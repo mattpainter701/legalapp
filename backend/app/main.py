@@ -19,6 +19,7 @@ from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.access_log import ApiAccessLogMiddleware
 from app.middleware.demo_quota import DemoQuotaMiddleware
 from app.middleware.platform_audit import PlatformAuditMiddleware
+from app.middleware.platform_key_auth import PlatformKeyAuthMiddleware
 from app.routers.auth import router as auth_router
 from app.routers.chat import router as chat_router
 from app.routers.documents import router as documents_router
@@ -334,6 +335,11 @@ app.add_middleware(ModuleGuardMiddleware)  # fail-closed plan/module enforcement
 app.add_middleware(RateLimitMiddleware)  # reads app.state.redis at request time
 
 app.add_middleware(PlatformAuditMiddleware)
+
+# Registered after the audit middleware so it runs *before* it: a minted key is
+# resolved to a named operator on the way in, and the audit trail records who
+# made the call even when the call is then refused for insufficient scope.
+app.add_middleware(PlatformKeyAuthMiddleware)
 
 app.add_middleware(ApiAccessLogMiddleware)
 app.add_middleware(DemoQuotaMiddleware)

@@ -82,8 +82,44 @@ exchanges it once at `/api/platform/auth/token`; all subsequent requests use a
 limited, and every platform request receives an operator audit row.
 
 The available scope ceiling is `platform:read`, `platform:write`,
-`platform:llm:read`, and `platform:llm:write`. Grant only the scopes required by
-that operator. The token expiry can never outlive the bootstrap entry expiry.
+`platform:debug`, `platform:llm:read`, and `platform:llm:write`. Grant only the
+scopes required by that operator. The token expiry can never outlive the
+bootstrap entry expiry.
+
+`platform:debug` is the gate on tenant troubleshooting data — stack traces,
+retained query text, client IPs — which can echo customer content. It is never
+implied by `platform:read`; a credential must be granted it explicitly, and
+every read of it lands in `operator_audit_logs`.
+
+### Minted operator keys
+
+Interactive console work uses the 15-minute bootstrap-exchanged token above.
+Scripts and runbooks that cannot hold the bootstrap secret use a minted key
+instead:
+
+```bash
+curl -sX POST https://<host>/api/platform/api-keys \
+  -H "Authorization: Bearer $BOOTSTRAP_SESSION_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"label":"oncall-runbook","scopes":["platform:read","platform:debug"],
+       "expires_in_days":90}'
+```
+
+The plaintext (prefixed `lhpk_`) is returned **once** and only its SHA-256 hash
+is stored; there is no way to recover it afterwards. It is then presented as an
+ordinary bearer token on any platform route.
+
+Three limits are deliberate:
+
+- A key can never be minted with scopes the minting session does not itself hold.
+- Minting and revoking require a **bootstrap-exchanged session**. A minted key
+  cannot mint or revoke, so a leaked key cannot be turned into permanent
+  replacements or used to lock the operator out.
+- Revocation takes effect on the next request — `DELETE /api/platform/api-keys/{id}`.
+
+`GET /api/platform/api-keys` lists keys with `last_used_at`, which is how you
+tell a key that is still live in some forgotten script from one that is safe to
+revoke. Rotate these alongside the bootstrap credentials.
 
 For an existing deployment only, a time-boxed bridge can be enabled with
 `PLATFORM_LEGACY_BOOTSTRAP_ENABLED=true`, plus an operator identity, expiry and

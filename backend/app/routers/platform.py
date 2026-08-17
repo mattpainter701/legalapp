@@ -13,6 +13,20 @@ Endpoints:
   PUT  /api/platform/tenants/{id}    — update billing_tier / is_active / seat_count
   GET  /api/platform/usage           — aggregate usage across all tenants
   GET  /api/platform/health          — row counts and index info
+
+Operator key management (offline bootstrap session only):
+  POST   /api/platform/api-keys      — mint a key; plaintext returned once
+  GET    /api/platform/api-keys      — list minted keys, masked
+  DELETE /api/platform/api-keys/{id} — revoke a key
+
+Tenant troubleshooting (``platform:debug`` scope only — these surface stack
+traces, retained query text and client IPs, which can echo customer content):
+  GET   /api/platform/logs/{error_id}            — full error incl. stack trace
+  PATCH /api/platform/logs/{error_id}/resolve    — mark handled, with a note
+  GET   /api/platform/trace/{request_id}         — one request across all tables
+  GET   /api/platform/tenants/{id}/diagnostics   — is this tenant healthy?
+  GET   /api/platform/audit                      — operator action history
+  GET   /api/platform/users                      — find a user's tenant by email
 """
 
 import os
@@ -32,7 +46,11 @@ from app.models.conversation import UsageRecord
 from app.models.error_log import ErrorLog
 from app.models.api_access_log import ApiAccessLog
 from app.models.document import Chunk, Document
+from app.models.durable_job import DurableJob
+from app.models.integration_sync_run import IntegrationSyncRun
 from app.models.mcp_product import MCPProductKey, MCPUsageEvent
+from app.models.operator_audit import OperatorAuditLog
+from app.models.platform_api_key import PlatformApiKey
 from app.models.tenant import Tenant, TenantSettings
 from app.models.user import User
 from app.services.mcp_product import DEFAULT_ALLOWED_TOOLS, mask_key
@@ -47,8 +65,12 @@ from app.services.operator_audit import record_operator_audit
 from app.services.durable_jobs import enqueue_job
 from app.services.corpus_revision import advance_rag_corpus_revision
 from app.services.platform_auth import (
+    PLATFORM_SCOPES,
+    generate_platform_api_key,
     issue_platform_token,
+    require_bootstrap_session,
     require_platform_token,
+    validate_requested_key_scopes,
     verify_platform_bootstrap_key,
 )
 
@@ -61,6 +83,19 @@ router = APIRouter(prefix="/platform", tags=["platform"])
 
 def _require_platform_key(request: Request) -> None:
     require_platform_token(request)
+
+
+def _require_platform_debug(request: Request):
+    """Gate for troubleshooting routes that can expose customer content.
+
+    The requirement is stated here rather than inferred from the URL by
+    :func:`required_scope`. Path inference on a route like ``/logs/{id}`` —
+    which sits next to the ``platform:read`` route ``/logs/summary`` — would
+    silently fall back to the weaker scope the moment a pattern stopped
+    matching, which is a fail-open we do not want on this data.
+    """
+
+    return require_platform_token(request, scopes={"platform:debug"})
 
 
 @asynccontextmanager
@@ -150,6 +185,63 @@ async def _platform_paginated_tenant_rows(
     candidates.sort(key=lambda row: row.created_at, reverse=True)
     start = (page - 1) * limit
     return candidates[start : start + limit], total
+
+
+async def _platform_collect_tenant_rows(
+    db: AsyncSession,
+    model,
+    *,
+    filters: list,
+    tenant_id: uuid.UUID | None = None,
+    include_system_rows: bool = False,
+    per_scope_limit: int = 200,
+    stop_after: int | None = None,
+) -> list:
+    """Gather matching rows one RLS scope at a time.
+
+    A lookup by primary key or correlation id cannot know its tenant in
+    advance, and the registry deliberately offers no cross-tenant read. So the
+    scopes are walked in turn. ``stop_after`` exists for the single-row case:
+    finding the error means the remaining tenants need not be queried at all.
+    """
+
+    found: list = []
+
+    async def load(tenant_filter) -> None:
+        found.extend(
+            list(
+                (
+                    await db.scalars(
+                        select(model)
+                        .where(tenant_filter, *filters)
+                        .order_by(model.created_at.desc())
+                        .limit(per_scope_limit)
+                    )
+                ).all()
+            )
+        )
+
+    if include_system_rows and tenant_id is None:
+        await clear_tenant_context(db)
+        await load(model.tenant_id.is_(None))
+        if stop_after is not None and len(found) >= stop_after:
+            return found
+
+    for scoped_tenant_id in await _platform_tenant_ids(db, tenant_id):
+        async with _platform_tenant_scope(db, scoped_tenant_id):
+            await load(model.tenant_id == scoped_tenant_id)
+        if stop_after is not None and len(found) >= stop_after:
+            break
+
+    return found
+
+
+async def _tenant_name_map(db: AsyncSession, tenant_ids) -> dict[str, str]:
+    ids = {tid for tid in tenant_ids if tid is not None}
+    if not ids:
+        return {}
+    rows = await db.execute(select(Tenant.id, Tenant.name).where(Tenant.id.in_(ids)))
+    return {str(row.id): row.name for row in rows.all()}
 
 
 # ── Operator integration readiness ────────────────────────────────────────────
@@ -298,6 +390,13 @@ class PlatformDocumentReindexRequest(BaseModel):
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
+
+def _parse_uuid(value: str, field: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(value)
+    except (AttributeError, ValueError):
+        raise HTTPException(status_code=400, detail=f"Invalid {field} UUID")
 
 
 def _mask(val: str | None) -> str | None:
@@ -1917,3 +2016,751 @@ async def access_log_summary(
         by_tenant=by_tenant,
         days=hours // 24 or 1,
     )
+
+
+# ── Operator API keys ─────────────────────────────────────────────────────────
+
+
+class MintApiKeyRequest(BaseModel):
+    label: str
+    scopes: list[str]
+    expires_in_days: int | None = None
+
+
+class ApiKeySummary(BaseModel):
+    id: str
+    label: str
+    key_prefix: str
+    scopes: list[str]
+    created_by: Optional[str] = None
+    created_at: datetime
+    expires_at: Optional[datetime] = None
+    revoked_at: Optional[datetime] = None
+    revoked_by: Optional[str] = None
+    last_used_at: Optional[datetime] = None
+    is_active: bool
+
+
+def _api_key_summary(row: PlatformApiKey) -> ApiKeySummary:
+    return ApiKeySummary(
+        id=str(row.id),
+        label=row.label,
+        key_prefix=row.key_prefix,
+        scopes=list(row.scopes or []),
+        created_by=row.created_by,
+        created_at=row.created_at,
+        expires_at=row.expires_at,
+        revoked_at=row.revoked_at,
+        revoked_by=row.revoked_by,
+        last_used_at=row.last_used_at,
+        is_active=row.is_usable(),
+    )
+
+
+@router.post("/api-keys", status_code=201)
+async def mint_api_key(
+    body: MintApiKeyRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Mint an operator key. The plaintext is shown once and never again."""
+
+    principal = require_bootstrap_session(request, scopes={"platform:write"})
+
+    label = body.label.strip()
+    if not label:
+        raise HTTPException(status_code=400, detail="label is required")
+    scopes = validate_requested_key_scopes(body.scopes, granted_by=principal)
+
+    expires_at = None
+    if body.expires_in_days is not None:
+        if body.expires_in_days < 1 or body.expires_in_days > 365:
+            raise HTTPException(
+                status_code=400, detail="expires_in_days must be between 1 and 365"
+            )
+        expires_at = datetime.now(timezone.utc) + timedelta(days=body.expires_in_days)
+
+    plaintext, key_prefix, key_hash = generate_platform_api_key()
+    row = PlatformApiKey(
+        label=label[:120],
+        key_prefix=key_prefix,
+        key_hash=key_hash,
+        scopes=scopes,
+        created_by=principal.actor_id,
+        expires_at=expires_at,
+    )
+    db.add(row)
+    await db.flush()
+
+    await record_operator_audit(
+        db,
+        request,
+        action="platform.api_key.minted",
+        resource_type="platform_api_key",
+        resource_id=str(row.id),
+        actor_id=principal.actor_id,
+        # The plaintext is deliberately absent; sanitize_operator_metadata
+        # would drop a "key" entry anyway, but it must never reach the call.
+        metadata={
+            "label": row.label,
+            "scopes": scopes,
+            "expires_at": expires_at.isoformat() if expires_at else None,
+        },
+    )
+    await db.commit()
+
+    return {
+        "key": plaintext,
+        "warning": "Store this now — it cannot be retrieved again.",
+        **_api_key_summary(row).model_dump(mode="json"),
+    }
+
+
+@router.get("/api-keys")
+async def list_api_keys(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    include_revoked: bool = Query(False),
+):
+    require_bootstrap_session(request, scopes={"platform:read"})
+
+    stmt = select(PlatformApiKey).order_by(PlatformApiKey.created_at.desc())
+    if not include_revoked:
+        stmt = stmt.where(PlatformApiKey.revoked_at.is_(None))
+    rows = (await db.scalars(stmt)).all()
+    return {
+        "keys": [_api_key_summary(row) for row in rows],
+        # Lets the console offer the real scope list instead of hardcoding one
+        # that drifts the next time a scope is added here.
+        "available_scopes": sorted(PLATFORM_SCOPES),
+    }
+
+
+@router.delete("/api-keys/{key_id}")
+async def revoke_api_key(
+    key_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    principal = require_bootstrap_session(request, scopes={"platform:write"})
+
+    row = await db.get(PlatformApiKey, _parse_uuid(key_id, "key_id"))
+    if row is None:
+        raise HTTPException(status_code=404, detail="API key not found")
+    if row.revoked_at is not None:
+        return {
+            "status": "already_revoked",
+            **_api_key_summary(row).model_dump(mode="json"),
+        }
+
+    row.revoked_at = datetime.now(timezone.utc)
+    row.revoked_by = principal.actor_id
+
+    await record_operator_audit(
+        db,
+        request,
+        action="platform.api_key.revoked",
+        resource_type="platform_api_key",
+        resource_id=str(row.id),
+        actor_id=principal.actor_id,
+        metadata={"label": row.label},
+    )
+    await db.commit()
+    return {"status": "revoked", **_api_key_summary(row).model_dump(mode="json")}
+
+
+# â”€â”€ Tenant troubleshooting (platform:debug) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+
+@asynccontextmanager
+async def _platform_row_scope(
+    db: AsyncSession, tenant_id: uuid.UUID | None
+) -> AsyncIterator[None]:
+    """Re-enter the RLS scope a row was read from, so it can be written back.
+
+    System rows carry a NULL tenant_id and are visible in every scope by
+    policy, so they are handled under a cleared context rather than a tenant's.
+    """
+
+    if tenant_id is None:
+        await clear_tenant_context(db)
+        yield
+        return
+    async with _platform_tenant_scope(db, tenant_id):
+        yield
+
+
+class ErrorDetail(BaseModel):
+    id: str
+    tenant_id: Optional[str] = None
+    tenant_name: Optional[str] = None
+    user_id: Optional[str] = None
+    error_type: str
+    severity: str
+    message: str
+    stack_trace: Optional[str] = None
+    endpoint: Optional[str] = None
+    method: Optional[str] = None
+    status_code: Optional[int] = None
+    ip_address: Optional[str] = None
+    user_agent: Optional[str] = None
+    request_id: Optional[str] = None
+    conversation_id: Optional[str] = None
+    query_text: Optional[str] = None
+    is_resolved: bool
+    resolved_at: Optional[datetime] = None
+    resolution_notes: Optional[str] = None
+    created_at: datetime
+
+
+class ResolveErrorRequest(BaseModel):
+    resolution_notes: str | None = None
+    is_resolved: bool = True
+
+
+def _tenant_label(names: dict[str, str], tenant_id) -> str:
+    if tenant_id is None:
+        return "System"
+    return names.get(str(tenant_id), "â€”")
+
+
+def _error_detail(row: ErrorLog, tenant_name: str | None) -> ErrorDetail:
+    return ErrorDetail(
+        id=str(row.id),
+        tenant_id=str(row.tenant_id) if row.tenant_id else None,
+        tenant_name=tenant_name,
+        # Unabbreviated, unlike the list views: identifying which user hit the
+        # error is the whole point of opening a single record.
+        user_id=str(row.user_id) if row.user_id else None,
+        error_type=row.error_type,
+        severity=row.severity,
+        message=row.message,
+        stack_trace=row.stack_trace,
+        endpoint=row.endpoint,
+        method=row.method,
+        status_code=row.status_code,
+        ip_address=row.ip_address,
+        user_agent=row.user_agent,
+        request_id=row.request_id,
+        conversation_id=str(row.conversation_id) if row.conversation_id else None,
+        # Null unless GATEWAY_RAW_TEXT_RETENTION_ENABLED was on at capture time.
+        query_text=row.query_text,
+        is_resolved=row.is_resolved,
+        resolved_at=row.resolved_at,
+        resolution_notes=row.resolution_notes,
+        created_at=row.created_at,
+    )
+
+
+async def _find_error(
+    db: AsyncSession, error_id: uuid.UUID, tenant_hint: uuid.UUID | None
+) -> Optional[ErrorLog]:
+    rows = await _platform_collect_tenant_rows(
+        db,
+        ErrorLog,
+        filters=[ErrorLog.id == error_id],
+        tenant_id=tenant_hint,
+        include_system_rows=tenant_hint is None,
+        per_scope_limit=1,
+        stop_after=1,
+    )
+    return rows[0] if rows else None
+
+
+@router.get("/logs/{error_id}", response_model=ErrorDetail)
+async def get_error_detail(
+    error_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: Optional[str] = Query(
+        None, description="Skips the tenant scan when the tenant is already known"
+    ),
+):
+    """Redeem an error_id handed to a customer for the full record.
+
+    Every 5xx already returns error_id in its body. Without this route that
+    identifier has nowhere to be spent, and the stack trace behind it is
+    reachable only from a database shell.
+    """
+
+    _require_platform_debug(request)
+
+    eid = _parse_uuid(error_id, "error_id")
+    hint = _parse_uuid(tenant_id, "tenant_id") if tenant_id else None
+    row = await _find_error(db, eid, hint)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Error log not found")
+
+    names = await _tenant_name_map(db, [row.tenant_id])
+    return _error_detail(row, _tenant_label(names, row.tenant_id))
+
+
+@router.patch("/logs/{error_id}/resolve", response_model=ErrorDetail)
+async def resolve_error(
+    error_id: str,
+    body: ResolveErrorRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: Optional[str] = Query(None),
+):
+    """Close out an error from the operator side.
+
+    Tenant admins could already resolve their own errors, but the operator who
+    actually diagnosed the fault had no way to record that it was handled â€” so
+    the same error resurfaced in every triage pass.
+    """
+
+    principal = _require_platform_debug(request)
+
+    eid = _parse_uuid(error_id, "error_id")
+    hint = _parse_uuid(tenant_id, "tenant_id") if tenant_id else None
+    row = await _find_error(db, eid, hint)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Error log not found")
+
+    async with _platform_row_scope(db, row.tenant_id):
+        row.is_resolved = body.is_resolved
+        row.resolved_at = datetime.now(timezone.utc) if body.is_resolved else None
+        if body.resolution_notes is not None:
+            row.resolution_notes = body.resolution_notes[:2000]
+        await db.flush()
+        detail = _error_detail(row, None)
+
+    await record_operator_audit(
+        db,
+        request,
+        action="platform.error.resolved",
+        resource_type="error_log",
+        resource_id=str(row.id),
+        actor_id=principal.actor_id,
+        metadata={
+            "tenant_id": str(row.tenant_id) if row.tenant_id else None,
+            "is_resolved": body.is_resolved,
+        },
+    )
+    await db.commit()
+
+    names = await _tenant_name_map(db, [row.tenant_id])
+    detail.tenant_name = _tenant_label(names, row.tenant_id)
+    return detail
+
+
+class TraceAccessEntry(BaseModel):
+    id: str
+    tenant_id: str
+    tenant_name: Optional[str] = None
+    endpoint: str
+    method: str
+    status_code: int
+    latency_ms: Optional[float] = None
+    user_id: Optional[str] = None
+    ip_address: Optional[str] = None
+    created_at: datetime
+
+
+class TraceResponse(BaseModel):
+    request_id: str
+    tenant_ids: list[str]
+    errors: list[ErrorDetail]
+    access_entries: list[TraceAccessEntry]
+
+
+@router.get("/trace/{request_id}", response_model=TraceResponse)
+async def trace_request(
+    request_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: Optional[str] = Query(None),
+):
+    """Assemble everything recorded about one request.
+
+    request_id is the identifier the customer can actually see â€” it comes back
+    in the X-Request-ID header and in every error body â€” which makes it the
+    only handle support can rely on a caller already having.
+    """
+
+    _require_platform_debug(request)
+
+    if not request_id or len(request_id) > 100:
+        raise HTTPException(status_code=400, detail="Invalid request_id")
+    hint = _parse_uuid(tenant_id, "tenant_id") if tenant_id else None
+
+    error_rows = await _platform_collect_tenant_rows(
+        db,
+        ErrorLog,
+        filters=[ErrorLog.request_id == request_id],
+        tenant_id=hint,
+        include_system_rows=hint is None,
+        per_scope_limit=20,
+    )
+    access_rows = await _platform_collect_tenant_rows(
+        db,
+        ApiAccessLog,
+        filters=[ApiAccessLog.request_id == request_id],
+        tenant_id=hint,
+        per_scope_limit=20,
+    )
+
+    names = await _tenant_name_map(
+        db,
+        [row.tenant_id for row in error_rows] + [row.tenant_id for row in access_rows],
+    )
+    tenant_ids = sorted(
+        {str(row.tenant_id) for row in error_rows if row.tenant_id}
+        | {str(row.tenant_id) for row in access_rows}
+    )
+
+    return TraceResponse(
+        request_id=request_id,
+        tenant_ids=tenant_ids,
+        errors=[
+            _error_detail(row, _tenant_label(names, row.tenant_id))
+            for row in sorted(error_rows, key=lambda r: r.created_at)
+        ],
+        access_entries=[
+            TraceAccessEntry(
+                id=str(row.id),
+                tenant_id=str(row.tenant_id),
+                tenant_name=_tenant_label(names, row.tenant_id),
+                endpoint=row.endpoint,
+                method=row.method,
+                status_code=row.status_code,
+                latency_ms=row.latency_ms,
+                user_id=str(row.user_id) if row.user_id else None,
+                ip_address=row.ip_address,
+                created_at=row.created_at,
+            )
+            for row in sorted(access_rows, key=lambda r: r.created_at)
+        ],
+    )
+
+
+class TenantDiagnostics(BaseModel):
+    tenant_id: str
+    tenant_name: str
+    is_active: bool
+    billing_tier: Optional[str] = None
+    window_hours: int
+    requests: int
+    error_rate: float
+    errors_by_severity: dict[str, int]
+    unresolved_errors: int
+    top_failing_endpoints: list[dict]
+    failed_sync_runs: list[dict]
+    stuck_jobs: list[dict]
+    active_users: int
+    last_activity_at: Optional[datetime] = None
+
+
+@router.get("/tenants/{tenant_id}/diagnostics", response_model=TenantDiagnostics)
+async def tenant_diagnostics(
+    tenant_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    hours: int = Query(24, ge=1, le=720),
+):
+    """Answer "what is wrong with this tenant" in one call.
+
+    The pieces existed already but only behind a tenant admin's own JWT, which
+    meant investigating a customer's failing integration required borrowing
+    their login.
+    """
+
+    _require_platform_debug(request)
+
+    tid = _parse_uuid(tenant_id, "tenant_id")
+    tenant = await db.scalar(select(Tenant).where(Tenant.id == tid))
+    if tenant is None:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    now = datetime.now(timezone.utc)
+
+    async with _platform_tenant_scope(db, tid):
+        requests_total = int(
+            await db.scalar(
+                select(func.count(ApiAccessLog.id)).where(
+                    ApiAccessLog.tenant_id == tid, ApiAccessLog.created_at >= cutoff
+                )
+            )
+            or 0
+        )
+        failed_requests = int(
+            await db.scalar(
+                select(func.count(ApiAccessLog.id)).where(
+                    ApiAccessLog.tenant_id == tid,
+                    ApiAccessLog.created_at >= cutoff,
+                    ApiAccessLog.status_code >= 500,
+                )
+            )
+            or 0
+        )
+        last_activity_at = await db.scalar(
+            select(func.max(ApiAccessLog.created_at)).where(
+                ApiAccessLog.tenant_id == tid
+            )
+        )
+        active_users = int(
+            await db.scalar(
+                select(func.count(func.distinct(ApiAccessLog.user_id))).where(
+                    ApiAccessLog.tenant_id == tid,
+                    ApiAccessLog.created_at >= cutoff,
+                    ApiAccessLog.user_id.is_not(None),
+                )
+            )
+            or 0
+        )
+
+        failing_endpoint_rows = (
+            await db.execute(
+                select(
+                    ApiAccessLog.endpoint,
+                    ApiAccessLog.status_code,
+                    func.count(ApiAccessLog.id).label("cnt"),
+                )
+                .where(
+                    ApiAccessLog.tenant_id == tid,
+                    ApiAccessLog.created_at >= cutoff,
+                    ApiAccessLog.status_code >= 400,
+                )
+                .group_by(ApiAccessLog.endpoint, ApiAccessLog.status_code)
+                .order_by(func.count(ApiAccessLog.id).desc())
+                .limit(10)
+            )
+        ).all()
+
+        severity_rows = (
+            await db.execute(
+                select(ErrorLog.severity, func.count(ErrorLog.id).label("cnt"))
+                .where(
+                    ErrorLog.tenant_id == tid,
+                    ErrorLog.created_at >= cutoff,
+                )
+                .group_by(ErrorLog.severity)
+            )
+        ).all()
+        unresolved_errors = int(
+            await db.scalar(
+                select(func.count(ErrorLog.id)).where(
+                    ErrorLog.tenant_id == tid,
+                    ErrorLog.created_at >= cutoff,
+                    ErrorLog.is_resolved.is_(False),
+                )
+            )
+            or 0
+        )
+
+        sync_rows = (
+            await db.scalars(
+                select(IntegrationSyncRun)
+                .where(
+                    IntegrationSyncRun.tenant_id == tid,
+                    IntegrationSyncRun.started_at >= cutoff,
+                    IntegrationSyncRun.status != "success",
+                )
+                .order_by(IntegrationSyncRun.started_at.desc())
+                .limit(20)
+            )
+        ).all()
+
+        # "Stuck" covers both terminal failures and work that keeps being
+        # retried without completing â€” both look like a hung feature to a user.
+        job_rows = (
+            await db.scalars(
+                select(DurableJob)
+                .where(
+                    DurableJob.tenant_id == tid,
+                    DurableJob.status.in_(("failed", "pending", "running")),
+                    DurableJob.updated_at <= now - timedelta(minutes=15),
+                )
+                .order_by(DurableJob.updated_at.desc())
+                .limit(20)
+            )
+        ).all()
+
+    return TenantDiagnostics(
+        tenant_id=str(tenant.id),
+        tenant_name=tenant.name,
+        is_active=tenant.is_active,
+        billing_tier=tenant.billing_tier,
+        window_hours=hours,
+        requests=requests_total,
+        error_rate=round(failed_requests / requests_total, 4)
+        if requests_total
+        else 0.0,
+        errors_by_severity={row.severity: int(row.cnt) for row in severity_rows},
+        unresolved_errors=unresolved_errors,
+        top_failing_endpoints=[
+            {
+                "endpoint": row.endpoint,
+                "status_code": row.status_code,
+                "count": int(row.cnt),
+            }
+            for row in failing_endpoint_rows
+        ],
+        failed_sync_runs=[
+            {
+                "id": str(row.id),
+                "provider": row.provider,
+                "job_type": row.job_type,
+                "status": row.status,
+                "started_at": row.started_at.isoformat() if row.started_at else None,
+                "items_ok": row.items_ok,
+                "items_failed": row.items_failed,
+                "error_summary": row.error_summary,
+            }
+            for row in sync_rows
+        ],
+        stuck_jobs=[
+            {
+                "id": str(row.id),
+                "kind": row.kind,
+                "status": row.status,
+                "attempts": row.attempts,
+                "max_attempts": row.max_attempts,
+                "last_error": row.last_error,
+                "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+            }
+            for row in job_rows
+        ],
+        active_users=active_users,
+        last_activity_at=last_activity_at,
+    )
+
+
+class OperatorAuditEntry(BaseModel):
+    id: str
+    action: str
+    actor_type: str
+    actor_id: Optional[str] = None
+    resource_type: Optional[str] = None
+    resource_id: Optional[str] = None
+    ip_address: Optional[str] = None
+    metadata: dict
+    created_at: datetime
+
+
+class OperatorAuditList(BaseModel):
+    entries: list[OperatorAuditEntry]
+    total: int
+    page: int
+    limit: int
+
+
+@router.get("/audit", response_model=OperatorAuditList)
+async def list_operator_audit(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+    action: Optional[str] = Query(None),
+    actor_id: Optional[str] = Query(None),
+    resource_id: Optional[str] = Query(None),
+    days: int = Query(7, ge=1, le=365),
+):
+    """Read the operator action trail.
+
+    Every platform request has been written to operator_audit_logs since the
+    audit middleware landed, but nothing could read it back â€” so the question
+    "what did we touch in this tenant, and when" had no answer through the API.
+    These rows are operator-owned and carry no tenant_id, so no RLS scope
+    applies.
+    """
+
+    _require_platform_debug(request)
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    filters = [OperatorAuditLog.created_at >= cutoff]
+    if action:
+        filters.append(OperatorAuditLog.action == action)
+    if actor_id:
+        filters.append(OperatorAuditLog.actor_id == actor_id)
+    if resource_id:
+        filters.append(OperatorAuditLog.resource_id == resource_id)
+
+    total = int(
+        await db.scalar(select(func.count(OperatorAuditLog.id)).where(*filters)) or 0
+    )
+    rows = (
+        await db.scalars(
+            select(OperatorAuditLog)
+            .where(*filters)
+            .order_by(OperatorAuditLog.created_at.desc())
+            .offset((page - 1) * limit)
+            .limit(limit)
+        )
+    ).all()
+
+    return OperatorAuditList(
+        entries=[
+            OperatorAuditEntry(
+                id=str(row.id),
+                action=row.action,
+                actor_type=row.actor_type,
+                actor_id=row.actor_id,
+                resource_type=row.resource_type,
+                resource_id=row.resource_id,
+                ip_address=row.ip_address,
+                metadata=row.metadata_json or {},
+                created_at=row.created_at,
+            )
+            for row in rows
+        ],
+        total=total,
+        page=page,
+        limit=limit,
+    )
+
+
+class UserLookupEntry(BaseModel):
+    id: str
+    email: str
+    full_name: Optional[str] = None
+    role: Optional[str] = None
+    is_active: bool
+    tenant_id: str
+    tenant_name: str
+    created_at: datetime
+
+
+@router.get("/users", response_model=list[UserLookupEntry])
+async def find_users(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    email: str = Query(..., min_length=3, max_length=320),
+    limit: int = Query(25, ge=1, le=100),
+):
+    """Find which tenant a user belongs to, starting from their email.
+
+    Support conversations start with an email address; every other operator
+    route starts from a tenant UUID. This closes that gap.
+    """
+
+    _require_platform_debug(request)
+
+    needle = email.strip().lower()
+    if not needle:
+        raise HTTPException(status_code=400, detail="email is required")
+
+    rows = await _platform_collect_tenant_rows(
+        db,
+        User,
+        filters=[func.lower(User.email).like(f"%{needle}%")],
+        per_scope_limit=limit,
+        stop_after=limit,
+    )
+    names = await _tenant_name_map(db, [row.tenant_id for row in rows])
+
+    return [
+        UserLookupEntry(
+            id=str(row.id),
+            email=row.email,
+            full_name=row.full_name,
+            role=row.role,
+            is_active=row.is_active,
+            tenant_id=str(row.tenant_id),
+            tenant_name=_tenant_label(names, row.tenant_id),
+            created_at=row.created_at,
+        )
+        for row in rows[:limit]
+    ]
