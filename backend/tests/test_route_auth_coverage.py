@@ -60,6 +60,11 @@ CANONICAL_AUTH_FUNCS = {
 # module attribute to resolve via getattr).
 AUTH_CALL_NAMES_LITERAL = {
     "_require_platform_key",
+    # Operator troubleshooting routes gate on platform:debug explicitly rather
+    # than on the path-inferred scope; key management insists the caller's
+    # session came from the offline bootstrap credential.
+    "_require_platform_debug",
+    "require_bootstrap_session",
     "authenticate_product_request",
     "verify_platform_bootstrap_key",
 } | {

@@ -49,6 +49,7 @@ class ApiAccessLogMiddleware(BaseHTTPMiddleware):
             latency_ms=round(elapsed_ms, 2),
             ip_address=request.client.host if request.client else None,
             user_agent_short=_truncate(request.headers.get("user-agent", ""), 300),
+            request_id=getattr(request.state, "request_id", None),
         )
 
         return response
@@ -63,6 +64,7 @@ async def _write_log(
     latency_ms: float,
     ip_address: str | None,
     user_agent_short: str | None,
+    request_id: str | None = None,
 ) -> None:
     try:
         async with async_session_maker() as db:
@@ -76,6 +78,7 @@ async def _write_log(
                     latency_ms=latency_ms,
                     ip_address=ip_address,
                     user_agent_short=user_agent_short,
+                    request_id=request_id[:100] if request_id else None,
                 )
             )
             await db.commit()
