@@ -31,6 +31,7 @@ from app.models.tenant import Tenant
 from app.models.tenant_credential import TenantCredential
 from app.models.user_oauth_token import UserOAuthToken
 from app.models.user import User
+from app.models.demo_session import DemoSession
 from app.routers.billing import ensure_stripe_customer
 from app.schemas.auth import (
     ForgotPasswordRequest,
@@ -1725,6 +1726,12 @@ async def get_me(
         db, user.tenant_id, user=user
     )
     plan_id, upsell_target = await resolve_plan_meta(db, user.tenant_id)
+    demo_session = await db.scalar(
+        select(DemoSession).where(
+            DemoSession.tenant_id == user.tenant_id,
+            DemoSession.status == "active",
+        )
+    )
     return UserInfo(
         id=str(user.id),
         tenant_id=str(user.tenant_id),
@@ -1744,6 +1751,18 @@ async def get_me(
         job_title=user.job_title,
         office_location=user.office_location,
         primary_jurisdictions=user.primary_jurisdictions or [],
+        privacy_mode=user.privacy_mode,
+        demo=(
+            {
+                "session_id": str(demo_session.id),
+                "expires_at": demo_session.expires_at,
+                "quota": demo_session.quota,
+                "reserved": demo_session.reserved,
+                "used": demo_session.used,
+            }
+            if demo_session
+            else None
+        ),
     )
 
 
@@ -1783,6 +1802,7 @@ async def update_me(
         job_title=user.job_title,
         office_location=user.office_location,
         primary_jurisdictions=user.primary_jurisdictions or [],
+        privacy_mode=user.privacy_mode,
     )
 
 

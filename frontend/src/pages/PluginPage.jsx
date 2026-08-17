@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { getPlugins, getPluginProfile, executeSkill, extractSkillInput, getPluginSetup, savePluginSetup, getMattersV2 } from '../api'
+import { useAuth } from '../App'
 import ColdStartInterview from '../components/ColdStartInterview'
 import SkillOutput from '../components/SkillOutput'
 import {
@@ -215,6 +216,7 @@ function skillLabel(skillId) {
 }
 
 export default function PluginPage() {
+  const { user } = useAuth()
   const { pluginName } = useParams()
   const navigate = useNavigate()
 
@@ -649,7 +651,7 @@ export default function PluginPage() {
 
                 {/* Action Footer */}
                 <div className="mt-8 pt-6 border-t border-brand-line flex items-center justify-between">
-                  <label className="flex items-center gap-3 cursor-pointer group">
+                  {!user?.demo && <label className="flex items-center gap-3 cursor-pointer group">
                     <input
                       type="checkbox"
                       checked={usePremium}
@@ -672,7 +674,7 @@ export default function PluginPage() {
                       <span className="text-[13px] font-semibold text-brand-ink font-sans">Premium Model</span>
                       <span className="text-[11px] text-brand-muted font-sans group-hover:text-brand-ink transition-colors">Premium • Slower • Higher quality</span>
                     </div>
-                  </label>
+                  </label>}
 
                   <button
                     onClick={handleRunSkill}

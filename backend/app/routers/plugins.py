@@ -76,6 +76,7 @@ from app.schemas.plugin import (
     SkillResponse,
 )
 from app.services.billing import calculate_cost
+from app.services.demo_access import reject_demo_premium
 from app.services.cache import ExpertiseCacheManager
 from app.services.conflict_check import run_conflict_check
 from app.services.cloud_search import CloudSearchService
@@ -1541,6 +1542,7 @@ async def cold_start_interview(
     context["setup_step"] = current_step
     context["tenant_name"] = user.tenant.name if user.tenant else "Legal"
 
+    reject_demo_premium(user, body.use_premium)
     use_premium = bool(body.use_premium and user.premium_ai_enabled)
     result_data = await plugin_executor.execute(
         db=db,
@@ -1709,6 +1711,7 @@ async def execute_skill(
             else f"--- Cloud Search Results ---\n\n{cloud_context}"
         )
 
+    reject_demo_premium(user, body.use_premium)
     use_premium = bool(body.use_premium and user.premium_ai_enabled)
     result_data = await plugin_executor.execute(
         db=db,

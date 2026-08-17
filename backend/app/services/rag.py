@@ -1147,12 +1147,13 @@ async def full_rag_query(
     user_id: str | None = None,
     matter_id: str | None = None,
     include_public: bool = True,
+    include_private: bool = True,
     reuse_db_for_usage: bool = False,
     default_public_jurisdiction: str | None = None,
 ) -> Tuple[str, List[dict]]:
     """
-    Hybrid RAG pipeline: dense (pgvector cosine) + FTS (PostgreSQL tsvector)
-    fused via Reciprocal Rank Fusion, plus optional public CourtListener chunks.
+    Hybrid RAG pipeline: optional tenant dense/FTS retrieval plus optional
+    public CourtListener chunks.
 
     Embedding calls and FTS search run concurrently. Public authority is retrieved
     through CourtListener MCP when MCP_SERVER_URL is set; otherwise the legacy
@@ -1175,7 +1176,7 @@ async def full_rag_query(
         public_task = asyncio.create_task(
             search_courtlistener_mcp(**public_search_kwargs)
         )
-    if include_public and not use_mcp_public:
+    if include_public and not use_mcp_public and include_private:
         embedding_result, public_embedding_result, fts_result = await asyncio.gather(
             embedding_service.embed_text(question),
             embedding_service.embed_public_query(question),
@@ -1199,7 +1200,21 @@ async def full_rag_query(
             and "public_embedding_failed" not in degradation_reasons
         ):
             degradation_reasons.append("public_embedding_unavailable")
-    else:
+    elif include_public and not use_mcp_public:
+        public_embedding_result = await embedding_service.embed_public_query(question)
+        embedding_result, fts_result = None, []
+        public_embedding = _retrieval_value_or_default(
+            public_embedding_result,
+            stage="public_embedding_failed",
+            default=None,
+            degradation_reasons=degradation_reasons,
+        )
+        if (
+            public_embedding is None
+            and "public_embedding_failed" not in degradation_reasons
+        ):
+            degradation_reasons.append("public_embedding_unavailable")
+    elif include_private:
         try:
             embedding_result, fts_result = await asyncio.gather(
                 embedding_service.embed_text(question),
@@ -1218,15 +1233,22 @@ async def full_rag_query(
                 await asyncio.gather(public_task, return_exceptions=True)
             raise
         public_embedding = None
+    else:
+        embedding_result, fts_result, public_embedding = None, [], None
 
-    query_embedding = _retrieval_value_or_default(
-        embedding_result,
-        stage="tenant_embedding_failed",
-        default=None,
-        degradation_reasons=degradation_reasons,
-    )
-    if query_embedding is None and "tenant_embedding_failed" not in degradation_reasons:
-        degradation_reasons.append("tenant_embedding_unavailable")
+    query_embedding = None
+    if include_private:
+        query_embedding = _retrieval_value_or_default(
+            embedding_result,
+            stage="tenant_embedding_failed",
+            default=None,
+            degradation_reasons=degradation_reasons,
+        )
+        if (
+            query_embedding is None
+            and "tenant_embedding_failed" not in degradation_reasons
+        ):
+            degradation_reasons.append("tenant_embedding_unavailable")
     fts_results = _retrieval_value_or_default(
         fts_result,
         stage="tenant_fts_failed",
@@ -1243,7 +1265,7 @@ async def full_rag_query(
             matter_id=matter_id,
             top_k=settings.RAG_TOP_K,
         )
-        if query_embedding is not None
+        if include_private and query_embedding is not None
         else _empty_chunks()
     )
     public_search = (
@@ -1390,20 +1412,21 @@ async def full_rag_query(
             logger.exception("Failed to record internal CourtListener MCP usage")
 
     # Fuse private dense + FTS results via RRF
-    try:
-        fused_private = filter_private_retrieval_results(
-            question,
-            reciprocal_rank_fusion(
-                dense_results=dense_chunks,
-                fts_results=fts_results,
-            ),
-        )
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        logger.exception("Private RAG result fusion failed")
-        degradation_reasons.append("tenant_fusion_failed")
-        fused_private = []
+    fused_private = []
+    if include_private:
+        try:
+            fused_private = filter_private_retrieval_results(
+                question,
+                reciprocal_rank_fusion(
+                    dense_results=dense_chunks,
+                    fts_results=fts_results,
+                ),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Private RAG result fusion failed")
+            degradation_reasons.append("tenant_fusion_failed")
 
     # Limit fused results and append public chunks
     chunks = RAGChunks(
@@ -1617,6 +1640,7 @@ async def hybrid_rag_query(
     tenant_id: str,
     user_id: str | None = None,
     include_public: bool = True,
+    include_private: bool = True,
     cloud_search_service=None,  # CloudSearchService | None
     retrieval_planner=None,  # RetrievalPlanner | None
     tenant_name: str = "Legal",
@@ -1626,7 +1650,8 @@ async def hybrid_rag_query(
     default_public_jurisdiction: str | None = None,
 ) -> tuple[str, list[dict], list[dict]]:
     """
-    Hybrid RAG pipeline: pgvector search + cloud search + SMB file search.
+    Hybrid RAG pipeline: optional tenant pgvector/cloud/SMB search plus public
+    legal-authority retrieval.
 
     Uses one caller-supplied DB session. Local/public retrieval runs first;
     connected cloud and SMB retrieval follows so database statements never
@@ -1644,6 +1669,7 @@ async def hybrid_rag_query(
             matter_id=matter_id,
             user_id=user_id,
             include_public=include_public,
+            include_private=include_private,
             reuse_db_for_usage=True,
             default_public_jurisdiction=default_public_jurisdiction,
         )
@@ -1652,23 +1678,26 @@ async def hybrid_rag_query(
     except Exception as exc:
         local_result = exc
 
-    try:
-        connected_result = await _connected_source_query(
-            question=question,
-            tenant_id=tenant_id,
-            user_id=user_id,
-            cloud_search_service=cloud_search_service,
-            retrieval_planner=retrieval_planner,
-            tenant_name=tenant_name,
-            matter_context_str=matter_context_str,
-            matter_id=matter_id,
-            matter_cloud_folder=matter_cloud_folder,
-            db=db,
-        )
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        connected_result = exc
+    if include_private:
+        try:
+            connected_result = await _connected_source_query(
+                question=question,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                cloud_search_service=cloud_search_service,
+                retrieval_planner=retrieval_planner,
+                tenant_name=tenant_name,
+                matter_context_str=matter_context_str,
+                matter_id=matter_id,
+                matter_cloud_folder=matter_cloud_folder,
+                db=db,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            connected_result = exc
+    else:
+        connected_result = ("", [], "")
 
     if isinstance(local_result, asyncio.CancelledError):
         raise local_result

@@ -10,6 +10,7 @@ import { getMe } from './api'
 import { canAccessModuleList } from './moduleAccess'
 
 const LoginPage = lazy(() => import('./pages/LoginPage'))
+const DemoLoginPage = lazy(() => import('./pages/DemoLoginPage'))
 const HomePage = lazy(() => import('./pages/HomePage'))
 const SignupPage = lazy(() => import('./pages/SignupPage'))
 const ForgotPasswordPage = lazy(() => import('./pages/ForgotPasswordPage'))
@@ -199,6 +200,7 @@ export default function App() {
         <Routes>
         <Route path="/" element={<RootRedirect />} />
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/demo" element={<DemoLoginPage />} />
         <Route path="/signup" element={<SignupPage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />

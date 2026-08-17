@@ -59,6 +59,9 @@ class Tenant(Base):
     is_active: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
     )
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     # Onboarding (Sprint 8)
     onboarding_completed: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"

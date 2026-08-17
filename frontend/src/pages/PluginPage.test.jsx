@@ -5,6 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import PluginPage from './PluginPage'
 import { executeSkill, extractSkillInput, getPlugins } from '../api'
 
+const authHarness = { user: {} }
+
+vi.mock('../App', () => ({
+  useAuth: () => authHarness,
+}))
+
 vi.mock('../api', () => ({
   getPlugins: vi.fn(),
   extractSkillInput: vi.fn(),
@@ -31,6 +37,7 @@ function renderPluginPage(pluginName = 'commercial-legal') {
 describe('PluginPage skill execution', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    authHarness.user = {}
     getPlugins.mockResolvedValue([
       {
         plugin_name: 'commercial-legal',
@@ -162,5 +169,15 @@ describe('PluginPage skill execution', () => {
     expect(
       screen.queryByRole('button', { name: /cold start interview/i })
     ).not.toBeInTheDocument()
+  })
+
+  it('hides Premium controls in a demo workspace', async () => {
+    authHarness.user = { demo: { session_id: 'demo-session' } }
+    renderPluginPage()
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Nda Review' })).toBeInTheDocument()
+    )
+    expect(screen.queryByText('Premium Model')).not.toBeInTheDocument()
   })
 })

@@ -4,11 +4,67 @@ from cryptography.fernet import Fernet
 
 from app.config import (
     Settings,
+    validate_demo_settings,
     validate_jwt_algorithm,
     validate_mcp_security_settings,
     validate_platform_bootstrap_settings,
     validate_token_encryption_key,
 )
+
+
+def _demo_settings(**overrides):
+    values = {
+        "_env_file": None,
+        "DATABASE_URL": "postgresql://test",
+        "SECRET_KEY": "x" * 48,
+        "TOKEN_ENCRYPTION_KEY": Fernet.generate_key().decode(),
+    }
+    values.update(overrides)
+    return Settings(**values)
+
+
+def test_demo_settings_are_inert_while_disabled():
+    validate_demo_settings(
+        _demo_settings(DEMO_MODE_ENABLED=False, DEMO_ACCESS_CODE="short")
+    )
+
+
+def test_demo_settings_require_strong_code_and_fixture_when_enabled():
+    with pytest.raises(ValueError, match="DEMO_ACCESS_CODE"):
+        validate_demo_settings(
+            _demo_settings(DEMO_MODE_ENABLED=True, DEMO_ACCESS_CODE="short")
+        )
+
+    with pytest.raises(ValueError, match="DEMO_FIXTURE_TENANT_DOMAIN"):
+        validate_demo_settings(
+            _demo_settings(
+                DEMO_MODE_ENABLED=True,
+                DEMO_ACCESS_CODE="a-strong-demo-code-123",
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("DEMO_SESSION_TTL_HOURS", 0),
+        ("DEMO_SESSION_TTL_HOURS", 169),
+        ("DEMO_MESSAGE_QUOTA", 0),
+        ("DEMO_MESSAGE_QUOTA", 101),
+        ("DEMO_MAX_ACTIVE", 0),
+        ("DEMO_MAX_ACTIVE", 26),
+    ],
+)
+def test_demo_settings_reject_unsafe_bounds(field, value):
+    with pytest.raises(ValueError, match=field):
+        validate_demo_settings(
+            _demo_settings(
+                DEMO_MODE_ENABLED=True,
+                DEMO_ACCESS_CODE="a-strong-demo-code-123",
+                DEMO_FIXTURE_TENANT_DOMAIN="demo-fixture.example",
+                **{field: value},
+            )
+        )
 
 
 def test_application_jwt_algorithm_is_strictly_hs256():
@@ -70,9 +126,7 @@ def test_token_encryption_key_invalid_raises():
     os.environ["DATABASE_URL"] = "postgresql://test"
     os.environ["SECRET_KEY"] = "test-secret"
 
-    with pytest.raises(
-        ValueError, match="must be a valid Fernet key"
-    ):
+    with pytest.raises(ValueError, match="must be a valid Fernet key"):
         settings = Settings()
         validate_token_encryption_key(settings)
 

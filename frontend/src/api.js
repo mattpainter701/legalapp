@@ -103,6 +103,27 @@ const api = axios.create({
   withCredentials: true, // Allow httpOnly cookies to be sent with requests
 })
 
+const isAiOperationPath = (url = '') => (
+  /^\/conversations\/[^/]+\/messages(?:\/stream)?$/.test(url)
+  || /^\/plugins\/[^/]+\/[^/]+$/.test(url)
+  || url === '/office/plans'
+)
+
+const newOperationId = () => globalThis.crypto?.randomUUID?.()
+  || `${Date.now()}-${Math.random().toString(36).slice(2)}`
+
+api.interceptors.request?.use?.((config) => {
+  if (
+    String(config.method || 'get').toLowerCase() === 'post'
+    && isAiOperationPath(config.url)
+    && !config.headers?.['X-Idempotency-Key']
+  ) {
+    config.headers = config.headers || {}
+    config.headers['X-Idempotency-Key'] = newOperationId()
+  }
+  return config
+})
+
 // Auth lives entirely in httpOnly cookies set by the backend — the SPA never
 // reads or stores the access/refresh token in localStorage, so an XSS payload
 // cannot exfiltrate a live session. `withCredentials: true` above is what
@@ -121,7 +142,7 @@ if (typeof window !== 'undefined') {
 let refreshPromise = null
 
 // Paths for which a 401 must NOT trigger a refresh attempt (would loop / is terminal).
-const NO_REFRESH_PATHS = ['/auth/refresh', '/auth/login', '/auth/register', '/auth/logout']
+const NO_REFRESH_PATHS = ['/auth/refresh', '/auth/login', '/auth/register', '/auth/logout', '/demo/session']
 
 const clearAuthState = () => {
   if (typeof window !== 'undefined') {
@@ -197,6 +218,7 @@ export const getAppVersion = () =>
   api.get('/version', { _suppressAuthRedirect: true }).then((r) => r.data)
 
 export const getMe = (config = {}) => api.get('/auth/me', config).then((r) => r.data)
+export const createDemoSession = (data) => api.post('/demo/session', data).then((r) => r.data)
 
 // Professional context is deliberately kept with the authenticated user. It is
 // used to tailor assistance across conversations, not stored in the browser.
@@ -309,10 +331,14 @@ export const streamMessage = async function* (
     use_premium_llm: usePremium,
     attachment_ids: attachmentIds,
   })
+  const operationId = newOperationId()
   const request = () => fetch(`${BASE_URL}/conversations/${conversationId}/messages/stream`, {
     method: 'POST',
     credentials: 'include',
-    headers: buildLegacyAuthHeaders({ 'Content-Type': 'application/json' }),
+    headers: buildLegacyAuthHeaders({
+      'Content-Type': 'application/json',
+      'X-Idempotency-Key': operationId,
+    }),
     body,
     signal,
   })

@@ -30,6 +30,15 @@ class Settings(BaseSettings):
     # release. Do not enable until trial expiry and paid conversion are enforced.
     PUBLIC_SIGNUP_ENABLED: bool = False
 
+    # Guided sales demo. Settings are cached at process startup, so rotating the
+    # access code requires an API restart (but no code change).
+    DEMO_MODE_ENABLED: bool = False
+    DEMO_ACCESS_CODE: str = ""
+    DEMO_FIXTURE_TENANT_DOMAIN: str = ""
+    DEMO_SESSION_TTL_HOURS: int = 72
+    DEMO_MESSAGE_QUOTA: int = 20
+    DEMO_MAX_ACTIVE: int = 5
+
     # ── Background scheduler ─────────────────────────────────────────────────
     # APScheduler must run in EXACTLY ONE process. In prod, API workers set this
     # to False and a single dedicated scheduler container sets it to True. Jobs
@@ -363,6 +372,28 @@ def validate_jwt_algorithm(settings: Settings) -> None:
         )
 
 
+def validate_demo_settings(settings: Settings) -> None:
+    """Fail closed before exposing a session-minting public demo endpoint."""
+    if not settings.DEMO_MODE_ENABLED:
+        return
+
+    access_code = settings.DEMO_ACCESS_CODE.strip()
+    if len(access_code) < 16 or _looks_like_placeholder(access_code):
+        raise ValueError(
+            "DEMO_ACCESS_CODE must be a non-placeholder value of at least 16 characters"
+        )
+    if not settings.DEMO_FIXTURE_TENANT_DOMAIN.strip():
+        raise ValueError(
+            "DEMO_FIXTURE_TENANT_DOMAIN is required when demo mode is enabled"
+        )
+    if not 1 <= settings.DEMO_SESSION_TTL_HOURS <= 168:
+        raise ValueError("DEMO_SESSION_TTL_HOURS must be between 1 and 168")
+    if not 1 <= settings.DEMO_MESSAGE_QUOTA <= 100:
+        raise ValueError("DEMO_MESSAGE_QUOTA must be between 1 and 100")
+    if not 1 <= settings.DEMO_MAX_ACTIVE <= 25:
+        raise ValueError("DEMO_MAX_ACTIVE must be between 1 and 25")
+
+
 def validate_platform_secret_key(settings: Settings) -> None:
     """Validate the optional, time-boxed legacy bootstrap bridge secret."""
     key = settings.PLATFORM_SECRET_KEY
@@ -534,6 +565,7 @@ def get_settings() -> Settings:
     validate_token_encryption_key(settings)
     validate_secret_key(settings)
     validate_jwt_algorithm(settings)
+    validate_demo_settings(settings)
     validate_platform_secret_key(settings)
     validate_platform_bootstrap_settings(settings)
     validate_mcp_security_settings(settings)

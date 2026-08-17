@@ -28,6 +28,15 @@ def test_full_platform_is_not_public():
     assert get_plan("full-platform").public_signup is False
 
 
+def test_demo_plan_is_full_platform_but_not_public_or_premium():
+    plan = get_plan("demo")
+    assert plan.modules == list(MODULES)
+    assert plan.default_module == "matters"
+    assert plan.billing_tier == "demo"
+    assert plan.public_signup is False
+    assert plan.upsell_target == "full-platform"
+
+
 def test_mcp_only_plan_shape():
     plan = get_plan("mcp-only")
     assert plan.modules == ["mcp"]
@@ -42,6 +51,7 @@ def test_public_plans_only_returns_signup_enabled():
     assert "intake-only" in ids
     assert "mcp-only" not in ids
     assert "full-platform" not in ids
+    assert "demo" not in ids
 
 
 def test_plan_for_config_defaults_to_full_platform():
@@ -49,6 +59,7 @@ def test_plan_for_config_defaults_to_full_platform():
     assert plan_for_config({}).id == "full-platform"
     assert plan_for_config({"plan": "intake-only"}).id == "intake-only"
     assert plan_for_config({"plan": "mcp-only"}).id == "mcp-only"
+    assert plan_for_config({"plan": "demo"}).id == "demo"
     assert plan_for_config({"plan": "bogus"}).id == "full-platform"
 
 
@@ -57,7 +68,7 @@ def test_get_plan_unknown_returns_none():
 
 
 def test_every_plan_module_has_a_catalog_entry_and_valid_default():
-    for plan_id in ("intake-only", "mcp-only", "full-platform"):
+    for plan_id in ("demo", "intake-only", "mcp-only", "full-platform"):
         plan = get_plan(plan_id)
         assert plan.default_module in plan.modules
         assert all(module_id in MODULES for module_id in plan.modules)
