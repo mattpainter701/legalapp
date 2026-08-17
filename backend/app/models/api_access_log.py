@@ -18,6 +18,7 @@ class ApiAccessLog(Base):
         Index("ix_api_access_logs_endpoint", "endpoint"),
         Index("ix_api_access_logs_user_id", "user_id"),
         Index("ix_api_access_logs_status_code", "status_code"),
+        Index("ix_api_access_logs_request_id", "request_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -41,6 +42,11 @@ class ApiAccessLog(Base):
 
     ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
     user_agent_short: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Correlates this row with the error_logs row and the client-side response
+    # for the same request. Nullable: rows written before this column existed
+    # have none, and it is never required for the access log to be valid.
+    request_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
