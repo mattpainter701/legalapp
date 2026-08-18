@@ -10,7 +10,9 @@ WorkingDirectory=@LEGALAPP_ROOT@
 Environment="ENV_FILE=@ENV_FILE@"
 Environment="COMPOSE_FILES=@COMPOSE_FILES@"
 Environment="OFFSITE_BACKUP_REQUIRED=true"
-Environment="PRUNE_OLD_BACKUPS=false"
+Environment="PRUNE_OLD_BACKUPS=true"
+Environment="PRUNE_OLD_BACKUPS_CONFIRM=delete-old-legalapp-backups"
+Environment="BACKUP_RETENTION_DAYS=2"
 Environment="PATH=@EXEC_PATH@"
 UMask=0077
 ExecStart=@BASH_BIN@ @LEGALAPP_ROOT@/scripts/backup_db.sh

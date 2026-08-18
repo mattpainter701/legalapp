@@ -70,6 +70,7 @@ from app.routers.licensing import router as licensing_router
 from app.services.mcp_protocol import protocol_endpoint, protocol_lifespan
 from app.services.scheduler import LegalScheduler
 from app.services.host_disk_status import HostDiskStatusError, read_host_disk_status
+from app.services.backup_status import BackupStatusError, read_backup_status
 from app.routers.chat import cache_manager
 from app.routers.plugins import plugin_cache_manager
 from app.routers.prompt_admin import router as prompt_admin_router
@@ -480,6 +481,8 @@ async def health_readiness(request: Request):
     }
     if settings.HOST_DISK_STATUS_FILE:
         states["host_disks"] = "unavailable"
+    if settings.BACKUP_STATUS_FILE:
+        states["backups"] = "unavailable"
 
     try:
         usage = shutil.disk_usage(settings.UPLOAD_DIR)
@@ -499,6 +502,16 @@ async def health_readiness(request: Request):
         except HostDiskStatusError as exc:
             states["host_disks"] = exc.state
             logger.error("Host disk readiness probe failed: %s", exc)
+
+    if settings.BACKUP_STATUS_FILE:
+        try:
+            states["backups"] = read_backup_status(
+                settings.BACKUP_STATUS_FILE,
+                max_age_seconds=settings.HEALTH_BACKUP_MAX_AGE_SECONDS,
+            )
+        except BackupStatusError as exc:
+            states["backups"] = exc.state
+            logger.error("Off-site backup readiness probe failed: %s", exc)
 
     redis_client = getattr(request.app.state, "redis", None)
     if redis_client is not None:

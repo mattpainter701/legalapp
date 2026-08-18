@@ -45,6 +45,9 @@ load_env_defaults() {
 : "${CERTS_DIR:=$ROOT_DIR/nginx/ssl}"
 : "${OFFSITE_BACKUP_REQUIRED:=false}"
 : "${SNAPSHOT_EXPORT_TIMEOUT_SECONDS:=30}"
+: "${OFFSITE_BACKUP_EVIDENCE_MAX_AGE_SECONDS:=900}"
+: "${COURTLISTENER_RAG_CLASSIFICATION:=rebuildable-public-corpus}"
+: "${HOST_STATUS_HOST_DIR:=}"
 
 [[ "$SNAPSHOT_EXPORT_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] || {
   echo "SNAPSHOT_EXPORT_TIMEOUT_SECONDS must be a positive integer" >&2
@@ -80,6 +83,7 @@ SNAPSHOT_HOLDER_PID=""
 SNAPSHOT_HOLDER_IN=""
 SNAPSHOT_HOLDER_OUT=""
 ACTIVE_SNAPSHOT_ID=""
+OFFSITE_EVIDENCE_FILE=""
 
 close_exported_snapshot() {
   local mode="${1:-graceful}" holder_pid="${SNAPSHOT_HOLDER_PID:-}" rc=0
@@ -283,6 +287,31 @@ if [[ -n "${RESTIC_REPOSITORY:-}" ]]; then
   # The escrow copy exists only for the duration of this encrypted snapshot.
   restic backup --tag legalapp-production --tag "$TIMESTAMP" "${backup_paths[@]}"
   restic check --read-data-subset="${RESTIC_CHECK_SUBSET:-1/100}"
+  snapshot_evidence="$(mktemp "$BACKUP_DIR/.restic-snapshots.XXXXXX")"
+  trap 'rm -f -- "${snapshot_evidence:-}"; cleanup' EXIT
+  restic snapshots --json --tag "$TIMESTAMP" > "$snapshot_evidence"
+  evidence_dir="${OFFSITE_BACKUP_EVIDENCE_DIR:-$BACKUP_DIR/offsite-evidence}"
+  if [[ "$evidence_dir" != /* ]]; then evidence_dir="$ROOT_DIR/$evidence_dir"; fi
+  evidence_file="$evidence_dir/legalapp-offsite-$TIMESTAMP.json"
+  backup_status_file=""
+  if [[ -n "$HOST_STATUS_HOST_DIR" ]]; then
+    [[ "$HOST_STATUS_HOST_DIR" == /* && -d "$HOST_STATUS_HOST_DIR" && ! -L "$HOST_STATUS_HOST_DIR" ]] || {
+      echo "HOST_STATUS_HOST_DIR must be an existing absolute non-symlink directory" >&2
+      exit 3
+    }
+    backup_status_file="$HOST_STATUS_HOST_DIR/backup-status.json"
+  fi
+  status_args=()
+  [[ -z "$backup_status_file" ]] || status_args=(--status-output "$backup_status_file")
+  python3 "$SCRIPT_DIR/backup_evidence.py" \
+    --snapshots "$snapshot_evidence" --timestamp "$TIMESTAMP" \
+    --output "$evidence_file" \
+    --max-age-seconds "$OFFSITE_BACKUP_EVIDENCE_MAX_AGE_SECONDS" \
+    --courtlistener-classification "$COURTLISTENER_RAG_CLASSIFICATION" \
+    "${status_args[@]}"
+  OFFSITE_EVIDENCE_FILE="$evidence_file"
+  rm -f -- "$snapshot_evidence"
+  snapshot_evidence=""
   rm -f -- "$ESCROW_FILE"
   ESCROW_FILE=""
   echo "Encrypted off-host Restic snapshot completed."
@@ -299,10 +328,20 @@ if [[ "${PRUNE_OLD_BACKUPS:-false}" == "true" ]]; then
     echo "Refusing to prune backups without PRUNE_OLD_BACKUPS_CONFIRM=delete-old-legalapp-backups" >&2
     exit 2
   fi
+  [[ -n "$OFFSITE_EVIDENCE_FILE" && -f "$OFFSITE_EVIDENCE_FILE" ]] || {
+    echo "Refusing to prune local recovery files without verified off-site evidence" >&2
+    exit 2
+  }
   echo "Pruning backups older than ${BACKUP_RETENTION_DAYS:-30} days..."
-  find "$BACKUP_DIR" -name "legalapp_*.dump" -mtime +"${BACKUP_RETENTION_DAYS:-30}" -delete
-  find "$BACKUP_DIR" -name "litellm_*.dump" -mtime +"${BACKUP_RETENTION_DAYS:-30}" -delete
-  find "$BACKUP_DIR" -name "uploads_*.tar" -mtime +"${BACKUP_RETENTION_DAYS:-30}" -delete
+  find "$BACKUP_DIR" -maxdepth 1 -type f \
+    \( -name 'legalapp_*.dump' -o -name 'legalapp_*.dump.sha256' \
+       -o -name 'legalapp_*.counts.tsv' -o -name 'litellm_*.dump' \
+       -o -name 'litellm_*.dump.sha256' -o -name 'litellm_*.counts.tsv' \
+       -o -name 'uploads_*.tar' -o -name 'uploads_*.manifest.json' \
+       -o -name 'uploads_*.sha256' -o -name 'legalapp-predeploy-*' \
+       -o -name 'legalapp-postdeploy-*' -o -name 'litellm-predeploy-*' \
+       -o -name 'litellm-postdeploy-*' \) \
+    -mtime +"${BACKUP_RETENTION_DAYS:-30}" -delete
 fi
 
 echo "Available backups:"

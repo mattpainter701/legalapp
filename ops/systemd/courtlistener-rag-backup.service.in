@@ -1,0 +1,21 @@
+[Unit]
+Description=CourtListener legal-authority RAG encrypted off-host backup
+After=docker.service network-online.target
+Wants=network-online.target
+OnFailure=courtlistener-rag-backup-failure@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=@LEGALAPP_ROOT@
+Environment="ENV_FILE=@ENV_FILE@"
+Environment="COURTLISTENER_COMPOSE_FILE=@COURTLISTENER_COMPOSE_FILE@"
+Environment="COURTLISTENER_RAG_BACKUP_REQUIRED=true"
+Environment="COURTLISTENER_RAG_PRUNE_OLD_BACKUPS=true"
+Environment="COURTLISTENER_RAG_PRUNE_CONFIRM=delete-old-courtlistener-rag-backups"
+Environment="COURTLISTENER_RAG_BACKUP_RETENTION_HOURS=48"
+Environment="PATH=@EXEC_PATH@"
+UMask=0077
+ExecStart=@BASH_BIN@ @LEGALAPP_ROOT@/scripts/courtlistener_rag_backup.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
