@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["108_platform_operator_api_keys"]
+    assert heads == ["109_hide_unlinked_synced_emails"]
 
 
 def test_revision_ids_fit_the_alembic_version_column():
@@ -286,3 +286,72 @@ def test_mcp_security_backfill_explicitly_enters_force_rls_policy():
     backfill = "UPDATE mcp_product_keys SET monthly_call_limit"
     bypass_off = "set_config('app.rls_bypass', 'off', true)"
     assert source.index(bypass_on) < source.index(backfill) < source.index(bypass_off)
+
+
+def test_unlinked_sync_email_cleanup_is_bounded_and_truly_reversible():
+    """The two properties that make this cleanup safe to run on customer data.
+
+    It hides rows by flipping a status the workspace filters on, which is
+    indistinguishable from a user's own delete.  The recorded-before-mutated
+    ordering is therefore the only thing that makes the downgrade honest, and
+    the WHERE bounds are the only thing keeping filed correspondence out of it.
+    """
+    backend_dir = Path(__file__).resolve().parents[1]
+    source = (
+        backend_dir / "migrations" / "versions" / "109_hide_unlinked_synced_emails.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'revision = "109_hide_unlinked_synced_emails"' in source
+    assert 'down_revision = "108_platform_operator_api_keys"' in source
+
+    upgrade = source.split("def upgrade()", 1)[1].split("def downgrade()", 1)[0]
+
+    # Only syncer-created mail that never acquired a matter or a contact.
+    assert "matter_id IS NULL" in upgrade
+    assert "contact_id IS NULL" in upgrade
+    assert "external_ref LIKE 'microsoft:%'" in upgrade
+    assert "external_ref LIKE 'google:%'" in upgrade
+    # Never re-hide, and never touch outbound or non-email records.
+    assert "status <> 'deleted'" in upgrade
+    assert "channel = 'email'" in upgrade
+    assert "direction = 'inbound'" in upgrade
+
+    # Record first, then mutate, and drive the mutation off what was recorded:
+    # a row can only be hidden once its restore path exists.
+    assert upgrade.index("INSERT INTO communication_log_sync_hides") < upgrade.index(
+        "UPDATE communication_logs AS c"
+    )
+    assert "FROM recorded AS r" in upgrade
+    assert "WHERE c.id = r.communication_log_id" in upgrade
+
+    # communication_logs forces RLS against a tenant id migrations do not have,
+    # so the backfill must run inside a NO FORCE window or match nothing at all.
+    # Losing the trailing restore would leave the table readable across tenants.
+    no_force = "ALTER TABLE communication_logs NO FORCE ROW LEVEL SECURITY"
+    backfill = "INSERT INTO communication_log_sync_hides"
+    force = "ALTER TABLE communication_logs FORCE ROW LEVEL SECURITY"
+    assert upgrade.index(no_force) < upgrade.index(backfill) < upgrade.index(force)
+
+    # The ledger only gets its policy after it is written, for the same reason.
+    assert upgrade.index(backfill) < upgrade.index(
+        "ALTER TABLE communication_log_sync_hides ENABLE ROW LEVEL SECURITY"
+    )
+
+    # The ledger is customer data, so it carries tenant_id and is fail-closed.
+    assert (
+        "ALTER TABLE communication_log_sync_hides FORCE ROW LEVEL SECURITY" in upgrade
+    )
+    assert "tenant_isolation_communication_log_sync_hides" in upgrade
+    assert "NULLIF(current_setting('app.current_tenant_id', true), '')" in upgrade
+
+    downgrade = source.split("def downgrade()", 1)[1]
+    assert "SET status = h.previous_status" in downgrade
+    # Only revive what is still hidden; a hand-revived row keeps its status.
+    assert "AND c.status = 'deleted'" in downgrade
+    assert 'op.drop_table("communication_log_sync_hides")' in downgrade
+    # The restore needs the same window, and must hand FORCE RLS back.
+    assert (
+        downgrade.index(no_force)
+        < downgrade.index("SET status = h.previous_status")
+        < downgrade.index(force)
+    )
