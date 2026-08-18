@@ -386,7 +386,7 @@
       "name": "postcss",
       "scope": "devDependencies",
       "source": "frontend/package.json",
-      "specifier": "^8.4.49"
+      "specifier": "^8.5.26"
     },
     {
       "ecosystem": "npm",
@@ -708,7 +708,7 @@
       "name": "pypdf",
       "scope": "runtime/dev",
       "source": "backend/requirements.txt",
-      "specifier": "==6.14.2"
+      "specifier": "==6.15.0"
     },
     {
       "ecosystem": "pypi",
