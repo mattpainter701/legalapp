@@ -7,6 +7,7 @@ SBOM generated from a built artifact; instead, it gathers the source-of-truth
 inputs and AI/model routing metadata that must be tracked for security, DLP, and
 insurance evidence.
 """
+
 from __future__ import annotations
 
 import json
@@ -18,6 +19,7 @@ from pathlib import Path
 from typing import Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_NAME = "legalapp"
 OUT_DIR = ROOT / "sbom"
 JSON_OUT = OUT_DIR / "sbom-inventory.json"
 MD_OUT = ROOT / "docs" / "SBOM_TRACKING_INVENTORY.md"
@@ -28,6 +30,7 @@ MANIFEST_PATHS = [
     "scripts/requirements.txt",
     "scripts/tabs3_export/requirements.txt",
     "frontend/package.json",
+    "office-addin/package.json",
     "word-addin/package.json",
     "agent/pyproject.toml",
 ]
@@ -40,6 +43,7 @@ DOCKERFILE_PATHS = [
 ]
 COMPOSE_PATHS = [
     "docker-compose.yml",
+    "docker-compose.courtlistener-mcp.yml",
     "docker-compose.local.yml",
     "docker-compose.prod.yml",
     "docker-compose.hypervisor.yml",
@@ -149,7 +153,9 @@ def gather_pyproject(path: str) -> list[Dependency]:
             parsed = parse_requirement_line(dep)
             if parsed:
                 name, specifier = parsed
-                deps.append(Dependency("pypi", name, specifier, path, f"optional:{extra}"))
+                deps.append(
+                    Dependency("pypi", name, specifier, path, f"optional:{extra}")
+                )
     return deps
 
 
@@ -182,7 +188,9 @@ def gather_docker_bases() -> list[ContainerBase]:
                 continue
             image = match.group(1)
             stage_reference = image in stage_aliases
-            bases.append(ContainerBase(image, path, idx, "@sha256:" in image, stage_reference))
+            bases.append(
+                ContainerBase(image, path, idx, "@sha256:" in image, stage_reference)
+            )
             if match.group(2):
                 stage_aliases.add(match.group(2))
     return bases
@@ -223,13 +231,13 @@ def gather_ai_routes() -> list[AiRoute]:
         if line.startswith("- model_name:"):
             if current.get("route_name"):
                 routes.append(ai_route_from_current(current))
-            current = {"route_name": line.split(":", 1)[1].strip().strip('"\'')}
+            current = {"route_name": line.split(":", 1)[1].strip().strip("\"'")}
         elif line.startswith("model:") and current:
-            current["provider_model"] = line.split(":", 1)[1].strip().strip('"\'')
+            current["provider_model"] = line.split(":", 1)[1].strip().strip("\"'")
         elif line.startswith("api_base:") and current:
-            current["api_base"] = line.split(":", 1)[1].strip().strip('"\'')
+            current["api_base"] = line.split(":", 1)[1].strip().strip("\"'")
         elif line.startswith("api_key:") and current:
-            current["api_key_env"] = line.split(":", 1)[1].strip().strip('"\'')
+            current["api_key_env"] = line.split(":", 1)[1].strip().strip("\"'")
     if current.get("route_name"):
         routes.append(ai_route_from_current(current))
     return routes
@@ -250,9 +258,21 @@ def lockfiles_for_manifest(manifest: str) -> list[str]:
     if not p.exists():
         return []
     if manifest.endswith("package.json"):
-        names = ("package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb")
+        names = (
+            "package-lock.json",
+            "npm-shrinkwrap.json",
+            "yarn.lock",
+            "pnpm-lock.yaml",
+            "bun.lockb",
+        )
     elif manifest.endswith("requirements.txt"):
-        names = ("requirements.lock", "requirements.txt.lock", "uv.lock", "Pipfile.lock", "poetry.lock")
+        names = (
+            "requirements.lock",
+            "requirements.txt.lock",
+            "uv.lock",
+            "Pipfile.lock",
+            "poetry.lock",
+        )
     elif manifest.endswith("pyproject.toml"):
         names = ("uv.lock", "poetry.lock", "pdm.lock", "Pipfile.lock")
     else:
@@ -284,7 +304,9 @@ def markdown_table(headers: list[str], rows: Iterable[Iterable[object]]) -> str:
         "|" + "|".join("-" for _ in headers) + "|",
     ]
     for row in rows:
-        lines.append("|" + "|".join(str(cell).replace("|", "\\|") for cell in row) + "|")
+        lines.append(
+            "|" + "|".join(str(cell).replace("|", "\\|") for cell in row) + "|"
+        )
     return "\n".join(lines)
 
 
@@ -313,7 +335,13 @@ def write_markdown(inventory: dict[str, object]) -> None:
         "## Manifest and lockfile coverage",
         "",
         markdown_table(
-            ["Manifest", "Type", "Lockfile present", "Lockfiles", "Tracked dependency count"],
+            [
+                "Manifest",
+                "Type",
+                "Lockfile present",
+                "Lockfiles",
+                "Tracked dependency count",
+            ],
             [
                 [
                     m.path,
@@ -405,7 +433,7 @@ def main() -> int:
 
     inventory = {
         "generated_at": "generated from current working tree",
-        "repository": ROOT.name,
+        "repository": REPOSITORY_NAME,
         "manifests": [asdict(m) for m in manifests],
         "dependencies": [asdict(d) for d in deps],
         "container_bases": [asdict(b) for b in bases],
@@ -424,11 +452,15 @@ def main() -> int:
     }
 
     OUT_DIR.mkdir(exist_ok=True)
-    JSON_OUT.write_text(json.dumps(inventory, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    JSON_OUT.write_text(
+        json.dumps(inventory, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     write_markdown(inventory)
     print(f"wrote {rel(JSON_OUT)}")
     print(f"wrote {rel(MD_OUT)}")
-    print(f"tracked {len(deps)} dependencies, {len(bases)} Docker FROM images, {len(images)} compose images, {len(routes)} AI routes")
+    print(
+        f"tracked {len(deps)} dependencies, {len(bases)} Docker FROM images, {len(images)} compose images, {len(routes)} AI routes"
+    )
     return 0
 
 

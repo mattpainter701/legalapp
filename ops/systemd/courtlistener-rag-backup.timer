@@ -1,0 +1,11 @@
+[Unit]
+Description=Run CourtListener legal-authority RAG encrypted backup hourly
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=10m
+Persistent=true
+Unit=courtlistener-rag-backup.service
+
+[Install]
+WantedBy=timers.target

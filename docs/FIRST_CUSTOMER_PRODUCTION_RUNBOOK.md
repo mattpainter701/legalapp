@@ -207,8 +207,10 @@ and verifies every upload hash plus key escrow presence. Redis is rebuildable
 operational state; PostgreSQL remains the durable job and business record.
 
 After configuring the separately escrowed Restic repository/password, install
-and prove the randomized persistent daily user timer (retention is deliberately
-disabled unless an operator separately supplies the destructive confirmation):
+and prove the randomized persistent hourly user timer. Local recovery artifacts
+are pruned only after verified off-site evidence exists and the systemd service
+supplies the explicit destructive confirmation; off-site retention is managed
+separately:
 
 ```bash
 ENV_FILE=.env COMPOSE_FILES="docker-compose.hypervisor.yml" bash scripts/install_backup_timer.sh

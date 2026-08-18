@@ -98,7 +98,11 @@ def _fingerprint(files: list[SourceFile]) -> list[tuple[str, int, int, int, int]
     ]
 
 
-def create_artifact(source: Path, archive: Path, manifest: Path) -> None:
+def create_artifact(
+    source: Path, archive: Path, manifest: Path, archive_prefix: str = ARCHIVE_PREFIX
+) -> None:
+    if not archive_prefix or "/" in archive_prefix or "\\" in archive_prefix:
+        raise ArtifactError("archive prefix must be a single portable path component")
     source = source.resolve(strict=True)
     archive = archive.resolve(strict=False)
     manifest = manifest.resolve(strict=False)
@@ -148,7 +152,7 @@ def create_artifact(source: Path, archive: Path, manifest: Path) -> None:
 
                     with os.fdopen(descriptor, "rb", closefd=False) as raw:
                         reader = HashingReader(raw)
-                        info = tarfile.TarInfo(name=f"{ARCHIVE_PREFIX}/{item.relative}")
+                        info = tarfile.TarInfo(name=f"{archive_prefix}/{item.relative}")
                         info.size = item.size
                         info.mode = item.mode & 0o777
                         info.mtime = item.mtime_ns // 1_000_000_000
@@ -216,7 +220,14 @@ def _safe_manifest_path(value: object) -> str:
     return value
 
 
-def verify_artifact(archive: Path, manifest: Path, extract_dir: Path) -> None:
+def verify_artifact(
+    archive: Path,
+    manifest: Path,
+    extract_dir: Path,
+    archive_prefix: str = ARCHIVE_PREFIX,
+) -> None:
+    if not archive_prefix or "/" in archive_prefix or "\\" in archive_prefix:
+        raise ArtifactError("archive prefix must be a single portable path component")
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     if payload.get("schema_version") != 1 or not isinstance(payload.get("files"), list):
         raise ArtifactError("unsupported upload manifest")
@@ -259,7 +270,7 @@ def verify_artifact(archive: Path, manifest: Path, extract_dir: Path) -> None:
             if (
                 member_path.is_absolute()
                 or len(member_path.parts) < 2
-                or member_path.parts[0] != ARCHIVE_PREFIX
+                or member_path.parts[0] != archive_prefix
                 or any(part in {"", ".", ".."} for part in member_path.parts)
                 or "\\" in member.name
             ):
@@ -309,10 +320,12 @@ def parse_args() -> argparse.Namespace:
     create.add_argument("--source", type=Path, required=True)
     create.add_argument("--archive", type=Path, required=True)
     create.add_argument("--manifest", type=Path, required=True)
+    create.add_argument("--archive-prefix", default=ARCHIVE_PREFIX)
     verify = subparsers.add_parser("verify")
     verify.add_argument("--archive", type=Path, required=True)
     verify.add_argument("--manifest", type=Path, required=True)
     verify.add_argument("--extract-dir", type=Path, required=True)
+    verify.add_argument("--archive-prefix", default=ARCHIVE_PREFIX)
     return parser.parse_args()
 
 
@@ -320,9 +333,13 @@ def main() -> int:
     args = parse_args()
     try:
         if args.command == "create":
-            create_artifact(args.source, args.archive, args.manifest)
+            create_artifact(
+                args.source, args.archive, args.manifest, args.archive_prefix
+            )
         else:
-            verify_artifact(args.archive, args.manifest, args.extract_dir)
+            verify_artifact(
+                args.archive, args.manifest, args.extract_dir, args.archive_prefix
+            )
     except (ArtifactError, OSError, tarfile.TarError, json.JSONDecodeError) as exc:
         print(f"upload backup artifact error: {exc}", file=os.sys.stderr)
         return 2
