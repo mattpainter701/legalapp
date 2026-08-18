@@ -68,6 +68,17 @@ services:
       COURTLISTENER_SYNC_MAX_PAGES: ${COURTLISTENER_SYNC_MAX_PAGES:-}
     command: ["python", "-m", "mcp_server.sync", "--interval-seconds", "${COURTLISTENER_SYNC_INTERVAL_SECONDS:-86400}"]
 
+  # Invoked only by scripts/courtlistener_rag_backup.sh.  Both corpus volumes
+  # are mounted read-only; the caller supplies an explicit, private host backup
+  # directory at /backup for immutable artifacts.
+  courtlistener-rag-artifact:
+    build: ./mcp-server
+    profiles: ["rag-backup"]
+    volumes:
+      - ./scripts:/scripts:ro
+      - courtlistener_bulk:/data/courtlistener:ro
+      - legal_authority_cache:/data/legal-authority:ro
+
   legal-authority-sync:
     build: ./mcp-server
     profiles: ["authority-sync"]

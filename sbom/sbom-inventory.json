@@ -75,6 +75,12 @@
     },
     {
       "image": "pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb",
+      "line": 3,
+      "pinned_by_digest": true,
+      "source": "docker-compose.courtlistener-mcp.yml"
+    },
+    {
+      "image": "pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb",
       "line": 27,
       "pinned_by_digest": true,
       "source": "docker-compose.local.yml"
@@ -144,14 +150,14 @@
     },
     {
       "image": "base",
-      "line": 15,
+      "line": 17,
       "pinned_by_digest": false,
       "source": "backend/Dockerfile",
       "stage_reference": true
     },
     {
       "image": "base",
-      "line": 21,
+      "line": 23,
       "pinned_by_digest": false,
       "source": "backend/Dockerfile",
       "stage_reference": true
@@ -193,6 +199,13 @@
     }
   ],
   "dependencies": [
+    {
+      "ecosystem": "npm",
+      "name": "@dnd-kit/core",
+      "scope": "dependencies",
+      "source": "frontend/package.json",
+      "specifier": "^6.3.1"
+    },
     {
       "ecosystem": "npm",
       "name": "@microsoft/teams-js",
@@ -258,10 +271,24 @@
     },
     {
       "ecosystem": "npm",
+      "name": "remark-gfm",
+      "scope": "dependencies",
+      "source": "frontend/package.json",
+      "specifier": "^4.0.1"
+    },
+    {
+      "ecosystem": "npm",
       "name": "@eslint/js",
       "scope": "devDependencies",
       "source": "frontend/package.json",
-      "specifier": "^10.0.1"
+      "specifier": "^9.39.5"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@playwright/test",
+      "scope": "devDependencies",
+      "source": "frontend/package.json",
+      "specifier": "1.61.1"
     },
     {
       "ecosystem": "npm",
@@ -303,7 +330,21 @@
       "name": "eslint",
       "scope": "devDependencies",
       "source": "frontend/package.json",
-      "specifier": "^10.6.0"
+      "specifier": "^9.39.5"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "eslint-plugin-jsx-a11y",
+      "scope": "devDependencies",
+      "source": "frontend/package.json",
+      "specifier": "^6.10.2"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "eslint-plugin-react",
+      "scope": "devDependencies",
+      "source": "frontend/package.json",
+      "specifier": "^7.37.5"
     },
     {
       "ecosystem": "npm",
@@ -366,6 +407,48 @@
       "name": "vitest",
       "scope": "devDependencies",
       "source": "frontend/package.json",
+      "specifier": "^4.1.10"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@azure/msal-browser",
+      "scope": "dependencies",
+      "source": "office-addin/package.json",
+      "specifier": "^5.0.0"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@types/office-js",
+      "scope": "devDependencies",
+      "source": "office-addin/package.json",
+      "specifier": "^1.0.585"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "rollup",
+      "scope": "devDependencies",
+      "source": "office-addin/package.json",
+      "specifier": "npm:@rollup/wasm-node@4.62.3"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "typescript",
+      "scope": "devDependencies",
+      "source": "office-addin/package.json",
+      "specifier": "^5.8.3"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "vite",
+      "scope": "devDependencies",
+      "source": "office-addin/package.json",
+      "specifier": "^6.0.3"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "vitest",
+      "scope": "devDependencies",
+      "source": "office-addin/package.json",
       "specifier": "^4.1.10"
     },
     {
@@ -538,6 +621,13 @@
     },
     {
       "ecosystem": "pypi",
+      "name": "greenlet",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==3.5.3"
+    },
+    {
+      "ecosystem": "pypi",
       "name": "httpx",
       "scope": "runtime/dev",
       "source": "backend/requirements.txt",
@@ -566,10 +656,24 @@
     },
     {
       "ecosystem": "pypi",
+      "name": "onnxruntime",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==1.27.0"
+    },
+    {
+      "ecosystem": "pypi",
       "name": "openai",
       "scope": "runtime/dev",
       "source": "backend/requirements.txt",
       "specifier": "==1.58.1"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "opencv-python",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==5.0.0.93"
     },
     {
       "ecosystem": "pypi",
@@ -605,6 +709,13 @@
       "scope": "runtime/dev",
       "source": "backend/requirements.txt",
       "specifier": "==6.14.2"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "pypdfium2",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==5.12.1"
     },
     {
       "ecosystem": "pypi",
@@ -661,6 +772,13 @@
       "scope": "runtime/dev",
       "source": "backend/requirements.txt",
       "specifier": "==0.0.32"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "rapidocr",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==3.9.1"
     },
     {
       "ecosystem": "pypi",
@@ -752,6 +870,13 @@
       "scope": "runtime/dev",
       "source": "mcp-server/requirements.txt",
       "specifier": "==2.10.3"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "pypdf",
+      "scope": "runtime/dev",
+      "source": "mcp-server/requirements.txt",
+      "specifier": "==6.14.2"
     },
     {
       "ecosystem": "pypi",
@@ -870,6 +995,14 @@
         "frontend/package-lock.json"
       ],
       "path": "frontend/package.json",
+      "type": "npm package"
+    },
+    {
+      "lockfile_present": true,
+      "lockfiles": [
+        "office-addin/package-lock.json"
+      ],
+      "path": "office-addin/package.json",
       "type": "npm package"
     },
     {
