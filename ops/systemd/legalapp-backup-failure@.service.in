@@ -1,0 +1,7 @@
+[Unit]
+Description=Report failed LegalApp backup unit %i
+
+[Service]
+Type=oneshot
+Environment="ENV_FILE=@ENV_FILE@"
+ExecStart=@BASH_BIN@ @LEGALAPP_ROOT@/scripts/backup_failure_alert.sh
