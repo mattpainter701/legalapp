@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.models.contact import Contact
 from app.models.document import Document
+from app.models.matter_document import MatterDocument
 from app.models.matter_party import MatterParty
 from app.models.plugin import Matter
 from app.models.task import Task, TaskAutomationRun
@@ -25,6 +26,7 @@ from app.models.user import User
 from app.services import task_automation
 from app.services.connected_mail import ConnectedMailDelivery
 from app.services.email import EmailDeliveryResult
+from app.services.matter_file_store import StorageResult
 
 
 class _RecordingSender:
@@ -118,6 +120,41 @@ async def _approved_email_task(
     return task
 
 
+async def _approved_document_task(
+    db_session, tenant, user, matter, *, version=1, status="in_progress"
+):
+    settings = await db_session.scalar(
+        select(TenantSettings).where(TenantSettings.tenant_id == tenant.id)
+    )
+    if settings is None:
+        settings = TenantSettings(tenant_id=tenant.id, enable_chat_actions=True)
+        db_session.add(settings)
+    else:
+        settings.enable_chat_actions = True
+    task = Task(
+        id=uuid.uuid4(),
+        tenant_id=tenant.id,
+        created_by_user_id=user.id,
+        matter_id=matter.id,
+        title="Prepare client status letter",
+        status=status,
+        reviewer_user_id=user.id,
+        source="assistant",
+        version=version,
+        pending_action={
+            "type": "matter_document_draft",
+            "matter_id": str(matter.id),
+            "title": "Client Status Letter",
+            "body": "Dear Client,\n\nThe matter remains on schedule.",
+            "source_ids": [],
+            "sources": [],
+        },
+    )
+    db_session.add(task)
+    await db_session.commit()
+    return task
+
+
 @pytest.mark.asyncio
 async def test_approving_a_drafted_email_sends_it_once(
     db_session, test_tenant, test_user, monkeypatch
@@ -152,6 +189,61 @@ async def test_approving_a_drafted_email_sends_it_once(
     assert run.completed_at is not None
     await db_session.refresh(task)
     assert task.pending_action is None
+
+
+@pytest.mark.asyncio
+async def test_approving_a_document_draft_files_an_editable_docx_and_closes_the_work(
+    db_session, test_tenant, test_user, monkeypatch
+):
+    matter = await _matter(db_session, test_tenant, test_user)
+    task = await _approved_document_task(db_session, test_tenant, test_user, matter)
+    stored = {}
+
+    async def store_document(**kwargs):
+        stored.update(kwargs)
+        return StorageResult(
+            provider="local",
+            backend="local",
+            storage_path="/uploads/client-status-letter.docx",
+        )
+
+    monkeypatch.setattr(
+        task_automation.matter_file_store,
+        "store_matter_file_result",
+        store_document,
+    )
+
+    await task_automation.run_task_automation(
+        task.id,
+        test_tenant.id,
+        from_status="review",
+        to_status="in_progress",
+        actor_user_id=test_user.id,
+    )
+
+    assert stored["filename"] == "Client Status Letter.docx"
+    assert stored["content"].startswith(b"PK")
+    assert stored["content_type"].endswith("wordprocessingml.document")
+    document = await db_session.scalar(
+        select(MatterDocument).where(MatterDocument.matter_id == matter.id)
+    )
+    assert document is not None
+    assert document.filename == "Client Status Letter.docx"
+    assert document.file_size == len(stored["content"])
+    assert document.storage_path == "/uploads/client-status-letter.docx"
+    assert document.uploaded_by_user_id == test_user.id
+
+    run = await db_session.scalar(
+        select(TaskAutomationRun).where(TaskAutomationRun.task_id == task.id)
+    )
+    assert run.status == "sent"
+    assert run.provider == "matter_document"
+    assert run.provider_message_id == str(document.id)
+    await db_session.refresh(task)
+    assert task.pending_action is None
+    assert task.status == "completed"
+    assert task.completed_at is not None
+    assert task.version == 2
 
 
 @pytest.mark.asyncio

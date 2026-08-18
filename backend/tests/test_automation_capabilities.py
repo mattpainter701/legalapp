@@ -11,8 +11,11 @@ from app.services.automation_capabilities import (
     CapabilityError,
     CapabilityEffect,
     capability_catalog,
+    resolve_capability_spec,
 )
 from app.services.chat_tools import ALLOWED_TOOLS
+from app.schemas.chat_action import MatterDocumentDraftAction
+from app.schemas.task import PendingActionEdit
 
 
 def test_chat_and_workspace_mcp_share_one_capability_catalog():
@@ -84,3 +87,55 @@ def test_workspace_mcp_requires_an_end_user_scope_grant():
         granted_scopes=frozenset({"matters:read", "tasks:propose"}),
     )
     spec.authorize(allowed)
+
+
+def test_capability_context_preserves_the_end_user_actor():
+    tenant_id = "tenant-1"
+    user_id = "user-1"
+    context = CapabilityContext(
+        db=object(),
+        user=SimpleNamespace(id=user_id, tenant_id=tenant_id),
+    )
+
+    assert context.tenant_id == tenant_id
+    assert context.actor_user_id == user_id
+
+
+def test_capability_contracts_fail_closed_for_invalid_adapter_input():
+    spec = next(item for item in CAPABILITY_SPECS if item.name == "propose_task")
+
+    with pytest.raises(CapabilityError, match="arguments must be an object"):
+        spec.parse_arguments([])
+    with pytest.raises(CapabilityError, match="Tool name must be a string"):
+        resolve_capability_spec(None)
+    assert capability_catalog(audience="unknown_adapter") == []
+
+
+def test_document_titles_are_normalized_and_cannot_be_paths():
+    action = MatterDocumentDraftAction.model_validate(
+        {
+            "type": "matter_document_draft",
+            "matter_id": "00000000-0000-0000-0000-000000000001",
+            "title": "  Client   Status Letter  ",
+            "body": "Draft body",
+        }
+    )
+    edit = PendingActionEdit.model_validate(
+        {"title": "  Revised   Status Letter  ", "expected_version": 1}
+    )
+
+    assert action.title == "Client Status Letter"
+    assert edit.title == "Revised Status Letter"
+    with pytest.raises(ValueError, match="cannot contain a path"):
+        MatterDocumentDraftAction.model_validate(
+            {
+                "type": "matter_document_draft",
+                "matter_id": "00000000-0000-0000-0000-000000000001",
+                "title": "client/status",
+                "body": "Draft body",
+            }
+        )
+    with pytest.raises(ValueError, match="cannot contain a path"):
+        PendingActionEdit.model_validate(
+            {"title": "client\\status", "expected_version": 1}
+        )
