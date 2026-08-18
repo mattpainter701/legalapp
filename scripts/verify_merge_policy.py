@@ -88,6 +88,61 @@ def check_added_workflow_actions(base: str, head: str) -> list[str]:
     return errors
 
 
+def check_sbom_currency(files: set[str]) -> list[str]:
+    """Require the committed SBOM to be *current*, not merely re-committed.
+
+    Demanding that both generated files appear in the diff makes any edit to a
+    tracked input unmergeable when that edit does not actually move the
+    inventory -- adding router fallbacks to litellm_config.yaml, say. There is
+    no honest way to satisfy that: regeneration produces no diff, so the files
+    cannot be added to the changed set.
+
+    Regenerate and compare instead. A stale inventory still fails, which is the
+    condition the check exists to catch, and a no-op edit passes.
+    """
+    sbom_impacted = bool(files & SBOM_INPUTS) or any(
+        name.startswith("docker-compose") and name.endswith(".yml") for name in files
+    )
+    if not sbom_impacted or GENERATED_SBOM.issubset(files):
+        return []
+
+    before = {
+        name: (ROOT / name).read_bytes()
+        for name in GENERATED_SBOM
+        if (ROOT / name).exists()
+    }
+    try:
+        subprocess.run(
+            [sys.executable, "scripts/generate_sbom_inventory.py"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+        )
+    except (subprocess.CalledProcessError, OSError) as exc:
+        # Fail closed: an inventory we could not verify is not an inventory we
+        # can vouch for.
+        return [f"could not regenerate the SBOM inventory to verify it: {exc}"]
+
+    stale = sorted(
+        name
+        for name, original in before.items()
+        if (ROOT / name).read_bytes() != original
+    )
+    missing = sorted(GENERATED_SBOM - set(before))
+    for name, original in before.items():
+        (ROOT / name).write_bytes(original)
+
+    if missing:
+        return [f"SBOM inventory file is missing: {', '.join(missing)}"]
+    if stale:
+        return [
+            "SBOM-tracked inputs changed and the committed inventory is stale; "
+            "regenerate both files with python scripts/generate_sbom_inventory.py "
+            f"({', '.join(stale)})"
+        ]
+    return []
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", required=True)
@@ -97,13 +152,7 @@ def main() -> int:
 
     files = changed_files(args.base, args.head)
     errors = check_pr_template(args.event_path)
-    sbom_impacted = bool(files & SBOM_INPUTS) or any(
-        name.startswith("docker-compose") and name.endswith(".yml") for name in files
-    )
-    if sbom_impacted and not GENERATED_SBOM.issubset(files):
-        errors.append(
-            "SBOM-tracked inputs changed; regenerate both SBOM inventory files with python scripts/generate_sbom_inventory.py"
-        )
+    errors.extend(check_sbom_currency(files))
     errors.extend(check_added_workflow_actions(args.base, args.head))
     if errors:
         print(
