@@ -7,7 +7,7 @@ from app.middleware.demo_quota import _surface
 from app.models.tenant import Tenant
 from app.services.demo_access import reject_demo_premium
 from app.services.demo_clone import _remap_embedded, _required_dependency_order
-from app.services.demo_purge import _delete_order
+from app.services.demo_purge import _delete_order, _purge_tables
 
 
 def test_embedded_fixture_identifiers_are_recursively_remapped():
@@ -37,12 +37,17 @@ def test_clone_and_purge_orders_cover_the_registry_without_cycles():
         for name, policy in DEMO_TABLE_REGISTRY.items()
         if policy.clone
     }
-    purge_tables = {
-        name: Base.metadata.tables[name] for name in DEMO_TABLE_REGISTRY
-    }
+    purge_tables = {name: Base.metadata.tables[name] for name in DEMO_TABLE_REGISTRY}
 
     assert set(_required_dependency_order(clone_tables)) == set(clone_tables)
     assert set(_delete_order(purge_tables)) == set(purge_tables)
+
+
+def test_runtime_purge_plan_registers_every_demo_table():
+    """The scheduler must not depend on routers to populate Base.metadata."""
+    from app.services.demo_registry import DEMO_TABLE_REGISTRY
+
+    assert set(_purge_tables()) == set(DEMO_TABLE_REGISTRY)
 
 
 @pytest.mark.parametrize(
@@ -68,9 +73,7 @@ def test_demo_premium_requests_are_explicitly_rejected():
 
 
 def test_non_demo_and_standard_requests_keep_existing_behavior():
-    standard_demo_user = type(
-        "DemoUser", (), {"tenant": Tenant(billing_tier="demo")}
-    )()
+    standard_demo_user = type("DemoUser", (), {"tenant": Tenant(billing_tier="demo")})()
     regular_user = type("User", (), {"tenant": Tenant(billing_tier="payg")})()
 
     reject_demo_premium(standard_demo_user, False)
