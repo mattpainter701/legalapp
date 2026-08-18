@@ -213,7 +213,14 @@ def test_offsite_backup_evidence_is_fresh_and_writes_strict_status(
     }
     assert abs(status_payload["completed_at_epoch"] - int(time.time())) <= 2
     if os.name == "posix":
-        assert status.stat().st_mode & 0o077 == 0
+        mode = status.stat().st_mode
+        # The readiness probe reads this through a read-only bind mount as the
+        # container's user, which is not the uid that writes it. Requiring the
+        # file to be private made `backups` report "unavailable" after every
+        # successful backup, so it must stay readable by others...
+        assert mode & 0o044 == 0o044
+        # ...but never writable by them: readiness treats this file as proof.
+        assert mode & 0o022 == 0
 
 
 def test_offsite_backup_evidence_rejects_stale_snapshot(tmp_path: Path) -> None:
