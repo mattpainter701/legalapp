@@ -55,3 +55,44 @@ async def test_unmatched_email_is_not_archived_or_turned_into_a_task(monkeypatch
     )
 
     assert db.persistence_attempted is False
+
+
+async def test_copied_contact_does_not_make_an_unknown_sender_matter_mail(monkeypatch):
+    """A known contact in cc must not pull an unknown sender's mail into a matter.
+
+    Inbound sync sees everything in the mailbox.  Matching recipients as well as
+    the sender meant that any message copying a client -- or simply addressed to
+    the firm -- became durable matter correspondence no matter who sent it.
+    """
+    import uuid as uuid_mod
+
+    from app.services import email_agent as agent
+
+    tenant_id = uuid_mod.uuid4()
+    seen_addresses = {}
+
+    class Contacts:
+        def all(self):
+            return []
+
+    class DB:
+        async def execute(self, statement):
+            # Capture the address set the query was built from.
+            text = str(statement.compile(compile_kwargs={"literal_binds": True}))
+            seen_addresses["sql"] = text
+            return Contacts()
+
+    email = {
+        "from": "stranger@unknown.example",
+        "to": "firm@example.com",
+        "cc": "client@known.example",
+        "bcc": "paralegal@known.example",
+    }
+
+    result = await agent._match_email_to_matters(DB(), tenant_id, email)
+
+    assert result == []
+    sql = seen_addresses["sql"].lower()
+    assert "stranger@unknown.example" in sql
+    for copied in ("client@known.example", "paralegal@known.example", "firm@example.com"):
+        assert copied not in sql, f"{copied} must not be matched: it is a recipient, not the sender"
