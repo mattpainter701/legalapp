@@ -1,7 +1,11 @@
 param(
   [string]$MicrosoftClientId = $env:MICROSOFT_CLIENT_ID,
   [string]$TeamsAppId = "b7aef9aa-6b66-4cde-8cf8-4a251e2f8f22",
-  [string]$PublicHost = "getlawhand.com"
+  [string]$PublicHost = "getlawhand.com",
+  # The Entra Application ID URI is an identity value, not a website URL.
+  # It must match the app registration byte for byte, so it stays on the
+  # old host until that registration is migrated.
+  [string]$MicrosoftResourceHost = "legalapp.perevagagroup.com"
 )
 
 $ErrorActionPreference = "Stop"
@@ -65,7 +69,7 @@ $manifest = [ordered]@{
   validDomains = @($PublicHost)
   webApplicationInfo = [ordered]@{
     id = $MicrosoftClientId
-    resource = "api://$PublicHost/$MicrosoftClientId"
+    resource = "api://$MicrosoftResourceHost/$MicrosoftClientId"
   }
 }
 
