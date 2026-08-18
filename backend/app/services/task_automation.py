@@ -393,7 +393,9 @@ async def _run_matter_document_draft(
             delivery_certainty=DELIVERY_NOT_ATTEMPTED,
         )
     matter = await db.scalar(
-        select(Matter).where(Matter.id == action.matter_id, Matter.tenant_id == task.tenant_id)
+        select(Matter).where(
+            Matter.id == action.matter_id, Matter.tenant_id == task.tenant_id
+        )
     )
     if matter is None:
         return ActionExecutionResult(
@@ -416,9 +418,19 @@ async def _run_matter_document_draft(
             matter_cloud_folder=matter.cloud_folder,
         )
     except Exception as exc:
-        return ActionExecutionResult(False, f"Word document could not be saved: {exc}"[:500], delivery_certainty=DELIVERY_NOT_ATTEMPTED)
+        return ActionExecutionResult(
+            False,
+            f"Word document could not be saved: {exc}"[:500],
+            delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+        )
     if not storage.succeeded:
-        return ActionExecutionResult(False, f"Word document could not be saved: {storage.error or 'storage failed'}"[:500], delivery_certainty=DELIVERY_NOT_ATTEMPTED)
+        return ActionExecutionResult(
+            False,
+            f"Word document could not be saved: {storage.error or 'storage failed'}"[
+                :500
+            ],
+            delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+        )
 
     document = MatterDocument(
         tenant_id=task.tenant_id,
