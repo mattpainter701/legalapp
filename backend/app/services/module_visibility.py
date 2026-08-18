@@ -81,7 +81,10 @@ async def resolve_enabled_modules(
     )
     tenant_settings = settings_result.scalar_one_or_none()
     custom_config = tenant_settings.custom_config if tenant_settings else None
-    custom_config = custom_config or {}
+    # Tenant settings are JSON and can contain a legacy scalar from an older
+    # import.  Authentication must still return a usable workspace instead of
+    # turning that stale preference into a 500 from ``/auth/me``.
+    custom_config = custom_config if isinstance(custom_config, dict) else {}
 
     from app.services.plans import get_plan
 
@@ -133,5 +136,6 @@ async def resolve_plan_meta(
         select(TenantSettings).where(TenantSettings.tenant_id == tenant_id)
     )
     ts = result.scalar_one_or_none()
-    plan = plan_for_config(ts.custom_config if ts else None)
+    custom_config = ts.custom_config if ts else None
+    plan = plan_for_config(custom_config if isinstance(custom_config, dict) else None)
     return plan.id, plan.upsell_target
