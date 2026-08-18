@@ -50,4 +50,7 @@ def test_standard_chat_route_uses_fast_primary_and_live_fallbacks():
     assert "clarity-premium-openrouter-qwen" not in models
     assert "clarity-premium-zen-flash" not in models
 
-    assert "fallbacks" not in config["router_settings"]
+    assert config["router_settings"]["fallbacks"] == [
+        {"clarity-standard": ["clarity-standard-deepseek-flash-free"]},
+        {"clarity-premium": ["clarity-standard-deepseek-flash-free"]},
+    ]
