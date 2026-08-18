@@ -44,6 +44,8 @@ services:
       EMAIL_FROM: ${EMAIL_FROM:?Set EMAIL_FROM in .env}
       HOST_DISK_STATUS_FILE: /run/legalapp-host-status/disk-status.json
       HEALTH_HOST_DISK_MAX_AGE_SECONDS: ${HEALTH_HOST_DISK_MAX_AGE_SECONDS:-180}
+      BACKUP_STATUS_FILE: ${BACKUP_STATUS_FILE:-}
+      HEALTH_BACKUP_MAX_AGE_SECONDS: ${HEALTH_BACKUP_MAX_AGE_SECONDS:-7200}
       RUN_SCHEDULER: "false"
     volumes:
       - ${UPLOADS_HOST_DIR:?Set an absolute UPLOADS_HOST_DIR in .env}:/app/uploads
