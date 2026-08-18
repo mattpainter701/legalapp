@@ -105,7 +105,9 @@ services:
       start_period: 90s
 
   migrator:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     depends_on:
       postgres:
         condition: service_healthy
@@ -116,7 +118,9 @@ services:
     restart: "no"
 
   backend:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     depends_on:
       postgres:
         condition: service_healthy
@@ -164,7 +168,9 @@ services:
   # this separate prevents API restarts or future worker scaling from firing
   # customer reminders more than once.
   scheduler:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     depends_on:
       backend:
         condition: service_healthy
