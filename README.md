@@ -255,6 +255,7 @@ the off-host restore proof described in the runbook.
 - [PDF template operations](docs/PDF_TEMPLATE_OPERATIONS.md)
 - [Credential rotation and platform access](docs/credential_security_operations.md)
 - [MCP product gateway release gates](docs/mcp_product_gateway.md)
+- [Matter automation and workspace MCP architecture](docs/matter_automation_workspace_mcp.md)
 - [Production hardening](docs/PROD_HARDENING.md)
 - [SBOM tracking inventory](docs/SBOM_TRACKING_INVENTORY.md)
 
