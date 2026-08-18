@@ -155,6 +155,9 @@ async def seed(domain: str) -> uuid.UUID:
                 ),
             ]
         )
+        # Contacts and matters reference this synthetic administrator. Flush it
+        # first so PostgreSQL can satisfy those foreign-key constraints.
+        await db.flush()
 
         for index, spec in enumerate(manifest["matters"]):
             matter_id, contact_id = uuid.uuid4(), uuid.uuid4()
@@ -200,6 +203,14 @@ async def seed(domain: str) -> uuid.UUID:
                 [
                     contact,
                     matter,
+                ]
+            )
+            # These are referenced by the event, tasks, and documents below.
+            # Flush parents first because the fixture uses explicit UUID fields
+            # rather than ORM relationship assignment.
+            await db.flush()
+            db.add_all(
+                [
                     MatterEvent(
                         tenant_id=tenant_id,
                         matter_id=matter_id,
@@ -283,6 +294,9 @@ async def seed(domain: str) -> uuid.UUID:
                         embedding_version=1,
                     )
                 )
+                # Chunks reference this document; persist the parent before
+                # adding its extracted-text records.
+                await db.flush()
                 for chunk in chunks:
                     db.add(
                         Chunk(
