@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, CheckCircle2, ClipboardCheck, FileText, LoaderCircle, Mail, Pencil, Send, X } from 'lucide-react'
-import { API_BASE_URL } from '../../api'
+import { AlertTriangle, ArrowRight, CheckCircle2, ClipboardCheck, FileText, LoaderCircle, Mail, Pencil, Send, Sparkles, X } from 'lucide-react'
+import { API_BASE_URL, updateTaskPendingAction } from '../../api'
+import DocumentDraftWorkspace from './DocumentDraftWorkspace'
 
 // The backend emits document links as origin-relative `/api/...`; re-base them
 // so a deployment serving the API from another host still resolves them.
@@ -59,25 +60,6 @@ function EmailDraft({ pendingAction, draft, onDraftChange, editing, immutable = 
           {draft}
         </p>
       )}
-    </div>
-  )
-}
-
-function DocumentDraft({ pendingAction, title, body, onTitleChange, onBodyChange, editing, immutable = false }) {
-  if (!pendingAction || pendingAction.type !== 'matter_document_draft') return null
-  return (
-    <div className="mt-3 border border-brand-line bg-brand-bg/60 p-3">
-      <div className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-brand-muted">
-        <FileText className="h-3 w-3" strokeWidth={2} />
-        <span>{immutable ? 'Recorded Word document' : 'Draft Word document'}</span>
-      </div>
-      {editing ? (
-        <div className="mt-2 space-y-2">
-          <label className="block"><span className="sr-only">Document title</span><input value={title} onChange={(event) => onTitleChange(event.target.value)} maxLength={300} className="w-full border border-brand-line bg-brand-surface p-2 text-sm font-semibold text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-accent" /></label>
-          <label className="block"><span className="sr-only">Document body</span><textarea value={body} onChange={(event) => onBodyChange(event.target.value)} rows={12} maxLength={20000} className="w-full resize-y border border-brand-line bg-brand-surface p-2 text-[13px] leading-relaxed text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-accent" /></label>
-        </div>
-      ) : <><p className="mt-2 font-semibold text-brand-ink">{title}</p><p className="mt-2 whitespace-pre-wrap break-words text-[13px] leading-relaxed text-brand-ink-2">{body}</p></>}
-      <p className="mt-2 text-[11px] text-brand-muted">Approval creates an editable .docx in Matter Documents; it does not email the client.</p>
     </div>
   )
 }
@@ -369,6 +351,9 @@ export default function ActionProposalCard({
     || currentProposal?.delivery?.action_type === 'matter_document_draft'
   const [draft, setDraft] = useState(pendingAction?.body || '')
   const [documentTitle, setDocumentTitle] = useState(pendingAction?.title || '')
+  const [documentWorkspaceOpen, setDocumentWorkspaceOpen] = useState(false)
+  const [documentSaving, setDocumentSaving] = useState(false)
+  const [documentNotice, setDocumentNotice] = useState(null)
   const [editing, setEditing] = useState(false)
   const [state, setState] = useState('proposed')
   const [delivery, setDelivery] = useState(currentProposal?.delivery || null)
@@ -474,7 +459,7 @@ export default function ActionProposalCard({
     ) {
       void pollForDelivery(currentProposal)
     }
-  }, [currentProposal, delivery, isEmail, pollForDelivery, verification])
+  }, [currentProposal, delivery, isDocument, isEmail, pollForDelivery, verification])
 
   const handleApprove = async () => {
     setState('approving')
@@ -520,7 +505,98 @@ export default function ActionProposalCard({
     }
   }
 
+  const handleSaveDocument = async () => {
+    const cleanTitle = documentTitle.trim()
+    if (!cleanTitle || !draft.trim()) {
+      setError('A document title and text are required.')
+      return
+    }
+    if (!Number.isInteger(currentProposal?.version) || currentProposal.version < 1) {
+      setError('The live review version is unavailable. Close and reopen this draft.')
+      return
+    }
+    setDocumentSaving(true)
+    setDocumentNotice(null)
+    setError(null)
+    try {
+      const updated = await updateTaskPendingAction(currentProposal.task_id, {
+        title: cleanTitle,
+        body: draft,
+        expected_version: currentProposal.version,
+      })
+      setLiveTask(updated)
+      setDocumentTitle(updated.pending_action?.title || cleanTitle)
+      setDraft(updated.pending_action?.body || draft)
+      setDocumentNotice('Saved to the Review task.')
+    } catch (saveError) {
+      setError(renderSafeError(saveError, 'The document draft could not be saved.'))
+    } finally {
+      setDocumentSaving(false)
+    }
+  }
+
   if (state === 'dismissed') return null
+
+  if (isDocument) {
+    const documentDelivery = delivery || currentProposal.delivery
+    const filed = documentDelivery?.status === 'sent' && documentDelivery?.action_type === 'matter_document_draft'
+    const savedDocumentUrl = filed && documentDelivery?.provider_message_id && currentProposal.matter_id
+      ? `${API_BASE_URL}/matters/${currentProposal.matter_id}/documents/${documentDelivery.provider_message_id}/download`
+      : ''
+    const canOpen = verification === 'verified' && !currentProposal.action_invalidated
+    return (
+      <>
+        <section data-testid="document-artifact" aria-label={`Document draft: ${documentTitle}`} className="mt-4 overflow-hidden rounded-2xl border border-brand-line bg-white shadow-sm">
+          <div className="h-1 bg-blue-600" />
+          <div className="p-4 sm:p-5">
+            <div className="flex items-start gap-3">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-700"><FileText size={21} /></div>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-blue-700">Word document draft</span>
+                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${filed ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-violet-200 bg-violet-50 text-violet-700'}`}>{filed ? 'Filed to matter' : 'In review'}</span>
+                </div>
+                <h4 className="mt-1 truncate font-serif text-lg font-bold text-brand-ink">{documentTitle || 'Untitled document'}</h4>
+                <p className="mt-0.5 text-xs text-brand-muted">{filed ? 'Approved Word file' : 'Prepared from this matter and your chat instructions'} · {String(draft || '').trim().split(/\s+/).filter(Boolean).length.toLocaleString()} words</p>
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-xl border border-brand-line bg-brand-bg-soft p-3 sm:p-4">
+              <p className="line-clamp-4 whitespace-pre-wrap font-serif text-sm leading-6 text-brand-ink-2">{draft}</p>
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              {filed && savedDocumentUrl ? (
+                <a href={savedDocumentUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg bg-brand-ink px-3.5 py-2 text-xs font-bold text-white"><FileText size={14} />Open Word document</a>
+              ) : (
+                <button type="button" onClick={() => setDocumentWorkspaceOpen(true)} disabled={!canOpen} className="inline-flex items-center gap-2 rounded-lg bg-brand-ink px-3.5 py-2 text-xs font-bold text-white disabled:opacity-50"><Sparkles size={14} />Open draft workspace</button>
+              )}
+              {!filed && <a href={`/tasks/${currentProposal.task_id}`} className="inline-flex items-center gap-2 rounded-lg border border-brand-line px-3.5 py-2 text-xs font-bold text-brand-ink hover:border-brand-accent">Continue in Review <ArrowRight size={14} /></a>}
+              <span className="ml-auto text-[11px] text-brand-muted">Filing and Word conversion happen on approval.</span>
+            </div>
+            {verification === 'loading' && <p role="status" className="mt-3 flex items-center gap-2 text-xs font-semibold text-brand-muted"><LoaderCircle size={14} className="animate-spin" />Checking the live Review task…</p>}
+            {verification === 'failed' && <div role="alert" className="mt-3 text-xs font-semibold text-brand-rose"><p>{loadError}</p><button type="button" onClick={() => setReloadCounter((value) => value + 1)} className="mt-2 rounded-lg border border-brand-line px-3 py-2 text-brand-ink">Retry task status</button></div>}
+          </div>
+        </section>
+        <DocumentDraftWorkspace
+          open={documentWorkspaceOpen}
+          title={documentTitle}
+          body={draft}
+          sources={currentProposal.sources || pendingAction?.sources || []}
+          dirty={bodyChanged || titleChanged}
+          saving={documentSaving}
+          filed={filed}
+          savedDocumentUrl={savedDocumentUrl}
+          notice={documentNotice}
+          error={error}
+          onTitleChange={(value) => { setDocumentTitle(value); setDocumentNotice(null) }}
+          onBodyChange={(value) => { setDraft(value); setDocumentNotice(null) }}
+          onSave={handleSaveDocument}
+          onClose={() => setDocumentWorkspaceOpen(false)}
+        />
+      </>
+    )
+  }
 
   return (
     <section
@@ -567,16 +643,6 @@ export default function ActionProposalCard({
         editing={editing}
         immutable={currentProposal.action_consumed}
       />
-      <DocumentDraft
-        pendingAction={pendingAction}
-        title={documentTitle}
-        body={draft}
-        onTitleChange={setDocumentTitle}
-        onBodyChange={setDraft}
-        editing={editing}
-        immutable={currentProposal.action_consumed}
-      />
-
       <SourceChips sources={currentProposal.sources} />
       <PriorDeliveryAttempts history={currentProposal.delivery_history} />
       <SavedDocumentLink proposal={currentProposal} delivery={delivery || currentProposal.delivery} />

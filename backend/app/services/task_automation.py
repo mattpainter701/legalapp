@@ -799,6 +799,26 @@ async def run_task_automation(
                 # Clear the draft so a later manual transition of the same task
                 # cannot re-enter the automation path at all.
                 task.pending_action = None
+                if action_type == "matter_document_draft":
+                    # Document preparation is complete once the reviewed Word
+                    # file is safely stored. The attorney should not have to
+                    # return to the board to close secretarial work manually.
+                    previous_status = task.status
+                    completed_at = datetime.now(timezone.utc)
+                    task.status = "completed"
+                    task.completed_at = completed_at
+                    task.status_changed_at = completed_at
+                    task.version += 1
+                    append_task_event(
+                        db,
+                        task,
+                        event_type="status_changed",
+                        actor_user_id=actor_user_id,
+                        from_status=previous_status,
+                        to_status="completed",
+                        note="Approved Word document filed to the matter.",
+                        metadata={"action_type": action_type},
+                    )
             await db.commit()
         except Exception:
             # Infrastructure failures must escape to the durable-job worker so

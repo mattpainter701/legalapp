@@ -227,6 +227,72 @@ describe('TaskBoard', () => {
     expect(screen.getByRole('button', { name: /^Move to/ })).toBeEnabled()
   })
 
+  it('treats an assistant document as a focused review workspace and approval handoff', async () => {
+    const user = userEvent.setup()
+    let current = {
+      ...task,
+      id: 'task-document-draft',
+      title: 'Review document: Client status letter',
+      status: 'review',
+      version: 2,
+      source: 'assistant',
+      pending_action: {
+        type: 'matter_document_draft',
+        title: 'Client status letter',
+        body: 'Dear Client,\n\nThis letter provides the current matter status.',
+        sources: [{ source_id: 'matter:1', label: 'Matter notes', url: '' }],
+      },
+    }
+    getTask.mockImplementation(async () => current)
+    updateTaskPendingAction.mockImplementation(async (_id, payload) => {
+      current = {
+        ...current,
+        version: 3,
+        pending_action: { ...current.pending_action, title: payload.title, body: payload.body },
+      }
+      return current
+    })
+    props.onTransition.mockResolvedValue({ ...current, status: 'in_progress', version: 4 })
+    const draftedData = {
+      ...data,
+      columns: data.columns.map((column) => (
+        column.status === 'review'
+          ? { ...column, total: 1, items: [current] }
+          : { ...column, total: 0, items: [] }
+      )),
+    }
+
+    render(<TaskBoard {...props} data={draftedData} taskId="task-document-draft" />)
+
+    expect(await screen.findByText('Word document draft')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Open draft workspace' }))
+    expect(screen.getByRole('dialog', { name: 'Client status letter' })).toBeInTheDocument()
+    expect(screen.getByText('No template attached')).toBeInTheDocument()
+
+    await user.clear(screen.getByRole('textbox', { name: 'Document text' }))
+    await user.type(screen.getByRole('textbox', { name: 'Document text' }), 'Dear Client,\n\nThe hearing is set for September 14.')
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(updateTaskPendingAction).toHaveBeenCalledWith(
+      'task-document-draft',
+      expect.objectContaining({
+        title: 'Client status letter',
+        body: 'Dear Client,\n\nThe hearing is set for September 14.',
+        expected_version: 2,
+      }),
+    ))
+    await user.click(screen.getByRole('button', { name: 'Review and approve' }))
+
+    expect(screen.getByRole('dialog', { name: 'Approve and file document' })).toBeInTheDocument()
+    expect(screen.getByText(/convert.*Client status letter.*editable Word file/i)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Approve document' }))
+    await waitFor(() => expect(props.onTransition).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'task-document-draft', version: 3 }),
+      'in_progress',
+      expect.any(Object),
+    ))
+  })
+
   it('loads the immutable delivery action snapshot from task detail after the live draft clears', async () => {
     const boardCard = {
       ...task,

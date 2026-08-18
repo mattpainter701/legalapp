@@ -39,6 +39,7 @@ import {
   searchUsers,
   updateTaskPendingAction,
 } from '../../api'
+import DocumentDraftWorkspace from '../chat/DocumentDraftWorkspace'
 
 export const BOARD_STATUSES = ['pending', 'in_progress', 'waiting', 'review', 'completed']
 
@@ -304,7 +305,9 @@ function DraggableTaskCard({ task, pending, onOpen, onMoveRequest, draggable = t
       )}
       {task.delivery?.status === 'failed' && (
         <p role="alert" className={`mt-2 rounded-lg px-2 py-1.5 text-[11px] ${task.delivery.delivery_certainty === 'not_attempted' ? 'bg-amber-50 text-amber-900' : 'bg-red-50 text-red-800'}`}>
-          {task.delivery.delivery_certainty === 'not_attempted' ? (
+          {task.delivery.action_type === 'matter_document_draft' ? (
+            <>The approved Word document could not be filed: {task.delivery.error_message || 'document storage failed'}. Open the task to review the filing record.</>
+          ) : task.delivery.delivery_certainty === 'not_attempted' ? (
             <>Email was not sent: {task.delivery.error_message || 'delivery stopped before a provider attempt'}. Resolve the issue and approve again.</>
           ) : (
             <>Delivery not confirmed: {task.delivery.error_message || 'the provider did not confirm delivery'}. Check the connected mailbox&apos;s Sent Items before retrying; another attempt could send a duplicate.</>
@@ -313,12 +316,12 @@ function DraggableTaskCard({ task, pending, onOpen, onMoveRequest, draggable = t
       )}
       {task.delivery?.status === 'queued' && (
         <p role="status" className="mt-2 rounded-lg bg-amber-50 px-2 py-1.5 text-[11px] text-amber-900">
-          Approved and queued for delivery. Not yet confirmed sent.
+          {task.delivery.action_type === 'matter_document_draft' ? 'Approval recorded. Creating the Word document…' : 'Approved and queued for delivery. Not yet confirmed sent.'}
         </p>
       )}
       {task.delivery?.status === 'sending' && (
         <p role="status" className="mt-2 rounded-lg bg-amber-50 px-2 py-1.5 text-[11px] text-amber-900">
-          Delivery attempt in progress. Not yet confirmed sent.
+          {task.delivery.action_type === 'matter_document_draft' ? 'Creating and filing the Word document…' : 'Delivery attempt in progress. Not yet confirmed sent.'}
         </p>
       )}
       {task.delivery?.status === 'sent' && (
@@ -432,6 +435,9 @@ function TaskTransitionDialog({ request, onClose, onConfirm, saving }) {
   const emailApproval = request.task.status === 'review'
     && request.task.pending_action?.type === 'email_client'
     && target === 'in_progress'
+  const documentApproval = request.task.status === 'review'
+    && request.task.pending_action?.type === 'matter_document_draft'
+    && target === 'in_progress'
   const activeDelivery = emailApproval
     && ['queued', 'sending'].includes(request.task.delivery?.status)
   const confirmedDelivery = emailApproval
@@ -472,8 +478,8 @@ function TaskTransitionDialog({ request, onClose, onConfirm, saving }) {
       <form ref={dialogRef} onSubmit={submit} role="dialog" aria-modal="true" aria-labelledby="transition-title" className="w-full max-w-md rounded-2xl bg-white shadow-2xl">
         <header className="flex items-start justify-between border-b border-brand-line px-5 py-4">
           <div>
-            <p className="text-[11px] font-bold uppercase tracking-wider text-brand-accent">Move task</p>
-            <h2 id="transition-title" className="mt-1 text-lg font-serif font-bold text-brand-ink">Move to {config?.label || target}</h2>
+            <p className="text-[11px] font-bold uppercase tracking-wider text-brand-accent">{documentApproval ? 'Document approval' : 'Move task'}</p>
+            <h2 id="transition-title" className="mt-1 text-lg font-serif font-bold text-brand-ink">{documentApproval ? 'Approve and file document' : `Move to ${config?.label || target}`}</h2>
             <p className="mt-1 line-clamp-2 text-xs text-brand-muted">{request.task.title}</p>
           </div>
           <button type="button" onClick={onClose} disabled={saving} aria-label="Close move dialog" className="rounded p-1 text-brand-muted hover:bg-brand-bg-soft"><X size={17} /></button>
@@ -494,6 +500,12 @@ function TaskTransitionDialog({ request, onClose, onConfirm, saving }) {
                 “{request.task.pending_action.subject}”. Open the task to read
                 or edit the draft before approving.
               </p>
+            </div>
+          )}
+          {documentApproval && (
+            <div role="note" className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5">
+              <p className="flex items-center gap-1.5 text-xs font-bold text-blue-800"><FileText size={12} /> Approve this document</p>
+              <p className="mt-1 text-[11px] leading-relaxed text-brand-ink">LawHand will convert “{request.task.pending_action.title}” into an editable Word file and place it in this matter&apos;s Documents area. Nothing is emailed to the client.</p>
             </div>
           )}
           {request.task.status === 'review'
@@ -562,7 +574,7 @@ function TaskTransitionDialog({ request, onClose, onConfirm, saving }) {
         </div>
         <footer className="flex justify-end gap-2 border-t border-brand-line px-5 py-4">
           <button type="button" onClick={onClose} disabled={saving} className="rounded-lg px-4 py-2 text-sm text-brand-muted hover:bg-brand-bg-soft">Cancel</button>
-          <button type="submit" disabled={saving || activeDelivery || confirmedDelivery || (unknownOutcomeRetry && !deliveryRiskAcknowledged) || (target === 'cancelled' && !reason.trim())} className="btn-primary inline-flex items-center gap-2 disabled:opacity-50">{saving && <Loader2 size={14} className="animate-spin" />} Move task</button>
+          <button type="submit" disabled={saving || activeDelivery || confirmedDelivery || (unknownOutcomeRetry && !deliveryRiskAcknowledged) || (target === 'cancelled' && !reason.trim())} className="btn-primary inline-flex items-center gap-2 disabled:opacity-50">{saving && <Loader2 size={14} className="animate-spin" />} {documentApproval ? 'Approve document' : 'Move task'}</button>
         </footer>
       </form>
     </div>
@@ -719,37 +731,34 @@ function PendingEmailDraftPanel({
   )
 }
 
-function PendingDocumentDraftPanel({ task, draft, editable, editing, saving, title, body, error, notice, onEdit, onTitleChange, onBodyChange, onSave, onCancel }) {
+function PendingDocumentDraftPanel({ task, draft, editable, onOpen }) {
   return (
-    <section aria-labelledby={'document-draft-' + task.id} className="rounded-xl border border-brand-accent/35 bg-brand-accent/[0.04] p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h3 id={'document-draft-' + task.id} className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-brand-accent-2"><FileText size={13} /> Authoritative Word document draft</h3>
-          <p className="mt-1 text-[11px] leading-relaxed text-brand-muted">This editable draft becomes a .docx in Matter Documents only when the Review task is approved.</p>
+    <section aria-labelledby={'document-draft-' + task.id} className="overflow-hidden rounded-2xl border border-brand-line bg-white shadow-sm">
+      <div className="h-1 bg-blue-600" />
+      <div className="p-4">
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-700"><FileText size={19} /></div>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2"><span className="text-[10px] font-bold uppercase tracking-[0.15em] text-blue-700">Word document draft</span><span className="rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-violet-700">In review</span></div>
+            <h3 id={'document-draft-' + task.id} className="mt-1 truncate font-serif text-lg font-bold text-brand-ink">{draft.title}</h3>
+            <p className="mt-0.5 text-[11px] text-brand-muted">Matter context and source materials are already attached.</p>
+          </div>
         </div>
-        {editable && !editing && <button type="button" onClick={onEdit} className="rounded-lg border border-brand-line bg-white px-3 py-1.5 text-xs font-semibold text-brand-ink hover:border-brand-accent">Edit document</button>}
+        <p className="mt-3 line-clamp-4 whitespace-pre-wrap rounded-xl bg-brand-bg-soft p-3 font-serif text-sm leading-6 text-brand-ink-2">{draft.body}</p>
+        {(draft.sources || []).length > 0 && <p className="mt-2 text-[11px] font-semibold text-brand-muted">{draft.sources.length} supporting {draft.sources.length === 1 ? 'item' : 'items'} linked</p>}
+        <button type="button" onClick={onOpen} className="mt-3 inline-flex items-center gap-2 rounded-lg bg-brand-ink px-3.5 py-2 text-xs font-bold text-white"><FileText size={14} />{editable ? 'Open draft workspace' : 'View document draft'}</button>
       </div>
-      {editing ? (
-        <form className="mt-3 space-y-3" onSubmit={(event) => { event.preventDefault(); onSave() }}>
-          <div><label htmlFor={'document-title-' + task.id} className="mb-1 block text-xs font-semibold text-brand-ink">Document title</label><input id={'document-title-' + task.id} value={title} onChange={(event) => onTitleChange(event.target.value)} maxLength={300} disabled={saving} className="w-full rounded-lg border border-brand-line bg-white px-3 py-2 text-sm text-brand-ink disabled:opacity-60" /></div>
-          <div><label htmlFor={'document-body-' + task.id} className="mb-1 block text-xs font-semibold text-brand-ink">Document text</label><textarea id={'document-body-' + task.id} value={body} onChange={(event) => onBodyChange(event.target.value)} rows={12} maxLength={20000} disabled={saving} className="w-full resize-y rounded-lg border border-brand-line bg-white px-3 py-2 text-sm leading-relaxed text-brand-ink disabled:opacity-60" /></div>
-          <div className="flex flex-wrap gap-2"><button type="submit" disabled={saving} className="btn-primary inline-flex items-center gap-2 disabled:opacity-50">{saving && <Loader2 size={14} className="animate-spin" />}Save document draft</button><button type="button" onClick={onCancel} disabled={saving} className="rounded-lg border border-brand-line px-3 py-2 text-sm font-semibold text-brand-muted hover:bg-white disabled:opacity-50">Cancel edit</button></div>
-        </form>
-      ) : <><p className="mt-3 font-semibold text-brand-ink">{draft.title}</p><p className="mt-2 whitespace-pre-wrap rounded-lg bg-white p-3 text-sm leading-relaxed text-brand-ink">{draft.body}</p></>}
-      {(draft.sources || []).length > 0 && <ul className="mt-3 flex flex-wrap gap-1" aria-label="Document draft sources">{draft.sources.map((source) => <li key={source.source_id}><TaskSourceChip source={source} /></li>)}</ul>}
-      {!editable && <p className="mt-3 text-xs font-semibold text-brand-muted">This draft is read-only because the task is no longer in Review.</p>}
-      {notice && <p role="status" className="mt-3 text-xs font-semibold text-emerald-700">{notice}</p>}
-      {error && <p role="alert" className="mt-3 text-xs font-semibold text-red-700">{error}</p>}
     </section>
   )
 }
 
 function DeliveryAttemptHistory({ attempts }) {
   if (!Array.isArray(attempts) || attempts.length < 1) return null
+  const isDocumentHistory = attempts.some((attempt) => attempt.action_type === 'matter_document_draft' || attempt.action_snapshot?.type === 'matter_document_draft')
   return (
     <section aria-labelledby="delivery-attempt-history">
       <h3 id="delivery-attempt-history" className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-brand-muted">
-        <History size={13} /> Delivery attempts
+        <History size={13} /> {isDocumentHistory ? 'Document filing record' : 'Delivery attempts'}
       </h3>
       <ol className="mt-3 space-y-2">
         {attempts.map((attempt, index) => {
@@ -762,10 +771,19 @@ function DeliveryAttemptHistory({ attempts }) {
                   {attempt.delivery_certainty ? ` — ${attempt.delivery_certainty.replaceAll('_', ' ')}` : ''}
                 </summary>
                 <dl className="mt-3 grid gap-2 text-[11px] sm:grid-cols-2">
-                  <div><dt className="font-bold uppercase tracking-wide text-brand-muted">To</dt><dd className="mt-0.5 break-all text-brand-ink">{(snapshot.to || []).join(', ') || 'Not recorded'}</dd></div>
-                  <div><dt className="font-bold uppercase tracking-wide text-brand-muted">Subject</dt><dd className="mt-0.5 break-words text-brand-ink">{snapshot.subject || 'Not recorded'}</dd></div>
+                  {snapshot.type === 'matter_document_draft' ? (
+                    <>
+                      <div><dt className="font-bold uppercase tracking-wide text-brand-muted">Document</dt><dd className="mt-0.5 break-words text-brand-ink">{snapshot.title || 'Untitled document'}.docx</dd></div>
+                      <div><dt className="font-bold uppercase tracking-wide text-brand-muted">Result</dt><dd className="mt-0.5 text-brand-ink">{attempt.status === 'sent' ? 'Saved to Matter Documents' : String(attempt.status || 'unknown').replaceAll('_', ' ')}</dd></div>
+                    </>
+                  ) : (
+                    <>
+                      <div><dt className="font-bold uppercase tracking-wide text-brand-muted">To</dt><dd className="mt-0.5 break-all text-brand-ink">{(snapshot.to || []).join(', ') || 'Not recorded'}</dd></div>
+                      <div><dt className="font-bold uppercase tracking-wide text-brand-muted">Subject</dt><dd className="mt-0.5 break-words text-brand-ink">{snapshot.subject || 'Not recorded'}</dd></div>
+                    </>
+                  )}
                   {attempt.provider && <div><dt className="font-bold uppercase tracking-wide text-brand-muted">Provider</dt><dd className="mt-0.5 text-brand-ink">{attempt.provider}</dd></div>}
-                  {attempt.provider_message_id && <div><dt className="font-bold uppercase tracking-wide text-brand-muted">Provider message ID</dt><dd className="mt-0.5 break-all font-mono text-brand-ink">{attempt.provider_message_id}</dd></div>}
+                  {attempt.provider_message_id && <div><dt className="font-bold uppercase tracking-wide text-brand-muted">{snapshot.type === 'matter_document_draft' ? 'Document record ID' : 'Provider message ID'}</dt><dd className="mt-0.5 break-all font-mono text-brand-ink">{attempt.provider_message_id}</dd></div>}
                   {attempt.action_sha256 && <div className="sm:col-span-2"><dt className="font-bold uppercase tracking-wide text-brand-muted">Payload fingerprint</dt><dd className="mt-0.5 break-all font-mono text-brand-ink">{attempt.action_sha256}</dd></div>}
                   {attempt.delivery_detail && <div className="sm:col-span-2"><dt className="font-bold uppercase tracking-wide text-brand-muted">Delivery detail</dt><dd className="mt-0.5 text-brand-ink">{attempt.delivery_detail}</dd></div>}
                 </dl>
@@ -784,7 +802,7 @@ function DeliveryAttemptHistory({ attempts }) {
   )
 }
 
-function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onAction, onTaskUpdated, canOpenMatters }) {
+function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onApproveDocument, onAction, onTaskUpdated, canOpenMatters }) {
   const [task, setTask] = useState(null)
   const [events, setEvents] = useState([])
   const [loading, setLoading] = useState(true)
@@ -795,6 +813,7 @@ function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onAction, onTa
   const [draftSaving, setDraftSaving] = useState(false)
   const [draftError, setDraftError] = useState(null)
   const [draftNotice, setDraftNotice] = useState(null)
+  const [documentWorkspaceOpen, setDocumentWorkspaceOpen] = useState(false)
   const drawerRef = useRef(null)
   useEffect(() => {
     let active = true
@@ -951,11 +970,7 @@ function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onAction, onTa
               {livePendingDocument && (
                 <PendingDocumentDraftPanel
                   task={task} draft={livePendingDocument} editable={draftDocumentEditable}
-                  editing={draftEditing} saving={draftSaving} title={draftSubject} body={draftBody}
-                  error={draftError} notice={draftNotice}
-                  onEdit={() => { setDraftEditing(true); setDraftError(null); setDraftNotice(null) }}
-                  onTitleChange={setDraftSubject} onBodyChange={setDraftBody}
-                  onSave={savePendingDocumentDraft} onCancel={resetDraft}
+                  onOpen={() => { setDocumentWorkspaceOpen(true); setDraftError(null); setDraftNotice(null) }}
                 />
               )}
               <DeliveryAttemptHistory attempts={task.delivery_history} />
@@ -1002,6 +1017,25 @@ function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onAction, onTa
           </footer>
         )}
       </aside>
+      {livePendingDocument && (
+        <DocumentDraftWorkspace
+          open={documentWorkspaceOpen}
+          title={draftSubject}
+          body={draftBody}
+          matterLabel={task.matter?.label || 'Linked matter'}
+          templateName={livePendingDocument.template_name}
+          sources={livePendingDocument.sources || []}
+          dirty={draftSubject !== livePendingDocument.title || draftBody !== livePendingDocument.body}
+          saving={draftSaving}
+          notice={draftNotice}
+          error={draftError}
+          onTitleChange={(value) => { setDraftSubject(value); setDraftNotice(null) }}
+          onBodyChange={(value) => { setDraftBody(value); setDraftNotice(null) }}
+          onSave={savePendingDocumentDraft}
+          onApprove={() => { setDocumentWorkspaceOpen(false); onApproveDocument(task) }}
+          onClose={() => { resetDraft(); setDocumentWorkspaceOpen(false) }}
+        />
+      )}
     </div>
   )
 }
@@ -1188,7 +1222,7 @@ export default function TaskBoard({ data, loading, error, scope, onRetry, onTran
         </div>
       )}
       {moveRequest?.toStatus && <TaskTransitionDialog request={moveRequest} saving={moveSaving} onClose={() => !moveSaving && setMoveRequest(null)} onConfirm={async details => { setMoveSaving(true); try { await performTransition(moveRequest.task, moveRequest.toStatus, details) } catch { /* inline board error */ } finally { setMoveSaving(false) } }} />}
-      {taskId && <TaskDetailDrawer taskId={taskId} card={selectedCard} onClose={onCloseTask} onMoveRequest={requestDestination} onAction={onTaskAction} onTaskUpdated={applyTaskUpdate} canOpenMatters={canOpenMatters} />}
+      {taskId && <TaskDetailDrawer taskId={taskId} card={selectedCard} onClose={onCloseTask} onMoveRequest={requestDestination} onApproveDocument={(task) => setMoveRequest({ task, toStatus: 'in_progress' })} onAction={onTaskAction} onTaskUpdated={applyTaskUpdate} canOpenMatters={canOpenMatters} />}
     </div>
   )
 }
