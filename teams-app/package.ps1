@@ -1,7 +1,7 @@
 param(
   [string]$MicrosoftClientId = $env:MICROSOFT_CLIENT_ID,
   [string]$TeamsAppId = "b7aef9aa-6b66-4cde-8cf8-4a251e2f8f22",
-  [string]$PublicHost = "legalapp.perevagagroup.com"
+  [string]$PublicHost = "getlawhand.com"
 )
 
 $ErrorActionPreference = "Stop"

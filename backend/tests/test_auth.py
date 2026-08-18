@@ -113,9 +113,14 @@ class TestAuthMe:
         assert data["role"] == test_user.role
         assert data["tenant_id"] == str(test_tenant.id)
         assert data["professional_role"] == "Attorney"
-        assert data["primary_jurisdictions"] == ["Illinois", "Northern District of Illinois"]
+        assert data["primary_jurisdictions"] == [
+            "Illinois",
+            "Northern District of Illinois",
+        ]
 
-    async def test_me_profile_patch_only_updates_professional_fields(self, client, test_user):
+    async def test_me_profile_patch_only_updates_professional_fields(
+        self, client, test_user
+    ):
         original_name = test_user.full_name
         resp = await client.patch(
             "/api/auth/me",
@@ -131,6 +136,73 @@ class TestAuthMe:
         assert data["professional_role"] == "Paralegal"
         assert data["primary_jurisdictions"] == ["North Dakota"]
         assert data["full_name"] == original_name
+
+    async def test_me_profile_patch_restores_rls_context_after_commit(
+        self, monkeypatch
+    ):
+        from types import SimpleNamespace
+
+        from app.routers import auth
+        from app.schemas.auth import UserProfileUpdate
+
+        tenant_id = uuid.uuid4()
+        user = SimpleNamespace(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            tenant=SimpleNamespace(billing_tier="flat"),
+            email="lawyer@example.test",
+            full_name="Test Lawyer",
+            role="attorney",
+            is_active=True,
+            license_active=True,
+            premium_ai_enabled=False,
+            created_at=datetime.now(timezone.utc),
+            professional_role=None,
+            job_title=None,
+            office_location=None,
+            primary_jurisdictions=[],
+            privacy_mode=False,
+        )
+        events = []
+
+        class FakeSession:
+            async def commit(self):
+                events.append("commit")
+
+            async def refresh(self, refreshed_user):
+                assert refreshed_user is user
+                events.append("refresh")
+
+        async def current_user(_request, _db):
+            return user
+
+        async def tenant_context(_db, value):
+            events.append(("tenant", value))
+
+        async def enabled_modules(_db, _tenant_id, *, user):
+            return ["chat"], "/chat"
+
+        async def plan_meta(_db, _tenant_id):
+            return "full-platform", None
+
+        monkeypatch.setattr(auth, "get_current_user", current_user)
+        monkeypatch.setattr(auth, "set_tenant_context", tenant_context)
+        monkeypatch.setattr(auth, "resolve_enabled_modules", enabled_modules)
+        monkeypatch.setattr(auth, "resolve_plan_meta", plan_meta)
+
+        response = await auth.update_me(
+            UserProfileUpdate(professional_role="Attorney"),
+            SimpleNamespace(),
+            FakeSession(),
+        )
+
+        assert response.professional_role == "Attorney"
+        assert events == [
+            ("tenant", str(tenant_id)),
+            "commit",
+            ("tenant", str(tenant_id)),
+            "refresh",
+        ]
 
     async def test_me_no_token_returns_401(self, db_session):
         from httpx import ASGITransport, AsyncClient

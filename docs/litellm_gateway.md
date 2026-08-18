@@ -55,12 +55,12 @@ strict unknown-price qualification is tracked in BK24 `AIP-04`.
 `litellm_config.yaml` defines these operator-selectable aliases:
 
 - `clarity-standard`: primary standard profile, using OpenCode Zen with
-  `DEEPSEEK_API_KEY` for the OpenAI-compatible key. Fallbacks:
-  `clarity-standard-openrouter-free`, then
-  `clarity-standard-openrouter-deepseek`.
+  `DEEPSEEK_API_KEY` for the OpenAI-compatible key. It fails over inside
+  LiteLLM to `clarity-standard-deepseek-flash-free`.
 - `clarity-premium`: primary premium profile, using OpenCode Go through the
-  OpenAI-compatible base URL. Fallbacks: `clarity-premium-openrouter`, then
-  `clarity-premium-openrouter-qwen`.
+  OpenAI-compatible base URL. It fails over to the standard flash profile when
+  the premium upstream is unavailable; the UI keeps labelling the work by the
+  user's selected product route, not by whichever vendor served it.
 
 The operator console should point global standard and premium routes at these
 aliases by setting provider `litellm` and model `clarity-standard` /
