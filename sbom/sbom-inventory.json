@@ -144,14 +144,14 @@
     },
     {
       "image": "base",
-      "line": 17,
+      "line": 15,
       "pinned_by_digest": false,
       "source": "backend/Dockerfile",
       "stage_reference": true
     },
     {
       "image": "base",
-      "line": 23,
+      "line": 21,
       "pinned_by_digest": false,
       "source": "backend/Dockerfile",
       "stage_reference": true
@@ -193,13 +193,6 @@
     }
   ],
   "dependencies": [
-    {
-      "ecosystem": "npm",
-      "name": "@dnd-kit/core",
-      "scope": "dependencies",
-      "source": "frontend/package.json",
-      "specifier": "^6.3.1"
-    },
     {
       "ecosystem": "npm",
       "name": "@microsoft/teams-js",
@@ -265,24 +258,10 @@
     },
     {
       "ecosystem": "npm",
-      "name": "remark-gfm",
-      "scope": "dependencies",
-      "source": "frontend/package.json",
-      "specifier": "^4.0.1"
-    },
-    {
-      "ecosystem": "npm",
       "name": "@eslint/js",
       "scope": "devDependencies",
       "source": "frontend/package.json",
-      "specifier": "^9.39.5"
-    },
-    {
-      "ecosystem": "npm",
-      "name": "@playwright/test",
-      "scope": "devDependencies",
-      "source": "frontend/package.json",
-      "specifier": "1.61.1"
+      "specifier": "^10.0.1"
     },
     {
       "ecosystem": "npm",
@@ -324,21 +303,7 @@
       "name": "eslint",
       "scope": "devDependencies",
       "source": "frontend/package.json",
-      "specifier": "^9.39.5"
-    },
-    {
-      "ecosystem": "npm",
-      "name": "eslint-plugin-jsx-a11y",
-      "scope": "devDependencies",
-      "source": "frontend/package.json",
-      "specifier": "^6.10.2"
-    },
-    {
-      "ecosystem": "npm",
-      "name": "eslint-plugin-react",
-      "scope": "devDependencies",
-      "source": "frontend/package.json",
-      "specifier": "^7.37.5"
+      "specifier": "^10.6.0"
     },
     {
       "ecosystem": "npm",
@@ -573,13 +538,6 @@
     },
     {
       "ecosystem": "pypi",
-      "name": "greenlet",
-      "scope": "runtime/dev",
-      "source": "backend/requirements.txt",
-      "specifier": "==3.5.3"
-    },
-    {
-      "ecosystem": "pypi",
       "name": "httpx",
       "scope": "runtime/dev",
       "source": "backend/requirements.txt",
@@ -608,24 +566,10 @@
     },
     {
       "ecosystem": "pypi",
-      "name": "onnxruntime",
-      "scope": "runtime/dev",
-      "source": "backend/requirements.txt",
-      "specifier": "==1.27.0"
-    },
-    {
-      "ecosystem": "pypi",
       "name": "openai",
       "scope": "runtime/dev",
       "source": "backend/requirements.txt",
       "specifier": "==1.58.1"
-    },
-    {
-      "ecosystem": "pypi",
-      "name": "opencv-python",
-      "scope": "runtime/dev",
-      "source": "backend/requirements.txt",
-      "specifier": "==5.0.0.93"
     },
     {
       "ecosystem": "pypi",
@@ -661,13 +605,6 @@
       "scope": "runtime/dev",
       "source": "backend/requirements.txt",
       "specifier": "==6.14.2"
-    },
-    {
-      "ecosystem": "pypi",
-      "name": "pypdfium2",
-      "scope": "runtime/dev",
-      "source": "backend/requirements.txt",
-      "specifier": "==5.12.1"
     },
     {
       "ecosystem": "pypi",
@@ -724,13 +661,6 @@
       "scope": "runtime/dev",
       "source": "backend/requirements.txt",
       "specifier": "==0.0.32"
-    },
-    {
-      "ecosystem": "pypi",
-      "name": "rapidocr",
-      "scope": "runtime/dev",
-      "source": "backend/requirements.txt",
-      "specifier": "==3.9.1"
     },
     {
       "ecosystem": "pypi",
@@ -822,13 +752,6 @@
       "scope": "runtime/dev",
       "source": "mcp-server/requirements.txt",
       "specifier": "==2.10.3"
-    },
-    {
-      "ecosystem": "pypi",
-      "name": "pypdf",
-      "scope": "runtime/dev",
-      "source": "mcp-server/requirements.txt",
-      "specifier": "==6.15.0"
     },
     {
       "ecosystem": "pypi",
@@ -962,7 +885,7 @@
       "type": "python project"
     }
   ],
-  "repository": "pr121-sbom",
+  "repository": "legalapp",
   "tracking_requirements": [
     "component identity and source manifest",
     "version/specifier and package URL when available",
