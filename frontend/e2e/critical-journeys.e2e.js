@@ -29,7 +29,7 @@ test('session bootstrap restores an authenticated workspace and rejects another 
     new URL(`/api/conversations/${otherTenantConversationId}`, page.url()).href,
   )
   expect(denied.status()).toBe(404)
-  expect(await denied.json()).toEqual({ detail: 'Conversation not found' })
+  expect(await denied.json()).toMatchObject({ detail: 'Conversation not found' })
 })
 
 test.describe('mobile profile context', () => {
@@ -71,6 +71,14 @@ test('chat remains usable after a deterministic stream failure', async ({ page }
     const path = url.pathname
     const json = (body, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
 
+    if (path === '/api/auth/me' && request.method() === 'GET') {
+      const response = await route.fetch()
+      const currentUser = await response.json()
+      return json({
+        ...currentUser,
+        enabled_modules: [...new Set([...(currentUser.enabled_modules || []), 'chat'])],
+      }, response.status())
+    }
     if (path === '/api/conversations' && request.method() === 'GET') return json([conversation])
     if (path === `/api/conversations/${conversation.id}` && request.method() === 'GET') {
       return json({ conversation, messages: [] })

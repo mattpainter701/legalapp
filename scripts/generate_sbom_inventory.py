@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_NAME = "legalapp"
 OUT_DIR = ROOT / "sbom"
 JSON_OUT = OUT_DIR / "sbom-inventory.json"
 MD_OUT = ROOT / "docs" / "SBOM_TRACKING_INVENTORY.md"
@@ -432,7 +433,7 @@ def main() -> int:
 
     inventory = {
         "generated_at": "generated from current working tree",
-        "repository": ROOT.name,
+        "repository": REPOSITORY_NAME,
         "manifests": [asdict(m) for m in manifests],
         "dependencies": [asdict(d) for d in deps],
         "container_bases": [asdict(b) for b in bases],

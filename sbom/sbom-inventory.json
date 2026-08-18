@@ -1018,7 +1018,7 @@
       "type": "python project"
     }
   ],
-  "repository": "enterprise-assurance",
+  "repository": "legalapp",
   "tracking_requirements": [
     "component identity and source manifest",
     "version/specifier and package URL when available",
