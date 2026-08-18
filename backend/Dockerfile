@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 FROM base AS builder
 
-COPY requirements.txt .
+COPY backend/requirements.txt ./requirements.txt
 RUN pip install --upgrade pip==26.1.2 && \
     pip install --no-cache-dir --prefix=/install -r requirements.txt
 
@@ -32,7 +32,11 @@ COPY --from=builder /install /usr/local
 # the production image to reduce vulnerable/runtime mutation surface.
 RUN python -m pip uninstall -y ecdsa pip
 
-COPY . .
+COPY backend/ /app/
+# The disposable sales-demo fixture imports this reviewed synthetic pack at
+# runtime.  Keeping it in the image makes the fixture reproducible and avoids
+# coupling a production demo to a host checkout or a customer upload volume.
+COPY demo/cybersafeadvisor-corporate-pack/ /app/demo/cybersafeadvisor-corporate-pack/
 
 # ── Non-root runtime user ─────────────────────────────────────────────────────
 # Fixed UID/GID 10001 so host-mounted volumes can be chowned to a known owner.
