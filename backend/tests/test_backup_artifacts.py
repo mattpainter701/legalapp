@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tarfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
 UPLOAD_TOOL = ROOT / "scripts" / "upload_backup_artifact.py"
 ATTESTATION_TOOL = ROOT / "scripts" / "offsite_backup_attestation.py"
+EVIDENCE_TOOL = ROOT / "scripts" / "backup_evidence.py"
 
 
 def _run(*args: str) -> subprocess.CompletedProcess[str]:
@@ -153,6 +156,98 @@ def test_upload_artifact_rejects_path_traversal_member(tmp_path: Path) -> None:
     assert result.returncode != 0
     assert "unsafe upload archive path" in result.stderr
     assert not (tmp_path / "escape.txt").exists()
+
+
+def test_offsite_backup_evidence_is_fresh_and_writes_strict_status(
+    tmp_path: Path,
+) -> None:
+    snapshots = tmp_path / "snapshots.json"
+    snapshots.write_text(
+        json.dumps(
+            [
+                {
+                    "short_id": "deadbeef",
+                    "time": datetime.now(timezone.utc).isoformat(),
+                    "tags": ["legalapp-production", "20260817T120000Z"],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    evidence = tmp_path / "evidence.json"
+    status = tmp_path / "backup-status.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(EVIDENCE_TOOL),
+            "--snapshots",
+            str(snapshots),
+            "--timestamp",
+            "20260817T120000Z",
+            "--output",
+            str(evidence),
+            "--status-output",
+            str(status),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (
+        json.loads(evidence.read_text(encoding="utf-8"))["off_host_encrypted"] is True
+    )
+    status_payload = json.loads(status.read_text(encoding="utf-8"))
+    assert status_payload == {
+        "schema_version": 1,
+        "completed_at_epoch": status_payload["completed_at_epoch"],
+        "status": "ok",
+        "offsite": True,
+        "components": [
+            "legalapp_database",
+            "litellm_database",
+            "uploads",
+            "key_escrow",
+        ],
+    }
+    assert abs(status_payload["completed_at_epoch"] - int(time.time())) <= 2
+    if os.name == "posix":
+        assert status.stat().st_mode & 0o077 == 0
+
+
+def test_offsite_backup_evidence_rejects_stale_snapshot(tmp_path: Path) -> None:
+    snapshots = tmp_path / "snapshots.json"
+    snapshots.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "a" * 64,
+                    "time": "2000-01-01T00:00:00Z",
+                    "tags": ["legalapp-production", "old"],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(EVIDENCE_TOOL),
+            "--snapshots",
+            str(snapshots),
+            "--timestamp",
+            "old",
+            "--output",
+            str(tmp_path / "evidence.json"),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "not fresh" in result.stderr
 
 
 def test_manual_offsite_attestation_is_exact_short_lived_and_consumed(

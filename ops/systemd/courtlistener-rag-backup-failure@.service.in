@@ -1,0 +1,7 @@
+[Unit]
+Description=Report failed CourtListener RAG backup unit %i
+
+[Service]
+Type=oneshot
+Environment="ENV_FILE=@ENV_FILE@"
+ExecStart=@BASH_BIN@ @LEGALAPP_ROOT@/scripts/courtlistener_rag_backup_failure_alert.sh

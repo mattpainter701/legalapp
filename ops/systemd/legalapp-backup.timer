@@ -1,9 +1,9 @@
 [Unit]
-Description=Run LegalApp encrypted off-host backup daily
+Description=Run LegalApp encrypted off-host backup hourly
 
 [Timer]
-OnCalendar=*-*-* 02:00:00
-RandomizedDelaySec=2h
+OnCalendar=hourly
+RandomizedDelaySec=10m
 Persistent=true
 Unit=legalapp-backup.service
 

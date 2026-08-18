@@ -52,6 +52,8 @@ def _production_env(**overrides: str) -> str:
         "HOST_STATUS_HOST_DIR": "/srv/legalapp/host-status",
         "HOST_DISK_STATUS_FILE": "/run/legalapp-host-status/disk-status.json",
         "HEALTH_HOST_DISK_MAX_AGE_SECONDS": "180",
+        "BACKUP_STATUS_FILE": "/run/legalapp-host-status/backup-status.json",
+        "HEALTH_BACKUP_MAX_AGE_SECONDS": "7200",
         "DISK_PATH": "/",
         "DISK_MAX_PERCENT": "85",
         "OFFSITE_BACKUP_REQUIRED": "true",
@@ -771,6 +773,32 @@ def test_host_disk_monitor_is_persistent_read_only_and_alertable() -> None:
     assert 'components.get("host_disks") == "ok"' in production_check
 
 
+def test_offsite_backup_freshness_is_a_public_production_gate() -> None:
+    hypervisor = yaml.safe_load((ROOT / "docker-compose.hypervisor.yml").read_text())
+    production = yaml.safe_load((ROOT / "docker-compose.prod.yml").read_text())
+    for model in (hypervisor, production):
+        backend = model["services"]["backend"]
+        assert backend["environment"]["BACKUP_STATUS_FILE"] == (
+            "${BACKUP_STATUS_FILE:-}"
+        )
+        assert backend["environment"]["HEALTH_BACKUP_MAX_AGE_SECONDS"] == (
+            "${HEALTH_BACKUP_MAX_AGE_SECONDS:-7200}"
+        )
+
+    timer = (ROOT / "ops" / "systemd" / "legalapp-backup.timer").read_text(
+        encoding="utf-8"
+    )
+    assert "OnCalendar=hourly" in timer
+    assert "RandomizedDelaySec=10m" in timer
+
+    scheduled_health = (
+        ROOT / ".github" / "workflows" / "production-health.yml"
+    ).read_text(encoding="utf-8")
+    assert '"backups":"ok"' in scheduled_health
+    production_check = PRODUCTION_CHECK.read_text(encoding="utf-8")
+    assert 'components.get("backups") == "ok"' in production_check
+
+
 def test_production_preflight_rejects_shared_upstream_auth(tmp_path: Path) -> None:
     shared_secret = "shared-secret-key-0123456789-abcdefghijklmnopqrstuvwxyz"
     result = _run_preflight(
@@ -1077,7 +1105,9 @@ def test_tls_and_recurring_backup_ops_support_multi_compose() -> None:
         encoding="utf-8"
     )
     assert "OFFSITE_BACKUP_REQUIRED=true" in service
-    assert "PRUNE_OLD_BACKUPS=false" in service
+    assert "PRUNE_OLD_BACKUPS=true" in service
+    assert "PRUNE_OLD_BACKUPS_CONFIRM=delete-old-legalapp-backups" in service
+    assert "BACKUP_RETENTION_DAYS=2" in service
     assert 'Environment="PATH=@EXEC_PATH@"' in service
     assert "OnFailure=" in service
     assert "RandomizedDelaySec=" in timer and "Persistent=true" in timer
