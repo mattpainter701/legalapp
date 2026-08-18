@@ -112,5 +112,6 @@ def public_plans() -> list[Plan]:
 
 
 def plan_for_config(custom_config: dict | None) -> Plan:
-    plan = get_plan((custom_config or {}).get("plan"))
+    config = custom_config if isinstance(custom_config, dict) else {}
+    plan = get_plan(config.get("plan"))
     return plan or PLANS[DEFAULT_PLAN_ID]
