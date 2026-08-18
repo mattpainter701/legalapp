@@ -5,9 +5,9 @@
     "id":  "b7aef9aa-6b66-4cde-8cf8-4a251e2f8f22",
     "developer":  {
                       "name":  "Perevaga Group",
-                      "websiteUrl":  "https://legalapp.perevagagroup.com",
-                      "privacyUrl":  "https://legalapp.perevagagroup.com/privacy",
-                      "termsOfUseUrl":  "https://legalapp.perevagagroup.com/terms"
+                      "websiteUrl":  "https://getlawhand.com",
+                      "privacyUrl":  "https://getlawhand.com/privacy",
+                      "termsOfUseUrl":  "https://getlawhand.com/terms"
                   },
     "name":  {
                  "short":  "LawHand",
@@ -26,8 +26,8 @@
                        {
                            "entityId":  "clarity-legal-personal",
                            "name":  "LawHand",
-                           "contentUrl":  "https://legalapp.perevagagroup.com/teams",
-                           "websiteUrl":  "https://legalapp.perevagagroup.com/teams",
+                           "contentUrl":  "https://getlawhand.com/teams",
+                           "websiteUrl":  "https://getlawhand.com/teams",
                            "scopes":  [
                                           "personal"
                                       ]
@@ -35,7 +35,7 @@
                    ],
     "configurableTabs":  [
                              {
-                                 "configurationUrl":  "https://legalapp.perevagagroup.com/teams/config",
+                                 "configurationUrl":  "https://getlawhand.com/teams/config",
                                  "canUpdateConfiguration":  true,
                                  "scopes":  [
                                                 "team"
@@ -43,7 +43,7 @@
                              }
                          ],
     "validDomains":  [
-                         "legalapp.perevagagroup.com"
+                         "getlawhand.com"
                      ],
     "webApplicationInfo":  {
                                "id":  "c805316c-ac2c-4f68-8ace-a5522889bf50",

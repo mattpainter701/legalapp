@@ -11,7 +11,7 @@ pip install -e .
 ## Configuration
 
 ```bash
-clarity-agent register --code PAIRING_CODE --name "Office Server" --url https://legalapp.perevagagroup.com
+clarity-agent register --code PAIRING_CODE --name "Office Server" --url https://getlawhand.com
 ```
 
 ## Usage
