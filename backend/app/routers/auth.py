@@ -1796,6 +1796,9 @@ async def update_me(
     for field, value in body.model_dump(exclude_unset=True).items():
         setattr(user, field, value)
     await db.commit()
+    # SET LOCAL tenant context ends at commit. Restore it before the refresh
+    # and every subsequent RLS-protected query in this transaction.
+    await set_tenant_context(db, str(user.tenant_id))
     await db.refresh(user)
     enabled_modules, default_route = await resolve_enabled_modules(
         db, user.tenant_id, user=user

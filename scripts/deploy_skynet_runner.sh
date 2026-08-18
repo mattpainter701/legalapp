@@ -45,6 +45,20 @@ ENV_FILE="$PROD_ENV_FILE" COMPOSE_FILES="$COMPOSE_FILE" \
   bash scripts/prod_env_preflight.sh
 
 echo "==> Capturing validated pre-deploy database backups and counts"
+echo "==> Creating and proving a fresh encrypted off-host backup"
+backup_output="$(
+  ENV_FILE="$PROD_ENV_FILE" COMPOSE_FILES="$COMPOSE_FILE" \
+    OFFSITE_BACKUP_REQUIRED=true OFFSITE_BACKUP_EVIDENCE_MAX_AGE_SECONDS=900 \
+    bash scripts/backup_db.sh
+)"
+printf '%s\n' "$backup_output"
+backup_evidence="$(printf '%s\n' "$backup_output" | awk -F= '/^OFFSITE_BACKUP_EVIDENCE=/ {print $2}')"
+[[ -n "$backup_evidence" && -f "$backup_evidence" && ! -L "$backup_evidence" ]] || {
+  echo "ERROR: encrypted off-host backup completed without usable freshness evidence" >&2
+  exit 3
+}
+
+echo "==> Capturing same-snapshot pre-deploy data counts"
 data_guard_output="$(
   COMPOSE_FILES="$guard_compose" BACKUP_DIR="$ROOT_DIR/backups" \
     bash scripts/prod_data_guard.sh pre

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the daily encrypted-backup timer for the current Linux user.
+# Install the hourly encrypted-backup timer for the current Linux user.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -61,7 +61,11 @@ sed \
   -e "s|@EXEC_PATH@|$EXEC_PATH|g" \
   "$ROOT_DIR/ops/systemd/legalapp-backup.service.in" > "$UNIT_DIR/legalapp-backup.service"
 install -m 600 "$ROOT_DIR/ops/systemd/legalapp-backup.timer" "$UNIT_DIR/legalapp-backup.timer"
-install -m 600 "$ROOT_DIR/ops/systemd/legalapp-backup-failure@.service" "$UNIT_DIR/legalapp-backup-failure@.service"
+sed \
+  -e "s|@LEGALAPP_ROOT@|$ROOT_DIR|g" \
+  -e "s|@ENV_FILE@|$ENV_FILE|g" \
+  -e "s|@BASH_BIN@|$BASH_BIN|g" \
+  "$ROOT_DIR/ops/systemd/legalapp-backup-failure@.service.in" > "$UNIT_DIR/legalapp-backup-failure@.service"
 chmod 600 "$UNIT_DIR/legalapp-backup.service"
 
 systemctl --user daemon-reload

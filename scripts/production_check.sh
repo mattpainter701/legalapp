@@ -323,9 +323,15 @@ try:
 except (json.JSONDecodeError, OSError):
     raise SystemExit(1)
 components = payload.get("components", {})
-raise SystemExit(0 if payload.get("status") == "ok" and components.get("host_disks") == "ok" else 1)
+raise SystemExit(
+    0
+    if payload.get("status") == "ok"
+    and components.get("host_disks") == "ok"
+    and components.get("backups") == "ok"
+    else 1
+)
 '; then
-  fail "public readiness must report status=ok and host_disks=ok"
+  fail "public readiness must report status=ok, host_disks=ok, and backups=ok"
 fi
 curl -fsS --max-time 15 "https://${DOMAIN}/" >/dev/null || fail "public frontend check failed"
 require_http_status "disabled public MCP transport" "https://${DOMAIN}/api/mcp" 404

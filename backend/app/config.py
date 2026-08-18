@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     # one dedicated read-only mount. Empty keeps local/dev readiness unchanged.
     HOST_DISK_STATUS_FILE: str = ""
     HEALTH_HOST_DISK_MAX_AGE_SECONDS: int = 180
+    # Written atomically only after a complete encrypted off-site backup and
+    # mounted read-only beside the host disk status. Empty keeps local/dev
+    # readiness independent of production backup infrastructure.
+    BACKUP_STATUS_FILE: str = ""
+    HEALTH_BACKUP_MAX_AGE_SECONDS: int = 7200
     HEALTH_SCHEDULER_MAX_AGE_MINUTES: int = 5
     HEALTH_QUEUE_MAX_AGE_MINUTES: int = 15
 

@@ -12,11 +12,12 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 
 |Manifest|Type|Lockfile present|Lockfiles|Tracked dependency count|
 |-|-|-|-|-|
-|backend/requirements.txt|python requirements|no|none|38|
-|mcp-server/requirements.txt|python requirements|no|none|8|
+|backend/requirements.txt|python requirements|no|none|43|
+|mcp-server/requirements.txt|python requirements|no|none|9|
 |scripts/requirements.txt|python requirements|no|none|7|
 |scripts/tabs3_export/requirements.txt|python requirements|no|none|2|
-|frontend/package.json|npm package|yes|frontend/package-lock.json|25|
+|frontend/package.json|npm package|yes|frontend/package-lock.json|30|
+|office-addin/package.json|npm package|yes|office-addin/package-lock.json|6|
 |word-addin/package.json|npm package|no|none|1|
 |agent/pyproject.toml|python project|no|none|11|
 
@@ -24,6 +25,7 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 
 |Ecosystem|Name|Specifier|Scope|Source|
 |-|-|-|-|-|
+|npm|@dnd-kit/core|^6.3.1|dependencies|frontend/package.json|
 |npm|@microsoft/teams-js|^2.53.0|dependencies|frontend/package.json|
 |npm|axios|^1.18.1|dependencies|frontend/package.json|
 |npm|date-fns|^4.1.0|dependencies|frontend/package.json|
@@ -33,13 +35,17 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |npm|react-dropzone|^14.3.5|dependencies|frontend/package.json|
 |npm|react-markdown|^9.0.1|dependencies|frontend/package.json|
 |npm|react-router-dom|^6.28.0|dependencies|frontend/package.json|
-|npm|@eslint/js|^10.0.1|devDependencies|frontend/package.json|
+|npm|remark-gfm|^4.0.1|dependencies|frontend/package.json|
+|npm|@eslint/js|^9.39.5|devDependencies|frontend/package.json|
+|npm|@playwright/test|1.61.1|devDependencies|frontend/package.json|
 |npm|@testing-library/jest-dom|^6.9.1|devDependencies|frontend/package.json|
 |npm|@testing-library/react|^16.3.2|devDependencies|frontend/package.json|
 |npm|@testing-library/user-event|^14.6.1|devDependencies|frontend/package.json|
 |npm|@vitejs/plugin-react|^4.3.4|devDependencies|frontend/package.json|
 |npm|autoprefixer|^10.4.20|devDependencies|frontend/package.json|
-|npm|eslint|^10.6.0|devDependencies|frontend/package.json|
+|npm|eslint|^9.39.5|devDependencies|frontend/package.json|
+|npm|eslint-plugin-jsx-a11y|^6.10.2|devDependencies|frontend/package.json|
+|npm|eslint-plugin-react|^7.37.5|devDependencies|frontend/package.json|
 |npm|eslint-plugin-react-hooks|^7.1.1|devDependencies|frontend/package.json|
 |npm|eslint-plugin-react-refresh|^0.5.3|devDependencies|frontend/package.json|
 |npm|globals|^17.7.0|devDependencies|frontend/package.json|
@@ -49,6 +55,12 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |npm|tailwindcss|^3.4.17|devDependencies|frontend/package.json|
 |npm|vite|^6.0.3|devDependencies|frontend/package.json|
 |npm|vitest|^4.1.10|devDependencies|frontend/package.json|
+|npm|@azure/msal-browser|^5.0.0|dependencies|office-addin/package.json|
+|npm|@types/office-js|^1.0.585|devDependencies|office-addin/package.json|
+|npm|rollup|npm:@rollup/wasm-node@4.62.3|devDependencies|office-addin/package.json|
+|npm|typescript|^5.8.3|devDependencies|office-addin/package.json|
+|npm|vite|^6.0.3|devDependencies|office-addin/package.json|
+|npm|vitest|^4.1.10|devDependencies|office-addin/package.json|
 |npm|http-server|^14.1.1|devDependencies|word-addin/package.json|
 |pypi|pytest|>=8.0|optional:dev|agent/pyproject.toml|
 |pypi|pytest-asyncio|>=0.23|optional:dev|agent/pyproject.toml|
@@ -73,16 +85,20 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |pypi|fastapi|==0.139.0|runtime/dev|backend/requirements.txt|
 |pypi|google-api-python-client|==2.160.0|runtime/dev|backend/requirements.txt|
 |pypi|google-auth-oauthlib|==1.2.1|runtime/dev|backend/requirements.txt|
+|pypi|greenlet|==3.5.3|runtime/dev|backend/requirements.txt|
 |pypi|httpx|==0.28.1|runtime/dev|backend/requirements.txt|
 |pypi|itsdangerous|==2.2.0|runtime/dev|backend/requirements.txt|
 |pypi|jsonschema|==4.26.0|runtime/dev|backend/requirements.txt|
 |pypi|mcp|==1.28.1|runtime/dev|backend/requirements.txt|
+|pypi|onnxruntime|==1.27.0|runtime/dev|backend/requirements.txt|
 |pypi|openai|==1.58.1|runtime/dev|backend/requirements.txt|
+|pypi|opencv-python|==5.0.0.93|runtime/dev|backend/requirements.txt|
 |pypi|pgvector|==0.3.6|runtime/dev|backend/requirements.txt|
 |pypi|psycopg2-binary|==2.9.10|runtime/dev|backend/requirements.txt|
 |pypi|pydantic|==2.11.10|runtime/dev|backend/requirements.txt|
 |pypi|pydantic-settings|==2.6.1|runtime/dev|backend/requirements.txt|
 |pypi|pypdf|==6.14.2|runtime/dev|backend/requirements.txt|
+|pypi|pypdfium2|==5.12.1|runtime/dev|backend/requirements.txt|
 |pypi|pytest|==9.0.3|runtime/dev|backend/requirements.txt|
 |pypi|pytest-asyncio|==1.4.0|runtime/dev|backend/requirements.txt|
 |pypi|pytest-env|==1.1.5|runtime/dev|backend/requirements.txt|
@@ -91,6 +107,7 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |pypi|python-dotenv|==1.2.2|runtime/dev|backend/requirements.txt|
 |pypi|python-jose[cryptography]|==3.5.0|runtime/dev|backend/requirements.txt|
 |pypi|python-multipart|==0.0.32|runtime/dev|backend/requirements.txt|
+|pypi|rapidocr|==3.9.1|runtime/dev|backend/requirements.txt|
 |pypi|redis|==5.2.1|runtime/dev|backend/requirements.txt|
 |pypi|reportlab|==4.2.5|runtime/dev|backend/requirements.txt|
 |pypi|ruff|==0.8.4|runtime/dev|backend/requirements.txt|
@@ -123,8 +140,8 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |Image|Source|Line|Pinned by digest|Internal stage reference|
 |-|-|-|-|-|
 |python:3.11-slim@sha256:e031123e3d85762b141ad1cbc56452ba69c6e722ebf2f042cc0dc86c47c0d8b3|backend/Dockerfile|1|yes|no|
-|base|backend/Dockerfile|15|no|yes|
-|base|backend/Dockerfile|21|no|yes|
+|base|backend/Dockerfile|17|no|yes|
+|base|backend/Dockerfile|23|no|yes|
 |node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293|frontend/Dockerfile|1|yes|no|
 |node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293|frontend/Dockerfile|16|yes|no|
 |nginx:alpine@sha256:54f2a904c251d5a34adf545a72d32515a15e08418dae0266e23be2e18c66fefa|nginx/Dockerfile|1|yes|no|
@@ -141,6 +158,7 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |legalapp-litellm:${APP_COMMIT:-dev}|docker-compose.yml|44|no|
 |legalapp-litellm:${APP_COMMIT:-dev}|docker-compose.yml|56|no|
 |legalapp-litellm:${APP_COMMIT:-dev}|docker-compose.yml|72|no|
+|pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb|docker-compose.courtlistener-mcp.yml|3|yes|
 |pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb|docker-compose.local.yml|27|yes|
 |pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb|docker-compose.local.yml|44|yes|
 |pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb|docker-compose.hypervisor.yml|3|yes|

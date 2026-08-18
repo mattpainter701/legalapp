@@ -37,6 +37,7 @@ jobs:
 
           curl --fail --silent --show-error --max-time 20 "$PRODUCTION_ORIGIN/health/readiness" | tee /tmp/readiness.json | grep -q '"status":"ok"'
           grep -q '"host_disks":"ok"' /tmp/readiness.json
+          grep -q '"backups":"ok"' /tmp/readiness.json
           curl --fail --silent --show-error --max-time 20 "$PRODUCTION_ORIGIN/" >/dev/null
           for disabled_mcp_path in /api/mcp /api/mcp/manifest; do
             disabled_mcp_status="$(curl --silent --show-error --max-time 20 \
@@ -66,7 +67,7 @@ jobs:
 
       - name: Create, update, or resolve production alert
         id: reconcile
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
         env:
           HTTP_OUTCOME: ${{ steps.http.outcome }}
           TLS_OUTCOME: ${{ steps.tls.outcome }}

@@ -14,8 +14,8 @@ the Clarity `tenants.id`, not the Microsoft Entra directory ID.
 Create a single-page application registration for organizational Microsoft
 accounts. Record its Application (client) ID, then configure:
 
-- SPA redirect: `brk-multihub://legalapp.perevagagroup.com`
-- SPA redirect: `https://legalapp.perevagagroup.com/office/index.html`
+- SPA redirect: `brk-multihub://getlawhand.com`
+- SPA redirect: `https://getlawhand.com/office/index.html`
 - Application ID URI: `api://<client-id>`
 - Delegated scope: `office.access`
 - Authorized client application: pre-authorize the same client ID for

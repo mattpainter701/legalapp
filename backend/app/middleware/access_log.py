@@ -6,7 +6,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.types import ASGIApp
 
-from app.database import async_session_maker
+from app.database import async_session_maker, set_tenant_context
 from app.models.api_access_log import ApiAccessLog
 
 SKIP_PREFIXES = (
@@ -68,6 +68,9 @@ async def _write_log(
 ) -> None:
     try:
         async with async_session_maker() as db:
+            # This is a new session, so it does not inherit the request's
+            # transaction-local RLS context. Establish it before the insert.
+            await set_tenant_context(db, tenant_id)
             db.add(
                 ApiAccessLog(
                     tenant_id=tenant_id,
