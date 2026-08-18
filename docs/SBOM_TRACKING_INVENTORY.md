@@ -51,7 +51,7 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |npm|globals|^17.7.0|devDependencies|frontend/package.json|
 |npm|jest-axe|^10.0.0|devDependencies|frontend/package.json|
 |npm|jsdom|^29.1.1|devDependencies|frontend/package.json|
-|npm|postcss|^8.4.49|devDependencies|frontend/package.json|
+|npm|postcss|^8.5.26|devDependencies|frontend/package.json|
 |npm|tailwindcss|^3.4.17|devDependencies|frontend/package.json|
 |npm|vite|^6.0.3|devDependencies|frontend/package.json|
 |npm|vitest|^4.1.10|devDependencies|frontend/package.json|
@@ -97,7 +97,7 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |pypi|psycopg2-binary|==2.9.10|runtime/dev|backend/requirements.txt|
 |pypi|pydantic|==2.11.10|runtime/dev|backend/requirements.txt|
 |pypi|pydantic-settings|==2.6.1|runtime/dev|backend/requirements.txt|
-|pypi|pypdf|==6.14.2|runtime/dev|backend/requirements.txt|
+|pypi|pypdf|==6.15.0|runtime/dev|backend/requirements.txt|
 |pypi|pypdfium2|==5.12.1|runtime/dev|backend/requirements.txt|
 |pypi|pytest|==9.0.3|runtime/dev|backend/requirements.txt|
 |pypi|pytest-asyncio|==1.4.0|runtime/dev|backend/requirements.txt|
