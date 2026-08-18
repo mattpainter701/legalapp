@@ -1276,6 +1276,7 @@ export const approveProposedTask = async (
   {
     body,
     subject,
+    title,
     expectedVersion,
     expected_version: expectedVersionSnake,
     acknowledgePriorDeliveryRisk,
@@ -1288,12 +1289,13 @@ export const approveProposedTask = async (
   }
 
   let version = reviewedVersion
-  if (body !== undefined || subject !== undefined) {
+  if (body !== undefined || subject !== undefined || title !== undefined) {
     let edited
     try {
       edited = await updateTaskPendingAction(id, {
         body,
         subject,
+        title,
         expected_version: reviewedVersion,
       })
     } catch (error) {

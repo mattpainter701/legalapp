@@ -34,6 +34,8 @@ from app.schemas.chat_action import (
     ListMatterRecipientsArgs,
     ListMatterTasksArgs,
     ProposeClientEmailArgs,
+    ProposeMatterDocumentArgs,
+    MatterDocumentDraftAction,
     ProposeTaskArgs,
     ResolvedRecipientBinding,
     normalize_single_mailbox,
@@ -717,6 +719,49 @@ async def propose_client_email(
         "approval_effect": (
             f"Approving sends this email to {', '.join(to)}. "
             "Edit the draft first if anything is wrong."
+        ),
+        "pending_action": action.model_dump(mode="json"),
+        "sources": chips,
+    }
+
+
+async def propose_matter_document(
+    context: ChatToolContext, args: ProposeMatterDocumentArgs
+) -> dict[str, Any]:
+    """Place an editable Word-document draft in Review without writing a file yet."""
+    await _require_matter(context, args.matter_id)
+    async with context.db.begin_nested():
+        chips = await _resolve_source_chips(
+            context, args.source_ids, matter_id=args.matter_id
+        )
+        action = MatterDocumentDraftAction(
+            type="matter_document_draft",
+            matter_id=args.matter_id,
+            title=args.title,
+            body=args.body,
+            source_ids=args.source_ids[:10],
+            sources=chips,
+        )
+        task = await _create_proposed_task(
+            context,
+            matter_id=args.matter_id,
+            title=f"Review document: {action.title}",
+            description=f"Draft Word document awaiting approval.\n\n{action.body}",
+            due_date=args.due_date,
+            source_ids=args.source_ids,
+            pending_action=action.model_dump(mode="json"),
+        )
+    return {
+        "task_id": str(task.id),
+        "version": task.version,
+        "title": task.title,
+        "status": task.status,
+        "matter_id": str(task.matter_id),
+        "due_date": task.due_date.isoformat() if task.due_date else None,
+        "action_type": action.type,
+        "approval_effect": (
+            "Approving saves this reviewed draft as a Word document in the "
+            "matter's Documents area. Nothing is sent to the client."
         ),
         "pending_action": action.model_dump(mode="json"),
         "sources": chips,

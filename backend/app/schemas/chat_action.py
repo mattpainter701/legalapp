@@ -122,6 +122,16 @@ class ProposeClientEmailArgs(ChatActionModel):
     source_ids: list[str] = Field(default_factory=list, max_length=10)
 
 
+class ProposeMatterDocumentArgs(ChatActionModel):
+    """Draft a Word document for a matter; an attorney must approve its save."""
+
+    matter_id: UUID
+    title: str = Field(min_length=1, max_length=300)
+    body: str = Field(min_length=1, max_length=20_000)
+    due_date: date | None = None
+    source_ids: list[str] = Field(default_factory=list, max_length=10)
+
+
 # ── Model output contract ───────────────────────────────────────────────────
 
 
@@ -223,8 +233,27 @@ class EmailClientAction(ChatActionModel):
         return self
 
 
+class MatterDocumentDraftAction(ChatActionModel):
+    """An editable office-document draft, persisted only after approval."""
+
+    type: Literal["matter_document_draft"]
+    matter_id: UUID
+    title: str = Field(min_length=1, max_length=300)
+    body: str = Field(min_length=1, max_length=20_000)
+    source_ids: list[str] = Field(default_factory=list, max_length=10)
+    sources: list[dict] = Field(default_factory=list, max_length=10)
+
+    @field_validator("title")
+    @classmethod
+    def title_is_a_filename_component(cls, value: str) -> str:
+        clean = " ".join(value.split())
+        if any(char in clean for char in ("/", "\\", "\x00")):
+            raise ValueError("Document title cannot contain a path")
+        return clean
+
+
 PendingAction = Annotated[
-    Union[EmailClientAction],
+    Union[EmailClientAction, MatterDocumentDraftAction],
     Field(discriminator="type"),
 ]
 

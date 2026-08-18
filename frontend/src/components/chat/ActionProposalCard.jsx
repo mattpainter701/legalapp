@@ -63,6 +63,30 @@ function EmailDraft({ pendingAction, draft, onDraftChange, editing, immutable = 
   )
 }
 
+function DocumentDraft({ pendingAction, title, body, onTitleChange, onBodyChange, editing, immutable = false }) {
+  if (!pendingAction || pendingAction.type !== 'matter_document_draft') return null
+  return (
+    <div className="mt-3 border border-brand-line bg-brand-bg/60 p-3">
+      <div className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-brand-muted">
+        <FileText className="h-3 w-3" strokeWidth={2} />
+        <span>{immutable ? 'Recorded Word document' : 'Draft Word document'}</span>
+      </div>
+      {editing ? (
+        <div className="mt-2 space-y-2">
+          <label className="block"><span className="sr-only">Document title</span><input value={title} onChange={(event) => onTitleChange(event.target.value)} maxLength={300} className="w-full border border-brand-line bg-brand-surface p-2 text-sm font-semibold text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-accent" /></label>
+          <label className="block"><span className="sr-only">Document body</span><textarea value={body} onChange={(event) => onBodyChange(event.target.value)} rows={12} maxLength={20000} className="w-full resize-y border border-brand-line bg-brand-surface p-2 text-[13px] leading-relaxed text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-accent" /></label>
+        </div>
+      ) : <><p className="mt-2 font-semibold text-brand-ink">{title}</p><p className="mt-2 whitespace-pre-wrap break-words text-[13px] leading-relaxed text-brand-ink-2">{body}</p></>}
+      <p className="mt-2 text-[11px] text-brand-muted">Approval creates an editable .docx in Matter Documents; it does not email the client.</p>
+    </div>
+  )
+}
+
+function SavedDocumentLink({ proposal, delivery }) {
+  if (delivery?.status !== 'sent' || delivery?.action_type !== 'matter_document_draft' || !delivery?.provider_message_id || !proposal?.matter_id) return null
+  return <a className="mt-3 inline-flex items-center gap-1.5 text-[12px] font-semibold text-brand-accent underline" href={`${API_BASE_URL}/matters/${proposal.matter_id}/documents/${delivery.provider_message_id}/download`} target="_blank" rel="noreferrer"><FileText className="h-3.5 w-3.5" />Open saved .docx</a>
+}
+
 /**
  * Report what is actually known about delivery.
  *
@@ -256,6 +280,8 @@ function proposalWithLiveTask(snapshot, task) {
       ? 'This email action has already been approved. The immutable delivery payload is shown above and cannot be approved again from this card.'
     : actionType === 'email_client'
       ? `Approving sends this email to ${(pendingAction.to || []).join(', ')}. Edit the draft first if anything is wrong.`
+      : actionType === 'matter_document_draft'
+        ? "Approving saves this reviewed draft as a Word document in the matter's Documents area. Nothing is sent to the client."
       : 'Approving moves this task into active work. Nothing is sent.'
   return {
     ...snapshot,
@@ -338,7 +364,11 @@ export default function ActionProposalCard({
   const isEmail = pendingAction?.type === 'email_client'
     || currentProposal?.action_type === 'email_client'
     || currentProposal?.delivery?.action_type === 'email_client'
+  const isDocument = pendingAction?.type === 'matter_document_draft'
+    || currentProposal?.action_type === 'matter_document_draft'
+    || currentProposal?.delivery?.action_type === 'matter_document_draft'
   const [draft, setDraft] = useState(pendingAction?.body || '')
+  const [documentTitle, setDocumentTitle] = useState(pendingAction?.title || '')
   const [editing, setEditing] = useState(false)
   const [state, setState] = useState('proposed')
   const [delivery, setDelivery] = useState(currentProposal?.delivery || null)
@@ -383,8 +413,11 @@ export default function ActionProposalCard({
   }, [onLoadTask, proposal.task_id, reloadCounter])
 
   useEffect(() => {
-    if (!editing) setDraft(pendingAction?.body || '')
-  }, [editing, pendingAction?.body])
+    if (!editing) {
+      setDraft(pendingAction?.body || '')
+      setDocumentTitle(pendingAction?.title || '')
+    }
+  }, [editing, pendingAction?.body, pendingAction?.title])
 
   useEffect(() => () => {
     const controller = deliveryAbortRef.current
@@ -392,7 +425,8 @@ export default function ActionProposalCard({
     controller?.abort()
   }, [])
 
-  const bodyChanged = isEmail && draft !== (pendingAction?.body || '')
+  const bodyChanged = (isEmail || isDocument) && draft !== (pendingAction?.body || '')
+  const titleChanged = isDocument && documentTitle !== (pendingAction?.title || '')
   const busy = state === 'approving'
   const currentDelivery = delivery || currentProposal?.delivery || null
   const currentDeliveryCertainty = currentDelivery?.delivery_certainty
@@ -434,7 +468,7 @@ export default function ActionProposalCard({
     if (
       verification === 'verified'
       && (currentProposal?.status !== 'review' || currentProposal?.action_consumed)
-      && isEmail
+      && (isEmail || isDocument)
       && ['queued', 'sending'].includes(currentDelivery?.status)
       && deliveryPollAttemptRef.current !== pollKey
     ) {
@@ -448,6 +482,7 @@ export default function ActionProposalCard({
     try {
       const approvalOptions = {
         ...(bodyChanged ? { body: draft } : {}),
+        ...(titleChanged ? { title: documentTitle } : {}),
         ...(requiresRetryRiskAcknowledgment && retryRiskAcknowledged
           ? { acknowledge_prior_delivery_risk: true }
           : {}),
@@ -470,7 +505,7 @@ export default function ActionProposalCard({
       setDelivery(nextTask.delivery || null)
       setVerification('verified')
       setState('approved')
-      if (isEmail) void pollForDelivery(proposalWithLiveTask(proposal, nextTask))
+      if (isEmail || isDocument) void pollForDelivery(proposalWithLiveTask(proposal, nextTask))
     } catch (err) {
       setState('proposed')
       const currentTask = err?.current_task || err?.response?.data?.current_task
@@ -532,9 +567,19 @@ export default function ActionProposalCard({
         editing={editing}
         immutable={currentProposal.action_consumed}
       />
+      <DocumentDraft
+        pendingAction={pendingAction}
+        title={documentTitle}
+        body={draft}
+        onTitleChange={setDocumentTitle}
+        onBodyChange={setDraft}
+        editing={editing}
+        immutable={currentProposal.action_consumed}
+      />
 
       <SourceChips sources={currentProposal.sources} />
       <PriorDeliveryAttempts history={currentProposal.delivery_history} />
+      <SavedDocumentLink proposal={currentProposal} delivery={delivery || currentProposal.delivery} />
 
       {/* Stated before the button, not after, so the consequence is read first. */}
       <p className="mt-3 text-[12px] leading-relaxed text-brand-ink-2">
@@ -615,9 +660,9 @@ export default function ActionProposalCard({
             ) : (
               <Send className="h-3.5 w-3.5" strokeWidth={2} />
             )}
-            {isEmail ? 'Approve and send' : 'Approve'}
+            {isEmail ? 'Approve and send' : isDocument ? 'Approve and save .docx' : 'Approve'}
           </button>
-          {isEmail && (
+          {(isEmail || isDocument) && (
             <button
               type="button"
               onClick={() => setEditing(!editing)}
@@ -625,7 +670,7 @@ export default function ActionProposalCard({
               className="inline-flex items-center gap-1.5 rounded-lg border border-brand-line px-3 py-2 text-[12px] font-semibold text-brand-ink transition-colors hover:bg-brand-bg disabled:opacity-50"
             >
               <Pencil className="h-3.5 w-3.5" strokeWidth={2} />
-              {editing ? 'Done editing' : 'Edit draft'}
+              {editing ? 'Done editing' : isDocument ? 'Edit document' : 'Edit draft'}
             </button>
           )}
           <button

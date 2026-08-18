@@ -105,12 +105,20 @@ class PendingActionEdit(BaseModel):
 
     subject: Optional[str] = Field(None, min_length=1, max_length=300)
     body: Optional[str] = Field(None, min_length=1, max_length=20_000)
+    title: Optional[str] = Field(None, min_length=1, max_length=300)
     expected_version: int = Field(ge=1)
 
     @field_validator("subject")
     @classmethod
     def validate_subject_header(cls, value: Optional[str]) -> Optional[str]:
         return validate_email_subject(value) if value is not None else None
+
+    @field_validator("title")
+    @classmethod
+    def validate_document_title(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and any(char in value for char in ("/", "\\", "\x00")):
+            raise ValueError("Document title cannot contain a path")
+        return " ".join(value.split()) if value is not None else None
 
 
 class TaskUpdate(BaseModel):

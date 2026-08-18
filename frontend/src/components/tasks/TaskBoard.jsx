@@ -20,6 +20,7 @@ import {
   Clock3,
   Eye,
   FileCheck2,
+  FileText,
   GripVertical,
   History,
   Loader2,
@@ -281,6 +282,12 @@ function DraggableTaskCard({ task, pending, onOpen, onMoveRequest, draggable = t
           </span>
         </p>
       )}
+      {task.pending_action?.type === 'matter_document_draft' && (
+        <p data-testid="pending-document-badge" className="mt-2 flex items-start gap-1 rounded-lg bg-brand-accent/[0.07] px-2 py-1.5 text-[11px] text-brand-accent-2">
+          <FileText size={11} className="mt-0.5 shrink-0" />
+          <span>{task.status === 'review' ? `Approving saves ${task.pending_action.title}.docx to Matter Documents` : 'Approved Word document is being saved'}</span>
+        </p>
+      )}
       {(task.pending_action?.sources || []).length > 0 && (
         <ul data-testid="task-source-chips" className="mt-2 flex flex-wrap gap-1">
           {task.pending_action.sources.map((source) => (
@@ -315,9 +322,9 @@ function DraggableTaskCard({ task, pending, onOpen, onMoveRequest, draggable = t
         </p>
       )}
       {task.delivery?.status === 'sent' && (
-        <p className="mt-2 flex items-center gap-1 text-[11px] text-brand-accent">
-          <Check size={11} /> Sent to the client
-        </p>
+        <div className="mt-2 flex items-center gap-1 text-[11px] text-brand-accent">
+          <Check size={11} /> {task.delivery.action_type === 'matter_document_draft' ? <a className="underline" target="_blank" rel="noreferrer" href={`${API_BASE_URL}/matters/${task.matter_id}/documents/${task.delivery.provider_message_id}/download`}>Open saved Word document</a> : 'Sent to the client'}
+        </div>
       )}
 
       <div className="mt-3 flex items-center justify-between border-t border-brand-line/70 pt-2">
@@ -712,6 +719,31 @@ function PendingEmailDraftPanel({
   )
 }
 
+function PendingDocumentDraftPanel({ task, draft, editable, editing, saving, title, body, error, notice, onEdit, onTitleChange, onBodyChange, onSave, onCancel }) {
+  return (
+    <section aria-labelledby={'document-draft-' + task.id} className="rounded-xl border border-brand-accent/35 bg-brand-accent/[0.04] p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 id={'document-draft-' + task.id} className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-brand-accent-2"><FileText size={13} /> Authoritative Word document draft</h3>
+          <p className="mt-1 text-[11px] leading-relaxed text-brand-muted">This editable draft becomes a .docx in Matter Documents only when the Review task is approved.</p>
+        </div>
+        {editable && !editing && <button type="button" onClick={onEdit} className="rounded-lg border border-brand-line bg-white px-3 py-1.5 text-xs font-semibold text-brand-ink hover:border-brand-accent">Edit document</button>}
+      </div>
+      {editing ? (
+        <form className="mt-3 space-y-3" onSubmit={(event) => { event.preventDefault(); onSave() }}>
+          <div><label htmlFor={'document-title-' + task.id} className="mb-1 block text-xs font-semibold text-brand-ink">Document title</label><input id={'document-title-' + task.id} value={title} onChange={(event) => onTitleChange(event.target.value)} maxLength={300} disabled={saving} className="w-full rounded-lg border border-brand-line bg-white px-3 py-2 text-sm text-brand-ink disabled:opacity-60" /></div>
+          <div><label htmlFor={'document-body-' + task.id} className="mb-1 block text-xs font-semibold text-brand-ink">Document text</label><textarea id={'document-body-' + task.id} value={body} onChange={(event) => onBodyChange(event.target.value)} rows={12} maxLength={20000} disabled={saving} className="w-full resize-y rounded-lg border border-brand-line bg-white px-3 py-2 text-sm leading-relaxed text-brand-ink disabled:opacity-60" /></div>
+          <div className="flex flex-wrap gap-2"><button type="submit" disabled={saving} className="btn-primary inline-flex items-center gap-2 disabled:opacity-50">{saving && <Loader2 size={14} className="animate-spin" />}Save document draft</button><button type="button" onClick={onCancel} disabled={saving} className="rounded-lg border border-brand-line px-3 py-2 text-sm font-semibold text-brand-muted hover:bg-white disabled:opacity-50">Cancel edit</button></div>
+        </form>
+      ) : <><p className="mt-3 font-semibold text-brand-ink">{draft.title}</p><p className="mt-2 whitespace-pre-wrap rounded-lg bg-white p-3 text-sm leading-relaxed text-brand-ink">{draft.body}</p></>}
+      {(draft.sources || []).length > 0 && <ul className="mt-3 flex flex-wrap gap-1" aria-label="Document draft sources">{draft.sources.map((source) => <li key={source.source_id}><TaskSourceChip source={source} /></li>)}</ul>}
+      {!editable && <p className="mt-3 text-xs font-semibold text-brand-muted">This draft is read-only because the task is no longer in Review.</p>}
+      {notice && <p role="status" className="mt-3 text-xs font-semibold text-emerald-700">{notice}</p>}
+      {error && <p role="alert" className="mt-3 text-xs font-semibold text-red-700">{error}</p>}
+    </section>
+  )
+}
+
 function DeliveryAttemptHistory({ attempts }) {
   if (!Array.isArray(attempts) || attempts.length < 1) return null
   return (
@@ -773,7 +805,7 @@ function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onAction, onTa
         if (!active) return
         const loadedTask = { ...card, ...detail, matter: card?.matter, assignee: card?.assignee, reviewer: card?.reviewer }
         setTask(loadedTask)
-        setDraftSubject(loadedTask.pending_action?.subject || '')
+        setDraftSubject(loadedTask.pending_action?.subject || loadedTask.pending_action?.title || '')
         setDraftBody(loadedTask.pending_action?.body || '')
         setDraftEditing(false)
         setDraftError(null)
@@ -798,9 +830,13 @@ function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onAction, onTa
   const pendingEmail = livePendingEmail || deliveryEmailSnapshot
   const auditSnapshot = !livePendingEmail && Boolean(deliveryEmailSnapshot)
   const draftEditable = Boolean(livePendingEmail) && task?.status === 'review'
+  const livePendingDocument = (
+    task?.pending_action?.type === 'matter_document_draft' && task.pending_action
+  ) || null
+  const draftDocumentEditable = Boolean(livePendingDocument) && task?.status === 'review'
 
   const resetDraft = (sourceTask = task) => {
-    setDraftSubject(sourceTask?.pending_action?.subject || '')
+    setDraftSubject(sourceTask?.pending_action?.subject || sourceTask?.pending_action?.title || '')
     setDraftBody(sourceTask?.pending_action?.body || '')
     setDraftEditing(false)
     setDraftError(null)
@@ -809,7 +845,7 @@ function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onAction, onTa
   const applyUpdatedTask = (updated) => {
     const merged = { ...task, ...updated }
     setTask(merged)
-    setDraftSubject(merged.pending_action?.subject || '')
+    setDraftSubject(merged.pending_action?.subject || merged.pending_action?.title || '')
     setDraftBody(merged.pending_action?.body || '')
     onTaskUpdated?.(merged)
   }
@@ -852,6 +888,16 @@ function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onAction, onTa
     } finally {
       setDraftSaving(false)
     }
+  }
+  const savePendingDocumentDraft = async () => {
+    const title = draftSubject.trim()
+    if (!title || !draftBody.trim()) { setDraftError('A document title and text are required before this draft can be saved.'); return }
+    if (!Number.isInteger(task?.version) || task.version < 1) { setDraftError('The live task version is unavailable. Close and reopen the task before editing.'); return }
+    setDraftSaving(true); setDraftError(null); setDraftNotice(null)
+    try {
+      const updated = await updateTaskPendingAction(task.id, { title, body: draftBody, expected_version: task.version })
+      applyUpdatedTask(updated); setDraftEditing(false); setDraftNotice('The authoritative Word document draft was saved.')
+    } catch (err) { setDraftError(apiError(err, 'The document draft could not be saved.')) } finally { setDraftSaving(false) }
   }
   return (
     <div className="fixed inset-0 z-[60] flex justify-end bg-black/30" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
@@ -902,8 +948,18 @@ function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onAction, onTa
                   onCancel={resetDraft}
                 />
               )}
+              {livePendingDocument && (
+                <PendingDocumentDraftPanel
+                  task={task} draft={livePendingDocument} editable={draftDocumentEditable}
+                  editing={draftEditing} saving={draftSaving} title={draftSubject} body={draftBody}
+                  error={draftError} notice={draftNotice}
+                  onEdit={() => { setDraftEditing(true); setDraftError(null); setDraftNotice(null) }}
+                  onTitleChange={setDraftSubject} onBodyChange={setDraftBody}
+                  onSave={savePendingDocumentDraft} onCancel={resetDraft}
+                />
+              )}
               <DeliveryAttemptHistory attempts={task.delivery_history} />
-              {task.description && !pendingEmail && <section><h3 className="text-xs font-bold uppercase tracking-wide text-brand-muted">Notes</h3><p className="mt-2 whitespace-pre-wrap rounded-xl bg-brand-bg-soft p-4 text-sm leading-relaxed text-brand-ink">{task.description}</p></section>}
+              {task.description && !pendingEmail && !livePendingDocument && <section><h3 className="text-xs font-bold uppercase tracking-wide text-brand-muted">Notes</h3><p className="mt-2 whitespace-pre-wrap rounded-xl bg-brand-bg-soft p-4 text-sm leading-relaxed text-brand-ink">{task.description}</p></section>}
               {task.waiting_reason && <section className="rounded-xl border border-amber-200 bg-amber-50 p-4"><h3 className="text-xs font-bold uppercase tracking-wide text-amber-800">Waiting on</h3><p className="mt-1 text-sm text-amber-950">{task.waiting_reason}</p>{task.waiting_follow_up_date && <p className="mt-2 text-xs text-amber-800">Follow up {localDate(task.waiting_follow_up_date).toLocaleDateString()}</p>}</section>}
               <section>
                 <h3 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-brand-muted"><History size={13} /> Activity</h3>

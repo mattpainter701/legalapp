@@ -19,6 +19,7 @@ from app.schemas.chat_action import (
     ListMatterRecipientsArgs,
     ListMatterTasksArgs,
     ProposeClientEmailArgs,
+    ProposeMatterDocumentArgs,
     ProposeTaskArgs,
 )
 
@@ -123,6 +124,17 @@ def _build_registry() -> dict[str, ChatTool]:
             args_model=ProposeClientEmailArgs,
             mutating=True,
             handler=handlers.propose_client_email,
+        ),
+        ChatTool(
+            name="propose_matter_document",
+            description=(
+                "Draft a Word document as reviewable matter work. The attorney "
+                "can edit the text on the work board; approval saves a .docx to "
+                "the matter documents."
+            ),
+            args_model=ProposeMatterDocumentArgs,
+            mutating=True,
+            handler=handlers.propose_matter_document,
         ),
     )
     return {tool.name: tool for tool in tools}
