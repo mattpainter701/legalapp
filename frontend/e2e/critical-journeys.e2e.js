@@ -114,9 +114,10 @@ test('chat remains usable after a deterministic stream failure', async ({ page }
   await page.getByRole('button', { name: 'Send message' }).click()
   await expect(page.getByText('Message could not be sent')).toBeVisible()
   await expect(page.getByText('An error occurred: Deterministic assistant outage')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Send message' })).toBeEnabled()
+  await expect(page.getByLabel('Message the assistant')).toBeEnabled()
 
   await page.getByLabel('Message the assistant').fill('Retry after outage')
+  await expect(page.getByRole('button', { name: 'Send message' })).toBeEnabled()
   await page.getByRole('button', { name: 'Send message' }).click()
   await expect(page.getByText('The retry completed safely.')).toBeVisible()
   expect(streamAttempts).toBe(2)
