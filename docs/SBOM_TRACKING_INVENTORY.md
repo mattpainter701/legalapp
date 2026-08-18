@@ -132,7 +132,7 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |pypi|python-dotenv|unbounded|runtime/dev|scripts/requirements.txt|
 |pypi|tiktoken|unbounded|runtime/dev|scripts/requirements.txt|
 |pypi|tqdm|unbounded|runtime/dev|scripts/requirements.txt|
-|pypi|cryptography|==44.0.2|runtime/dev|scripts/tabs3_export/requirements.txt|
+|pypi|cryptography|==50.0.0|runtime/dev|scripts/tabs3_export/requirements.txt|
 |pypi|pyodbc|==5.2.0|runtime/dev|scripts/tabs3_export/requirements.txt|
 
 ## Container base images
