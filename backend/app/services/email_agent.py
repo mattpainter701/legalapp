@@ -158,22 +158,24 @@ async def _match_email_to_matters(
     tenant_id: uuid_mod.UUID,
     email: dict,
 ) -> list[uuid_mod.UUID]:
-    """Find matters linked to contacts whose email matches sender/recipient."""
+    """Find matters linked to a contact who *sent* the message.
+
+    This path only ever handles inbound mailbox sync.  Matching to/cc/bcc as
+    well would archive mail from an unknown sender whenever a known contact was
+    merely copied — or whenever the firm's own address was a recipient — which
+    turns copied and misaddressed traffic into matter correspondence.
+    """
     from sqlalchemy import func, select
 
     from app.models.contact import Contact
     from app.models.matter_party import MatterParty
     from app.models.plugin import Matter
 
-    # Extract email addresses from sender and recipients
+    # Sender only: see the docstring.  Recipients are deliberately not matched.
     addresses = set()
     sender = email.get("from", "") or ""
     for addr in _extract_email_addresses(sender):
         addresses.add(addr.lower())
-    for field in ("to", "cc", "bcc"):
-        val = email.get(field, "") or ""
-        for addr in _extract_email_addresses(val):
-            addresses.add(addr.lower())
 
     if not addresses:
         return []
