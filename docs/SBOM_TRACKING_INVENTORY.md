@@ -34,7 +34,7 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |npm|react-dom|^18.3.1|dependencies|frontend/package.json|
 |npm|react-dropzone|^14.3.5|dependencies|frontend/package.json|
 |npm|react-markdown|^9.0.1|dependencies|frontend/package.json|
-|npm|react-router-dom|^6.28.0|dependencies|frontend/package.json|
+|npm|react-router-dom|^7.18.2|dependencies|frontend/package.json|
 |npm|remark-gfm|^4.0.1|dependencies|frontend/package.json|
 |npm|@eslint/js|^9.39.5|devDependencies|frontend/package.json|
 |npm|@playwright/test|1.61.1|devDependencies|frontend/package.json|

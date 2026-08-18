@@ -267,7 +267,7 @@
       "name": "react-router-dom",
       "scope": "dependencies",
       "source": "frontend/package.json",
-      "specifier": "^6.28.0"
+      "specifier": "^7.18.2"
     },
     {
       "ecosystem": "npm",
