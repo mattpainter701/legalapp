@@ -50,6 +50,13 @@ litellm_settings:
 
 router_settings:
   routing_strategy: cost-based-routing
+  # Fail over inside the gateway so every request keeps the app-selected route
+  # and provider outages do not surface as a generic chat failure.
+  fallbacks:
+    - clarity-standard:
+        - clarity-standard-deepseek-flash-free
+    - clarity-premium:
+        - clarity-standard-deepseek-flash-free
 
 general_settings:
   master_key: os.environ/LITELLM_API_KEY
