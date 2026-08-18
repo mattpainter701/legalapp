@@ -20,6 +20,7 @@ import hashlib
 import json
 import logging
 import os
+from io import BytesIO
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
@@ -31,11 +32,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import async_session_maker, set_tenant_context
 from app.models.task import Task, TaskAutomationRun
+from app.models.matter_document import MatterDocument
+from app.models.plugin import Matter
 from app.models.tenant import TenantSettings
 from app.models.contact import Contact
 from app.models.document import Document
 from app.models.matter_party import MatterParty
-from app.schemas.chat_action import EmailClientAction, normalize_single_mailbox
+from app.schemas.chat_action import (
+    EmailClientAction,
+    MatterDocumentDraftAction,
+    normalize_single_mailbox,
+)
+from app.services.matter_file_store import MatterFileStore
 from app.services.connected_mail import (
     DELIVERY_CONFIRMED_SENT,
     DELIVERY_NOT_ATTEMPTED,
@@ -46,6 +54,7 @@ from app.services.email import email_service
 from app.services.task_workflow import append_task_event
 
 logger = logging.getLogger(__name__)
+matter_file_store = MatterFileStore()
 
 # Approval is a specific move, not merely leaving Review. Cancelling a drafted
 # client email must never send it — that inverts the attorney's intent — and
@@ -350,6 +359,107 @@ async def _run_email_client(
     )
 
 
+def _word_document_bytes(title: str, body: str) -> bytes:
+    """Render a straightforward, editable OOXML document from reviewed text."""
+    from docx import Document
+
+    document = Document()
+    document.add_heading(title, level=0)
+    for paragraph in body.split("\n\n"):
+        document.add_paragraph(paragraph.strip())
+    output = BytesIO()
+    document.save(output)
+    return output.getvalue()
+
+
+async def _run_matter_document_draft(
+    db: AsyncSession,
+    task: Task,
+    payload: dict[str, Any],
+    actor_user_id,
+) -> ActionExecutionResult:
+    try:
+        action = MatterDocumentDraftAction.model_validate(payload)
+    except ValidationError:
+        return ActionExecutionResult(
+            False,
+            "The stored document draft is not a valid action payload",
+            delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+        )
+    if task.matter_id != action.matter_id:
+        return ActionExecutionResult(
+            False,
+            "The reviewed document no longer belongs to this matter",
+            delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+        )
+    matter = await db.scalar(
+        select(Matter).where(
+            Matter.id == action.matter_id, Matter.tenant_id == task.tenant_id
+        )
+    )
+    if matter is None:
+        return ActionExecutionResult(
+            False,
+            "The matter for this reviewed document is no longer available",
+            delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+        )
+
+    filename = f"{action.title}.docx"
+    content = await asyncio.to_thread(_word_document_bytes, action.title, action.body)
+    try:
+        storage = await matter_file_store.store_matter_file_result(
+            db=db,
+            tenant_id=str(task.tenant_id),
+            matter_slug=matter.slug,
+            category="general",
+            filename=filename,
+            content=content,
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            matter_cloud_folder=matter.cloud_folder,
+        )
+    except Exception as exc:
+        return ActionExecutionResult(
+            False,
+            f"Word document could not be saved: {exc}"[:500],
+            delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+        )
+    if not storage.succeeded:
+        return ActionExecutionResult(
+            False,
+            f"Word document could not be saved: {storage.error or 'storage failed'}"[
+                :500
+            ],
+            delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+        )
+
+    document = MatterDocument(
+        tenant_id=task.tenant_id,
+        matter_id=action.matter_id,
+        uploaded_by_user_id=actor_user_id,
+        filename=filename,
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        file_size=len(content),
+        storage_path=storage.storage_path,
+        storage_provider=storage.provider,
+        storage_backend=storage.backend,
+        provider_object_id=storage.provider_item_id,
+        provider_drive_id=storage.drive_id,
+        provider_parent_id=storage.parent_id,
+        storage_error=storage.error,
+        description="Assistant draft approved by attorney",
+        document_category="general",
+    )
+    db.add(document)
+    await db.flush()
+    return ActionExecutionResult(
+        True,
+        "Approved Word document saved to Matter Documents.",
+        provider="matter_document",
+        provider_message_id=str(document.id),
+        delivery_certainty=DELIVERY_CONFIRMED_SENT,
+    )
+
+
 async def _recipient_bindings_are_current(
     db: AsyncSession,
     task: Task,
@@ -457,6 +567,7 @@ ACTION_HANDLERS: dict[
     Callable[[AsyncSession, Task, dict, Any], Awaitable[ActionExecutionResult]],
 ] = {
     "email_client": _run_email_client,
+    "matter_document_draft": _run_matter_document_draft,
 }
 
 
@@ -700,6 +811,26 @@ async def run_task_automation(
                 # Clear the draft so a later manual transition of the same task
                 # cannot re-enter the automation path at all.
                 task.pending_action = None
+                if action_type == "matter_document_draft":
+                    # Document preparation is complete once the reviewed Word
+                    # file is safely stored. The attorney should not have to
+                    # return to the board to close secretarial work manually.
+                    previous_status = task.status
+                    completed_at = datetime.now(timezone.utc)
+                    task.status = "completed"
+                    task.completed_at = completed_at
+                    task.status_changed_at = completed_at
+                    task.version += 1
+                    append_task_event(
+                        db,
+                        task,
+                        event_type="status_changed",
+                        actor_user_id=actor_user_id,
+                        from_status=previous_status,
+                        to_status="completed",
+                        note="Approved Word document filed to the matter.",
+                        metadata={"action_type": action_type},
+                    )
             await db.commit()
         except Exception:
             # Infrastructure failures must escape to the durable-job worker so

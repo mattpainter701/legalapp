@@ -454,7 +454,7 @@ class ChatActionAgent:
 
             try:
                 sequence.require(tool.name, arguments)
-                result = await tool.handler(context, arguments)
+                result = await tool.execute(context, arguments)
             except ChatToolError as exc:
                 # A recoverable, in-contract failure (wrong matter, bad
                 # recipient). Tell the model so it can correct course, but

@@ -1,11 +1,13 @@
-"""Handlers for the chat assistant's bounded tool surface.
+"""Tenant-safe implementations for LawHand's bounded automation capabilities.
 
-Every handler receives a ``ChatToolContext`` carrying the authenticated caller
-and an already tenant-scoped session. Handlers must treat their arguments as
-untrusted even after schema validation: the values originated from a model that
-read tenant documents, and a document can carry instructions. Concretely, every
-id is re-checked against the caller's tenant, and email recipients are resolved
-from matter parties rather than accepted as text.
+Matter chat is the first adapter, while a future workspace MCP adapter can call
+the same handlers. Every handler receives a ``CapabilityContext`` carrying the
+authenticated human actor and an already tenant-scoped session. Handlers must
+treat their arguments as untrusted even after schema validation: the values
+originated from a model that read tenant documents, and a document can contain
+instructions. Concretely, every id is re-checked against the caller's tenant,
+and email recipients are resolved from matter parties rather than accepted as
+text.
 
 Mutating handlers create board work in ``review`` and never perform the action
 itself. Execution belongs to ``task_automation`` and only after a human approves.
@@ -16,12 +18,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import uuid
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import and_, func, or_, select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.contact import Contact
 from app.models.document import Chunk, Document
@@ -34,12 +34,14 @@ from app.schemas.chat_action import (
     ListMatterRecipientsArgs,
     ListMatterTasksArgs,
     ProposeClientEmailArgs,
+    ProposeMatterDocumentArgs,
+    MatterDocumentDraftAction,
     ProposeTaskArgs,
     ResolvedRecipientBinding,
     normalize_single_mailbox,
 )
 from app.schemas.task import OPEN_TASK_STATUSES
-from app.services.chat_tools.registry import ChatToolError
+from app.services.automation_capabilities import CapabilityContext, CapabilityError
 from app.services.corpus_revision import advance_rag_corpus_revision
 from app.services.task_workflow import (
     TaskWorkflowError,
@@ -57,19 +59,9 @@ def _normalize_task_title(value: str) -> str:
     return " ".join(value.casefold().split())
 
 
-@dataclass
-class ChatToolContext:
-    db: AsyncSession
-    user: Any
-    conversation_id: uuid.UUID | None = None
-    # ``None`` keeps the legacy/direct-call resolver for existing internal
-    # callers.  The production chat path always supplies a list (including an
-    # empty one), which makes source resolution strict to this exact turn.
-    allowed_sources: list[dict[str, Any]] | None = None
-
-    @property
-    def tenant_id(self) -> uuid.UUID:
-        return self.user.tenant_id
+# Compatibility for existing imports while adapters migrate to the neutral name.
+ChatToolContext = CapabilityContext
+ChatToolError = CapabilityError
 
 
 async def _resolve_source_chips(
@@ -717,6 +709,49 @@ async def propose_client_email(
         "approval_effect": (
             f"Approving sends this email to {', '.join(to)}. "
             "Edit the draft first if anything is wrong."
+        ),
+        "pending_action": action.model_dump(mode="json"),
+        "sources": chips,
+    }
+
+
+async def propose_matter_document(
+    context: ChatToolContext, args: ProposeMatterDocumentArgs
+) -> dict[str, Any]:
+    """Place an editable Word-document draft in Review without writing a file yet."""
+    await _require_matter(context, args.matter_id)
+    async with context.db.begin_nested():
+        chips = await _resolve_source_chips(
+            context, args.source_ids, matter_id=args.matter_id
+        )
+        action = MatterDocumentDraftAction(
+            type="matter_document_draft",
+            matter_id=args.matter_id,
+            title=args.title,
+            body=args.body,
+            source_ids=args.source_ids[:10],
+            sources=chips,
+        )
+        task = await _create_proposed_task(
+            context,
+            matter_id=args.matter_id,
+            title=f"Review document: {action.title}",
+            description=f"Draft Word document awaiting approval.\n\n{action.body}",
+            due_date=args.due_date,
+            source_ids=args.source_ids,
+            pending_action=action.model_dump(mode="json"),
+        )
+    return {
+        "task_id": str(task.id),
+        "version": task.version,
+        "title": task.title,
+        "status": task.status,
+        "matter_id": str(task.matter_id),
+        "due_date": task.due_date.isoformat() if task.due_date else None,
+        "action_type": action.type,
+        "approval_effect": (
+            "Approving saves this reviewed draft as a Word document in the "
+            "matter's Documents area. Nothing is sent to the client."
         ),
         "pending_action": action.model_dump(mode="json"),
         "sources": chips,
