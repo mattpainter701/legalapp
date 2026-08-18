@@ -422,9 +422,30 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      # `--with-deps` shells out to apt-get.  When the runner draws a slow
+      # archive mirror, apt retries for ~18 minutes and eats the job's whole
+      # 20-minute budget, so the job is cancelled and reported as a failure
+      # before a single test runs.  Bound the apt work so a bad mirror costs a
+      # fast retry instead of the entire job.
       - name: Install Chromium
         working-directory: frontend
-        run: npx playwright install --with-deps chromium
+        timeout-minutes: 9
+        run: |
+          set -euo pipefail
+          sudo tee /etc/apt/apt.conf.d/99-ci-bounded-fetch >/dev/null <<'APT'
+          Acquire::Retries "2";
+          Acquire::http::Timeout "20";
+          Acquire::https::Timeout "20";
+          APT
+          for attempt in 1 2 3; do
+            if npx playwright install --with-deps chromium; then
+              exit 0
+            fi
+            echo "playwright install failed (attempt ${attempt}/3); retrying" >&2
+            sleep 5
+          done
+          echo "playwright install failed after 3 attempts" >&2
+          exit 1
 
       - name: Run first-customer browser E2E
         working-directory: frontend
