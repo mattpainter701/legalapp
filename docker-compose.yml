@@ -96,7 +96,9 @@ services:
 
   # Init service: runs migrations once, exits when complete.
   migrator:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     depends_on:
       postgres:
         condition: service_healthy
@@ -107,7 +109,9 @@ services:
     restart: "no"
 
   backend:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     depends_on:
       postgres:
         condition: service_healthy
