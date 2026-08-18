@@ -12,7 +12,7 @@ async def test_integration_readiness_is_redacted(client):
     data = resp.json()
     assert set(data["env"]["MICROSOFT_CLIENT_ID"].keys()) == {"configured"}
     assert (
-        "https://legalapp.perevagagroup.com/api/integrations/microsoft/callback"
+        "https://getlawhand.com/api/integrations/microsoft/callback"
         in data["expected_redirect_uris"]["microsoft"]
         or any(
             uri.endswith("/api/integrations/microsoft/callback")

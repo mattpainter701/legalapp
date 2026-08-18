@@ -194,7 +194,7 @@ def main():
     reg = sub.add_parser("register", help="Register agent with SaaS")
     reg.add_argument("--code", required=True, help="Pairing code from SaaS")
     reg.add_argument("--name", default="Unnamed Agent", help="Agent display name")
-    reg.add_argument("--url", default="https://legalapp.perevagagroup.com", help="SaaS API URL")
+    reg.add_argument("--url", default="https://getlawhand.com", help="SaaS API URL")
     reg.add_argument("--smb-username", default="", help="SMB username")
     reg.add_argument("--smb-password", default="", help="SMB password")
     reg.add_argument("--smb-domain", default="", help="SMB domain")
