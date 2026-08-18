@@ -72,7 +72,7 @@ Main app health:
 
 ```bash
 curl -sf http://localhost/health
-curl -s -o /dev/null -w "%{http_code}\n" https://legalapp.perevagagroup.com/health
+curl -s -o /dev/null -w "%{http_code}\n" https://getlawhand.com/health
 ```
 
 ## Data Loading Workflow

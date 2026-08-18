@@ -53,7 +53,7 @@ def _decrypt(ciphertext: str) -> str:
 
 @dataclass
 class AgentConfig:
-    saas_url: str = "https://legalapp.perevagagroup.com"
+    saas_url: str = "https://getlawhand.com"
     api_key: str = ""
     agent_id: str = ""
     smb_username: str = ""
