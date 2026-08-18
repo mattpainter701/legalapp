@@ -422,30 +422,33 @@ jobs:
         working-directory: frontend
         run: npm ci
 
-      # `--with-deps` shells out to apt-get.  When the runner draws a slow
-      # archive mirror, apt retries for ~18 minutes and eats the job's whole
-      # 20-minute budget, so the job is cancelled and reported as a failure
-      # before a single test runs.  Bound the apt work so a bad mirror costs a
-      # fast retry instead of the entire job.
+      # `--with-deps` reported every shared library Chromium needs as "already
+      # the newest version" — ubuntu-24.04 ships all of them.  The only thing it
+      # actually fetched was 21 MB of CJK, Cyrillic and Thai font packages this
+      # suite never renders, and the Azure mirror serves those at 30-60 kB/s:
+      # three of them alone burned the whole budget while the index fetch just
+      # before ran at 8 MB/s.  So skip apt and take the browser from Playwright's
+      # own CDN.  The launch check is the safety net: if a runner image ever does
+      # drop a library, it fails here with the missing name instead of surfacing
+      # as an unexplained timeout inside a test.
       - name: Install Chromium
         working-directory: frontend
-        timeout-minutes: 9
+        timeout-minutes: 5
         run: |
           set -euo pipefail
-          sudo tee /etc/apt/apt.conf.d/99-ci-bounded-fetch >/dev/null <<'APT'
-          Acquire::Retries "2";
-          Acquire::http::Timeout "20";
-          Acquire::https::Timeout "20";
-          APT
-          for attempt in 1 2 3; do
-            if npx playwright install --with-deps chromium; then
-              exit 0
-            fi
-            echo "playwright install failed (attempt ${attempt}/3); retrying" >&2
-            sleep 5
-          done
-          echo "playwright install failed after 3 attempts" >&2
-          exit 1
+          npx playwright install chromium
+          node -e '
+            const { chromium } = require("@playwright/test");
+            chromium.launch()
+              .then(async (browser) => {
+                console.log("chromium launched:", browser.version());
+                await browser.close();
+              })
+              .catch((error) => {
+                console.error("chromium failed to launch:", error.message);
+                process.exit(1);
+              });
+          '
 
       - name: Run first-customer browser E2E
         working-directory: frontend
