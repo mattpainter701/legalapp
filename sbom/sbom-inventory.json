@@ -953,7 +953,7 @@
       "name": "cryptography",
       "scope": "runtime/dev",
       "source": "scripts/tabs3_export/requirements.txt",
-      "specifier": "==44.0.2"
+      "specifier": "==50.0.0"
     },
     {
       "ecosystem": "pypi",
