@@ -63,7 +63,9 @@ def _requested_filename(
         or candidate in {".", ".."}
         or any(char in candidate for char in '\\/:*?"<>|\r\n\x00')
     ):
-        raise HTTPException(status_code=422, detail="Filename must be a single file name")
+        raise HTTPException(
+            status_code=422, detail="Filename must be a single file name"
+        )
     return candidate
 
 
@@ -181,9 +183,7 @@ async def create_artifact(
     await _get_conversation_or_404(conversation_id, user, db)
 
     if payload.task_id and not payload.matter_id:
-        raise HTTPException(
-            status_code=400, detail="task_id requires matter_id"
-        )
+        raise HTTPException(status_code=400, detail="task_id requires matter_id")
     if payload.matter_id:
         await _get_matter_or_404(str(payload.matter_id), user.tenant_id, db)
     if payload.task_id:
@@ -220,9 +220,7 @@ async def get_artifact(
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
     await _get_conversation_or_404(conversation_id, user, db)
-    return await _get_artifact_or_404(
-        artifact_id, conversation_id, user.tenant_id, db
-    )
+    return await _get_artifact_or_404(artifact_id, conversation_id, user.tenant_id, db)
 
 
 @router.patch(
@@ -244,7 +242,8 @@ async def update_artifact(
     )
 
     if artifact.saved_to_matter and any(
-        field in payload.model_fields_set for field in ("content", "matter_id", "task_id")
+        field in payload.model_fields_set
+        for field in ("content", "matter_id", "task_id")
     ):
         raise HTTPException(
             status_code=409,
@@ -446,9 +445,7 @@ async def export_artifact(
     )
 
     if payload.format == "markdown":
-        filename = _requested_filename(
-            payload.filename, artifact.title, extension="md"
-        )
+        filename = _requested_filename(payload.filename, artifact.title, extension="md")
         return PlainTextResponse(
             content=artifact.content,
             media_type="text/markdown",

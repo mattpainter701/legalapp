@@ -1,21 +1,35 @@
 import uuid
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 from fastapi import HTTPException
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 
+from app.models.conversation import Conversation, Message
 from app.models.plugin import Matter
+from app.models.task import Task
+from app.routers import chat as chat_router
 from app.routers import chat_artifacts as chat_artifacts_router
 from app.routers.chat_artifacts import _requested_filename
-from app.schemas.chat_artifact import ChatArtifactCreate
+from app.schemas.chat_artifact import (
+    ChatArtifactCreate,
+    ChatArtifactUpdate,
+    SaveArtifactToMatterRequest,
+)
 from app.services.artifact_extraction import extract_artifacts, strip_artifacts
-from app.services.document_export import markdown_to_docx_bytes, markdown_to_pdf_bytes
+from app.services.document_export import (
+    _inline_html,
+    _markdown_blocks,
+    markdown_to_docx_bytes,
+    markdown_to_pdf_bytes,
+)
 from app.services.matter_file_store import StorageResult
 
 
 def test_extract_and_strip_artifact_blocks() -> None:
-    response = '''Here is the requested revision.
+    response = """Here is the requested revision.
 
 :::artifact title="Mutual NDA - Section 3"
 ## Confidentiality
@@ -23,7 +37,7 @@ def test_extract_and_strip_artifact_blocks() -> None:
 The parties must protect confidential information.
 :::
 
-Please have counsel review before sending.'''
+Please have counsel review before sending."""
 
     artifacts = extract_artifacts(response)
 
@@ -46,14 +60,9 @@ def test_malformed_artifact_is_not_extracted_or_stripped() -> None:
 
 def test_artifact_extraction_fails_closed_instead_of_losing_content() -> None:
     too_many = "\n\n".join(
-        f':::artifact title="Draft {index}"\nBody {index}\n:::'
-        for index in range(4)
+        f':::artifact title="Draft {index}"\nBody {index}\n:::' for index in range(4)
     )
-    oversized = (
-        ':::artifact title="Oversized"\n'
-        + ("x" * 200_001)
-        + "\n:::"
-    )
+    oversized = ':::artifact title="Oversized"\n' + ("x" * 200_001) + "\n:::"
 
     assert extract_artifacts(too_many) == []
     assert extract_artifacts(oversized) == []
@@ -63,7 +72,10 @@ def test_artifact_extraction_fails_closed_instead_of_losing_content() -> None:
 
 def test_artifact_payload_is_bounded_and_markdown_only() -> None:
     assert ChatArtifactCreate(title="Draft", content="Body").format == "markdown"
-    assert ChatArtifactCreate(title="  Draft  ", content="  indented body\n").title == "Draft"
+    assert (
+        ChatArtifactCreate(title="  Draft  ", content="  indented body\n").title
+        == "Draft"
+    )
     assert (
         ChatArtifactCreate(title="Draft", content="  indented body\n").content
         == "  indented body\n"
@@ -95,6 +107,225 @@ def test_document_exports_are_real_files() -> None:
 
     assert markdown_to_pdf_bytes(markdown, title="Review memo").startswith(b"%PDF-")
     assert markdown_to_docx_bytes(markdown, title="Review memo").startswith(b"PK")
+
+
+def test_document_exports_support_all_declared_markdown_blocks() -> None:
+    markdown = """## Terms
+
+Plain **bold**, *italic*, and `code` text.
+
+> First quoted line
+> Second quoted line
+
+- Alpha
+- Beta
+
+1. First
+2. Second
+
+| Name | Value |
+| --- | --- |
+| Notice | 30 days |
+"""
+
+    blocks = _markdown_blocks(markdown)
+    assert [kind for kind, _ in blocks] == [
+        "heading",
+        "para",
+        "quote",
+        "bullets",
+        "numbers",
+        "table",
+    ]
+    assert _inline_html("A & B < C **bold** *italic* `code`") == (
+        "A &amp; B &lt; C <b>bold</b> <i>italic</i> " '<font face="Courier">code</font>'
+    )
+    assert markdown_to_pdf_bytes(markdown).startswith(b"%PDF-")
+    assert markdown_to_docx_bytes(markdown).startswith(b"PK")
+
+
+def test_artifact_update_validators_allow_null_and_reject_blank_values() -> None:
+    assert ChatArtifactUpdate(title=None, content=None).model_dump() == {
+        "title": None,
+        "content": None,
+        "matter_id": None,
+        "task_id": None,
+    }
+    assert ChatArtifactUpdate(title="  Revised  ").title == "Revised"
+
+    with pytest.raises(ValueError):
+        ChatArtifactUpdate(title="   ")
+    with pytest.raises(ValueError):
+        ChatArtifactUpdate(content="\n\t")
+
+
+@pytest.mark.asyncio
+async def test_message_artifacts_are_persisted_and_extraction_failures_are_safe(
+    client: AsyncClient,
+    db_session,
+    test_user,
+    monkeypatch,
+) -> None:
+    conversation_payload = (await client.post("/api/conversations", json={})).json()
+    conversation = await db_session.scalar(
+        select(Conversation).where(Conversation.id == conversation_payload["id"])
+    )
+    message = Message(
+        tenant_id=test_user.tenant_id,
+        conversation_id=conversation.id,
+        role="assistant",
+        content="placeholder",
+    )
+    db_session.add(message)
+    await db_session.flush()
+
+    visible, artifacts = await chat_router._persist_message_artifacts(
+        db_session,
+        user=test_user,
+        conv=conversation,
+        assistant_msg=message,
+        response_text=(
+            'Before\n\n:::artifact title="Demand letter"\n'
+            "# Demand\n\nPay within 10 days.\n:::\n\nAfter"
+        ),
+    )
+
+    assert visible == "Before\n\nAfter"
+    assert len(artifacts) == 1
+    assert artifacts[0].message_id == message.id
+    assert artifacts[0].matter_id == conversation.matter_id
+
+    unchanged, none = await chat_router._persist_message_artifacts(
+        db_session,
+        user=test_user,
+        conv=conversation,
+        assistant_msg=message,
+        response_text="No document block here.",
+    )
+    assert (unchanged, none) == ("No document block here.", [])
+
+    monkeypatch.setattr(
+        chat_router,
+        "extract_artifacts",
+        lambda _text: (_ for _ in ()).throw(RuntimeError("parser unavailable")),
+    )
+    unchanged, none = await chat_router._persist_message_artifacts(
+        db_session,
+        user=test_user,
+        conv=conversation,
+        assistant_msg=message,
+        response_text="Keep this response",
+    )
+    assert (unchanged, none) == ("Keep this response", [])
+
+
+@pytest.mark.asyncio
+async def test_save_artifact_service_records_storage_metadata_and_compensates(
+    monkeypatch,
+) -> None:
+    tenant_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    conversation_id = str(uuid.uuid4())
+    artifact_id = str(uuid.uuid4())
+    matter_id = uuid.uuid4()
+    user = SimpleNamespace(tenant_id=tenant_id, id=user_id)
+    matter = SimpleNamespace(
+        id=matter_id,
+        slug="direct-save",
+        cloud_folder=None,
+    )
+    artifact = SimpleNamespace(
+        id=uuid.UUID(artifact_id),
+        title="Direct save memo",
+        content="# Memo\n\nConfidential.",
+        saved_to_matter=False,
+        saved_document_id=None,
+        matter_id=None,
+        task_id=None,
+        updated_at=None,
+    )
+    storage = StorageResult(
+        provider="local",
+        backend="local",
+        storage_path="direct-save.md",
+    )
+    settings_result = SimpleNamespace(scalar_one_or_none=lambda: None)
+    db = SimpleNamespace(
+        execute=AsyncMock(return_value=settings_result),
+        add=MagicMock(),
+        flush=AsyncMock(),
+        commit=AsyncMock(),
+        refresh=AsyncMock(),
+        rollback=AsyncMock(),
+    )
+
+    monkeypatch.setattr(
+        chat_artifacts_router, "get_current_user", AsyncMock(return_value=user)
+    )
+    monkeypatch.setattr(chat_artifacts_router, "set_tenant_context", AsyncMock())
+    monkeypatch.setattr(chat_artifacts_router, "_get_conversation_or_404", AsyncMock())
+    monkeypatch.setattr(
+        chat_artifacts_router,
+        "_get_artifact_or_404",
+        AsyncMock(return_value=artifact),
+    )
+    monkeypatch.setattr(
+        chat_artifacts_router,
+        "_get_matter_or_404",
+        AsyncMock(return_value=matter),
+    )
+    store = AsyncMock(return_value=storage)
+    compensate = AsyncMock()
+    monkeypatch.setattr(
+        chat_artifacts_router.matter_file_store,
+        "store_matter_file_result",
+        store,
+    )
+    monkeypatch.setattr(
+        chat_artifacts_router.matter_file_store,
+        "delete_stored_result",
+        compensate,
+    )
+
+    result = await chat_artifacts_router.save_artifact_to_matter(
+        conversation_id,
+        artifact_id,
+        SaveArtifactToMatterRequest(matter_id=matter_id),
+        SimpleNamespace(),
+        db,
+    )
+
+    assert result.artifact_id == artifact.id
+    assert result.matter_id == matter_id
+    assert result.filename == "Direct-save-memo.md"
+    assert result.storage_backend == "local"
+    assert artifact.saved_to_matter is True
+    assert artifact.saved_document_id == result.document_id
+    db.flush.assert_awaited_once()
+    db.commit.assert_awaited_once()
+    compensate.assert_not_awaited()
+
+    artifact.saved_to_matter = False
+    artifact.saved_document_id = None
+    db.commit.reset_mock(side_effect=True)
+    db.commit.side_effect = RuntimeError("database unavailable")
+
+    with pytest.raises(HTTPException) as exc:
+        await chat_artifacts_router.save_artifact_to_matter(
+            conversation_id,
+            artifact_id,
+            SaveArtifactToMatterRequest(matter_id=matter_id),
+            SimpleNamespace(),
+            db,
+        )
+
+    assert exc.value.status_code == 500
+    db.rollback.assert_awaited_once()
+    compensate.assert_awaited_once_with(
+        db=db,
+        tenant_id=str(tenant_id),
+        result=storage,
+    )
 
 
 @pytest.mark.asyncio
@@ -175,6 +406,88 @@ async def test_artifact_api_rejects_unknown_matter_and_blank_title(
 
 
 @pytest.mark.asyncio
+async def test_artifact_destination_requires_a_task_from_the_selected_matter(
+    client: AsyncClient,
+    db_session,
+    test_tenant,
+    test_user,
+) -> None:
+    matter = Matter(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        slug="artifact-task-target",
+        matter_name="Artifact task target",
+        matter_type="general",
+    )
+    other_matter = Matter(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        slug="artifact-other-target",
+        matter_name="Artifact other target",
+        matter_type="general",
+    )
+    task = Task(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        matter_id=matter.id,
+        created_by_user_id=test_user.id,
+        title="Review generated draft",
+    )
+    db_session.add_all([matter, other_matter, task])
+    await db_session.commit()
+
+    conversation = (await client.post("/api/conversations", json={})).json()
+    endpoint = f"/api/conversations/{conversation['id']}/artifacts"
+
+    task_without_matter = await client.post(
+        endpoint,
+        json={"title": "Draft", "content": "Body", "task_id": str(task.id)},
+    )
+    assert task_without_matter.status_code == 400
+
+    mismatched_task = await client.post(
+        endpoint,
+        json={
+            "title": "Draft",
+            "content": "Body",
+            "matter_id": str(other_matter.id),
+            "task_id": str(task.id),
+        },
+    )
+    assert mismatched_task.status_code == 400
+
+    created = await client.post(
+        endpoint,
+        json={
+            "title": "  Task-linked draft  ",
+            "content": "Initial body",
+            "matter_id": str(matter.id),
+            "task_id": str(task.id),
+        },
+    )
+    assert created.status_code == 201
+    artifact = created.json()
+    assert artifact["matter_id"] == str(matter.id)
+    assert artifact["task_id"] == str(task.id)
+
+    clear_matter_only = await client.patch(
+        f"{endpoint}/{artifact['id']}", json={"matter_id": None}
+    )
+    assert clear_matter_only.status_code == 400
+
+    updated = await client.patch(
+        f"{endpoint}/{artifact['id']}",
+        json={"title": "  Revised title  ", "task_id": None, "matter_id": None},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["title"] == "Revised title"
+    assert updated.json()["task_id"] is None
+    assert updated.json()["matter_id"] is None
+
+
+@pytest.mark.asyncio
 async def test_artifact_save_links_the_created_matter_document(
     client: AsyncClient,
     db_session,
@@ -224,6 +537,12 @@ async def test_artifact_save_links_the_created_matter_document(
     assert saved["storage_backend"] == "local"
     assert saved["storage_warning"] is None
 
+    duplicate_save = await client.post(
+        f"/api/conversations/{conversation['id']}/artifacts/{created['id']}/save",
+        json={"matter_id": str(matter.id), "document_category": "generated"},
+    )
+    assert duplicate_save.status_code == 409
+
     artifact = await client.get(
         f"/api/conversations/{conversation['id']}/artifacts/{created['id']}"
     )
@@ -236,3 +555,33 @@ async def test_artifact_save_links_the_created_matter_document(
         json={"matter_id": None},
     )
     assert retarget.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_artifact_docx_export_and_invalid_filename_are_rejected(
+    client: AsyncClient,
+) -> None:
+    conversation = (await client.post("/api/conversations", json={})).json()
+    created = (
+        await client.post(
+            f"/api/conversations/{conversation['id']}/artifacts",
+            json={"title": "Draft memo", "content": "# Memo\n\nReview `term`."},
+        )
+    ).json()
+    endpoint = (
+        f"/api/conversations/{conversation['id']}/artifacts/{created['id']}/export"
+    )
+
+    docx_export = await client.post(
+        endpoint,
+        json={"format": "docx", "filename": "draft-memo.docx"},
+    )
+    assert docx_export.status_code == 200
+    assert docx_export.content.startswith(b"PK")
+    assert "draft-memo.docx" in docx_export.headers["content-disposition"]
+
+    invalid_name = await client.post(
+        endpoint,
+        json={"format": "pdf", "filename": "../outside.pdf"},
+    )
+    assert invalid_name.status_code == 422

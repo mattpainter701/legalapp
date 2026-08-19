@@ -103,9 +103,7 @@ _STREAM_INTERRUPTED_MESSAGE = (
     "**Response interrupted.** A complete answer was not saved. "
     "Retry this message before relying on the analysis."
 )
-_INTERNAL_DOCUMENT_URL_RE = re.compile(
-    r"^/api/documents/[0-9a-fA-F-]{36}/download$"
-)
+_INTERNAL_DOCUMENT_URL_RE = re.compile(r"^/api/documents/[0-9a-fA-F-]{36}/download$")
 
 
 def _clean_source_text(value, max_length: int | None = None) -> str:
@@ -1702,8 +1700,7 @@ async def get_conversation(
             attachment_count or 0,
         ),
         messages=[
-            _message_to_response(m, artifact_map.get(str(m.id), []))
-            for m in messages
+            _message_to_response(m, artifact_map.get(str(m.id), [])) for m in messages
         ],
     )
 

@@ -113,12 +113,20 @@ def _markdown_blocks(content: str) -> list[tuple[str, object]]:
 
         para_lines = [line]
         i += 1
-        while i < len(lines) and lines[i].strip() and not (
-            _HEADING_RE.match(lines[i])
-            or _BULLET_RE.match(lines[i])
-            or _NUMBER_RE.match(lines[i])
-            or _QUOTE_RE.match(lines[i])
-            or ("|" in lines[i] and i + 1 < len(lines) and _TABLE_DIVIDER_RE.match(lines[i + 1]))
+        while (
+            i < len(lines)
+            and lines[i].strip()
+            and not (
+                _HEADING_RE.match(lines[i])
+                or _BULLET_RE.match(lines[i])
+                or _NUMBER_RE.match(lines[i])
+                or _QUOTE_RE.match(lines[i])
+                or (
+                    "|" in lines[i]
+                    and i + 1 < len(lines)
+                    and _TABLE_DIVIDER_RE.match(lines[i + 1])
+                )
+            )
         ):
             para_lines.append(lines[i])
             i += 1
@@ -162,7 +170,9 @@ def markdown_to_pdf_bytes(content: str, title: str | None = None) -> bytes:
         if kind == "heading":
             level, text = payload
             story.append(
-                Paragraph(_inline_html(text), heading_styles.get(level, styles["Heading4"]))
+                Paragraph(
+                    _inline_html(text), heading_styles.get(level, styles["Heading4"])
+                )
             )
             story.append(Spacer(1, 6))
         elif kind == "para":
@@ -190,7 +200,9 @@ def markdown_to_pdf_bytes(content: str, title: str | None = None) -> bytes:
             story.append(Spacer(1, 8))
         elif kind == "table":
             header = payload[0]
-            story.append(Paragraph(_inline_html(" | ".join(header)), styles["Heading4"]))
+            story.append(
+                Paragraph(_inline_html(" | ".join(header)), styles["Heading4"])
+            )
             for row in payload[1:]:
                 story.append(Paragraph(_inline_html(" | ".join(row)), body))
             story.append(Spacer(1, 8))

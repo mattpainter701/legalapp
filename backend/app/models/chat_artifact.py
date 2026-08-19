@@ -45,9 +45,7 @@ class ChatArtifact(Base):
     format: Mapped[str] = mapped_column(
         String(50), default="markdown", server_default="markdown"
     )
-    version: Mapped[int] = mapped_column(
-        Integer, default=1, server_default="1"
-    )
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     matter_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("matters.id", ondelete="SET NULL"),
