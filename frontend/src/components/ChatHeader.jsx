@@ -104,7 +104,6 @@ export default function ChatHeader({
   }
 
   const canEditTitle = Boolean(activeConvTitle && onRenameConversation)
-
   return (
     <header className="z-20 flex min-h-12 flex-shrink-0 items-center justify-between gap-2 border-b border-brand-line bg-brand-surface px-2 py-1.5 sm:min-h-16 sm:gap-3 sm:px-4 sm:py-2 md:px-6">
       <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">

@@ -96,6 +96,7 @@ from app.models.durable_job import DurableJob
 from app.models.office_action_run import OfficeActionRun
 from app.models.plugin_skill_run import PluginSkillRun
 from app.models.matter_document_revision import MatterDocumentRevision
+from app.models.chat_artifact import ChatArtifact
 
 __all__ = [
     "Tenant",
@@ -195,4 +196,6 @@ __all__ = [
     "OfficeActionRun",
     "PluginSkillRun",
     "MatterDocumentRevision",
+    "ChatArtifact",
+    "MatterDocument",
 ]

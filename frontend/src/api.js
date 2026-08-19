@@ -411,6 +411,14 @@ export const streamMessage = async function* (
         return null
       }
     }
+    if (data.startsWith('[ARTIFACTS]')) {
+      try {
+        return { value: JSON.parse(data.slice('[ARTIFACTS]'.length)), terminal: false }
+      } catch {
+        // Ignore malformed artifact metadata; token streaming should continue.
+        return null
+      }
+    }
     if (data === '[STREAM_COMPLETE]') {
       return { value: data, terminal: true }
     }
@@ -519,6 +527,45 @@ export const uploadChatAttachment = (conversationId, file) => {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
     .then((r) => r.data)
+}
+
+// Chat artifacts (AI-generated document work products)
+export const getArtifacts = (conversationId) =>
+  api.get(`/conversations/${conversationId}/artifacts`).then((r) => r.data)
+
+export const getArtifact = (conversationId, artifactId) =>
+  api
+    .get(`/conversations/${conversationId}/artifacts/${artifactId}`)
+    .then((r) => r.data)
+
+export const createArtifact = (conversationId, payload) =>
+  api
+    .post(`/conversations/${conversationId}/artifacts`, payload)
+    .then((r) => r.data)
+
+export const updateArtifact = (conversationId, artifactId, payload) =>
+  api
+    .patch(`/conversations/${conversationId}/artifacts/${artifactId}`, payload)
+    .then((r) => r.data)
+
+export const deleteArtifact = (conversationId, artifactId) =>
+  api.delete(`/conversations/${conversationId}/artifacts/${artifactId}`)
+
+export const saveArtifactToMatter = (conversationId, artifactId, payload) =>
+  api
+    .post(
+      `/conversations/${conversationId}/artifacts/${artifactId}/save`,
+      payload,
+    )
+    .then((r) => r.data)
+
+export const exportArtifact = async (conversationId, artifactId, format, filename) => {
+  const response = await api.post(
+    `/conversations/${conversationId}/artifacts/${artifactId}/export`,
+    { format, filename },
+    { responseType: 'blob' },
+  )
+  return response.data
 }
 
 // Admin

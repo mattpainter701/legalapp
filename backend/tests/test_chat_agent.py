@@ -25,6 +25,7 @@ from app.models.plugin import Matter
 from app.models.task import Task
 from app.models.tenant import Tenant, TenantSettings
 from app.models.user import User
+from app.routers import documents as documents_router
 from app.services.chat_agent import (
     MAX_AGENT_STEPS,
     ChatActionAgent,
@@ -535,8 +536,9 @@ async def test_contact_value_cannot_expand_one_party_into_multiple_recipients(
 
 @pytest.mark.asyncio
 async def test_action_cited_chat_attachment_is_promoted_and_survives_chat_delete(
-    client, db_session, test_tenant, test_user, tmp_path
+    client, db_session, test_tenant, test_user, tmp_path, monkeypatch
 ):
+    monkeypatch.setattr(documents_router.settings, "UPLOAD_DIR", str(tmp_path))
     await _enable_actions(db_session, test_tenant)
     matter, party, _contact = await _matter_with_client(
         db_session, test_tenant, test_user
@@ -548,7 +550,8 @@ async def test_action_cited_chat_attachment_is_promoted_and_survives_chat_delete
         matter_id=matter.id,
         title="Insurance follow-up",
     )
-    storage_path = tmp_path / "insurance-evidence.pdf"
+    storage_path = tmp_path / str(test_tenant.id) / "insurance-evidence.pdf"
+    storage_path.parent.mkdir(parents=True)
     storage_path.write_bytes(b"synthetic evidence")
     document = Document(
         id=uuid.uuid4(),

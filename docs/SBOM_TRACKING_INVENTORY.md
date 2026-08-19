@@ -174,7 +174,7 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 
 |Route|Provider/model|API base|API key env|Source|
 |-|-|-|-|-|
-|clarity-standard|openrouter/google/gemma-4-31b-it:free|default/provider|os.environ/OPENROUTER_API_KEY|litellm_config.yaml|
+|clarity-standard|openai/nemotron-3-ultra-free|https://opencode.ai/zen/v1|os.environ/DEEPSEEK_API_KEY|litellm_config.yaml|
 |clarity-standard-zen-nemotron|openai/nemotron-3-ultra-free|https://opencode.ai/zen/v1|os.environ/DEEPSEEK_API_KEY|litellm_config.yaml|
 |clarity-standard-deepseek-flash-free|openai/deepseek-v4-flash-free|https://opencode.ai/zen/v1|os.environ/DEEPSEEK_API_KEY|litellm_config.yaml|
 |clarity-premium|openai/deepseek-v4-pro|https://opencode.ai/zen/go/v1|os.environ/DEEPSEEK_API_KEY|litellm_config.yaml|
