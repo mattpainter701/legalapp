@@ -1,6 +1,6 @@
-# Corporate-Law AI Assistant Demo Runbook
+# Practice-Area Scenario Library Demo Runbook
 
-Audience: corporate and contract attorney with recurring retainer work
+Audience: attorney evaluating a common matter in their practice area
 Target length: 10 minutes
 Tenant: `cybersafeadvisor.com`
 Data: synthetic only
@@ -20,7 +20,7 @@ levels and review controls.
 ## Preflight — 20 minutes before the meeting
 
 1. Confirm production version/readiness and the active paid demo route.
-2. Confirm the three matters and six documents are visible only in the demo tenant.
+2. Confirm all 15 matters and 18 documents are visible only in the demo tenant.
 3. Open each document and verify the synthetic warning is visible.
 4. Run each exact prompt below once; keep successful tabs open.
 5. Confirm citations open the correct matter document and passage.
@@ -35,7 +35,9 @@ the expected review path honestly.
 
 ## 0:00–1:00 — Set the frame
 
-Show the three matter types:
+Start with the scenario closest to the prospect's work. The library includes one rich,
+synthetic matter for every shipped LawHand module, plus a recurring outside-counsel
+portfolio. For a corporate or commercial audience, show these three familiar paths:
 
 - customer-side SaaS agreement review;
 - Delaware financing and board approvals;

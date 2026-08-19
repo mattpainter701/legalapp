@@ -1,16 +1,20 @@
 {
-  "schema_version": 1,
-  "pack_version": "bk24-corporate-demo-v1",
+  "schema_version": 2,
+  "pack_version": "demo-scenario-library-v1",
   "tenant_domain": "cybersafeadvisor.com",
   "synthetic": true,
   "warning": "SYNTHETIC DEMO - NOT LEGAL ADVICE",
   "matters": [
     {
       "external_key": "demo-northstar-saas-review",
+      "primary_plugin": "commercial-legal",
+      "matter_type": "commercial",
+      "jurisdiction": "Delaware",
       "name": "Northstar Analytics - SaaS Vendor Review",
       "practice_area": "Corporate / Commercial Contracts",
       "status": "Open - Negotiation",
       "client": "Northstar Analytics, Inc. (fictional)",
+      "description": "A customer-side SaaS renewal with AI-training, security, and liability issues.",
       "documents": [
         "01-northstar-cloud-master-services-agreement.docx",
         "02-northstar-cloud-data-security-addendum.docx"
@@ -28,10 +32,14 @@
     },
     {
       "external_key": "demo-harborlight-seed-financing",
+      "primary_plugin": "corporate-legal",
+      "matter_type": "corporate",
+      "jurisdiction": "Delaware",
       "name": "HarborLight Robotics - Series Seed Financing",
       "practice_area": "Corporate / Financing",
       "status": "Open - Pre-Closing",
       "client": "HarborLight Robotics, Inc. (fictional)",
+      "description": "A founder-friendly seed financing with approvals, cap-table, and closing work.",
       "documents": [
         "03-harborlight-series-seed-term-sheet.docx",
         "04-harborlight-board-written-consent.docx"
@@ -47,10 +55,14 @@
     },
     {
       "external_key": "demo-redwood-ogc-retainer",
+      "primary_plugin": "commercial-legal",
+      "matter_type": "commercial",
+      "jurisdiction": "Ohio",
       "name": "Redwood Outdoor Supply - Outside General Counsel Retainer",
       "practice_area": "Outside General Counsel",
       "status": "Open - Recurring",
       "client": "Redwood Outdoor Supply, Inc. (fictional)",
+      "description": "A lively monthly outside-counsel portfolio with contract, product, and governance work.",
       "documents": [
         "05-redwood-ogc-engagement-letter.docx",
         "06-redwood-monthly-request-and-contract-calendar.docx"
@@ -66,6 +78,246 @@
         "monthly_usd": 12500,
         "included_attorney_hours": 45
       }
+    },
+    {
+      "external_key": "demo-sunbeam-drone-demand",
+      "primary_plugin": "litigation-legal",
+      "matter_type": "litigation",
+      "jurisdiction": "Illinois",
+      "name": "Sunbeam Drone - Rooftop Delivery Demand",
+      "practice_area": "Litigation / Commercial Dispute",
+      "status": "Open - Pre-Suit",
+      "client": "Sunbeam Drone Delivery, Inc. (fictional)",
+      "description": "A fictional rooftop delivery pilot ended with a damaged greenhouse, a viral video, and a demand letter that arrives before the insurer has finished its factual review.",
+      "documents": [
+        "07-sunbeam-rooftop-delivery-demand-response.docx"
+      ],
+      "demo_prompt": "Build a claim chronology, identify the preservation steps, and draft a measured response that does not concede the disputed marketing statement.",
+      "suggested_tasks": [
+        "Issue legal hold and preserve flight, marketing, and support records",
+        "Map contract, insurance, and agency-notice deadlines",
+        "Prepare demand-response chronology and settlement authority memo"
+      ]
+    },
+    {
+      "external_key": "demo-pineapple-dsar",
+      "primary_plugin": "privacy-legal",
+      "matter_type": "privacy",
+      "jurisdiction": "California",
+      "name": "Pineapple Fitness - Member Data Request",
+      "practice_area": "Privacy / Data Protection",
+      "status": "Open - Response Window",
+      "client": "Pineapple Fitness Studios, LLC (fictional)",
+      "description": "A former spin-class regular asks what the studio knows about her while a well-meaning manager has already offered to send a spreadsheet from the front-desk system.",
+      "documents": [
+        "08-pineapple-member-data-request-playbook.docx"
+      ],
+      "demo_prompt": "Create a practical DSAR plan, flag the data that needs human review, and prepare the questions for the booking and marketing vendors.",
+      "suggested_tasks": [
+        "Open verified request record and freeze automatic deletion",
+        "Collect booking, payment, and marketing-vendor data maps",
+        "Draft access, deletion, and partner-disclosure response package"
+      ]
+    },
+    {
+      "external_key": "demo-brew-bloom-termination",
+      "primary_plugin": "employment-legal",
+      "matter_type": "employment",
+      "jurisdiction": "Ohio",
+      "name": "Brew & Bloom - Store Manager Separation",
+      "practice_area": "Employment / Workplace Investigation",
+      "status": "Open - Decision Pending",
+      "client": "Brew & Bloom Coffee Roasters, Inc. (fictional)",
+      "description": "A popular store manager is accused of changing tip allocations, but the complaint lands two days after she raised scheduling concerns in a staff group chat.",
+      "documents": [
+        "09-brew-bloom-manager-separation-memo.docx"
+      ],
+      "demo_prompt": "Build an investigation plan that tests the tip allegation and the retaliation risk, then prepare an HR decision checklist.",
+      "suggested_tasks": [
+        "Preserve POS, payroll, schedule, and group-chat records",
+        "Prepare witness interview plan and comparator review",
+        "Draft separation-or-coaching checklist with final-pay steps"
+      ]
+    },
+    {
+      "external_key": "demo-trailtrack-kids-watch",
+      "primary_plugin": "product-legal",
+      "matter_type": "product",
+      "jurisdiction": "United States",
+      "name": "TrailTrack - Kids Adventure Watch Launch",
+      "practice_area": "Product / Marketing Review",
+      "status": "Open - Launch Gate",
+      "client": "TrailTrack Outdoor Labs, Inc. (fictional)",
+      "description": "The product team wants a fun September launch for a kids' hiking watch with location sharing, parent challenges, and a battery claim that marketing describes as 'weekend-proof.'",
+      "documents": [
+        "10-trailtrack-kids-watch-launch-review.docx"
+      ],
+      "demo_prompt": "Turn this launch brief into a prioritized product legal checklist, with specific edits to the battery and location-sharing claims.",
+      "suggested_tasks": [
+        "Review launch claims against test evidence and product behavior",
+        "Draft parent-facing location and trial disclosures",
+        "Create retailer FAQ and launch-risk signoff checklist"
+      ]
+    },
+    {
+      "external_key": "demo-moonbeam-trademark",
+      "primary_plugin": "ip-legal",
+      "matter_type": "trademark",
+      "jurisdiction": "United States",
+      "name": "Moonbeam Bakery - Sparkle Crumb Brand Clash",
+      "practice_area": "Intellectual Property / Trademark",
+      "status": "Open - Brand Decision",
+      "client": "Moonbeam Bakery Co. (fictional)",
+      "description": "A neighborhood bakery plans a 'Sparkle Crumb' sprinkle-kit launch, then receives a friendly but firm message from a regional cookie company using a similar name on social media.",
+      "documents": [
+        "11-moonbeam-sparkle-crumb-brand-review.docx"
+      ],
+      "demo_prompt": "Create a brand-risk matrix and a practical next-step plan for the founder before the holiday packaging deadline.",
+      "suggested_tasks": [
+        "Build trademark clearance and usage evidence checklist",
+        "Inventory packaging, web, and social uses of the proposed mark",
+        "Draft non-admission response and holiday-print decision memo"
+      ]
+    },
+    {
+      "external_key": "demo-pearl-pixel-ai-recruiter",
+      "primary_plugin": "ai-governance-legal",
+      "matter_type": "ai governance",
+      "jurisdiction": "United States",
+      "name": "Pearl & Pixel - AI Recruiter Pilot",
+      "practice_area": "AI Governance / Vendor Review",
+      "status": "Open - Pilot Review",
+      "client": "Pearl & Pixel Design Studio, LLC (fictional)",
+      "description": "A design studio wants to use an AI tool to sort portfolio submissions before its seasonal hiring sprint, while the vendor promises that its 'bias-free' scoring is ready on day one.",
+      "documents": [
+        "12-pearl-pixel-ai-recruiter-pilot.docx"
+      ],
+      "demo_prompt": "Assess this AI hiring pilot, identify the controls needed before launch, and draft a concise go/no-go recommendation.",
+      "suggested_tasks": [
+        "Create AI use-case inventory and human-oversight record",
+        "Negotiate pilot data-use and model-change controls",
+        "Draft candidate notice and recruiter training checklist"
+      ]
+    },
+    {
+      "external_key": "demo-freshnest-supplement-label",
+      "primary_plugin": "regulatory-legal",
+      "matter_type": "regulatory",
+      "jurisdiction": "United States",
+      "name": "FreshNest - Sleepy Tea Label Refresh",
+      "practice_area": "Regulatory / Consumer Claims",
+      "status": "Open - Label Review",
+      "client": "FreshNest Pantry Brands, Inc. (fictional)",
+      "description": "A tea company wants to make its calming blend feel more magical for a grocery reset, but the draft label moves from 'bedtime ritual' toward claims that sound like treatment.",
+      "documents": [
+        "13-freshnest-sleepy-tea-label-review.docx"
+      ],
+      "demo_prompt": "Classify the proposed claims, suggest safer alternatives, and build a ten-day approval plan for the label refresh.",
+      "suggested_tasks": [
+        "Redline label and campaign claims by support level",
+        "Create testimonial, influencer, and moderation guidance",
+        "Prepare retailer deadline plan and approval archive"
+      ]
+    },
+    {
+      "external_key": "demo-riverstone-parenting-plan",
+      "primary_plugin": "family-law",
+      "matter_type": "family",
+      "jurisdiction": "Ohio",
+      "name": "Riverstone - School-Year Parenting Plan",
+      "practice_area": "Family Law / Parenting Time",
+      "status": "Open - Mediation Prep",
+      "client": "Avery Riverstone (fictional)",
+      "description": "Two parents agree that their daughter loves robotics club and her rescue rabbit, but they need a workable school-year schedule before a job transfer changes the weekday routine.",
+      "documents": [
+        "14-riverstone-parenting-plan-prep.docx"
+      ],
+      "demo_prompt": "Turn these facts into a neutral mediation agenda and a child-centered parenting-plan checklist without giving jurisdiction-specific legal advice.",
+      "suggested_tasks": [
+        "Build parenting-time calendar and holiday options",
+        "Prepare mediation issue list and communication protocol",
+        "Collect school, activity, travel, and expense information"
+      ]
+    },
+    {
+      "external_key": "demo-parkers-festival-citation",
+      "primary_plugin": "criminal-defense",
+      "matter_type": "criminal defense",
+      "jurisdiction": "Ohio",
+      "name": "Parker - Summer Festival Citation",
+      "practice_area": "Criminal Defense / Municipal Case",
+      "status": "Open - Initial Review",
+      "client": "Jordan Parker (fictional)",
+      "description": "A summer festival ends with a citation, a lost phone, and two different accounts of whether a barricade was visible in the crowd.",
+      "documents": [
+        "15-parker-festival-citation-case-notes.docx"
+      ],
+      "demo_prompt": "Build an initial defense-case checklist that prioritizes evidence preservation, court preparation, and client communications.",
+      "suggested_tasks": [
+        "Preserve venue, phone, and witness evidence",
+        "Create citation timeline and discovery request checklist",
+        "Prepare client communication and first-appearance checklist"
+      ]
+    },
+    {
+      "external_key": "demo-lakeside-bakery-lease",
+      "primary_plugin": "real-estate",
+      "matter_type": "real estate",
+      "jurisdiction": "Michigan",
+      "name": "Lakeside Bakery - First Brick-and-Mortar Lease",
+      "practice_area": "Real Estate / Commercial Lease",
+      "status": "Open - Lease Negotiation",
+      "client": "Lakeside Bakery, LLC (fictional)",
+      "description": "A bakery with a devoted pop-up following has found a sunny corner storefront, but the proposed lease makes the tenant responsible for more than flour, frosting, and a cheerful opening day.",
+      "documents": [
+        "16-lakeside-bakery-lease-review.docx"
+      ],
+      "demo_prompt": "Review this first-store lease scenario, identify the top negotiation points, and create a practical due-diligence checklist.",
+      "suggested_tasks": [
+        "Create lease redline matrix and build-out contingency list",
+        "Request exclusivity, zoning, and utility documentation",
+        "Prepare opening-date and guaranty negotiation checklist"
+      ]
+    },
+    {
+      "external_key": "demo-marigold-estate",
+      "primary_plugin": "trust-estate-legal",
+      "matter_type": "estate",
+      "jurisdiction": "Ohio",
+      "name": "Marigold Estate - Garden Shop Transition",
+      "practice_area": "Trusts & Estates / Probate Planning",
+      "status": "Open - Administration Planning",
+      "client": "Marigold Estate Representative (fictional)",
+      "description": "A beloved garden-shop owner left a handwritten note, a small greenhouse business, and three adult children who all agree the shop should survive but disagree about who should run it.",
+      "documents": [
+        "17-marigold-estate-administration-plan.docx"
+      ],
+      "demo_prompt": "Organize this estate-and-business transition into immediate, near-term, and long-term decisions while flagging questions for local probate counsel.",
+      "suggested_tasks": [
+        "Inventory estate and garden-shop records",
+        "Create 30-day business-continuity checklist",
+        "Prepare beneficiary communication and decision calendar"
+      ]
+    },
+    {
+      "external_key": "demo-neighborly-fence-mediation",
+      "primary_plugin": "mediation-legal",
+      "matter_type": "mediation",
+      "jurisdiction": "Ohio",
+      "name": "Neighborly Fence - Garden and Dog-Run Mediation",
+      "practice_area": "Mediation / Property Dispute",
+      "status": "Open - Session Preparation",
+      "client": "Neighborly Mediation File (fictional)",
+      "description": "A charming community garden, an energetic rescue dog, and six inches of fence line have turned two friendly neighbors into people who no longer wave across the driveway.",
+      "documents": [
+        "18-neighborly-fence-mediation-brief.docx"
+      ],
+      "demo_prompt": "Prepare a constructive mediation agenda, identify the information gaps, and outline settlement terms that let both neighbors enjoy their yards again.",
+      "suggested_tasks": [
+        "Prepare neutral chronology and document exchange list",
+        "Draft mediation agenda, caucus questions, and settlement options",
+        "Create written-agreement checklist for work scope and access"
+      ]
     }
   ]
 }

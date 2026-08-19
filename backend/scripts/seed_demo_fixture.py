@@ -1,8 +1,8 @@
 """Create a clean, reproducible synthetic tenant for live sales demonstrations.
 
-The fixture deliberately contains no conversations or messages.  Every prospect
-starts in a clean workspace and the six cited documents are scoped across three
-complete synthetic matters.
+The fixture deliberately contains no conversations or messages. Every prospect
+starts in a clean workspace with a synthetic, document-rich scenario for every
+shipped practice module.
 
 Usage (from backend/):
     python scripts/seed_demo_fixture.py --domain lawhand-demo-fixture-v2.invalid
@@ -36,6 +36,7 @@ from app.models.task import Task  # noqa: E402
 from app.models.tenant import Tenant, TenantSettings  # noqa: E402
 from app.models.user import User  # noqa: E402
 from app.services.demo_clone import validate_demo_fixture  # noqa: E402
+from app.services.plugins.manifest import valid_plugin_names  # noqa: E402
 from app.services.rbac_service import provision_tenant_rbac  # noqa: E402
 from app.utils.legal_chunker import chunk_legal_document  # noqa: E402
 from app.utils.text_processing import extract_text_from_docx  # noqa: E402
@@ -56,7 +57,7 @@ def demo_pack_root() -> Path:
     for candidate in candidates:
         if (candidate / "manifest.json").is_file():
             return candidate
-    raise RuntimeError("The synthetic corporate demo pack is unavailable")
+    raise RuntimeError("The synthetic practice demo pack is unavailable")
 
 
 def load_demo_pack(pack_root: Path | None = None) -> dict[str, Any]:
@@ -69,9 +70,33 @@ def load_demo_pack(pack_root: Path | None = None) -> dict[str, Any]:
         manifest.get("synthetic") is not True
         or manifest.get("warning") != DISCLAIMER
         or not isinstance(matters, list)
-        or len(matters) != 3
+        or not matters
     ):
-        raise RuntimeError("The demo pack is not the approved three-matter fixture")
+        raise RuntimeError("The demo pack is not an approved synthetic scenario library")
+
+    required_fields = {
+        "external_key",
+        "primary_plugin",
+        "matter_type",
+        "jurisdiction",
+        "name",
+        "practice_area",
+        "status",
+        "client",
+        "description",
+        "documents",
+        "demo_prompt",
+        "suggested_tasks",
+    }
+    if any(not isinstance(matter, dict) or required_fields - matter.keys() for matter in matters):
+        raise RuntimeError("Every demo scenario must include complete matter metadata")
+    covered_plugins = {str(matter["primary_plugin"]) for matter in matters}
+    missing_plugins = valid_plugin_names() - covered_plugins
+    if missing_plugins:
+        raise RuntimeError(
+            "The demo scenario library is missing shipped plugins: "
+            f"{sorted(missing_plugins)}"
+        )
 
     filenames = [
         filename
@@ -79,8 +104,8 @@ def load_demo_pack(pack_root: Path | None = None) -> dict[str, Any]:
         if isinstance(matter, dict)
         for filename in matter.get("documents", [])
     ]
-    if len(filenames) != 6 or len(set(filenames)) != 6:
-        raise RuntimeError("The demo pack must provide six unique source documents")
+    if len(filenames) < len(matters) or len(set(filenames)) != len(filenames):
+        raise RuntimeError("Every demo scenario must have unique source documents")
     if any(
         not isinstance(name, str) or not (root / name).is_file() for name in filenames
     ):
@@ -115,9 +140,9 @@ async def seed(domain: str) -> uuid.UUID:
         tenant_id, user_id = uuid.uuid4(), uuid.uuid4()
         tenant = Tenant(
             id=tenant_id,
-            name="LawHand Corporate Demo - Synthetic",
+            name="LawHand Practice Demo - Synthetic",
             domain=domain,
-            company_name="LawHand Corporate Demo Firm (Synthetic)",
+            company_name="LawHand Practice Demo Firm (Synthetic)",
             billing_tier="fixture",
             is_active=True,
             onboarding_completed=True,
@@ -148,9 +173,9 @@ async def seed(domain: str) -> uuid.UUID:
                     enable_auto_memory=False,
                     use_customer_llm=False,
                     custom_config={
-                        "plan": "demo-fixture-v2",
+                        "plan": "demo-scenario-library-v1",
                         "synthetic": True,
-                        "demo_prompt": "Choose a matter and ask its suggested question.",
+                        "demo_prompt": "Choose a practice-area scenario and ask its suggested question.",
                     },
                 ),
             ]
@@ -180,24 +205,21 @@ async def seed(domain: str) -> uuid.UUID:
                 user_id=user_id,
                 slug=str(spec["external_key"]),
                 matter_name=str(spec["name"]),
-                description=(
-                    "Synthetic corporate-law demonstration matter. "
-                    "Use the cited documents and attorney review; not legal advice."
-                ),
-                matter_type="corporate",
+                description=str(spec["description"]),
+                matter_type=str(spec["matter_type"]),
                 practice_area=str(spec["practice_area"]),
-                jurisdiction="Delaware",
+                jurisdiction=str(spec["jurisdiction"]),
                 status="open",
                 stage=str(spec["status"]),
                 risk_level="medium",
-                case_number=f"DEMO-2026-CORP-{index + 1:02d}",
+                case_number=f"DEMO-2026-{index + 1:02d}",
                 client_contact_id=contact_id,
                 attorney_of_record_id=user_id,
                 memory_content=(
                     "SYNTHETIC DEMO - NOT LEGAL ADVICE. Suggested question: "
                     f"{spec['demo_prompt']}"
                 ),
-                primary_plugin="corporate",
+                primary_plugin=str(spec["primary_plugin"]),
             )
             db.add_all(
                 [
