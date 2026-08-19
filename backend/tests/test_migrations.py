@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["109_hide_unlinked_synced_emails"]
+    assert heads == ["110_chat_artifact_pipeline"]
 
 
 def test_revision_ids_fit_the_alembic_version_column():

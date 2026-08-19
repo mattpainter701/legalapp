@@ -33,6 +33,7 @@ from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.conversation import Conversation, Message, UsageRecord
 from app.models.document import Document
+from app.models.chat_artifact import ChatArtifact
 from app.models.plugin import Matter as MatterModel
 from app.models.tenant import Tenant
 from app.schemas.chat import (
@@ -45,6 +46,7 @@ from app.schemas.chat import (
     MessageResponse,
     SourceCitation,
 )
+from app.services.artifact_extraction import extract_artifacts, strip_artifacts
 from app.services.embeddings import EmbeddingService
 from app.services.rag import (
     cloud_context_source_id,
@@ -101,6 +103,9 @@ _STREAM_INTERRUPTED_MESSAGE = (
     "**Response interrupted.** A complete answer was not saved. "
     "Retry this message before relying on the analysis."
 )
+_INTERNAL_DOCUMENT_URL_RE = re.compile(
+    r"^/api/documents/[0-9a-fA-F-]{36}/download$"
+)
 
 
 def _clean_source_text(value, max_length: int | None = None) -> str:
@@ -145,11 +150,13 @@ def _normalize_source_url(value: str | None) -> str | None:
     url = url.strip("<>")
     if url.startswith("//"):
         return f"https:{url}"
-    # Authenticated LawHand document links are intentionally origin-relative so
-    # they work in local, staging, and production environments.  CourtListener
-    # paths use a different namespace (for example ``/opinion/...``).
-    if url.startswith("/api/"):
+    # Authenticated LawHand document links must remain origin-relative so they
+    # work in every deployment. CourtListener paths use other namespaces such
+    # as /opinion/ and are normalized below.
+    if _INTERNAL_DOCUMENT_URL_RE.fullmatch(url):
         return url
+    if url.startswith("/api/"):
+        return None
     if url.startswith("/"):
         return f"https://www.courtlistener.com{url}"
     if url.startswith("www.courtlistener.com/") or url.startswith("courtlistener.com/"):
@@ -494,6 +501,12 @@ def _stream_error_event(message: str) -> str:
     if not safe_message:
         safe_message = "Assistant service temporarily unavailable. Retry this message."
     return f"data: [ERROR] {safe_message}\n\n"
+
+
+def _stream_artifacts_event(artifacts: list[ChatArtifact]) -> str:
+    """Notify the client of document artifacts created during this message."""
+    payload = {"type": "artifacts", "artifacts": _artifact_summaries(artifacts)}
+    return f"data: [ARTIFACTS]{json.dumps(payload)}\n\n"
 
 
 def _stream_activity_event(
@@ -892,7 +905,70 @@ def _stored_source_type(source: dict) -> str:
     return "context"
 
 
-def _message_to_response(msg: Message) -> MessageResponse:
+async def _persist_message_artifacts(
+    db: AsyncSession,
+    *,
+    user,
+    conv: Conversation,
+    assistant_msg: Message,
+    response_text: str,
+) -> tuple[str, list[ChatArtifact]]:
+    """Extract artifact blocks from an assistant response and persist them.
+
+    Returns (visible_content, artifacts). Artifact blocks are stripped from the
+    message body shown in chat; the document content lives on the artifact rows.
+    Extraction failures must never break the chat flow.
+    """
+    try:
+        extracted = extract_artifacts(response_text)
+    except Exception:
+        logger.warning("Artifact extraction failed", exc_info=True)
+        return response_text, []
+
+    if not extracted:
+        return response_text, []
+
+    visible_content = strip_artifacts(response_text)
+    artifacts: list[ChatArtifact] = []
+    try:
+        async with db.begin_nested():
+            for item in extracted:
+                artifact = ChatArtifact(
+                    id=uuid.uuid4(),
+                    tenant_id=user.tenant_id,
+                    conversation_id=conv.id,
+                    message_id=assistant_msg.id,
+                    created_by_user_id=user.id,
+                    title=item.title,
+                    content=item.content,
+                    format="markdown",
+                    matter_id=conv.matter_id,
+                )
+                db.add(artifact)
+                artifacts.append(artifact)
+            await db.flush()
+    except Exception:
+        logger.warning("Artifact persistence failed", exc_info=True)
+        return response_text, []
+    return visible_content, artifacts
+
+
+def _artifact_summaries(artifacts: list[ChatArtifact]) -> list[dict]:
+    return [
+        {
+            "id": str(a.id),
+            "title": a.title,
+            "format": a.format,
+            "version": a.version,
+            "saved_to_matter": a.saved_to_matter,
+        }
+        for a in artifacts
+    ]
+
+
+def _message_to_response(
+    msg: Message, artifacts: list[ChatArtifact] | None = None
+) -> MessageResponse:
     sources = []
     if msg.sources:
         for s in msg.sources:
@@ -957,6 +1033,7 @@ def _message_to_response(msg: Message) -> MessageResponse:
             [source.model_dump() for source in sources],
         ),
         proposed_actions=list(msg.proposed_actions or []),
+        artifacts=_artifact_summaries(artifacts or []),
         created_at=msg.created_at,
     )
 
@@ -1603,13 +1680,31 @@ async def get_conversation(
         )
     )
 
+    # Batch-load artifacts for all messages so document cards render on reload.
+    artifact_map: dict[str, list[ChatArtifact]] = {}
+    if messages:
+        art_result = await db.execute(
+            select(ChatArtifact)
+            .where(
+                ChatArtifact.message_id.in_([m.id for m in messages]),
+                ChatArtifact.tenant_id == user.tenant_id,
+            )
+            .order_by(ChatArtifact.created_at.asc())
+        )
+        for artifact in art_result.scalars().all():
+            if artifact.message_id is not None:
+                artifact_map.setdefault(str(artifact.message_id), []).append(artifact)
+
     return ConversationDetail(
         conversation=_conversation_to_response(
             conv,
             len(messages),
             attachment_count or 0,
         ),
-        messages=[_message_to_response(m) for m in messages],
+        messages=[
+            _message_to_response(m, artifact_map.get(str(m.id), []))
+            for m in messages
+        ],
     )
 
 
@@ -2527,6 +2622,18 @@ async def _send_message_under_generation_lock(
     )
     db.add(assistant_msg)
 
+    # Extract document artifacts (e.g. drafted clauses, memos) from the
+    # response. Artifact blocks are stripped from the visible message body and
+    # persisted as ChatArtifact rows linked to this message.
+    visible_content, msg_artifacts = await _persist_message_artifacts(
+        db,
+        user=user,
+        conv=conv,
+        assistant_msg=assistant_msg,
+        response_text=cleaned_response,
+    )
+    assistant_msg.content = visible_content
+
     # Update conversation updated_at
     conv.updated_at = datetime.now(timezone.utc)
 
@@ -2587,7 +2694,7 @@ async def _send_message_under_generation_lock(
             privacy_mode=privacy_mode,
         )
 
-    return _message_to_response(assistant_msg)
+    return _message_to_response(assistant_msg, msg_artifacts)
 
 
 @router.post("/{conversation_id}/messages/stream")
@@ -3356,11 +3463,25 @@ async def _stream_message_under_generation_lock(
                     ),
                 },
             )
+            # Extract document artifacts before streaming so the raw
+            # :::artifact fence syntax is never sent to the client.
+            try:
+                stream_extracted = extract_artifacts(cleaned_response)
+                stream_visible_response = (
+                    strip_artifacts(cleaned_response)
+                    if stream_extracted
+                    else cleaned_response
+                )
+            except Exception:
+                logger.warning("Artifact extraction failed", exc_info=True)
+                stream_extracted = []
+                stream_visible_response = cleaned_response
+
             # Do not expose unvalidated provider output.  Buffering preserves
             # the SSE contract while ensuring the client only receives the
             # privacy- and citation-checked answer.
-            for offset in range(0, len(cleaned_response), 80):
-                safe_chunk = cleaned_response[offset : offset + 80]
+            for offset in range(0, len(stream_visible_response), 80):
+                safe_chunk = stream_visible_response[offset : offset + 80]
                 yield _stream_token_event(safe_chunk)
 
             # Track matter context usage if provided
@@ -3411,13 +3532,14 @@ async def _stream_message_under_generation_lock(
                 # Persist the same text that will be streamed after commit so a
                 # reload can never disagree with the live turn.
                 cleaned_response = f"{cleaned_response}{action_note}"
+                stream_visible_response = f"{stream_visible_response}{action_note}"
 
             assistant_msg = Message(
                 id=uuid.uuid4(),
                 tenant_id=user.tenant_id,
                 conversation_id=conv.id,
                 role="assistant",
-                content=cleaned_response,
+                content=stream_visible_response,
                 sources=source_dicts if source_dicts else None,
                 skill_applied=skill_applied,
                 context_used=context_used if context_used else None,
@@ -3426,6 +3548,31 @@ async def _stream_message_under_generation_lock(
                 proposed_actions=proposed_actions or None,
             )
             db.add(assistant_msg)
+
+            # Persist extracted artifacts linked to this message. Reuse the
+            # pre-stream extraction so the client and DB agree on the content.
+            msg_artifacts: list[ChatArtifact] = []
+            if stream_extracted:
+                try:
+                    async with db.begin_nested():
+                        for item in stream_extracted:
+                            artifact = ChatArtifact(
+                                id=uuid.uuid4(),
+                                tenant_id=user.tenant_id,
+                                conversation_id=conv.id,
+                                message_id=assistant_msg.id,
+                                created_by_user_id=user.id,
+                                title=item.title,
+                                content=item.content,
+                                format="markdown",
+                                matter_id=conv.matter_id,
+                            )
+                            db.add(artifact)
+                            msg_artifacts.append(artifact)
+                        await db.flush()
+                except Exception:
+                    logger.warning("Artifact persistence failed", exc_info=True)
+                    msg_artifacts = []
 
             # Update conversation timestamp
             conv.updated_at = datetime.now(timezone.utc)
@@ -3524,6 +3671,10 @@ async def _stream_message_under_generation_lock(
                     tenant_name=user.tenant.name if user.tenant else "Legal",
                     privacy_mode=privacy_mode,
                 )
+
+            # Notify the client of any document artifacts created this message
+            if msg_artifacts:
+                yield _stream_artifacts_event(msg_artifacts)
 
             # Send completion marker
             yield "data: [STREAM_COMPLETE]\n\n"

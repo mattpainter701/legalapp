@@ -77,6 +77,18 @@ class CitationAnnotation(BaseModel):
     support_tag: CitationTagSpan
 
 
+class ArtifactSummary(BaseModel):
+    """Metadata about a document artifact attached to a message."""
+
+    id: str
+    title: str
+    format: str = "markdown"
+    version: int = 1
+    saved_to_matter: bool = False
+
+    model_config = {"from_attributes": True}
+
+
 class MessageResponse(BaseModel):
     id: str
     conversation_id: str
@@ -87,6 +99,7 @@ class MessageResponse(BaseModel):
     # Reviewable work the assistant proposed on this turn. Empty for every
     # tenant without chat actions enabled, which is the default.
     proposed_actions: List[dict] = []
+    artifacts: List[ArtifactSummary] = []
     created_at: datetime
 
     model_config = {"from_attributes": True}

@@ -199,13 +199,14 @@ describe('Chat assistant experience', () => {
     expect(screen.getByText('Retrieved context')).toBeInTheDocument()
   })
 
-  it('links attached-document source tags to the authenticated LawHand download', () => {
+  it('keeps attached-document hyperlinks on the authenticated LawHand origin', () => {
+    const documentId = '3b99740d-63af-4d25-a937-268786947f8d'
     const sources = [
       {
-        source_id: 'document:atlas-loi',
+        source_id: `document:${documentId}`,
         case_name: 'Project Atlas Letter of Intent.docx',
         citation: 'Project Atlas Letter of Intent.docx',
-        url: '/api/documents/atlas-loi/download',
+        url: `/api/documents/${documentId}/download`,
         source_type: 'tenant_document',
         source_label: 'Attached document',
         locator: 'LOI §§5–9',
@@ -217,7 +218,7 @@ describe('Chat assistant experience', () => {
         message={{
           id: 'answer-attachment',
           role: 'assistant',
-          content: 'The exclusivity covenant is binding. [source: document:atlas-loi] [verify]',
+          content: `The exclusivity covenant is binding. [source: document:${documentId}] [verify]`,
           sources,
           created_at: '2026-08-13T20:26:00Z',
         }}
@@ -226,12 +227,34 @@ describe('Chat assistant experience', () => {
 
     expect(screen.getByRole('link', { name: '[1]' })).toHaveAttribute(
       'href',
-      '/api/documents/atlas-loi/download',
+      '#source-answer-attachment-1',
     )
     expect(
       screen.getByRole('link', { name: 'Project Atlas Letter of Intent.docx' }),
-    ).toHaveAttribute('href', '/api/documents/atlas-loi/download')
-    expect(screen.getByText('Cited Sources')).toBeInTheDocument()
+    ).toHaveAttribute('href', `/api/documents/${documentId}/download`)
+    expect(screen.getByText('Sources & References')).toBeInTheDocument()
+  })
+
+  it('does not trust arbitrary internal API paths from source metadata', () => {
+    render(
+      <ChatMessage
+        message={{
+          id: 'answer-untrusted-internal-link',
+          role: 'assistant',
+          content: 'Review the purported source. [source: untrusted]',
+          sources: [{
+            source_id: 'untrusted',
+            case_name: 'Untrusted source',
+            citation: 'Internal API',
+            url: '/api/admin/users',
+            source_type: 'tenant_document',
+          }],
+          created_at: '2026-08-13T20:26:00Z',
+        }}
+      />,
+    )
+
+    expect(screen.queryByRole('link', { name: 'Internal API' })).not.toBeInTheDocument()
   })
 
   it('renders consent trackers as semantic Markdown tables', () => {
@@ -374,6 +397,11 @@ describe('Chat assistant experience', () => {
         onRenameConversation={vi.fn()}
         onExportConversation={vi.fn()}
         onOpenSidebar={vi.fn()}
+        activeConversationId="conversation-1"
+        linkedMatter={{ id: 'matter-1', matter_name: 'Acme lease', case_number: '24-CV-1' }}
+        matters={[{ id: 'matter-1', matter_name: 'Acme lease', case_number: '24-CV-1' }]}
+        onLinkMatter={vi.fn()}
+        onOpenMatter={vi.fn()}
       />,
     )
 
@@ -388,6 +416,8 @@ describe('Chat assistant experience', () => {
     expect(setIncludePublic).toHaveBeenCalledWith(expect.any(Function))
     const updater = setIncludePublic.mock.calls[0][0]
     expect(updater(true)).toBe(false)
+    expect(screen.getByText('Matter context')).toBeInTheDocument()
+    expect(screen.getByText(/Acme lease/)).toBeInTheDocument()
   })
 
   it('turns suggested work into an editable prompt and keeps keyboard sending', async () => {
