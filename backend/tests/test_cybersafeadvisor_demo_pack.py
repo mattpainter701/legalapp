@@ -34,6 +34,7 @@ def test_demo_manifest_covers_every_shipped_practice_module_with_rich_sources():
             "practice_area",
             "status",
             "client",
+            "client_profile",
             "description",
             "documents",
             "demo_prompt",
@@ -43,8 +44,13 @@ def test_demo_manifest_covers_every_shipped_practice_module_with_rich_sources():
         for matter in matters
     )
     assert all(len(matter["suggested_tasks"]) >= 3 for matter in matters)
+    assert all(
+        matter["client_profile"]["address"]
+        and matter["client_profile"]["primary_contact"]["email"].endswith(".invalid")
+        for matter in matters
+    )
     documents = [name for matter in manifest["matters"] for name in matter["documents"]]
-    assert len(documents) >= len(matters)
+    assert len(documents) >= len(matters) * 3
     assert len(set(documents)) == len(documents)
     assert all((PACK / name).is_file() for name in documents)
 

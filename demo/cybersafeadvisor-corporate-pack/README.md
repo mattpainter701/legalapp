@@ -4,10 +4,11 @@ This directory contains fictional, generated documents for the LawHand prospect
 demonstration. Every document is marked `SYNTHETIC DEMO - NOT LEGAL ADVICE`.
 No real client, counterparty, person, address, email, or transaction is used.
 
-`manifest.json` maps the documents into lively, common matters across every
-shipped practice module. Each matter includes a demo prompt, suggested tasks,
-and a structured source document. The manifest is preparation evidence only: it
-is not a production database seed and the documents have not been uploaded to
+`manifest.json` maps 48 documents into 15 lively, common matters across every
+shipped practice module. Each matter includes a fictional client profile and
+address, primary contact, opposing party, demo prompt, suggested tasks, and
+multiple structured source documents. The manifest is preparation evidence only:
+it is not a production database seed and the documents have not been uploaded to
 `cybersafeadvisor.com`.
 
 Regenerate the pack with:
