@@ -91,43 +91,48 @@ def test_application_jwt_algorithm_rejects_every_other_profile(algorithm):
         validate_jwt_algorithm(settings)
 
 
-def test_token_encryption_key_required():
+def test_token_encryption_key_required(monkeypatch):
     """TOKEN_ENCRYPTION_KEY must be set and valid."""
     # Generate a valid Fernet key
     valid_key = Fernet.generate_key().decode()
 
     # Create settings with valid key
-    os.environ["TOKEN_ENCRYPTION_KEY"] = valid_key
-    os.environ["DATABASE_URL"] = "postgresql://test"
-    os.environ["SECRET_KEY"] = "test-secret"
+    monkeypatch.delenv("TOKEN_ENCRYPTION_KEYS", raising=False)
+    monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", valid_key)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test")
+    monkeypatch.setenv("SECRET_KEY", "test-secret")
 
-    settings = Settings()
+    settings = Settings(_env_file=None)
     # This should not raise
     validate_token_encryption_key(settings)
 
 
-def test_token_encryption_key_missing_raises():
+def test_token_encryption_key_missing_raises(monkeypatch):
     """TOKEN_ENCRYPTION_KEY missing should raise ValueError with helpful message."""
     # Clear the env var
-    os.environ.pop("TOKEN_ENCRYPTION_KEY", None)
-    os.environ["DATABASE_URL"] = "postgresql://test"
-    os.environ["SECRET_KEY"] = "test-secret"
+    monkeypatch.delenv("TOKEN_ENCRYPTION_KEYS", raising=False)
+    monkeypatch.delenv("TOKEN_ENCRYPTION_KEY", raising=False)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test")
+    monkeypatch.setenv("SECRET_KEY", "test-secret")
 
     with pytest.raises(
         ValueError, match="TOKEN_ENCRYPTION_KEYS or TOKEN_ENCRYPTION_KEY is required"
     ):
-        settings = Settings()
+        settings = Settings(_env_file=None)
         validate_token_encryption_key(settings)
 
 
-def test_token_encryption_key_invalid_raises():
+def test_token_encryption_key_invalid_raises(monkeypatch):
     """Invalid Fernet key should raise ValueError with helpful message."""
-    os.environ["TOKEN_ENCRYPTION_KEY"] = "invalid-key"
-    os.environ["DATABASE_URL"] = "postgresql://test"
-    os.environ["SECRET_KEY"] = "test-secret"
+    monkeypatch.delenv("TOKEN_ENCRYPTION_KEYS", raising=False)
+    monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", "invalid-key")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test")
+    monkeypatch.setenv("SECRET_KEY", "test-secret")
 
-    with pytest.raises(ValueError, match="must be a valid Fernet key"):
-        settings = Settings()
+    with pytest.raises(
+        ValueError, match="must be a valid Fernet key"
+    ):
+        settings = Settings(_env_file=None)
         validate_token_encryption_key(settings)
 
 
