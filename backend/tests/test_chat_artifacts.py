@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -16,6 +17,7 @@ from app.routers.chat_artifacts import _requested_filename
 from app.schemas.chat_artifact import (
     ChatArtifactCreate,
     ChatArtifactUpdate,
+    ExportArtifactRequest,
     SaveArtifactToMatterRequest,
 )
 from app.services.artifact_extraction import extract_artifacts, strip_artifacts
@@ -326,6 +328,98 @@ async def test_save_artifact_service_records_storage_metadata_and_compensates(
         tenant_id=str(tenant_id),
         result=storage,
     )
+
+
+@pytest.mark.asyncio
+async def test_artifact_router_crud_and_export_handlers(monkeypatch) -> None:
+    tenant_id = uuid.uuid4()
+    user = SimpleNamespace(tenant_id=tenant_id, id=uuid.uuid4())
+    conversation_id = str(uuid.uuid4())
+    artifact_id = str(uuid.uuid4())
+    existing = SimpleNamespace(
+        id=uuid.UUID(artifact_id),
+        tenant_id=tenant_id,
+        conversation_id=uuid.UUID(conversation_id),
+        message_id=None,
+        created_by_user_id=user.id,
+        title="Existing draft",
+        content="# Existing",
+        format="markdown",
+        version=1,
+        matter_id=None,
+        task_id=None,
+        saved_to_matter=False,
+        saved_document_id=None,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    count_result = SimpleNamespace(scalar_one=lambda: 1)
+    rows_result = SimpleNamespace(
+        scalars=lambda: SimpleNamespace(all=lambda: [existing])
+    )
+    db = SimpleNamespace(
+        execute=AsyncMock(side_effect=[count_result, rows_result]),
+        add=MagicMock(),
+        commit=AsyncMock(),
+        refresh=AsyncMock(),
+        delete=AsyncMock(),
+    )
+
+    monkeypatch.setattr(
+        chat_artifacts_router, "get_current_user", AsyncMock(return_value=user)
+    )
+    monkeypatch.setattr(chat_artifacts_router, "set_tenant_context", AsyncMock())
+    monkeypatch.setattr(chat_artifacts_router, "_get_conversation_or_404", AsyncMock())
+    get_artifact = AsyncMock(return_value=existing)
+    monkeypatch.setattr(chat_artifacts_router, "_get_artifact_or_404", get_artifact)
+    request = SimpleNamespace()
+
+    listed = await chat_artifacts_router.list_artifacts(conversation_id, request, db)
+    assert listed.total == 1
+    assert listed.items[0].id == existing.id
+
+    created = await chat_artifacts_router.create_artifact(
+        conversation_id,
+        ChatArtifactCreate(title="  New draft  ", content="# New"),
+        request,
+        db,
+    )
+    assert created.title == "New draft"
+    assert created.tenant_id == tenant_id
+    db.add.assert_called_with(created)
+
+    assert (
+        await chat_artifacts_router.get_artifact(
+            conversation_id, artifact_id, request, db
+        )
+        is existing
+    )
+
+    updated = await chat_artifacts_router.update_artifact(
+        conversation_id,
+        artifact_id,
+        ChatArtifactUpdate(title="  Updated draft  ", content="# Updated"),
+        request,
+        db,
+    )
+    assert updated.title == "Updated draft"
+    assert updated.content == "# Updated"
+    assert updated.version == 2
+
+    markdown = await chat_artifacts_router.export_artifact(
+        conversation_id,
+        artifact_id,
+        ExportArtifactRequest(format="markdown"),
+        request,
+        db,
+    )
+    assert markdown.body == b"# Updated"
+
+    deleted = await chat_artifacts_router.delete_artifact(
+        conversation_id, artifact_id, request, db
+    )
+    assert deleted.status_code == 204
+    db.delete.assert_awaited_once_with(existing)
 
 
 @pytest.mark.asyncio
