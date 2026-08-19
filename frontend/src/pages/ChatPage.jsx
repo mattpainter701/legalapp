@@ -18,6 +18,7 @@ import {
   updateMe,
 } from '../api'
 import { AlertBanner } from '../components/ui'
+import { Briefcase, ChevronDown, ExternalLink, Link2, Search, Unlink } from 'lucide-react'
 
 const MESSAGE_IDENTITY_KEYS = [
   'id',

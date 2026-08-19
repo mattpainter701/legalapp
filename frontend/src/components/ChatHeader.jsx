@@ -5,6 +5,7 @@ import {
   Download,
   MoreVertical,
   PanelLeft,
+  Search,
   Settings2,
   ShieldCheck,
 } from 'lucide-react'

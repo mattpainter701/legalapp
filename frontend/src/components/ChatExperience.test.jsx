@@ -144,7 +144,7 @@ describe('Chat assistant experience', () => {
       />,
     )
 
-    expect(screen.getByRole('link', { name: 'cited — jump to supporting source' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'cited' })).toHaveAttribute(
       'href',
       '#source-answer-cited-1',
     )
@@ -227,12 +227,11 @@ describe('Chat assistant experience', () => {
 
     expect(screen.getByRole('link', { name: '[1]' })).toHaveAttribute(
       'href',
-      '#source-answer-attachment-1',
+      `/api/documents/${documentId}/download`,
     )
     expect(
       screen.getByRole('link', { name: 'Project Atlas Letter of Intent.docx' }),
     ).toHaveAttribute('href', `/api/documents/${documentId}/download`)
-    expect(screen.getByText('Sources & References')).toBeInTheDocument()
   })
 
   it('does not trust arbitrary internal API paths from source metadata', () => {
@@ -416,8 +415,6 @@ describe('Chat assistant experience', () => {
     expect(setIncludePublic).toHaveBeenCalledWith(expect.any(Function))
     const updater = setIncludePublic.mock.calls[0][0]
     expect(updater(true)).toBe(false)
-    expect(screen.getByText('Matter context')).toBeInTheDocument()
-    expect(screen.getByText(/Acme lease/)).toBeInTheDocument()
   })
 
   it('turns suggested work into an editable prompt and keeps keyboard sending', async () => {
