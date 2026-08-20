@@ -321,13 +321,30 @@ upload_mount_source="$(docker inspect --format '{{range .Mounts}}{{if eq .Destin
   echo "Uploads host directory is not owned by backend UID/GID 10001" >&2
   exit 3
 }
-# Keep Prisma's schema-diff process out of the live proxy container. Its peak
-# memory can briefly exceed the proxy's rehearsal ceiling; a dedicated
-# no-deps service gives it a 2G rehearsal-only ceiling while preserving the
-# live proxy/model assertion and avoiding an OOM-kill after the stack is healthy.
+# Keep Prisma's schema-diff process out of the live proxy container. Stop only
+# LiteLLM after the full stack has passed startup and upload checks, then
+# restore it before the model assertion. This bounds the transient peak while
+# proving the complete simultaneous stack both before and after the check.
+echo "==> Pausing live LiteLLM for isolated schema check"
+"${compose[@]}" stop litellm
 "${compose[@]}" run --rm --no-deps litellm-schema-check -c \
   'prisma migrate diff --exit-code --from-url "$LITELLM_DATABASE_URL" --to-schema-datamodel /app/schema.prisma' \
   >/dev/null
+echo "==> Restarting live LiteLLM after isolated schema check"
+"${compose[@]}" up -d --no-deps litellm
+for _ in $(seq 1 60); do
+  litellm_id="$(${compose[@]} ps -q litellm 2>/dev/null || true)"
+  litellm_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$litellm_id" 2>/dev/null || true)"
+  [[ "$litellm_health" == healthy ]] && break
+  sleep 2
+done
+[[ "$litellm_health" == healthy ]] || {
+  "${compose[@]}" logs --tail=100 litellm >&2
+  echo "LiteLLM did not recover after isolated schema check" >&2
+  exit 6
+}
+echo "LITELLM_SCHEMA_CHECK=passed"
+echo "LITELLM_RECOVERY=healthy"
 "${compose[@]}" exec -T litellm python - <<'PY'
 import json
 import os

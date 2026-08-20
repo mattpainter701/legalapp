@@ -1146,6 +1146,10 @@ def test_fresh_host_workflow_rehearses_both_production_topologies() -> None:
     assert "docker stats --no-stream --no-trunc" in rehearsal
     assert "litellm-schema-check" in rehearsal
     assert 'run --rm --no-deps litellm-schema-check -c' in rehearsal
+    assert 'stop litellm' in rehearsal
+    assert 'up -d --no-deps litellm' in rehearsal
+    assert 'LITELLM_SCHEMA_CHECK=passed' in rehearsal
+    assert 'LITELLM_RECOVERY=healthy' in rehearsal
     assert 'exec -T litellm sh -c' not in rehearsal
     assert '"${compose[@]}" up -d --build' not in rehearsal
 
