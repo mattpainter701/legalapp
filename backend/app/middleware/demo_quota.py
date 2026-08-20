@@ -38,33 +38,43 @@ def _is_blocked_demo_action(path: str, method: str) -> bool:
         # OAuth connect/callback routes are provider-bound even when they use
         # GET; status/profile reads are deliberately outside these prefixes.
         return True
-    if path.startswith((
-        "/api/integrations",
-        "/api/sync/",
-        "/api/v1/smb",
-        "/api/admin/cloud-search",
-        "/api/admin/sharepoint",
-        "/api/admin/smb",
-        "/api/mcp",
-        "/api/email-agent",
-        "/api/calendar/sync",
-        "/api/calendar/scheduled-events",
-    )) and method in _DEMO_MUTATING_METHODS:
-        return True
     if (
-        (path.endswith("/email-client") or path.endswith("/cloud-folder/sync"))
+        path.startswith(
+            (
+                "/api/integrations",
+                "/api/sync/",
+                "/api/v1/smb",
+                "/api/admin/cloud-search",
+                "/api/admin/sharepoint",
+                "/api/admin/smb",
+                "/api/mcp",
+                "/api/email-agent",
+                "/api/calendar/sync",
+                "/api/calendar/scheduled-events",
+            )
+        )
         and method in _DEMO_MUTATING_METHODS
     ):
         return True
-    if method in _DEMO_MUTATING_METHODS and path.endswith("/send") and (
-        path.startswith("/api/plugins/mediation/")
-        or path.startswith("/api/matters/")
+    if (
+        path.endswith("/email-client") or path.endswith("/cloud-folder/sync")
+    ) and method in _DEMO_MUTATING_METHODS:
+        return True
+    if (
+        method in _DEMO_MUTATING_METHODS
+        and path.endswith("/send")
+        and (
+            path.startswith("/api/plugins/mediation/")
+            or path.startswith("/api/matters/")
+        )
     ):
         return True
-    if method in _DEMO_MUTATING_METHODS and path.startswith((
-        "/api/intake/dashboard/zoom-phone/sync",
-        "/scheduler/agents/",
-    )):
+    if method in _DEMO_MUTATING_METHODS and path.startswith(
+        (
+            "/api/intake/dashboard/zoom-phone/sync",
+            "/scheduler/agents/",
+        )
+    ):
         return True
     return False
 
