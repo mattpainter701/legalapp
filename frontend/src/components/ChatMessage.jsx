@@ -22,6 +22,7 @@ import {
 import { markdownComponents } from './legalMarkdown'
 import { API_BASE_URL, approveProposedTask, getTask, waitForTaskDelivery } from '../api'
 import ActionProposalCard from './chat/ActionProposalCard'
+import ArtifactCard from './ArtifactCard'
 
 function cleanSourceText(value) {
   if (!value) return ''
@@ -39,12 +40,14 @@ function readableSourceMeta(value) {
 function sourceHref(src) {
   const url = cleanSourceText(src?.url)
   if (url?.startsWith('http://') || url?.startsWith('https://')) return url
-  // The backend emits tenant document links as origin-relative `/api/...`.
-  // Re-base them on the configured API origin so a deployment that serves the
-  // API from another host (VITE_API_URL) still resolves citation links.
-  if (url?.startsWith('/api/')) {
+  // Only authenticated tenant-document downloads may use an internal API URL.
+  if (
+    src?.source_type === 'tenant_document'
+    && /^\/api\/documents\/[0-9a-f-]{36}\/download$/i.test(url)
+  ) {
     return API_BASE_URL === '/api' ? url : `${API_BASE_URL}${url.slice('/api'.length)}`
   }
+  if (url?.startsWith('/api/')) return ''
   if (url?.startsWith('/')) {
     const isPublicAuthority = src?.source_type === 'public_authority'
       || src?.source_label === 'Cited authority'
@@ -778,6 +781,18 @@ export default function ChatMessage({ message }) {
               content={content}
               annotations={annotations}
             />
+          )}
+          {Array.isArray(message.artifacts) && message.artifacts.length > 0 && (
+            <div className="mt-2 space-y-2">
+              {message.artifacts.map((artifact) => (
+                <ArtifactCard
+                  key={artifact.id}
+                  message={message}
+                  summary={artifact}
+                  conversationId={message.conversation_id}
+                />
+              ))}
+            </div>
           )}
         </div>
       </div>

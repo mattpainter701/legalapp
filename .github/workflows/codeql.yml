@@ -30,14 +30,14 @@ jobs:
         language: [python, javascript-typescript]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5.1 (Node.js 24)
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@f3712979fa5f215279b101dd0a2e3bdfb4353324
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7 (Node.js 24)
         with:
           languages: ${{ matrix.language }}
       - name: Build compiled languages when required
-        uses: github/codeql-action/autobuild@f3712979fa5f215279b101dd0a2e3bdfb4353324
+        uses: github/codeql-action/autobuild@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7 (Node.js 24)
       - name: Analyze and upload results
-        uses: github/codeql-action/analyze@f3712979fa5f215279b101dd0a2e3bdfb4353324
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7 (Node.js 24)
         with:
           category: /language:${{ matrix.language }}

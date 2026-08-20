@@ -1,0 +1,114 @@
+name: Production acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: "Full SHA of the deployed production release"
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: law-hand-production
+  cancel-in-progress: false
+
+jobs:
+  release-gate:
+    name: Validate deployed release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.release.outputs.release_sha }}
+    steps:
+      - name: Require the default branch
+        env:
+          RELEASE_REF: ${{ github.ref }}
+        run: |
+          [[ "$RELEASE_REF" == refs/heads/main ]] || {
+            echo "::error::Production acceptance must be dispatched from main, not $RELEASE_REF"
+            exit 1
+          }
+
+      - name: Validate and pin release SHA
+        id: release
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "::error::release_sha must be a full lowercase commit SHA"
+            exit 1
+          }
+          main_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq '.sha')"
+          [[ "$main_sha" == "$RELEASE_SHA" ]] || {
+            echo "::error::release_sha is not the current main commit"
+            exit 1
+          }
+          recorded_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/production" --jq '.object.sha')"
+          [[ "$recorded_sha" == "$RELEASE_SHA" ]] || {
+            echo "::error::production tag does not identify release_sha"
+            exit 1
+          }
+          echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+
+  production:
+    name: Run acceptance on Skynet
+    needs: release-gate
+    runs-on: [self-hosted, linux, x64, skynet, lawhand-prod]
+    environment:
+      name: production
+      url: https://getlawhand.com
+    timeout-minutes: 30
+    steps:
+      - name: Preflight root-owned acceptance entrypoint
+        run: |
+          set -Eeuo pipefail
+          entrypoint=/usr/local/sbin/lawhand-deploy-from-github
+          remediation='Operator action: install the versioned scripts/lawhand-deploy-from-github at /usr/local/sbin/lawhand-deploy-from-github as root (owner root:root, mode 0755), then rerun Production acceptance.'
+
+          # These checks intentionally run without sudo. The file is
+          # world-readable/executable at the required 0755 mode; the runner's
+          # only privileged action remains the exact path-scoped entrypoint.
+          if ! test -f "$entrypoint" || ! test -x "$entrypoint"; then
+            echo "::error title=Acceptance entrypoint unavailable::$entrypoint is missing or not executable. $remediation"
+            exit 1
+          fi
+
+          # The runner may inspect this fixed, root-owned script, but never
+          # reads the production checkout or environment. This catches the
+          # pre-acceptance failure mode where the host still has the older
+          # verify/deploy-only entrypoint.
+          if ! stat -c '%U:%G %a' "$entrypoint" | grep -Fqx 'root:root 755'; then
+            metadata="$(stat -c '%U:%G %a' "$entrypoint")"
+            echo "::error title=Acceptance entrypoint permissions::$entrypoint has unsafe ownership or mode ($metadata). $remediation"
+            exit 1
+          fi
+
+          if ! grep -Fqx '  verify|deploy|accept) ;;' "$entrypoint"; then
+            echo "::error title=Acceptance operation unavailable::$entrypoint does not advertise the accept operation. $remediation"
+            exit 1
+          fi
+
+      - name: Run read-only host and public acceptance gate
+        env:
+          RELEASE_SHA: ${{ needs.release-gate.outputs.release_sha }}
+        run: |
+          sudo -n /usr/local/sbin/lawhand-deploy-from-github accept "$RELEASE_SHA"
+
+      - name: Record acceptance summary
+        if: always()
+        env:
+          RELEASE_SHA: ${{ needs.release-gate.outputs.release_sha }}
+        run: |
+          {
+            echo "## LawHand production acceptance"
+            echo
+            echo "- Commit: \`$RELEASE_SHA\`"
+            echo "- Runner: \`$RUNNER_NAME\`"
+            echo "- Site: https://getlawhand.com"
+            echo "- Gate: strict host production check plus public health/readiness/version checks"
+          } >> "$GITHUB_STEP_SUMMARY"

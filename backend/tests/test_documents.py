@@ -11,6 +11,7 @@ from sqlalchemy import select
 
 from app.routers.documents import _document_to_response, _persist_uploaded_document
 from app.routers.documents import _is_allowed_upload
+from app.routers import documents as documents_router
 from app.models.conversation import Conversation
 from app.models.document import Chunk, Document
 from app.models.user import User
@@ -115,17 +116,21 @@ async def test_chat_attachment_download_is_available_to_conversation_owner(
     test_tenant,
     test_user,
     tmp_path,
+    monkeypatch,
 ):
+    monkeypatch.setattr(documents_router.settings, "UPLOAD_DIR", str(tmp_path))
     conversation = Conversation(
         id=uuid.uuid4(),
         tenant_id=test_tenant.id,
         user_id=test_user.id,
         title="Private deal chat",
     )
-    file_path = tmp_path / "project-atlas-loi.txt"
+    document_id = uuid.uuid4()
+    file_path = tmp_path / str(test_tenant.id) / str(document_id) / "project-atlas-loi.txt"
+    file_path.parent.mkdir(parents=True)
     file_path.write_bytes(b"Project Atlas synthetic LOI")
     document = Document(
-        id=uuid.uuid4(),
+        id=document_id,
         tenant_id=test_tenant.id,
         user_id=test_user.id,
         conversation_id=conversation.id,
@@ -152,7 +157,9 @@ async def test_chat_attachment_download_is_hidden_from_other_tenant_user(
     db_session,
     test_tenant,
     tmp_path,
+    monkeypatch,
 ):
+    monkeypatch.setattr(documents_router.settings, "UPLOAD_DIR", str(tmp_path))
     other_user = User(
         id=uuid.uuid4(),
         tenant_id=test_tenant.id,
@@ -167,10 +174,12 @@ async def test_chat_attachment_download_is_hidden_from_other_tenant_user(
         user_id=other_user.id,
         title="Another user's private deal chat",
     )
-    file_path = tmp_path / "private-board-consent.txt"
+    document_id = uuid.uuid4()
+    file_path = tmp_path / str(test_tenant.id) / str(document_id) / "private-board-consent.txt"
+    file_path.parent.mkdir(parents=True)
     file_path.write_bytes(b"Private synthetic board consent")
     document = Document(
-        id=uuid.uuid4(),
+        id=document_id,
         tenant_id=test_tenant.id,
         user_id=other_user.id,
         conversation_id=conversation.id,

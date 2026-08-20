@@ -76,14 +76,14 @@ const CITATION_PATTERNS = [
     classes: 'bg-brand-green/10 text-brand-green border-brand-green/20',
   },
   {
-    regex: /\[UNCERTAIN:\s*([^\]]*)\]/g,
+    regex: /\[UNCERTAIN:\s*([^\]]*)\]/gi,
     label: null, // dynamic
     classes: 'bg-brand-rose/10 text-brand-rose border-brand-rose/20',
     dynamic: true,
     prefix: 'UNCERTAIN: ',
   },
   {
-    regex: /\[VERIFY:\s*([^\]]*)\]/g,
+    regex: /\[VERIFY:\s*([^\]]*)\]/gi,
     label: null,
     classes: 'bg-brand-amber/10 text-brand-amber border-brand-amber/20',
     dynamic: true,
@@ -173,42 +173,40 @@ export function transformCitations(text) {
   return parts
 }
 
-function CitationParagraph({ children }) {
-  if (typeof children === 'string') {
-    return <p className="mb-4 leading-relaxed font-sans">{transformCitations(children)}</p>
-  }
-  if (Array.isArray(children)) {
-    const transformed = []
-    children.forEach((child, i) => {
-      if (typeof child === 'string') {
-        transformCitations(child).forEach((node, j) => {
-          transformed.push(React.cloneElement(node, { key: `${i}-${j}` }))
-        })
-      } else {
-        transformed.push(React.cloneElement(child, { key: `el-${i}` }))
-      }
+function transformCitationChildren(children) {
+  return React.Children.map(children, (child) => {
+    if (typeof child === 'string') return transformCitations(child)
+    if (!React.isValidElement(child) || child.props.children == null) return child
+    return React.cloneElement(child, {
+      children: transformCitationChildren(child.props.children),
     })
-    return <p className="mb-4 leading-relaxed font-sans">{transformed}</p>
-  }
-  return <p className="mb-4 leading-relaxed font-sans">{children}</p>
+  })
+}
+
+function CitationParagraph({ children }) {
+  return (
+    <p className="mb-4 leading-relaxed font-sans">
+      {transformCitationChildren(children)}
+    </p>
+  )
 }
 
 export const markdownComponents = {
   p: ({ children }) => <CitationParagraph>{children}</CitationParagraph>,
   h1: ({ children }) => (
-    <h1 className="font-serif text-2xl font-semibold text-brand-ink mt-6 mb-4 leading-snug">{children}</h1>
+    <h1 className="font-serif text-2xl font-semibold text-brand-ink mt-6 mb-4 leading-snug">{transformCitationChildren(children)}</h1>
   ),
   h2: ({ children }) => (
-    <h2 className="font-sans text-sm font-bold uppercase tracking-widest text-brand-muted mt-8 mb-4 border-b border-brand-line pb-2">{children}</h2>
+    <h2 className="font-sans text-sm font-bold uppercase tracking-widest text-brand-muted mt-8 mb-4 border-b border-brand-line pb-2">{transformCitationChildren(children)}</h2>
   ),
   h3: ({ children }) => (
-    <h3 className="font-sans text-sm font-bold uppercase tracking-widest text-brand-muted mt-8 mb-4 border-b border-brand-line pb-2">{children}</h3>
+    <h3 className="font-sans text-sm font-bold uppercase tracking-widest text-brand-muted mt-8 mb-4 border-b border-brand-line pb-2">{transformCitationChildren(children)}</h3>
   ),
   ul: ({ children }) => <ul className="list-disc pl-5 mb-4 space-y-1.5 text-brand-ink font-sans marker:text-brand-line-2">{children}</ul>,
   ol: ({ children }) => <ol className="list-decimal pl-5 mb-4 space-y-1.5 text-brand-ink font-sans marker:font-mono marker:text-brand-muted">{children}</ol>,
-  li: ({ children }) => <li className="text-[15px] leading-relaxed">{children}</li>,
-  strong: ({ children }) => <strong className="font-semibold text-brand-ink">{children}</strong>,
-  em: ({ children }) => <em className="italic">{children}</em>,
+  li: ({ children }) => <li className="text-[15px] leading-relaxed">{transformCitationChildren(children)}</li>,
+  strong: ({ children }) => <strong className="font-semibold text-brand-ink">{transformCitationChildren(children)}</strong>,
+  em: ({ children }) => <em className="italic">{transformCitationChildren(children)}</em>,
   a: ({ children, href }) => {
     const isInternalSource = String(href || '').startsWith('#source-')
     const childText = React.Children.toArray(children).join('').trim().toLowerCase()
@@ -252,9 +250,9 @@ export const markdownComponents = {
   tbody: ({ children }) => <tbody className="divide-y divide-brand-line">{children}</tbody>,
   tr: ({ children }) => <tr className="hover:bg-brand-surface transition-colors">{children}</tr>,
   th: ({ children }) => (
-    <th className="px-4 py-3 text-left text-[11px] font-bold text-brand-muted uppercase tracking-widest font-mono">{children}</th>
+    <th className="px-4 py-3 text-left text-[11px] font-bold text-brand-muted uppercase tracking-widest font-mono">{transformCitationChildren(children)}</th>
   ),
-  td: ({ children }) => <td className="px-4 py-3 text-[14px] text-brand-ink font-sans">{children}</td>,
+  td: ({ children }) => <td className="px-4 py-3 text-[14px] text-brand-ink font-sans">{transformCitationChildren(children)}</td>,
   code: ({ children, inline }) =>
     inline ? (
       <code className="bg-brand-line/30 text-brand-accent-2 px-1.5 py-0.5 text-[13px] font-mono border border-brand-line">

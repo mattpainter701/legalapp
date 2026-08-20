@@ -1,6 +1,7 @@
 import logging
 import os
 import uuid
+from pathlib import Path
 
 import aiofiles
 from fastapi import (
@@ -11,7 +12,7 @@ from fastapi import (
     UploadFile,
     File,
 )
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse
 import asyncio
 import hashlib
 from datetime import datetime, timezone
@@ -506,13 +507,18 @@ async def download_document(
             # Preserve the same non-enumerating behavior as a missing document.
             raise HTTPException(status_code=404, detail="Document not found")
 
-    if doc.storage_path and doc.storage_path.startswith(("http://", "https://")):
-        return RedirectResponse(doc.storage_path)
-    if not doc.storage_path or not os.path.exists(doc.storage_path):
+    if not doc.storage_path:
         raise HTTPException(status_code=404, detail="File not found on disk")
 
+    tenant_root = (Path(settings.UPLOAD_DIR) / str(user.tenant_id)).resolve()
+    try:
+        stored_path = Path(doc.storage_path).resolve(strict=True)
+        stored_path.relative_to(tenant_root)
+    except (OSError, ValueError):
+        raise HTTPException(status_code=404, detail="File not found on disk") from None
+
     return FileResponse(
-        path=doc.storage_path,
+        path=stored_path,
         filename=doc.filename,
         media_type=doc.content_type or "application/octet-stream",
     )

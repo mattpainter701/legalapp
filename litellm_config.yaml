@@ -1,11 +1,13 @@
 model_list:
   # Standard profile: cost-effective query routing.
-  # Primary: OpenRouter Gemma free. Live smoke on 2026-06-27 showed this is
-  # materially faster than the OpenCode free models with LegalApp's full prompt.
+  # Primary: OpenCode Zen.  This deployment has a configured OpenCode key;
+  # routing through an unset OpenRouter key made the normal assistant fail
+  # before LiteLLM could reach an alternate route.
   - model_name: clarity-standard
     litellm_params:
-      model: openrouter/google/gemma-4-31b-it:free
-      api_key: os.environ/OPENROUTER_API_KEY
+      model: openai/nemotron-3-ultra-free
+      api_base: https://opencode.ai/zen/v1
+      api_key: os.environ/DEEPSEEK_API_KEY
       timeout: 15  # fast failover to next model
 
   # Standard fallback: OpenCode zen Nemotron free.
@@ -54,8 +56,6 @@ router_settings:
   # and provider outages do not surface as a generic chat failure.
   fallbacks:
     - clarity-standard:
-        - clarity-standard-deepseek-flash-free
-    - clarity-premium:
         - clarity-standard-deepseek-flash-free
 
 general_settings:

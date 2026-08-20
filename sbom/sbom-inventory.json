@@ -1,9 +1,9 @@
 {
   "ai_routes": [
     {
-      "api_base": "default/provider",
-      "api_key_env": "os.environ/OPENROUTER_API_KEY",
-      "provider_model": "openrouter/google/gemma-4-31b-it:free",
+      "api_base": "https://opencode.ai/zen/v1",
+      "api_key_env": "os.environ/DEEPSEEK_API_KEY",
+      "provider_model": "openai/nemotron-3-ultra-free",
       "route_name": "clarity-standard",
       "source": "litellm_config.yaml"
     },
