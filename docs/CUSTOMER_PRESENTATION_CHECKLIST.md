@@ -36,11 +36,10 @@ fixtures. It does **not** prove external model generation, outbound email, or
 Zoom delivery; [`frontend/e2e/README.md`](../frontend/e2e/README.md) records
 that intentional boundary.
 
-The browser stub returns `403` and the text `The demo access code is invalid.`
-for its fake request. The production API implementation in
-[`backend/app/routers/demo.py`](../backend/app/routers/demo.py) returns `401`
-with `Invalid demo access code`. Treat the production route as authoritative;
-the E2E stub is only a UI error-state fixture.
+The browser stub mirrors the production API implementation in
+[`backend/app/routers/demo.py`](../backend/app/routers/demo.py): an invalid code
+returns `401` with `Invalid demo access code`. This remains a deterministic UI
+error-state fixture, not a request to production.
 
 For a deployed revision, anonymous checks are limited to these safe routes:
 

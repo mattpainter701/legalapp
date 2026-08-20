@@ -1148,7 +1148,7 @@ def test_fresh_host_refreshes_host_disk_status_after_image_build() -> None:
 
     assert rehearsal.count(probe) == 2
     initial_probe = rehearsal.find(probe)
-    image_build = rehearsal.find("up -d --build postgres redis")
+    image_build = rehearsal.find('COMPOSE_PARALLEL_LIMIT=1 "${compose[@]}" build')
     refreshed_probe = rehearsal.find(probe, initial_probe + len(probe))
     readiness_waiter = rehearsal.find("python -m app.services.readiness_wait")
 

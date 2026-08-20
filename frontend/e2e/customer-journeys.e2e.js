@@ -73,7 +73,7 @@ test.describe('/demo customer entry', () => {
       if (path === '/api/demo/session' && request.method() === 'POST') {
         const payload = request.postDataJSON()
         if (payload.access_code !== 'valid-demo-code') {
-          return json(route, { detail: 'The demo access code is invalid.' }, 403)
+          return json(route, { detail: 'Invalid demo access code' }, 401)
         }
         sessionCreated = true
         return json(route, { session_id: user.demo.session_id })
@@ -97,13 +97,14 @@ test.describe('/demo customer entry', () => {
     await page.getByLabel('Work email').fill('demo@example.test')
     await page.getByLabel('Demo access code').fill('wrong-code')
     await submit.click()
-    await expect(page.getByRole('alert')).toHaveText('The demo access code is invalid.')
+    await expect(page.getByRole('alert')).toHaveText('Invalid demo access code')
 
     await page.getByLabel('Demo access code').fill('valid-demo-code')
     await submit.click()
     await expect(page).toHaveURL(/\/matters$/)
-    await expect(page.getByText(/Demo session — 2 of 20 AI operations used/)).toBeVisible()
-    await expect(page.getByText(/Premium AI and live integrations are disabled/)).toBeVisible()
+    const demoStatus = page.getByRole('status')
+    await expect(demoStatus).toContainText('Demo session — 2 of 20 AI operations used')
+    await expect(demoStatus).toContainText('Premium AI and live integrations are disabled')
   })
 })
 
