@@ -67,6 +67,9 @@ test.describe('/demo customer entry', () => {
     await page.route('**/api/**', async (route) => {
       const request = route.request()
       const path = new URL(request.url()).pathname
+      if (path === '/api/auth/refresh' && request.method() === 'POST') {
+        return json(route, { ok: true })
+      }
       if (path === '/api/auth/me' && request.method() === 'GET') {
         return sessionCreated ? json(route, user) : json(route, { detail: 'Not authenticated' }, 401)
       }
