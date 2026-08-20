@@ -49,3 +49,17 @@ by default. Set `E2E_REUSE_EXISTING_SERVERS=true` only when you intentionally
 started disposable local E2E servers with the same database and environment.
 Failure traces, screenshots, and video are written under `test-results`; the
 HTML report is written under `playwright-report`.
+
+## Deterministic customer journeys
+
+`customer-journeys.e2e.js` covers the `/demo` entry form (browser-required
+fields, access-code failure, successful session bootstrap, and synthetic-data
+disclosures) and the chat citation → review proposal → approval → task-board
+status contract. The chat and board records are intercepted as seeded API
+fixtures, so CI never depends on an LLM, mailbox, or other live provider.
+
+The suite intentionally leaves a real-provider smoke gap: it does not prove
+that an external model generates citations/proposals or that an outbound
+integration delivers approved work. Those checks require a separately
+credentialed, non-CI environment and must not be added as test-only production
+endpoints.
