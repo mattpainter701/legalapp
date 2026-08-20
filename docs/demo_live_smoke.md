@@ -25,6 +25,14 @@ it is never printed. Use a fresh email when repeating a check. The provisioned
 workspace follows the configured demo expiry/cap and should not be reused for
 customer presentation.
 
+When `DEMO_EMAIL` is omitted, the smoke harness generates a unique address under
+`demo.example.com`. This is a subdomain of the RFC-reserved `example.com`
+domain, so the identity is synthetic and cannot be confused with a customer
+mailbox, while still satisfying the backend's `EmailStr` request validation.
+This keeps the smoke request aligned with the same schema used by the public
+demo-session endpoint.
+Use `DEMO_EMAIL` only when the operator has an approved disposable address.
+
 ## Manual remainder before customer presentation
 
 The script deliberately does not POST a chat message or approve a task. Those

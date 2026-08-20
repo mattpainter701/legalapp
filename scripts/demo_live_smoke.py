@@ -13,7 +13,7 @@ Required environment variables:
 Optional:
   DEMO_FULL_NAME      Name used for the disposable workspace (default: Demo Reviewer)
   DEMO_EMAIL          Email used for the disposable workspace
-                      (default: demo-smoke-<random>@example.invalid)
+                      (default: demo-smoke-<random>@demo.example.com)
   DEMO_TIMEOUT_SECONDS (default: 30)
 
 The command exits non-zero on a failed check and prints only redacted, stable
@@ -38,6 +38,13 @@ from typing import Any
 
 class SmokeFailure(RuntimeError):
     """A check failed without exposing response contents or credentials."""
+
+
+# example.com is an RFC-reserved domain.  The subdomain keeps generated demo
+# identities clearly synthetic while remaining accepted by the backend's
+# Pydantic EmailStr validation (which rejects special-use TLDs such as .test
+# and .invalid).
+DEFAULT_EMAIL_DOMAIN = "demo.example.com"
 
 
 @dataclass
@@ -149,7 +156,7 @@ def run(base_url: str, access_code: str, full_name: str, email: str, timeout: fl
 
 def _default_email() -> str:
     suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=10))
-    return f"demo-smoke-{suffix}@example.invalid"
+    return f"demo-smoke-{suffix}@{DEFAULT_EMAIL_DOMAIN}"
 
 
 def main(argv: list[str] | None = None) -> int:
