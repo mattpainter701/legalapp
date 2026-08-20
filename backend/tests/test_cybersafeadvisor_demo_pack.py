@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -112,3 +113,26 @@ def test_demo_support_intake_documents_match_manifest_party_links():
         assert matter["client"] in text
         assert opposing["organization"] in text
         assert opposing["email"] in text
+
+
+def test_demo_docx_ooxml_namespace_declarations_are_self_consistent():
+    """Catch Word corruption when an XML rewrite drops namespace prefixes."""
+
+    namespace_decl = re.compile(rb"xmlns:([A-Za-z_][\w.-]*)=\s*['\"]")
+    ignorable = re.compile(rb"(?:mc:Ignorable|Ignorable)=\s*['\"]([^'\"]+)['\"]")
+    for path in sorted(PACK.glob("*.docx")):
+        with ZipFile(path) as package:
+            assert package.testzip() is None
+            assert "[Content_Types].xml" in package.namelist()
+            assert "word/document.xml" in package.namelist()
+            for name in package.namelist():
+                if not name.endswith(".xml"):
+                    continue
+                payload = package.read(name)
+                declared = {match.decode("ascii") for match in namespace_decl.findall(payload)}
+                for value in ignorable.findall(payload):
+                    for prefix in value.split():
+                        assert prefix.decode("ascii") in declared, (
+                            f"{path.name}:{name} references undeclared "
+                            f"mc:Ignorable prefix {prefix!r}"
+                        )
