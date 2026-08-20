@@ -38,6 +38,9 @@ from .test_task_automation import _approved_email_task, _matter
         ("POST", "/api/billing/checkout-session"),
         ("POST", "/api/billing/portal"),
         ("POST", "/api/billing/invoices/123/payment-link"),
+        ("POST", "/api/admin/users/invite"),
+        ("POST", "/api/matters/123/portal/invite"),
+        ("POST", "/api/tasks/123/remind"),
     ],
 )
 def test_demo_outbound_routes_are_blocked(method, path):
@@ -153,3 +156,33 @@ async def test_demo_worker_terminalizes_preexisting_queued_action_without_dispat
         )
     )
     assert event is not None
+
+
+@pytest.mark.asyncio
+async def test_demo_task_notifications_do_not_reach_calendar_or_email(
+    db_session, test_tenant, test_user, monkeypatch
+):
+    from app.services import task_notifications
+
+    task = Task(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        created_by_user_id=test_user.id,
+        assigned_to_user_id=test_user.id,
+        title="Synthetic assigned task",
+        status="open",
+        due_date=None,
+    )
+    db_session.add(task)
+    test_tenant.billing_tier = "demo"
+    await db_session.commit()
+    monkeypatch.setattr(
+        task_notifications,
+        "push_task_to_calendars",
+        lambda *args, **kwargs: pytest.fail("demo calendar notification dispatched"),
+    )
+
+    result = await task_notifications.notify_task_created(
+        db_session, task, str(test_tenant.id)
+    )
+    assert result.name == "NOT_REQUIRED"
