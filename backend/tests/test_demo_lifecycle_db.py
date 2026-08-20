@@ -15,7 +15,7 @@ from app.models.plugin import Matter
 from app.models.tenant import Tenant, TenantSettings
 from app.models.user import User
 from app.services.demo_clone import clone_demo_fixture
-from app.services.demo_purge import purge_demo_tenant
+from app.services.demo_purge import DemoPurgeRefused, purge_demo_tenant
 from app.services.demo_quota import (
     DemoQuotaExceeded,
     DemoReservation,
@@ -324,3 +324,38 @@ async def test_verified_purge_deletes_demo_and_preserves_fixture(
         await db_session.scalar(select(Tenant.id).where(Tenant.id == tenant_id)) is None
     )
     assert not target_file.exists()
+
+
+@pytest.mark.asyncio
+async def test_purge_refuses_session_already_claimed_by_another_worker(
+    db_session, tmp_path, monkeypatch
+):
+    fixture_id, tenant_id = uuid.uuid4(), uuid.uuid4()
+    monkeypatch.setattr(demo_purge.get_settings(), "UPLOAD_DIR", str(tmp_path))
+    db_session.add_all(
+        [
+            _tenant(tenant_id=fixture_id, domain="purge-lock-fixture.invalid"),
+            _tenant(
+                tenant_id=tenant_id,
+                domain="purge-lock.demo.invalid",
+                billing_tier="demo",
+                expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+            ),
+            DemoSession(
+                tenant_id=tenant_id,
+                fixture_tenant_id=fixture_id,
+                fixture_version="purge-lock-test",
+                prospect_name="Synthetic Prospect",
+                prospect_email="prospect@example.invalid",
+                status="purging",
+                quota=20,
+                expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    with pytest.raises(DemoPurgeRefused, match="already being purged"):
+        await purge_demo_tenant(db_session, tenant_id)
+
+    assert await db_session.scalar(select(Tenant.id).where(Tenant.id == tenant_id))

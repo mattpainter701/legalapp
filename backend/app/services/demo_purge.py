@@ -85,11 +85,19 @@ async def purge_demo_tenant(db: AsyncSession, tenant_id: uuid.UUID) -> dict[str,
     ):
         raise DemoPurgeRefused("Tenant is not an expired disposable demo")
     await set_tenant_context(db, str(tenant_id))
+    # Serialize purgers on the session row.  Without the lock, two scheduler
+    # workers can both observe an active session, both commit ``purging``, and
+    # then race through file/database deletion.  The second worker must see
+    # the first worker's state transition after waiting for this lock.
     demo = await db.scalar(
-        select(DemoSession).where(DemoSession.tenant_id == tenant_id)
+        select(DemoSession)
+        .where(DemoSession.tenant_id == tenant_id)
+        .with_for_update()
     )
     if demo is None or demo.fixture_tenant_id == tenant_id:
         raise DemoPurgeRefused("Demo session provenance check failed")
+    if demo.status not in {"active", "expired", "failed"}:
+        raise DemoPurgeRefused("Demo session is already being purged")
     fixture_version = demo.fixture_version
     session_id = demo.id
     tenant.is_active = False
