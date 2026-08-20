@@ -6,7 +6,10 @@ import pytest
 
 from app.middleware.demo_quota import _is_blocked_demo_action
 from app.models.task import Task
-from app.services.task_automation import ActionApprovalConflict, enqueue_durable_automation
+from app.services.task_automation import (
+    ActionApprovalConflict,
+    enqueue_durable_automation,
+)
 
 
 @pytest.mark.parametrize(
@@ -27,6 +30,9 @@ from app.services.task_automation import ActionApprovalConflict, enqueue_durable
         ("POST", "/api/integrations/zoom/disconnect"),
         ("POST", "/api/intake/dashboard/zoom-phone/sync"),
         ("POST", "/scheduler/agents/user-sync/run"),
+        ("POST", "/api/billing/checkout-session"),
+        ("POST", "/api/billing/portal"),
+        ("POST", "/api/billing/invoices/123/payment-link"),
     ],
 )
 def test_demo_outbound_routes_are_blocked(method, path):
@@ -56,6 +62,8 @@ def test_demo_synthetic_review_routes_remain_available(path):
         "/api/mcp/product-keys",
         "/api/integrations/zoom/status",
         "/api/email-agent/scan",
+        "/api/billing/status",
+        "/api/billing/invoices/123/export",
     ],
 )
 def test_demo_read_only_provider_surfaces_remain_available(path):

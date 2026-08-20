@@ -51,6 +51,8 @@ def _is_blocked_demo_action(path: str, method: str) -> bool:
                 "/api/email-agent",
                 "/api/calendar/sync",
                 "/api/calendar/scheduled-events",
+                "/api/billing/checkout-session",
+                "/api/billing/portal",
             )
         )
         and method in _DEMO_MUTATING_METHODS
@@ -67,6 +69,12 @@ def _is_blocked_demo_action(path: str, method: str) -> bool:
             path.startswith("/api/plugins/mediation/")
             or path.startswith("/api/matters/")
         )
+    ):
+        return True
+    if (
+        method in _DEMO_MUTATING_METHODS
+        and path.startswith("/api/billing/invoices/")
+        and path.endswith("/payment-link")
     ):
         return True
     if method in _DEMO_MUTATING_METHODS and path.startswith(
