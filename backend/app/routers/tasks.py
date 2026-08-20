@@ -1332,6 +1332,17 @@ async def update_pending_action(
     if not updates:
         return await _task_response_with_delivery(db, task)
 
+    action_type = str(task.pending_action.get("type") or "")
+    allowed_fields = {
+        "email_client": {"subject", "body"},
+        "matter_document_draft": {"title", "body"},
+    }.get(action_type, set())
+    if set(updates) - allowed_fields:
+        raise HTTPException(
+            status_code=422,
+            detail="This draft does not support those edits",
+        )
+
     # Replace the whole mapping: SQLAlchemy does not track in-place JSON edits.
     action = dict(task.pending_action)
     action.update(updates)

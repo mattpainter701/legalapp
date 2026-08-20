@@ -32,6 +32,8 @@ describe('SEO configuration', () => {
     expect(getRouteMeta('/product').indexable).toBe(true)
 
     expect(getRouteMeta('/login').indexable).toBe(false)
+    expect(getRouteMeta('/demo').title).toBe('Guided demo | LawHand')
+    expect(getRouteMeta('/demo/session').title).toBe('Guided demo | LawHand')
     expect(getRouteMeta('/matters/customer-id').indexable).toBe(false)
     expect(getRouteMeta('/portal/client/matter?token=secret').indexable).toBe(false)
     expect(getRouteMeta('/unknown').indexable).toBe(false)
@@ -47,7 +49,7 @@ describe('SEO configuration', () => {
   it('keeps sign-in-walled routes out of the crawl budget', () => {
     const robots = buildRobotsTxt('https://clarity.example')
 
-    for (const route of ['/login', '/signup', '/chat', '/matters', '/admin', '/platform', '/portal']) {
+    for (const route of ['/demo', '/login', '/signup', '/chat', '/matters', '/admin', '/platform', '/portal']) {
       expect(robots).toContain(`Disallow: ${route}/`)
     }
     // Public marketing routes must stay crawlable.

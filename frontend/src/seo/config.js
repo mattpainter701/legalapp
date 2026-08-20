@@ -114,6 +114,7 @@ export const PUBLIC_ROUTE_META = Object.freeze({
 })
 
 const WORKSPACE_ROUTE_TITLES = [
+  ['/demo', 'Guided demo'],
   ['/forgot-password', 'Reset password'],
   ['/reset-password', 'Reset password'],
   ['/auth/callback', 'Completing sign in'],

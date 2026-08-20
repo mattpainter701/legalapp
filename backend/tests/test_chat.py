@@ -28,6 +28,7 @@ from app.routers.chat import (
     _assert_public_general_sources_allowed,
     _partition_stream_source_previews,
     _propose_followthrough_actions,
+    _normalize_source_url,
     _source_dict_from_chunk,
     _stream_activity_event,
     _stream_error_event,
@@ -893,6 +894,16 @@ def test_message_response_preserves_attachment_link_and_locator():
     assert response.sources[0].cited is True
     assert response.citation_annotations[0].support == "cited"
     assert response.citation_annotations[0].source_ids == [f"document:{document_id}"]
+
+
+def test_source_url_only_preserves_expected_internal_document_downloads():
+    document_id = uuid.uuid4()
+
+    assert (
+        _normalize_source_url(f"/api/documents/{document_id}/download")
+        == f"/api/documents/{document_id}/download"
+    )
+    assert _normalize_source_url("/api/admin/users") is None
 
 
 @pytest.mark.asyncio

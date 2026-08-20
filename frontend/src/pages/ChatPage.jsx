@@ -891,9 +891,20 @@ export default function ChatPage() {
                 ? { ...msg, progress: streamProgress, referenceContext }
                 : msg.id === userMessage.id
                   ? { ...msg, referenceContext }
-                : msg
+                  : msg
             )
           )
+          continue
+        }
+        if (token?.type === 'artifacts') {
+          const streamArtifacts = Array.isArray(token.artifacts) ? token.artifacts : []
+          if (streamArtifacts.length > 0) {
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === assistantMsgId ? { ...msg, artifacts: streamArtifacts } : msg
+              )
+            )
+          }
           continue
         }
         if (token === '[STREAM_COMPLETE]') {

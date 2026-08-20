@@ -21,6 +21,7 @@ async def _auto_log_and_task(
     user_id: str,
     email: dict,
     classification: dict,
+    matched_matter_ids: list[uuid_mod.UUID] | None = None,
 ) -> None:
     """Persist an email only when it is tied to a matter contact.
 
@@ -41,8 +42,8 @@ async def _auto_log_and_task(
         tid = uuid_mod.UUID(tenant_id)
         uid = uuid_mod.UUID(user_id)
 
-        # Match email to matters by sender/recipient
-        matched_matter_ids = await _match_email_to_matters(db, tid, email)
+        if matched_matter_ids is None:
+            matched_matter_ids = await _match_email_to_matters(db, tid, email)
         if not matched_matter_ids:
             logger.debug(
                 "Keeping unmatched mailbox message out of durable records: %s",
@@ -378,6 +379,12 @@ Draft a professional response email. The attorney will review before sending. Do
             if email.get("id") and not email.get("external_ref"):
                 email["external_ref"] = f"{provider}:{email['id']}"
             email.setdefault("provider", provider)
+            matched_matter_ids = await _match_email_to_matters(
+                db, uuid_mod.UUID(tenant_id), email
+            )
+            if not matched_matter_ids:
+                logger.debug("Ignoring email with no matter-linked contact")
+                continue
             classification = await self.classify_email(
                 email,
                 llm_service,
@@ -397,7 +404,14 @@ Draft a professional response email. The attorney will review before sending. Do
                     privacy_mode=privacy_mode,
                 )
 
-            await _auto_log_and_task(db, tenant_id, user_id, email, classification)
+            await _auto_log_and_task(
+                db,
+                tenant_id,
+                user_id,
+                email,
+                classification,
+                matched_matter_ids=matched_matter_ids,
+            )
 
             results.append(
                 {

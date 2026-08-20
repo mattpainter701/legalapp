@@ -22,6 +22,7 @@ from app.middleware.platform_audit import PlatformAuditMiddleware
 from app.middleware.platform_key_auth import PlatformKeyAuthMiddleware
 from app.routers.auth import router as auth_router
 from app.routers.chat import router as chat_router
+from app.routers.chat_artifacts import router as chat_artifacts_router
 from app.routers.documents import router as documents_router
 from app.routers.admin import router as admin_router
 from app.routers.billing import router as billing_router
@@ -366,6 +367,7 @@ app.router.routes.append(
 app.include_router(auth_router, prefix="/api")
 app.include_router(demo_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
+app.include_router(chat_artifacts_router, prefix="/api")
 app.include_router(documents_router, prefix="/api")
 app.include_router(admin_router, prefix="/api")
 app.include_router(billing_router, prefix="/api")
@@ -602,7 +604,7 @@ async def health_check_llm():
     Consumers should inspect the ``status`` field:
     - ``"disabled"``  — LITELLM_ENABLED is False
     - ``"ok"``        — gateway is reachable
-    - ``"degraded"``  — gateway ping failed; ``detail`` contains the error
+    - ``"degraded"``  — gateway ping failed; details are available in server logs
     """
     if not settings.LITELLM_ENABLED:
         return {"status": "disabled"}
@@ -614,8 +616,12 @@ async def health_check_llm():
             _r = await _c.get(f"{settings.LITELLM_BASE_URL}/health/liveliness")
             _r.raise_for_status()
         return {"status": "ok"}
-    except Exception as exc:
-        return {"status": "degraded", "detail": str(exc)}
+    except Exception:
+        # This endpoint is unauthenticated. Keep provider URLs, credentials,
+        # network details, and exception text out of the public response while
+        # retaining the full traceback for server-side troubleshooting.
+        logger.exception("LLM health check failed")
+        return {"status": "degraded"}
 
 
 # ─────────────────────────────────────────────────────

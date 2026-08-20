@@ -6,7 +6,9 @@ services:
   # Init service: runs migrations once, exits when complete.
   # Backend depends on migrator health, ensuring migrations run before app starts.
   migrator:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     depends_on:
       postgres:
         condition: service_healthy
@@ -64,7 +66,9 @@ services:
   # and is not placed behind nginx (it serves no user traffic). Job-level Postgres
   # advisory locks remain as a backstop against any accidental second runner.
   scheduler:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     restart: unless-stopped
     depends_on:
       postgres:

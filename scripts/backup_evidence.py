@@ -91,7 +91,13 @@ def create(args: argparse.Namespace) -> None:
             prefix=".backup-status.", dir=args.status_output.parent
         )
         try:
-            os.fchmod(descriptor, 0o600)
+            # The readiness probe reads this through a read-only bind mount as
+            # the container's own user, which is not the uid that runs the
+            # backup. At 0600 that read fails and `backups` reports
+            # "unavailable" after a backup that actually succeeded. The payload
+            # is a schema version, a timestamp, a boolean and four component
+            # names -- no secrets -- so it is world readable and owner writable.
+            os.fchmod(descriptor, 0o644)
             with os.fdopen(descriptor, "w", encoding="utf-8") as target:
                 json.dump(
                     {

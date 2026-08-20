@@ -30,6 +30,11 @@ class MatterDocument(Base):
         ForeignKey("matters.id", ondelete="CASCADE"),
         nullable=False,
     )
+    task_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tasks.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     uploaded_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),

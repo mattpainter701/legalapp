@@ -58,9 +58,9 @@ strict unknown-price qualification is tracked in BK24 `AIP-04`.
   `DEEPSEEK_API_KEY` for the OpenAI-compatible key. It fails over inside
   LiteLLM to `clarity-standard-deepseek-flash-free`.
 - `clarity-premium`: primary premium profile, using OpenCode Go through the
-  OpenAI-compatible base URL. It fails over to the standard flash profile when
-  the premium upstream is unavailable; the UI keeps labelling the work by the
-  user's selected product route, not by whichever vendor served it.
+  OpenAI-compatible base URL. It has no automatic cross-tier fallback: a
+  Premium request fails clearly if Premium capacity is unavailable instead of
+  silently returning Standard output under a Premium label.
 
 The operator console should point global standard and premium routes at these
 aliases by setting provider `litellm` and model `clarity-standard` /

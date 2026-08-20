@@ -10,6 +10,7 @@ class MatterDocumentResponse(BaseModel):
     id: UUID
     tenant_id: UUID
     matter_id: UUID
+    task_id: UUID | None = None
     uploaded_by_user_id: UUID | None
     filename: str
     content_type: str | None

@@ -34,7 +34,7 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |npm|react-dom|^18.3.1|dependencies|frontend/package.json|
 |npm|react-dropzone|^14.3.5|dependencies|frontend/package.json|
 |npm|react-markdown|^9.0.1|dependencies|frontend/package.json|
-|npm|react-router-dom|^6.28.0|dependencies|frontend/package.json|
+|npm|react-router-dom|^7.18.2|dependencies|frontend/package.json|
 |npm|remark-gfm|^4.0.1|dependencies|frontend/package.json|
 |npm|@eslint/js|^9.39.5|devDependencies|frontend/package.json|
 |npm|@playwright/test|1.61.1|devDependencies|frontend/package.json|
@@ -174,7 +174,7 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 
 |Route|Provider/model|API base|API key env|Source|
 |-|-|-|-|-|
-|clarity-standard|openrouter/google/gemma-4-31b-it:free|default/provider|os.environ/OPENROUTER_API_KEY|litellm_config.yaml|
+|clarity-standard|openai/nemotron-3-ultra-free|https://opencode.ai/zen/v1|os.environ/DEEPSEEK_API_KEY|litellm_config.yaml|
 |clarity-standard-zen-nemotron|openai/nemotron-3-ultra-free|https://opencode.ai/zen/v1|os.environ/DEEPSEEK_API_KEY|litellm_config.yaml|
 |clarity-standard-deepseek-flash-free|openai/deepseek-v4-flash-free|https://opencode.ai/zen/v1|os.environ/DEEPSEEK_API_KEY|litellm_config.yaml|
 |clarity-premium|openai/deepseek-v4-pro|https://opencode.ai/zen/go/v1|os.environ/DEEPSEEK_API_KEY|litellm_config.yaml|

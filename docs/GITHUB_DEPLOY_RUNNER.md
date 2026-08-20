@@ -4,8 +4,9 @@
 
 - CI, browser tests, migration safety, and scheduled public health checks run on
   GitHub-hosted runners. Untrusted pull-request code never runs on Skynet.
-- The dedicated repository runner is labeled `skynet` and `lawhand-prod`. Only
-  `.github/workflows/deploy.yml` uses those labels.
+- The dedicated repository runner is labeled `skynet` and `lawhand-prod`.
+  `.github/workflows/deploy.yml` and the manual
+  `.github/workflows/production-acceptance.yml` use those labels.
 - Production deploys are manual. A deployment must be dispatched from `main`,
   and the exact commit must have a successful `CI` push run.
 - The moving `production` Git tag identifies the deployed migration baseline.
@@ -26,6 +27,35 @@
      changing production.
    - `deploy` to require green CI and deploy the exact selected commit.
 4. Follow the job log. The summary records the operation, SHA, runner, and site.
+
+After a deploy, run **Production acceptance** from `main` with the full SHA
+recorded by the deploy run. The workflow requires that SHA to still be `main`
+and the `production` tag, then invokes the root-owned entrypoint's `accept`
+operation. That operation checks the production checkout, runs the strict
+`scripts/production_check.sh` gate as `varta`, and records only sanitized
+readiness, host-disk, backup, public health, and exact-version evidence. It
+does not change provider configuration or inspect/print secret values.
+
+Before invoking `accept`, the workflow performs a non-secret host preflight. It
+requires the fixed entrypoint to be an executable `root:root` file with mode
+`0755` and to advertise the `verify|deploy|accept` operation set. If this
+preflight fails, do not retry repeatedly or broaden the runner's sudo policy:
+an operator must install the versioned repository file as root, then rerun the
+workflow:
+
+```bash
+sudo install -o root -g root -m 0755 \
+  /home/varta/legalapp/scripts/lawhand-deploy-from-github \
+  /usr/local/sbin/lawhand-deploy-from-github
+```
+
+When installing or refreshing the runner boundary, install the versioned
+`scripts/lawhand-deploy-from-github` file at
+`/usr/local/sbin/lawhand-deploy-from-github` (root-owned, mode 0755). The
+existing sudoers entry remains intentionally path-scoped; `accept` is an
+operation of that same entrypoint, not a second privileged command. The
+acceptance workflow cannot run until this host copy includes the `accept`
+operation.
 
 Codex or a terminal can dispatch the same workflow:
 

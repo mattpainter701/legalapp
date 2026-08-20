@@ -11,6 +11,11 @@ from pathlib import Path
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+# Register every tenant-scoped table before deriving the purge plan.  The
+# scheduler imports this module without necessarily loading every router, so
+# relying on incidental application imports can leave valid demo tables absent
+# from Base.metadata and strand an expired demo in the "purging" state.
+import app.models  # noqa: F401
 from app.config import get_settings
 from app.database import Base, async_session_maker, set_tenant_context
 from app.models.demo_session import DemoSession

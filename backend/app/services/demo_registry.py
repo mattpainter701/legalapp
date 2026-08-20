@@ -19,6 +19,7 @@ class DemoTablePolicy:
 # still remap every PK/FK/embedded identifier and run table-specific file hooks.
 _CLONE_TABLES = {
     "child_support_calculations",
+    "chat_artifacts",
     "chunks",
     "communication_logs",
     "contacts",

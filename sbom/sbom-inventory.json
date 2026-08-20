@@ -1,9 +1,9 @@
 {
   "ai_routes": [
     {
-      "api_base": "default/provider",
-      "api_key_env": "os.environ/OPENROUTER_API_KEY",
-      "provider_model": "openrouter/google/gemma-4-31b-it:free",
+      "api_base": "https://opencode.ai/zen/v1",
+      "api_key_env": "os.environ/DEEPSEEK_API_KEY",
+      "provider_model": "openai/nemotron-3-ultra-free",
       "route_name": "clarity-standard",
       "source": "litellm_config.yaml"
     },
@@ -267,7 +267,7 @@
       "name": "react-router-dom",
       "scope": "dependencies",
       "source": "frontend/package.json",
-      "specifier": "^6.28.0"
+      "specifier": "^7.18.2"
     },
     {
       "ecosystem": "npm",
