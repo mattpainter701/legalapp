@@ -104,6 +104,37 @@ APP_COMMIT=$PROJECT
 APP_VERSION=fresh-host
 ENV
 
+# This is a schema-valid synthetic artifact solely to exercise the read-only
+# readiness wiring in an isolated rehearsal. It is not backup/restore proof;
+# real production evidence is created by backup_db.sh and its off-host attestation.
+python3 - "$APP_DIR/host-status/backup-status.json" <<'PY'
+import json
+import os
+import sys
+import time
+
+path = sys.argv[1]
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(
+        {
+            "schema_version": 1,
+            "completed_at_epoch": int(time.time()),
+            "status": "ok",
+            "offsite": True,
+            "components": [
+                "legalapp_database",
+                "litellm_database",
+                "uploads",
+                "key_escrow",
+            ],
+        },
+        handle,
+        sort_keys=True,
+    )
+    handle.write("\n")
+os.chmod(path, 0o644)
+PY
+
 cat > "$APP_DIR/docker-compose.rehearsal.yml" <<'YAML'
 services:
   postgres:
@@ -171,7 +202,11 @@ MSYS2_ARG_CONV_EXCL='*' docker run --rm --network none --entrypoint /bin/sh \
   pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb \
   -c 'chown 10001:10001 /legalapp-uploads && chmod 0750 /legalapp-uploads'
 echo "Starting isolated fresh-host stack ($PROJECT, topology=$FRESH_HOST_TOPOLOGY)"
-"${compose[@]}" up -d --build postgres redis litellm-postgres litellm migrator backend scheduler frontend nginx
+# Build one image at a time, then start the complete stack. This bounds peak
+# runner memory during base-prod's full image build without changing services
+# or health assertions being proven.
+COMPOSE_PARALLEL_LIMIT=1 "${compose[@]}" build postgres redis litellm-postgres litellm migrator backend scheduler frontend nginx
+COMPOSE_PARALLEL_LIMIT=1 "${compose[@]}" up -d postgres redis litellm-postgres litellm migrator backend scheduler frontend nginx
 
 for _ in $(seq 1 90); do
   backend_id="$(${compose[@]} ps -q backend 2>/dev/null || true)"

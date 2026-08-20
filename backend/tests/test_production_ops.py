@@ -1134,6 +1134,10 @@ def test_fresh_host_workflow_rehearses_both_production_topologies() -> None:
     assert "plain=301,edge=200,https=200,frontend=200" in rehearsal
     assert 'plain_headers.get_all("Strict-Transport-Security", []) == []' in rehearsal
     assert '"https://rehearsal.invalid/health/readiness"' in rehearsal
+    assert "schema-valid synthetic artifact solely to exercise" in rehearsal
+    assert 'os.chmod(path, 0o644)' in rehearsal
+    assert 'COMPOSE_PARALLEL_LIMIT=1 "${compose[@]}" build' in rehearsal
+    assert '"${compose[@]}" up -d --build' not in rehearsal
 
 
 def test_fresh_host_refreshes_host_disk_status_after_image_build() -> None:
