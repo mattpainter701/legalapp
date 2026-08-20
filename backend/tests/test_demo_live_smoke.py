@@ -6,6 +6,7 @@ from http.cookiejar import CookieJar
 from pathlib import Path
 
 import pytest
+from app.schemas.demo import DemoSessionRequest
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -90,3 +91,12 @@ def test_http_error_does_not_include_response_body(monkeypatch):
     with pytest.raises(demo_live_smoke.SmokeFailure, match="HTTP 401") as exc:
         client.request("GET", "/api/auth/me")
     assert "secret" not in str(exc.value)
+
+
+def test_default_email_matches_backend_email_schema_and_reserved_domain():
+    email = demo_live_smoke._default_email()
+
+    assert email.endswith(f"@{demo_live_smoke.DEFAULT_EMAIL_DOMAIN}")
+    request = DemoSessionRequest(full_name="Smoke Reviewer", email=email, access_code="test-code")
+    assert str(request.email) == email
+    assert demo_live_smoke.DEFAULT_EMAIL_DOMAIN.endswith("example.com")
