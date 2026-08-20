@@ -64,6 +64,35 @@ jobs:
       url: https://getlawhand.com
     timeout-minutes: 30
     steps:
+      - name: Preflight root-owned acceptance entrypoint
+        run: |
+          set -Eeuo pipefail
+          entrypoint=/usr/local/sbin/lawhand-deploy-from-github
+          remediation='Operator action: install the versioned scripts/lawhand-deploy-from-github at /usr/local/sbin/lawhand-deploy-from-github as root (owner root:root, mode 0755), then rerun Production acceptance.'
+
+          # These checks intentionally run without sudo. The file is
+          # world-readable/executable at the required 0755 mode; the runner's
+          # only privileged action remains the exact path-scoped entrypoint.
+          if ! test -f "$entrypoint" || ! test -x "$entrypoint"; then
+            echo "::error title=Acceptance entrypoint unavailable::$entrypoint is missing or not executable. $remediation"
+            exit 1
+          fi
+
+          # The runner may inspect this fixed, root-owned script, but never
+          # reads the production checkout or environment. This catches the
+          # pre-acceptance failure mode where the host still has the older
+          # verify/deploy-only entrypoint.
+          if ! stat -c '%U:%G %a' "$entrypoint" | grep -Fqx 'root:root 755'; then
+            metadata="$(stat -c '%U:%G %a' "$entrypoint")"
+            echo "::error title=Acceptance entrypoint permissions::$entrypoint has unsafe ownership or mode ($metadata). $remediation"
+            exit 1
+          fi
+
+          if ! grep -Fqx '  verify|deploy|accept) ;;' "$entrypoint"; then
+            echo "::error title=Acceptance operation unavailable::$entrypoint does not advertise the accept operation. $remediation"
+            exit 1
+          fi
+
       - name: Run read-only host and public acceptance gate
         env:
           RELEASE_SHA: ${{ needs.release-gate.outputs.release_sha }}
