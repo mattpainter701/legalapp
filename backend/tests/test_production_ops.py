@@ -1138,7 +1138,9 @@ def test_fresh_host_workflow_rehearses_both_production_topologies() -> None:
     assert '"https://rehearsal.invalid/health/readiness"' in rehearsal
     assert "schema-valid synthetic artifact solely to exercise" in rehearsal
     assert 'os.chmod(path, 0o644)' in rehearsal
-    assert 'COMPOSE_PARALLEL_LIMIT=1 "${compose[@]}" build' in rehearsal
+    assert 'for service in postgres redis litellm-postgres litellm migrator backend scheduler frontend nginx; do' in rehearsal
+    assert '"${compose[@]}" build "$service"' in rehearsal
+    assert "docker builder prune --all --force" in rehearsal
     assert '"${compose[@]}" up -d --build' not in rehearsal
 
 

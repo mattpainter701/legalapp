@@ -206,10 +206,20 @@ MSYS2_ARG_CONV_EXCL='*' docker run --rm --network none --entrypoint /bin/sh \
   pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb \
   -c 'chown 10001:10001 /legalapp-uploads && chmod 0750 /legalapp-uploads'
 echo "Starting isolated fresh-host stack ($PROJECT, topology=$FRESH_HOST_TOPOLOGY)"
-# Build one image at a time, then start the complete stack. This bounds peak
-# runner memory during base-prod's full image build without changing services
-# or health assertions being proven.
-COMPOSE_PARALLEL_LIMIT=1 "${compose[@]}" build postgres redis litellm-postgres litellm migrator backend scheduler frontend nginx
+# Build one service image per Compose invocation. A single multi-service build
+# can still create a BuildKit bake graph with overlapping workers even when
+# COMPOSE_PARALLEL_LIMIT=1. This disposable runner has no cache worth keeping;
+# release it before starting the complete stack so runtime memory is available.
+if command -v free >/dev/null 2>&1; then
+  free -h
+fi
+for service in postgres redis litellm-postgres litellm migrator backend scheduler frontend nginx; do
+  COMPOSE_PARALLEL_LIMIT=1 "${compose[@]}" build "$service"
+done
+docker builder prune --all --force
+if command -v free >/dev/null 2>&1; then
+  free -h
+fi
 COMPOSE_PARALLEL_LIMIT=1 "${compose[@]}" up -d postgres redis litellm-postgres litellm migrator backend scheduler frontend nginx
 
 for _ in $(seq 1 90); do
