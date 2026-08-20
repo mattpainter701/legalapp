@@ -47,6 +47,35 @@ def test_main_requires_operator_inputs(capsys):
     assert "DEMO_BASE_URL" in capsys.readouterr().err
 
 
+def test_main_rejects_access_code_cli_argument(monkeypatch, capsys):
+    monkeypatch.setenv("DEMO_BASE_URL", "https://example.test")
+    monkeypatch.setenv("DEMO_ACCESS_CODE", "environment-only")
+    with pytest.raises(SystemExit) as exc:
+        demo_live_smoke.main(["--access-code", "process-list-secret"])
+    assert exc.value.code == 2
+    assert "unrecognized arguments" in capsys.readouterr().err
+
+
+def test_main_requires_https_for_non_loopback_hosts(monkeypatch, capsys):
+    monkeypatch.setenv("DEMO_ACCESS_CODE", "environment-only")
+    with pytest.raises(SystemExit) as exc:
+        demo_live_smoke.main(["--base-url", "http://example.test"])
+    assert exc.value.code == 2
+    assert "HTTPS is required" in capsys.readouterr().err
+
+
+def test_main_allows_http_for_loopback(monkeypatch):
+    monkeypatch.setenv("DEMO_ACCESS_CODE", "environment-only")
+    monkeypatch.setattr(
+        demo_live_smoke,
+        "run",
+        lambda base_url, access_code, full_name, email, timeout: [
+            f"checked {base_url} with environment secret"
+        ],
+    )
+    assert demo_live_smoke.main(["--base-url", "http://127.0.0.1:8000"]) == 0
+
+
 def test_http_error_does_not_include_response_body(monkeypatch):
     class ErrorOpener:
         def open(self, request, timeout):

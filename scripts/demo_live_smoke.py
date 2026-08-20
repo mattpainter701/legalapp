@@ -155,7 +155,6 @@ def _default_email() -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default=os.getenv("DEMO_BASE_URL"))
-    parser.add_argument("--access-code", default=os.getenv("DEMO_ACCESS_CODE"))
     parser.add_argument("--full-name", default=os.getenv("DEMO_FULL_NAME", "Demo Reviewer"))
     parser.add_argument("--email", default=os.getenv("DEMO_EMAIL", _default_email()))
     parser.add_argument(
@@ -165,12 +164,22 @@ def main(argv: list[str] | None = None) -> int:
         dest="timeout",
     )
     args = parser.parse_args(argv)
-    if not args.base_url or not args.access_code:
+    access_code = os.getenv("DEMO_ACCESS_CODE")
+    if not args.base_url or not access_code:
         parser.error("DEMO_BASE_URL and DEMO_ACCESS_CODE are required")
-    if urllib.parse.urlparse(args.base_url).scheme not in {"http", "https"}:
+    parsed_base_url = urllib.parse.urlparse(args.base_url)
+    if parsed_base_url.scheme not in {"http", "https"}:
         parser.error("base URL must use http or https")
+    if not parsed_base_url.hostname:
+        parser.error("base URL must include a hostname")
+    if parsed_base_url.scheme == "http" and parsed_base_url.hostname not in {
+        "localhost",
+        "127.0.0.1",
+        "::1",
+    }:
+        parser.error("HTTPS is required for non-loopback base URLs")
     try:
-        for check in run(args.base_url, args.access_code, args.full_name, args.email, args.timeout):
+        for check in run(args.base_url, access_code, args.full_name, args.email, args.timeout):
             print(f"PASS {check}")
     except SmokeFailure as exc:
         print(f"FAIL {exc}", file=sys.stderr)

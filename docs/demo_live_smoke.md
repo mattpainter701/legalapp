@@ -13,6 +13,11 @@ export DEMO_ACCESS_CODE='(retrieve through the approved operator secret path)'
 python scripts/demo_live_smoke.py
 ```
 
+The access code is accepted only through `DEMO_ACCESS_CODE`; there is no
+command-line access-code option, so it does not appear in shell history or the
+process argument list. HTTPS is required for non-loopback hosts. HTTP is allowed
+only for local disposable testing (`localhost`, `127.0.0.1`, or `::1`).
+
 The command provisions one normal disposable demo session, verifies
 `/api/auth/me`, and confirms that the fixture clone contains synthetic matters,
 conversations, or tasks. The access code is sent only in the bootstrap request;
