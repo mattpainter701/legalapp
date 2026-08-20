@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -807,23 +807,34 @@ def _scrub_revision_ids(path: Path) -> None:
             for item in source.infolist():
                 payload = source.read(item.filename)
                 if item.filename.startswith("word/") and item.filename.endswith(".xml"):
-                    root = ET.fromstring(payload)
-                    changed = False
-                    for parent in root.iter():
-                        for child in list(parent):
-                            local_name = child.tag.rsplit("}", 1)[-1]
-                            if local_name.startswith("rsid"):
-                                parent.remove(child)
-                                changed = True
-                    for node in root.iter():
-                        for attribute in list(node.attrib):
-                            if attribute.startswith(f"{{{WORD_NS}}}rsid"):
-                                del node.attrib[attribute]
-                                changed = True
-                    if changed:
-                        payload = ET.tostring(
-                            root, encoding="utf-8", xml_declaration=True
-                        )
+                    # Do not parse/re-serialize with stdlib ElementTree here. It
+                    # rewrites lxml's namespace map (for example to ns0/ns1) but
+                    # leaves mc:Ignorable values such as ``w14 wp14`` untouched;
+                    # Word then rejects the package as corrupt. A byte-level
+                    # removal of the generated rsid attributes preserves the
+                    # original OOXML namespace declarations and formatting.
+                    payload = re.sub(
+                        rb'\s+w:rsid[A-Za-z0-9]+=(?:"[^"]*"|\'[^\']*\')',
+                        b"",
+                        payload,
+                    )
+                    # python-docx can also emit standalone revision-id elements
+                    # in styles/settings (for example w:rsids and w:rsidRoot).
+                    # Remove those with byte-level patterns so namespace maps
+                    # remain untouched while preserving the privacy scrubber's
+                    # prior contract that no w:rsid material ships.
+                    revision_elements = rb"rsids?|rsidRoot|rsidDel|rsidP|rsidR|rsidSect"
+                    payload = re.sub(
+                        rb"<w:(" + revision_elements + rb")(?:\s[^>]*)?>.*?</w:\1>",
+                        b"",
+                        payload,
+                        flags=re.DOTALL,
+                    )
+                    payload = re.sub(
+                        rb"<w:(" + revision_elements + rb")(?:\s[^>]*)?/>",
+                        b"",
+                        payload,
+                    )
                 target.writestr(item, payload)
         os.replace(temporary, path)
     finally:
