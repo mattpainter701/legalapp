@@ -316,7 +316,7 @@ upload_mount_source="$(docker inspect --format '{{range .Mounts}}{{if eq .Destin
 # memory can briefly exceed the proxy's rehearsal ceiling; a disposable
 # no-deps container preserves the live proxy/model assertion and avoids an
 # OOM-kill after the stack is healthy.
-"${compose[@]}" run --rm --no-deps --entrypoint sh litellm -c \
+"${compose[@]}" run --rm --no-deps --memory 2g --entrypoint sh litellm -c \
   'prisma migrate diff --exit-code --from-url "$LITELLM_DATABASE_URL" --to-schema-datamodel /app/schema.prisma' \
   >/dev/null
 "${compose[@]}" exec -T litellm python - <<'PY'
