@@ -24,7 +24,7 @@ pytest backend/tests/test_demo_lifecycle_db.py
 
 # Browser entry and deterministic chat -> proposal -> task journey
 cd frontend
-npm run e2e -- customer-journeys.e2e.js
+npm run e2e -- e2e/customer-journeys.e2e.js
 ```
 
 The browser journey in
@@ -85,6 +85,12 @@ check requires the configured launch tenant and Zoom Phone proof when
 
 These are not replaceable with mocked E2E tests:
 
+- After the live-smoke harness is integrated, run `python scripts/demo_live_smoke.py`
+  using the operator-held `DEMO_ACCESS_CODE`. Follow `docs/demo_live_smoke.md`
+  for the exact assertions. This is an
+  operator-only check: use synthetic demo data, never print or commit the code,
+  and do not perform provider configuration, credential rotation, or other
+  live-provider mutation from the harness.
 - Run the `/demo` session with the operator-held access code, then verify the
   seeded Northstar matter, source-document links, quota banner, and expiry.
 - Submit the documented review prompt through the real configured LLM and
