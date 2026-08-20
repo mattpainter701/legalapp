@@ -80,7 +80,7 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |pypi|asyncpg|==0.30.0|runtime/dev|backend/requirements.txt|
 |pypi|authlib|==1.6.12|runtime/dev|backend/requirements.txt|
 |pypi|bcrypt|>=4.0,<5.0|runtime/dev|backend/requirements.txt|
-|pypi|cryptography|==48.0.1|runtime/dev|backend/requirements.txt|
+|pypi|cryptography|==50.0.0|runtime/dev|backend/requirements.txt|
 |pypi|email-validator|==2.2.0|runtime/dev|backend/requirements.txt|
 |pypi|fastapi|==0.139.0|runtime/dev|backend/requirements.txt|
 |pypi|google-api-python-client|==2.160.0|runtime/dev|backend/requirements.txt|

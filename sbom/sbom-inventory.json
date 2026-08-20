@@ -589,7 +589,7 @@
       "name": "cryptography",
       "scope": "runtime/dev",
       "source": "backend/requirements.txt",
-      "specifier": "==48.0.1"
+      "specifier": "==50.0.0"
     },
     {
       "ecosystem": "pypi",
