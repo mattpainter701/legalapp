@@ -22,16 +22,77 @@ from app.services.plugins.manifest import get_plugin_manifest, valid_plugin_name
 
 settings = get_settings()
 
-_BLOCKED_DEMO_PREFIXES = (
-    "/api/integrations",
-    "/api/sync/",
-    "/api/v1/smb",
-    "/api/admin/cloud-search",
-    "/api/admin/sharepoint",
-    "/api/admin/smb",
-    "/api/auth/microsoft",
-    "/api/auth/google",
-)
+
+_DEMO_MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def _is_blocked_demo_action(path: str, method: str) -> bool:
+    """Return whether a demo request can cause provider/outbound side effects.
+
+    The broad matter and mediation prefixes are narrowed below so synthetic
+    matter/task/document editing remains available while direct email and
+    approved mediation sends stay fail-closed.
+    """
+    method = method.upper()
+    if path.startswith(("/api/auth/microsoft", "/api/auth/google")):
+        # OAuth connect/callback routes are provider-bound even when they use
+        # GET; status/profile reads are deliberately outside these prefixes.
+        return True
+    if (
+        path.startswith(
+            (
+                "/api/integrations",
+                "/api/sync/",
+                "/api/v1/smb",
+                "/api/admin/cloud-search",
+                "/api/admin/sharepoint",
+                "/api/admin/smb",
+                "/api/mcp",
+                "/api/email-agent",
+                "/api/calendar/sync",
+                "/api/calendar/scheduled-events",
+                "/api/billing/checkout-session",
+                "/api/billing/portal",
+            )
+        )
+        and method in _DEMO_MUTATING_METHODS
+    ):
+        return True
+    if (
+        path.endswith("/email-client") or path.endswith("/cloud-folder/sync")
+    ) and method in _DEMO_MUTATING_METHODS:
+        return True
+    if (
+        method in _DEMO_MUTATING_METHODS
+        and path.endswith("/send")
+        and (
+            path.startswith("/api/plugins/mediation/")
+            or path.startswith("/api/matters/")
+        )
+    ):
+        return True
+    if (
+        method in _DEMO_MUTATING_METHODS
+        and path.startswith("/api/billing/invoices/")
+        and path.endswith("/payment-link")
+    ):
+        return True
+    if method in _DEMO_MUTATING_METHODS and path.startswith(
+        (
+            "/api/intake/dashboard/zoom-phone/sync",
+            "/scheduler/agents/",
+        )
+    ):
+        return True
+    if method in _DEMO_MUTATING_METHODS and (
+        path == "/api/admin/users/invite"
+        or path == "/api/auth/forgot-password"
+        or path.endswith("/portal/invite")
+        or path.endswith("/remind")
+        or (path.startswith("/api/plugins/mediation/") and path.endswith("/invite"))
+    ):
+        return True
+    return False
 
 
 def _surface(path: str, method: str) -> str | None:
@@ -89,8 +150,8 @@ class DemoQuotaMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         surface = _surface(request.url.path, request.method)
         demo_tenant_id = _demo_tenant(request)
-        if demo_tenant_id is not None and request.url.path.startswith(
-            _BLOCKED_DEMO_PREFIXES
+        if demo_tenant_id is not None and _is_blocked_demo_action(
+            request.url.path, request.method
         ):
             return JSONResponse(
                 status_code=403,

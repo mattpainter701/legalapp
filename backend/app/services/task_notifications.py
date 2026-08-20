@@ -13,12 +13,21 @@ from app.config import get_settings
 from app.models.contact import Contact
 from app.models.plugin import Matter
 from app.models.task import Task
+from app.models.tenant import Tenant
 from app.models.user import User
 from app.services import google_calendar, microsoft_calendar
 from app.services.email import EmailDeliveryResult, email_service
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+
+async def _demo_notifications_disabled(db: AsyncSession, tenant_id: str) -> bool:
+    """Keep task-created calendar/email notifications inside demo workspaces."""
+    billing_tier = await db.scalar(
+        select(Tenant.billing_tier).where(Tenant.id == tenant_id)
+    )
+    return billing_tier == "demo"
 
 
 def _fire_and_log(coro: Coroutine, *, task_id: str, action: str) -> None:
@@ -189,6 +198,8 @@ async def send_task_assignment_alert(
     db: AsyncSession, task: Task, assignment_note: str | None = None
 ) -> EmailDeliveryResult | bool:
     """Send an immediate email alert when a task is assigned to a user."""
+    if await _demo_notifications_disabled(db, str(task.tenant_id)):
+        return EmailDeliveryResult.NOT_REQUIRED
     if not task.assigned_to_user_id:
         return EmailDeliveryResult.NOT_REQUIRED
     assignee = (
@@ -258,6 +269,8 @@ async def notify_task_created(
     assignment_note: str | None = None,
 ) -> EmailDeliveryResult | bool:
     """Notify external systems and assignee after a new task is created."""
+    if await _demo_notifications_disabled(db, tenant_id):
+        return EmailDeliveryResult.NOT_REQUIRED
     creator, contact, _matter = await _load_task_context(db, task)
     push_task_to_calendars(
         task,
@@ -282,6 +295,8 @@ async def notify_task_updated(
     assignment_note: str | None = None,
 ) -> EmailDeliveryResult | bool:
     """Notify external systems after a task update."""
+    if await _demo_notifications_disabled(db, tenant_id):
+        return EmailDeliveryResult.NOT_REQUIRED
     if calendar_changed:
         if assignment_changed and previous_calendar_user_id:
             remove_task_from_calendars(

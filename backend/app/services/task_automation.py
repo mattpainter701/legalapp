@@ -34,7 +34,7 @@ from app.database import async_session_maker, set_tenant_context
 from app.models.task import Task, TaskAutomationRun
 from app.models.matter_document import MatterDocument
 from app.models.plugin import Matter
-from app.models.tenant import TenantSettings
+from app.models.tenant import Tenant, TenantSettings
 from app.models.contact import Contact
 from app.models.document import Document
 from app.models.matter_party import MatterParty
@@ -620,6 +620,23 @@ async def run_task_automation(
             if not task.pending_action:
                 return
 
+            tenant_billing_tier = await db.scalar(
+                select(Tenant.billing_tier).where(Tenant.id == task.tenant_id)
+            )
+            if tenant_billing_tier == "demo":
+                await _record_terminal_no_send(
+                    db,
+                    task,
+                    action_type=action_type,
+                    idempotency_key=approval_key,
+                    actor_user_id=actor_user_id,
+                    detail=(
+                        "Not sent: live outbound actions are disabled in demo "
+                        "workspaces."
+                    ),
+                )
+                return
+
             if task.status != to_status or to_status != "in_progress":
                 await _record_terminal_no_send(
                     db,
@@ -867,6 +884,15 @@ async def enqueue_durable_automation(
         return None
     if not task.pending_action:
         return None
+
+    tenant_billing_tier = await db.scalar(
+        select(Tenant.billing_tier).where(Tenant.id == task.tenant_id)
+    )
+    if tenant_billing_tier == "demo":
+        raise ActionApprovalConflict(
+            "Live outbound actions are disabled in demo workspaces. "
+            "This synthetic task can be reviewed but not delivered."
+        )
 
     if str(task.pending_action.get("type") or "") == "email_client":
         try:

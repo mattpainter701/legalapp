@@ -193,7 +193,10 @@ async def _run_for_active_tenants(coro_fn: Callable[[], Awaitable[Any]]) -> list
             (
                 await session.execute(
                     select(Tenant.id)
-                    .where(Tenant.is_active.is_(True))
+                    .where(
+                        Tenant.is_active.is_(True),
+                        Tenant.billing_tier != "demo",
+                    )
                     .order_by(Tenant.id)
                 )
             ).scalars()
