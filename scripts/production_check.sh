@@ -225,8 +225,10 @@ sql() {
   "${compose[@]}" exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atq -v ON_ERROR_STOP=1 -c "$1" 2>/dev/null
 }
 
-active_tenants="$(sql "SELECT count(*) FROM tenants WHERE is_active" || echo error)"
-fresh_heartbeats="$(sql "SELECT count(*) FROM tenants t WHERE t.is_active AND EXISTS (SELECT 1 FROM scheduler_logs s WHERE s.tenant_id=t.id AND s.agent_name='scheduler-heartbeat' AND s.status='completed' AND s.run_at >= now() - interval '${SCHEDULER_MAX_AGE_MINUTES} minutes')" || echo error)"
+# Demo tenants are intentionally excluded from tenant-scoped scheduler jobs;
+# health and release gates must measure the same customer-tenant population.
+active_tenants="$(sql "SELECT count(*) FROM tenants WHERE is_active AND billing_tier <> 'demo'" || echo error)"
+fresh_heartbeats="$(sql "SELECT count(*) FROM tenants t WHERE t.is_active AND t.billing_tier <> 'demo' AND EXISTS (SELECT 1 FROM scheduler_logs s WHERE s.tenant_id=t.id AND s.agent_name='scheduler-heartbeat' AND s.status='completed' AND s.run_at >= now() - interval '${SCHEDULER_MAX_AGE_MINUTES} minutes')" || echo error)"
 if [[ ! "$active_tenants" =~ ^[0-9]+$ || ! "$fresh_heartbeats" =~ ^[0-9]+$ ]]; then
   fail "scheduler heartbeat query failed"
 elif (( fresh_heartbeats != active_tenants )); then

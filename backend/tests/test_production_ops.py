@@ -1011,8 +1011,24 @@ def test_upload_bind_scheduler_and_launch_capability_contracts() -> None:
     production_check = (ROOT / "scripts" / "production_check.sh").read_text(
         encoding="utf-8"
     )
+    assert "billing_tier <> 'demo'" in production_check
+    assert "t.billing_tier <> 'demo'" in production_check
     assert "ZOOM_REQUIRED_TENANT_ID" in production_check
     assert "ZOOM_REQUIRED_TENANT_PLAN" in production_check
+
+
+def test_demo_tenants_are_excluded_from_scheduler_health_gates() -> None:
+    deploy = (ROOT / "scripts" / "deploy_prod.sh").read_text(encoding="utf-8")
+    production_check = (ROOT / "scripts" / "production_check.sh").read_text(
+        encoding="utf-8"
+    )
+    main = (ROOT / "backend" / "app" / "main.py").read_text(encoding="utf-8")
+
+    # Demo tenants are intentionally excluded by tenant_scoped_job. Every
+    # release/readiness population query must use the same customer boundary.
+    assert "billing_tier <> 'demo'" in deploy
+    assert "billing_tier <> 'demo'" in production_check
+    assert 'billing_tier <> \'demo\' ORDER BY id' in main
     assert "custom_config->>'plan'" in production_check
     assert '--tenant-id "$ZOOM_REQUIRED_TENANT_ID"' in production_check
     assert "SMTP no-delivery capability probe" in production_check
