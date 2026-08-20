@@ -48,7 +48,7 @@
           "phone": "+1-555-0110"
         },
         "opposing_party": {
-          "organization": "Maple ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "organization": "Maple Holdings (fictional)",
           "contact_name": "Blake Carter",
           "email": "counterparty-1@example.invalid"
         }
@@ -95,7 +95,7 @@
           "phone": "+1-555-0111"
         },
         "opposing_party": {
-          "organization": "Cobalt ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "organization": "Cobalt Partners (fictional)",
           "contact_name": "Rowan Carter",
           "email": "counterparty-2@example.invalid"
         }
@@ -145,7 +145,7 @@
           "phone": "+1-555-0112"
         },
         "opposing_party": {
-          "organization": "Lantern ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "organization": "Lantern Services (fictional)",
           "contact_name": "Hayden Carter",
           "email": "counterparty-3@example.invalid"
         }
@@ -189,7 +189,7 @@
           "phone": "+1-555-0113"
         },
         "opposing_party": {
-          "organization": "Summit ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "organization": "Summit Group (fictional)",
           "contact_name": "Sage Carter",
           "email": "counterparty-4@example.invalid"
         }
@@ -233,7 +233,7 @@
           "phone": "+1-555-0114"
         },
         "opposing_party": {
-          "organization": "Crescent ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "organization": "Crescent Counsel (fictional)",
           "contact_name": "Reese Carter",
           "email": "counterparty-5@example.invalid"
         }
@@ -277,7 +277,7 @@
           "phone": "+1-555-0115"
         },
         "opposing_party": {
-          "organization": "Maple ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "organization": "Maple Holdings (fictional)",
           "contact_name": "Blake Carter",
           "email": "counterparty-6@example.invalid"
         }
@@ -321,7 +321,7 @@
           "phone": "+1-555-0116"
         },
         "opposing_party": {
-          "organization": "Cobalt ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "organization": "Cobalt Partners (fictional)",
           "contact_name": "Rowan Carter",
           "email": "counterparty-7@example.invalid"
         }
@@ -365,7 +365,7 @@
           "phone": "+1-555-0117"
         },
         "opposing_party": {
-          "organization": "Lantern ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "organization": "Lantern Services (fictional)",
           "contact_name": "Hayden Carter",
           "email": "counterparty-8@example.invalid"
         }
@@ -409,7 +409,7 @@
           "phone": "+1-555-0118"
         },
         "opposing_party": {
-          "organization": "Summit ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "organization": "Summit Group (fictional)",
           "contact_name": "Sage Carter",
           "email": "counterparty-9@example.invalid"
         }
@@ -453,7 +453,7 @@
           "phone": "+1-555-0119"
         },
         "opposing_party": {
-          "organization": "Crescent ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "organization": "Crescent Counsel (fictional)",
           "contact_name": "Reese Carter",
           "email": "counterparty-10@example.invalid"
         }
@@ -497,7 +497,7 @@
           "phone": "+1-555-0120"
         },
         "opposing_party": {
-          "organization": "Maple ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "organization": "Maple Holdings (fictional)",
           "contact_name": "Blake Carter",
           "email": "counterparty-11@example.invalid"
         }
@@ -541,7 +541,7 @@
           "phone": "+1-555-0121"
         },
         "opposing_party": {
-          "organization": "Cobalt ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "organization": "Cobalt Partners (fictional)",
           "contact_name": "Rowan Carter",
           "email": "counterparty-12@example.invalid"
         }
@@ -585,7 +585,7 @@
           "phone": "+1-555-0122"
         },
         "opposing_party": {
-          "organization": "Lantern ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "organization": "Lantern Services (fictional)",
           "contact_name": "Hayden Carter",
           "email": "counterparty-13@example.invalid"
         }
@@ -629,7 +629,7 @@
           "phone": "+1-555-0123"
         },
         "opposing_party": {
-          "organization": "Summit ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "organization": "Summit Group (fictional)",
           "contact_name": "Sage Carter",
           "email": "counterparty-14@example.invalid"
         }
@@ -673,7 +673,7 @@
           "phone": "+1-555-0124"
         },
         "opposing_party": {
-          "organization": "Crescent ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "organization": "Crescent Counsel (fictional)",
           "contact_name": "Reese Carter",
           "email": "counterparty-15@example.invalid"
         }
