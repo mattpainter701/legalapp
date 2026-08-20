@@ -79,6 +79,16 @@ test.describe('/demo customer entry', () => {
       if (sessionCreated && path === '/api/matters/my' && request.method() === 'GET') {
         return json(route, [])
       }
+      // AppShell loads these collections as soon as the protected workspace
+      // mounts. Keep the synthetic demo fixture authenticated for those
+      // reads too; an unmocked 401 would invoke the real refresh interceptor
+      // and redirect the otherwise valid demo session to /login.
+      if (sessionCreated && path === '/api/conversations' && request.method() === 'GET') {
+        return json(route, [])
+      }
+      if (sessionCreated && path === '/api/documents' && request.method() === 'GET') {
+        return json(route, { documents: [] })
+      }
       if (path === '/api/demo/session' && request.method() === 'POST') {
         const payload = request.postDataJSON()
         if (payload.access_code !== 'valid-demo-code') {
