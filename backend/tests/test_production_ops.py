@@ -1144,6 +1144,8 @@ def test_fresh_host_workflow_rehearses_both_production_topologies() -> None:
     assert "memory: 768M" in rehearsal
     assert "cgroup_memory_current" in rehearsal
     assert "docker stats --no-stream --no-trunc" in rehearsal
+    assert 'run --rm --no-deps --entrypoint prisma litellm' in rehearsal
+    assert 'exec -T litellm sh -c' not in rehearsal
     assert '"${compose[@]}" up -d --build' not in rehearsal
 
 
