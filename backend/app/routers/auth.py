@@ -1506,6 +1506,15 @@ async def forgot_password(
             "reset_token": None,
         }
 
+    billing_tier = await db.scalar(
+        select(Tenant.billing_tier).where(Tenant.id == user.tenant_id)
+    )
+    if billing_tier == "demo":
+        return {
+            "message": "If that email exists, a reset link has been sent.",
+            "reset_token": None,
+        }
+
     token = secrets.token_urlsafe(32)
     redis = getattr(request.app.state, "redis", None)
     if redis:

@@ -86,8 +86,10 @@ def _is_blocked_demo_action(path: str, method: str) -> bool:
         return True
     if method in _DEMO_MUTATING_METHODS and (
         path == "/api/admin/users/invite"
+        or path == "/api/auth/forgot-password"
         or path.endswith("/portal/invite")
         or path.endswith("/remind")
+        or (path.startswith("/api/plugins/mediation/") and path.endswith("/invite"))
     ):
         return True
     return False
