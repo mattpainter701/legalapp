@@ -36,6 +36,19 @@ operation. That operation checks the production checkout, runs the strict
 readiness, host-disk, backup, public health, and exact-version evidence. It
 does not change provider configuration or inspect/print secret values.
 
+Before invoking `accept`, the workflow performs a non-secret host preflight. It
+requires the fixed entrypoint to be an executable `root:root` file with mode
+`0755` and to advertise the `verify|deploy|accept` operation set. If this
+preflight fails, do not retry repeatedly or broaden the runner's sudo policy:
+an operator must install the versioned repository file as root, then rerun the
+workflow:
+
+```bash
+sudo install -o root -g root -m 0755 \
+  /home/varta/legalapp/scripts/lawhand-deploy-from-github \
+  /usr/local/sbin/lawhand-deploy-from-github
+```
+
 When installing or refreshing the runner boundary, install the versioned
 `scripts/lawhand-deploy-from-github` file at
 `/usr/local/sbin/lawhand-deploy-from-github` (root-owned, mode 0755). The

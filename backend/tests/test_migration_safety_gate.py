@@ -169,3 +169,21 @@ def test_production_deploy_pins_commit_and_requires_its_ci_run() -> None:
     assert 'readonly PROD_ENV_FILE="$ROOT_DIR/.env"' in host_deploy
     assert 'ENV_FILE="$PROD_ENV_FILE" COMPOSE_FILES="$COMPOSE_FILE"' in host_deploy
     assert "readonly ENV_FILE=" not in host_deploy
+
+
+def test_production_acceptance_preflights_root_entrypoint_capability() -> None:
+    workflow = (
+        ROOT / ".github" / "workflows" / "production-acceptance.yml"
+    ).read_text(encoding="utf-8")
+    entrypoint = (ROOT / "scripts" / "lawhand-deploy-from-github").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Preflight root-owned acceptance entrypoint" in workflow
+    assert "if ! test -f \"$entrypoint\" || ! test -x \"$entrypoint\"" in workflow
+    assert "if ! stat -c '%U:%G %a' \"$entrypoint\"" in workflow
+    assert "root:root 755" in workflow
+    assert "if ! grep -Fqx '  verify|deploy|accept) ;;' \"$entrypoint\"" in workflow
+    assert "Operator action: install the versioned scripts/lawhand-deploy-from-github" in workflow
+    assert "sudo -n /usr/local/sbin/lawhand-deploy-from-github accept" in workflow
+    assert "  verify|deploy|accept) ;;" in entrypoint
