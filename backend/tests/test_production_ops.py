@@ -1141,7 +1141,7 @@ def test_fresh_host_workflow_rehearses_both_production_topologies() -> None:
     assert 'for service in postgres redis litellm-postgres litellm migrator backend scheduler frontend nginx; do' in rehearsal
     assert '"${compose[@]}" build "$service"' in rehearsal
     assert "docker builder prune --all --force" in rehearsal
-    assert "mem_limit: 768m" in rehearsal
+    assert "memory: 768M" in rehearsal
     assert "cgroup_memory_current" in rehearsal
     assert "docker stats --no-stream --no-trunc" in rehearsal
     assert '"${compose[@]}" up -d --build' not in rehearsal

@@ -144,30 +144,57 @@ services:
   # Rehearsal-only ceilings keep the disposable hosted runner from OOM-killing
   # the shell while retaining the complete simultaneous production topology.
   redis:
-    mem_limit: 128m
+    deploy:
+      resources:
+        limits:
+          memory: 128M
   litellm:
-    mem_limit: 768m
+    deploy:
+      resources:
+        limits:
+          memory: 768M
   migrator:
-    mem_limit: 384m
+    deploy:
+      resources:
+        limits:
+          memory: 384M
   scheduler:
-    mem_limit: 512m
+    deploy:
+      resources:
+        limits:
+          memory: 512M
   postgres:
-    mem_limit: 1g
+    deploy:
+      resources:
+        limits:
+          memory: 1G
     volumes: !override
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init_clarity_app_role.sh:/docker-entrypoint-initdb.d/10-clarity-app-role.sh:ro
   litellm-postgres:
-    mem_limit: 512m
+    deploy:
+      resources:
+        limits:
+          memory: 512M
     volumes: !override
       - litellm_postgres_data:/var/lib/postgresql/data
   backend:
-    mem_limit: 768m
+    deploy:
+      resources:
+        limits:
+          memory: 768M
     ports: !reset []
   frontend:
-    mem_limit: 512m
+    deploy:
+      resources:
+        limits:
+          memory: 512M
     ports: !reset []
   nginx:
-    mem_limit: 128m
+    deploy:
+      resources:
+        limits:
+          memory: 128M
     # Prove the actual host ingress path without exposing a rehearsal service
     # beyond loopback. Docker chooses collision-free ephemeral host ports.
     ports: !override
