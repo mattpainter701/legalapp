@@ -99,4 +99,4 @@ def test_default_email_matches_backend_email_schema_and_reserved_domain():
     assert email.endswith(f"@{demo_live_smoke.DEFAULT_EMAIL_DOMAIN}")
     request = DemoSessionRequest(full_name="Smoke Reviewer", email=email, access_code="test-code")
     assert str(request.email) == email
-    assert demo_live_smoke.DEFAULT_EMAIL_DOMAIN.endswith("example.com")
+    assert demo_live_smoke.DEFAULT_EMAIL_DOMAIN == "demo.example.com"
