@@ -73,6 +73,12 @@ test.describe('/demo customer entry', () => {
       if (path === '/api/auth/me' && request.method() === 'GET') {
         return sessionCreated ? json(route, user) : json(route, { detail: 'Not authenticated' }, 401)
       }
+      if (sessionCreated && path === '/api/matters' && request.method() === 'GET') {
+        return json(route, [])
+      }
+      if (sessionCreated && path === '/api/matters/my' && request.method() === 'GET') {
+        return json(route, [])
+      }
       if (path === '/api/demo/session' && request.method() === 'POST') {
         const payload = request.postDataJSON()
         if (payload.access_code !== 'valid-demo-code') {
