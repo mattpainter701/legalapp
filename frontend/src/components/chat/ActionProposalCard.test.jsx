@@ -159,7 +159,7 @@ describe('assistant action proposals in chat', () => {
     )
 
     expect(await screen.findByText('Recorded delivery payload')).toBeInTheDocument()
-    expect(screen.getByText('Exact body accepted for delivery.')).toBeInTheDocument()
+    expect(await screen.findByText('Exact body accepted for delivery.')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Insurance request.pdf' })).toHaveAttribute(
       'href',
       '/api/documents/insurance/download',
