@@ -84,12 +84,14 @@ DOMAIN=rehearsal.invalid
 BACKEND_URL=https://rehearsal.invalid
 FRONTEND_URL=https://rehearsal.invalid
 VITE_PUBLIC_SITE_URL=https://rehearsal.invalid
-VITE_CONTACT_URL=mailto:rehearsal@example.invalid
+VITE_CONTACT_URL=mailto:matt@cybersafeadvisor.com
 UPLOAD_DIR=/app/uploads
 UPLOADS_HOST_DIR=$APP_DIR/uploads
 HOST_STATUS_HOST_DIR=$APP_DIR/host-status
 HOST_DISK_STATUS_FILE=/run/legalapp-host-status/disk-status.json
 HEALTH_HOST_DISK_MAX_AGE_SECONDS=180
+BACKUP_STATUS_FILE=/run/legalapp-host-status/backup-status.json
+HEALTH_BACKUP_MAX_AGE_SECONDS=3600
 DISK_PATH=/
 DISK_MAX_PERCENT=85
 OFFSITE_BACKUP_REQUIRED=true
@@ -97,25 +99,111 @@ OFFSITE_RESTORE_PUBLIC_KEY_FILE=$APP_DIR/offsite-restore-public.pem
 EMAIL_ENABLED=false
 EMAIL_HOST=smtp.rehearsal.invalid
 EMAIL_PORT=587
-EMAIL_FROM=noreply@rehearsal.invalid
+EMAIL_FROM=matt@cybersafeadvisor.com
 APP_COMMIT=$PROJECT
 APP_VERSION=fresh-host
+# The disposable GitHub runner proves boot and behavior, not production
+# capacity. One API worker keeps the base-prod topology inside the runner's
+# memory ceiling while all services and acceptance assertions remain enabled.
+BACKEND_WORKERS=1
 ENV
+
+# This is a schema-valid synthetic artifact solely to exercise the read-only
+# readiness wiring in an isolated rehearsal. It is not backup/restore proof;
+# real production evidence is created by backup_db.sh and its off-host attestation.
+python3 - "$APP_DIR/host-status/backup-status.json" <<'PY'
+import json
+import os
+import sys
+import time
+
+path = sys.argv[1]
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(
+        {
+            "schema_version": 1,
+            "completed_at_epoch": int(time.time()),
+            "status": "ok",
+            "offsite": True,
+            "components": [
+                "legalapp_database",
+                "litellm_database",
+                "uploads",
+                "key_escrow",
+            ],
+        },
+        handle,
+        sort_keys=True,
+    )
+    handle.write("\n")
+os.chmod(path, 0o644)
+PY
 
 cat > "$APP_DIR/docker-compose.rehearsal.yml" <<'YAML'
 services:
+  # Rehearsal-only ceilings keep the disposable hosted runner from OOM-killing
+  # the shell while retaining the complete simultaneous production topology.
+  redis:
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+  litellm:
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+  litellm-schema-check:
+    image: legalapp-litellm:${APP_COMMIT:-dev}
+    environment:
+      LITELLM_DATABASE_URL: ${LITELLM_DATABASE_URL}
+    entrypoint: ["/bin/sh"]
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+  migrator:
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+  scheduler:
+    deploy:
+      resources:
+        limits:
+          memory: 512M
   postgres:
+    deploy:
+      resources:
+        limits:
+          memory: 1G
     volumes: !override
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init_clarity_app_role.sh:/docker-entrypoint-initdb.d/10-clarity-app-role.sh:ro
   litellm-postgres:
+    deploy:
+      resources:
+        limits:
+          memory: 512M
     volumes: !override
       - litellm_postgres_data:/var/lib/postgresql/data
   backend:
+    deploy:
+      resources:
+        limits:
+          memory: 768M
     ports: !reset []
   frontend:
+    deploy:
+      resources:
+        limits:
+          memory: 512M
     ports: !reset []
   nginx:
+    deploy:
+      resources:
+        limits:
+          memory: 128M
     # Prove the actual host ingress path without exposing a rehearsal service
     # beyond loopback. Docker chooses collision-free ephemeral host ports.
     ports: !override
@@ -169,7 +257,38 @@ MSYS2_ARG_CONV_EXCL='*' docker run --rm --network none --entrypoint /bin/sh \
   pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb \
   -c 'chown 10001:10001 /legalapp-uploads && chmod 0750 /legalapp-uploads'
 echo "Starting isolated fresh-host stack ($PROJECT, topology=$FRESH_HOST_TOPOLOGY)"
-"${compose[@]}" up -d --build postgres redis litellm-postgres litellm migrator backend scheduler frontend nginx
+# Build one service image per Compose invocation. A single multi-service build
+# can still create a BuildKit bake graph with overlapping workers even when
+# COMPOSE_PARALLEL_LIMIT=1. This disposable runner has no cache worth keeping;
+# release it before starting the complete stack so runtime memory is available.
+if command -v free >/dev/null 2>&1; then
+  free -h
+fi
+for service in postgres redis litellm-postgres litellm migrator backend scheduler frontend nginx; do
+  COMPOSE_PARALLEL_LIMIT=1 "${compose[@]}" build "$service"
+done
+docker builder prune --all --force
+if command -v free >/dev/null 2>&1; then
+  free -h
+fi
+COMPOSE_PARALLEL_LIMIT=1 "${compose[@]}" up -d postgres redis litellm-postgres litellm migrator backend scheduler frontend nginx
+echo "==> Fresh-host memory diagnostics immediately after stack startup"
+if [[ -r /sys/fs/cgroup/memory.max ]]; then
+  echo "cgroup_memory_max=$(< /sys/fs/cgroup/memory.max)"
+  echo "cgroup_memory_current=$(< /sys/fs/cgroup/memory.current)"
+elif [[ -r /sys/fs/cgroup/memory/memory.limit_in_bytes ]]; then
+  echo "cgroup_memory_max=$(< /sys/fs/cgroup/memory/memory.limit_in_bytes)"
+  echo "cgroup_memory_current=$(< /sys/fs/cgroup/memory/memory.usage_in_bytes)"
+fi
+docker stats --no-stream --no-trunc \
+  "$(${compose[@]} ps -q postgres)" \
+  "$(${compose[@]} ps -q redis)" \
+  "$(${compose[@]} ps -q litellm-postgres)" \
+  "$(${compose[@]} ps -q litellm)" \
+  "$(${compose[@]} ps -q backend)" \
+  "$(${compose[@]} ps -q scheduler)" \
+  "$(${compose[@]} ps -q frontend)" \
+  "$(${compose[@]} ps -q nginx)" || true
 
 for _ in $(seq 1 90); do
   backend_id="$(${compose[@]} ps -q backend 2>/dev/null || true)"
@@ -202,8 +321,30 @@ upload_mount_source="$(docker inspect --format '{{range .Mounts}}{{if eq .Destin
   echo "Uploads host directory is not owned by backend UID/GID 10001" >&2
   exit 3
 }
-"${compose[@]}" exec -T litellm sh -c \
-  'prisma migrate diff --exit-code --from-url "$LITELLM_DATABASE_URL" --to-schema-datamodel /app/schema.prisma >/dev/null'
+# Keep Prisma's schema-diff process out of the live proxy container. Stop only
+# LiteLLM after the full stack has passed startup and upload checks, then
+# restore it before the model assertion. This bounds the transient peak while
+# proving the complete simultaneous stack both before and after the check.
+echo "==> Pausing live LiteLLM for isolated schema check"
+"${compose[@]}" stop litellm
+"${compose[@]}" run --rm --no-deps litellm-schema-check -c \
+  'prisma migrate diff --exit-code --from-url "$LITELLM_DATABASE_URL" --to-schema-datamodel /app/schema.prisma' \
+  >/dev/null
+echo "==> Restarting live LiteLLM after isolated schema check"
+"${compose[@]}" up -d --no-deps litellm
+for _ in $(seq 1 60); do
+  litellm_id="$(${compose[@]} ps -q litellm 2>/dev/null || true)"
+  litellm_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$litellm_id" 2>/dev/null || true)"
+  [[ "$litellm_health" == healthy ]] && break
+  sleep 2
+done
+[[ "$litellm_health" == healthy ]] || {
+  "${compose[@]}" logs --tail=100 litellm >&2
+  echo "LiteLLM did not recover after isolated schema check" >&2
+  exit 6
+}
+echo "LITELLM_SCHEMA_CHECK=passed"
+echo "LITELLM_RECOVERY=healthy"
 "${compose[@]}" exec -T litellm python - <<'PY'
 import json
 import os

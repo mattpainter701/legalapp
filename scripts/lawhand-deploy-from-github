@@ -15,8 +15,8 @@ operation="${1:-}"
 requested_sha="${2:-}"
 
 case "$operation" in
-  verify|deploy) ;;
-  *) echo "Usage: $0 <verify|deploy> <40-character-main-commit>" >&2; exit 2 ;;
+  verify|deploy|accept) ;;
+  *) echo "Usage: $0 <verify|deploy|accept> <40-character-main-commit>" >&2; exit 2 ;;
 esac
 [[ "$requested_sha" =~ ^[0-9a-f]{40}$ ]] || {
   echo "ERROR: release must be a full lowercase Git commit SHA" >&2
@@ -71,6 +71,17 @@ if [[ "$operation" == verify ]]; then
   echo "AVAILABLE_MAIN_COMMIT=$main_sha"
   curl -fsS --max-time 20 "$PUBLIC_ORIGIN/health/readiness"
   echo
+  exit 0
+fi
+
+if [[ "$operation" == accept ]]; then
+  [[ "$current_sha" == "$requested_sha" ]] || {
+    echo "ERROR: production HEAD is $current_sha, expected deployed commit $requested_sha" >&2
+    exit 4
+  }
+  echo "==> Running post-deploy production acceptance evidence"
+  as_deploy_user env GITHUB_DEPLOY_COMMIT="$requested_sha" \
+    bash "$APP_DIR/scripts/production_acceptance.sh" "$requested_sha"
   exit 0
 fi
 

@@ -1,5 +1,8 @@
 # Live demo operations runbook
 
+For the evidence boundary and presentation go/no-go gates, use
+[`CUSTOMER_PRESENTATION_CHECKLIST.md`](CUSTOMER_PRESENTATION_CHECKLIST.md).
+
 ## Enable the feature
 
 1. Create a synthetic fixture from the API container:

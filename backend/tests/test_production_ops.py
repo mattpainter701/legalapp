@@ -1126,6 +1126,8 @@ def test_fresh_host_workflow_rehearses_both_production_topologies() -> None:
 
     assert "topology: [hypervisor, base-prod]" in workflow
     assert "FRESH_HOST_TOPOLOGY: ${{ matrix.topology }}" in workflow
+    assert "BACKEND_WORKERS=1" in rehearsal
+    assert "proves boot and behavior, not production" in rehearsal
     assert "OFFSITE_RESTORE_PUBLIC_KEY_FILE=" in rehearsal
     assert 'compose_files=("${production_compose_files[@]}"' in rehearsal
     assert 'COMPOSE_FILES="$preflight_compose_files_value"' in rehearsal
@@ -1134,6 +1136,22 @@ def test_fresh_host_workflow_rehearses_both_production_topologies() -> None:
     assert "plain=301,edge=200,https=200,frontend=200" in rehearsal
     assert 'plain_headers.get_all("Strict-Transport-Security", []) == []' in rehearsal
     assert '"https://rehearsal.invalid/health/readiness"' in rehearsal
+    assert "schema-valid synthetic artifact solely to exercise" in rehearsal
+    assert 'os.chmod(path, 0o644)' in rehearsal
+    assert 'for service in postgres redis litellm-postgres litellm migrator backend scheduler frontend nginx; do' in rehearsal
+    assert '"${compose[@]}" build "$service"' in rehearsal
+    assert "docker builder prune --all --force" in rehearsal
+    assert "memory: 768M" in rehearsal
+    assert "cgroup_memory_current" in rehearsal
+    assert "docker stats --no-stream --no-trunc" in rehearsal
+    assert "litellm-schema-check" in rehearsal
+    assert 'run --rm --no-deps litellm-schema-check -c' in rehearsal
+    assert 'stop litellm' in rehearsal
+    assert 'up -d --no-deps litellm' in rehearsal
+    assert 'LITELLM_SCHEMA_CHECK=passed' in rehearsal
+    assert 'LITELLM_RECOVERY=healthy' in rehearsal
+    assert 'exec -T litellm sh -c' not in rehearsal
+    assert '"${compose[@]}" up -d --build' not in rehearsal
 
 
 def test_fresh_host_refreshes_host_disk_status_after_image_build() -> None:
@@ -1144,7 +1162,7 @@ def test_fresh_host_refreshes_host_disk_status_after_image_build() -> None:
 
     assert rehearsal.count(probe) == 2
     initial_probe = rehearsal.find(probe)
-    image_build = rehearsal.find("up -d --build postgres redis")
+    image_build = rehearsal.find('COMPOSE_PARALLEL_LIMIT=1 "${compose[@]}" build')
     refreshed_probe = rehearsal.find(probe, initial_probe + len(probe))
     readiness_waiter = rehearsal.find("python -m app.services.readiness_wait")
 

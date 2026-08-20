@@ -67,13 +67,22 @@ test.describe('/demo customer entry', () => {
     await page.route('**/api/**', async (route) => {
       const request = route.request()
       const path = new URL(request.url()).pathname
+      if (path === '/api/auth/refresh' && request.method() === 'POST') {
+        return json(route, { ok: true })
+      }
       if (path === '/api/auth/me' && request.method() === 'GET') {
         return sessionCreated ? json(route, user) : json(route, { detail: 'Not authenticated' }, 401)
+      }
+      if (sessionCreated && path === '/api/matters' && request.method() === 'GET') {
+        return json(route, [])
+      }
+      if (sessionCreated && path === '/api/matters/my' && request.method() === 'GET') {
+        return json(route, [])
       }
       if (path === '/api/demo/session' && request.method() === 'POST') {
         const payload = request.postDataJSON()
         if (payload.access_code !== 'valid-demo-code') {
-          return json(route, { detail: 'The demo access code is invalid.' }, 403)
+          return json(route, { detail: 'Invalid demo access code' }, 401)
         }
         sessionCreated = true
         return json(route, { session_id: user.demo.session_id })
@@ -97,13 +106,14 @@ test.describe('/demo customer entry', () => {
     await page.getByLabel('Work email').fill('demo@example.test')
     await page.getByLabel('Demo access code').fill('wrong-code')
     await submit.click()
-    await expect(page.getByRole('alert')).toHaveText('The demo access code is invalid.')
+    await expect(page.getByRole('alert')).toHaveText('Invalid demo access code')
 
     await page.getByLabel('Demo access code').fill('valid-demo-code')
     await submit.click()
     await expect(page).toHaveURL(/\/matters$/)
-    await expect(page.getByText(/Demo session — 2 of 20 AI operations used/)).toBeVisible()
-    await expect(page.getByText(/Premium AI and live integrations are disabled/)).toBeVisible()
+    const demoStatus = page.getByRole('status', { name: 'Demo session status' })
+    await expect(demoStatus).toContainText('Demo session — 2 of 20 AI operations used')
+    await expect(demoStatus).toContainText('Premium AI and live integrations are disabled')
   })
 })
 
