@@ -1,5 +1,8 @@
 # First-customer production runbook
 
+The concise evidence matrix for presentation and launch decisions is
+[`CUSTOMER_PRESENTATION_CHECKLIST.md`](CUSTOMER_PRESENTATION_CHECKLIST.md).
+
 This is the release gate for the initial Call Intake + Tasks + Zoom Phone customer. MCP is not part of this launch and must remain disabled.
 
 ## 1. Provision production configuration
