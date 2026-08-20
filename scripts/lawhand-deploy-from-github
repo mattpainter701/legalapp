@@ -7,6 +7,8 @@ umask 077
 
 readonly APP_DIR="/home/varta/legalapp"
 readonly DEPLOY_USER="varta"
+readonly DEPLOY_UID="$(id -u "$DEPLOY_USER")"
+readonly DEPLOY_RUNTIME_DIR="/run/user/$DEPLOY_UID"
 readonly EXPECTED_ORIGIN="https://github.com/mattpainter701/legalapp.git"
 readonly PUBLIC_ORIGIN="https://getlawhand.com"
 readonly LOCK_FILE="/run/lock/lawhand-production-deploy.lock"
@@ -40,6 +42,8 @@ fi
 as_deploy_user() {
   runuser -u "$DEPLOY_USER" -- env \
     HOME="/home/$DEPLOY_USER" USER="$DEPLOY_USER" LOGNAME="$DEPLOY_USER" \
+    XDG_RUNTIME_DIR="$DEPLOY_RUNTIME_DIR" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=$DEPLOY_RUNTIME_DIR/bus" \
     "$@"
 }
 

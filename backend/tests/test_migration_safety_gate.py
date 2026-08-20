@@ -163,6 +163,9 @@ def test_production_deploy_pins_commit_and_requires_its_ci_run() -> None:
     assert '[[ "$requested_sha" == "$main_sha" ]]' in host_entrypoint
     assert 'reset --hard "$requested_sha"' in host_entrypoint
     assert '[[ "$checked_out_sha" == "$requested_sha" ]]' in host_entrypoint
+    assert 'readonly DEPLOY_UID="$(id -u "$DEPLOY_USER")"' in host_entrypoint
+    assert 'XDG_RUNTIME_DIR="$DEPLOY_RUNTIME_DIR"' in host_entrypoint
+    assert 'DBUS_SESSION_BUS_ADDRESS="unix:path=$DEPLOY_RUNTIME_DIR/bus"' in host_entrypoint
 
     # ENV_FILE is the child preflight's public input. Keeping a readonly local
     # with that name makes Bash reject the per-command environment assignment.
