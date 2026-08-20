@@ -22,16 +22,41 @@ from app.services.plugins.manifest import get_plugin_manifest, valid_plugin_name
 
 settings = get_settings()
 
-_BLOCKED_DEMO_PREFIXES = (
-    "/api/integrations",
-    "/api/sync/",
-    "/api/v1/smb",
-    "/api/admin/cloud-search",
-    "/api/admin/sharepoint",
-    "/api/admin/smb",
-    "/api/auth/microsoft",
-    "/api/auth/google",
-)
+def _is_blocked_demo_action(path: str, method: str) -> bool:
+    """Return whether a demo request can cause provider/outbound side effects.
+
+    The broad matter and mediation prefixes are narrowed below so synthetic
+    matter/task/document editing remains available while direct email and
+    approved mediation sends stay fail-closed.
+    """
+    if path.startswith((
+        "/api/integrations",
+        "/api/sync/",
+        "/api/v1/smb",
+        "/api/admin/cloud-search",
+        "/api/admin/sharepoint",
+        "/api/admin/smb",
+        "/api/auth/microsoft",
+        "/api/auth/google",
+        "/api/mcp",
+        "/api/email-agent/calendar",
+        "/api/calendar/sync",
+        "/api/calendar/scheduled-events",
+    )):
+        return True
+    if path.endswith("/email-client") or path.endswith("/cloud-folder/sync"):
+        return True
+    if path.endswith("/send") and (
+        path.startswith("/api/plugins/mediation/")
+        or path.startswith("/api/matters/")
+    ):
+        return True
+    if path.startswith((
+        "/api/intake/dashboard/zoom-phone/sync",
+        "/scheduler/agents/",
+    )):
+        return True
+    return False
 
 
 def _surface(path: str, method: str) -> str | None:
@@ -89,8 +114,8 @@ class DemoQuotaMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         surface = _surface(request.url.path, request.method)
         demo_tenant_id = _demo_tenant(request)
-        if demo_tenant_id is not None and request.url.path.startswith(
-            _BLOCKED_DEMO_PREFIXES
+        if demo_tenant_id is not None and _is_blocked_demo_action(
+            request.url.path, request.method
         ):
             return JSONResponse(
                 status_code=403,
