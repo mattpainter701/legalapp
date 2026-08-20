@@ -493,7 +493,12 @@ export default function ActionProposalCard({
       if (isEmail || isDocument) void pollForDelivery(proposalWithLiveTask(proposal, nextTask))
     } catch (err) {
       setState('proposed')
-      const currentTask = err?.current_task || err?.response?.data?.current_task
+      // The API helper normally flattens structured conflicts, but keep the
+      // card safe for callers/tests that pass through a raw FastAPI response:
+      // conflict details may retain `current_task` under `detail`.
+      const currentTask = err?.current_task
+        || err?.response?.data?.current_task
+        || err?.response?.data?.detail?.current_task
       if (currentTask) {
         setLiveTask(currentTask)
         setDelivery(currentTask.delivery || null)

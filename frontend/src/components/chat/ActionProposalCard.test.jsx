@@ -447,8 +447,13 @@ describe('assistant action proposals in chat', () => {
       delivery: { status: 'sent', action_type: 'email_client' },
     }
     const conflict = Object.assign(new Error(message), {
-      current_task: currentTask,
-      response: { status: 409, data: { detail: message, current_task: currentTask } },
+      // Match the raw FastAPI response shape. The API helper normally
+      // normalizes this, but the card must also fail closed when a caller
+      // passes through the structured detail unchanged.
+      response: {
+        status: 409,
+        data: { detail: { message, current_task: currentTask } },
+      },
     })
     const onApprove = vi.fn().mockRejectedValue(conflict)
     render(
