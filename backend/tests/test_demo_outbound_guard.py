@@ -3,13 +3,18 @@
 import uuid
 
 import pytest
+from sqlalchemy import select
 
 from app.middleware.demo_quota import _is_blocked_demo_action
-from app.models.task import Task
+from app.models.task import Task, TaskAutomationRun, TaskEvent
 from app.services.task_automation import (
     ActionApprovalConflict,
+    DELIVERY_NOT_ATTEMPTED,
+    automation_idempotency_key,
     enqueue_durable_automation,
+    run_task_automation,
 )
+from .test_task_automation import _approved_email_task, _matter
 
 
 @pytest.mark.parametrize(
@@ -95,3 +100,56 @@ async def test_demo_approval_cannot_enqueue_outbound_action(
             to_status="in_progress",
             actor_user_id=test_user.id,
         )
+
+
+@pytest.mark.asyncio
+async def test_demo_worker_terminalizes_preexisting_queued_action_without_dispatch(
+    db_session, test_tenant, test_user, monkeypatch
+):
+    from app.services import task_automation
+
+    calls = []
+
+    async def send_email(**kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setattr(task_automation.email_service, "send_email", send_email)
+    matter = await _matter(db_session, test_tenant, test_user)
+    task = await _approved_email_task(
+        db_session, test_tenant, test_user, matter, status="in_progress"
+    )
+    test_tenant.billing_tier = "demo"
+    key = automation_idempotency_key(task, "review")
+    db_session.add(
+        TaskAutomationRun(
+            tenant_id=test_tenant.id,
+            task_id=task.id,
+            action_type="email_client",
+            idempotency_key=key,
+            status="queued",
+        )
+    )
+    await db_session.commit()
+
+    await run_task_automation(
+        task.id,
+        test_tenant.id,
+        from_status="review",
+        to_status="in_progress",
+        actor_user_id=test_user.id,
+    )
+
+    run = await db_session.scalar(
+        select(TaskAutomationRun).where(TaskAutomationRun.task_id == task.id)
+    )
+    assert run.status == "failed"
+    assert run.delivery_certainty == DELIVERY_NOT_ATTEMPTED
+    assert "disabled in demo" in run.delivery_detail
+    assert calls == []
+    event = await db_session.scalar(
+        select(TaskEvent).where(
+            TaskEvent.task_id == task.id,
+            TaskEvent.event_type == "automation_blocked",
+        )
+    )
+    assert event is not None
