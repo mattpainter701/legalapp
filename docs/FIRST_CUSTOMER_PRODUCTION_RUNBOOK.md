@@ -342,6 +342,15 @@ Run the complete operator gate:
 ENV_FILE=.env COMPOSE_FILE=docker-compose.hypervisor.yml bash scripts/production_check.sh
 ```
 
+For repeatable post-deploy evidence, dispatch the GitHub Actions
+**Production acceptance** workflow from `main` with the exact deployed SHA.
+It verifies that SHA is both current `main` and the `production` tag, then runs
+the same strict host gate on Skynet and checks public readiness, host disks,
+backups, frontend health, and `/api/version` commit identity. It is read-only
+with respect to provider configuration and prints no secret values. The
+runner's root-owned `lawhand-deploy-from-github` entrypoint must include its
+`accept` operation before dispatching the workflow.
+
 `ZOOM_REQUIRED=true` is the validated default. It requires
 `ZOOM_REQUIRED_TENANT_ID` to be active, configured, healthy, and on the expected
 `intake-only` plan. This strict command must pass
