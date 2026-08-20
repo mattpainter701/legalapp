@@ -29,6 +29,8 @@ When `DEMO_EMAIL` is omitted, the smoke harness generates a unique address under
 `demo.example.com`. This is a subdomain of the RFC-reserved `example.com`
 domain, so the identity is synthetic and cannot be confused with a customer
 mailbox, while still satisfying the backend's `EmailStr` request validation.
+This keeps the smoke request aligned with the same schema used by the public
+demo-session endpoint.
 Use `DEMO_EMAIL` only when the operator has an approved disposable address.
 
 ## Manual remainder before customer presentation
