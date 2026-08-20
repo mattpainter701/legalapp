@@ -90,9 +90,7 @@ async def purge_demo_tenant(db: AsyncSession, tenant_id: uuid.UUID) -> dict[str,
     # then race through file/database deletion.  The second worker must see
     # the first worker's state transition after waiting for this lock.
     demo = await db.scalar(
-        select(DemoSession)
-        .where(DemoSession.tenant_id == tenant_id)
-        .with_for_update()
+        select(DemoSession).where(DemoSession.tenant_id == tenant_id).with_for_update()
     )
     if demo is None or demo.fixture_tenant_id == tenant_id:
         raise DemoPurgeRefused("Demo session provenance check failed")
