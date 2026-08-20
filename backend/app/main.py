@@ -604,7 +604,7 @@ async def health_check_llm():
     Consumers should inspect the ``status`` field:
     - ``"disabled"``  — LITELLM_ENABLED is False
     - ``"ok"``        — gateway is reachable
-    - ``"degraded"``  — gateway ping failed; ``detail`` contains the error
+    - ``"degraded"``  — gateway ping failed; details are available in server logs
     """
     if not settings.LITELLM_ENABLED:
         return {"status": "disabled"}
@@ -616,8 +616,12 @@ async def health_check_llm():
             _r = await _c.get(f"{settings.LITELLM_BASE_URL}/health/liveliness")
             _r.raise_for_status()
         return {"status": "ok"}
-    except Exception as exc:
-        return {"status": "degraded", "detail": str(exc)}
+    except Exception:
+        # This endpoint is unauthenticated. Keep provider URLs, credentials,
+        # network details, and exception text out of the public response while
+        # retaining the full traceback for server-side troubleshooting.
+        logger.exception("LLM health check failed")
+        return {"status": "degraded"}
 
 
 # ─────────────────────────────────────────────────────
