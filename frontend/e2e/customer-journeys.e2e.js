@@ -129,6 +129,9 @@ test('chat citation leads to review proposal approval and matching task-board st
     if (path === '/api/documents' && request.method() === 'GET') return json(route, { documents: [] })
     if (path === '/api/matters' && request.method() === 'GET') return json(route, [])
     if (path === '/api/mcp/source-health' && request.method() === 'GET') return json(route, { available: false, status: 'unavailable', sources: [], partitions: [] })
+    if (path === '/api/tasks' && request.method() === 'GET') return json(route, { items: [currentTask], total: 1 })
+    if (path === '/api/tasks/overdue' && request.method() === 'GET') return json(route, { items: [], total: 0 })
+    if (path === '/api/tasks/board/telemetry' && request.method() === 'POST') return json(route, { accepted: true })
     if (path === `/api/tasks/${taskId}` && request.method() === 'GET') return json(route, currentTask)
     if (path === `/api/tasks/${taskId}/transition` && request.method() === 'POST') {
       currentTask = { ...currentTask, status: 'in_progress', version: 4 }
