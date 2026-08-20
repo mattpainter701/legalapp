@@ -30,7 +30,7 @@ const proposal = {
   title: 'Review the synthetic engagement letter',
   status: 'review',
   version: 3,
-  action_type: 'general',
+  action_type: null,
   pending_action: null,
   sources: [source],
   approval_effect: 'Approving moves this task into active work. Nothing is sent.',
@@ -82,7 +82,7 @@ test.describe('/demo customer entry', () => {
     })
 
     await page.goto('/demo')
-    await expect(page).toHaveTitle(/LawHand/i)
+    await expect(page).toHaveTitle('Guided demo | LawHand')
     await expect(page.getByRole('heading', { name: 'Start a guided demo' })).toBeVisible()
     await expect(page.getByText('populated, synthetic firm workspace')).toBeVisible()
     await expect(page.getByText('Premium AI and live integrations are disabled.')).toBeVisible()
@@ -151,17 +151,19 @@ test('chat citation leads to review proposal approval and matching task-board st
   })
 
   await page.goto(`/chat?conv=${conversationId}`)
-  await expect(page.getByText('Synthetic source review')).toBeVisible()
-  await expect(page.getByText('Synthetic engagement letter')).toBeVisible()
+  await expect(page.getByTitle('Rename conversation')).toHaveText('Synthetic source review')
+  await expect(page.getByTestId('action-proposal').getByText(source.label, { exact: true })).toBeVisible()
   await expect(page.getByText('Proposed for your approval')).toBeVisible()
   await expect(page.getByText('Approving moves this task into active work. Nothing is sent.')).toBeVisible()
 
   await page.getByRole('button', { name: 'Approve' }).click()
-  await expect(page.getByRole('status')).toContainText('Approved and moved into active work.')
+  await expect(page.getByTestId('action-proposal').getByRole('status')).toContainText(
+    'Approved and moved into active work.',
+  )
 
   await page.goto('/tasks')
   await page.getByRole('button', { name: 'Board', exact: true }).click()
   await expect(page.getByLabel('Legal work board')).toBeVisible()
   await expect(page.getByText('Review the synthetic engagement letter')).toBeVisible()
-  await expect(page.getByText('In Progress')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'In Progress', exact: true })).toBeVisible()
 })
