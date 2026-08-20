@@ -271,7 +271,7 @@ docker builder prune --all --force
 if command -v free >/dev/null 2>&1; then
   free -h
 fi
-COMPOSE_PARALLEL_LIMIT=1 "${compose[@]}" up -d postgres redis litellm-postgres litellm migrator backend scheduler frontend nginx
+COMPOSE_PARALLEL_LIMIT=1 "${compose[@]}" up -d --wait --wait-timeout 180 postgres redis litellm-postgres litellm migrator backend scheduler frontend nginx
 echo "==> Fresh-host memory diagnostics immediately after stack startup"
 if [[ -r /sys/fs/cgroup/memory.max ]]; then
   echo "cgroup_memory_max=$(< /sys/fs/cgroup/memory.max)"
@@ -290,16 +290,12 @@ docker stats --no-stream --no-trunc \
   "$(${compose[@]} ps -q frontend)" \
   "$(${compose[@]} ps -q nginx)" || true
 
-for _ in $(seq 1 90); do
-  backend_id="$(${compose[@]} ps -q backend 2>/dev/null || true)"
-  frontend_id="$(${compose[@]} ps -q frontend 2>/dev/null || true)"
-  nginx_id="$(${compose[@]} ps -q nginx 2>/dev/null || true)"
-  backend_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$backend_id" 2>/dev/null || true)"
-  frontend_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$frontend_id" 2>/dev/null || true)"
-  nginx_state="$(docker inspect --format '{{.State.Status}}' "$nginx_id" 2>/dev/null || true)"
-  [[ "$backend_health" == healthy && "$frontend_health" == healthy && "$nginx_state" == running ]] && break
-  sleep 2
-done
+backend_id="$(${compose[@]} ps -q backend 2>/dev/null || true)"
+frontend_id="$(${compose[@]} ps -q frontend 2>/dev/null || true)"
+nginx_id="$(${compose[@]} ps -q nginx 2>/dev/null || true)"
+backend_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$backend_id" 2>/dev/null || true)"
+frontend_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$frontend_id" 2>/dev/null || true)"
+nginx_state="$(docker inspect --format '{{.State.Status}}' "$nginx_id" 2>/dev/null || true)"
 [[ "$backend_health" == healthy && "$frontend_health" == healthy && "$nginx_state" == running ]] || {
   "${compose[@]}" logs --tail=100 litellm-migrator litellm-schema-migrator litellm backend scheduler migrator frontend nginx
   exit 3
