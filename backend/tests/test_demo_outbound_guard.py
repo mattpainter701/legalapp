@@ -17,6 +17,8 @@ from app.services.task_automation import ActionApprovalConflict, enqueue_durable
         ("PATCH", "/api/calendar/scheduled-events/123"),
         ("DELETE", "/api/calendar/scheduled-events/123"),
         ("POST", "/api/email-agent/calendar"),
+        ("POST", "/api/email-agent/scan"),
+        ("POST", "/api/email-agent/draft-response"),
         ("POST", "/api/matters/123/email-client"),
         ("POST", "/api/matters/123/cloud-folder/sync"),
         ("POST", "/api/plugins/mediation/cases/123/assets/456/send"),
@@ -43,6 +45,21 @@ def test_demo_outbound_routes_are_blocked(method, path):
 )
 def test_demo_synthetic_review_routes_remain_available(path):
     assert not _is_blocked_demo_action(path, "POST")
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/calendar/events",
+        "/api/calendar/scheduled-events",
+        "/api/mcp/tools",
+        "/api/mcp/product-keys",
+        "/api/integrations/zoom/status",
+        "/api/email-agent/scan",
+    ],
+)
+def test_demo_read_only_provider_surfaces_remain_available(path):
+    assert not _is_blocked_demo_action(path, "GET")
 
 
 @pytest.mark.asyncio

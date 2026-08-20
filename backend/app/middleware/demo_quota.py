@@ -22,6 +22,10 @@ from app.services.plugins.manifest import get_plugin_manifest, valid_plugin_name
 
 settings = get_settings()
 
+
+_DEMO_MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
 def _is_blocked_demo_action(path: str, method: str) -> bool:
     """Return whether a demo request can cause provider/outbound side effects.
 
@@ -29,6 +33,11 @@ def _is_blocked_demo_action(path: str, method: str) -> bool:
     matter/task/document editing remains available while direct email and
     approved mediation sends stay fail-closed.
     """
+    method = method.upper()
+    if path.startswith(("/api/auth/microsoft", "/api/auth/google")):
+        # OAuth connect/callback routes are provider-bound even when they use
+        # GET; status/profile reads are deliberately outside these prefixes.
+        return True
     if path.startswith((
         "/api/integrations",
         "/api/sync/",
@@ -36,22 +45,23 @@ def _is_blocked_demo_action(path: str, method: str) -> bool:
         "/api/admin/cloud-search",
         "/api/admin/sharepoint",
         "/api/admin/smb",
-        "/api/auth/microsoft",
-        "/api/auth/google",
         "/api/mcp",
-        "/api/email-agent/calendar",
+        "/api/email-agent",
         "/api/calendar/sync",
         "/api/calendar/scheduled-events",
-    )):
+    )) and method in _DEMO_MUTATING_METHODS:
         return True
-    if path.endswith("/email-client") or path.endswith("/cloud-folder/sync"):
+    if (
+        (path.endswith("/email-client") or path.endswith("/cloud-folder/sync"))
+        and method in _DEMO_MUTATING_METHODS
+    ):
         return True
-    if path.endswith("/send") and (
+    if method in _DEMO_MUTATING_METHODS and path.endswith("/send") and (
         path.startswith("/api/plugins/mediation/")
         or path.startswith("/api/matters/")
     ):
         return True
-    if path.startswith((
+    if method in _DEMO_MUTATING_METHODS and path.startswith((
         "/api/intake/dashboard/zoom-phone/sync",
         "/scheduler/agents/",
     )):
