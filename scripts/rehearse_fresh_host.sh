@@ -141,18 +141,33 @@ PY
 
 cat > "$APP_DIR/docker-compose.rehearsal.yml" <<'YAML'
 services:
+  # Rehearsal-only ceilings keep the disposable hosted runner from OOM-killing
+  # the shell while retaining the complete simultaneous production topology.
+  redis:
+    mem_limit: 128m
+  litellm:
+    mem_limit: 768m
+  migrator:
+    mem_limit: 384m
+  scheduler:
+    mem_limit: 512m
   postgres:
+    mem_limit: 1g
     volumes: !override
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init_clarity_app_role.sh:/docker-entrypoint-initdb.d/10-clarity-app-role.sh:ro
   litellm-postgres:
+    mem_limit: 512m
     volumes: !override
       - litellm_postgres_data:/var/lib/postgresql/data
   backend:
+    mem_limit: 768m
     ports: !reset []
   frontend:
+    mem_limit: 512m
     ports: !reset []
   nginx:
+    mem_limit: 128m
     # Prove the actual host ingress path without exposing a rehearsal service
     # beyond loopback. Docker chooses collision-free ephemeral host ports.
     ports: !override
@@ -221,6 +236,23 @@ if command -v free >/dev/null 2>&1; then
   free -h
 fi
 COMPOSE_PARALLEL_LIMIT=1 "${compose[@]}" up -d postgres redis litellm-postgres litellm migrator backend scheduler frontend nginx
+echo "==> Fresh-host memory diagnostics immediately after stack startup"
+if [[ -r /sys/fs/cgroup/memory.max ]]; then
+  echo "cgroup_memory_max=$(< /sys/fs/cgroup/memory.max)"
+  echo "cgroup_memory_current=$(< /sys/fs/cgroup/memory.current)"
+elif [[ -r /sys/fs/cgroup/memory/memory.limit_in_bytes ]]; then
+  echo "cgroup_memory_max=$(< /sys/fs/cgroup/memory/memory.limit_in_bytes)"
+  echo "cgroup_memory_current=$(< /sys/fs/cgroup/memory/memory.usage_in_bytes)"
+fi
+docker stats --no-stream --no-trunc \
+  "$(${compose[@]} ps -q postgres)" \
+  "$(${compose[@]} ps -q redis)" \
+  "$(${compose[@]} ps -q litellm-postgres)" \
+  "$(${compose[@]} ps -q litellm)" \
+  "$(${compose[@]} ps -q backend)" \
+  "$(${compose[@]} ps -q scheduler)" \
+  "$(${compose[@]} ps -q frontend)" \
+  "$(${compose[@]} ps -q nginx)" || true
 
 for _ in $(seq 1 90); do
   backend_id="$(${compose[@]} ps -q backend 2>/dev/null || true)"
