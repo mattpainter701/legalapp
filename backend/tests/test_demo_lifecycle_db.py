@@ -341,17 +341,23 @@ async def test_purge_refuses_session_already_claimed_by_another_worker(
                 billing_tier="demo",
                 expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
             ),
-            DemoSession(
-                tenant_id=tenant_id,
-                fixture_tenant_id=fixture_id,
-                fixture_version="purge-lock-test",
-                prospect_name="Synthetic Prospect",
-                prospect_email="prospect@example.invalid",
-                status="purging",
-                quota=20,
-                expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
-            ),
         ]
+    )
+    # DemoSession has two tenant FKs without ORM relationships; flush the
+    # referenced tenants before inserting the claimed session row.
+    await db_session.flush()
+    await set_tenant_context(db_session, str(tenant_id))
+    db_session.add(
+        DemoSession(
+            tenant_id=tenant_id,
+            fixture_tenant_id=fixture_id,
+            fixture_version="purge-lock-test",
+            prospect_name="Synthetic Prospect",
+            prospect_email="prospect@example.invalid",
+            status="purging",
+            quota=20,
+            expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+        )
     )
     await db_session.commit()
 
