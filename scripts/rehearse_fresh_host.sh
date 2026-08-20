@@ -153,6 +153,15 @@ services:
       resources:
         limits:
           memory: 768M
+  litellm-schema-check:
+    image: legalapp-litellm:${APP_COMMIT:-dev}
+    environment:
+      LITELLM_DATABASE_URL: ${LITELLM_DATABASE_URL}
+    entrypoint: ["/bin/sh"]
+    deploy:
+      resources:
+        limits:
+          memory: 2G
   migrator:
     deploy:
       resources:
@@ -313,10 +322,10 @@ upload_mount_source="$(docker inspect --format '{{range .Mounts}}{{if eq .Destin
   exit 3
 }
 # Keep Prisma's schema-diff process out of the live proxy container. Its peak
-# memory can briefly exceed the proxy's rehearsal ceiling; a disposable
-# no-deps container preserves the live proxy/model assertion and avoids an
-# OOM-kill after the stack is healthy.
-"${compose[@]}" run --rm --no-deps --memory 2g --entrypoint sh litellm -c \
+# memory can briefly exceed the proxy's rehearsal ceiling; a dedicated
+# no-deps service gives it a 2G rehearsal-only ceiling while preserving the
+# live proxy/model assertion and avoiding an OOM-kill after the stack is healthy.
+"${compose[@]}" run --rm --no-deps litellm-schema-check -c \
   'prisma migrate diff --exit-code --from-url "$LITELLM_DATABASE_URL" --to-schema-datamodel /app/schema.prisma' \
   >/dev/null
 "${compose[@]}" exec -T litellm python - <<'PY'
