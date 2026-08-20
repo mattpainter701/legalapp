@@ -16,6 +16,8 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
+from demo_scenario_library import ADDITIONAL_SCENARIOS
+
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "demo" / "cybersafeadvisor-corporate-pack"
 INK = RGBColor(31, 45, 61)
@@ -42,7 +44,77 @@ SOURCES = {
         "https://www.americanbar.org/groups/professional_responsibility/"
         "publications/model_rules_of_professional_conduct/rule_1_5_fees/"
     ),
+    "synthetic_design": (
+        "Scenario design note: all people, organizations, facts, and amounts are fictional; "
+        "the material is for product demonstration only and is not legal advice."
+    ),
 }
+
+
+LEGACY_SCENARIOS = [
+    {
+        "external_key": "demo-northstar-saas-review",
+        "name": "Northstar Analytics - SaaS Vendor Review",
+        "client": "Northstar Analytics, Inc. (fictional)",
+        "lead": "A customer-side SaaS renewal with AI-training, security, and liability issues.",
+        "demo_prompt": "Review the MSA and data addendum for customer-side risks, cite the source clauses, and propose follow-up tasks for the renewal and data-use issues.",
+        "suggested_tasks": ["Negotiate AI training restriction", "Calendar renewal notice", "Resolve security liability carve-out"],
+    },
+    {
+        "external_key": "demo-harborlight-seed-financing",
+        "name": "HarborLight Robotics - Series Seed Financing",
+        "client": "HarborLight Robotics, Inc. (fictional)",
+        "lead": "A founder-friendly seed financing with approvals, cap-table, and closing work.",
+        "demo_prompt": "Compare the term sheet to the board consent, identify missing approvals and closing conditions, and prepare a prioritized closing checklist.",
+        "suggested_tasks": ["Verify approval thresholds", "Prepare stockholder consent", "Reconcile capitalization certificate"],
+    },
+    {
+        "external_key": "demo-redwood-ogc-retainer",
+        "name": "Redwood Outdoor Supply - Outside General Counsel Retainer",
+        "client": "Redwood Outdoor Supply, Inc. (fictional)",
+        "lead": "A lively monthly outside-counsel portfolio with contract, product, and governance work.",
+        "demo_prompt": "Triage the August legal requests, show the next notice deadlines, and draft the monthly retainer portfolio summary with decisions needed.",
+        "suggested_tasks": ["Review PinePeak exclusivity", "Calendar Evergreen notice", "Prepare September board materials"],
+    },
+]
+
+ALL_SCENARIOS = [*LEGACY_SCENARIOS, *ADDITIONAL_SCENARIOS]
+
+
+def _client_profile(index: int, scenario: dict) -> dict:
+    """Return fictional contact details that make each demo matter feel lived in."""
+
+    contacts = [
+        ("Avery", "Nguyen", "Chief Operating Officer"), ("Morgan", "Ellis", "Founder and CEO"),
+        ("Riley", "Santos", "General Manager"), ("Jamie", "Patel", "Director of Operations"),
+        ("Casey", "Morgan", "Owner"), ("Taylor", "Brooks", "Chief of Staff"),
+        ("Jordan", "Kim", "Director of People"), ("Robin", "Flores", "Product Lead"),
+        ("Cameron", "Wells", "Privacy Program Manager"), ("Drew", "Hart", "Finance Director"),
+        ("Quinn", "Rivera", "Client Representative"), ("Parker", "Reed", "Operations Lead"),
+        ("Emerson", "Lane", "Managing Member"), ("Skyler", "Bennett", "Program Director"),
+        ("Alex", "Monroe", "Business Manager"),
+    ]
+    streets = [
+        ("184 Lantern Way", "Chicago", "IL", "60607"), ("42 Harbor Loop", "Wilmington", "DE", "19801"),
+        ("77 Trailhead Avenue", "Columbus", "OH", "43215"), ("310 Juniper Street", "Cleveland", "OH", "44113"),
+        ("18 Orchard Lane", "Ann Arbor", "MI", "48104"),
+    ]
+    first, last, title = contacts[index % len(contacts)]
+    street, city, state, postal_code = streets[index % len(streets)]
+    local = f"{first}.{last}".lower()
+    return {
+        "organization": scenario["client"],
+        "address": {"street": street, "city": city, "state": state, "zip": postal_code, "country": "US"},
+        "primary_contact": {
+            "first_name": first, "last_name": last, "title": title,
+            "email": f"{local}@example.invalid", "phone": f"+1-555-01{index + 10:02d}",
+        },
+        "opposing_party": {
+            "organization": f"{['Maple', 'Cobalt', 'Lantern', 'Summit', 'Crescent'][index % 5]} {['Holdings', 'Partners', 'Services', 'Group', 'Counsel']} (fictional)",
+            "contact_name": f"{['Blake', 'Rowan', 'Hayden', 'Sage', 'Reese'][index % 5]} Carter",
+            "email": f"counterparty-{index + 1}@example.invalid",
+        },
+    }
 
 
 DOCUMENTS = [
@@ -480,6 +552,133 @@ DOCUMENTS = [
 ]
 
 
+def _scenario_document(scenario: dict) -> dict:
+    """Turn compact scenario data into a structured, demo-ready source document."""
+
+    return {
+        "filename": scenario["filename"],
+        "title": scenario["title"],
+        "subtitle": scenario["subtitle"],
+        "matter": scenario["name"],
+        "date": "August 18, 2026",
+        "lead": scenario["lead"],
+        "sections": [
+            ("Background and Working Facts", scenario["facts"]),
+            ("Risk and Issue Map", scenario["issues"]),
+            ("Options and Decisions Needed", scenario["decisions"]),
+            (
+                "90-Day Action Plan",
+                [
+                    f"Priority {index + 1}: {task}."
+                    for index, task in enumerate(scenario["suggested_tasks"])
+                ],
+            ),
+            (
+                "Guided Demo Question",
+                [
+                    scenario["demo_prompt"],
+                    "Use this scenario to demonstrate document-grounded analysis, a matter timeline, "
+                    "task creation, and an attorney review workflow. Confirm jurisdiction-specific "
+                    "law and facts before acting outside this fictional demonstration.",
+                ],
+            ),
+        ],
+        "sources": ["synthetic_design"],
+    }
+
+
+DOCUMENTS.extend(_scenario_document(scenario) for scenario in ADDITIONAL_SCENARIOS)
+
+
+def _supporting_document_filenames(external_key: str) -> list[str]:
+    stem = external_key.removeprefix("demo-")
+    return [
+        f"support-{stem}-intake-and-contact-profile.docx",
+        f"support-{stem}-communications-and-work-plan.docx",
+    ]
+
+
+def _supporting_documents(index: int, scenario: dict) -> list[dict]:
+    """Create the client-facing and internal work papers for every demo file."""
+
+    profile = _client_profile(index, scenario)
+    contact = profile["primary_contact"]
+    intake_filename, workplan_filename = _supporting_document_filenames(
+        scenario["external_key"]
+    )
+    return [
+        {
+            "filename": intake_filename,
+            "title": f"{scenario['name']} | Client Intake and Contact Profile",
+            "subtitle": "Synthetic client file · privileged demonstration work paper",
+            "matter": scenario["name"],
+            "date": "August 18, 2026",
+            "lead": scenario["lead"],
+            "sections": [
+                ("Client Profile", [
+                    f"Organization: {profile['organization']}",
+                    f"Primary contact: {contact['first_name']} {contact['last_name']}, {contact['title']}",
+                    f"Office: {profile['address']['street']}, {profile['address']['city']}, {profile['address']['state']} {profile['address']['zip']}",
+                    f"Direct line: {contact['phone']} · Email: {contact['email']}",
+                ]),
+                ("Initial Intake", [
+                    scenario["lead"],
+                    "Conflict check recorded as cleared for this fictional demonstration file.",
+                    "Client asked for a practical work plan, source-grounded risk summary, and attorney-reviewed communications.",
+                ]),
+                ("Other Known Parties", [
+                    f"Counterparty or stakeholder: {profile['opposing_party']['organization']}.",
+                    f"Primary outside contact: {profile['opposing_party']['contact_name']} ({profile['opposing_party']['email']}).",
+                    "Party information is fictional and is included solely to demonstrate a complete matter file.",
+                ]),
+                ("Open Questions for Counsel", [
+                    "Confirm governing documents, venue, and jurisdiction-specific requirements before advice or external action.",
+                    "Confirm the client representative's authority and any insurance, notice, or consent obligations.",
+                    "Identify records that require preservation or privilege treatment.",
+                ]),
+            ],
+            "sources": ["synthetic_design"],
+        },
+        {
+            "filename": workplan_filename,
+            "title": f"{scenario['name']} | Communications and 30-Day Work Plan",
+            "subtitle": "Synthetic correspondence log and attorney work plan",
+            "matter": scenario["name"],
+            "date": "August 18, 2026",
+            "lead": "A simulated client update, internal analysis, and review-ready next steps for this fictional matter.",
+            "sections": [
+                ("Recent Communications", [
+                    f"Client email: {contact['first_name']} {contact['last_name']} asked counsel to prioritize the immediate decision and summarize remaining information gaps.",
+                    "Attorney reply: acknowledged receipt, confirmed that no external communication will be sent without review, and requested the listed records.",
+                    "Internal call note: team agreed to preserve relevant records and return a concise risk-and-options memo.",
+                ]),
+                ("30-Day Work Plan", [
+                    f"Week 1: {scenario['suggested_tasks'][0]}.",
+                    f"Week 2: {scenario['suggested_tasks'][1]}.",
+                    f"Weeks 3–4: {scenario['suggested_tasks'][2]}.",
+                ]),
+                ("Decision Log", [
+                    "Decision pending: confirm client objective, authority, and acceptable risk tolerance.",
+                    "Decision pending: select an attorney-reviewed communication posture.",
+                    "Decision pending: approve the next milestone and accountable owner.",
+                ]),
+                ("Guided Demo Question", [
+                    scenario["demo_prompt"],
+                    "Demonstrate how the assistant connects source documents, communications, tasks, and the matter timeline while leaving legal judgment with counsel.",
+                ]),
+            ],
+            "sources": ["synthetic_design"],
+        },
+    ]
+
+
+DOCUMENTS.extend(
+    document
+    for index, scenario in enumerate(ALL_SCENARIOS)
+    for document in _supporting_documents(index, scenario)
+)
+
+
 def _font(run, *, size=None, color=None, bold=None, italic=None):
     run.font.name = "Calibri"
     run._element.get_or_add_rPr().rFonts.set(qn("w:ascii"), "Calibri")
@@ -728,61 +927,94 @@ def build_document(spec: dict) -> Path:
 
 
 def build_manifest():
+    matters = [
+        {
+            "external_key": "demo-northstar-saas-review",
+            "primary_plugin": "commercial-legal",
+            "matter_type": "commercial",
+            "jurisdiction": "Delaware",
+            "name": "Northstar Analytics - SaaS Vendor Review",
+            "practice_area": "Corporate / Commercial Contracts",
+            "status": "Open - Negotiation",
+            "client": "Northstar Analytics, Inc. (fictional)",
+            "description": "A customer-side SaaS renewal with AI-training, security, and liability issues.",
+            "documents": [DOCUMENTS[0]["filename"], DOCUMENTS[1]["filename"]],
+            "demo_prompt": "Review the MSA and data addendum for customer-side risks, cite the source clauses, and propose follow-up tasks for the renewal and data-use issues.",
+            "suggested_tasks": [
+                "Negotiate AI training and de-identification restriction",
+                "Propose a 12-month fee cap and calendar the renewal notice",
+                "Add security/privacy liability carve-out and balanced indemnity",
+            ],
+            "renewal": {"date": "2027-07-31", "notice_days": 60},
+        },
+        {
+            "external_key": "demo-harborlight-seed-financing",
+            "primary_plugin": "corporate-legal",
+            "matter_type": "corporate",
+            "jurisdiction": "Delaware",
+            "name": "HarborLight Robotics - Series Seed Financing",
+            "practice_area": "Corporate / Financing",
+            "status": "Open - Pre-Closing",
+            "client": "HarborLight Robotics, Inc. (fictional)",
+            "description": "A founder-friendly seed financing with approvals, cap-table, and closing work.",
+            "documents": [DOCUMENTS[2]["filename"], DOCUMENTS[3]["filename"]],
+            "demo_prompt": "Compare the term sheet to the board consent, identify missing approvals and closing conditions, and prepare a prioritized closing checklist.",
+            "suggested_tasks": [
+                "Verify charter/bylaw approval thresholds and director conflicts",
+                "Prepare stockholder consent and charter filing package",
+                "Reconcile option pool and capitalization certificate",
+                "Collect invention assignments and key-person agreements",
+            ],
+            "target_close": "2026-09-15",
+        },
+        {
+            "external_key": "demo-redwood-ogc-retainer",
+            "primary_plugin": "commercial-legal",
+            "matter_type": "commercial",
+            "jurisdiction": "Ohio",
+            "name": "Redwood Outdoor Supply - Outside General Counsel Retainer",
+            "practice_area": "Outside General Counsel",
+            "status": "Open - Recurring",
+            "client": "Redwood Outdoor Supply, Inc. (fictional)",
+            "description": "A lively monthly outside-counsel portfolio with contract, product, and governance work.",
+            "documents": [DOCUMENTS[4]["filename"], DOCUMENTS[5]["filename"]],
+            "demo_prompt": "Triage the August legal requests, show the next notice deadlines, and draft the monthly retainer portfolio summary with decisions needed.",
+            "suggested_tasks": [
+                "Review PinePeak exclusivity and forecast remedies",
+                "Calendar Evergreen Packaging non-renewal notice",
+                "Review warehouse pilot data and security terms",
+                "Prepare September board-materials legal section",
+            ],
+            "retainer": {"monthly_usd": 12500, "included_attorney_hours": 45},
+        },
+    ]
+    matters.extend(
+        {
+            "external_key": scenario["external_key"],
+            "primary_plugin": scenario["primary_plugin"],
+            "matter_type": scenario["matter_type"],
+            "jurisdiction": scenario["jurisdiction"],
+            "name": scenario["name"],
+            "practice_area": scenario["practice_area"],
+            "status": scenario["status"],
+            "client": scenario["client"],
+            "description": scenario["lead"],
+            "documents": [scenario["filename"]],
+            "demo_prompt": scenario["demo_prompt"],
+            "suggested_tasks": scenario["suggested_tasks"],
+        }
+        for scenario in ADDITIONAL_SCENARIOS
+    )
+    for index, matter in enumerate(matters):
+        matter["documents"].extend(_supporting_document_filenames(matter["external_key"]))
+        matter["client_profile"] = _client_profile(index, matter)
     manifest = {
-        "schema_version": 1,
-        "pack_version": "bk24-corporate-demo-v1",
+        "schema_version": 2,
+        "pack_version": "demo-scenario-library-v1",
         "tenant_domain": "cybersafeadvisor.com",
         "synthetic": True,
         "warning": DISCLAIMER,
-        "matters": [
-            {
-                "external_key": "demo-northstar-saas-review",
-                "name": "Northstar Analytics - SaaS Vendor Review",
-                "practice_area": "Corporate / Commercial Contracts",
-                "status": "Open - Negotiation",
-                "client": "Northstar Analytics, Inc. (fictional)",
-                "documents": [DOCUMENTS[0]["filename"], DOCUMENTS[1]["filename"]],
-                "demo_prompt": "Review the MSA and data addendum for customer-side risks, cite the source clauses, and propose follow-up tasks for the renewal and data-use issues.",
-                "suggested_tasks": [
-                    "Negotiate AI training and de-identification restriction",
-                    "Propose a 12-month fee cap and calendar the renewal notice",
-                    "Add security/privacy liability carve-out and balanced indemnity",
-                ],
-                "renewal": {"date": "2027-07-31", "notice_days": 60},
-            },
-            {
-                "external_key": "demo-harborlight-seed-financing",
-                "name": "HarborLight Robotics - Series Seed Financing",
-                "practice_area": "Corporate / Financing",
-                "status": "Open - Pre-Closing",
-                "client": "HarborLight Robotics, Inc. (fictional)",
-                "documents": [DOCUMENTS[2]["filename"], DOCUMENTS[3]["filename"]],
-                "demo_prompt": "Compare the term sheet to the board consent, identify missing approvals and closing conditions, and prepare a prioritized closing checklist.",
-                "suggested_tasks": [
-                    "Verify charter/bylaw approval thresholds and director conflicts",
-                    "Prepare stockholder consent and charter filing package",
-                    "Reconcile option pool and capitalization certificate",
-                    "Collect invention assignments and key-person agreements",
-                ],
-                "target_close": "2026-09-15",
-            },
-            {
-                "external_key": "demo-redwood-ogc-retainer",
-                "name": "Redwood Outdoor Supply - Outside General Counsel Retainer",
-                "practice_area": "Outside General Counsel",
-                "status": "Open - Recurring",
-                "client": "Redwood Outdoor Supply, Inc. (fictional)",
-                "documents": [DOCUMENTS[4]["filename"], DOCUMENTS[5]["filename"]],
-                "demo_prompt": "Triage the August legal requests, show the next notice deadlines, and draft the monthly retainer portfolio summary with decisions needed.",
-                "suggested_tasks": [
-                    "Review PinePeak exclusivity and forecast remedies",
-                    "Calendar Evergreen Packaging non-renewal notice",
-                    "Review warehouse pilot data and security terms",
-                    "Prepare September board-materials legal section",
-                ],
-                "retainer": {"monthly_usd": 12500, "included_attorney_hours": 45},
-            },
-        ],
+        "matters": matters,
     }
     (OUT / "manifest.json").write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"

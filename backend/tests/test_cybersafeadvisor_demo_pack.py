@@ -5,21 +5,53 @@ from zipfile import ZipFile
 from docx import Document
 from docx.oxml.ns import qn
 
+from app.services.plugins.manifest import valid_plugin_names
+
 
 ROOT = Path(__file__).resolve().parents[2]
 PACK = ROOT / "demo" / "cybersafeadvisor-corporate-pack"
 DISCLAIMER = "SYNTHETIC DEMO - NOT LEGAL ADVICE"
 
 
-def test_demo_manifest_maps_six_documents_to_three_synthetic_matters():
+def test_demo_manifest_covers_every_shipped_practice_module_with_rich_sources():
     manifest = json.loads((PACK / "manifest.json").read_text(encoding="utf-8"))
 
     assert manifest["tenant_domain"] == "cybersafeadvisor.com"
     assert manifest["synthetic"] is True
-    assert len(manifest["matters"]) == 3
+    assert manifest["schema_version"] == 2
+    assert manifest["pack_version"] == "demo-scenario-library-v1"
+    matters = manifest["matters"]
+    assert set(valid_plugin_names()) <= {
+        matter["primary_plugin"] for matter in matters
+    }
+    assert all(
+        {
+            "external_key",
+            "primary_plugin",
+            "matter_type",
+            "jurisdiction",
+            "name",
+            "practice_area",
+            "status",
+            "client",
+            "client_profile",
+            "description",
+            "documents",
+            "demo_prompt",
+            "suggested_tasks",
+        }
+        <= matter.keys()
+        for matter in matters
+    )
+    assert all(len(matter["suggested_tasks"]) >= 3 for matter in matters)
+    assert all(
+        matter["client_profile"]["address"]
+        and matter["client_profile"]["primary_contact"]["email"].endswith(".invalid")
+        for matter in matters
+    )
     documents = [name for matter in manifest["matters"] for name in matter["documents"]]
-    assert len(documents) == 6
-    assert len(set(documents)) == 6
+    assert len(documents) >= len(matters) * 3
+    assert len(set(documents)) == len(documents)
     assert all((PACK / name).is_file() for name in documents)
 
 

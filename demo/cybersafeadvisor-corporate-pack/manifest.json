@@ -1,19 +1,25 @@
 {
-  "schema_version": 1,
-  "pack_version": "bk24-corporate-demo-v1",
+  "schema_version": 2,
+  "pack_version": "demo-scenario-library-v1",
   "tenant_domain": "cybersafeadvisor.com",
   "synthetic": true,
   "warning": "SYNTHETIC DEMO - NOT LEGAL ADVICE",
   "matters": [
     {
       "external_key": "demo-northstar-saas-review",
+      "primary_plugin": "commercial-legal",
+      "matter_type": "commercial",
+      "jurisdiction": "Delaware",
       "name": "Northstar Analytics - SaaS Vendor Review",
       "practice_area": "Corporate / Commercial Contracts",
       "status": "Open - Negotiation",
       "client": "Northstar Analytics, Inc. (fictional)",
+      "description": "A customer-side SaaS renewal with AI-training, security, and liability issues.",
       "documents": [
         "01-northstar-cloud-master-services-agreement.docx",
-        "02-northstar-cloud-data-security-addendum.docx"
+        "02-northstar-cloud-data-security-addendum.docx",
+        "support-northstar-saas-review-intake-and-contact-profile.docx",
+        "support-northstar-saas-review-communications-and-work-plan.docx"
       ],
       "demo_prompt": "Review the MSA and data addendum for customer-side risks, cite the source clauses, and propose follow-up tasks for the renewal and data-use issues.",
       "suggested_tasks": [
@@ -24,17 +30,45 @@
       "renewal": {
         "date": "2027-07-31",
         "notice_days": 60
+      },
+      "client_profile": {
+        "organization": "Northstar Analytics, Inc. (fictional)",
+        "address": {
+          "street": "184 Lantern Way",
+          "city": "Chicago",
+          "state": "IL",
+          "zip": "60607",
+          "country": "US"
+        },
+        "primary_contact": {
+          "first_name": "Avery",
+          "last_name": "Nguyen",
+          "title": "Chief Operating Officer",
+          "email": "avery.nguyen@example.invalid",
+          "phone": "+1-555-0110"
+        },
+        "opposing_party": {
+          "organization": "Maple ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "contact_name": "Blake Carter",
+          "email": "counterparty-1@example.invalid"
+        }
       }
     },
     {
       "external_key": "demo-harborlight-seed-financing",
+      "primary_plugin": "corporate-legal",
+      "matter_type": "corporate",
+      "jurisdiction": "Delaware",
       "name": "HarborLight Robotics - Series Seed Financing",
       "practice_area": "Corporate / Financing",
       "status": "Open - Pre-Closing",
       "client": "HarborLight Robotics, Inc. (fictional)",
+      "description": "A founder-friendly seed financing with approvals, cap-table, and closing work.",
       "documents": [
         "03-harborlight-series-seed-term-sheet.docx",
-        "04-harborlight-board-written-consent.docx"
+        "04-harborlight-board-written-consent.docx",
+        "support-harborlight-seed-financing-intake-and-contact-profile.docx",
+        "support-harborlight-seed-financing-communications-and-work-plan.docx"
       ],
       "demo_prompt": "Compare the term sheet to the board consent, identify missing approvals and closing conditions, and prepare a prioritized closing checklist.",
       "suggested_tasks": [
@@ -43,17 +77,45 @@
         "Reconcile option pool and capitalization certificate",
         "Collect invention assignments and key-person agreements"
       ],
-      "target_close": "2026-09-15"
+      "target_close": "2026-09-15",
+      "client_profile": {
+        "organization": "HarborLight Robotics, Inc. (fictional)",
+        "address": {
+          "street": "42 Harbor Loop",
+          "city": "Wilmington",
+          "state": "DE",
+          "zip": "19801",
+          "country": "US"
+        },
+        "primary_contact": {
+          "first_name": "Morgan",
+          "last_name": "Ellis",
+          "title": "Founder and CEO",
+          "email": "morgan.ellis@example.invalid",
+          "phone": "+1-555-0111"
+        },
+        "opposing_party": {
+          "organization": "Cobalt ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "contact_name": "Rowan Carter",
+          "email": "counterparty-2@example.invalid"
+        }
+      }
     },
     {
       "external_key": "demo-redwood-ogc-retainer",
+      "primary_plugin": "commercial-legal",
+      "matter_type": "commercial",
+      "jurisdiction": "Ohio",
       "name": "Redwood Outdoor Supply - Outside General Counsel Retainer",
       "practice_area": "Outside General Counsel",
       "status": "Open - Recurring",
       "client": "Redwood Outdoor Supply, Inc. (fictional)",
+      "description": "A lively monthly outside-counsel portfolio with contract, product, and governance work.",
       "documents": [
         "05-redwood-ogc-engagement-letter.docx",
-        "06-redwood-monthly-request-and-contract-calendar.docx"
+        "06-redwood-monthly-request-and-contract-calendar.docx",
+        "support-redwood-ogc-retainer-intake-and-contact-profile.docx",
+        "support-redwood-ogc-retainer-communications-and-work-plan.docx"
       ],
       "demo_prompt": "Triage the August legal requests, show the next notice deadlines, and draft the monthly retainer portfolio summary with decisions needed.",
       "suggested_tasks": [
@@ -65,6 +127,556 @@
       "retainer": {
         "monthly_usd": 12500,
         "included_attorney_hours": 45
+      },
+      "client_profile": {
+        "organization": "Redwood Outdoor Supply, Inc. (fictional)",
+        "address": {
+          "street": "77 Trailhead Avenue",
+          "city": "Columbus",
+          "state": "OH",
+          "zip": "43215",
+          "country": "US"
+        },
+        "primary_contact": {
+          "first_name": "Riley",
+          "last_name": "Santos",
+          "title": "General Manager",
+          "email": "riley.santos@example.invalid",
+          "phone": "+1-555-0112"
+        },
+        "opposing_party": {
+          "organization": "Lantern ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "contact_name": "Hayden Carter",
+          "email": "counterparty-3@example.invalid"
+        }
+      }
+    },
+    {
+      "external_key": "demo-sunbeam-drone-demand",
+      "primary_plugin": "litigation-legal",
+      "matter_type": "litigation",
+      "jurisdiction": "Illinois",
+      "name": "Sunbeam Drone - Rooftop Delivery Demand",
+      "practice_area": "Litigation / Commercial Dispute",
+      "status": "Open - Pre-Suit",
+      "client": "Sunbeam Drone Delivery, Inc. (fictional)",
+      "description": "A fictional rooftop delivery pilot ended with a damaged greenhouse, a viral video, and a demand letter that arrives before the insurer has finished its factual review.",
+      "documents": [
+        "07-sunbeam-rooftop-delivery-demand-response.docx",
+        "support-sunbeam-drone-demand-intake-and-contact-profile.docx",
+        "support-sunbeam-drone-demand-communications-and-work-plan.docx"
+      ],
+      "demo_prompt": "Build a claim chronology, identify the preservation steps, and draft a measured response that does not concede the disputed marketing statement.",
+      "suggested_tasks": [
+        "Issue legal hold and preserve flight, marketing, and support records",
+        "Map contract, insurance, and agency-notice deadlines",
+        "Prepare demand-response chronology and settlement authority memo"
+      ],
+      "client_profile": {
+        "organization": "Sunbeam Drone Delivery, Inc. (fictional)",
+        "address": {
+          "street": "310 Juniper Street",
+          "city": "Cleveland",
+          "state": "OH",
+          "zip": "44113",
+          "country": "US"
+        },
+        "primary_contact": {
+          "first_name": "Jamie",
+          "last_name": "Patel",
+          "title": "Director of Operations",
+          "email": "jamie.patel@example.invalid",
+          "phone": "+1-555-0113"
+        },
+        "opposing_party": {
+          "organization": "Summit ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "contact_name": "Sage Carter",
+          "email": "counterparty-4@example.invalid"
+        }
+      }
+    },
+    {
+      "external_key": "demo-pineapple-dsar",
+      "primary_plugin": "privacy-legal",
+      "matter_type": "privacy",
+      "jurisdiction": "California",
+      "name": "Pineapple Fitness - Member Data Request",
+      "practice_area": "Privacy / Data Protection",
+      "status": "Open - Response Window",
+      "client": "Pineapple Fitness Studios, LLC (fictional)",
+      "description": "A former spin-class regular asks what the studio knows about her while a well-meaning manager has already offered to send a spreadsheet from the front-desk system.",
+      "documents": [
+        "08-pineapple-member-data-request-playbook.docx",
+        "support-pineapple-dsar-intake-and-contact-profile.docx",
+        "support-pineapple-dsar-communications-and-work-plan.docx"
+      ],
+      "demo_prompt": "Create a practical DSAR plan, flag the data that needs human review, and prepare the questions for the booking and marketing vendors.",
+      "suggested_tasks": [
+        "Open verified request record and freeze automatic deletion",
+        "Collect booking, payment, and marketing-vendor data maps",
+        "Draft access, deletion, and partner-disclosure response package"
+      ],
+      "client_profile": {
+        "organization": "Pineapple Fitness Studios, LLC (fictional)",
+        "address": {
+          "street": "18 Orchard Lane",
+          "city": "Ann Arbor",
+          "state": "MI",
+          "zip": "48104",
+          "country": "US"
+        },
+        "primary_contact": {
+          "first_name": "Casey",
+          "last_name": "Morgan",
+          "title": "Owner",
+          "email": "casey.morgan@example.invalid",
+          "phone": "+1-555-0114"
+        },
+        "opposing_party": {
+          "organization": "Crescent ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "contact_name": "Reese Carter",
+          "email": "counterparty-5@example.invalid"
+        }
+      }
+    },
+    {
+      "external_key": "demo-brew-bloom-termination",
+      "primary_plugin": "employment-legal",
+      "matter_type": "employment",
+      "jurisdiction": "Ohio",
+      "name": "Brew & Bloom - Store Manager Separation",
+      "practice_area": "Employment / Workplace Investigation",
+      "status": "Open - Decision Pending",
+      "client": "Brew & Bloom Coffee Roasters, Inc. (fictional)",
+      "description": "A popular store manager is accused of changing tip allocations, but the complaint lands two days after she raised scheduling concerns in a staff group chat.",
+      "documents": [
+        "09-brew-bloom-manager-separation-memo.docx",
+        "support-brew-bloom-termination-intake-and-contact-profile.docx",
+        "support-brew-bloom-termination-communications-and-work-plan.docx"
+      ],
+      "demo_prompt": "Build an investigation plan that tests the tip allegation and the retaliation risk, then prepare an HR decision checklist.",
+      "suggested_tasks": [
+        "Preserve POS, payroll, schedule, and group-chat records",
+        "Prepare witness interview plan and comparator review",
+        "Draft separation-or-coaching checklist with final-pay steps"
+      ],
+      "client_profile": {
+        "organization": "Brew & Bloom Coffee Roasters, Inc. (fictional)",
+        "address": {
+          "street": "184 Lantern Way",
+          "city": "Chicago",
+          "state": "IL",
+          "zip": "60607",
+          "country": "US"
+        },
+        "primary_contact": {
+          "first_name": "Taylor",
+          "last_name": "Brooks",
+          "title": "Chief of Staff",
+          "email": "taylor.brooks@example.invalid",
+          "phone": "+1-555-0115"
+        },
+        "opposing_party": {
+          "organization": "Maple ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "contact_name": "Blake Carter",
+          "email": "counterparty-6@example.invalid"
+        }
+      }
+    },
+    {
+      "external_key": "demo-trailtrack-kids-watch",
+      "primary_plugin": "product-legal",
+      "matter_type": "product",
+      "jurisdiction": "United States",
+      "name": "TrailTrack - Kids Adventure Watch Launch",
+      "practice_area": "Product / Marketing Review",
+      "status": "Open - Launch Gate",
+      "client": "TrailTrack Outdoor Labs, Inc. (fictional)",
+      "description": "The product team wants a fun September launch for a kids' hiking watch with location sharing, parent challenges, and a battery claim that marketing describes as 'weekend-proof.'",
+      "documents": [
+        "10-trailtrack-kids-watch-launch-review.docx",
+        "support-trailtrack-kids-watch-intake-and-contact-profile.docx",
+        "support-trailtrack-kids-watch-communications-and-work-plan.docx"
+      ],
+      "demo_prompt": "Turn this launch brief into a prioritized product legal checklist, with specific edits to the battery and location-sharing claims.",
+      "suggested_tasks": [
+        "Review launch claims against test evidence and product behavior",
+        "Draft parent-facing location and trial disclosures",
+        "Create retailer FAQ and launch-risk signoff checklist"
+      ],
+      "client_profile": {
+        "organization": "TrailTrack Outdoor Labs, Inc. (fictional)",
+        "address": {
+          "street": "42 Harbor Loop",
+          "city": "Wilmington",
+          "state": "DE",
+          "zip": "19801",
+          "country": "US"
+        },
+        "primary_contact": {
+          "first_name": "Jordan",
+          "last_name": "Kim",
+          "title": "Director of People",
+          "email": "jordan.kim@example.invalid",
+          "phone": "+1-555-0116"
+        },
+        "opposing_party": {
+          "organization": "Cobalt ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "contact_name": "Rowan Carter",
+          "email": "counterparty-7@example.invalid"
+        }
+      }
+    },
+    {
+      "external_key": "demo-moonbeam-trademark",
+      "primary_plugin": "ip-legal",
+      "matter_type": "trademark",
+      "jurisdiction": "United States",
+      "name": "Moonbeam Bakery - Sparkle Crumb Brand Clash",
+      "practice_area": "Intellectual Property / Trademark",
+      "status": "Open - Brand Decision",
+      "client": "Moonbeam Bakery Co. (fictional)",
+      "description": "A neighborhood bakery plans a 'Sparkle Crumb' sprinkle-kit launch, then receives a friendly but firm message from a regional cookie company using a similar name on social media.",
+      "documents": [
+        "11-moonbeam-sparkle-crumb-brand-review.docx",
+        "support-moonbeam-trademark-intake-and-contact-profile.docx",
+        "support-moonbeam-trademark-communications-and-work-plan.docx"
+      ],
+      "demo_prompt": "Create a brand-risk matrix and a practical next-step plan for the founder before the holiday packaging deadline.",
+      "suggested_tasks": [
+        "Build trademark clearance and usage evidence checklist",
+        "Inventory packaging, web, and social uses of the proposed mark",
+        "Draft non-admission response and holiday-print decision memo"
+      ],
+      "client_profile": {
+        "organization": "Moonbeam Bakery Co. (fictional)",
+        "address": {
+          "street": "77 Trailhead Avenue",
+          "city": "Columbus",
+          "state": "OH",
+          "zip": "43215",
+          "country": "US"
+        },
+        "primary_contact": {
+          "first_name": "Robin",
+          "last_name": "Flores",
+          "title": "Product Lead",
+          "email": "robin.flores@example.invalid",
+          "phone": "+1-555-0117"
+        },
+        "opposing_party": {
+          "organization": "Lantern ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "contact_name": "Hayden Carter",
+          "email": "counterparty-8@example.invalid"
+        }
+      }
+    },
+    {
+      "external_key": "demo-pearl-pixel-ai-recruiter",
+      "primary_plugin": "ai-governance-legal",
+      "matter_type": "ai governance",
+      "jurisdiction": "United States",
+      "name": "Pearl & Pixel - AI Recruiter Pilot",
+      "practice_area": "AI Governance / Vendor Review",
+      "status": "Open - Pilot Review",
+      "client": "Pearl & Pixel Design Studio, LLC (fictional)",
+      "description": "A design studio wants to use an AI tool to sort portfolio submissions before its seasonal hiring sprint, while the vendor promises that its 'bias-free' scoring is ready on day one.",
+      "documents": [
+        "12-pearl-pixel-ai-recruiter-pilot.docx",
+        "support-pearl-pixel-ai-recruiter-intake-and-contact-profile.docx",
+        "support-pearl-pixel-ai-recruiter-communications-and-work-plan.docx"
+      ],
+      "demo_prompt": "Assess this AI hiring pilot, identify the controls needed before launch, and draft a concise go/no-go recommendation.",
+      "suggested_tasks": [
+        "Create AI use-case inventory and human-oversight record",
+        "Negotiate pilot data-use and model-change controls",
+        "Draft candidate notice and recruiter training checklist"
+      ],
+      "client_profile": {
+        "organization": "Pearl & Pixel Design Studio, LLC (fictional)",
+        "address": {
+          "street": "310 Juniper Street",
+          "city": "Cleveland",
+          "state": "OH",
+          "zip": "44113",
+          "country": "US"
+        },
+        "primary_contact": {
+          "first_name": "Cameron",
+          "last_name": "Wells",
+          "title": "Privacy Program Manager",
+          "email": "cameron.wells@example.invalid",
+          "phone": "+1-555-0118"
+        },
+        "opposing_party": {
+          "organization": "Summit ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "contact_name": "Sage Carter",
+          "email": "counterparty-9@example.invalid"
+        }
+      }
+    },
+    {
+      "external_key": "demo-freshnest-supplement-label",
+      "primary_plugin": "regulatory-legal",
+      "matter_type": "regulatory",
+      "jurisdiction": "United States",
+      "name": "FreshNest - Sleepy Tea Label Refresh",
+      "practice_area": "Regulatory / Consumer Claims",
+      "status": "Open - Label Review",
+      "client": "FreshNest Pantry Brands, Inc. (fictional)",
+      "description": "A tea company wants to make its calming blend feel more magical for a grocery reset, but the draft label moves from 'bedtime ritual' toward claims that sound like treatment.",
+      "documents": [
+        "13-freshnest-sleepy-tea-label-review.docx",
+        "support-freshnest-supplement-label-intake-and-contact-profile.docx",
+        "support-freshnest-supplement-label-communications-and-work-plan.docx"
+      ],
+      "demo_prompt": "Classify the proposed claims, suggest safer alternatives, and build a ten-day approval plan for the label refresh.",
+      "suggested_tasks": [
+        "Redline label and campaign claims by support level",
+        "Create testimonial, influencer, and moderation guidance",
+        "Prepare retailer deadline plan and approval archive"
+      ],
+      "client_profile": {
+        "organization": "FreshNest Pantry Brands, Inc. (fictional)",
+        "address": {
+          "street": "18 Orchard Lane",
+          "city": "Ann Arbor",
+          "state": "MI",
+          "zip": "48104",
+          "country": "US"
+        },
+        "primary_contact": {
+          "first_name": "Drew",
+          "last_name": "Hart",
+          "title": "Finance Director",
+          "email": "drew.hart@example.invalid",
+          "phone": "+1-555-0119"
+        },
+        "opposing_party": {
+          "organization": "Crescent ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "contact_name": "Reese Carter",
+          "email": "counterparty-10@example.invalid"
+        }
+      }
+    },
+    {
+      "external_key": "demo-riverstone-parenting-plan",
+      "primary_plugin": "family-law",
+      "matter_type": "family",
+      "jurisdiction": "Ohio",
+      "name": "Riverstone - School-Year Parenting Plan",
+      "practice_area": "Family Law / Parenting Time",
+      "status": "Open - Mediation Prep",
+      "client": "Avery Riverstone (fictional)",
+      "description": "Two parents agree that their daughter loves robotics club and her rescue rabbit, but they need a workable school-year schedule before a job transfer changes the weekday routine.",
+      "documents": [
+        "14-riverstone-parenting-plan-prep.docx",
+        "support-riverstone-parenting-plan-intake-and-contact-profile.docx",
+        "support-riverstone-parenting-plan-communications-and-work-plan.docx"
+      ],
+      "demo_prompt": "Turn these facts into a neutral mediation agenda and a child-centered parenting-plan checklist without giving jurisdiction-specific legal advice.",
+      "suggested_tasks": [
+        "Build parenting-time calendar and holiday options",
+        "Prepare mediation issue list and communication protocol",
+        "Collect school, activity, travel, and expense information"
+      ],
+      "client_profile": {
+        "organization": "Avery Riverstone (fictional)",
+        "address": {
+          "street": "184 Lantern Way",
+          "city": "Chicago",
+          "state": "IL",
+          "zip": "60607",
+          "country": "US"
+        },
+        "primary_contact": {
+          "first_name": "Quinn",
+          "last_name": "Rivera",
+          "title": "Client Representative",
+          "email": "quinn.rivera@example.invalid",
+          "phone": "+1-555-0120"
+        },
+        "opposing_party": {
+          "organization": "Maple ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "contact_name": "Blake Carter",
+          "email": "counterparty-11@example.invalid"
+        }
+      }
+    },
+    {
+      "external_key": "demo-parkers-festival-citation",
+      "primary_plugin": "criminal-defense",
+      "matter_type": "criminal defense",
+      "jurisdiction": "Ohio",
+      "name": "Parker - Summer Festival Citation",
+      "practice_area": "Criminal Defense / Municipal Case",
+      "status": "Open - Initial Review",
+      "client": "Jordan Parker (fictional)",
+      "description": "A summer festival ends with a citation, a lost phone, and two different accounts of whether a barricade was visible in the crowd.",
+      "documents": [
+        "15-parker-festival-citation-case-notes.docx",
+        "support-parkers-festival-citation-intake-and-contact-profile.docx",
+        "support-parkers-festival-citation-communications-and-work-plan.docx"
+      ],
+      "demo_prompt": "Build an initial defense-case checklist that prioritizes evidence preservation, court preparation, and client communications.",
+      "suggested_tasks": [
+        "Preserve venue, phone, and witness evidence",
+        "Create citation timeline and discovery request checklist",
+        "Prepare client communication and first-appearance checklist"
+      ],
+      "client_profile": {
+        "organization": "Jordan Parker (fictional)",
+        "address": {
+          "street": "42 Harbor Loop",
+          "city": "Wilmington",
+          "state": "DE",
+          "zip": "19801",
+          "country": "US"
+        },
+        "primary_contact": {
+          "first_name": "Parker",
+          "last_name": "Reed",
+          "title": "Operations Lead",
+          "email": "parker.reed@example.invalid",
+          "phone": "+1-555-0121"
+        },
+        "opposing_party": {
+          "organization": "Cobalt ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "contact_name": "Rowan Carter",
+          "email": "counterparty-12@example.invalid"
+        }
+      }
+    },
+    {
+      "external_key": "demo-lakeside-bakery-lease",
+      "primary_plugin": "real-estate",
+      "matter_type": "real estate",
+      "jurisdiction": "Michigan",
+      "name": "Lakeside Bakery - First Brick-and-Mortar Lease",
+      "practice_area": "Real Estate / Commercial Lease",
+      "status": "Open - Lease Negotiation",
+      "client": "Lakeside Bakery, LLC (fictional)",
+      "description": "A bakery with a devoted pop-up following has found a sunny corner storefront, but the proposed lease makes the tenant responsible for more than flour, frosting, and a cheerful opening day.",
+      "documents": [
+        "16-lakeside-bakery-lease-review.docx",
+        "support-lakeside-bakery-lease-intake-and-contact-profile.docx",
+        "support-lakeside-bakery-lease-communications-and-work-plan.docx"
+      ],
+      "demo_prompt": "Review this first-store lease scenario, identify the top negotiation points, and create a practical due-diligence checklist.",
+      "suggested_tasks": [
+        "Create lease redline matrix and build-out contingency list",
+        "Request exclusivity, zoning, and utility documentation",
+        "Prepare opening-date and guaranty negotiation checklist"
+      ],
+      "client_profile": {
+        "organization": "Lakeside Bakery, LLC (fictional)",
+        "address": {
+          "street": "77 Trailhead Avenue",
+          "city": "Columbus",
+          "state": "OH",
+          "zip": "43215",
+          "country": "US"
+        },
+        "primary_contact": {
+          "first_name": "Emerson",
+          "last_name": "Lane",
+          "title": "Managing Member",
+          "email": "emerson.lane@example.invalid",
+          "phone": "+1-555-0122"
+        },
+        "opposing_party": {
+          "organization": "Lantern ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "contact_name": "Hayden Carter",
+          "email": "counterparty-13@example.invalid"
+        }
+      }
+    },
+    {
+      "external_key": "demo-marigold-estate",
+      "primary_plugin": "trust-estate-legal",
+      "matter_type": "estate",
+      "jurisdiction": "Ohio",
+      "name": "Marigold Estate - Garden Shop Transition",
+      "practice_area": "Trusts & Estates / Probate Planning",
+      "status": "Open - Administration Planning",
+      "client": "Marigold Estate Representative (fictional)",
+      "description": "A beloved garden-shop owner left a handwritten note, a small greenhouse business, and three adult children who all agree the shop should survive but disagree about who should run it.",
+      "documents": [
+        "17-marigold-estate-administration-plan.docx",
+        "support-marigold-estate-intake-and-contact-profile.docx",
+        "support-marigold-estate-communications-and-work-plan.docx"
+      ],
+      "demo_prompt": "Organize this estate-and-business transition into immediate, near-term, and long-term decisions while flagging questions for local probate counsel.",
+      "suggested_tasks": [
+        "Inventory estate and garden-shop records",
+        "Create 30-day business-continuity checklist",
+        "Prepare beneficiary communication and decision calendar"
+      ],
+      "client_profile": {
+        "organization": "Marigold Estate Representative (fictional)",
+        "address": {
+          "street": "310 Juniper Street",
+          "city": "Cleveland",
+          "state": "OH",
+          "zip": "44113",
+          "country": "US"
+        },
+        "primary_contact": {
+          "first_name": "Skyler",
+          "last_name": "Bennett",
+          "title": "Program Director",
+          "email": "skyler.bennett@example.invalid",
+          "phone": "+1-555-0123"
+        },
+        "opposing_party": {
+          "organization": "Summit ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "contact_name": "Sage Carter",
+          "email": "counterparty-14@example.invalid"
+        }
+      }
+    },
+    {
+      "external_key": "demo-neighborly-fence-mediation",
+      "primary_plugin": "mediation-legal",
+      "matter_type": "mediation",
+      "jurisdiction": "Ohio",
+      "name": "Neighborly Fence - Garden and Dog-Run Mediation",
+      "practice_area": "Mediation / Property Dispute",
+      "status": "Open - Session Preparation",
+      "client": "Neighborly Mediation File (fictional)",
+      "description": "A charming community garden, an energetic rescue dog, and six inches of fence line have turned two friendly neighbors into people who no longer wave across the driveway.",
+      "documents": [
+        "18-neighborly-fence-mediation-brief.docx",
+        "support-neighborly-fence-mediation-intake-and-contact-profile.docx",
+        "support-neighborly-fence-mediation-communications-and-work-plan.docx"
+      ],
+      "demo_prompt": "Prepare a constructive mediation agenda, identify the information gaps, and outline settlement terms that let both neighbors enjoy their yards again.",
+      "suggested_tasks": [
+        "Prepare neutral chronology and document exchange list",
+        "Draft mediation agenda, caucus questions, and settlement options",
+        "Create written-agreement checklist for work scope and access"
+      ],
+      "client_profile": {
+        "organization": "Neighborly Mediation File (fictional)",
+        "address": {
+          "street": "18 Orchard Lane",
+          "city": "Ann Arbor",
+          "state": "MI",
+          "zip": "48104",
+          "country": "US"
+        },
+        "primary_contact": {
+          "first_name": "Alex",
+          "last_name": "Monroe",
+          "title": "Business Manager",
+          "email": "alex.monroe@example.invalid",
+          "phone": "+1-555-0124"
+        },
+        "opposing_party": {
+          "organization": "Crescent ['Holdings', 'Partners', 'Services', 'Group', 'Counsel'] (fictional)",
+          "contact_name": "Reese Carter",
+          "email": "counterparty-15@example.invalid"
+        }
       }
     }
   ]
