@@ -102,7 +102,7 @@ test.describe('/demo customer entry', () => {
     await page.getByLabel('Demo access code').fill('valid-demo-code')
     await submit.click()
     await expect(page).toHaveURL(/\/matters$/)
-    const demoStatus = page.getByRole('status')
+    const demoStatus = page.getByRole('status', { name: 'Demo session status' })
     await expect(demoStatus).toContainText('Demo session — 2 of 20 AI operations used')
     await expect(demoStatus).toContainText('Premium AI and live integrations are disabled')
   })
