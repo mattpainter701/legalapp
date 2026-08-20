@@ -11,7 +11,7 @@ const user = {
     session_id: 'demo-session-1',
     used: 2,
     quota: 20,
-    expires_at: '2099-01-01T00:00:00Z',
+    expires_at: new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString(),
   },
 }
 
