@@ -102,6 +102,10 @@ EMAIL_PORT=587
 EMAIL_FROM=matt@cybersafeadvisor.com
 APP_COMMIT=$PROJECT
 APP_VERSION=fresh-host
+# The disposable GitHub runner proves boot and behavior, not production
+# capacity. One API worker keeps the base-prod topology inside the runner's
+# memory ceiling while all services and acceptance assertions remain enabled.
+BACKEND_WORKERS=1
 ENV
 
 # This is a schema-valid synthetic artifact solely to exercise the read-only

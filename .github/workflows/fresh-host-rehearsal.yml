@@ -16,15 +16,6 @@ jobs:
         topology: [hypervisor, base-prod]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - name: Add ephemeral swap for the base production image build
-        if: matrix.topology == 'base-prod'
-        run: |
-          swap_file="$RUNNER_TEMP/lawhand-fresh-host.swap"
-          sudo fallocate -l 4G "$swap_file"
-          sudo chmod 600 "$swap_file"
-          sudo mkswap "$swap_file"
-          sudo swapon "$swap_file"
-          free -h
       - name: Build and prove a clean isolated deployment
         env:
           FRESH_HOST_TOPOLOGY: ${{ matrix.topology }}
