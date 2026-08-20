@@ -49,6 +49,12 @@ def test_demo_manifest_covers_every_shipped_practice_module_with_rich_sources():
         and matter["client_profile"]["primary_contact"]["email"].endswith(".invalid")
         for matter in matters
     )
+    assert all(
+        matter["client_profile"]["opposing_party"]["organization"].endswith(" (fictional)")
+        and "[" not in matter["client_profile"]["opposing_party"]["organization"]
+        and "]" not in matter["client_profile"]["opposing_party"]["organization"]
+        for matter in matters
+    )
     documents = [name for matter in manifest["matters"] for name in matter["documents"]]
     assert len(documents) >= len(matters) * 3
     assert len(set(documents)) == len(documents)
@@ -90,3 +96,19 @@ def test_demo_documents_are_labeled_structured_and_metadata_scrubbed():
             for name in package.namelist():
                 if name.startswith("word/") and name.endswith(".xml"):
                     assert b"w:rsid" not in package.read(name)
+
+
+def test_demo_support_intake_documents_match_manifest_party_links():
+    manifest = json.loads((PACK / "manifest.json").read_text(encoding="utf-8"))
+
+    for matter in manifest["matters"]:
+        intake = next(
+            PACK / filename
+            for filename in matter["documents"]
+            if filename.startswith("support-") and filename.endswith("-intake-and-contact-profile.docx")
+        )
+        text = "\n".join(paragraph.text for paragraph in Document(intake).paragraphs)
+        opposing = matter["client_profile"]["opposing_party"]
+        assert matter["client"] in text
+        assert opposing["organization"] in text
+        assert opposing["email"] in text

@@ -110,7 +110,7 @@ def _client_profile(index: int, scenario: dict) -> dict:
             "email": f"{local}@example.invalid", "phone": f"+1-555-01{index + 10:02d}",
         },
         "opposing_party": {
-            "organization": f"{['Maple', 'Cobalt', 'Lantern', 'Summit', 'Crescent'][index % 5]} {['Holdings', 'Partners', 'Services', 'Group', 'Counsel']} (fictional)",
+            "organization": f"{['Maple', 'Cobalt', 'Lantern', 'Summit', 'Crescent'][index % 5]} {['Holdings', 'Partners', 'Services', 'Group', 'Counsel'][index % 5]} (fictional)",
             "contact_name": f"{['Blake', 'Rowan', 'Hayden', 'Sage', 'Reese'][index % 5]} Carter",
             "email": f"counterparty-{index + 1}@example.invalid",
         },
