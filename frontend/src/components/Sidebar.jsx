@@ -23,7 +23,7 @@ const NAV_GROUPS = [
       { path: '/time-tracking',  label: 'Time Tracking',  icon: Clock, module: 'time-tracking' },
       { path: '/tasks',          label: 'Tasks',          icon: CheckSquare, module: 'tasks' },
       { path: '/communications', label: 'Communications', icon: Mail, module: 'communications' },
-      { path: '/contacts',       label: 'Contacts',       icon: Users, module: 'contacts' },
+      { path: '/clients',        label: 'Clients & CRM',  icon: Users, module: 'contacts' },
       { path: '/intake/dashboard', label: 'Call Intake',   icon: PhoneCall, module: 'intake-dashboard' },
       { path: '/intake',         label: 'Intake',         icon: ClipboardList, module: 'intake' },
       { path: '/templates',      label: 'Document Automation', icon: FileSignature, module: 'templates' },

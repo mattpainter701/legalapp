@@ -23,6 +23,7 @@ GENERAL_MODULES = [
     "calendar",
     "tasks",
     "communications",
+    "contacts",
     "intake",
     "intake-dashboard",
     "time-tracking",
