@@ -19,37 +19,150 @@ from app.services.task_automation import (
 from .test_task_automation import _approved_email_task, _matter
 
 
-@pytest.mark.parametrize(
-    ("method", "path"),
-    [
-        ("POST", "/api/calendar/sync"),
-        ("POST", "/api/calendar/scheduled-events"),
-        ("PATCH", "/api/calendar/scheduled-events/123"),
-        ("DELETE", "/api/calendar/scheduled-events/123"),
-        ("POST", "/api/email-agent/calendar"),
-        ("POST", "/api/email-agent/scan"),
-        ("POST", "/api/email-agent/draft-response"),
-        ("POST", "/api/matters/123/email-client"),
-        ("POST", "/api/matters/123/cloud-folder/sync"),
-        ("POST", "/api/plugins/mediation/cases/123/assets/456/send"),
-        ("POST", "/api/matters/123/signatures/456/send"),
-        ("POST", "/api/mcp/product-keys"),
-        ("POST", "/api/integrations/zoom/disconnect"),
-        ("POST", "/api/intake/dashboard/zoom-phone/sync"),
-        ("POST", "/scheduler/agents/user-sync/run"),
-        ("POST", "/api/billing/checkout-session"),
-        ("POST", "/api/billing/portal"),
-        ("POST", "/api/billing/invoices/123/payment-link"),
-        ("POST", "/api/clients/123/sync/quickbooks"),
-        ("POST", "/api/admin/users/invite"),
-        ("POST", "/api/matters/123/portal/invite"),
-        ("POST", "/api/tasks/123/remind"),
-        ("POST", "/api/auth/forgot-password"),
-        ("POST", "/api/plugins/mediation/cases/123/parties/456/invite"),
-    ],
-)
-def test_demo_outbound_routes_are_blocked(method, path):
+# Each row is (method, registered route template, concrete request path). The
+# template is asserted against the live route table so a guard prefix can never
+# silently drift away from the router that actually mounts the endpoint.
+BLOCKED_DEMO_ROUTES = [
+    ("POST", "/api/calendar/sync", "/api/calendar/sync"),
+    ("POST", "/api/calendar/scheduled-events", "/api/calendar/scheduled-events"),
+    (
+        "PATCH",
+        "/api/calendar/scheduled-events/{event_id}",
+        "/api/calendar/scheduled-events/123",
+    ),
+    (
+        "DELETE",
+        "/api/calendar/scheduled-events/{event_id}",
+        "/api/calendar/scheduled-events/123",
+    ),
+    ("POST", "/api/email/calendar", "/api/email/calendar"),
+    ("POST", "/api/email/scan", "/api/email/scan"),
+    ("POST", "/api/email/draft-response", "/api/email/draft-response"),
+    ("POST", "/api/matters/{matter_id}/email-client", "/api/matters/123/email-client"),
+    (
+        "POST",
+        "/api/matters/{matter_id}/cloud-folder/sync",
+        "/api/matters/123/cloud-folder/sync",
+    ),
+    (
+        "POST",
+        "/api/plugins/mediation/cases/{case_id}/assets/{asset_id}/send",
+        "/api/plugins/mediation/cases/123/assets/456/send",
+    ),
+    (
+        "POST",
+        "/api/matters/{matter_id}/signatures/{request_id}/send",
+        "/api/matters/123/signatures/456/send",
+    ),
+    ("POST", "/api/mcp/product-keys", "/api/mcp/product-keys"),
+    ("POST", "/api/integrations/zoom/disconnect", "/api/integrations/zoom/disconnect"),
+    (
+        "POST",
+        "/api/intake/dashboard/zoom-phone/sync",
+        "/api/intake/dashboard/zoom-phone/sync",
+    ),
+    (
+        "POST",
+        "/api/scheduler/agents/{agent_name}/run",
+        "/api/scheduler/agents/user-sync/run",
+    ),
+    ("POST", "/api/billing/checkout-session", "/api/billing/checkout-session"),
+    ("POST", "/api/billing/portal", "/api/billing/portal"),
+    (
+        "POST",
+        "/api/billing/invoices/{invoice_id}/payment-link",
+        "/api/billing/invoices/123/payment-link",
+    ),
+    ("POST", "/api/admin/users/invite", "/api/admin/users/invite"),
+    (
+        "POST",
+        "/api/matters/{matter_id}/portal/invite",
+        "/api/matters/123/portal/invite",
+    ),
+    ("POST", "/api/tasks/{task_id}/remind", "/api/tasks/123/remind"),
+    ("POST", "/api/auth/forgot-password", "/api/auth/forgot-password"),
+    (
+        "POST",
+        "/api/plugins/mediation/cases/{case_id}/parties/{party_id}/invite",
+        "/api/plugins/mediation/cases/123/parties/456/invite",
+    ),
+]
+
+DEMO_OAUTH_PROVIDERS = ("microsoft", "google", "zoom", "zoom-phone", "qbo")
+DEMO_OAUTH_PHASES = ("connect", "callback")
+DEMO_PROVIDER_GET_ROUTES = ("/api/integrations/qbo/items",)
+
+
+@pytest.mark.parametrize(("method", "template", "path"), BLOCKED_DEMO_ROUTES)
+def test_demo_outbound_routes_are_blocked(method, template, path):
     assert _is_blocked_demo_action(path, method)
+
+
+@pytest.mark.parametrize("provider", DEMO_OAUTH_PROVIDERS)
+@pytest.mark.parametrize("phase", DEMO_OAUTH_PHASES)
+def test_demo_integration_oauth_routes_are_blocked(provider, phase):
+    path = f"/api/integrations/{provider}/{phase}"
+    assert _is_blocked_demo_action(path, "GET")
+
+
+@pytest.mark.parametrize("path", DEMO_PROVIDER_GET_ROUTES)
+def test_demo_provider_bound_get_routes_are_blocked(path):
+    assert _is_blocked_demo_action(path, "GET")
+
+
+def _registered_routes(routes, prefix: str = ""):
+    """Flatten the app route table, including lazily included sub-routers."""
+    for route in routes:
+        included = getattr(route, "original_router", None)
+        if included is not None:
+            context = getattr(route, "include_context", None)
+            child_prefix = prefix + (getattr(context, "prefix", "") or "")
+            yield from _registered_routes(included.routes, child_prefix)
+            continue
+        path = getattr(route, "path", None)
+        methods = getattr(route, "methods", None)
+        if path and methods:
+            for verb in methods:
+                yield (prefix + path, verb)
+
+
+@pytest.mark.parametrize(("method", "template", "path"), BLOCKED_DEMO_ROUTES)
+def test_demo_outbound_guard_targets_registered_routes(method, template, path):
+    """A guarded path that no router serves is a fail-open guard, not a guard.
+
+    The guard matches raw request paths, so a prefix that drifts from the
+    router mounting the endpoint (for example ``/api/email-agent`` when the
+    router is mounted at ``/api/email``) silently stops blocking anything.
+    """
+    from app.main import app
+
+    assert (template, method) in set(_registered_routes(app.routes))
+
+
+def test_demo_oauth_guard_covers_every_registered_integration_oauth_route():
+    from app.main import app
+
+    registered = {
+        (path, method)
+        for path, method in _registered_routes(app.routes)
+        if path.startswith("/api/integrations/")
+        and method == "GET"
+        and path.rsplit("/", 1)[-1] in DEMO_OAUTH_PHASES
+    }
+    expected = {
+        (f"/api/integrations/{provider}/{phase}", "GET")
+        for provider in DEMO_OAUTH_PROVIDERS
+        for phase in DEMO_OAUTH_PHASES
+    }
+    assert registered == expected
+
+
+def test_demo_provider_get_guard_targets_registered_routes():
+    from app.main import app
+
+    registered = set(_registered_routes(app.routes))
+    for path in DEMO_PROVIDER_GET_ROUTES:
+        assert (path, "GET") in registered
 
 
 @pytest.mark.parametrize(
@@ -60,6 +173,12 @@ def test_demo_outbound_routes_are_blocked(method, path):
         "/api/matters",
         "/api/calendar/events",
         "/api/plugins/mediation/cases/123/assets/456/approve",
+        "/api/clients",
+        "/api/clients/import.csv",
+        # Served by the router's demo branch, which returns an audited,
+        # ephemeral simulation without calling QuickBooks. See
+        # test_demo_client_quickbooks_sync_is_simulated_without_provider_calls.
+        "/api/clients/123/sync/quickbooks",
     ],
 )
 def test_demo_synthetic_review_routes_remain_available(path):
@@ -74,7 +193,7 @@ def test_demo_synthetic_review_routes_remain_available(path):
         "/api/mcp/tools",
         "/api/mcp/product-keys",
         "/api/integrations/zoom/status",
-        "/api/email-agent/scan",
+        "/api/email/scan",
         "/api/billing/status",
         "/api/billing/invoices/123/export",
     ],

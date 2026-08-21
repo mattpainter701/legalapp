@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from app.models.contact import Contact
+from app.models.operator_audit import OperatorAuditLog
 from app.models.tenant import Tenant
 
 
@@ -217,3 +218,85 @@ async def test_client_external_ids_require_finance_access(
         },
     )
     assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_demo_client_quickbooks_sync_is_simulated_without_provider_calls(
+    client, db_session, test_tenant, test_user, monkeypatch
+):
+    """A demo sync is explicit, audited, and never becomes a provider mapping.
+
+    Demo tenants never receive QuickBooks credentials — qbo_integrations is
+    purge-only and is never cloned into a disposable workspace — so the live
+    provider path is deliberately unreachable in this test.
+    """
+    from app.routers import qbo
+    from app.routers.auth import _create_access_token
+
+    def _fail(*args, **kwargs):
+        raise AssertionError("demo workspace attempted a QuickBooks provider call")
+
+    monkeypatch.setattr(qbo, "_get_fresh_qbo_token", _fail)
+    monkeypatch.setattr(qbo, "_get_qbo_integration", _fail)
+
+    created = await client.post(
+        "/api/clients",
+        json={"first_name": "Sky", "last_name": "Nolan", "email": "sky@example.com"},
+    )
+    assert created.status_code == 201, created.text
+    client_id = created.json()["id"]
+
+    test_tenant.billing_tier = "demo"
+    await db_session.commit()
+    demo_token = _create_access_token(test_user, test_tenant, "demo", [])
+    client.headers["Authorization"] = f"Bearer {demo_token}"
+
+    response = await client.post(
+        f"/api/clients/{client_id}/sync/quickbooks",
+        headers={"x-idempotency-key": "demo-qbo-sync-1"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "demo_simulated"
+    assert body["is_simulated"] is True
+    assert body["qbo_customer_id"] == f"DEMO-{uuid.UUID(client_id).hex.upper()}"
+    assert "QuickBooks was not contacted" in body["detail"]
+    assert body["synced_at"]
+
+    detail = await client.get(f"/api/clients/{client_id}")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["qbo_customer_id"] is None
+    assert detail.json()["qbo_synced_at"] is None
+
+    audit = await db_session.scalar(
+        select(OperatorAuditLog).where(
+            OperatorAuditLog.action == "client.quickbooks_sync_simulated",
+            OperatorAuditLog.resource_id == client_id,
+        )
+    )
+    assert audit is not None
+    assert audit.metadata_json["operation_id"] == "demo-qbo-sync-1"
+    assert audit.metadata_json["provider_contacted"] is False
+
+
+@pytest.mark.asyncio
+async def test_non_demo_client_quickbooks_sync_still_requires_a_connection(
+    client, db_session, test_tenant
+):
+    """The demo branch must not soften the real path for a paying tenant."""
+    created = await client.post(
+        "/api/clients",
+        json={"first_name": "Robin", "last_name": "Vale", "email": "robin@example.com"},
+    )
+    assert created.status_code == 201, created.text
+    client_id = created.json()["id"]
+
+    assert test_tenant.billing_tier != "demo"
+    response = await client.post(f"/api/clients/{client_id}/sync/quickbooks")
+    assert response.status_code == 400
+    assert response.json()["detail"] == "QuickBooks is not connected"
+
+    stored = await db_session.scalar(
+        select(Contact.qbo_customer_id).where(Contact.id == uuid.UUID(client_id))
+    )
+    assert stored is None

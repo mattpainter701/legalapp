@@ -5,11 +5,12 @@ from __future__ import annotations
 import shutil
 import uuid
 from collections import defaultdict, deque
-from datetime import datetime, timezone
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import delete, func, select, update
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import delete, func, select, text, update
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 # Register every tenant-scoped table before deriving the purge plan.  The
 # scheduler imports this module without necessarily loading every router, so
@@ -25,9 +26,57 @@ from app.services.demo_registry import DEMO_TABLE_REGISTRY
 
 _DEMO_DOMAIN_SUFFIX = ".demo.invalid"
 
+# A worker that dies between claiming a session and reaching a terminal state
+# leaves the row in "purging".  Without a reclaim window the hourly job would
+# refuse that tenant forever and its synthetic data would outlive its expiry.
+# The purge itself is idempotent, so a later run may re-claim a stale claim.
+#
+# The window is measured from ``purge_started_at`` — the moment the claim was
+# committed — and never from tenant expiry.  A tenant that expired long before
+# its first purge attempt (a missed run, a deploy, a restart) would otherwise
+# satisfy an expiry-based window the instant a live worker claimed it, so a
+# second worker could enter file and row deletion concurrently.
+_PURGE_RECLAIM_AFTER = timedelta(hours=1)
+
 
 class DemoPurgeRefused(RuntimeError):
     pass
+
+
+def _tenant_purge_lock_name(tenant_id: uuid.UUID) -> str:
+    return f"lawhand:demo-purge:v1:{tenant_id}"
+
+
+@asynccontextmanager
+async def _tenant_purge_lock(db: AsyncSession, tenant_id: uuid.UUID):
+    """Fence every destructive phase with one crash-safe database lock.
+
+    The row claim is committed before filesystem and table deletion so a dead
+    worker leaves recoverable state. A row lock cannot span that commit, and a
+    timestamp is not an ownership token: a slow worker could otherwise overlap
+    a reclaimer once the stale window elapsed. The transaction-scoped advisory
+    lock stays pinned on a dedicated connection for the whole purge and is
+    released automatically if the transaction, connection, or worker dies.
+    """
+    bind = db.bind
+    if bind is None:
+        raise RuntimeError("Demo purge database session is not bound to an engine")
+    lock_engine = bind.engine if isinstance(bind, AsyncConnection) else bind
+    connection = await lock_engine.connect()
+    try:
+        async with connection.begin():
+            acquired = await connection.scalar(
+                text(
+                    "SELECT pg_try_advisory_xact_lock("
+                    "hashtextextended(:lock_name, 0))"
+                ),
+                {"lock_name": _tenant_purge_lock_name(tenant_id)},
+            )
+            if acquired is not True:
+                raise DemoPurgeRefused("Demo session is already being purged")
+            yield
+    finally:
+        await connection.close()
 
 
 def _purge_tables():
@@ -71,6 +120,19 @@ def _delete_order(tables) -> list[str]:
     return ordered
 
 
+def _claim_started_at(demo: DemoSession) -> datetime | None:
+    """The claim timestamp, always tz-aware so it can be compared to ``now``.
+
+    ``purge_started_at`` is a ``timestamptz`` and asyncpg hands back aware
+    values, but a naive one would raise TypeError on the comparison below and
+    take down the purge rather than merely misjudging staleness.
+    """
+    claimed_at = demo.purge_started_at
+    if claimed_at is not None and claimed_at.tzinfo is None:
+        return claimed_at.replace(tzinfo=timezone.utc)
+    return claimed_at
+
+
 def _remove_tenant_files(tenant_id: uuid.UUID) -> None:
     upload_root = Path(get_settings().UPLOAD_DIR).resolve()
     target = (upload_root / str(tenant_id)).resolve()
@@ -80,7 +142,9 @@ def _remove_tenant_files(tenant_id: uuid.UUID) -> None:
         shutil.rmtree(target)
 
 
-async def purge_demo_tenant(db: AsyncSession, tenant_id: uuid.UUID) -> dict[str, int]:
+async def _purge_demo_tenant_locked(
+    db: AsyncSession, tenant_id: uuid.UUID
+) -> dict[str, int]:
     now = datetime.now(timezone.utc)
     tenant = await db.get(Tenant, tenant_id)
     if (
@@ -101,17 +165,27 @@ async def purge_demo_tenant(db: AsyncSession, tenant_id: uuid.UUID) -> dict[str,
     )
     if demo is None or demo.fixture_tenant_id == tenant_id:
         raise DemoPurgeRefused("Demo session provenance check failed")
-    if demo.status not in {"active", "expired", "failed"}:
+    claimed_at = _claim_started_at(demo)
+    # A claim with no recorded start is never reclaimed: refusing strands one
+    # tenant, while guessing risks two workers deleting the same rows and files.
+    reclaimable = (
+        demo.status == "purging"
+        and claimed_at is not None
+        and claimed_at <= now - _PURGE_RECLAIM_AFTER
+    )
+    if demo.status not in {"active", "expired", "failed"} and not reclaimable:
         raise DemoPurgeRefused("Demo session is already being purged")
     fixture_version = demo.fixture_version
     session_id = demo.id
     tenant.is_active = False
     demo.status = "purging"
+    # Re-stamped on a reclaim too, so the next worker measures its own window.
+    demo.purge_started_at = now
     await db.commit()
 
-    _remove_tenant_files(tenant_id)
-    tables = _purge_tables()
     try:
+        _remove_tenant_files(tenant_id)
+        tables = _purge_tables()
         await set_tenant_context(db, str(tenant_id))
         # Break optional cycles (invoice/retainer and self-references) first.
         for table in tables.values():
@@ -185,6 +259,12 @@ async def purge_demo_tenant(db: AsyncSession, tenant_id: uuid.UUID) -> dict[str,
         )
         await db.commit()
         raise
+
+
+async def purge_demo_tenant(db: AsyncSession, tenant_id: uuid.UUID) -> dict[str, int]:
+    """Purge one tenant while holding a cluster-wide, crash-safe fence."""
+    async with _tenant_purge_lock(db, tenant_id):
+        return await _purge_demo_tenant_locked(db, tenant_id)
 
 
 async def purge_expired_demo_tenants() -> int:

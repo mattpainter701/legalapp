@@ -24,6 +24,21 @@ settings = get_settings()
 
 
 _DEMO_MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_DEMO_PROVIDER_GET_ROUTES = frozenset(
+    {
+        "/api/integrations/microsoft/connect",
+        "/api/integrations/microsoft/callback",
+        "/api/integrations/google/connect",
+        "/api/integrations/qbo/connect",
+        "/api/integrations/qbo/callback",
+        "/api/integrations/qbo/items",
+        "/api/integrations/google/callback",
+        "/api/integrations/zoom/connect",
+        "/api/integrations/zoom/callback",
+        "/api/integrations/zoom-phone/connect",
+        "/api/integrations/zoom-phone/callback",
+    }
+)
 
 
 def _is_blocked_demo_action(path: str, method: str) -> bool:
@@ -38,6 +53,11 @@ def _is_blocked_demo_action(path: str, method: str) -> bool:
         # OAuth connect/callback routes are provider-bound even when they use
         # GET; status/profile reads are deliberately outside these prefixes.
         return True
+    if method == "GET" and path in _DEMO_PROVIDER_GET_ROUTES:
+        # These endpoints redirect to, exchange credentials with, or fetch
+        # records from an external provider. They are distinct from read-only
+        # integration status endpoints.
+        return True
     if (
         path.startswith(
             (
@@ -48,7 +68,9 @@ def _is_blocked_demo_action(path: str, method: str) -> bool:
                 "/api/admin/sharepoint",
                 "/api/admin/smb",
                 "/api/mcp",
-                "/api/email-agent",
+                # The email agent router is mounted at /api/email; it reads the
+                # connected mailbox and reuses the calendar sync entrypoint.
+                "/api/email/",
                 "/api/calendar/sync",
                 "/api/calendar/scheduled-events",
                 "/api/billing/checkout-session",
@@ -61,12 +83,6 @@ def _is_blocked_demo_action(path: str, method: str) -> bool:
     if (
         path.endswith("/email-client") or path.endswith("/cloud-folder/sync")
     ) and method in _DEMO_MUTATING_METHODS:
-        return True
-    if (
-        path.startswith("/api/clients/")
-        and path.endswith("/sync/quickbooks")
-        and method in _DEMO_MUTATING_METHODS
-    ):
         return True
     if (
         method in _DEMO_MUTATING_METHODS
@@ -86,7 +102,8 @@ def _is_blocked_demo_action(path: str, method: str) -> bool:
     if method in _DEMO_MUTATING_METHODS and path.startswith(
         (
             "/api/intake/dashboard/zoom-phone/sync",
-            "/scheduler/agents/",
+            # The scheduler router is mounted under the /api prefix.
+            "/api/scheduler/agents/",
         )
     ):
         return True

@@ -92,6 +92,12 @@ class TenantMiddleware(BaseHTTPMiddleware):
             tenant_id: str = payload.get("tenant_id")
             user_id: str = payload.get("sub")
 
+            # Keep signed entitlement claims available to handlers making
+            # provider-side safety decisions. They must still be compared
+            # with authoritative database state before any side effect.
+            request.state.signed_plan = payload.get("plan")
+            request.state.signed_billing_tier = payload.get("billing_tier")
+
             if tenant_id:
                 request.state.tenant_id = tenant_id
             if user_id:
@@ -141,6 +147,8 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
                     )
             user_id = payload.get("sub")
             tenant_id = payload.get("tenant_id")
+            request.state.signed_plan = payload.get("plan")
+            request.state.signed_billing_tier = payload.get("billing_tier")
         except JWTError:
             raise HTTPException(status_code=401, detail="Invalid token")
 

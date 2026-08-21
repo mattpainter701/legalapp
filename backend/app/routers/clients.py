@@ -7,7 +7,16 @@ import io
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import Response
 from pydantic import ValidationError
 from sqlalchemy import func, or_, select
@@ -18,6 +27,7 @@ from app.middleware.tenant import get_current_user, require_admin
 from app.models.contact import Contact
 from app.models.matter_party import MatterParty
 from app.models.plugin import Matter
+from app.models.tenant import Tenant
 from app.schemas.client import (
     ClientCreate,
     ClientImportError,
@@ -29,6 +39,7 @@ from app.schemas.client import (
     ClientSummaryResponse,
     ClientUpdate,
 )
+from app.services.operator_audit import record_operator_audit
 
 router = APIRouter(prefix="/api/clients", tags=["clients", "crm"])
 
@@ -76,6 +87,15 @@ CSV_FIELDS = (
     "internal_notes",
     "tags",
 )
+
+
+def _demo_qbo_customer_id(client_id: uuid.UUID) -> str:
+    """Return an ephemeral, obviously synthetic demo-operation identifier.
+
+    It is returned to the caller and audit log, never persisted as a provider
+    mapping on the canonical client record.
+    """
+    return f"DEMO-{client_id.hex.upper()}"
 
 
 def _client_response(contact: Contact) -> ClientResponse:
@@ -465,15 +485,103 @@ async def import_clients_csv(
 @router.post("/{client_id}/sync/quickbooks", response_model=ClientQBOSyncResponse)
 async def sync_client_quickbooks(
     client_id: uuid.UUID,
+    request: Request,
     admin=Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Create or update the client Customer in the tenant's connected QBO company."""
+    """Sync a live QBO customer or return an audited, ephemeral demo simulation."""
+    await set_tenant_context(db, str(admin.tenant_id))
+    billing_tier = await db.scalar(
+        select(Tenant.billing_tier).where(Tenant.id == admin.tenant_id)
+    )
+    tenant_is_demo = billing_tier == "demo"
+    claim_values = [
+        value == "demo"
+        for value in (
+            getattr(request.state, "signed_plan", None),
+            getattr(request.state, "signed_billing_tier", None),
+        )
+        if value is not None
+    ]
+    signed_demo = (
+        claim_values[0]
+        if claim_values and all(value == claim_values[0] for value in claim_values[1:])
+        else None
+    )
+    operation_id = str(
+        request.headers.get("x-idempotency-key")
+        or getattr(request.state, "request_id", None)
+        or uuid.uuid4()
+    )[:200]
+    if signed_demo is None or signed_demo != tenant_is_demo:
+        await record_operator_audit(
+            db,
+            request,
+            action="client.quickbooks_sync_denied",
+            resource_type="client",
+            resource_id=str(client_id),
+            actor_type="user",
+            actor_id=str(admin.id),
+            metadata={
+                "tenant_id": str(admin.tenant_id),
+                "operation_id": operation_id,
+                "signed_plan": getattr(request.state, "signed_plan", None),
+                "signed_billing_tier": getattr(
+                    request.state, "signed_billing_tier", None
+                ),
+                "database_billing_tier": billing_tier,
+                "reason": "signed_claim_mismatch",
+            },
+        )
+        await db.commit()
+        raise HTTPException(
+            status_code=403,
+            detail=("Workspace access changed; sign in again before using QuickBooks"),
+        )
+
+    contact = await _load_client(db, admin.tenant_id, client_id)
+
+    if tenant_is_demo:
+        # Simulate the operation without creating a provider-looking mapping.
+        # The audit record is durable; canonical QuickBooks fields remain the
+        # sole evidence of a real provider-backed synchronization.
+        simulated_id = _demo_qbo_customer_id(contact.id)
+        simulated_at = datetime.now(timezone.utc)
+        await record_operator_audit(
+            db,
+            request,
+            action="client.quickbooks_sync_simulated",
+            resource_type="client",
+            resource_id=str(contact.id),
+            actor_type="user",
+            actor_id=str(admin.id),
+            metadata={
+                "tenant_id": str(admin.tenant_id),
+                "operation_id": operation_id,
+                "provider": "quickbooks",
+                "provider_contacted": False,
+                "is_simulated": True,
+                "simulated_customer_id": simulated_id,
+                "prior_qbo_customer_id": contact.qbo_customer_id,
+                "canonical_mapping_changed": False,
+            },
+        )
+        await db.commit()
+        return ClientQBOSyncResponse(
+            status="demo_simulated",
+            client_id=contact.id,
+            qbo_customer_id=simulated_id,
+            synced_at=simulated_at,
+            is_simulated=True,
+            detail=(
+                f"Simulated QuickBooks sync as customer {simulated_id}. "
+                "No client mapping was changed and QuickBooks was not contacted."
+            ),
+        )
+
     from app.routers.qbo import _get_fresh_qbo_token, _get_qbo_integration
     from app.services.qbo_sync import QBOSyncService
 
-    await set_tenant_context(db, str(admin.tenant_id))
-    contact = await _load_client(db, admin.tenant_id, client_id)
     access_token = await _get_fresh_qbo_token(db, str(admin.tenant_id))
     integration = await _get_qbo_integration(db, str(admin.tenant_id))
     if not access_token or not integration or not integration.qbo_realm_id:

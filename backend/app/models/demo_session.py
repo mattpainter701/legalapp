@@ -77,6 +77,13 @@ class DemoSession(Base):
     purged_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # When a purge worker claimed this session.  Staleness has to be measured
+    # from the claim, not from tenant expiry: a tenant that expired long before
+    # its first purge attempt would otherwise look reclaimable the moment a
+    # live worker claimed it.
+    purge_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class DemoUsageReservation(Base):
