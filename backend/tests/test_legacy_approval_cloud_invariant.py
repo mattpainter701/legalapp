@@ -2,7 +2,9 @@ from pathlib import Path
 
 
 def test_legacy_document_approval_is_blocked_instead_of_uploading_late():
-    source = Path("backend/app/services/task_automation.py").read_text(encoding="utf-8")
+    source = (
+        Path(__file__).resolve().parents[1] / "app/services/task_automation.py"
+    ).read_text(encoding="utf-8")
     start = source.index("async def _run_matter_document_draft(")
     end = source.index("async def _recipient_bindings_are_current(", start)
     block = source[start:end]

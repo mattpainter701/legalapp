@@ -768,20 +768,6 @@ async def run_task_automation(
             # work, not a failed automation.
             if not task.pending_action:
                 return
-            if not await _actor_can_approve_legal_work(db, actor_user_id):
-                await _record_terminal_no_send(
-                    db,
-                    task,
-                    action_type=action_type,
-                    idempotency_key=approval_key,
-                    actor_user_id=actor_user_id,
-                    detail=(
-                        "Not sent: the approving user's legal approval authority "
-                        "is no longer active."
-                    ),
-                )
-                return
-
             tenant_billing_tier = await db.scalar(
                 select(Tenant.billing_tier).where(Tenant.id == task.tenant_id)
             )
@@ -792,9 +778,20 @@ async def run_task_automation(
                     action_type=action_type,
                     idempotency_key=approval_key,
                     actor_user_id=actor_user_id,
+                    detail="Not sent: live outbound actions are disabled in demo workspaces.",
+                )
+                return
+
+            if not await _actor_can_approve_legal_work(db, actor_user_id):
+                await _record_terminal_no_send(
+                    db,
+                    task,
+                    action_type=action_type,
+                    idempotency_key=approval_key,
+                    actor_user_id=actor_user_id,
                     detail=(
-                        "Not sent: live outbound actions are disabled in demo "
-                        "workspaces."
+                        "Not sent: the approving user's legal approval authority "
+                        "is no longer active."
                     ),
                 )
                 return
@@ -1058,11 +1055,6 @@ async def enqueue_durable_automation(
         return None
     if not task.pending_action:
         return None
-    if not await _actor_can_approve_legal_work(db, actor_user_id):
-        raise ActionApprovalConflict(
-            "Legal approval authority is required before outbound automation"
-        )
-
     tenant_billing_tier = await db.scalar(
         select(Tenant.billing_tier).where(Tenant.id == task.tenant_id)
     )
@@ -1070,6 +1062,10 @@ async def enqueue_durable_automation(
         raise ActionApprovalConflict(
             "Live outbound actions are disabled in demo workspaces. "
             "This synthetic task can be reviewed but not delivered."
+        )
+    if not await _actor_can_approve_legal_work(db, actor_user_id):
+        raise ActionApprovalConflict(
+            "Legal approval authority is required before outbound automation"
         )
 
     if str(task.pending_action.get("type") or "") == "email_client":

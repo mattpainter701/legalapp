@@ -602,7 +602,7 @@ async def test_a_raising_handler_records_failure_without_corrupting_the_task(
         select(TaskAutomationRun).where(TaskAutomationRun.task_id == task.id)
     )
     assert run.status == "failed"
-    assert "smtp exploded" in run.error_message
+    assert run.error_message == "The approved action failed inside the delivery worker"
 
     await db_session.refresh(task)
     assert task.status == "in_progress"

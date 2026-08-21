@@ -85,6 +85,8 @@ _PURGE_ONLY_TABLES = {
     "cloud_metadata_index",
     "demo_sessions",
     "demo_usage_reservations",
+    "document_integrity_events",
+    "document_storage_operations",
     "document_template_previews",
     "durable_jobs",
     "error_logs",
@@ -92,6 +94,8 @@ _PURGE_ONLY_TABLES = {
     "external_raw_rows",
     "external_record_links",
     "external_system_connections",
+    "generated_artifact_revisions",
+    "generated_artifacts",
     "intake_call_drafts",
     "integration_sync_runs",
     "legacy_call_records",
@@ -126,6 +130,7 @@ _PURGE_ONLY_TABLES = {
     "user_oauth_tokens",
     "user_roles",
     "users",
+    "workspace_mcp_grants",
 }
 
 
