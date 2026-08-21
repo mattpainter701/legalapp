@@ -41,6 +41,7 @@ from app.routers.billing_extended import router as billing_extended_router
 from app.routers.trust_accounting import router as trust_accounting_router
 from app.routers.firm import router as firm_branding_router
 from app.routers.contacts import router as contacts_router
+from app.routers.clients import router as clients_router
 from app.routers.tasks import router as tasks_router
 from app.routers.communications import (
     communication_context_cache,
@@ -401,6 +402,7 @@ app.include_router(billing_extended_router)
 app.include_router(trust_accounting_router)
 app.include_router(firm_branding_router)
 app.include_router(contacts_router)
+app.include_router(clients_router)
 app.include_router(tasks_router)
 app.include_router(communications_router)
 app.include_router(intake_dashboard_router)

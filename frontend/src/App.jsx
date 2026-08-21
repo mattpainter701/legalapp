@@ -40,6 +40,8 @@ const MediationDetailPage = lazy(() => import('./pages/MediationDetailPage'))
 const PlatformPage = lazy(() => import('./pages/PlatformPage'))
 const ContactsPage = lazy(() => import('./pages/ContactsPage'))
 const ContactDetailPage = lazy(() => import('./pages/ContactDetailPage'))
+const ClientsPage = lazy(() => import('./pages/ClientsPage'))
+const ClientDetailPage = lazy(() => import('./pages/ClientDetailPage'))
 const TasksPage = lazy(() => import('./pages/TasksPage'))
 const IntakePage = lazy(() => import('./pages/IntakePage'))
 const IntakeDashboardPage = lazy(() => import('./pages/IntakeDashboardPage'))
@@ -286,6 +288,14 @@ export default function App() {
         <Route
           path="/billing"
           element={<ProtectedRoute financeOnly><LegacyBillingRedirect /></ProtectedRoute>}
+        />
+        <Route
+          path="/clients"
+          element={<ShellRoute title="Clients & CRM" module="contacts"><ClientsPage /></ShellRoute>}
+        />
+        <Route
+          path="/clients/:id"
+          element={<ShellRoute title="Client" module="contacts"><ClientDetailPage /></ShellRoute>}
         />
         <Route
           path="/contacts"

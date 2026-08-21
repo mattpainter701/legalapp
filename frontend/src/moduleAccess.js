@@ -4,6 +4,7 @@ export const GENERAL_MODULES = new Set([
   'calendar',
   'tasks',
   'communications',
+  'contacts',
   'intake',
   'intake-dashboard',
   'time-tracking',
