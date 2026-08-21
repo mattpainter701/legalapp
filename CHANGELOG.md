@@ -3,6 +3,17 @@
 ## [Unreleased]
 
 ### Added
+- **Dedicated Clients & CRM workspace:** replaced the hidden generic contact
+  entry with first-class client list and profile workspaces covering lifecycle,
+  identity, addresses, two phone numbers, DOB, emergency contacts,
+  communication preferences and timestamped SMS consent, linked matters,
+  activity, tasks, billing defaults, internal notes, and finance-controlled
+  QuickBooks/Stripe customer mappings. A tenant-scoped `/api/clients` surface
+  adds CRUD, summaries, matter linkage, bounded admin-only CSV import/export
+  with spreadsheet-formula hardening, and admin QuickBooks customer sync that
+  excludes DOB, emergency details, and internal notes. Migration
+  `111_client_crm_management` adds validated fields, indexes, tenant-unique
+  client numbers, and reasserts forced row-level security on contact PII.
 - **In-app version and release updates:** `/api/version` now returns structured,
   customer-facing release metadata alongside the deployed commit and build
   time. All users can review version details and release notes from Profile,

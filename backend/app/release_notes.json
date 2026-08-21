@@ -2,6 +2,27 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.21",
+      "version": "2026.08.21",
+      "title": "A dedicated home for client relationships",
+      "published_at": "2026-08-21",
+      "summary": "Manage client details, communication preferences, matters, billing choices, and accounting connections from one secure workspace.",
+      "highlights": [
+        {
+          "title": "Keep the complete client profile together",
+          "description": "Store contact details, addresses, emergency contacts, preferences, consent, internal notes, and relationship status in Clients & CRM."
+        },
+        {
+          "title": "See client work in context",
+          "description": "Open a client to review linked matters, activity, tasks, and billing preferences without searching across separate screens."
+        },
+        {
+          "title": "Move client data safely",
+          "description": "Tenant admins can import or export bounded CSV files and synchronize customer records with connected QuickBooks Online accounts."
+        }
+      ]
+    },
+    {
       "id": "2026.08.20",
       "version": "2026.08.20",
       "title": "A clearer view of what changed",
