@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { dismissReleaseAnnouncement } from './release-announcement.js'
 
 const email = process.env.E2E_USER_EMAIL || 'reception@playwright-e2e.example.com'
 const password = process.env.E2E_USER_PASSWORD || 'Playwright-Only-42!'
@@ -12,6 +13,7 @@ async function signIn(page) {
   await page.getByRole('button', { name: 'Sign In' }).click()
   await expect(page).toHaveURL(/\/intake\/dashboard$/)
   await expect(page.getByRole('heading', { name: 'Local Intake Dashboard' })).toBeVisible()
+  await dismissReleaseAnnouncement(page)
 }
 
 test('session bootstrap restores an authenticated workspace and rejects another tenant conversation', async ({ page }) => {

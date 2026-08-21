@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { dismissReleaseAnnouncement } from './release-announcement.js'
 
 const user = {
   id: 'demo-user-1',
@@ -175,6 +176,7 @@ test('chat citation leads to review proposal approval and matching task-board st
 
   await page.goto(`/chat?conv=${conversationId}`)
   await expect(page.getByTitle('Rename conversation')).toHaveText('Synthetic source review')
+  await dismissReleaseAnnouncement(page)
   await expect(page.getByTestId('action-proposal').getByText(source.label, { exact: true })).toBeVisible()
   await expect(page.getByText('Proposed for your approval')).toBeVisible()
   await expect(page.getByText('Approving moves this task into active work. Nothing is sent.')).toBeVisible()

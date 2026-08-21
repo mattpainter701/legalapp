@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { dismissReleaseAnnouncement } from './release-announcement.js'
 
 const email = process.env.E2E_USER_EMAIL || 'reception@playwright-e2e.example.com'
 const password = process.env.E2E_USER_PASSWORD || 'Playwright-Only-42!'
@@ -19,6 +20,7 @@ async function signInWithKeyboard(page) {
 
   await expect(page).toHaveURL(/\/intake\/dashboard$/)
   await expect(page.getByRole('heading', { name: 'Local Intake Dashboard' })).toBeVisible()
+  await dismissReleaseAnnouncement(page)
   // Draft hydration is part of page readiness. Inputs are backed by the active
   // draft, so do not race the API that creates/restores it after navigation.
   await expect(page.getByRole('button', { name: 'New call' })).toBeEnabled()
