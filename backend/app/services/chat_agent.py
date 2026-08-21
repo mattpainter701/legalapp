@@ -279,7 +279,11 @@ class _ToolSequence:
                 "task_check_required",
                 "Call list_matter_tasks before resolving recipients",
             )
-        if tool_name in {"propose_task", "propose_client_email"}:
+        if tool_name in {
+            "propose_task",
+            "propose_client_email",
+            "propose_matter_document",
+        }:
             if matter_id not in self.tasks_checked:
                 raise ChatToolError(
                     "task_check_required",

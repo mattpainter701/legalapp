@@ -20,7 +20,6 @@ import hashlib
 import json
 import logging
 import os
-from io import BytesIO
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
@@ -31,9 +30,13 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import async_session_maker, set_tenant_context
-from app.models.task import Task, TaskAutomationRun
+from app.models.generated_artifact import (
+    GeneratedArtifact,
+    GeneratedArtifactRevision,
+)
 from app.models.matter_document import MatterDocument
 from app.models.plugin import Matter
+from app.models.task import Task, TaskAutomationRun
 from app.models.tenant import Tenant, TenantSettings
 from app.models.contact import Contact
 from app.models.document import Document
@@ -43,6 +46,7 @@ from app.schemas.chat_action import (
     MatterDocumentDraftAction,
     normalize_single_mailbox,
 )
+from app.services.document_accountability import append_document_integrity_event
 from app.services.matter_file_store import MatterFileStore
 from app.services.connected_mail import (
     DELIVERY_CONFIRMED_SENT,
@@ -51,7 +55,10 @@ from app.services.connected_mail import (
     send_client_email,
 )
 from app.services.email import email_service
-from app.services.task_workflow import append_task_event
+from app.services.task_workflow import (
+    append_task_event,
+    staged_review_is_approved,
+)
 
 logger = logging.getLogger(__name__)
 matter_file_store = MatterFileStore()
@@ -123,6 +130,15 @@ def automation_idempotency_key(task: Task, from_status: str) -> str:
     return f"approve:{from_status}:sha256:{action_payload_sha256(task.pending_action)}"
 
 
+async def _actor_can_approve_legal_work(db: AsyncSession, actor_user_id) -> bool:
+    """Resolve approval authority from live tenant RBAC, never role labels."""
+    if actor_user_id is None:
+        return False
+    from app.services.rbac_service import get_user_capabilities
+
+    return "approve_legal_work" in await get_user_capabilities(db, actor_user_id)
+
+
 async def enqueue_automation_run(
     db: AsyncSession,
     task: Task,
@@ -140,9 +156,19 @@ async def enqueue_automation_run(
 
     Does not commit: the caller owns the transaction, which is the whole point.
     """
+    if task.review_policy == "staff_then_attorney" and not staged_review_is_approved(
+        task
+    ):
+        raise ActionApprovalConflict(
+            "Attorney approval is required before staged automation"
+        )
     action_type = str((task.pending_action or {}).get("type") or "")
     if not action_type:
         return None
+    if not await _actor_can_approve_legal_work(db, actor_user_id):
+        raise ActionApprovalConflict(
+            "Legal approval authority is required before outbound automation"
+        )
     action_snapshot = _canonical_action_snapshot(task.pending_action)
     action_sha256 = action_payload_sha256(action_snapshot)
     approval_key = idempotency_key or automation_idempotency_key(task, from_status)
@@ -359,19 +385,6 @@ async def _run_email_client(
     )
 
 
-def _word_document_bytes(title: str, body: str) -> bytes:
-    """Render a straightforward, editable OOXML document from reviewed text."""
-    from docx import Document
-
-    document = Document()
-    document.add_heading(title, level=0)
-    for paragraph in body.split("\n\n"):
-        document.add_paragraph(paragraph.strip())
-    output = BytesIO()
-    document.save(output)
-    return output.getvalue()
-
-
 async def _run_matter_document_draft(
     db: AsyncSession,
     task: Task,
@@ -404,59 +417,183 @@ async def _run_matter_document_draft(
             delivery_certainty=DELIVERY_NOT_ATTEMPTED,
         )
 
-    filename = f"{action.title}.docx"
-    content = await asyncio.to_thread(_word_document_bytes, action.title, action.body)
-    try:
-        storage = await matter_file_store.store_matter_file_result(
-            db=db,
-            tenant_id=str(task.tenant_id),
-            matter_slug=matter.slug,
-            category="general",
-            filename=filename,
-            content=content,
-            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            matter_cloud_folder=matter.cloud_folder,
+    artifact = None
+    if action.artifact_id is not None:
+        artifact = await db.scalar(
+            select(GeneratedArtifact)
+            .where(
+                GeneratedArtifact.id == action.artifact_id,
+                GeneratedArtifact.tenant_id == task.tenant_id,
+                GeneratedArtifact.matter_id == action.matter_id,
+                GeneratedArtifact.task_id == task.id,
+            )
+            .with_for_update()
         )
-    except Exception as exc:
-        return ActionExecutionResult(
-            False,
-            f"Word document could not be saved: {exc}"[:500],
-            delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+        revision = await db.scalar(
+            select(GeneratedArtifactRevision)
+            .where(
+                GeneratedArtifactRevision.id == action.artifact_revision_id,
+                GeneratedArtifactRevision.tenant_id == task.tenant_id,
+                GeneratedArtifactRevision.artifact_id == action.artifact_id,
+                GeneratedArtifactRevision.revision_no == action.artifact_revision_no,
+            )
+            .with_for_update()
         )
-    if not storage.succeeded:
-        return ActionExecutionResult(
-            False,
-            f"Word document could not be saved: {storage.error or 'storage failed'}"[
-                :500
-            ],
-            delivery_certainty=DELIVERY_NOT_ATTEMPTED,
-        )
+        if artifact is None or revision is None:
+            return ActionExecutionResult(
+                False,
+                "The approved artifact revision is no longer available",
+                delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+            )
+        if (
+            artifact.output_document_id != action.document_id
+            or artifact.status != "review"
+            or artifact.current_revision_no != revision.revision_no
+            or artifact.title != action.title
+            or revision.content_sha256 != action.artifact_sha256
+            or revision.content_text != action.body
+            or hashlib.sha256(revision.content_text.encode("utf-8")).hexdigest()
+            != revision.content_sha256
+        ):
+            return ActionExecutionResult(
+                False,
+                "The approved artifact changed after it was reviewed",
+                delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+            )
+        if revision.unresolved_variables:
+            return ActionExecutionResult(
+                False,
+                "The approved artifact still has unresolved template variables",
+                delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+            )
 
-    document = MatterDocument(
-        tenant_id=task.tenant_id,
-        matter_id=action.matter_id,
-        uploaded_by_user_id=actor_user_id,
-        filename=filename,
-        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        file_size=len(content),
-        storage_path=storage.storage_path,
-        storage_provider=storage.provider,
-        storage_backend=storage.backend,
-        provider_object_id=storage.provider_item_id,
-        provider_drive_id=storage.drive_id,
-        provider_parent_id=storage.parent_id,
-        storage_error=storage.error,
-        description="Assistant draft approved by attorney",
-        document_category="general",
-    )
-    db.add(document)
-    await db.flush()
+    if artifact is not None:
+        document = await db.scalar(
+            select(MatterDocument)
+            .where(
+                MatterDocument.id == action.document_id,
+                MatterDocument.tenant_id == task.tenant_id,
+                MatterDocument.matter_id == action.matter_id,
+                MatterDocument.task_id == task.id,
+            )
+            .with_for_update()
+        )
+        expected_revision = getattr(document, "generated_artifact_revision_id", None)
+        expected_hash = str(getattr(document, "document_sha256", "") or "").lower()
+        backend = str(getattr(document, "storage_backend", "") or "").lower()
+        if (
+            document is None
+            or artifact.output_document_id != document.id
+            or getattr(document, "generated_artifact_id", None) != artifact.id
+            or expected_revision != revision.id
+            or getattr(document, "document_role", None) != "working_copy"
+            or getattr(document, "document_status", None) != "in_review"
+            or getattr(document, "storage_state", None) != "verified"
+            or expected_hash != action.document_sha256
+            or backend != action.document_storage_backend
+            or len(expected_hash) != 64
+            or backend not in {"onedrive", "sharepoint", "google_drive"}
+            or not getattr(document, "provider_object_id", None)
+            or (
+                action.document_provider_etag is not None
+                and action.document_provider_etag != document.provider_etag
+            )
+            or (
+                action.document_provider_version_id is not None
+                and action.document_provider_version_id != document.provider_version_id
+            )
+        ):
+            return ActionExecutionResult(
+                False,
+                "The generated cloud draft binding is invalid or incomplete",
+                delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+            )
+        try:
+            async with async_session_maker() as provider_db:
+                await set_tenant_context(provider_db, str(task.tenant_id))
+                cloud_bytes = await matter_file_store.read_matter_file_bytes(
+                    db=provider_db,
+                    tenant_id=str(task.tenant_id),
+                    document=document,
+                    expected_sha256=expected_hash,
+                    expected_size=document.file_size,
+                )
+            actual_hash = hashlib.sha256(cloud_bytes).hexdigest()
+            if actual_hash != expected_hash:
+                raise ValueError("cloud content hash mismatch")
+        except Exception:
+            logger.warning(
+                "generated_artifact_cloud_readback_failed task_id=%s",
+                task.id,
+                exc_info=True,
+            )
+            document.storage_state = "conflict"
+            document.storage_error = (
+                "Approval verification failed; cloud reconciliation is required"
+            )
+            await append_document_integrity_event(
+                db,
+                tenant_id=task.tenant_id,
+                matter_id=action.matter_id,
+                task_id=task.id,
+                artifact_id=artifact.id,
+                artifact_revision_id=revision.id,
+                document_id=document.id,
+                actor_type="user",
+                actor_user_id=actor_user_id,
+                event_type="cloud_approval_verification_failed",
+                content_sha256=expected_hash,
+                provider_object_id=document.provider_object_id,
+                provider_etag=document.provider_etag,
+                provider_version_id=document.provider_version_id,
+                metadata={
+                    "verification": "bounded_cloud_readback",
+                    "backend": backend,
+                    "result": "conflict_or_unavailable",
+                },
+            )
+            return ActionExecutionResult(
+                False,
+                "The cloud draft changed or is unavailable; approval is blocked",
+                delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+            )
+
+        await append_document_integrity_event(
+            db,
+            tenant_id=task.tenant_id,
+            matter_id=action.matter_id,
+            task_id=task.id,
+            artifact_id=artifact.id,
+            artifact_revision_id=revision.id,
+            document_id=document.id,
+            actor_type="user",
+            actor_user_id=actor_user_id,
+            event_type="approved_cloud_revision",
+            content_sha256=expected_hash,
+            provider_object_id=document.provider_object_id,
+            provider_etag=document.provider_etag,
+            provider_version_id=document.provider_version_id,
+            metadata={
+                "verification": "bounded_cloud_readback",
+                "backend": backend,
+                "artifact_revision_no": revision.revision_no,
+            },
+        )
+        artifact.status = "approved"
+        document.document_status = "approved"
+        document.storage_verified_at = datetime.now(timezone.utc)
+        document.storage_error = None
+        return ActionExecutionResult(
+            True,
+            "Approved the exact verified cloud document revision.",
+            provider="matter_document",
+            provider_message_id=str(document.id),
+            delivery_certainty="verified",
+        )
     return ActionExecutionResult(
-        True,
-        "Approved Word document saved to Matter Documents.",
-        provider="matter_document",
-        provider_message_id=str(document.id),
-        delivery_certainty=DELIVERY_CONFIRMED_SENT,
+        False,
+        "This draft predates verified cloud review. Regenerate it to create a tenant-cloud DOCX before approval.",
+        delivery_certainty=DELIVERY_NOT_ATTEMPTED,
     )
 
 
@@ -536,6 +673,9 @@ async def _action_sources_are_current(
             or storage_path.startswith(("http://", "https://"))
             or not os.path.isfile(storage_path)
         ):
+            # A worker must never execute a staged action without durable attorney evidence.
+            # The task is reloaded below; this guard is repeated there before dispatch.
+
             return False
         actual_hash = await asyncio.to_thread(_file_sha256, storage_path)
         if actual_hash != expected_hash:
@@ -609,6 +749,15 @@ async def run_task_automation(
             )
             if task is None:
                 return
+            if (
+                task.review_policy == "staff_then_attorney"
+                and not staged_review_is_approved(task)
+            ):
+                logger.warning(
+                    "staged_automation_blocked_without_approval task_id=%s",
+                    task_id,
+                )
+                return
 
             approval_key = approval_idempotency_key or automation_idempotency_key(
                 task, from_status
@@ -618,6 +767,19 @@ async def run_task_automation(
             # A reviewed task without a drafted side effect is ordinary board
             # work, not a failed automation.
             if not task.pending_action:
+                return
+            if not await _actor_can_approve_legal_work(db, actor_user_id):
+                await _record_terminal_no_send(
+                    db,
+                    task,
+                    action_type=action_type,
+                    idempotency_key=approval_key,
+                    actor_user_id=actor_user_id,
+                    detail=(
+                        "Not sent: the approving user's legal approval authority "
+                        "is no longer active."
+                    ),
+                )
                 return
 
             tenant_billing_tier = await db.scalar(
@@ -710,11 +872,17 @@ async def run_task_automation(
                 .where(Task.id == task_id, Task.tenant_id == tenant_id)
                 .with_for_update()
             )
+            actor_is_authorized = await _actor_can_approve_legal_work(db, actor_user_id)
             if (
                 task is None
                 or task.status != to_status
                 or to_status != "in_progress"
                 or not task.pending_action
+                or not actor_is_authorized
+                or (
+                    task.review_policy == "staff_then_attorney"
+                    and not staged_review_is_approved(task)
+                )
                 or (
                     run.action_sha256 is not None
                     and action_payload_sha256(task.pending_action) != run.action_sha256
@@ -781,9 +949,9 @@ async def run_task_automation(
                 run.action_sha256 = action_payload_sha256(payload_snapshot)
             try:
                 result = await handler(db, task, payload_snapshot, actor_user_id)
-            except Exception as exc:
+            except Exception:
                 result = ActionExecutionResult(
-                    False, f"{type(exc).__name__}: {exc}"[:500]
+                    False, "The approved action failed inside the delivery worker"
                 )
                 logger.warning(
                     "task_automation_handler_raised task_id=%s action_type=%s",
@@ -880,10 +1048,20 @@ async def enqueue_durable_automation(
     commits, so they land atomically with the approval or not at all — there is
     no window in which a task is approved but the send is unrecorded.
     """
+    if task.review_policy == "staff_then_attorney" and not staged_review_is_approved(
+        task
+    ):
+        raise ActionApprovalConflict(
+            "Attorney approval is required before staged automation"
+        )
     if not transition_is_approval(from_status, to_status):
         return None
     if not task.pending_action:
         return None
+    if not await _actor_can_approve_legal_work(db, actor_user_id):
+        raise ActionApprovalConflict(
+            "Legal approval authority is required before outbound automation"
+        )
 
     tenant_billing_tier = await db.scalar(
         select(Tenant.billing_tier).where(Tenant.id == task.tenant_id)
@@ -911,6 +1089,19 @@ async def enqueue_durable_automation(
             raise ActionApprovalConflict(
                 "A cited local document is no longer available or no longer "
                 "belongs to this matter. Restore the evidence or create a new draft."
+            )
+    elif str(task.pending_action.get("type") or "") == "matter_document_draft":
+        try:
+            pending_document = MatterDocumentDraftAction.model_validate(
+                task.pending_action
+            )
+        except ValidationError as exc:
+            raise ActionApprovalConflict(
+                "The stored document draft has an invalid cloud binding. Create a new draft."
+            ) from exc
+        if pending_document.artifact_id is None or pending_document.document_id is None:
+            raise ActionApprovalConflict(
+                "This draft predates verified cloud review. Regenerate it before approval."
             )
 
     active_run = await db.scalar(

@@ -15,6 +15,7 @@ CAPABILITIES: frozenset[str] = frozenset(
         "manage_documents",
         "manage_integrations",
         "admin_settings",
+        "approve_legal_work",
         "use_premium_ai",
     }
 )

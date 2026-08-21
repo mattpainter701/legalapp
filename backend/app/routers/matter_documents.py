@@ -4,7 +4,16 @@ import os
 import uuid
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,7 +29,13 @@ from app.schemas.matter_document import (
     MatterDocumentResponse,
     MatterDocumentUpdate,
 )
-from app.services.matter_file_store import MatterFileStore
+from app.services.document_accountability import append_document_integrity_event
+from app.services.matter_file_store import (
+    MatterFileIntegrityError,
+    MatterFileNotFound,
+    MatterFileReadError,
+    MatterFileStore,
+)
 from app.services.matter_document_revisions import (
     DocumentRevisionServiceError,
     assert_assistant_derivative_category_preserved,
@@ -458,6 +473,37 @@ async def delete_matter_document(
     await db.commit()
 
 
+@router.get("/matters/{matter_id}/documents/{doc_id}/open")
+async def open_matter_document(
+    matter_id: str,
+    doc_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Resolve a fresh tenant-provider editing URL from durable object IDs."""
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    doc = await _get_doc_or_404(doc_id, matter_id, user.tenant_id, db)
+    try:
+        url = await matter_file_store.get_matter_file_open_url(
+            db=db,
+            tenant_id=str(user.tenant_id),
+            document=doc,
+        )
+    except MatterFileNotFound as exc:
+        raise HTTPException(status_code=404, detail="Cloud document not found") from exc
+    except (MatterFileReadError, ProviderError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="The cloud document cannot be opened until its binding is repaired",
+        ) from exc
+    return RedirectResponse(
+        url,
+        status_code=307,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @router.get("/matters/{matter_id}/documents/{doc_id}/download")
 async def download_matter_document(
     matter_id: str,
@@ -465,13 +511,76 @@ async def download_matter_document(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """Stream the file for download."""
+    """Download exact registered bytes without trusting a persisted display URL."""
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
     doc = await _get_doc_or_404(doc_id, matter_id, user.tenant_id, db)
 
-    if doc.storage_path and doc.storage_path.startswith(("http://", "https://")):
-        return RedirectResponse(doc.storage_path)
+    if doc.storage_backend in {"onedrive", "sharepoint", "google_drive"}:
+        if doc.storage_state == "conflict":
+            raise HTTPException(
+                status_code=409,
+                detail="This cloud document must be reconciled before download",
+            )
+        expected_sha256 = (
+            doc.document_sha256 if doc.storage_state == "verified" else None
+        )
+        try:
+            content = await matter_file_store.read_matter_file_bytes(
+                db=db,
+                tenant_id=str(user.tenant_id),
+                document=doc,
+                expected_sha256=expected_sha256,
+                expected_size=doc.file_size,
+            )
+        except MatterFileIntegrityError as exc:
+            doc.storage_state = "conflict"
+            doc.storage_error = (
+                "Download verification failed; cloud reconciliation is required"
+            )
+            if doc.generated_artifact_id and doc.generated_artifact_revision_id:
+                await append_document_integrity_event(
+                    db,
+                    tenant_id=user.tenant_id,
+                    matter_id=doc.matter_id,
+                    task_id=doc.task_id,
+                    artifact_id=doc.generated_artifact_id,
+                    artifact_revision_id=doc.generated_artifact_revision_id,
+                    document_id=doc.id,
+                    event_type="cloud_download_integrity_conflict",
+                    actor_type="user",
+                    actor_user_id=user.id,
+                    content_sha256=doc.document_sha256,
+                    provider_object_id=doc.provider_object_id,
+                    provider_etag=doc.provider_etag,
+                    provider_version_id=doc.provider_version_id,
+                    metadata={"storage_backend": doc.storage_backend},
+                )
+            await db.commit()
+            raise HTTPException(
+                status_code=409,
+                detail="The cloud document changed and must be reconciled",
+            ) from exc
+        except MatterFileNotFound as exc:
+            raise HTTPException(
+                status_code=404, detail="Cloud document not found"
+            ) from exc
+        except (MatterFileReadError, ProviderError) as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="The cloud document is temporarily unavailable",
+            ) from exc
+        return Response(
+            content=content,
+            media_type=doc.content_type or "application/octet-stream",
+            headers={
+                "Content-Disposition": (
+                    "attachment; filename*=UTF-8''" f"{quote(doc.filename, safe='')}"
+                ),
+                "Cache-Control": "private, no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     if not doc.storage_path or not os.path.exists(doc.storage_path):
         raise HTTPException(status_code=404, detail="File not found on disk")

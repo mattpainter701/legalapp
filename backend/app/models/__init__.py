@@ -97,6 +97,13 @@ from app.models.office_action_run import OfficeActionRun
 from app.models.plugin_skill_run import PluginSkillRun
 from app.models.matter_document_revision import MatterDocumentRevision
 from app.models.chat_artifact import ChatArtifact
+from app.models.workspace_mcp_grant import WorkspaceMCPGrant
+from app.models.generated_artifact import (
+    GeneratedArtifact,
+    GeneratedArtifactRevision,
+)
+from app.models.document_storage_operation import DocumentStorageOperation
+from app.models.document_integrity_event import DocumentIntegrityEvent
 
 __all__ = [
     "Tenant",
@@ -197,5 +204,9 @@ __all__ = [
     "PluginSkillRun",
     "MatterDocumentRevision",
     "ChatArtifact",
-    "MatterDocument",
+    "WorkspaceMCPGrant",
+    "GeneratedArtifact",
+    "GeneratedArtifactRevision",
+    "DocumentStorageOperation",
+    "DocumentIntegrityEvent",
 ]

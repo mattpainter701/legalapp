@@ -4,7 +4,8 @@ Files are stored in the customer's own cloud storage, not ours:
   - MS365 customers → OneDrive: /claritylegal-records/{matter_slug}/{category}/{filename}
   - SharePoint customers → selected document library/folder
   - Google Workspace → Google Drive: claritylegal-records/{matter_slug}/ folder
-  - Fallback → local disk (UPLOAD_DIR)
+  - Legacy callers may allow local fallback; accountable automation passes
+    ``require_cloud=True`` and fails closed instead.
 
 When matter.cloud_folder is provided (pre-provisioned subfolder IDs), uploads skip
 the multi-hop folder traversal and go directly to the pre-created folder.
@@ -18,7 +19,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -65,6 +66,10 @@ class StorageResult:
     storage_path: str | None = None
     web_url: str | None = None
     provider_item_id: str | None = None
+    provider_etag: str | None = None
+    provider_version_id: str | None = None
+    provider_modified_at: str | None = None
+    provider_checksum: str | None = None
     drive_id: str | None = None
     parent_id: str | None = None
     error: str | None = None
@@ -114,6 +119,7 @@ class MatterFileStore:
         expected_sha256: str | None = None,
         expected_size: int | None = None,
         max_bytes: int | None = None,
+        enforce_persisted_size: bool = True,
     ) -> bytes:
         """Read a tenant-owned MatterDocument using durable provider metadata.
 
@@ -133,9 +139,13 @@ class MatterFileStore:
             raise MatterFileMetadataError("Document read limit must be positive")
 
         persisted_size = (
-            expected_size
-            if expected_size is not None
-            else getattr(document, "file_size", None)
+            None
+            if not enforce_persisted_size
+            else (
+                expected_size
+                if expected_size is not None
+                else getattr(document, "file_size", None)
+            )
         )
         if persisted_size is not None:
             try:
@@ -203,6 +213,89 @@ class MatterFileStore:
             expected_sha256=expected_sha256,
         )
         return content
+
+    async def get_matter_file_open_url(
+        self,
+        *,
+        db: AsyncSession,
+        tenant_id: str,
+        document: Any,
+    ) -> str:
+        """Resolve a fresh provider web URL from durable tenant-scoped IDs."""
+        if document is None or str(getattr(document, "tenant_id", "")) != str(
+            tenant_id
+        ):
+            raise MatterFileAccessError("Document is not owned by this tenant")
+
+        backend = _normalized_read_backend(document)
+        if backend not in {"google_drive", "onedrive", "sharepoint"}:
+            raise MatterFileMetadataError(
+                "Only tenant-cloud documents have an external editing URL"
+            )
+        item_id = str(getattr(document, "provider_object_id", "") or "").strip()
+        if not item_id:
+            raise MatterFileMetadataError(
+                "Cloud document is missing its durable provider item ID"
+            )
+        encoded_item_id = quote(item_id, safe="")
+
+        if backend == "google_drive":
+            token_provider = "google"
+            provider_label = "Google Drive"
+            metadata_url = (
+                f"{GOOGLE_DOWNLOAD_BASE}/files/{encoded_item_id}"
+                "?fields=id,webViewLink,modifiedTime,md5Checksum,version,trashed"
+            )
+        else:
+            token_provider = "microsoft"
+            provider_label = (
+                "Microsoft SharePoint" if backend == "sharepoint" else "OneDrive"
+            )
+            drive_id = str(getattr(document, "provider_drive_id", "") or "").strip()
+            if backend == "sharepoint" and not drive_id:
+                raise MatterFileMetadataError(
+                    "SharePoint document is missing its durable drive ID"
+                )
+            base = (
+                f"{GRAPH_BASE}/drives/{quote(drive_id, safe='')}/items"
+                if drive_id
+                else f"{GRAPH_BASE}/me/drive/items"
+            )
+            metadata_url = (
+                f"{base}/{encoded_item_id}"
+                "?$select=id,webUrl,eTag,cTag,lastModifiedDateTime,deleted"
+            )
+
+        token = await get_fresh_token(db, str(tenant_id), token_provider)
+        if not token:
+            raise ProviderAuthError(f"{provider_label} credentials are unavailable")
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.get(
+                    metadata_url,
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+            _raise_for_download_response(response, provider_label)
+            payload = response.json()
+        except json.JSONDecodeError as exc:
+            raise ProviderError(
+                f"{provider_label} returned invalid document metadata"
+            ) from exc
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            raise ProviderError(
+                f"{provider_label} document metadata lookup did not complete"
+            ) from exc
+
+        if (
+            not isinstance(payload, dict)
+            or payload.get("deleted")
+            or payload.get("trashed")
+        ):
+            raise MatterFileNotFound(f"{provider_label} document no longer exists")
+        url = str(payload.get("webViewLink") or payload.get("webUrl") or "").strip()
+        if backend == "google_drive" and not url:
+            url = _gdrive_web_url(item_id)
+        return _validated_provider_open_url(url, backend)
 
     async def delete_stored_result(
         self,
@@ -348,6 +441,7 @@ class MatterFileStore:
         content_type: str,
         matter_cloud_folder: dict | None = None,
         preferred_provider: str | None = None,
+        require_cloud: bool = False,
     ) -> str:
         """Upload a file. Returns the legacy storage path/URL.
 
@@ -368,6 +462,7 @@ class MatterFileStore:
             content_type=content_type,
             matter_cloud_folder=matter_cloud_folder,
             preferred_provider=preferred_provider,
+            require_cloud=require_cloud,
         )
         return result.storage_path or ""
 
@@ -382,6 +477,7 @@ class MatterFileStore:
         content_type: str,
         matter_cloud_folder: dict | None = None,
         preferred_provider: str | None = None,
+        require_cloud: bool = False,
     ) -> StorageResult:
         """Upload a file and return structured provider metadata.
 
@@ -463,6 +559,13 @@ class MatterFileStore:
 
         # Fallback: local disk. An explicit primary cloud never spills into a
         # different cloud provider; surface the configured-provider failure so
+        if require_cloud:
+            return StorageResult(
+                provider=configured_provider or "cloud",
+                backend=configured_provider or "cloud",
+                error="Required cloud storage upload failed; local storage is disabled.",
+            )
+
         # callers can warn the user while retaining the locally saved bytes.
         local_result = await self._store_local(
             tenant_id, matter_slug, canonical_folder, filename, content
@@ -485,6 +588,10 @@ class MatterFileStore:
             provider_item_id=local_result.provider_item_id,
             drive_id=local_result.drive_id,
             parent_id=local_result.parent_id,
+            provider_etag=local_result.provider_etag,
+            provider_version_id=local_result.provider_version_id,
+            provider_modified_at=local_result.provider_modified_at,
+            provider_checksum=local_result.provider_checksum,
             error=warning,
         )
 
@@ -703,22 +810,47 @@ class MatterFileStore:
                     token, ["claritylegal-records", matter_slug, category]
                 )
 
-            # Check for existing file with same name to avoid duplicates.
+            # Reuse an earlier crash/retry object only when Google confirms the
+            # exact bytes. A same-name user document is not ours to overwrite or
+            # later delete during compensation.
             existing = await self._find_gdrive_file(token, parent_id, filename)
-            if existing:
+            existing_checksum = str(
+                (existing or {}).get("md5Checksum") or ""
+            ).casefold()
+            content_checksum = hashlib.md5(content, usedforsecurity=False).hexdigest()
+            if (
+                existing
+                and existing_checksum
+                and hmac.compare_digest(existing_checksum, content_checksum)
+            ):
                 logger.info(
-                    "Google Drive file '%s' already exists (id=%s), skipping upload",
+                    "Reusing byte-identical Google Drive file '%s' (id=%s)",
                     filename,
-                    existing,
+                    existing.get("id"),
                 )
-                web_link = _gdrive_web_url(existing)
+                web_link = existing.get("webViewLink") or _gdrive_web_url(
+                    existing.get("id", "")
+                )
                 return StorageResult(
                     provider="google",
                     backend="google_drive",
                     storage_path=web_link,
                     web_url=web_link,
-                    provider_item_id=existing,
+                    provider_item_id=existing.get("id"),
                     parent_id=parent_id,
+                    provider_etag=existing.get("etag"),
+                    provider_version_id=existing.get("version")
+                    or existing.get("headRevisionId"),
+                    provider_modified_at=existing.get("modifiedTime"),
+                    provider_checksum=existing.get("md5Checksum"),
+                )
+
+            if existing:
+                logger.warning(
+                    "Google Drive already has a different same-name file '%s' "
+                    "(id=%s); creating a distinct provider object",
+                    filename,
+                    existing.get("id"),
                 )
 
             if len(content) > self._CHUNK_THRESHOLD_GOOGLE:
@@ -741,7 +873,11 @@ class MatterFileStore:
 
             async with httpx.AsyncClient(timeout=60) as client:
                 resp = await client.post(
-                    f"{GOOGLE_UPLOAD_BASE}/files?uploadType=multipart",
+                    (
+                        f"{GOOGLE_UPLOAD_BASE}/files?uploadType=multipart&"
+                        "fields=id,webViewLink,parents,version,modifiedTime,"
+                        "md5Checksum,headRevisionId"
+                    ),
                     content=body,
                     headers={
                         "Authorization": f"Bearer {token}",
@@ -759,6 +895,11 @@ class MatterFileStore:
                         web_url=web_link,
                         provider_item_id=file_id or None,
                         parent_id=parent_id,
+                        provider_etag=data.get("etag"),
+                        provider_version_id=data.get("version")
+                        or data.get("headRevisionId"),
+                        provider_modified_at=data.get("modifiedTime"),
+                        provider_checksum=data.get("md5Checksum"),
                     )
                     logger.info("Stored %s in Google Drive: %s", filename, web_link)
                     return result
@@ -786,7 +927,7 @@ class MatterFileStore:
 
     async def _find_gdrive_file(
         self, token: str, parent_id: str, filename: str
-    ) -> str | None:
+    ) -> dict | None:
         """Return the file ID if a file named ``filename`` already exists in
         ``parent_id``, or None."""
         try:
@@ -801,13 +942,13 @@ class MatterFileStore:
                     headers={"Authorization": f"Bearer {token}"},
                     params={
                         "q": query,
-                        "fields": "files(id)",
+                        "fields": "files(id,webViewLink,parents,version,modifiedTime,md5Checksum,headRevisionId)",
                         "pageSize": 1,
                     },
                 )
                 if resp.status_code == 200:
                     files = resp.json().get("files", [])
-                    return files[0]["id"] if files else None
+                    return files[0] if files else None
         except Exception:
             pass
         return None
@@ -888,6 +1029,11 @@ class MatterFileStore:
                             web_url=web_link,
                             provider_item_id=file_id or None,
                             parent_id=parent_id,
+                            provider_etag=data.get("etag"),
+                            provider_version_id=data.get("version")
+                            or data.get("headRevisionId"),
+                            provider_modified_at=data.get("modifiedTime"),
+                            provider_checksum=data.get("md5Checksum"),
                         )
                     elif chunk_resp.status_code == 308:
                         # 308 Resume Incomplete — continue.
@@ -953,6 +1099,7 @@ class MatterFileStore:
             upload_url = (
                 f"{GRAPH_BASE}/drives/{drive_id}/items/{folder_id}:/"
                 f"{filename}:/content"
+                "?@microsoft.graph.conflictBehavior=rename"
             )
             async with httpx.AsyncClient(timeout=60) as client:
                 resp = await client.put(
@@ -1253,7 +1400,35 @@ def _storage_result_from_graph_item(
         provider_item_id=data.get("id"),
         drive_id=resolved_drive_id,
         parent_id=resolved_parent_id,
+        provider_etag=data.get("eTag") or data.get("etag"),
+        provider_version_id=data.get("cTag"),
+        provider_modified_at=(data.get("fileSystemInfo") or {}).get(
+            "lastModifiedDateTime"
+        )
+        or data.get("lastModifiedDateTime"),
+        provider_checksum=((data.get("file") or {}).get("hashes") or {}).get(
+            "sha256Hash"
+        )
+        or ((data.get("file") or {}).get("hashes") or {}).get("quickXorHash"),
     )
+
+
+def _validated_provider_open_url(value: str, backend: str) -> str:
+    parsed = urlparse(str(value or "").strip())
+    hostname = (parsed.hostname or "").casefold()
+    if parsed.scheme.casefold() != "https" or not hostname:
+        raise ProviderError("Cloud provider returned an unsafe document URL")
+    if backend == "google_drive":
+        allowed = hostname in {"drive.google.com", "docs.google.com"}
+    else:
+        allowed = (
+            hostname == "1drv.ms"
+            or hostname == "onedrive.live.com"
+            or hostname.endswith(".sharepoint.com")
+        )
+    if not allowed:
+        raise ProviderError("Cloud provider returned an unexpected document host")
+    return parsed.geturl()
 
 
 def _gdrive_web_url(file_id: str) -> str:
