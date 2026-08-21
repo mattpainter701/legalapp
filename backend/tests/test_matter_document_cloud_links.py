@@ -318,7 +318,7 @@ async def test_google_drive_reuses_only_a_byte_identical_existing_file(monkeypat
         return {
             "id": "existing-file",
             "webViewLink": "https://drive.google.com/file/d/existing-file/view",
-            "md5Checksum": "900150983cd24fb0d6963f7d28e17f72",
+            "sha256Checksum": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
             "version": "7",
         }
 
@@ -345,7 +345,10 @@ async def test_google_drive_reuses_only_a_byte_identical_existing_file(monkeypat
 
     assert result.succeeded
     assert result.provider_item_id == "existing-file"
-    assert result.provider_checksum == "900150983cd24fb0d6963f7d28e17f72"
+    assert (
+        result.provider_checksum
+        == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    )
 
 
 @pytest.mark.asyncio
@@ -357,13 +360,13 @@ async def test_google_drive_does_not_reuse_a_changed_same_name_file(monkeypatch)
         return {
             "id": "user-edited-file",
             "webViewLink": "https://drive.google.com/file/d/user-edited-file/view",
-            "md5Checksum": "149603e6c03516362a8da23f624db945",
+            "sha256Checksum": "0000000000000000000000000000000000000000000000000000000000000000",
         }
 
     created = {
         "id": "new-snapshot-file",
         "webViewLink": "https://drive.google.com/file/d/new-snapshot-file/view",
-        "md5Checksum": "900150983cd24fb0d6963f7d28e17f72",
+        "sha256Checksum": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
     }
     monkeypatch.setattr(matter_file_store_module, "get_fresh_token", fake_token)
     monkeypatch.setattr(MatterFileStore, "_find_gdrive_file", fake_find_file)

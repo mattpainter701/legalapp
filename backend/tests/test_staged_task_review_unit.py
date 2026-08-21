@@ -27,6 +27,9 @@ class _DB:
     def add(self, value):
         self.events.append(value)
 
+    async def scalar(self, _stmt):
+        return "standard"
+
 
 def _task():
     staff = uuid4()

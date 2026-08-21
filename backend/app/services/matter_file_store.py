@@ -244,7 +244,7 @@ class MatterFileStore:
             provider_label = "Google Drive"
             metadata_url = (
                 f"{GOOGLE_DOWNLOAD_BASE}/files/{encoded_item_id}"
-                "?fields=id,webViewLink,modifiedTime,md5Checksum,version,trashed"
+                "?fields=id,webViewLink,modifiedTime,sha256Checksum,version,trashed"
             )
         else:
             token_provider = "microsoft"
@@ -815,9 +815,9 @@ class MatterFileStore:
             # later delete during compensation.
             existing = await self._find_gdrive_file(token, parent_id, filename)
             existing_checksum = str(
-                (existing or {}).get("md5Checksum") or ""
+                (existing or {}).get("sha256Checksum") or ""
             ).casefold()
-            content_checksum = hashlib.md5(content, usedforsecurity=False).hexdigest()
+            content_checksum = hashlib.sha256(content).hexdigest()
             if (
                 existing
                 and existing_checksum
@@ -842,7 +842,7 @@ class MatterFileStore:
                     provider_version_id=existing.get("version")
                     or existing.get("headRevisionId"),
                     provider_modified_at=existing.get("modifiedTime"),
-                    provider_checksum=existing.get("md5Checksum"),
+                    provider_checksum=existing.get("sha256Checksum"),
                 )
 
             if existing:
@@ -876,7 +876,7 @@ class MatterFileStore:
                     (
                         f"{GOOGLE_UPLOAD_BASE}/files?uploadType=multipart&"
                         "fields=id,webViewLink,parents,version,modifiedTime,"
-                        "md5Checksum,headRevisionId"
+                        "sha256Checksum,headRevisionId"
                     ),
                     content=body,
                     headers={
@@ -899,7 +899,7 @@ class MatterFileStore:
                         provider_version_id=data.get("version")
                         or data.get("headRevisionId"),
                         provider_modified_at=data.get("modifiedTime"),
-                        provider_checksum=data.get("md5Checksum"),
+                        provider_checksum=data.get("sha256Checksum"),
                     )
                     logger.info("Stored %s in Google Drive: %s", filename, web_link)
                     return result
@@ -942,7 +942,7 @@ class MatterFileStore:
                     headers={"Authorization": f"Bearer {token}"},
                     params={
                         "q": query,
-                        "fields": "files(id,webViewLink,parents,version,modifiedTime,md5Checksum,headRevisionId)",
+                        "fields": "files(id,webViewLink,parents,version,modifiedTime,sha256Checksum,headRevisionId)",
                         "pageSize": 1,
                     },
                 )
@@ -967,7 +967,11 @@ class MatterFileStore:
             metadata = {"name": filename, "parents": [parent_id]}
             async with httpx.AsyncClient(timeout=30) as client:
                 init_resp = await client.post(
-                    "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable",
+                    (
+                        "https://www.googleapis.com/upload/drive/v3/files?"
+                        "uploadType=resumable&fields=id,webViewLink,parents,version,"
+                        "modifiedTime,sha256Checksum,headRevisionId"
+                    ),
                     json=metadata,
                     headers={
                         "Authorization": f"Bearer {token}",
@@ -1033,7 +1037,7 @@ class MatterFileStore:
                             provider_version_id=data.get("version")
                             or data.get("headRevisionId"),
                             provider_modified_at=data.get("modifiedTime"),
-                            provider_checksum=data.get("md5Checksum"),
+                            provider_checksum=data.get("sha256Checksum"),
                         )
                     elif chunk_resp.status_code == 308:
                         # 308 Resume Incomplete — continue.
