@@ -35,6 +35,7 @@ failure_diagnostics() {
   echo "ERROR: deployment failed with status $rc" >&2
   "${compose[@]}" ps >&2 || true
   "${compose[@]}" logs --tail=120 \
+    litellm-migrator litellm-schema-migrator litellm \
     migrator backend scheduler frontend office-addin nginx >&2 || true
   exit "$rc"
 }
@@ -72,7 +73,10 @@ litellm_pre_counts="$(printf '%s\n' "$data_guard_output" | awk -F= '/^LITELLM_PR
 }
 
 echo "==> Building and replacing LawHand application services"
-"${compose[@]}" up -d --build backend scheduler frontend office-addin nginx
+# LiteLLM reads provider keys at process start. Force-recreate it with every
+# normal Skynet release so a rotated .env key cannot remain in an old process.
+"${compose[@]}" up -d --build --force-recreate \
+  litellm backend scheduler frontend office-addin nginx
 
 echo "==> Reconfirming the database schema"
 "${compose[@]}" exec -T backend alembic upgrade head
@@ -81,25 +85,29 @@ echo "==> Waiting for replacement services"
 for _ in $(seq 1 90); do
   backend_id="$("${compose[@]}" ps -q backend 2>/dev/null || true)"
   scheduler_id="$("${compose[@]}" ps -q scheduler 2>/dev/null || true)"
+  litellm_id="$("${compose[@]}" ps -q litellm 2>/dev/null || true)"
   frontend_id="$("${compose[@]}" ps -q frontend 2>/dev/null || true)"
   office_id="$("${compose[@]}" ps -q office-addin 2>/dev/null || true)"
   nginx_id="$("${compose[@]}" ps -q nginx 2>/dev/null || true)"
   backend_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$backend_id" 2>/dev/null || true)"
   scheduler_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$scheduler_id" 2>/dev/null || true)"
+  litellm_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$litellm_id" 2>/dev/null || true)"
   frontend_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$frontend_id" 2>/dev/null || true)"
   office_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$office_id" 2>/dev/null || true)"
   nginx_state="$(docker inspect --format '{{.State.Status}}' "$nginx_id" 2>/dev/null || true)"
-  if [[ "$backend_health" == healthy && "$scheduler_health" == healthy && \
+  if [[ "$litellm_health" == healthy && "$backend_health" == healthy && "$scheduler_health" == healthy && \
         "$frontend_health" == healthy && "$office_health" == healthy && \
         "$nginx_state" == running ]]; then
     break
   fi
   sleep 2
 done
-[[ "$backend_health" == healthy && "$scheduler_health" == healthy && \
+[[ "$litellm_health" == healthy && "$backend_health" == healthy && "$scheduler_health" == healthy && \
    "$frontend_health" == healthy && "$office_health" == healthy && \
    "$nginx_state" == running ]] || {
   echo "ERROR: replacement services did not become healthy" >&2
+  "${compose[@]}" logs --tail=120 litellm-migrator litellm-schema-migrator litellm \
+    migrator backend scheduler frontend office-addin nginx >&2 || true
   exit 4
 }
 

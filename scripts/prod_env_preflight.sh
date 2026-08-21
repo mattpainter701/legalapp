@@ -62,13 +62,18 @@ check_nonplaceholder() {
   local key="$1" value lowered
   value="$(get_env "$key")"
   lowered="${value,,}"
-  if [[ -z "$value" || "$lowered" == *change_me* || "$lowered" == *changeme* ||
+  if [[ -z "$value" || "$lowered" == *change_me* || "$lowered" == *change-me* || "$lowered" == *changeme* ||
         "$lowered" == *example.com* || "$lowered" == *example.invalid* ||
         "$lowered" == *placeholder* ]]; then
     errors+=("$key must be configured with a non-placeholder value")
   fi
 }
 
+# The checked-in customer aliases use DEEPSEEK_API_KEY for both their
+# standard and premium primary OpenCode routes.  OPENROUTER_API_KEY remains an
+# optional fallback, but an unset primary key makes every customer route
+# unusable and must fail before deployment.
+check_nonplaceholder DEEPSEEK_API_KEY
 check_nonplaceholder EMAIL_FROM
 
 if [[ "$(get_env LITELLM_SALT_KEY)" == "$(get_env LITELLM_API_KEY)" ]]; then
