@@ -54,9 +54,14 @@ not raw secrets.
 
 ## Tool Catalog
 
-The candidate CourtListener MCP scope list is:
+The sidecar advertises this candidate catalog from a static manifest. Catalog
+presence is not evidence of corpus completeness: results depend on the authority
+currently loaded and indexed, and a deployment can be partial or empty. Check
+`corpus_status` and `get_court_coverage` before relying on a research result:
 
 - `search_caselaw`: hybrid keyword/vector search over locally loaded authority.
+- `search_legal_authorities`: hybrid search over locally reviewed statutes,
+  regulations, court rules, forms, agency manuals, and official guidance.
 - `get_case_details`: metadata and chunks for one `opinion_id` or `cluster_id`.
 - `get_full_opinion`: complete locally loaded opinion text.
 - `find_similar_cases`: similar-case lookup from a query, opinion, cluster, or chunk.
@@ -113,12 +118,22 @@ Migration `070_mcp_product_gateway.py` creates product keys and usage. Migration
 `087_mcp_product_security.py` invalidates legacy keys, adds mandatory key limits,
 and adds explicit tenant entitlement/billing states.
 
-The backend and private CourtListener sidecar must share a distinct 32+ character
-`MCP_UPSTREAM_API_KEY`. The sidecar rejects manifest and tool calls without it;
-the backend never forwards application JWTs or customer API keys upstream.
+### Required configuration and topology
 
-Start the private sidecar under the same Compose project so it shares the
-private network with the backend:
+- `COURTLISTENER_DB_PASSWORD` is required. The database user and database name
+  both default to `courtlistener` unless explicitly overridden.
+- The backend and private sidecar must share the same distinct, minimum
+  32-character `MCP_UPSTREAM_API_KEY`. It authenticates only the private
+  backend-to-sidecar header. The backend never forwards application JWTs or
+  customer API keys upstream.
+- Use Compose project `legalapp` and
+  `docker-compose.courtlistener-mcp.yml`. This places the sidecar on
+  `legalapp_default` with the backend; configure the backend with
+  `MCP_SERVER_URL=http://courtlistener-mcp:8021`.
+- Keep the diagnostic database and MCP listeners loopback-only. Their defaults
+  are `127.0.0.1:5434` and `127.0.0.1:8021`, respectively.
+
+Start the two base services with:
 
 ```bash
 docker compose --env-file .env -p legalapp \
@@ -126,10 +141,71 @@ docker compose --env-file .env -p legalapp \
   up -d --build courtlistener-db courtlistener-mcp
 ```
 
-Host diagnostic ports must remain bound to `127.0.0.1`. The existing public
-application origin exposes the future transport at `/api/mcp`; introducing a
-new MCP hostname would require an explicit nginx, origin/host allowlist, TLS,
-monitoring, and client-auth review.
+Starting these services makes the private sidecar available to internal
+application paths; it does not enable the public MCP product.
+`MCP_PRODUCT_ENABLED` remains the separate public-release gate.
+
+### Corpus loading and optional profiles
+
+The `loader` profile runs one-shot corpus operations in `courtlistener-loader`.
+Always execute them through the same Compose project and file so they use the
+intended container, database, network, and corpus volume. For a new corpus,
+initialize the schema, stage a snapshot, choose either the bounded MVP/profile
+load or a bounded full staged load, and then create searchable opinion chunks:
+
+```bash
+BOUNDED_ROW_LIMIT=1000
+BOUNDED_CHUNK_LIMIT=1000
+
+docker compose --env-file .env -p legalapp \
+  -f docker-compose.courtlistener-mcp.yml --profile loader run --rm \
+  courtlistener-loader python -m mcp_server.loader --init-schema
+
+docker compose --env-file .env -p legalapp \
+  -f docker-compose.courtlistener-mcp.yml --profile loader run --rm \
+  courtlistener-loader python -m mcp_server.loader --stage-latest
+
+# Choose one load mode. The bounds above are smoke-test examples.
+docker compose --env-file .env -p legalapp \
+  -f docker-compose.courtlistener-mcp.yml --profile loader run --rm \
+  courtlistener-loader python -m mcp_server.loader --load-mvp \
+  --coverage-profile federal-appellate --limit "$BOUNDED_ROW_LIMIT"
+
+docker compose --env-file .env -p legalapp \
+  -f docker-compose.courtlistener-mcp.yml --profile loader run --rm \
+  courtlistener-loader python -m mcp_server.loader --load-staged \
+  --limit "$BOUNDED_ROW_LIMIT"
+
+docker compose --env-file .env -p legalapp \
+  -f docker-compose.courtlistener-mcp.yml --profile loader run --rm \
+  courtlistener-loader python -m mcp_server.loader --chunk-opinions \
+  --limit "$BOUNDED_CHUNK_LIMIT"
+```
+
+Opinion retrieval is not ready until the chunk step completes. The valid
+coverage profiles are `regional`, `federal-appellate`, and
+`national-priority`; the Compose loader defaults to `federal-appellate`.
+Select a profile with `--coverage-profile` or
+`COURTLISTENER_COVERAGE_PROFILE` and verify the loaded result with the coverage
+tools before describing it as available.
+
+`search_legal_authorities` uses a separate official-authority corpus populated
+by source-specific ingest and the `authority-sync` path; the CourtListener
+snapshot loader above does not populate it. See
+[CourtListener MCP operations](courtlistener_mcp_operations.md) for production
+limits, sequencing, embedding, backup, and recovery procedures.
+
+Other opt-in Compose profiles are:
+
+- `sync`, which runs `mcp_server.sync`;
+- `rag-backup`, which mounts the corpus volumes for the backup helper;
+- `authority-sync`, which runs `mcp_server.authority_scheduler`;
+- `embedding`, which runs `mcp_server.dispatcher`; and
+- `embedding-scheduler`, which runs `mcp_server.embedding_scheduler`.
+
+The existing public application origin exposes the future transport at
+`/api/mcp`. Introducing a new MCP hostname would require an explicit nginx,
+origin/host allowlist, TLS, monitoring, and client-auth review.
 
 ## Product release checklist
 
