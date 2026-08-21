@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, ArrowRight, CheckCircle2, ClipboardCheck, FileText, LoaderCircle, Mail, Pencil, Send, Sparkles, X } from 'lucide-react'
-import { API_BASE_URL, updateTaskPendingAction } from '../../api'
+import { API_BASE_URL, syncTaskCloudDocument, updateTaskPendingAction } from '../../api'
 import DocumentDraftWorkspace from './DocumentDraftWorkspace'
 
 // The backend emits document links as origin-relative `/api/...`; re-base them
@@ -257,13 +257,15 @@ function proposalWithLiveTask(snapshot, task) {
   )
   const actionType = pendingAction?.type || (actionConsumed ? taskDelivery?.action_type : null)
   const approvalEffect = actionInvalidated
-    ? 'The email draft on this historical chat card is no longer attached to the live task. Nothing will be sent from this card.'
+    ? 'This historical draft is no longer attached to the live Review task and cannot be approved from this card.'
     : actionConsumed
-      ? 'This email action has already been approved. The immutable delivery payload is shown above and cannot be approved again from this card.'
-    : actionType === 'email_client'
-      ? `Approving sends this email to ${(pendingAction.to || []).join(', ')}. Edit the draft first if anything is wrong.`
+      ? actionType === 'matter_document_draft'
+        ? 'This exact cloud document revision has already been approved and cannot be approved again from this card.'
+        : 'This email action has already been approved. The immutable delivery payload is shown above and cannot be approved again from this card.'
+      : actionType === 'email_client'
+        ? `Approving sends this email to ${(pendingAction.to || []).join(', ')}. Edit the draft first if anything is wrong.`
       : actionType === 'matter_document_draft'
-        ? "Approving saves this reviewed draft as a Word document in the matter's Documents area. Nothing is sent to the client."
+        ? 'The DOCX is already in tenant cloud storage. Approval verifies the exact reviewed bytes; client delivery is separate.'
       : 'Approving moves this task into active work. Nothing is sent.'
   return {
     ...snapshot,
@@ -354,6 +356,7 @@ export default function ActionProposalCard({
   const [documentWorkspaceOpen, setDocumentWorkspaceOpen] = useState(false)
   const [documentSaving, setDocumentSaving] = useState(false)
   const [documentNotice, setDocumentNotice] = useState(null)
+  const [cloudSyncing, setCloudSyncing] = useState(false)
   const [editing, setEditing] = useState(false)
   const [state, setState] = useState('proposed')
   const [delivery, setDelivery] = useState(currentProposal?.delivery || null)
@@ -532,11 +535,33 @@ export default function ActionProposalCard({
       setLiveTask(updated)
       setDocumentTitle(updated.pending_action?.title || cleanTitle)
       setDraft(updated.pending_action?.body || draft)
-      setDocumentNotice('Saved to the Review task.')
+      setDocumentNotice('New DOCX revision saved to tenant cloud; review reset.')
     } catch (saveError) {
       setError(renderSafeError(saveError, 'The document draft could not be saved.'))
     } finally {
       setDocumentSaving(false)
+    }
+  }
+  const handleSyncCloudDocument = async () => {
+    if (!currentProposal?.task_id || !Number.isInteger(currentProposal?.version)) return
+    setCloudSyncing(true)
+    setDocumentNotice(null)
+    setError(null)
+    try {
+      const response = await syncTaskCloudDocument(currentProposal.task_id, currentProposal.version)
+      const updated = response?.task || response
+      setLiveTask(updated)
+      setDelivery(updated.delivery || null)
+      setDocumentTitle(updated.pending_action?.title || documentTitle)
+      setDraft(updated.pending_action?.body || draft)
+      setDocumentNotice(response?.changed === false || updated.cloud_sync?.changed === false
+        ? 'No cloud edits were found; this review is unchanged.'
+        : response?.message || 'Cloud edits imported as a new revision; review has been reset.')
+    } catch (syncError) {
+      setError(renderSafeError(syncError, 'Cloud edits could not be imported.'))
+      if (syncError?.response?.status === 409) setReloadCounter((value) => value + 1)
+    } finally {
+      setCloudSyncing(false)
     }
   }
 
@@ -544,9 +569,21 @@ export default function ActionProposalCard({
 
   if (isDocument) {
     const documentDelivery = delivery || currentProposal.delivery
-    const filed = documentDelivery?.status === 'sent' && documentDelivery?.action_type === 'matter_document_draft'
-    const savedDocumentUrl = filed && documentDelivery?.provider_message_id && currentProposal.matter_id
-      ? `${API_BASE_URL}/matters/${currentProposal.matter_id}/documents/${documentDelivery.provider_message_id}/download`
+    const approved = documentDelivery?.status === 'sent'
+      && documentDelivery?.action_type === 'matter_document_draft'
+    const documentId = pendingAction?.document_id
+      || currentProposal.document_id
+      || (approved ? documentDelivery?.provider_message_id : null)
+    const storageBackend = pendingAction?.document_storage_backend
+      || currentProposal.document_storage_backend
+    const storageState = documentDelivery?.status === 'failed'
+      ? 'conflict'
+      : currentProposal.document_storage_state || (documentId ? 'verified' : 'pending')
+    const documentOpenUrl = documentId && currentProposal.matter_id
+      ? `${API_BASE_URL}/matters/${currentProposal.matter_id}/documents/${documentId}/open`
+      : ''
+    const documentDownloadUrl = documentId && currentProposal.matter_id
+      ? `${API_BASE_URL}/matters/${currentProposal.matter_id}/documents/${documentId}/download`
       : ''
     const canOpen = verification === 'verified' && !currentProposal.action_invalidated
     return (
@@ -558,11 +595,11 @@ export default function ActionProposalCard({
               <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-700"><FileText size={21} /></div>
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-blue-700">Word document draft</span>
-                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${filed ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-violet-200 bg-violet-50 text-violet-700'}`}>{filed ? 'Filed to matter' : 'In review'}</span>
+                  <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-blue-700">Tenant-cloud DOCX</span>
+                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${storageState === 'conflict' ? 'border-red-200 bg-red-50 text-red-700' : approved ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-violet-200 bg-violet-50 text-violet-700'}`}>{storageState === 'conflict' ? 'Cloud conflict' : approved ? 'Approved revision' : 'Cloud copy ready'}</span>
                 </div>
                 <h4 className="mt-1 truncate font-serif text-lg font-bold text-brand-ink">{documentTitle || 'Untitled document'}</h4>
-                <p className="mt-0.5 text-xs text-brand-muted">{filed ? 'Approved Word file' : 'Prepared from this matter and your chat instructions'} · {String(draft || '').trim().split(/\s+/).filter(Boolean).length.toLocaleString()} words</p>
+                <p className="mt-0.5 text-xs text-brand-muted">{approved ? 'Exact cloud bytes approved' : 'Stored in the firm’s connected cloud and linked to Review'} · {String(draft || '').trim().split(/\s+/).filter(Boolean).length.toLocaleString()} words</p>
               </div>
             </div>
 
@@ -571,13 +608,12 @@ export default function ActionProposalCard({
             </div>
 
             <div className="mt-4 flex flex-wrap items-center gap-2">
-              {filed && savedDocumentUrl ? (
-                <a href={savedDocumentUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg bg-brand-ink px-3.5 py-2 text-xs font-bold text-white"><FileText size={14} />Open Word document</a>
-              ) : (
-                <button type="button" onClick={() => setDocumentWorkspaceOpen(true)} disabled={!canOpen} className="inline-flex items-center gap-2 rounded-lg bg-brand-ink px-3.5 py-2 text-xs font-bold text-white disabled:opacity-50"><Sparkles size={14} />Open draft workspace</button>
-              )}
-              {!filed && <a href={`/tasks/${currentProposal.task_id}`} className="inline-flex items-center gap-2 rounded-lg border border-brand-line px-3.5 py-2 text-xs font-bold text-brand-ink hover:border-brand-accent">Continue in Review <ArrowRight size={14} /></a>}
-              <span className="ml-auto text-[11px] text-brand-muted">Filing and Word conversion happen on approval.</span>
+              <button type="button" onClick={() => setDocumentWorkspaceOpen(true)} disabled={!canOpen} className="inline-flex items-center gap-2 rounded-lg bg-brand-ink px-3.5 py-2 text-xs font-bold text-white disabled:opacity-50"><Sparkles size={14} />Open draft workspace</button>
+              {documentOpenUrl && <a href={documentOpenUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg border border-brand-line px-3.5 py-2 text-xs font-bold text-brand-ink hover:border-brand-accent"><FileText size={14} />Open cloud copy</a>}
+              {documentOpenUrl && <button type="button" onClick={handleSyncCloudDocument} disabled={cloudSyncing || !canOpen} className="inline-flex items-center gap-2 rounded-lg border border-brand-line px-3.5 py-2 text-xs font-bold text-brand-ink hover:border-brand-accent disabled:opacity-50">{cloudSyncing ? 'Refreshing…' : 'Refresh edits from cloud'}</button>}
+              {documentDownloadUrl && <a href={documentDownloadUrl} className="inline-flex items-center gap-2 rounded-lg border border-brand-line px-3.5 py-2 text-xs font-bold text-brand-ink hover:border-brand-accent">Download DOCX</a>}
+              {!approved && <a href={`/tasks/${currentProposal.task_id}`} className="inline-flex items-center gap-2 rounded-lg border border-brand-line px-3.5 py-2 text-xs font-bold text-brand-ink hover:border-brand-accent">Continue in Review <ArrowRight size={14} /></a>}
+              <span className="ml-auto text-[11px] text-brand-muted">Approval verifies this cloud revision; client delivery stays separate.</span>
             </div>
             {verification === 'loading' && <p role="status" className="mt-3 flex items-center gap-2 text-xs font-semibold text-brand-muted"><LoaderCircle size={14} className="animate-spin" />Checking the live Review task…</p>}
             {verification === 'failed' && <div role="alert" className="mt-3 text-xs font-semibold text-brand-rose"><p>{loadError}</p><button type="button" onClick={() => setReloadCounter((value) => value + 1)} className="mt-2 rounded-lg border border-brand-line px-3 py-2 text-brand-ink">Retry task status</button></div>}
@@ -589,9 +625,14 @@ export default function ActionProposalCard({
           body={draft}
           sources={currentProposal.sources || pendingAction?.sources || []}
           dirty={bodyChanged || titleChanged}
+          officeSnapshot={pendingAction?.document_edit_mode === 'office_snapshot'}
+          previewTruncated={Boolean(pendingAction?.document_preview_truncated)}
           saving={documentSaving}
-          filed={filed}
-          savedDocumentUrl={savedDocumentUrl}
+          approved={approved}
+          cloudDocumentUrl={documentOpenUrl}
+          downloadUrl={documentDownloadUrl}
+          storageBackend={storageBackend}
+          storageState={storageState}
           notice={documentNotice}
           error={error}
           onTitleChange={(value) => { setDocumentTitle(value); setDocumentNotice(null) }}

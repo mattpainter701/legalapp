@@ -94,6 +94,44 @@ class ListMatterRecipientsArgs(ChatActionModel):
     matter_id: UUID
 
 
+MatterContextSection = Literal[
+    "team",
+    "tasks",
+    "events",
+    "notes",
+]
+
+
+class GetMatterContextArgs(ChatActionModel):
+    matter_id: UUID
+    sections: list[MatterContextSection] = Field(
+        default_factory=lambda: ["team", "tasks", "events", "notes"],
+        min_length=1,
+        max_length=4,
+    )
+    max_items_per_section: int = Field(default=10, ge=1, le=25)
+
+
+class ListMatterDocumentsArgs(ChatActionModel):
+    matter_id: UUID
+    category: str | None = Field(default=None, min_length=1, max_length=100)
+    limit: int = Field(default=25, ge=1, le=50)
+
+
+class GetMatterDocumentTextArgs(ChatActionModel):
+    matter_id: UUID
+    document_id: UUID
+    max_characters: int = Field(default=20_000, ge=100, le=50_000)
+    max_pdf_pages: int = Field(default=20, ge=1, le=50)
+
+
+class ListDocumentTemplatesArgs(ChatActionModel):
+    matter_id: UUID
+    query: str | None = Field(default=None, min_length=1, max_length=200)
+    category: str | None = Field(default=None, min_length=1, max_length=100)
+    limit: int = Field(default=20, ge=1, le=50)
+
+
 class ProposeTaskArgs(ChatActionModel):
     matter_id: UUID
     title: str = Field(min_length=1, max_length=500)
@@ -123,13 +161,17 @@ class ProposeClientEmailArgs(ChatActionModel):
 
 
 class ProposeMatterDocumentArgs(ChatActionModel):
-    """Draft a Word document for a matter; an attorney must approve its save."""
+    """Draft cloud-backed Word work for a matter and route it for review."""
 
     matter_id: UUID
+    client_request_id: UUID | None = None
     title: str = Field(min_length=1, max_length=300)
-    body: str = Field(min_length=1, max_length=20_000)
+    document_kind: str = Field(default="other", min_length=1, max_length=80)
+    body: str = Field(min_length=1, max_length=50_000)
     due_date: date | None = None
     source_ids: list[str] = Field(default_factory=list, max_length=10)
+    staff_reviewer_user_id: UUID | None = None
+    attorney_reviewer_user_id: UUID | None = None
 
 
 # ── Model output contract ───────────────────────────────────────────────────
@@ -234,12 +276,35 @@ class EmailClientAction(ChatActionModel):
 
 
 class MatterDocumentDraftAction(ChatActionModel):
-    """An editable office-document draft, persisted only after approval."""
+    """An exact artifact revision bound to its tenant-cloud working copy."""
 
     type: Literal["matter_document_draft"]
     matter_id: UUID
     title: str = Field(min_length=1, max_length=300)
-    body: str = Field(min_length=1, max_length=20_000)
+    body: str = Field(min_length=1, max_length=50_000)
+    artifact_id: UUID | None = None
+    artifact_revision_id: UUID | None = None
+    artifact_revision_no: int | None = Field(default=None, ge=1)
+    artifact_sha256: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    document_id: UUID | None = None
+    document_sha256: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    document_storage_backend: (
+        Literal["onedrive", "sharepoint", "google_drive"] | None
+    ) = None
+    document_provider_etag: str | None = Field(default=None, max_length=500)
+    document_provider_version_id: str | None = Field(default=None, max_length=500)
+    document_preview_truncated: bool = False
+    document_edit_mode: Literal["lawhand_text", "office_snapshot"] = "lawhand_text"
     source_ids: list[str] = Field(default_factory=list, max_length=10)
     sources: list[dict] = Field(default_factory=list, max_length=10)
 
@@ -250,6 +315,42 @@ class MatterDocumentDraftAction(ChatActionModel):
         if any(char in clean for char in ("/", "\\", "\x00")):
             raise ValueError("Document title cannot contain a path")
         return clean
+
+    @model_validator(mode="after")
+    def artifact_binding_is_complete(self):
+        artifact_binding = (
+            self.artifact_id,
+            self.artifact_revision_id,
+            self.artifact_revision_no,
+            self.artifact_sha256,
+        )
+        if any(value is not None for value in artifact_binding) and not all(
+            value is not None for value in artifact_binding
+        ):
+            raise ValueError("Artifact revision binding must be complete")
+        document_binding = (
+            self.document_id,
+            self.document_sha256,
+            self.document_storage_backend,
+        )
+        if self.artifact_id is not None and not all(
+            value is not None for value in document_binding
+        ):
+            raise ValueError(
+                "Generated artifact binding requires a tenant-cloud document"
+            )
+        if self.artifact_id is None and any(
+            value is not None
+            for value in (
+                *document_binding,
+                self.document_provider_etag,
+                self.document_provider_version_id,
+            )
+        ):
+            raise ValueError(
+                "Tenant-cloud document evidence requires an artifact revision"
+            )
+        return self
 
 
 PendingAction = Annotated[

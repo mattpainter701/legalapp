@@ -10,6 +10,7 @@ Tasks router — deadline and task management.
   DELETE /api/tasks/{id}       delete/cancel
 """
 
+import hashlib
 import logging
 import time
 import uuid
@@ -25,11 +26,28 @@ from sqlalchemy.orm import aliased
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.contact import Contact, Lead
+from app.models.matter_document import MatterDocument
 from app.models.plugin import Matter
 from app.models.task import Task, TaskAutomationRun, TaskEvent
 from app.models.tenant import TenantSettings
 from app.models.user import User
+from app.schemas.chat_action import MatterDocumentDraftAction
+from app.services.cloud_artifact_materialization import (
+    CloudArtifactMaterializationError,
+    cloud_artifact_materializer,
+)
+from app.services.cloud_docx_snapshot import (
+    CloudDocxSnapshotError,
+    inspect_cloud_docx_snapshot,
+)
+from app.services.document_accountability import append_document_integrity_event
 from app.services.email import email_delivery_http_error, email_service
+from app.services.generated_artifacts import (
+    GeneratedArtifactError,
+    create_generated_artifact_revision,
+)
+from app.services.matter_file_store import MatterFileReadError, MatterFileTooLarge
+from app.services.provider_http import ProviderError
 from app.services.task_history import record_customer_contact, record_task_event
 from app.services.task_notifications import (
     notify_task_created,
@@ -47,6 +65,9 @@ from app.services.task_workflow import (
     append_task_event,
     increment_task_version,
     require_task_references_for_tenant,
+    record_review_decision,
+    reset_staged_review_after_edit,
+    staged_review_is_approved,
     transition_task,
 )
 from app.schemas.task import (
@@ -63,6 +84,8 @@ from app.schemas.task import (
     TaskBoardTelemetryRequest,
     TaskCardMatter,
     TaskCardPerson,
+    TaskCloudSyncResponse,
+    PendingActionCloudSync,
     TaskContactedRequest,
     TaskCreate,
     TaskDeliveryState,
@@ -71,6 +94,8 @@ from app.schemas.task import (
     TaskListResponse,
     TaskResponse,
     TaskTransitionRequest,
+    TaskReviewDecisionRequest,
+    AttorneyOverrideRequest,
     PendingActionEdit,
     TaskUpdate,
 )
@@ -159,17 +184,28 @@ async def _require_task_references_for_tenant(
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
-def _require_action_reviewer_or_admin(task: Task, user) -> None:
-    """Restrict an outbound draft to its assigned reviewer or a tenant admin."""
+async def _require_action_reviewer_or_approver(
+    db: AsyncSession, task: Task, user
+) -> None:
+    """Restrict an outbound draft to its reviewer or a legal approver.
+
+    Role labels are presentation data, not an authorization boundary. A user
+    outside the assignment may intervene only when the tenant's live RBAC
+    grants the explicit legal-approval capability.
+    """
     if not task.pending_action:
         return
-    if user.role == "admin" or task.reviewer_user_id == user.id:
+    if task.reviewer_user_id == user.id:
+        return
+    from app.services.rbac_service import get_user_capabilities
+
+    if "approve_legal_work" in await get_user_capabilities(db, user.id):
         return
     raise HTTPException(
         status_code=403,
         detail=(
-            "Only the assigned reviewer or an admin can change or approve "
-            "this outbound action"
+            "Only the assigned reviewer or a user with legal approval "
+            "authority can change this outbound action"
         ),
     )
 
@@ -1038,6 +1074,157 @@ async def get_task_events(
     )
 
 
+@router.post("/{task_id}/review/staff", response_model=TaskResponse)
+async def review_task_as_staff(
+    task_id: uuid.UUID,
+    payload: TaskReviewDecisionRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    tenant_uuid = uuid.UUID(str(current_user.tenant_id))
+    await set_tenant_context(db, str(tenant_uuid))
+    task = (
+        await db.execute(
+            select(Task)
+            .where(Task.id == task_id, Task.tenant_id == tenant_uuid)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    try:
+        if payload.expected_version != task.version:
+            raise TaskVersionConflict()
+        await record_review_decision(
+            db,
+            task,
+            actor=current_user,
+            stage="staff",
+            decision=payload.decision,
+            reason=payload.reason,
+        )
+    except TaskWorkflowError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    await db.commit()
+    await set_tenant_context(db, str(tenant_uuid))
+
+    await db.refresh(task)
+    return await _task_response_with_delivery(db, task)
+
+
+async def _approve_staged_task(
+    task_id: uuid.UUID,
+    payload: TaskReviewDecisionRequest | AttorneyOverrideRequest,
+    current_user,
+    db: AsyncSession,
+    *,
+    override: bool = False,
+):
+    tenant_uuid = uuid.UUID(str(current_user.tenant_id))
+    tenant_id = str(tenant_uuid)
+    await set_tenant_context(db, tenant_id)
+    task = (
+        await db.execute(
+            select(Task)
+            .where(Task.id == task_id, Task.tenant_id == tenant_uuid)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if payload.expected_version != task.version:
+        raise HTTPException(
+            status_code=409, detail="This task changed after it was loaded"
+        )
+    decision = "approve" if override else payload.decision
+    try:
+        await record_review_decision(
+            db,
+            task,
+            actor=current_user,
+            stage="attorney",
+            decision=decision,
+            reason=payload.reason,
+            override=override,
+        )
+        previous_status = task.status
+        transition_task(
+            db,
+            task,
+            to_status="in_progress",
+            actor_user_id=current_user.id,
+            expected_version=task.version,
+        )
+        await enqueue_durable_automation(
+            db,
+            task,
+            from_status=previous_status,
+            to_status=task.status,
+            actor_user_id=current_user.id,
+        )
+    except (TaskWorkflowError, ActionApprovalConflict) as exc:
+        await db.rollback()
+        status_code = getattr(exc, "status_code", 409)
+        raise HTTPException(
+            status_code=status_code, detail=getattr(exc, "detail", str(exc))
+        ) from exc
+    await db.commit()
+    await set_tenant_context(db, tenant_id)
+    await db.refresh(task)
+    return await _task_response_with_delivery(db, task)
+
+
+@router.post("/{task_id}/review/attorney", response_model=TaskResponse)
+async def review_task_as_attorney(
+    task_id: uuid.UUID,
+    payload: TaskReviewDecisionRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if payload.decision == "request_changes":
+        tenant_uuid = uuid.UUID(str(current_user.tenant_id))
+        await set_tenant_context(db, str(tenant_uuid))
+        task = (
+            await db.execute(
+                select(Task)
+                .where(Task.id == task_id, Task.tenant_id == tenant_uuid)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if payload.expected_version != task.version:
+            raise HTTPException(
+                status_code=409, detail="This task changed after it was loaded"
+            )
+        try:
+            await record_review_decision(
+                db,
+                task,
+                actor=current_user,
+                stage="attorney",
+                decision="request_changes",
+                reason=payload.reason,
+            )
+        except TaskWorkflowError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        await db.commit()
+        await set_tenant_context(db, str(tenant_uuid))
+        await db.refresh(task)
+        return await _task_response_with_delivery(db, task)
+    return await _approve_staged_task(task_id, payload, current_user, db)
+
+
+@router.post("/{task_id}/review/attorney-override", response_model=TaskResponse)
+async def override_staff_review(
+    task_id: uuid.UUID,
+    payload: AttorneyOverrideRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _approve_staged_task(task_id, payload, current_user, db, override=True)
+
+
 @router.post("/{task_id}/transition", response_model=TaskResponse)
 async def transition_task_status(
     task_id: uuid.UUID,
@@ -1058,13 +1245,33 @@ async def transition_task_status(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    if (
+        task.review_policy == "staff_then_attorney"
+        and payload.to_status == "in_progress"
+        and not staged_review_is_approved(task)
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Attorney approval is required before this staged task can proceed",
+        )
+
+    if (
+        task.review_policy == "staff_then_attorney"
+        and payload.reviewer_user_id is not None
+        and payload.reviewer_user_id != task.reviewer_user_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Staged reviewers must be reassigned through the review workflow",
+        )
+
     if task.pending_action:
         reviewer_change = (
             payload.reviewer_user_id is not None
             and payload.reviewer_user_id != task.reviewer_user_id
         )
         if payload.to_status != task.status or reviewer_change:
-            _require_action_reviewer_or_admin(task, current_user)
+            await _require_action_reviewer_or_approver(db, task, current_user)
 
     if payload.reviewer_user_id:
         await _require_task_references_for_tenant(
@@ -1314,7 +1521,7 @@ async def update_pending_action(
         raise HTTPException(
             status_code=409, detail="This task has no drafted action to edit"
         )
-    _require_action_reviewer_or_admin(task, current_user)
+    await _require_action_reviewer_or_approver(db, task, current_user)
     if task.status != "review":
         # Once approved, the draft is history. Editing it would misrepresent
         # what was actually sent.
@@ -1346,19 +1553,379 @@ async def update_pending_action(
     # Replace the whole mapping: SQLAlchemy does not track in-place JSON edits.
     action = dict(task.pending_action)
     action.update(updates)
+    artifact_revision_no = None
+    if action_type == "matter_document_draft" and action.get("artifact_id"):
+        try:
+            bound_action = MatterDocumentDraftAction.model_validate(action)
+            if bound_action.document_edit_mode == "office_snapshot":
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Continue editing this formatted snapshot in the cloud DOCX, "
+                        "then refresh it into LawHand"
+                    ),
+                )
+            revision = await create_generated_artifact_revision(
+                db,
+                tenant_id=uuid.UUID(tenant_id),
+                artifact_id=bound_action.artifact_id,
+                actor_user_id=current_user.id,
+                expected_revision_no=bound_action.artifact_revision_no,
+                content_text=bound_action.body,
+                title=bound_action.title,
+            )
+            materialized = await cloud_artifact_materializer.materialize(
+                db=db,
+                tenant_id=uuid.UUID(tenant_id),
+                artifact_id=bound_action.artifact_id,
+                revision_id=revision.id,
+                task_id=task.id,
+                uploaded_by_user_id=current_user.id,
+                supersedes_document_id=bound_action.document_id,
+            )
+        except GeneratedArtifactError as exc:
+            status_code = 409 if "conflict" in exc.code else 422
+            raise HTTPException(status_code=status_code, detail=exc.message) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=409, detail="The artifact revision binding is invalid"
+            ) from exc
+        except CloudArtifactMaterializationError as exc:
+            # The old revision remains the review target unless the replacement
+            # was written, read back, and bound successfully.
+            await db.rollback()
+            await set_tenant_context(db, tenant_id)
+            status_code = 503 if getattr(exc, "retryable", False) else 409
+            raise HTTPException(
+                status_code=status_code,
+                detail=(
+                    "The revised draft could not be written and verified in "
+                    "tenant storage"
+                ),
+            ) from exc
+
+        document = materialized.document
+        action.update(
+            {
+                "body": revision.content_text,
+                "artifact_revision_id": str(revision.id),
+                "artifact_revision_no": revision.revision_no,
+                "artifact_sha256": revision.content_sha256,
+                "document_id": str(document.id),
+                "document_sha256": materialized.sha256,
+                "document_storage_backend": document.storage_backend,
+                "document_provider_etag": document.provider_etag,
+                "document_provider_version_id": document.provider_version_id,
+                "document_preview_truncated": False,
+                "document_edit_mode": "lawhand_text",
+            }
+        )
+        try:
+            action = MatterDocumentDraftAction.model_validate(action).model_dump(
+                mode="json"
+            )
+        except ValueError as exc:
+            await db.rollback()
+            await set_tenant_context(db, tenant_id)
+            raise HTTPException(
+                status_code=409,
+                detail="The revised cloud document binding is invalid",
+            ) from exc
+        artifact_revision_no = revision.revision_no
     task.pending_action = action
+    review_reset = reset_staged_review_after_edit(task)
     increment_task_version(task)
     append_task_event(
         db,
         task,
         event_type="draft_edited",
         actor_user_id=current_user.id,
-        metadata={"fields": sorted(updates)},
+        metadata={
+            "fields": sorted(updates),
+            "artifact_revision_no": artifact_revision_no,
+            "staged_review_reset": review_reset,
+        },
     )
     await db.commit()
     await set_tenant_context(db, tenant_id)
     await db.refresh(task)
     return await _task_response_with_delivery(db, task)
+
+
+@router.post(
+    "/{task_id}/pending-action/sync-cloud",
+    response_model=TaskCloudSyncResponse,
+)
+async def sync_pending_action_from_cloud(
+    task_id: uuid.UUID,
+    payload: PendingActionCloudSync,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Adopt external Word/LibreOffice edits as a new verified revision.
+
+    The mutable provider object is never silently substituted for reviewed
+    evidence.  Changed bytes are safely inspected, copied byte-for-byte to a
+    new cloud object, read back, linked to a new immutable artifact revision,
+    and routed through review again.
+    """
+    tenant_uuid = uuid.UUID(str(current_user.tenant_id))
+    tenant_id = str(tenant_uuid)
+    await set_tenant_context(db, tenant_id)
+
+    task = await db.scalar(
+        select(Task)
+        .where(Task.id == task_id, Task.tenant_id == tenant_uuid)
+        .with_for_update()
+    )
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if not task.pending_action:
+        raise HTTPException(
+            status_code=409, detail="This task has no cloud document to refresh"
+        )
+    await _require_action_reviewer_or_approver(db, task, current_user)
+    if task.status != "review":
+        raise HTTPException(
+            status_code=409,
+            detail="Only a document still in Review can be refreshed from cloud",
+        )
+    if payload.expected_version != task.version:
+        conflict = TaskVersionConflict()
+        raise HTTPException(
+            status_code=conflict.status_code, detail=conflict.detail
+        ) from None
+
+    try:
+        action = MatterDocumentDraftAction.model_validate(task.pending_action)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="The review task does not have a complete cloud document binding",
+        ) from exc
+    if (
+        action.artifact_id is None
+        or action.artifact_revision_id is None
+        or action.artifact_revision_no is None
+        or action.document_id is None
+        or action.document_sha256 is None
+        or task.matter_id != action.matter_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="The review task does not have a complete cloud document binding",
+        )
+
+    document = await db.scalar(
+        select(MatterDocument)
+        .where(
+            MatterDocument.id == action.document_id,
+            MatterDocument.tenant_id == tenant_uuid,
+            MatterDocument.matter_id == action.matter_id,
+            MatterDocument.task_id == task.id,
+            MatterDocument.generated_artifact_id == action.artifact_id,
+            MatterDocument.generated_artifact_revision_id
+            == action.artifact_revision_id,
+        )
+        .with_for_update()
+    )
+    if document is None:
+        raise HTTPException(
+            status_code=409,
+            detail="The bound tenant-cloud document is unavailable",
+        )
+    if (
+        document.storage_backend not in {"onedrive", "sharepoint", "google_drive"}
+        or not document.provider_object_id
+        or document.document_sha256 != action.document_sha256
+        or document.document_role != "working_copy"
+        or document.document_status not in {"draft", "in_review"}
+        or document.storage_state not in {"verified", "conflict"}
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="The bound document is not a refreshable tenant-cloud working copy",
+        )
+
+    try:
+        cloud_bytes = await cloud_artifact_materializer.read_current_cloud_bytes(
+            tenant_id=tenant_uuid,
+            document=document,
+        )
+    except MatterFileTooLarge as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="The cloud DOCX is too large to adopt as a review revision",
+        ) from exc
+    except MatterFileReadError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="The tenant-cloud document could not be read from its durable binding",
+        ) from exc
+    except ProviderError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="The cloud provider could not return the current document",
+        ) from exc
+
+    try:
+        snapshot = inspect_cloud_docx_snapshot(
+            cloud_bytes,
+            filename=document.filename,
+        )
+    except CloudDocxSnapshotError as exc:
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+
+    if hashlib.sha256(cloud_bytes).hexdigest() == action.document_sha256:
+        document.storage_state = "verified"
+        document.storage_verified_at = datetime.now(timezone.utc)
+        await append_document_integrity_event(
+            db,
+            tenant_id=tenant_uuid,
+            matter_id=action.matter_id,
+            task_id=task.id,
+            artifact_id=action.artifact_id,
+            artifact_revision_id=action.artifact_revision_id,
+            document_id=document.id,
+            event_type="cloud_working_copy_reverified",
+            actor_type="user",
+            actor_user_id=current_user.id,
+            content_sha256=action.document_sha256,
+            provider_object_id=document.provider_object_id,
+            provider_etag=document.provider_etag,
+            provider_version_id=document.provider_version_id,
+            metadata={"storage_backend": document.storage_backend},
+        )
+        await db.commit()
+        await set_tenant_context(db, tenant_id)
+        await db.refresh(task)
+        return TaskCloudSyncResponse(
+            task=await _task_response_with_delivery(db, task),
+            changed=False,
+            message="Cloud working copy already matches the review revision.",
+        )
+
+    previous_sha256 = action.document_sha256
+    try:
+        revision = await create_generated_artifact_revision(
+            db,
+            tenant_id=tenant_uuid,
+            artifact_id=action.artifact_id,
+            actor_user_id=current_user.id,
+            expected_revision_no=action.artifact_revision_no,
+            content_text=snapshot.review_text,
+            title=action.title,
+        )
+        materialized = await cloud_artifact_materializer.materialize(
+            db=db,
+            tenant_id=tenant_uuid,
+            artifact_id=action.artifact_id,
+            revision_id=revision.id,
+            task_id=task.id,
+            uploaded_by_user_id=current_user.id,
+            supersedes_document_id=document.id,
+            source_docx_bytes=cloud_bytes,
+        )
+    except GeneratedArtifactError as exc:
+        status_code = 409 if "conflict" in exc.code else 422
+        raise HTTPException(status_code=status_code, detail=exc.message) from exc
+    except CloudArtifactMaterializationError as exc:
+        await db.rollback()
+        await set_tenant_context(db, tenant_id)
+        status_code = 503 if getattr(exc, "retryable", False) else 409
+        raise HTTPException(
+            status_code=status_code,
+            detail=(
+                "The cloud edits could not be copied and verified as a new "
+                "review revision"
+            ),
+        ) from exc
+
+    new_document = materialized.document
+    action_payload = action.model_dump(mode="json")
+    action_payload.update(
+        {
+            "body": revision.content_text,
+            "artifact_revision_id": str(revision.id),
+            "artifact_revision_no": revision.revision_no,
+            "artifact_sha256": revision.content_sha256,
+            "document_id": str(new_document.id),
+            "document_sha256": materialized.sha256,
+            "document_storage_backend": new_document.storage_backend,
+            "document_provider_etag": new_document.provider_etag,
+            "document_provider_version_id": new_document.provider_version_id,
+            "document_preview_truncated": snapshot.preview_truncated,
+            "document_edit_mode": "office_snapshot",
+        }
+    )
+    try:
+        task.pending_action = MatterDocumentDraftAction.model_validate(
+            action_payload
+        ).model_dump(mode="json")
+    except ValueError as exc:
+        await db.rollback()
+        await set_tenant_context(db, tenant_id)
+        raise HTTPException(
+            status_code=409,
+            detail="The adopted cloud document binding is invalid",
+        ) from exc
+
+    # The provider object the user edited no longer represents its persisted
+    # historical hash.  Keep that evidence but mark its pointer as conflicted;
+    # the new document is the independently verified review snapshot.
+    document.storage_state = "conflict"
+    review_reset = reset_staged_review_after_edit(task)
+    increment_task_version(task)
+    append_task_event(
+        db,
+        task,
+        event_type="cloud_revision_adopted",
+        actor_user_id=current_user.id,
+        metadata={
+            "previous_document_id": str(document.id),
+            "document_id": str(new_document.id),
+            "previous_sha256": previous_sha256,
+            "document_sha256": materialized.sha256,
+            "artifact_revision_no": revision.revision_no,
+            "preview_truncated": snapshot.preview_truncated,
+            "staged_review_reset": review_reset,
+        },
+    )
+    await append_document_integrity_event(
+        db,
+        tenant_id=tenant_uuid,
+        matter_id=action.matter_id,
+        task_id=task.id,
+        artifact_id=action.artifact_id,
+        artifact_revision_id=revision.id,
+        document_id=new_document.id,
+        operation_id=materialized.operation.id,
+        event_type="external_cloud_edit_adopted",
+        actor_type="user",
+        actor_user_id=current_user.id,
+        content_sha256=materialized.sha256,
+        provider_object_id=new_document.provider_object_id,
+        provider_etag=new_document.provider_etag,
+        provider_version_id=new_document.provider_version_id,
+        metadata={
+            "storage_backend": new_document.storage_backend,
+            "previous_document_id": str(document.id),
+            "previous_sha256": previous_sha256,
+            "byte_count": len(cloud_bytes),
+            "preview_truncated": snapshot.preview_truncated,
+        },
+    )
+    await db.commit()
+    await set_tenant_context(db, tenant_id)
+    await db.refresh(task)
+    return TaskCloudSyncResponse(
+        task=await _task_response_with_delivery(db, task),
+        changed=True,
+        message=(
+            "Cloud edits were preserved byte-for-byte as a new verified DOCX "
+            "revision. Review approvals were reset."
+        ),
+    )
 
 
 @router.patch("/{task_id}", response_model=TaskResponse)
@@ -1382,6 +1949,15 @@ async def update_task(
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    if (
+        task.review_policy == "staff_then_attorney"
+        and payload.status == "in_progress"
+        and not staged_review_is_approved(task)
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Attorney approval is required before this staged task can proceed",
+        )
 
     previous_calendar_user_id = task_calendar_user_id(task)
     previous_assignee_id = task.assigned_to_user_id
@@ -1467,6 +2043,15 @@ async def update_task(
     waiting_reason = updates.pop("waiting_reason", None)
     waiting_follow_up_date = updates.pop("waiting_follow_up_date", None)
     reviewer_user_id = updates.pop("reviewer_user_id", None)
+    if (
+        task.review_policy == "staff_then_attorney"
+        and "reviewer_user_id" in payload.model_fields_set
+        and reviewer_user_id != task.reviewer_user_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Staged reviewers must be reassigned through the review workflow",
+        )
     if task.pending_action:
         reviewer_change = (
             "reviewer_user_id" in payload.model_fields_set
@@ -1474,7 +2059,7 @@ async def update_task(
         )
         status_change = new_status is not None and new_status != task.status
         if status_change or reviewer_change:
-            _require_action_reviewer_or_admin(task, current_user)
+            await _require_action_reviewer_or_approver(db, task, current_user)
     transition_changed = False
     workflow_metadata_requested = bool(
         {"waiting_reason", "waiting_follow_up_date", "reviewer_user_id"}

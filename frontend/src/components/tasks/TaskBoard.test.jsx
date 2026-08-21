@@ -240,6 +240,9 @@ describe('TaskBoard', () => {
         type: 'matter_document_draft',
         title: 'Client status letter',
         body: 'Dear Client,\n\nThis letter provides the current matter status.',
+        document_id: 'document-cloud-1',
+        document_sha256: 'b'.repeat(64),
+        document_storage_backend: 'sharepoint',
         sources: [{ source_id: 'matter:1', label: 'Matter notes', url: '' }],
       },
     }
@@ -264,14 +267,22 @@ describe('TaskBoard', () => {
 
     render(<TaskBoard {...props} data={draftedData} taskId="task-document-draft" />)
 
-    expect(await screen.findByText('Word document draft')).toBeInTheDocument()
+    expect(await screen.findByText('Tenant-cloud DOCX')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Open draft workspace' }))
     expect(screen.getByRole('dialog', { name: 'Client status letter' })).toBeInTheDocument()
     expect(screen.getByText('No template attached')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open cloud working copy' })).toHaveAttribute(
+      'href',
+      expect.stringContaining('/matters/matter-1/documents/document-cloud-1/open'),
+    )
+    expect(screen.getByRole('link', { name: 'Download exact DOCX' })).toHaveAttribute(
+      'href',
+      expect.stringContaining('/matters/matter-1/documents/document-cloud-1/download'),
+    )
 
     await user.clear(screen.getByRole('textbox', { name: 'Document text' }))
     await user.type(screen.getByRole('textbox', { name: 'Document text' }), 'Dear Client,\n\nThe hearing is set for September 14.')
-    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+    await user.click(screen.getByRole('button', { name: 'Save as new cloud revision' }))
 
     await waitFor(() => expect(updateTaskPendingAction).toHaveBeenCalledWith(
       'task-document-draft',
@@ -281,11 +292,11 @@ describe('TaskBoard', () => {
         expected_version: 2,
       }),
     ))
-    await user.click(screen.getByRole('button', { name: 'Review and approve' }))
+    await user.click(screen.getByRole('button', { name: 'Review exact revision' }))
 
-    expect(screen.getByRole('dialog', { name: 'Approve and file document' })).toBeInTheDocument()
-    expect(screen.getByText(/convert.*Client status letter.*editable Word file/i)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Approve document' }))
+    expect(screen.getByRole('dialog', { name: 'Approve verified cloud revision' })).toBeInTheDocument()
+    expect(screen.getByText(/read back.*Client status letter.*exact registered DOCX bytes/i)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Approve exact revision' }))
     await waitFor(() => expect(props.onTransition).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'task-document-draft', version: 3 }),
       'in_progress',

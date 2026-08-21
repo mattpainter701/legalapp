@@ -1,4 +1,4 @@
-import { Suspense, createContext, lazy, useContext, useState, useEffect, useCallback } from 'react'
+import { Suspense, createContext, lazy, useContext, useState, useEffect, useCallback, useRef } from 'react'
 import { Routes, Route, Navigate, useParams, useSearchParams } from 'react-router-dom'
 import AppShell from './components/AppShell'
 import { ToastProvider } from './components/toast/ToastProvider'
@@ -72,18 +72,24 @@ const AuthContext = createContext(null)
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
+  const authRequestSequence = useRef(0)
 
   // Auth state lives entirely in the backend's httpOnly cookies — the access
   // token is never read from or written to browser-accessible storage, so an
   // XSS payload cannot exfiltrate a live session token. Session presence is
   // derived by asking the API who the current cookie belongs to.
   const fetchUser = useCallback(async () => {
+    const requestSequence = ++authRequestSequence.current
     try {
       const me = await getMe({ _suppressAuthRedirect: true })
-      setUser(me)
+      if (requestSequence === authRequestSequence.current) {
+        setUser(me)
+      }
       return me
     } catch {
-      setUser(null)
+      if (requestSequence === authRequestSequence.current) {
+        setUser(null)
+      }
       return null
     }
   }, [])
@@ -100,6 +106,9 @@ export function AuthProvider({ children }) {
   }, [fetchUser])
 
   const logoutUser = useCallback(() => {
+    // Invalidate any older session probe so it cannot restore a user after a
+    // logout or overwrite a newer login result when its refresh finishes late.
+    authRequestSequence.current += 1
     setUser(null)
   }, [])
 
