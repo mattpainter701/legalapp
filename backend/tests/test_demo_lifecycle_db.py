@@ -407,6 +407,7 @@ async def test_purge_reclaims_session_stranded_by_a_crashed_worker(
             status="purging",
             quota=20,
             expires_at=stranded_at,
+            purge_started_at=stranded_at,
         )
     )
     await db_session.commit()
@@ -416,6 +417,146 @@ async def test_purge_reclaims_session_stranded_by_a_crashed_worker(
     assert (
         await db_session.scalar(select(Tenant.id).where(Tenant.id == tenant_id)) is None
     )
+
+
+@pytest.mark.asyncio
+async def test_purge_does_not_reclaim_a_fresh_claim_on_a_long_expired_tenant(
+    db_session, tmp_path, monkeypatch
+):
+    """Staleness is measured from the claim, never from tenant expiry.
+
+    A tenant that expired well before its first purge attempt — a missed
+    scheduler run, a deploy, a restart — is already past any expiry-based
+    window at the moment a live worker claims it. Reclaiming on that basis
+    would put a second worker into file and row deletion alongside the first.
+    """
+    fixture_id, tenant_id = uuid.uuid4(), uuid.uuid4()
+    monkeypatch.setattr(demo_purge.get_settings(), "UPLOAD_DIR", str(tmp_path))
+    now = datetime.now(timezone.utc)
+    long_expired = now - (demo_purge._PURGE_RECLAIM_AFTER * 5)
+    db_session.add_all(
+        [
+            _tenant(tenant_id=fixture_id, domain="purge-fresh-fixture.invalid"),
+            _tenant(
+                tenant_id=tenant_id,
+                domain="purge-fresh-claim.demo.invalid",
+                billing_tier="demo",
+                expires_at=long_expired,
+            ),
+        ]
+    )
+    await db_session.flush()
+    await set_tenant_context(db_session, str(tenant_id))
+    db_session.add(
+        DemoSession(
+            tenant_id=tenant_id,
+            fixture_tenant_id=fixture_id,
+            fixture_version="purge-fresh-claim-test",
+            prospect_name="Synthetic Prospect",
+            prospect_email="prospect@example.invalid",
+            status="purging",
+            quota=20,
+            expires_at=long_expired,
+            # Another worker claimed this a moment ago and is still working it.
+            purge_started_at=now - timedelta(seconds=5),
+        )
+    )
+    await db_session.commit()
+
+    with pytest.raises(DemoPurgeRefused, match="already being purged"):
+        await purge_demo_tenant(db_session, tenant_id)
+
+    assert await db_session.scalar(select(Tenant.id).where(Tenant.id == tenant_id))
+
+
+@pytest.mark.asyncio
+async def test_purge_stamps_the_claim_so_the_next_worker_measures_its_own_window(
+    db_session, tmp_path, monkeypatch
+):
+    """The claim commit must record when it happened, including on a reclaim."""
+    fixture_id, tenant_id = uuid.uuid4(), uuid.uuid4()
+    monkeypatch.setattr(demo_purge.get_settings(), "UPLOAD_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        demo_purge,
+        "_purge_tables",
+        lambda: (_ for _ in ()).throw(DemoPurgeRefused("stop after the claim")),
+    )
+    expired_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    db_session.add_all(
+        [
+            _tenant(tenant_id=fixture_id, domain="purge-stamp-fixture.invalid"),
+            _tenant(
+                tenant_id=tenant_id,
+                domain="purge-stamp.demo.invalid",
+                billing_tier="demo",
+                expires_at=expired_at,
+            ),
+        ]
+    )
+    await db_session.flush()
+    await set_tenant_context(db_session, str(tenant_id))
+    db_session.add(
+        DemoSession(
+            tenant_id=tenant_id,
+            fixture_tenant_id=fixture_id,
+            fixture_version="purge-stamp-test",
+            prospect_name="Synthetic Prospect",
+            prospect_email="prospect@example.invalid",
+            status="active",
+            quota=20,
+            expires_at=expired_at,
+        )
+    )
+    await db_session.commit()
+
+    with pytest.raises(DemoPurgeRefused, match="stop after the claim"):
+        await purge_demo_tenant(db_session, tenant_id)
+
+    await set_tenant_context(db_session, str(tenant_id))
+    claimed_at = await db_session.scalar(
+        select(DemoSession.purge_started_at).where(DemoSession.tenant_id == tenant_id)
+    )
+    assert claimed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_purge_refuses_a_claim_with_no_recorded_start(
+    db_session, tmp_path, monkeypatch
+):
+    """An unstamped claim fails safe: refuse rather than risk a second worker."""
+    fixture_id, tenant_id = uuid.uuid4(), uuid.uuid4()
+    monkeypatch.setattr(demo_purge.get_settings(), "UPLOAD_DIR", str(tmp_path))
+    expired_at = datetime.now(timezone.utc) - (demo_purge._PURGE_RECLAIM_AFTER * 5)
+    db_session.add_all(
+        [
+            _tenant(tenant_id=fixture_id, domain="purge-unstamped-fixture.invalid"),
+            _tenant(
+                tenant_id=tenant_id,
+                domain="purge-unstamped.demo.invalid",
+                billing_tier="demo",
+                expires_at=expired_at,
+            ),
+        ]
+    )
+    await db_session.flush()
+    await set_tenant_context(db_session, str(tenant_id))
+    db_session.add(
+        DemoSession(
+            tenant_id=tenant_id,
+            fixture_tenant_id=fixture_id,
+            fixture_version="purge-unstamped-test",
+            prospect_name="Synthetic Prospect",
+            prospect_email="prospect@example.invalid",
+            status="purging",
+            quota=20,
+            expires_at=expired_at,
+            purge_started_at=None,
+        )
+    )
+    await db_session.commit()
+
+    with pytest.raises(DemoPurgeRefused, match="already being purged"):
+        await purge_demo_tenant(db_session, tenant_id)
 
 
 @pytest.mark.asyncio

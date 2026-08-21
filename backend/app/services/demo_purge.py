@@ -28,7 +28,13 @@ _DEMO_DOMAIN_SUFFIX = ".demo.invalid"
 # A worker that dies between claiming a session and reaching a terminal state
 # leaves the row in "purging".  Without a reclaim window the hourly job would
 # refuse that tenant forever and its synthetic data would outlive its expiry.
-# The purge itself is idempotent, so a later run may re-claim a stale row.
+# The purge itself is idempotent, so a later run may re-claim a stale claim.
+#
+# The window is measured from ``purge_started_at`` — the moment the claim was
+# committed — and never from tenant expiry.  A tenant that expired long before
+# its first purge attempt (a missed run, a deploy, a restart) would otherwise
+# satisfy an expiry-based window the instant a live worker claimed it, so a
+# second worker could enter file and row deletion concurrently.
 _PURGE_RECLAIM_AFTER = timedelta(hours=1)
 
 
@@ -100,8 +106,15 @@ async def purge_demo_tenant(db: AsyncSession, tenant_id: uuid.UUID) -> dict[str,
     )
     if demo is None or demo.fixture_tenant_id == tenant_id:
         raise DemoPurgeRefused("Demo session provenance check failed")
-    reclaimable = demo.status == "purging" and tenant.expires_at <= (
-        now - _PURGE_RECLAIM_AFTER
+    claimed_at = demo.purge_started_at
+    if claimed_at is not None and claimed_at.tzinfo is None:
+        claimed_at = claimed_at.replace(tzinfo=timezone.utc)
+    # A claim with no recorded start is never reclaimed: refusing strands one
+    # tenant, while guessing risks two workers deleting the same rows and files.
+    reclaimable = (
+        demo.status == "purging"
+        and claimed_at is not None
+        and claimed_at <= now - _PURGE_RECLAIM_AFTER
     )
     if demo.status not in {"active", "expired", "failed"} and not reclaimable:
         raise DemoPurgeRefused("Demo session is already being purged")
@@ -109,6 +122,8 @@ async def purge_demo_tenant(db: AsyncSession, tenant_id: uuid.UUID) -> dict[str,
     session_id = demo.id
     tenant.is_active = False
     demo.status = "purging"
+    # Re-stamped on a reclaim too, so the next worker measures its own window.
+    demo.purge_started_at = now
     await db.commit()
 
     try:
