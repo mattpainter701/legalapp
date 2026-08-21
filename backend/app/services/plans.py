@@ -20,9 +20,7 @@ MODULES: dict[str, Module] = {
     "communications": Module(
         "communications", "/communications", ("/api/communications",)
     ),
-    "contacts": Module(
-        "contacts", "/clients", ("/api/contacts", "/api/clients")
-    ),
+    "contacts": Module("contacts", "/clients", ("/api/contacts", "/api/clients")),
     "intake": Module("intake", "/intake", ("/api/intake",)),
     "intake-dashboard": Module("intake-dashboard", "/intake/dashboard"),
     "templates": Module("templates", "/templates", ("/api/templates",)),
