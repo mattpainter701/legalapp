@@ -76,6 +76,19 @@ def _delete_order(tables) -> list[str]:
     return ordered
 
 
+def _claim_started_at(demo: DemoSession) -> datetime | None:
+    """The claim timestamp, always tz-aware so it can be compared to ``now``.
+
+    ``purge_started_at`` is a ``timestamptz`` and asyncpg hands back aware
+    values, but a naive one would raise TypeError on the comparison below and
+    take down the purge rather than merely misjudging staleness.
+    """
+    claimed_at = demo.purge_started_at
+    if claimed_at is not None and claimed_at.tzinfo is None:
+        return claimed_at.replace(tzinfo=timezone.utc)
+    return claimed_at
+
+
 def _remove_tenant_files(tenant_id: uuid.UUID) -> None:
     upload_root = Path(get_settings().UPLOAD_DIR).resolve()
     target = (upload_root / str(tenant_id)).resolve()
@@ -106,9 +119,7 @@ async def purge_demo_tenant(db: AsyncSession, tenant_id: uuid.UUID) -> dict[str,
     )
     if demo is None or demo.fixture_tenant_id == tenant_id:
         raise DemoPurgeRefused("Demo session provenance check failed")
-    claimed_at = demo.purge_started_at
-    if claimed_at is not None and claimed_at.tzinfo is None:
-        claimed_at = claimed_at.replace(tzinfo=timezone.utc)
+    claimed_at = _claim_started_at(demo)
     # A claim with no recorded start is never reclaimed: refusing strands one
     # tenant, while guessing risks two workers deleting the same rows and files.
     reclaimable = (

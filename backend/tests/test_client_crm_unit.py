@@ -492,3 +492,45 @@ async def test_quickbooks_sync_updates_provider_mapping_without_sensitive_fields
         pytest.raises(HTTPException, match="not connected"),
     ):
         await sync_client_quickbooks(client_id, admin=admin, db=db)
+
+
+@pytest.mark.asyncio
+async def test_quickbooks_sync_simulates_for_a_demo_tenant_without_provider_lookups():
+    """Called directly so the demo branch is measured, not just exercised.
+
+    tests/test_clients_crm.py drives this over HTTP; this covers the same
+    branch at the unit level and pins the simulated payload.
+    """
+    tenant_id = uuid.uuid4()
+    client_id = uuid.uuid4()
+    admin = SimpleNamespace(tenant_id=tenant_id, id=uuid.uuid4(), role="admin")
+    contact = Contact(
+        id=client_id,
+        tenant_id=tenant_id,
+        contact_type="client",
+        entity_type="person",
+        first_name="Sky",
+        last_name="Nolan",
+    )
+    db = fake_db(billing_tier="demo")
+
+    def _fail(*args, **kwargs):
+        raise AssertionError("demo tenant attempted a QuickBooks provider call")
+
+    with (
+        patch("app.routers.clients.set_tenant_context", new_callable=AsyncMock),
+        patch(
+            "app.routers.clients._load_client",
+            new_callable=AsyncMock,
+            return_value=contact,
+        ),
+        patch("app.routers.qbo._get_fresh_qbo_token", _fail),
+        patch("app.routers.qbo._get_qbo_integration", _fail),
+    ):
+        result = await sync_client_quickbooks(client_id, admin=admin, db=db)
+
+    assert result.status == "demo_simulated"
+    assert result.qbo_customer_id == f"DEMO-{client_id.hex[:8].upper()}"
+    assert "never contact QuickBooks" in result.detail
+    assert contact.qbo_sync_token == "0"
+    assert contact.qbo_synced_at is not None

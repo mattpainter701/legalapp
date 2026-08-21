@@ -1,5 +1,6 @@
 import asyncio
 import uuid
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -610,3 +611,52 @@ async def test_purge_records_failure_when_file_removal_is_refused(
         select(DemoSession.status).where(DemoSession.tenant_id == tenant_id)
     )
     assert status == "failed"
+
+
+def test_claim_timestamps_are_normalised_to_utc():
+    """A naive claim must not crash the staleness comparison."""
+    aware = datetime(2026, 8, 21, 12, 0, tzinfo=timezone.utc)
+    naive = datetime(2026, 8, 21, 12, 0)
+
+    assert demo_purge._claim_started_at(SimpleNamespace(purge_started_at=None)) is None
+    assert (
+        demo_purge._claim_started_at(SimpleNamespace(purge_started_at=aware)) == aware
+    )
+    normalised = demo_purge._claim_started_at(
+        SimpleNamespace(purge_started_at=naive)
+    )
+    assert normalised == aware
+    assert normalised.tzinfo is timezone.utc
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("billing_tier", "domain", "expires_in"),
+    [
+        # A paying tenant must never be purgeable, whatever else lines up.
+        ("payg", "real-customer.demo.invalid", timedelta(minutes=-1)),
+        # Nor a demo-tier tenant outside the disposable demo domain.
+        ("demo", "real-customer.example.com", timedelta(minutes=-1)),
+        # Nor one that has not expired yet.
+        ("demo", "not-yet.demo.invalid", timedelta(hours=1)),
+    ],
+)
+async def test_purge_refuses_any_tenant_that_is_not_an_expired_disposable_demo(
+    db_session, tmp_path, monkeypatch, billing_tier, domain, expires_in
+):
+    tenant_id = uuid.uuid4()
+    monkeypatch.setattr(demo_purge.get_settings(), "UPLOAD_DIR", str(tmp_path))
+    db_session.add(
+        _tenant(
+            tenant_id=tenant_id,
+            domain=domain,
+            billing_tier=billing_tier,
+            expires_at=datetime.now(timezone.utc) + expires_in,
+        )
+    )
+    await db_session.commit()
+
+    with pytest.raises(DemoPurgeRefused, match="not an expired disposable demo"):
+        await purge_demo_tenant(db_session, tenant_id)
+
+    assert await db_session.scalar(select(Tenant.id).where(Tenant.id == tenant_id))
