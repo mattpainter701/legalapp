@@ -58,6 +58,25 @@ then call the same capability used by matter chat. It must not query LawHand
 tables directly, proxy to LiteLLM, or forward a tenant product key to an
 application handler.
 
+### Current authentication boundary
+
+The endpoint that exists today is a resource-server foundation, not a complete
+desktop connection. It accepts only a dedicated LawHand-signed Bearer JWT with
+the workspace audience, user, tenant, client, grant, scope, token ID, and expiry
+claims. Every request must also match an active persisted workspace grant for
+that exact user, tenant, client, and scope set. A normal LawHand browser token
+and a research-product `clmcp_` key are both rejected.
+
+LawHand does **not** yet publish protected-resource or authorization-server
+metadata for this surface and does not yet provide the authorization endpoint,
+PKCE flow, client registration policy, consent UI, token/refresh endpoint,
+rotating refresh tokens, or disconnect/revocation flow that a desktop client
+needs. Consequently, Claude Desktop, Codex/GPT desktop clients, and OpenCode
+cannot yet add `/api/mcp/workspace` as a real end-user OAuth connection.
+Enabling the feature flag alone would not make that flow complete. Locally
+minted test tokens are development evidence only, not a customer onboarding
+mechanism.
+
 Official OpenAI documentation confirms that Codex clients can connect to
 Streamable HTTP MCP servers using bearer-token or OAuth authentication, and
 that desktop, CLI, and IDE clients can share the same MCP configuration:
@@ -74,14 +93,19 @@ Capabilities have only two effects today:
 
 There is deliberately no model-facing `execute` effect. In particular:
 
-- `propose_client_email` cannot accept an email address; it accepts matter-party
-  IDs and resolves current addresses server-side;
+- `propose_client_email` cannot accept an email address; it accepts
+  matter-party IDs, resolves current addresses server-side, and creates a
+  review item. Its reviewed approval path can enqueue the approved email for
+  deterministic delivery;
 - `propose_matter_document` creates and read-back verifies a tenant-cloud DOCX
   working copy linked to a versioned artifact and Review task; it does not file,
-  approve, or deliver the document;
+  approve, or deliver the document. Attorney approval records approval of the
+  exact verified bytes; it does not email the file to the client;
 - approval remains an explicit, version-checked LawHand action; and
 - approval re-reads and hashes the exact bound provider object. It never creates
-  or uploads a late replacement; client delivery remains a separate action.
+  or uploads a late replacement. Delivering an approved document requires a
+  separate reviewed delivery action; the current email proposal is body-only
+  and is not an implicit document-delivery workflow.
 
 MCP annotations are discovery hints, not enforcement. OAuth scopes, tenant RLS,
 matter/reference validation, reviewer authorization, optimistic versioning, and
@@ -153,6 +177,16 @@ this binding; artifact-less legacy drafts fail closed and must be regenerated.
   adoption, authenticated open/download, and approval-time provider readback.
 - Hash-chained integrity events and provider-operation evidence, with a
   crash-safe outbox/reconciliation worker still required for production.
+
+The provider-operation evidence is not yet a crash-safe cloud-write outbox.
+Its state is committed with the surrounding caller transaction rather than in
+an independently durable operation transaction. A provider can therefore
+accept a create/copy/upload and the process can stop before LawHand commits the
+binding and operation state, leaving an orphaned tenant-cloud object with no
+durable reconciliation instruction. There is no dedicated scheduler or outbox
+worker today that scans and repairs this condition. A committed operation state
+machine, stable provider idempotency metadata, and reconciliation worker/webhook
+path are a P1 production gate for workspace MCP enablement.
 
 ### Phase 3 — production workspace MCP
 
