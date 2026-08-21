@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import { useAuth } from '../App'
 import { Briefcase, Clock, DollarSign, Building, ShieldCheck } from 'lucide-react'
 import { getMyMatters, getTimeEntries, updateMe } from '../api'
+import ReleaseInfoPanel from '../components/ReleaseInfoPanel'
 
 export default function ProfilePage() {
   const { user, refreshUser } = useAuth()
@@ -191,6 +192,8 @@ export default function ProfilePage() {
             : 'Off for eligible private routes. Standard remains protected and cannot use matters or attachments.')}
         </p>
       </section>
+
+      <ReleaseInfoPanel className="mb-6" />
 
       {/* Stats cards */}
       <div style={{

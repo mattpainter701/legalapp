@@ -246,8 +246,24 @@ official MCP protocol tests, CourtListener sidecar tests, Compose resolution,
 shell syntax checks, a disposable fresh-host rehearsal, production checks, and
 the off-host restore proof described in the runbook.
 
+## Release notes workflow
+
+Customer-facing changes are written as short, plain-language bullets in
+`backend/app/release_notes.json`. That catalog drives the sign-in announcement
+and the Profile/Admin release panels. Run
+`python scripts/generate_release_notes.py` after editing the catalog to refresh
+[customer release notes](RELEASE_NOTES.md), then record implementation,
+security, migration, and operator detail in the [technical changelog](CHANGELOG.md).
+
+Pull requests must state whether they include a customer-facing change. CI runs
+`python scripts/generate_release_notes.py --check` on every commit and requires
+the catalog, generated notes, and technical changelog to move together when a
+customer release-note update is declared.
+
 ## Documentation map
 
+- [Customer release notes](RELEASE_NOTES.md)
+- [Technical changelog](CHANGELOG.md)
 - [Architecture and trust boundaries](docs/ARCHITECTURE.md)
 - [First-customer production runbook](docs/FIRST_CUSTOMER_PRODUCTION_RUNBOOK.md)
 - [Standalone Call Intake plan and API enforcement](docs/call-intake-standalone.md)

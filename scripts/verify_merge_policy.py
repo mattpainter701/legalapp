@@ -37,6 +37,15 @@ SBOM_INPUTS = {
 }
 GENERATED_SBOM = {"sbom/sbom-inventory.json", "docs/SBOM_TRACKING_INVENTORY.md"}
 DOC_CHOICES = ("Documentation updated", "No documentation impact")
+RELEASE_NOTE_CHOICES = (
+    "Customer release notes updated",
+    "No customer-facing release note",
+)
+RELEASE_NOTE_ARTIFACTS = {
+    "backend/app/release_notes.json",
+    "RELEASE_NOTES.md",
+    "CHANGELOG.md",
+}
 SECURITY_CHOICE = "Security and privacy impact reviewed"
 
 
@@ -52,7 +61,7 @@ def changed_files(base: str, head: str) -> set[str]:
     }
 
 
-def check_pr_template(event_path: str | None) -> list[str]:
+def check_pr_template(event_path: str | None, files: set[str]) -> list[str]:
     if not event_path:
         return []
     event = json.loads(Path(event_path).read_text(encoding="utf-8"))
@@ -66,6 +75,27 @@ def check_pr_template(event_path: str | None) -> list[str]:
     if len(checked_docs) != 1:
         errors.append(
             "PR description must check exactly one documentation-impact option"
+        )
+    checked_release_notes = [
+        choice
+        for choice in RELEASE_NOTE_CHOICES
+        if f"- [x] {choice}".lower() in body.lower()
+    ]
+    if len(checked_release_notes) != 1:
+        errors.append(
+            "PR description must check exactly one customer release-note option"
+        )
+    elif checked_release_notes[0] == "Customer release notes updated":
+        missing = sorted(RELEASE_NOTE_ARTIFACTS - files)
+        if missing:
+            errors.append(
+                "customer release-note updates must include the catalog, generated "
+                f"notes, and technical changelog: {', '.join(missing)}"
+            )
+    elif files & (RELEASE_NOTE_ARTIFACTS - {"CHANGELOG.md"}):
+        errors.append(
+            "release-note files changed but the PR declares no customer-facing "
+            "release note"
         )
     if f"- [x] {SECURITY_CHOICE}".lower() not in body.lower():
         errors.append(f"PR description must check: {SECURITY_CHOICE}")
@@ -151,7 +181,7 @@ def main() -> int:
     args = parser.parse_args()
 
     files = changed_files(args.base, args.head)
-    errors = check_pr_template(args.event_path)
+    errors = check_pr_template(args.event_path, files)
     errors.extend(check_sbom_currency(files))
     errors.extend(check_added_workflow_actions(args.base, args.head))
     if errors:
@@ -163,7 +193,7 @@ def main() -> int:
         )
         return 1
     print(
-        f"Merge policy passed ({len(files)} changed files; documentation and SBOM declarations accounted for)."
+        f"Merge policy passed ({len(files)} changed files; documentation, release-note, and SBOM declarations accounted for)."
     )
     return 0
 

@@ -30,6 +30,7 @@ import TeamsPanel from '../components/TeamsPanel'
 import ZoomPanel from '../components/ZoomPanel'
 import QBOPanel from '../components/QBOPanel'
 import FirmBrandingPanel from '../components/FirmBrandingPanel'
+import ReleaseInfoPanel from '../components/ReleaseInfoPanel'
 import BillingPage from './BillingPage'
 import { Spinner, Toggle } from '../components/ui'
 import { UserPlus, ChevronDown, ChevronRight, X } from 'lucide-react'
@@ -1143,6 +1144,8 @@ function SettingsTab() {
 
   return (
     <div className="max-w-3xl space-y-8">
+      <ReleaseInfoPanel />
+
       {/* Case Law */}
       <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden">
         <div className="px-8 py-6 border-b border-brand-line bg-brand-bg-soft/50">
