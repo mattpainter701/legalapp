@@ -365,3 +365,107 @@ async def test_purge_refuses_session_already_claimed_by_another_worker(
         await purge_demo_tenant(db_session, tenant_id)
 
     assert await db_session.scalar(select(Tenant.id).where(Tenant.id == tenant_id))
+
+
+@pytest.mark.asyncio
+async def test_purge_reclaims_session_stranded_by_a_crashed_worker(
+    db_session, tmp_path, monkeypatch
+):
+    """A worker that dies after claiming the row must not strand demo data.
+
+    The claim guard keeps two live workers apart, but a process that is killed
+    between committing ``purging`` and reaching a terminal state leaves the row
+    claimed with nobody working it. The hourly job has to pick that tenant back
+    up once the reclaim window has passed, or the synthetic workspace outlives
+    its expiry forever.
+    """
+    fixture_id, tenant_id = uuid.uuid4(), uuid.uuid4()
+    monkeypatch.setattr(demo_purge.get_settings(), "UPLOAD_DIR", str(tmp_path))
+    stranded_at = datetime.now(timezone.utc) - (
+        demo_purge._PURGE_RECLAIM_AFTER + timedelta(minutes=5)
+    )
+    db_session.add_all(
+        [
+            _tenant(tenant_id=fixture_id, domain="purge-reclaim-fixture.invalid"),
+            _tenant(
+                tenant_id=tenant_id,
+                domain="purge-reclaim.demo.invalid",
+                billing_tier="demo",
+                expires_at=stranded_at,
+            ),
+        ]
+    )
+    await db_session.flush()
+    await set_tenant_context(db_session, str(tenant_id))
+    db_session.add(
+        DemoSession(
+            tenant_id=tenant_id,
+            fixture_tenant_id=fixture_id,
+            fixture_version="purge-reclaim-test",
+            prospect_name="Synthetic Prospect",
+            prospect_email="prospect@example.invalid",
+            status="purging",
+            quota=20,
+            expires_at=stranded_at,
+        )
+    )
+    await db_session.commit()
+
+    await purge_demo_tenant(db_session, tenant_id)
+
+    assert (
+        await db_session.scalar(select(Tenant.id).where(Tenant.id == tenant_id)) is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_purge_records_failure_when_file_removal_is_refused(
+    db_session, tmp_path, monkeypatch
+):
+    """File-removal failures must reach the terminal ``failed`` state.
+
+    Otherwise the session stays claimed with no audit trail and the next run
+    refuses it as already being purged.
+    """
+    fixture_id, tenant_id = uuid.uuid4(), uuid.uuid4()
+    monkeypatch.setattr(demo_purge.get_settings(), "UPLOAD_DIR", str(tmp_path))
+
+    def _explode(_tenant_id):
+        raise DemoPurgeRefused("Demo storage path failed its containment guard")
+
+    monkeypatch.setattr(demo_purge, "_remove_tenant_files", _explode)
+    db_session.add_all(
+        [
+            _tenant(tenant_id=fixture_id, domain="purge-files-fixture.invalid"),
+            _tenant(
+                tenant_id=tenant_id,
+                domain="purge-files.demo.invalid",
+                billing_tier="demo",
+                expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+            ),
+        ]
+    )
+    await db_session.flush()
+    await set_tenant_context(db_session, str(tenant_id))
+    db_session.add(
+        DemoSession(
+            tenant_id=tenant_id,
+            fixture_tenant_id=fixture_id,
+            fixture_version="purge-files-test",
+            prospect_name="Synthetic Prospect",
+            prospect_email="prospect@example.invalid",
+            status="active",
+            quota=20,
+            expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+        )
+    )
+    await db_session.commit()
+
+    with pytest.raises(DemoPurgeRefused, match="containment guard"):
+        await purge_demo_tenant(db_session, tenant_id)
+
+    await set_tenant_context(db_session, str(tenant_id))
+    status = await db_session.scalar(
+        select(DemoSession.status).where(DemoSession.tenant_id == tenant_id)
+    )
+    assert status == "failed"

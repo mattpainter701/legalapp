@@ -48,7 +48,9 @@ def _is_blocked_demo_action(path: str, method: str) -> bool:
                 "/api/admin/sharepoint",
                 "/api/admin/smb",
                 "/api/mcp",
-                "/api/email-agent",
+                # The email agent router is mounted at /api/email; it reads the
+                # connected mailbox and reuses the calendar sync entrypoint.
+                "/api/email/",
                 "/api/calendar/sync",
                 "/api/calendar/scheduled-events",
                 "/api/billing/checkout-session",
@@ -80,7 +82,8 @@ def _is_blocked_demo_action(path: str, method: str) -> bool:
     if method in _DEMO_MUTATING_METHODS and path.startswith(
         (
             "/api/intake/dashboard/zoom-phone/sync",
-            "/scheduler/agents/",
+            # The scheduler router is mounted under the /api prefix.
+            "/api/scheduler/agents/",
         )
     ):
         return True

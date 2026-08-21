@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 import uuid
 from collections import defaultdict, deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import delete, func, select, update
@@ -24,6 +24,12 @@ from app.models.tenant import Tenant
 from app.services.demo_registry import DEMO_TABLE_REGISTRY
 
 _DEMO_DOMAIN_SUFFIX = ".demo.invalid"
+
+# A worker that dies between claiming a session and reaching a terminal state
+# leaves the row in "purging".  Without a reclaim window the hourly job would
+# refuse that tenant forever and its synthetic data would outlive its expiry.
+# The purge itself is idempotent, so a later run may re-claim a stale row.
+_PURGE_RECLAIM_AFTER = timedelta(hours=1)
 
 
 class DemoPurgeRefused(RuntimeError):
@@ -94,7 +100,10 @@ async def purge_demo_tenant(db: AsyncSession, tenant_id: uuid.UUID) -> dict[str,
     )
     if demo is None or demo.fixture_tenant_id == tenant_id:
         raise DemoPurgeRefused("Demo session provenance check failed")
-    if demo.status not in {"active", "expired", "failed"}:
+    reclaimable = demo.status == "purging" and tenant.expires_at <= (
+        now - _PURGE_RECLAIM_AFTER
+    )
+    if demo.status not in {"active", "expired", "failed"} and not reclaimable:
         raise DemoPurgeRefused("Demo session is already being purged")
     fixture_version = demo.fixture_version
     session_id = demo.id
@@ -102,9 +111,9 @@ async def purge_demo_tenant(db: AsyncSession, tenant_id: uuid.UUID) -> dict[str,
     demo.status = "purging"
     await db.commit()
 
-    _remove_tenant_files(tenant_id)
-    tables = _purge_tables()
     try:
+        _remove_tenant_files(tenant_id)
+        tables = _purge_tables()
         await set_tenant_context(db, str(tenant_id))
         # Break optional cycles (invoice/retainer and self-references) first.
         for table in tables.values():
