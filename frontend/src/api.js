@@ -1263,6 +1263,9 @@ export const archiveClient = (id) =>
 export const getClientMatters = (id) =>
   api.get(`/clients/${id}/matters`).then(r => r.data)
 
+export const getClientContacts = (id) =>
+  api.get(`/clients/${id}/contacts`).then(r => r.data)
+
 export const importClientsCsv = (formData) =>
   api.post('/clients/import.csv', formData).then(r => r.data)
 

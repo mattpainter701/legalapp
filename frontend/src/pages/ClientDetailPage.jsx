@@ -6,7 +6,7 @@ import {
   Edit2, Link2, Mail, MessageSquare, Phone, RefreshCw, ShieldCheck, User, X,
 } from 'lucide-react'
 import {
-  getClient, getClientMatters, getContactCommunications, getTasks,
+  getClient, getClientContacts, getClientMatters, getContactCommunications, getTasks,
   syncClientQuickBooks, updateClient,
 } from '../api'
 import { useAuth } from '../App'
@@ -49,6 +49,7 @@ export default function ClientDetailPage() {
   const [clientRecord, setClientRecord] = useState(null)
   const [form, setForm] = useState({})
   const [matters, setMatters] = useState([])
+  const [relatedContacts, setRelatedContacts] = useState([])
   const [communications, setCommunications] = useState([])
   const [tasks, setTasks] = useState([])
   const [activeTab, setActiveTab] = useState('Profile')
@@ -61,14 +62,18 @@ export default function ClientDetailPage() {
 
   useEffect(() => {
     setLoading(true)
-    Promise.all([
-      getClient(id), getClientMatters(id), getContactCommunications(id), getTasks({ contact_id: id, limit: 50 }),
-    ]).then(([record, linkedMatters, activity, taskData]) => {
+    Promise.all([getClient(id), getClientMatters(id), getClientContacts(id)]).then(async ([record, linkedMatters, contacts]) => {
+      const contactIds = [id, ...(contacts || []).map(contact => contact.id)]
+      const [activitySets, taskSets] = await Promise.all([
+        Promise.all(contactIds.map(contactId => getContactCommunications(contactId))),
+        Promise.all(contactIds.map(contactId => getTasks({ contact_id: contactId, limit: 50 }))),
+      ])
       setClientRecord(record)
       setForm(record)
       setMatters(linkedMatters || [])
-      setCommunications(activity.items || [])
-      setTasks(taskData.items || [])
+      setRelatedContacts(contacts || [])
+      setCommunications(activitySets.flatMap(activity => activity.items || []).sort((a, b) => new Date(b.occurred_at) - new Date(a.occurred_at)))
+      setTasks(taskSets.flatMap(taskData => taskData.items || []))
     }).catch(requestError => setError(requestError?.response?.data?.detail || 'Client could not be loaded')).finally(() => setLoading(false))
   }, [id])
 
@@ -80,8 +85,8 @@ export default function ClientDetailPage() {
     setError(null)
     const allowed = [
       'entity_type', 'client_status', 'client_number', 'first_name', 'last_name', 'preferred_name',
-      'organization_name', 'date_of_birth', 'email', 'phone', 'secondary_phone', 'address',
-      'preferred_contact_method', 'preferred_language', 'emergency_contact', 'sms_opt_in',
+      'organization_name', 'date_of_birth', 'client_since', 'email', 'phone', 'secondary_phone', 'address',
+      'preferred_contact_method', 'preferred_contact_window', 'preferred_contact_timezone', 'preferred_language', 'emergency_contact', 'sms_opt_in',
       'email_opt_in', 'referral_source', 'preferred_payment_method', 'billing_delivery_method',
       'payment_terms_days', 'billing_notes', 'qbo_customer_id', 'stripe_customer_id', 'notes', 'tags',
     ]
@@ -92,6 +97,7 @@ export default function ClientDetailPage() {
     }
     payload.payment_terms_days = Number(payload.payment_terms_days || 0)
     payload.date_of_birth = payload.date_of_birth || null
+    payload.client_since = payload.client_since || null
     try {
       const updated = await updateClient(id, payload)
       setClientRecord(updated)
@@ -126,7 +132,7 @@ export default function ClientDetailPage() {
 
   const emergency = clientRecord.emergency_contact || {}
   const isFinance = ['admin', 'accountant'].includes(user?.role)
-  const activeMatters = matters.filter(matter => matter.status === 'active').length
+  const activeMatters = matters.filter(matter => ['active', 'open'].includes(matter.status)).length
 
   return <WorkspacePage>
     <button type="button" onClick={() => navigate('/clients')} className="inline-flex items-center gap-2 text-sm text-brand-muted hover:text-brand-ink"><ArrowLeft size={16} /> Back to Clients & CRM</button>
@@ -154,6 +160,7 @@ export default function ClientDetailPage() {
         <Field label="Entity type" value={form.entity_type} editing={editing} onChange={value => set('entity_type', value)} options={['person', 'organization']} />
         <Field label="Client status" value={form.client_status} editing={editing} onChange={value => set('client_status', value)} options={['prospect', 'active', 'inactive', 'former']} />
         <Field label="Client number" value={form.client_number} editing={editing} onChange={value => set('client_number', value)} />
+        <Field label="Client since" value={form.client_since} editing={editing} type="date" onChange={value => set('client_since', value)} />
         {form.entity_type === 'organization' ? <Field label="Organization" value={form.organization_name} editing={editing} onChange={value => set('organization_name', value)} /> : <><Field label="First name" value={form.first_name} editing={editing} onChange={value => set('first_name', value)} /><Field label="Last name" value={form.last_name} editing={editing} onChange={value => set('last_name', value)} /><Field label="Preferred name" value={form.preferred_name} editing={editing} onChange={value => set('preferred_name', value)} /><Field label="Date of birth" value={form.date_of_birth} editing={editing} type="date" onChange={value => set('date_of_birth', value)} /></>}
         <Field label="Preferred language" value={form.preferred_language} editing={editing} onChange={value => set('preferred_language', value)} />
         <Field label="Referral source" value={form.referral_source} editing={editing} onChange={value => set('referral_source', value)} />
@@ -163,17 +170,20 @@ export default function ClientDetailPage() {
         <Field label="Primary phone" value={form.phone} editing={editing} onChange={value => set('phone', value)} />
         <Field label="Secondary phone" value={form.secondary_phone} editing={editing} onChange={value => set('secondary_phone', value)} />
         <Field label="Preferred contact" value={form.preferred_contact_method} editing={editing} onChange={value => set('preferred_contact_method', value)} options={['email', 'phone', 'sms', 'mail', 'portal']} />
+        <Field label="Contact window" value={form.preferred_contact_window} editing={editing} onChange={value => set('preferred_contact_window', value)} />
+        <Field label="Contact timezone" value={form.preferred_contact_timezone} editing={editing} onChange={value => set('preferred_contact_timezone', value)} />
         {editing ? <><label className="flex items-center gap-2 py-3 text-sm text-brand-ink"><input type="checkbox" checked={Boolean(form.sms_opt_in)} onChange={event => set('sms_opt_in', event.target.checked)} /> SMS alerts opted in</label><label className="flex items-center gap-2 py-3 text-sm text-brand-ink"><input type="checkbox" checked={Boolean(form.email_opt_in)} onChange={event => set('email_opt_in', event.target.checked)} /> Email updates opted in</label></> : <><Field label="SMS alerts" value={clientRecord.sms_opt_in ? 'Opted in' : 'Not opted in'} hint={clientRecord.sms_opt_in_at ? `Recorded ${format(parseISO(clientRecord.sms_opt_in_at), 'MMM d, yyyy h:mm a')}` : undefined} /><Field label="Email updates" value={clientRecord.email_opt_in ? 'Opted in' : 'Not opted in'} /></>}
       </dl></Section>
       <Section title="Mailing address"><div className={editing ? 'grid gap-4 sm:grid-cols-2' : ''}>{editing ? <>{[['street', 'Street'], ['street2', 'Suite / unit'], ['city', 'City'], ['state', 'State / province'], ['zip', 'Postal code'], ['country', 'Country']].map(([key, label]) => <Field key={key} label={label} value={form.address?.[key]} editing onChange={value => setNested('address', key, value)} />)}</> : <p className="whitespace-pre-line text-sm text-brand-ink">{displayAddress(clientRecord.address) || 'No address recorded'}</p>}</div></Section>
       <Section title="Emergency contact" description="Use only for legitimate client-service or safety needs."><dl className="grid gap-x-4 sm:grid-cols-2">{editing ? <>{[['name', 'Name'], ['relationship', 'Relationship'], ['phone', 'Phone'], ['email', 'Email']].map(([key, label]) => <Field key={key} label={label} value={form.emergency_contact?.[key]} editing type={key === 'email' ? 'email' : 'text'} onChange={value => setNested('emergency_contact', key, value)} />)}</> : <><Field label="Name" value={emergency.name} /><Field label="Relationship" value={emergency.relationship} /><Field label="Phone" value={emergency.phone} /><Field label="Email" value={emergency.email} /></>}</dl></Section>
+      <Section title="Client contacts" description="People associated with this canonical client account.">{relatedContacts.length === 0 ? <p className="py-6 text-center text-sm text-brand-muted">No related contacts recorded.</p> : <div className="divide-y divide-brand-line">{relatedContacts.map(contact => <div key={contact.id} className="py-3"><div className="flex flex-wrap items-center gap-2"><p className="text-sm font-semibold text-brand-ink">{contact.display_name}</p>{contact.is_primary_client_contact && <span className="rounded-full bg-brand-bg-soft px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-brand-muted">Primary</span>}</div><p className="text-xs text-brand-muted">{contact.client_contact_role || 'Client contact'}{contact.email ? ` · ${contact.email}` : ''}{contact.phone ? ` · ${contact.phone}` : ''}</p>{contact.client_contact_authorization && <p className="mt-1 text-xs text-brand-muted">{contact.client_contact_authorization}</p>}</div>)}</div>}</Section>
     </div>}
 
     {activeTab === 'Matters' && <Section title="Linked matters" description="Every matter whose client record points to this profile.">{matters.length === 0 ? <div className="py-12 text-center text-brand-muted"><Briefcase size={30} className="mx-auto mb-3 text-brand-line" /><p>No matters linked to this client.</p></div> : <div className="divide-y divide-brand-line">{matters.map(matter => <button key={matter.id} type="button" onClick={() => navigate(`/plugins/litigation/matters/${matter.id}`)} className="flex w-full items-center gap-4 py-4 text-left hover:bg-brand-bg-soft"><Briefcase size={17} className="ml-2 text-brand-muted" /><div className="flex-1"><p className="text-sm font-semibold text-brand-ink">{matter.matter_name}</p><p className="text-xs text-brand-muted">{matter.matter_type} · {matter.jurisdiction}</p></div><StatusBadge status={matter.status} /></button>)}</div>}</Section>}
 
     {activeTab === 'Activity' && <div className="grid gap-5 lg:grid-cols-2"><Section title="Communications" description="Email, call, meeting, portal, and SMS history.">{communications.length === 0 ? <p className="py-10 text-center text-sm text-brand-muted">No communications logged.</p> : <div className="divide-y divide-brand-line">{communications.map(item => <div key={item.id} className="flex gap-3 py-3"><MessageSquare size={15} className="mt-1 text-brand-muted" /><div><p className="text-sm font-semibold text-brand-ink">{item.subject || item.channel}</p><p className="text-xs text-brand-muted">{item.summary || `${item.direction} ${item.channel}`}</p><p className="mt-1 text-[10px] text-brand-muted">{format(parseISO(item.occurred_at), 'MMM d, yyyy h:mm a')}</p></div></div>)}</div>}</Section><Section title="Client tasks">{tasks.length === 0 ? <p className="py-10 text-center text-sm text-brand-muted">No client tasks.</p> : <div className="divide-y divide-brand-line">{tasks.map(task => <div key={task.id} className="flex gap-3 py-3"><CheckSquare size={15} className="mt-1 text-brand-muted" /><div><p className={`text-sm font-semibold ${task.status === 'completed' ? 'text-brand-muted line-through' : 'text-brand-ink'}`}>{task.title}</p><p className="text-xs text-brand-muted">{task.status}{task.due_date ? ` · due ${task.due_date}` : ''}</p></div></div>)}</div>}</Section></div>}
 
-    {activeTab === 'Billing & integrations' && <div className="grid gap-5 lg:grid-cols-2"><Section title="Billing preferences" description="Defaults used when staff prepare and deliver invoices."><dl><Field label="Preferred payment" value={form.preferred_payment_method} editing={editing} onChange={value => set('preferred_payment_method', value)} options={['stripe', 'check', 'ach', 'wire', 'cash', 'other']} /><Field label="Invoice delivery" value={form.billing_delivery_method} editing={editing} onChange={value => set('billing_delivery_method', value)} options={['email', 'mail', 'portal']} /><Field label="Payment terms (days)" value={form.payment_terms_days} editing={editing} type="number" onChange={value => set('payment_terms_days', value)} /><Field label="Billing notes" value={form.billing_notes} editing={editing} multiline onChange={value => set('billing_notes', value)} /></dl></Section><Section title="Accounting integrations" description="Customer mappings only; provider credentials remain encrypted at the tenant level."><dl><Field label="QuickBooks customer ID" value={form.qbo_customer_id} editing={editing && isFinance} onChange={value => set('qbo_customer_id', value)} /><Field label="QuickBooks last sync" value={clientRecord.qbo_synced_at ? format(parseISO(clientRecord.qbo_synced_at), 'MMM d, yyyy h:mm a') : ''} /><Field label="Stripe customer ID" value={form.stripe_customer_id} editing={editing && isFinance} onChange={value => set('stripe_customer_id', value)} /></dl>{user?.role === 'admin' && <button type="button" disabled={syncing} onClick={syncQbo} className="btn-secondary mt-4 inline-flex items-center gap-2"><RefreshCw size={14} className={syncing ? 'animate-spin' : ''} /> {syncing ? 'Synchronizing…' : 'Sync to QuickBooks'}</button>}<p className="mt-3 flex items-start gap-2 text-xs text-brand-muted"><Link2 size={13} className="mt-0.5 shrink-0" />OAuth tokens and Stripe secrets are never stored on the client record.</p></Section></div>}
+    {activeTab === 'Billing & integrations' && <div className="grid gap-5 lg:grid-cols-2"><Section title="Billing preferences" description="Defaults used when staff prepare and deliver invoices."><dl><Field label="Preferred payment" value={form.preferred_payment_method} editing={editing} onChange={value => set('preferred_payment_method', value)} options={['stripe', 'check', 'ach', 'wire', 'cash', 'other']} /><Field label="Invoice delivery" value={form.billing_delivery_method} editing={editing} onChange={value => set('billing_delivery_method', value)} options={['email', 'mail', 'portal']} /><Field label="Payment terms (days)" value={form.payment_terms_days} editing={editing} type="number" onChange={value => set('payment_terms_days', value)} /><Field label="Billing notes" value={form.billing_notes} editing={editing} multiline onChange={value => set('billing_notes', value)} /></dl></Section><Section title="Accounting integrations" description="Customer mappings only; provider credentials remain encrypted at the tenant level."><dl><Field label="QuickBooks customer ID" value={form.qbo_customer_id} editing={editing && isFinance} onChange={value => set('qbo_customer_id', value)} /><Field label="QuickBooks last sync" value={clientRecord.qbo_synced_at ? format(parseISO(clientRecord.qbo_synced_at), 'MMM d, yyyy h:mm a') : ''} /><Field label="Stripe customer ID" value={form.stripe_customer_id} editing={editing && isFinance} onChange={value => set('stripe_customer_id', value)} /></dl>{user?.role === 'admin' && !user?.demo && <button type="button" disabled={syncing} onClick={syncQbo} className="btn-secondary mt-4 inline-flex items-center gap-2"><RefreshCw size={14} className={syncing ? 'animate-spin' : ''} /> {syncing ? 'Synchronizing…' : 'Sync to QuickBooks'}</button>}{user?.demo && <p className="mt-4 text-xs text-brand-muted">Live accounting synchronization is disabled in demo workspaces.</p>}<p className="mt-3 flex items-start gap-2 text-xs text-brand-muted"><Link2 size={13} className="mt-0.5 shrink-0" />OAuth tokens and Stripe secrets are never stored on the client record.</p></Section></div>}
 
     {activeTab === 'Internal notes' && <Section title="Internal notes" description="Firm-only context. These notes are not sent to QuickBooks, Stripe, or the client portal.">{editing ? <Field label="Notes" value={form.notes} editing multiline onChange={value => set('notes', value)} /> : <div className="min-h-40 whitespace-pre-wrap rounded-lg bg-brand-bg-soft p-4 text-sm text-brand-ink">{clientRecord.notes || 'No internal notes recorded.'}</div>}</Section>}
   </WorkspacePage>
