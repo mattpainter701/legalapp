@@ -46,6 +46,13 @@ def _delete_order(tables) -> list[str]:
             if column.nullable:
                 continue
             for fk in column.foreign_keys:
+                # Deferred constraints can participate in required cycles when
+                # both sides are deleted before this transaction commits.
+                if (
+                    fk.constraint.deferrable
+                    and str(fk.constraint.initially or "").upper() == "DEFERRED"
+                ):
+                    continue
                 parent = fk.column.table.name
                 if parent in tables and parent != name:
                     parents[name].add(parent)

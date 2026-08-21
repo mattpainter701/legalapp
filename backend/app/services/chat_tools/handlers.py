@@ -25,9 +25,11 @@ from sqlalchemy import and_, func, or_, select
 
 from app.models.contact import Contact
 from app.models.document import Chunk, Document
+from app.models.matter_assignment import MatterAssignment
 from app.models.matter_party import MatterParty
 from app.models.plugin import Matter
 from app.models.task import Task
+from app.models.user import User
 from app.schemas.chat_action import (
     EmailClientAction,
     FindMatterArgs,
@@ -43,6 +45,24 @@ from app.schemas.chat_action import (
 from app.schemas.task import OPEN_TASK_STATUSES
 from app.services.automation_capabilities import CapabilityContext, CapabilityError
 from app.services.corpus_revision import advance_rag_corpus_revision
+from app.services.generated_artifacts import (
+    GeneratedArtifactError,
+    create_initial_generated_artifact,
+    derive_artifact_request_id,
+)
+from app.services.cloud_artifact_materialization import (
+    CloudArtifactMaterializationError,
+    cloud_artifact_materializer,
+)
+from app.services.rbac_service import get_user_capabilities
+
+# Re-exported names are resolved dynamically from CapabilitySpec.handler_name.
+from app.services.matter_workspace_capabilities import (
+    get_matter_document_text,  # noqa: F401
+    get_matter_context,  # noqa: F401
+    list_document_templates,  # noqa: F401
+    list_matter_documents,  # noqa: F401
+)
 from app.services.task_workflow import (
     TaskWorkflowError,
     append_task_event,
@@ -357,6 +377,124 @@ async def _require_matter(context: ChatToolContext, matter_id: uuid.UUID) -> Mat
     return matter
 
 
+async def _active_reviewer(
+    context: ChatToolContext, user_id: uuid.UUID | None
+) -> User | None:
+    if user_id is None:
+        return None
+    return await context.db.scalar(
+        select(User).where(
+            User.id == user_id,
+            User.tenant_id == context.tenant_id,
+            User.is_active.is_(True),
+        )
+    )
+
+
+async def _resolve_document_reviewers(
+    context: ChatToolContext,
+    *,
+    matter: Matter,
+    requested_staff_user_id: uuid.UUID | None,
+    requested_attorney_user_id: uuid.UUID | None,
+) -> tuple[uuid.UUID, uuid.UUID]:
+    """Resolve two active matter members and capability-check final approval."""
+
+    team = list(
+        (
+            await context.db.execute(
+                select(User)
+                .join(MatterAssignment, MatterAssignment.user_id == User.id)
+                .where(
+                    MatterAssignment.tenant_id == context.tenant_id,
+                    MatterAssignment.matter_id == matter.id,
+                    User.tenant_id == context.tenant_id,
+                    User.is_active.is_(True),
+                )
+                .order_by(
+                    MatterAssignment.is_active_working.desc(),
+                    MatterAssignment.is_primary.desc(),
+                    MatterAssignment.assigned_at.asc(),
+                    User.id.asc(),
+                )
+                .limit(25)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    by_id = {user.id: user for user in team}
+    matter_team_ids = set(by_id)
+    attorney_of_record = await _active_reviewer(context, matter.attorney_of_record_id)
+    if attorney_of_record is not None:
+        by_id.setdefault(attorney_of_record.id, attorney_of_record)
+    permitted_attorney_ids = set(by_id)
+
+    capability_cache: dict[uuid.UUID, bool] = {}
+
+    async def approval_capable(user: User) -> bool:
+        if user.id not in capability_cache:
+            capability_cache[user.id] = "approve_legal_work" in (
+                await get_user_capabilities(context.db, user.id)
+            )
+        return capability_cache[user.id]
+
+    attorney: User | None = None
+    if requested_attorney_user_id is not None:
+        attorney = await _active_reviewer(context, requested_attorney_user_id)
+        if (
+            attorney is None
+            or attorney.id not in permitted_attorney_ids
+            or not await approval_capable(attorney)
+        ):
+            raise ChatToolError(
+                "invalid_attorney_reviewer",
+                "The selected attorney reviewer is not an authorized member of this matter",
+            )
+    else:
+        candidates: list[uuid.UUID] = []
+        for candidate_id in (
+            matter.attorney_of_record_id,
+            context.actor_user_id,
+            *(user.id for user in team),
+        ):
+            if candidate_id is not None and candidate_id not in candidates:
+                candidates.append(candidate_id)
+        for candidate_id in candidates:
+            candidate = by_id.get(candidate_id)
+            if candidate is not None and await approval_capable(candidate):
+                attorney = candidate
+                break
+    if attorney is None:
+        raise ChatToolError(
+            "attorney_reviewer_required",
+            "Assign an active matter attorney with approve_legal_work before drafting",
+        )
+
+    if requested_staff_user_id is not None:
+        staff = await _active_reviewer(context, requested_staff_user_id)
+        if staff is None or staff.id not in matter_team_ids or staff.id == attorney.id:
+            raise ChatToolError(
+                "invalid_staff_reviewer",
+                "The selected staff reviewer is not a separate member of this matter",
+            )
+    else:
+        staff_candidates = [user for user in team if user.id != attorney.id]
+        staff = None
+        for candidate in staff_candidates:
+            if not await approval_capable(candidate):
+                staff = candidate
+                break
+        if staff is None and staff_candidates:
+            staff = staff_candidates[0]
+    if staff is None:
+        raise ChatToolError(
+            "staff_reviewer_required",
+            "Assign a separate active staff reviewer to this matter before drafting",
+        )
+    return staff.id, attorney.id
+
+
 # ── Read tools ──────────────────────────────────────────────────────────────
 
 
@@ -489,11 +627,21 @@ async def _create_proposed_task(
     due_date,
     source_ids: list[str],
     pending_action: dict | None,
+    review_policy: str = "single",
+    staff_reviewer_user_id: uuid.UUID | None = None,
+    attorney_reviewer_user_id: uuid.UUID | None = None,
 ) -> Task:
+    staged = review_policy == "staff_then_attorney"
+    if staged and (staff_reviewer_user_id is None or attorney_reviewer_user_id is None):
+        raise ChatToolError(
+            "reviewer_configuration_required",
+            "A staged document review requires separate staff and attorney reviewers",
+        )
+    current_reviewer_id = staff_reviewer_user_id if staged else context.actor_user_id
     values = {
         "matter_id": matter_id,
-        "assigned_to_user_id": context.user.id,
-        "reviewer_user_id": context.user.id,
+        "assigned_to_user_id": current_reviewer_id,
+        "reviewer_user_id": current_reviewer_id,
     }
     try:
         # Same gate the HTTP endpoint uses. A model-authored id earns no shortcut.
@@ -535,7 +683,7 @@ async def _create_proposed_task(
     task = Task(
         tenant_id=context.tenant_id,
         created_by_user_id=context.user.id,
-        assigned_to_user_id=context.user.id,
+        assigned_to_user_id=current_reviewer_id,
         matter_id=matter_id,
         title=title,
         description=description,
@@ -543,11 +691,15 @@ async def _create_proposed_task(
         # inherits the approval UI, audit trail, and concurrency already built
         # for it instead of introducing a parallel lifecycle.
         status="review",
-        reviewer_user_id=context.user.id,
+        reviewer_user_id=current_reviewer_id,
         due_date=due_date,
         source="assistant",
         task_type="follow_up",
         pending_action=pending_action,
+        review_policy=review_policy,
+        review_stage="staff" if staged else "attorney",
+        staff_reviewer_user_id=staff_reviewer_user_id,
+        attorney_reviewer_user_id=attorney_reviewer_user_id,
     )
     context.db.add(task)
     await context.db.flush()
@@ -557,7 +709,11 @@ async def _create_proposed_task(
         event_type="created",
         actor_user_id=context.user.id,
         to_status=task.status,
-        note="Proposed by the assistant; awaiting attorney approval.",
+        note=(
+            "Proposed by the assistant; awaiting staff and attorney review."
+            if staged
+            else "Proposed by the assistant; awaiting attorney approval."
+        ),
         metadata={
             "source": "assistant",
             "conversation_id": (
@@ -565,6 +721,11 @@ async def _create_proposed_task(
             ),
             "source_ids": source_ids[:10],
             "action_type": (pending_action or {}).get("type"),
+            "review_policy": review_policy,
+            "staff_reviewer_user_id": str(staff_reviewer_user_id) if staged else None,
+            "attorney_reviewer_user_id": str(attorney_reviewer_user_id)
+            if staged
+            else None,
         },
     )
     return task
@@ -718,40 +879,211 @@ async def propose_client_email(
 async def propose_matter_document(
     context: ChatToolContext, args: ProposeMatterDocumentArgs
 ) -> dict[str, Any]:
-    """Place an editable Word-document draft in Review without writing a file yet."""
-    await _require_matter(context, args.matter_id)
+    """Create a verified tenant-cloud working copy and place it in Review."""
+    matter = await _require_matter(context, args.matter_id)
+    (
+        staff_reviewer_user_id,
+        attorney_reviewer_user_id,
+    ) = await _resolve_document_reviewers(
+        context,
+        matter=matter,
+        requested_staff_user_id=args.staff_reviewer_user_id,
+        requested_attorney_user_id=args.attorney_reviewer_user_id,
+    )
     async with context.db.begin_nested():
         chips = await _resolve_source_chips(
             context, args.source_ids, matter_id=args.matter_id
         )
+        client_request_id = derive_artifact_request_id(
+            tenant_id=context.tenant_id,
+            channel=context.channel,
+            explicit_request_id=args.client_request_id,
+            transport_request_id=context.request_id,
+        )
+        request_payload = {
+            "matter_id": args.matter_id,
+            "title": args.title,
+            "document_kind": args.document_kind,
+            "body": args.body,
+            "due_date": args.due_date,
+            "source_ids": args.source_ids[:10],
+            "staff_reviewer_user_id": staff_reviewer_user_id,
+            "attorney_reviewer_user_id": attorney_reviewer_user_id,
+        }
+        try:
+            artifact_result = await create_initial_generated_artifact(
+                context.db,
+                tenant_id=context.tenant_id,
+                matter_id=args.matter_id,
+                actor_user_id=context.actor_user_id,
+                conversation_id=context.conversation_id,
+                title=args.title,
+                kind=args.document_kind,
+                content_text=args.body,
+                source_channel=context.channel,
+                client_request_id=client_request_id,
+                request_payload=request_payload,
+                sources=chips,
+            )
+        except GeneratedArtifactError as exc:
+            raise ChatToolError(exc.code, exc.message) from exc
+
+        artifact = artifact_result.artifact
+        revision = artifact_result.revision
+        if artifact_result.created:
+            # This provisional payload is never returned or approved. It only
+            # gives the new task an auditable identity while the exact revision
+            # is written and read back from tenant storage.
+            provisional_action = {
+                "type": "matter_document_draft",
+                "matter_id": str(args.matter_id),
+                "title": args.title,
+                "body": revision.content_text,
+                "artifact_id": str(artifact.id),
+                "artifact_revision_id": str(revision.id),
+                "artifact_revision_no": revision.revision_no,
+                "artifact_sha256": revision.content_sha256,
+                "source_ids": args.source_ids[:10],
+                "sources": chips,
+                "storage_state": "materializing",
+            }
+            task = await _create_proposed_task(
+                context,
+                matter_id=args.matter_id,
+                title=f"Review document: {args.title}",
+                description=(
+                    "Cloud-backed Word draft awaiting staff and attorney review."
+                    f"\n\n{revision.content_text}"
+                ),
+                due_date=args.due_date,
+                source_ids=args.source_ids,
+                pending_action=provisional_action,
+                review_policy="staff_then_attorney",
+                staff_reviewer_user_id=staff_reviewer_user_id,
+                attorney_reviewer_user_id=attorney_reviewer_user_id,
+            )
+            artifact.task_id = task.id
+            artifact.status = "review"
+            await context.db.flush()
+        else:
+            if artifact.task_id is None:
+                raise ChatToolError(
+                    "artifact_incomplete",
+                    "Generated artifact review task is unavailable",
+                )
+            task = await context.db.scalar(
+                select(Task)
+                .where(
+                    Task.id == artifact.task_id,
+                    Task.tenant_id == context.tenant_id,
+                    Task.matter_id == args.matter_id,
+                )
+                .with_for_update()
+            )
+            if task is None or not task.pending_action:
+                raise ChatToolError(
+                    "artifact_incomplete",
+                    "Generated artifact review task is unavailable",
+                )
+            pending = task.pending_action
+            try:
+                pending_artifact_id = uuid.UUID(str(pending.get("artifact_id")))
+                pending_revision_id = uuid.UUID(
+                    str(pending.get("artifact_revision_id"))
+                )
+            except (TypeError, ValueError, AttributeError) as exc:
+                raise ChatToolError(
+                    "artifact_incomplete",
+                    "Generated artifact review task is invalid",
+                ) from exc
+            if (
+                pending_artifact_id != artifact.id
+                or pending_revision_id != revision.id
+                or pending.get("artifact_sha256") != revision.content_sha256
+            ):
+                raise ChatToolError(
+                    "artifact_version_conflict",
+                    "The existing review task points to a different artifact revision",
+                )
+            if (
+                task.review_policy != "staff_then_attorney"
+                or task.staff_reviewer_user_id != staff_reviewer_user_id
+                or task.attorney_reviewer_user_id != attorney_reviewer_user_id
+            ):
+                raise ChatToolError(
+                    "idempotency_conflict",
+                    "The existing review task has different reviewer bindings",
+                )
+
+        try:
+            materialized = await cloud_artifact_materializer.materialize(
+                db=context.db,
+                tenant_id=context.tenant_id,
+                artifact_id=artifact.id,
+                revision_id=revision.id,
+                task_id=task.id,
+                uploaded_by_user_id=context.actor_user_id,
+            )
+        except CloudArtifactMaterializationError as exc:
+            raise ChatToolError(
+                exc.code,
+                "The draft could not be written and verified in tenant storage",
+            ) from exc
+
+        document = materialized.document
         action = MatterDocumentDraftAction(
             type="matter_document_draft",
             matter_id=args.matter_id,
-            title=args.title,
-            body=args.body,
+            title=artifact.title,
+            body=revision.content_text,
+            artifact_id=artifact.id,
+            artifact_revision_id=revision.id,
+            artifact_revision_no=revision.revision_no,
+            artifact_sha256=revision.content_sha256,
+            document_id=document.id,
+            document_sha256=document.document_sha256,
+            document_storage_backend=document.storage_backend,
+            document_provider_etag=document.provider_etag,
+            document_provider_version_id=document.provider_version_id,
             source_ids=args.source_ids[:10],
             sources=chips,
         )
-        task = await _create_proposed_task(
-            context,
-            matter_id=args.matter_id,
-            title=f"Review document: {action.title}",
-            description=f"Draft Word document awaiting approval.\n\n{action.body}",
-            due_date=args.due_date,
-            source_ids=args.source_ids,
-            pending_action=action.model_dump(mode="json"),
-        )
+        task.pending_action = action.model_dump(mode="json")
+        await context.db.flush()
+
     return {
+        "artifact_id": str(artifact.id),
+        "artifact_revision_id": str(revision.id),
+        "artifact_revision_no": revision.revision_no,
+        "artifact_sha256": revision.content_sha256,
+        "client_request_id": str(client_request_id),
+        "idempotent_replay": not artifact_result.created,
         "task_id": str(task.id),
         "version": task.version,
         "title": task.title,
         "status": task.status,
+        "review_policy": task.review_policy,
+        "review_stage": task.review_stage,
+        "staff_reviewer_user_id": str(task.staff_reviewer_user_id),
+        "attorney_reviewer_user_id": str(task.attorney_reviewer_user_id),
         "matter_id": str(task.matter_id),
         "due_date": task.due_date.isoformat() if task.due_date else None,
         "action_type": action.type,
+        "document_id": str(document.id),
+        "document_sha256": document.document_sha256,
+        "document_storage_backend": document.storage_backend,
+        "document_storage_state": document.storage_state,
+        "document_open_url": (
+            f"/api/matters/{task.matter_id}/documents/{document.id}/open"
+        ),
+        "document_download_url": (
+            f"/api/matters/{task.matter_id}/documents/{document.id}/download"
+        ),
         "approval_effect": (
-            "Approving saves this reviewed draft as a Word document in the "
-            "matter's Documents area. Nothing is sent to the client."
+            "The editable DOCX is already stored in the tenant cloud. Staff review "
+            "advances this exact revision to attorney review; attorney approval "
+            "records approval of the verified cloud bytes. Delivery remains a "
+            "separate reviewed action."
         ),
         "pending_action": action.model_dump(mode="json"),
         "sources": chips,

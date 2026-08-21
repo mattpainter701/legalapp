@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["112_client_account_relationships"]
+    assert heads == ["116_cloud_doc_accountability"]
 
 
 def test_revision_ids_fit_the_alembic_version_column():
@@ -34,6 +34,29 @@ def test_revision_ids_fit_the_alembic_version_column():
     }
 
     assert not oversized, f"revision ids exceed varchar(32): {oversized}"
+
+
+def test_staged_review_migration_enforces_approval_identity():
+    backend_dir = Path(__file__).resolve().parents[1]
+    source = (
+        backend_dir / "migrations" / "versions" / "115_staged_task_review.py"
+    ).read_text(encoding="utf-8")
+
+    for constraint in (
+        "ck_tasks_staged_reviewers_distinct",
+        "ck_tasks_review_evidence_pairs",
+        "ck_tasks_staff_reviewer_evidence_actor",
+        "ck_tasks_attorney_reviewer_evidence_actor",
+        "ck_tasks_staff_stage_reviewer",
+        "ck_tasks_attorney_stage_reviewer",
+        "ck_tasks_approved_staff_evidence",
+    ):
+        assert source.count(constraint) == 2
+    assert "staff_reviewer_user_id != attorney_reviewer_user_id" in source
+    assert "staff_reviewed_by_user_id = staff_reviewer_user_id" in source
+    assert "attorney_approved_by_user_id = attorney_reviewer_user_id" in source
+    assert "name = 'Administrator' AND is_system IS TRUE" in source
+    assert "approve_legal_work" in source
 
 
 def test_live_demo_foundation_is_additive_and_forces_tenant_rls():

@@ -1306,6 +1306,11 @@ export const transitionTask = (id, data) =>
 // from the matter's own parties.
 export const updateTaskPendingAction = (id, data) =>
   api.patch(`/tasks/${id}/pending-action`, data).then(r => r.data)
+export const syncTaskCloudDocument = (id, expectedVersion) =>
+  api.post(`/tasks/${id}/pending-action/sync-cloud`, {
+    expected_version: expectedVersion,
+  }).then(r => r.data)
+
 
 const normalizeTaskActionApprovalError = (error) => {
   const normalized = normalizeApiError(error)

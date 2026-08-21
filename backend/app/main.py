@@ -70,6 +70,10 @@ from app.routers.esignature import portal_router as esignature_portal_router
 from app.routers.onboarding import router as onboarding_router
 from app.routers.licensing import router as licensing_router
 from app.services.mcp_protocol import protocol_endpoint, protocol_lifespan
+from app.services.workspace_mcp_protocol import (
+    workspace_protocol_endpoint,
+    workspace_protocol_lifespan,
+)
 from app.services.scheduler import LegalScheduler
 from app.services.host_disk_status import HostDiskStatusError, read_host_disk_status
 from app.services.backup_status import BackupStatusError, read_backup_status
@@ -254,7 +258,7 @@ async def lifespan(app: FastAPI):
     # The official MCP SDK owns JSON-RPC lifecycle and Streamable HTTP
     # semantics. Its public endpoint remains fail-closed unless
     # MCP_PRODUCT_ENABLED is explicitly enabled.
-    async with protocol_lifespan():
+    async with protocol_lifespan(), workspace_protocol_lifespan():
         yield
 
     # Shutdown
@@ -364,6 +368,14 @@ app.router.routes.append(
         endpoint=protocol_endpoint,
         methods=["GET", "POST", "DELETE"],
         name="mcp_streamable_http",
+    )
+)
+app.router.routes.append(
+    Route(
+        "/api/mcp/workspace",
+        endpoint=workspace_protocol_endpoint,
+        methods=["GET", "POST", "DELETE"],
+        name="workspace_mcp_streamable_http",
     )
 )
 app.include_router(auth_router, prefix="/api")

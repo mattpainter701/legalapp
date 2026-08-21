@@ -23,10 +23,10 @@ LawHand UI / REST -----+                              |
                                                       v
                                             Review task + artifact
                                                       |
-                                             human approves in LawHand
+                                       exact cloud bytes are verified
                                                       |
                                                       v
-                                      deterministic delivery/file worker
+                                      separately approved delivery worker
 ```
 
 The initial shared contract is implemented in
@@ -41,8 +41,9 @@ The existing `/api/mcp` gateway remains a read-only legal-research product. Its
 not an individual attorney. They are appropriate for metering research calls
 and inappropriate for firm-management actions.
 
-The future workspace server should be a separate Streamable HTTP endpoint,
-provisionally `/api/mcp/workspace`, with an end-user OAuth flow. The resulting
+The workspace resource-server foundation is a separate, disabled-by-default
+Streamable HTTP endpoint at `/api/mcp/workspace`. Production enablement still
+requires the complete end-user OAuth 2.1/PKCE lifecycle. The resulting
 principal must include:
 
 - `tenant_id`;
@@ -75,10 +76,12 @@ There is deliberately no model-facing `execute` effect. In particular:
 
 - `propose_client_email` cannot accept an email address; it accepts matter-party
   IDs and resolves current addresses server-side;
-- `propose_matter_document` creates reviewable work, not a filed document;
+- `propose_matter_document` creates and read-back verifies a tenant-cloud DOCX
+  working copy linked to a versioned artifact and Review task; it does not file,
+  approve, or deliver the document;
 - approval remains an explicit, version-checked LawHand action; and
-- the task automation worker alone sends or files an approved immutable
-  snapshot.
+- approval re-reads and hashes the exact bound provider object. It never creates
+  or uploads a late replacement; client delivery remains a separate action.
 
 MCP annotations are discovery hints, not enforcement. OAuth scopes, tenant RLS,
 matter/reference validation, reviewer authorization, optimistic versioning, and
@@ -99,9 +102,10 @@ to a client or file a document as final.
 
 ## Artifact model
 
-`Task.pending_action` is a safe bootstrap envelope for the current demo, but it
-should not become the permanent document system. Before template automation or
-multi-revision drafting expands, introduce a first-class matter work artifact:
+`Task.pending_action` remains a compatibility and presentation envelope. The
+foundation now uses first-class generated artifacts, immutable revisions, and
+tenant-cloud matter-document bindings as the authoritative draft lineage. The
+target domain shape remains:
 
 ```text
 work_artifact
@@ -128,40 +132,44 @@ turning the task table into a document store.
 
 Migration can be incremental: add `artifact_id` to new pending actions, dual-read
 the existing JSON envelope, backfill live review tasks, and then make the
-artifact revision authoritative. The current approval worker already snapshots
-and hashes an action, so that audit boundary maps directly to an artifact
-revision.
+artifact revision authoritative. New generated document proposals already use
+this binding; artifact-less legacy drafts fail closed and must be regenerated.
 
 ## Workspace MCP rollout
 
-### Phase 1 — current PR
+### Phase 1 — shared capability foundation (implemented)
 
 - Shared capability catalog and actor context.
 - Matter chat consumes the shared contracts.
 - Read and proposal capabilities declare scopes and review policy.
 - Existing research MCP remains unchanged.
 
-### Phase 2 — first-class artifacts
+### Phase 2 — artifacts and cloud review foundation (implemented)
 
-- Add artifact, revision, approval, and delivery records.
-- Link Review tasks and chat cards to the same artifact.
-- Bind template/original and source provenance to each revision.
-- Preserve the current DOCX filing and email delivery workers as deterministic
-  execution adapters.
+- Generated artifact and immutable revision records.
+- Review tasks and chat cards linked to the same cloud-backed artifact revision.
+- Staff → attorney staged review, attorney override evidence, and reset on edit.
+- Tenant-cloud DOCX materialization before review, exact-byte external-edit
+  adoption, authenticated open/download, and approval-time provider readback.
+- Hash-chained integrity events and provider-operation evidence, with a
+  crash-safe outbox/reconciliation worker still required for production.
 
-### Phase 3 — workspace MCP
+### Phase 3 — production workspace MCP
 
 - Implement OAuth authorization and consent for LawHand users.
-- Add `/api/mcp/workspace` using the existing official MCP SDK integration.
+- Complete the `/api/mcp/workspace` OAuth metadata, PKCE, registration, token
+  rotation, disconnect, and revocation lifecycle.
 - Expose only the shared read/propose catalog initially.
 - Add per-user audit, grant revocation, rate limits, and target-client
   interoperability tests through production TLS.
 
 ### Phase 4 — deeper office automation
 
-- Template selection and smart field mapping.
+- Deterministic firm-template selection, smart field mapping, and render-fidelity
+  tests.
 - Natural-language revision requests that always produce a new artifact
   revision.
+- Explicit native Google Docs conversion/export policy and fidelity testing.
 - Approval stamps and controlled DOCX/PDF renditions.
 - Approved client delivery with provider message IDs and delivery certainty.
 - Read/open telemetry only where the mail provider and applicable policy allow
@@ -177,3 +185,7 @@ revision.
 6. Delivery is idempotent, audited, and records uncertain provider outcomes.
 7. Chat, MCP, UI, and scheduled automation cannot implement competing business
    rules.
+8. Generated DOCX bytes live in tenant cloud before review; LawHand stores the
+   binding and integrity evidence, not a fallback copy.
+9. A cloud edit is adopted only as a new exact-byte revision and invalidates
+   prior review. Approval never uploads or silently substitutes bytes.
