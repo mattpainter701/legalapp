@@ -79,7 +79,9 @@ def load_demo_pack(pack_root: Path | None = None) -> dict[str, Any]:
         or not isinstance(matters, list)
         or not matters
     ):
-        raise RuntimeError("The demo pack is not an approved synthetic scenario library")
+        raise RuntimeError(
+            "The demo pack is not an approved synthetic scenario library"
+        )
 
     required_fields = {
         "external_key",
@@ -96,7 +98,10 @@ def load_demo_pack(pack_root: Path | None = None) -> dict[str, Any]:
         "demo_prompt",
         "suggested_tasks",
     }
-    if any(not isinstance(matter, dict) or required_fields - matter.keys() for matter in matters):
+    if any(
+        not isinstance(matter, dict) or required_fields - matter.keys()
+        for matter in matters
+    ):
         raise RuntimeError("Every demo scenario must include complete matter metadata")
     if any(
         not isinstance(matter["client_profile"], dict)
@@ -104,7 +109,9 @@ def load_demo_pack(pack_root: Path | None = None) -> dict[str, Any]:
         or not isinstance(matter["client_profile"].get("primary_contact"), dict)
         for matter in matters
     ):
-        raise RuntimeError("Every demo scenario must include a fictional client profile")
+        raise RuntimeError(
+            "Every demo scenario must include a fictional client profile"
+        )
     covered_plugins = {str(matter["primary_plugin"]) for matter in matters}
     missing_plugins = valid_plugin_names() - covered_plugins
     if missing_plugins:
@@ -198,45 +205,253 @@ async def seed(domain: str) -> uuid.UUID:
         # Contacts and matters reference this synthetic administrator. Flush it
         # first so PostgreSQL can satisfy those foreign-key constraints.
         await db.flush()
+        lifecycle_samples = (
+            {
+                "client_number": "DEMO-LEAD-0001",
+                "client_status": "prospect",
+                "entity_type": "organization",
+                "organization_name": "Bluebird Foods Co. (fictional prospect)",
+                "email": "intake@bluebird-foods.demo.invalid",
+                "phone": "(312) 555-0171",
+                "referral_source": "Website consultation request",
+                "last_contacted_at": now - timedelta(hours=8),
+            },
+            {
+                "client_number": "DEMO-LEAD-0002",
+                "client_status": "prospect",
+                "entity_type": "person",
+                "first_name": "Taylor",
+                "last_name": "Brooks",
+                "preferred_name": "Taylor",
+                "email": "taylor.brooks@demo.invalid",
+                "phone": "(312) 555-0172",
+                "referral_source": "Former client referral",
+                "last_contacted_at": now - timedelta(days=2),
+            },
+            {
+                "client_number": "DEMO-FORMER-0001",
+                "client_status": "former",
+                "entity_type": "organization",
+                "organization_name": "Copper Finch Retail, LLC (fictional former client)",
+                "email": "legal@copper-finch.demo.invalid",
+                "phone": "(312) 555-0173",
+                "referral_source": "Professional network",
+                "last_contacted_at": now - timedelta(days=95),
+            },
+            {
+                "client_number": "DEMO-INACTIVE-0001",
+                "client_status": "inactive",
+                "entity_type": "organization",
+                "organization_name": "Willow Bend Services, Inc. (fictional inactive client)",
+                "email": "office@willow-bend.demo.invalid",
+                "phone": "(312) 555-0174",
+                "referral_source": "Local bar association",
+                "last_contacted_at": now - timedelta(days=180),
+            },
+        )
+        for sample_index, sample in enumerate(lifecycle_samples):
+            status = str(sample["client_status"])
+            db.add(
+                Contact(
+                    id=uuid.uuid4(),
+                    tenant_id=tenant_id,
+                    contact_type="prospect" if status == "prospect" else "client",
+                    client_since=(
+                        None
+                        if status == "prospect"
+                        else date(2018 + sample_index, 6, 1)
+                    ),
+                    preferred_contact_method=("phone" if sample_index % 2 else "email"),
+                    preferred_contact_window="Weekdays, 10:00 a.m.-2:00 p.m.",
+                    preferred_contact_timezone="America/Chicago",
+                    preferred_language="English",
+                    sms_opt_in=sample_index == 1,
+                    sms_opt_in_at=(
+                        now - timedelta(days=7) if sample_index == 1 else None
+                    ),
+                    email_opt_in=sample_index < 2,
+                    preferred_payment_method=(None if status == "prospect" else "ach"),
+                    billing_delivery_method="email",
+                    payment_terms_days=30,
+                    billing_notes="Synthetic CRM lifecycle example; no live billing account.",
+                    notes="Synthetic CRM-only record with no linked matter.",
+                    tags=["synthetic", "demo-client", f"demo-{status}"],
+                    created_by_user_id=user_id,
+                    **sample,
+                )
+            )
+
+        await db.flush()
 
         for index, spec in enumerate(manifest["matters"]):
             matter_id, contact_id = uuid.uuid4(), uuid.uuid4()
-            client_representative_id, counterparty_id = uuid.uuid4(), uuid.uuid4()
+            counterparty_id = uuid.uuid4()
             due_date, event_start = _matter_dates(index)
             client = str(spec["client"])
             profile = dict(spec["client_profile"])
             primary_contact = dict(profile["primary_contact"])
+            secondary_contact = profile.get("secondary_contact")
             opposing_party = dict(profile["opposing_party"])
+            is_person_client = (
+                str(primary_contact.get("title", "")).strip().lower() == "client"
+                and str(profile.get("organization", client)) == client
+            )
+            client_representative_id = contact_id if is_person_client else uuid.uuid4()
+            preferred_contact_method = str(
+                profile.get(
+                    "preferred_contact_method",
+                    ("phone", "email", "email")[index % 3],
+                )
+            )
+            preferred_contact_window = str(
+                profile.get(
+                    "preferred_contact_window",
+                    (
+                        "Weekdays, 9:00 a.m.-noon",
+                        "Weekdays, 1:00-4:00 p.m.",
+                        "Weekdays after 3:00 p.m.",
+                    )[index % 3],
+                )
+            )
+            preferred_contact_timezone = str(
+                profile.get(
+                    "preferred_contact_timezone",
+                    (
+                        "America/New_York"
+                        if "Eastern" in preferred_contact_window
+                        else "America/Chicago"
+                    ),
+                )
+            )
+            client_since = date.fromisoformat(
+                str(profile.get("client_since", f"{2019 + index % 6}-01-15"))
+            )
+            sms_opt_in = index % 3 == 0
             contact = Contact(
                 id=contact_id,
                 tenant_id=tenant_id,
-                entity_type="organization",
+                entity_type="person" if is_person_client else "organization",
                 contact_type="client",
-                organization_name=client,
-                email=str(primary_contact["email"]),
-                phone=str(primary_contact["phone"]),
-                address=dict(profile["address"]),
-                notes="Synthetic demo organization. Address and contacts are fictional.",
-                tags=["synthetic", "demo-client", str(spec["primary_plugin"])],
-                created_by_user_id=user_id,
-            )
-            client_representative = Contact(
-                id=client_representative_id,
-                tenant_id=tenant_id,
-                entity_type="person",
-                contact_type="client",
-                first_name=str(primary_contact["first_name"]),
-                last_name=str(primary_contact["last_name"]),
-                email=str(primary_contact["email"]),
-                phone=str(primary_contact["phone"]),
-                address=dict(profile["address"]),
-                notes=(
-                    f"Synthetic client representative and {primary_contact['title']}. "
-                    "No real person or contact information."
+                client_number=f"DEMO-CL-{index + 1:04d}",
+                client_status="active",
+                first_name=(
+                    str(primary_contact["first_name"]) if is_person_client else None
                 ),
-                tags=["synthetic", "primary-contact"],
+                last_name=(
+                    str(primary_contact["last_name"]) if is_person_client else None
+                ),
+                preferred_name=(
+                    str(primary_contact["first_name"]) if is_person_client else None
+                ),
+                organization_name=None if is_person_client else client,
+                date_of_birth=(
+                    date(1984 + index % 12, (index % 12) + 1, 12)
+                    if is_person_client
+                    else None
+                ),
+                client_since=client_since,
+                email=str(primary_contact["email"]),
+                phone=str(primary_contact["phone"]),
+                address=dict(profile["address"]),
+                preferred_contact_method=preferred_contact_method,
+                preferred_contact_window=preferred_contact_window,
+                preferred_contact_timezone=preferred_contact_timezone,
+                preferred_language=("Spanish" if index == 10 else "English"),
+                emergency_contact=(
+                    {
+                        "name": f"Morgan {primary_contact['last_name']}",
+                        "relationship": "Emergency contact",
+                        "phone": "(312) 555-0199",
+                        "email": f"morgan.{str(primary_contact['last_name']).lower()}@demo.invalid",
+                    }
+                    if is_person_client
+                    else None
+                ),
+                sms_opt_in=sms_opt_in,
+                sms_opt_in_at=(
+                    now - timedelta(days=30 + index) if sms_opt_in else None
+                ),
+                email_opt_in=index % 7 != 0,
+                referral_source=(
+                    "Existing client referral" if index % 2 else "Professional network"
+                ),
+                last_contacted_at=now - timedelta(days=1),
+                preferred_payment_method=("ach", "check", "stripe")[index % 3],
+                billing_delivery_method=("email", "portal")[index % 2],
+                payment_terms_days=(15, 30, 45)[index % 3],
+                billing_notes=str(
+                    profile.get(
+                        "billing_terms",
+                        "Monthly itemized invoice; approval required before third-party spend.",
+                    )
+                ),
+                notes=(
+                    "Synthetic demo client. Address and contacts are fictional. "
+                    f"Preferred contact window: {preferred_contact_window}."
+                ),
+                tags=[
+                    "synthetic",
+                    "demo-client",
+                    "active-client",
+                    str(spec["primary_plugin"]),
+                ],
                 created_by_user_id=user_id,
             )
+            client_representative = (
+                None
+                if is_person_client
+                else Contact(
+                    id=client_representative_id,
+                    tenant_id=tenant_id,
+                    entity_type="person",
+                    contact_type="client_contact",
+                    first_name=str(primary_contact["first_name"]),
+                    last_name=str(primary_contact["last_name"]),
+                    email=str(primary_contact["email"]),
+                    phone=str(primary_contact["phone"]),
+                    address=dict(profile["address"]),
+                    preferred_contact_method=preferred_contact_method,
+                    client_account_id=contact_id,
+                    client_contact_role=str(primary_contact["title"]),
+                    is_primary_client_contact=True,
+                    client_contact_authorization=(
+                        "Primary matter contact; authorized for routine instructions, "
+                        "scheduling, records, and billing coordination."
+                    ),
+                    last_contacted_at=now - timedelta(days=1),
+                    notes=(
+                        f"Synthetic client representative and {primary_contact['title']}. "
+                        "No real person or contact information."
+                    ),
+                    tags=["synthetic", "primary-contact"],
+                    created_by_user_id=user_id,
+                )
+            )
+            client_secondary_contact = None
+            if isinstance(secondary_contact, dict):
+                client_secondary_contact = Contact(
+                    id=uuid.uuid4(),
+                    tenant_id=tenant_id,
+                    entity_type="person",
+                    contact_type="client_contact",
+                    first_name=str(secondary_contact["first_name"]),
+                    last_name=str(secondary_contact["last_name"]),
+                    email=str(secondary_contact["email"]),
+                    phone=str(secondary_contact["phone"]),
+                    address=dict(profile["address"]),
+                    preferred_contact_method="email",
+                    client_account_id=contact_id,
+                    client_contact_role=str(secondary_contact["title"]),
+                    is_primary_client_contact=False,
+                    client_contact_authorization=(
+                        "Authorized for records, scheduling, and billing coordination; "
+                        "substantive decisions remain with the primary contact."
+                    ),
+                    last_contacted_at=now - timedelta(days=3),
+                    notes="Synthetic secondary client contact; no real person or contact information.",
+                    tags=["synthetic", "secondary-contact", "records-contact"],
+                    created_by_user_id=user_id,
+                )
             counterparty = Contact(
                 id=counterparty_id,
                 tenant_id=tenant_id,
@@ -268,7 +483,11 @@ async def seed(domain: str) -> uuid.UUID:
                 source="synthetic_demo_fixture",
                 risk_level=("high" if index % 4 == 0 else "medium"),
                 materiality=("high" if index % 3 == 0 else "medium"),
-                exposure_range=("$50,000–$250,000 (fictional)" if index % 2 else "$10,000–$75,000 (fictional)"),
+                exposure_range=(
+                    "$50,000–$250,000 (fictional)"
+                    if index % 2
+                    else "$10,000–$75,000 (fictional)"
+                ),
                 conflicts_status="cleared",
                 key_dates={
                     "next_review": due_date.isoformat(),
@@ -291,7 +510,8 @@ async def seed(domain: str) -> uuid.UUID:
             db.add_all(
                 [
                     contact,
-                    client_representative,
+                    *([client_representative] if client_representative else []),
+                    *([client_secondary_contact] if client_secondary_contact else []),
                     counterparty,
                     matter,
                 ]
@@ -318,12 +538,36 @@ async def seed(domain: str) -> uuid.UUID:
                         is_primary=True,
                         notes="Synthetic client organization.",
                     ),
-                    MatterParty(
-                        tenant_id=tenant_id,
-                        matter_id=matter_id,
-                        contact_id=client_representative_id,
-                        role="client_representative",
-                        notes=f"{primary_contact['title']} and primary matter contact.",
+                    *(
+                        [
+                            MatterParty(
+                                tenant_id=tenant_id,
+                                matter_id=matter_id,
+                                contact_id=client_representative_id,
+                                role="client_representative",
+                                notes=(
+                                    f"{primary_contact['title']} and primary matter contact."
+                                ),
+                            )
+                        ]
+                        if client_representative
+                        else []
+                    ),
+                    *(
+                        [
+                            MatterParty(
+                                tenant_id=tenant_id,
+                                matter_id=matter_id,
+                                contact_id=client_secondary_contact.id,
+                                role="client_representative",
+                                notes=(
+                                    f"{secondary_contact['title']}; records, scheduling, "
+                                    "and billing coordination."
+                                ),
+                            )
+                        ]
+                        if client_secondary_contact
+                        else []
                     ),
                     MatterParty(
                         tenant_id=tenant_id,
@@ -353,7 +597,10 @@ async def seed(domain: str) -> uuid.UUID:
                             f"{primary_contact['first_name']} {primary_contact['last_name']} "
                             "provided the initial facts and requested a review-ready plan."
                         ),
-                        metadata_json={"synthetic": True, "contact_id": str(client_representative_id)},
+                        metadata_json={
+                            "synthetic": True,
+                            "contact_id": str(client_representative_id),
+                        },
                         created_by=user_id,
                     ),
                     MatterEvent(
@@ -362,7 +609,10 @@ async def seed(domain: str) -> uuid.UUID:
                         event_type="risk_review",
                         title="Initial issue review prepared",
                         content="Synthetic issue triage is ready for attorney review; no advice or external action has been sent.",
-                        metadata_json={"synthetic": True, "risk_level": matter.risk_level},
+                        metadata_json={
+                            "synthetic": True,
+                            "risk_level": matter.risk_level,
+                        },
                         created_by=user_id,
                     ),
                     ScheduledEvent(
@@ -398,18 +648,30 @@ async def seed(domain: str) -> uuid.UUID:
                     ),
                     task_type=("follow_up" if task_index == 4 else "review"),
                     status=status,
-                    priority="urgent" if task_index == 1 else ("high" if task_index < 4 else "medium"),
+                    priority="urgent"
+                    if task_index == 1
+                    else ("high" if task_index < 4 else "medium"),
                     due_date=due_date + timedelta(days=task_index - 1),
                     matter_id=matter_id,
                     contact_id=client_representative_id,
                     assigned_to_user_id=user_id,
                     created_by_user_id=user_id,
                     reviewer_user_id=user_id if status == "review" else None,
-                    completed_at=(now - timedelta(days=1) if status == "completed" else None),
-                    customer_contacted_at=(now - timedelta(days=2) if task_index == 0 else None),
+                    completed_at=(
+                        now - timedelta(days=1) if status == "completed" else None
+                    ),
+                    customer_contacted_at=(
+                        now - timedelta(days=2) if task_index == 0 else None
+                    ),
                     customer_contact_method=("email" if task_index == 0 else None),
-                    waiting_reason=("Awaiting fictional client records and authority confirmation." if status == "waiting" else None),
-                    waiting_follow_up_date=(due_date + timedelta(days=7) if status == "waiting" else None),
+                    waiting_reason=(
+                        "Awaiting fictional client records and authority confirmation."
+                        if status == "waiting"
+                        else None
+                    ),
+                    waiting_follow_up_date=(
+                        due_date + timedelta(days=7) if status == "waiting" else None
+                    ),
                     pending_action=(
                         {
                             "type": "email_client",
@@ -433,7 +695,10 @@ async def seed(domain: str) -> uuid.UUID:
                         from_status="pending",
                         to_status=status,
                         note="Synthetic task history for the demo work board.",
-                        metadata_json={"synthetic": True, "fixture": manifest["pack_version"]},
+                        metadata_json={
+                            "synthetic": True,
+                            "fixture": manifest["pack_version"],
+                        },
                     )
                 )
 
@@ -494,7 +759,10 @@ async def seed(domain: str) -> uuid.UUID:
                         created_by_user_id=user_id,
                         occurred_at=now - timedelta(days=4),
                         thread_ref=f"synthetic-{index + 1}-client-thread",
-                        participants={"from": str(primary_contact["email"]), "to": [user.email]},
+                        participants={
+                            "from": str(primary_contact["email"]),
+                            "to": [user.email],
+                        },
                     ),
                     CommunicationLog(
                         tenant_id=tenant_id,
@@ -512,7 +780,10 @@ async def seed(domain: str) -> uuid.UUID:
                         created_by_user_id=user_id,
                         occurred_at=now - timedelta(days=1),
                         thread_ref=f"synthetic-{index + 1}-client-thread",
-                        participants={"from": user.email, "to": [str(primary_contact["email"])]},
+                        participants={
+                            "from": user.email,
+                            "to": [str(primary_contact["email"])],
+                        },
                     ),
                     CommunicationLog(
                         tenant_id=tenant_id,
@@ -526,7 +797,10 @@ async def seed(domain: str) -> uuid.UUID:
                         contact_id=client_representative_id,
                         created_by_user_id=user_id,
                         occurred_at=now - timedelta(days=2),
-                        participants={"from": user.email, "to": [str(primary_contact["email"])]},
+                        participants={
+                            "from": user.email,
+                            "to": [str(primary_contact["email"])],
+                        },
                     ),
                 ]
             )
@@ -557,8 +831,14 @@ async def seed(domain: str) -> uuid.UUID:
                         ),
                         sources={"synthetic": True, "matter": str(spec["name"])},
                         proposed_actions=[
-                            {"title": str(spec["suggested_tasks"][0]), "status": "review"},
-                            {"title": str(spec["suggested_tasks"][1]), "status": "pending"},
+                            {
+                                "title": str(spec["suggested_tasks"][0]),
+                                "status": "review",
+                            },
+                            {
+                                "title": str(spec["suggested_tasks"][1]),
+                                "status": "pending",
+                            },
                         ],
                     ),
                 ]

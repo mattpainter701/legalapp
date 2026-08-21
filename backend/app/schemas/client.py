@@ -52,11 +52,14 @@ class ClientCreate(BaseModel):
     preferred_name: str | None = Field(default=None, max_length=200)
     organization_name: str | None = Field(default=None, max_length=500)
     date_of_birth: date | None = None
+    client_since: date | None = None
     email: EmailStr | None = None
     phone: str | None = Field(default=None, max_length=50)
     secondary_phone: str | None = Field(default=None, max_length=50)
     address: Address | None = None
     preferred_contact_method: ContactMethod | None = None
+    preferred_contact_window: str | None = Field(default=None, max_length=200)
+    preferred_contact_timezone: str | None = Field(default=None, max_length=100)
     preferred_language: str | None = Field(default=None, max_length=100)
     emergency_contact: EmergencyContact | None = None
     sms_opt_in: bool = False
@@ -80,6 +83,8 @@ class ClientCreate(BaseModel):
         "phone",
         "secondary_phone",
         "preferred_language",
+        "preferred_contact_window",
+        "preferred_contact_timezone",
         "referral_source",
         "qbo_customer_id",
         "stripe_customer_id",
@@ -113,11 +118,14 @@ class ClientUpdate(BaseModel):
     preferred_name: str | None = Field(default=None, max_length=200)
     organization_name: str | None = Field(default=None, max_length=500)
     date_of_birth: date | None = None
+    client_since: date | None = None
     email: EmailStr | None = None
     phone: str | None = Field(default=None, max_length=50)
     secondary_phone: str | None = Field(default=None, max_length=50)
     address: Address | None = None
     preferred_contact_method: ContactMethod | None = None
+    preferred_contact_window: str | None = Field(default=None, max_length=200)
+    preferred_contact_timezone: str | None = Field(default=None, max_length=100)
     preferred_language: str | None = Field(default=None, max_length=100)
     emergency_contact: EmergencyContact | None = None
     sms_opt_in: bool | None = None
@@ -149,11 +157,14 @@ class ClientResponse(BaseModel):
     organization_name: str | None
     display_name: str
     date_of_birth: date | None
+    client_since: date | None
     email: str | None
     phone: str | None
     secondary_phone: str | None
     address: dict | None
     preferred_contact_method: str | None
+    preferred_contact_window: str | None
+    preferred_contact_timezone: str | None
     preferred_language: str | None
     emergency_contact: dict | None
     sms_opt_in: bool
@@ -174,6 +185,25 @@ class ClientResponse(BaseModel):
     created_by_user_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
+
+
+class ClientRelatedContactResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    entity_type: str
+    first_name: str | None
+    last_name: str | None
+    preferred_name: str | None
+    organization_name: str | None
+    display_name: str
+    email: str | None
+    phone: str | None
+    secondary_phone: str | None
+    preferred_contact_method: str | None
+    client_contact_role: str | None
+    is_primary_client_contact: bool
+    client_contact_authorization: str | None
 
 
 class ClientListResponse(BaseModel):

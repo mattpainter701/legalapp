@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user, require_admin
 from app.models.contact import Contact
+from app.models.matter_party import MatterParty
 from app.models.plugin import Matter
 from app.schemas.client import (
     ClientCreate,
@@ -23,6 +24,7 @@ from app.schemas.client import (
     ClientImportResponse,
     ClientListResponse,
     ClientQBOSyncResponse,
+    ClientRelatedContactResponse,
     ClientResponse,
     ClientSummaryResponse,
     ClientUpdate,
@@ -47,6 +49,7 @@ CSV_FIELDS = (
     "phone",
     "secondary_phone",
     "date_of_birth",
+    "client_since",
     "address_street",
     "address_street2",
     "address_city",
@@ -54,6 +57,8 @@ CSV_FIELDS = (
     "address_zip",
     "address_country",
     "preferred_contact_method",
+    "preferred_contact_window",
+    "preferred_contact_timezone",
     "preferred_language",
     "sms_opt_in",
     "email_opt_in",
@@ -90,6 +95,7 @@ async def _load_client(
             Contact.id == client_id,
             Contact.tenant_id == tenant_id,
             Contact.contact_type.in_(CLIENT_CONTACT_TYPES),
+            Contact.client_account_id.is_(None),
         )
     )
     contact = result.scalar_one_or_none()
@@ -156,6 +162,7 @@ async def list_clients(
     stmt = select(Contact).where(
         Contact.tenant_id == tenant_id,
         Contact.contact_type.in_(CLIENT_CONTACT_TYPES),
+        Contact.client_account_id.is_(None),
     )
     if active_only:
         stmt = stmt.where(Contact.is_active.is_(True))
@@ -209,6 +216,7 @@ async def client_summary(
     base = (
         Contact.tenant_id == tenant_id,
         Contact.contact_type.in_(CLIENT_CONTACT_TYPES),
+        Contact.client_account_id.is_(None),
         Contact.is_active.is_(True),
     )
     row = (
@@ -310,6 +318,9 @@ async def export_clients_csv(
                 "date_of_birth": contact.date_of_birth.isoformat()
                 if contact.date_of_birth
                 else "",
+                "client_since": contact.client_since.isoformat()
+                if contact.client_since
+                else "",
                 "address_street": _csv_safe(address.get("street")),
                 "address_street2": _csv_safe(address.get("street2")),
                 "address_city": _csv_safe(address.get("city")),
@@ -317,6 +328,10 @@ async def export_clients_csv(
                 "address_zip": _csv_safe(address.get("zip")),
                 "address_country": _csv_safe(address.get("country")),
                 "preferred_contact_method": contact.preferred_contact_method or "",
+                "preferred_contact_window": _csv_safe(contact.preferred_contact_window),
+                "preferred_contact_timezone": _csv_safe(
+                    contact.preferred_contact_timezone
+                ),
                 "preferred_language": _csv_safe(contact.preferred_language),
                 "sms_opt_in": str(contact.sms_opt_in).lower(),
                 "email_opt_in": str(contact.email_opt_in).lower(),
@@ -532,6 +547,54 @@ async def get_client(
     return _client_response(await _load_client(db, current_user.tenant_id, client_id))
 
 
+@router.get("/{client_id}/contacts", response_model=list[ClientRelatedContactResponse])
+async def client_related_contacts(
+    client_id: uuid.UUID,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await set_tenant_context(db, str(current_user.tenant_id))
+    await _load_client(db, current_user.tenant_id, client_id)
+    contacts = (
+        (
+            await db.execute(
+                select(Contact)
+                .where(
+                    Contact.tenant_id == current_user.tenant_id,
+                    Contact.client_account_id == client_id,
+                    Contact.is_active.is_(True),
+                )
+                .order_by(
+                    Contact.is_primary_client_contact.desc(),
+                    Contact.last_name,
+                    Contact.first_name,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        ClientRelatedContactResponse(
+            id=contact.id,
+            entity_type=contact.entity_type,
+            first_name=contact.first_name,
+            last_name=contact.last_name,
+            preferred_name=contact.preferred_name,
+            organization_name=contact.organization_name,
+            display_name=contact.display_name,
+            email=contact.email,
+            phone=contact.phone,
+            secondary_phone=contact.secondary_phone,
+            preferred_contact_method=contact.preferred_contact_method,
+            client_contact_role=contact.client_contact_role,
+            is_primary_client_contact=contact.is_primary_client_contact,
+            client_contact_authorization=contact.client_contact_authorization,
+        )
+        for contact in contacts
+    ]
+
+
 @router.patch("/{client_id}", response_model=ClientResponse)
 async def update_client(
     client_id: uuid.UUID,
@@ -589,13 +652,24 @@ async def client_matters(
 ):
     await set_tenant_context(db, str(current_user.tenant_id))
     await _load_client(db, current_user.tenant_id, client_id)
+    related_contact_ids = select(Contact.id).where(
+        Contact.tenant_id == current_user.tenant_id,
+        Contact.client_account_id == client_id,
+    )
+    related_matter_ids = select(MatterParty.matter_id).where(
+        MatterParty.tenant_id == current_user.tenant_id,
+        MatterParty.contact_id.in_(related_contact_ids),
+    )
     matters = (
         (
             await db.execute(
                 select(Matter)
                 .where(
                     Matter.tenant_id == current_user.tenant_id,
-                    Matter.client_contact_id == client_id,
+                    or_(
+                        Matter.client_contact_id == client_id,
+                        Matter.id.in_(related_matter_ids),
+                    ),
                 )
                 .order_by(Matter.created_at.desc())
             )
@@ -656,7 +730,10 @@ def _csv_row_payload(row: dict) -> dict:
         "phone",
         "secondary_phone",
         "date_of_birth",
+        "client_since",
         "preferred_contact_method",
+        "preferred_contact_window",
+        "preferred_contact_timezone",
         "preferred_language",
         "referral_source",
         "preferred_payment_method",

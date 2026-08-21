@@ -33,6 +33,7 @@ class Contact(Base):
         Index("idx_contacts_tenant_email", "tenant_id", "email"),
         Index("idx_contacts_tenant_last_name", "tenant_id", "last_name"),
         Index("idx_contacts_tenant_client_status", "tenant_id", "client_status"),
+        Index("idx_contacts_tenant_client_account", "tenant_id", "client_account_id"),
         Index("idx_contacts_tenant_qbo_customer", "tenant_id", "qbo_customer_id"),
         Index(
             "uq_contacts_tenant_client_number",
@@ -105,8 +106,15 @@ class Contact(Base):
     # non-client parties without fabricating client-specific data.
     client_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
     client_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    client_since: Mapped[date | None] = mapped_column(Date, nullable=True)
     preferred_contact_method: Mapped[str | None] = mapped_column(
         String(50), nullable=True
+    )
+    preferred_contact_window: Mapped[str | None] = mapped_column(
+        String(200), nullable=True
+    )
+    preferred_contact_timezone: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
     )
     preferred_language: Mapped[str | None] = mapped_column(String(100), nullable=True)
     emergency_contact: Mapped[dict | None] = mapped_column(JSON, nullable=True)
@@ -122,6 +130,22 @@ class Contact(Base):
     referral_source: Mapped[str | None] = mapped_column(String(300), nullable=True)
     last_contacted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+    # People attached to an organization client remain ordinary contacts, but
+    # this link keeps them underneath one canonical CRM account instead of
+    # inflating the client directory with duplicate top-level records.
+    client_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("contacts.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    client_contact_role: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    is_primary_client_contact: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    client_contact_authorization: Mapped[str | None] = mapped_column(
+        Text, nullable=True
     )
 
     # Billing preferences and external customer mappings. Provider IDs are

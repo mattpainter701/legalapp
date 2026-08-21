@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.communication_log import CommunicationLog
+from app.models.contact import Contact
 from app.schemas.communication_log import (
     CommunicationLogCreate,
     CommunicationLogListResponse,
@@ -28,6 +29,42 @@ from app.services.cache import ExpertiseCacheManager
 
 router = APIRouter(prefix="/api/communications", tags=["communications"])
 communication_context_cache = ExpertiseCacheManager()
+
+
+async def _record_client_contact(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    contact_id: uuid.UUID | None,
+    occurred_at: datetime,
+) -> None:
+    """Advance recency for a contacted person and their canonical client account."""
+    if contact_id is None:
+        return
+    contact = (
+        await db.execute(
+            select(Contact).where(
+                Contact.id == contact_id,
+                Contact.tenant_id == tenant_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if contact is None:
+        return
+    targets = [contact]
+    if contact.client_account_id:
+        account = (
+            await db.execute(
+                select(Contact).where(
+                    Contact.id == contact.client_account_id,
+                    Contact.tenant_id == tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if account is not None:
+            targets.append(account)
+    for target in targets:
+        if target.last_contacted_at is None or occurred_at > target.last_contacted_at:
+            target.last_contacted_at = occurred_at
 
 
 async def _invalidate_communication_context(
@@ -113,6 +150,9 @@ async def create_communication_log(
         **data,
     )
     db.add(log)
+    await _record_client_contact(
+        db, uuid.UUID(tenant_id), log.contact_id, log.occurred_at
+    )
     await db.commit()
     await db.refresh(log)
     await _invalidate_communication_context(tenant_id, log.matter_id)
@@ -164,6 +204,9 @@ async def update_communication_log(
     for field, value in payload.model_dump(exclude_none=True).items():
         setattr(log, field, value)
 
+    await _record_client_contact(
+        db, uuid.UUID(tenant_id), log.contact_id, log.occurred_at
+    )
     await db.commit()
     await db.refresh(log)
     await _invalidate_communication_context(tenant_id, previous_matter_id)
