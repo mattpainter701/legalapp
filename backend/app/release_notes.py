@@ -1,51 +1,21 @@
-"""User-facing product release notes exposed with build metadata.
-
-Keep the newest release first. These entries intentionally describe customer-
-visible changes rather than implementation details so the same catalog can be
-used by the in-app announcement and the settings pages.
-"""
+"""Load the customer-facing release catalog exposed with build metadata."""
 
 from datetime import date
+import json
+from pathlib import Path
 from typing import Any
 
 
-RECENT_RELEASE_DAYS = 30
+CATALOG_PATH = Path(__file__).with_name("release_notes.json")
 
-RELEASE_NOTES: tuple[dict[str, Any], ...] = (
-    {
-        "id": "2026.08.20",
-        "version": "2026.08.20",
-        "title": "A clearer view of what changed",
-        "published_at": "2026-08-20",
-        "summary": (
-            "See the version currently running and catch up on the latest "
-            "LawHand improvements without leaving your workspace."
-        ),
-        "highlights": [
-            {
-                "title": "Release updates in LawHand",
-                "description": (
-                    "Version details and release notes are now available from "
-                    "your Profile and Admin Settings."
-                ),
-            },
-            {
-                "title": "Safer document revisions",
-                "description": (
-                    "Matter documents can move through a review-first revision "
-                    "workspace that preserves the original and its audit trail."
-                ),
-            },
-            {
-                "title": "A more useful work board",
-                "description": (
-                    "Tasks can be organized across To Do, In Progress, Waiting, "
-                    "Review, and Done with clearer ownership and history."
-                ),
-            },
-        ],
-    },
-)
+
+def _load_release_config() -> dict[str, Any]:
+    return json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+
+
+_RELEASE_CONFIG = _load_release_config()
+RECENT_RELEASE_DAYS = int(_RELEASE_CONFIG["recent_release_days"])
+RELEASE_NOTES: tuple[dict[str, Any], ...] = tuple(_RELEASE_CONFIG["releases"])
 
 
 def build_release_catalog(today: date | None = None) -> dict[str, Any]:
