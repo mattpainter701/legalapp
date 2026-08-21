@@ -40,6 +40,7 @@ from .test_task_automation import _approved_email_task, _matter
         ("POST", "/api/billing/checkout-session"),
         ("POST", "/api/billing/portal"),
         ("POST", "/api/billing/invoices/123/payment-link"),
+        ("POST", "/api/clients/123/sync/quickbooks"),
         ("POST", "/api/admin/users/invite"),
         ("POST", "/api/matters/123/portal/invite"),
         ("POST", "/api/tasks/123/remind"),

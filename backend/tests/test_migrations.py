@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["111_client_crm_management"]
+    assert heads == ["112_client_account_relationships"]
 
 
 def test_revision_ids_fit_the_alembic_version_column():

@@ -18,6 +18,7 @@ from app.routers.clients import (
     _validate_client_name,
     archive_client,
     client_matters,
+    client_related_contacts,
     client_summary,
     create_client,
     import_clients_csv,
@@ -91,14 +92,20 @@ def test_client_csv_normalizes_aliases_and_consent():
             "Last_Name": " Rivera ",
             "Phone_1": "+1 701 555 0100",
             "DOB": "1985-04-12",
+            "Client_Since": "2021-03-01",
             "SMS_Opt_In": "yes",
             "Address_City": "Fargo",
+            "Preferred_Contact_Window": "Weekdays after 3 p.m.",
+            "Preferred_Contact_Timezone": "America/Chicago",
         }
     )
     client = ClientCreate.model_validate(payload)
 
     assert client.phone == "+1 701 555 0100"
     assert client.date_of_birth.isoformat() == "1985-04-12"
+    assert client.client_since.isoformat() == "2021-03-01"
+    assert client.preferred_contact_window == "Weekdays after 3 p.m."
+    assert client.preferred_contact_timezone == "America/Chicago"
     assert client.sms_opt_in is True
     assert client.address is not None
     assert client.address.city == "Fargo"
@@ -335,6 +342,40 @@ async def test_create_update_archive_and_linked_matters():
     assert linked[0]["matter_name"] == "Estate plan"
     assert contact.is_active is False
     assert contact.client_status == "inactive"
+
+
+@pytest.mark.asyncio
+async def test_related_contacts_stay_under_the_canonical_client_account():
+    tenant_id = uuid.uuid4()
+    client_id = uuid.uuid4()
+    user = SimpleNamespace(tenant_id=tenant_id)
+    related = Contact(
+        id=uuid.uuid4(),
+        tenant_id=tenant_id,
+        entity_type="person",
+        contact_type="client_contact",
+        client_account_id=client_id,
+        first_name="Avery",
+        last_name="Nguyen",
+        email="avery@example.invalid",
+        client_contact_role="Chief Operating Officer",
+        is_primary_client_contact=True,
+        client_contact_authorization="Authorized for routine instructions.",
+    )
+    db = fake_db(FakeResult(rows=[related]))
+    with (
+        patch("app.routers.clients.set_tenant_context", new_callable=AsyncMock),
+        patch(
+            "app.routers.clients._load_client",
+            new_callable=AsyncMock,
+            return_value=SimpleNamespace(id=client_id),
+        ),
+    ):
+        result = await client_related_contacts(client_id, current_user=user, db=db)
+
+    assert [contact.display_name for contact in result] == ["Avery Nguyen"]
+    assert result[0].client_contact_role == "Chief Operating Officer"
+    assert result[0].is_primary_client_contact is True
 
 
 @pytest.mark.asyncio

@@ -63,6 +63,12 @@ def _is_blocked_demo_action(path: str, method: str) -> bool:
     ) and method in _DEMO_MUTATING_METHODS:
         return True
     if (
+        path.startswith("/api/clients/")
+        and path.endswith("/sync/quickbooks")
+        and method in _DEMO_MUTATING_METHODS
+    ):
+        return True
+    if (
         method in _DEMO_MUTATING_METHODS
         and path.endswith("/send")
         and (
