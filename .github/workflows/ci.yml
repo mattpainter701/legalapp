@@ -482,6 +482,17 @@ jobs:
           --base "${{ github.event.pull_request.base.sha }}"
           --head "${{ github.event.pull_request.head.sha }}"
 
+  release-notes:
+    name: Release notes and version catalog
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout release-note sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5.1 (Node.js 24)
+      - name: Validate customer notes and repository links
+        run: python scripts/generate_release_notes.py --check
+
   security-dependency-sbom:
     name: Security, dependency, secret, and SBOM controls
     runs-on: ubuntu-latest
@@ -549,6 +560,7 @@ jobs:
       - test-office-addin
       - e2e-first-customer
       - pr-policy-documentation
+      - release-notes
       - security-dependency-sbom
       - dependency-vulnerability-review
     runs-on: ubuntu-latest

@@ -1,0 +1,26 @@
+{
+  "recent_release_days": 30,
+  "releases": [
+    {
+      "id": "2026.08.20",
+      "version": "2026.08.20",
+      "title": "A clearer view of what changed",
+      "published_at": "2026-08-20",
+      "summary": "See the version currently running and catch up on the latest LawHand improvements without leaving your workspace.",
+      "highlights": [
+        {
+          "title": "Find updates in LawHand",
+          "description": "Open Profile or Admin Settings to see the running version and the latest release notes."
+        },
+        {
+          "title": "Revise documents without losing the original",
+          "description": "Each matter-document revision keeps the source document and its review history."
+        },
+        {
+          "title": "See where work stands",
+          "description": "Move tasks through To Do, In Progress, Waiting, Review, and Done with clearer ownership and history."
+        }
+      ]
+    }
+  ]
+}
