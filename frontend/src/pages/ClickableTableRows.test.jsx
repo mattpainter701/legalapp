@@ -36,6 +36,7 @@ vi.mock('../api', () => ({
   getMyMatters: vi.fn().mockResolvedValue([
     { id: 'profile-matter-1', matter_name: 'Acme advisory', matter_type: 'commercial', status: 'active' },
   ]),
+  getAppVersion: vi.fn().mockResolvedValue({ version: 'test', release_notes: [] }),
   getMattersV2: vi.fn().mockResolvedValue({ items: [] }),
   getTimeEntries: vi.fn().mockResolvedValue({ items: [] }),
   updateMe: vi.fn().mockResolvedValue({}),

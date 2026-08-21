@@ -72,6 +72,7 @@ from app.services.mcp_protocol import protocol_endpoint, protocol_lifespan
 from app.services.scheduler import LegalScheduler
 from app.services.host_disk_status import HostDiskStatusError, read_host_disk_status
 from app.services.backup_status import BackupStatusError, read_backup_status
+from app.release_notes import build_release_catalog
 from app.routers.chat import cache_manager
 from app.routers.plugins import plugin_cache_manager
 from app.routers.prompt_admin import router as prompt_admin_router
@@ -596,6 +597,7 @@ async def app_version():
     return {
         "status": "ok",
         **_build_metadata(),
+        **build_release_catalog(),
     }
 
 
