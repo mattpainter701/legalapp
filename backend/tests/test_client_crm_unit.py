@@ -53,9 +53,13 @@ class FakeResult:
         return self.row
 
 
-def fake_db(*execute_results):
+def fake_db(*execute_results, billing_tier=None):
     return SimpleNamespace(
         execute=AsyncMock(side_effect=execute_results),
+        # Scalar reads are keyed separately so they do not consume an
+        # ``execute`` side effect. The routers use one to read the tenant's
+        # billing tier; None keeps the fake on the ordinary customer path.
+        scalar=AsyncMock(return_value=billing_tier),
         add=MagicMock(),
         flush=AsyncMock(),
         commit=AsyncMock(),

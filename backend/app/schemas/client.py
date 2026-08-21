@@ -203,7 +203,10 @@ class ClientImportResponse(BaseModel):
 
 
 class ClientQBOSyncResponse(BaseModel):
-    status: Literal["synced"]
+    # "demo_simulated" is recorded locally by a demo workspace and never
+    # involves a QuickBooks request; callers must not treat it as a live sync.
+    status: Literal["synced", "demo_simulated"]
     client_id: uuid.UUID
     qbo_customer_id: str
     synced_at: datetime
+    detail: str | None = None

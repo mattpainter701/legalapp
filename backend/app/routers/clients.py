@@ -17,6 +17,7 @@ from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user, require_admin
 from app.models.contact import Contact
 from app.models.plugin import Matter
+from app.models.tenant import Tenant
 from app.schemas.client import (
     ClientCreate,
     ClientImportError,
@@ -71,6 +72,15 @@ CSV_FIELDS = (
     "internal_notes",
     "tags",
 )
+
+
+def _demo_qbo_customer_id(client_id: uuid.UUID) -> str:
+    """A stable, obviously synthetic stand-in for a real QuickBooks customer Id.
+
+    Real QBO ids are numeric, so the DEMO- prefix keeps a simulated mapping from
+    ever being mistaken for one if a record is exported or inspected.
+    """
+    return f"DEMO-{client_id.hex[:8].upper()}"
 
 
 def _client_response(contact: Contact) -> ClientResponse:
@@ -459,6 +469,33 @@ async def sync_client_quickbooks(
 
     await set_tenant_context(db, str(admin.tenant_id))
     contact = await _load_client(db, admin.tenant_id, client_id)
+
+    billing_tier = await db.scalar(
+        select(Tenant.billing_tier).where(Tenant.id == admin.tenant_id)
+    )
+    if billing_tier == "demo":
+        # Disposable demo workspaces never receive provider credentials
+        # (qbo_integrations is purge-only and never cloned), so the live path
+        # could only ever return "QuickBooks is not connected". Record the
+        # mapping locally instead: the demo shows the full sync result while
+        # nothing leaves the workspace. Every branch below is skipped, so no
+        # QBO request is constructed, let alone sent.
+        contact.qbo_customer_id = _demo_qbo_customer_id(contact.id)
+        contact.qbo_sync_token = "0"
+        contact.qbo_synced_at = datetime.now(timezone.utc)
+        await db.commit()
+        await set_tenant_context(db, str(admin.tenant_id))
+        return ClientQBOSyncResponse(
+            status="demo_simulated",
+            client_id=contact.id,
+            qbo_customer_id=contact.qbo_customer_id,
+            synced_at=contact.qbo_synced_at,
+            detail=(
+                f"Simulated QuickBooks sync as customer {contact.qbo_customer_id}. "
+                "Demo workspaces never contact QuickBooks."
+            ),
+        )
+
     access_token = await _get_fresh_qbo_token(db, str(admin.tenant_id))
     integration = await _get_qbo_integration(db, str(admin.tenant_id))
     if not access_token or not integration or not integration.qbo_realm_id:

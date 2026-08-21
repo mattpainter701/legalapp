@@ -113,7 +113,7 @@ export default function ClientDetailPage() {
       const refreshed = await getClient(id)
       setClientRecord(refreshed)
       setForm(refreshed)
-      setNotice(`QuickBooks customer ${result.qbo_customer_id} is synchronized.`)
+      setNotice(result.detail || `QuickBooks customer ${result.qbo_customer_id} is synchronized.`)
     } catch (requestError) {
       setError(requestError?.response?.data?.detail || 'QuickBooks sync failed')
     } finally {

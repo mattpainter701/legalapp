@@ -61,10 +61,7 @@ def _is_blocked_demo_action(path: str, method: str) -> bool:
     ):
         return True
     if (
-        path.endswith("/email-client")
-        or path.endswith("/cloud-folder/sync")
-        # Pushes the client record into the tenant's connected QBO company.
-        or path.endswith("/sync/quickbooks")
+        path.endswith("/email-client") or path.endswith("/cloud-folder/sync")
     ) and method in _DEMO_MUTATING_METHODS:
         return True
     if (

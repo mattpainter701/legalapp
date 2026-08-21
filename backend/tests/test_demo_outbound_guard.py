@@ -54,11 +54,6 @@ BLOCKED_DEMO_ROUTES = [
         "/api/matters/{matter_id}/signatures/{request_id}/send",
         "/api/matters/123/signatures/456/send",
     ),
-    (
-        "POST",
-        "/api/clients/{client_id}/sync/quickbooks",
-        "/api/clients/123/sync/quickbooks",
-    ),
     ("POST", "/api/mcp/product-keys", "/api/mcp/product-keys"),
     ("POST", "/api/integrations/zoom/disconnect", "/api/integrations/zoom/disconnect"),
     (
@@ -138,6 +133,10 @@ def test_demo_outbound_guard_targets_registered_routes(method, template, path):
         "/api/plugins/mediation/cases/123/assets/456/approve",
         "/api/clients",
         "/api/clients/import.csv",
+        # Served by the router's demo branch, which records the mapping
+        # locally instead of calling QuickBooks. See
+        # test_demo_client_quickbooks_sync_is_simulated_without_provider_calls.
+        "/api/clients/123/sync/quickbooks",
     ],
 )
 def test_demo_synthetic_review_routes_remain_available(path):
