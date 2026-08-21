@@ -16,8 +16,11 @@ Set these in the deployment environment. Do not commit real values.
 - `LITELLM_DATABASE_URL`: synchronous Postgres URL for LiteLLM spend/log tables.
 - `STORE_MODEL_IN_DB=True`: required for operator-console route saves and
   reloads through LiteLLM `/config/update`.
-- Provider keys used by `litellm_config.yaml`, such as `DEEPSEEK_API_KEY` and
-  `OPENROUTER_API_KEY`.
+- `DEEPSEEK_API_KEY`: required provider key for the standard and premium
+  primary routes; production preflight rejects an absent or placeholder value.
+- `OPENROUTER_API_KEY`: optional fallback provider key. The current Premium
+  availability chain can fall back through Standard even when OpenRouter is
+  unavailable.
 
 ## App Routing
 
@@ -58,9 +61,10 @@ strict unknown-price qualification is tracked in BK24 `AIP-04`.
   `DEEPSEEK_API_KEY` for the OpenAI-compatible key. It fails over inside
   LiteLLM to `clarity-standard-deepseek-flash-free`.
 - `clarity-premium`: primary premium profile, using OpenCode Go through the
-  OpenAI-compatible base URL. It has no automatic cross-tier fallback: a
-  Premium request fails clearly if Premium capacity is unavailable instead of
-  silently returning Standard output under a Premium label.
+  OpenAI-compatible base URL. If Premium capacity is unavailable, LiteLLM
+  falls back to the configured `clarity-standard` chain so the customer
+  request remains available. Operators should disclose that a fallback may
+  return standard-tier quality while the requested alias remains Premium.
 
 The operator console should point global standard and premium routes at these
 aliases by setting provider `litellm` and model `clarity-standard` /

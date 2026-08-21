@@ -57,6 +57,11 @@ router_settings:
   fallbacks:
     - clarity-standard:
         - clarity-standard-deepseek-flash-free
+    # Premium OpenCode Go can return capacity errors independently of the
+    # standard route. Preserve the premium alias while keeping customer chat
+    # available through the configured standard chain when that happens.
+    - clarity-premium:
+        - clarity-standard
 
 general_settings:
   master_key: os.environ/LITELLM_API_KEY

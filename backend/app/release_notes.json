@@ -19,6 +19,10 @@
         {
           "title": "See where work stands",
           "description": "Move tasks through To Do, In Progress, Waiting, Review, and Done with clearer ownership and history."
+        },
+        {
+          "title": "Keep AI work available during provider limits",
+          "description": "Premium requests can continue through the Standard route when premium capacity is temporarily unavailable."
         }
       ]
     }
