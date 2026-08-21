@@ -3,6 +3,12 @@
 ## [Unreleased]
 
 ### Added
+- **In-app version and release updates:** `/api/version` now returns structured,
+  customer-facing release metadata alongside the deployed commit and build
+  time. All users can review version details and release notes from Profile,
+  admins get the same information in Admin Settings, and each user sees an
+  accessible, device-local, one-time summary when signing in during a recent
+  release window.
 - **Profile- and matter-aware AI context:** general chats and plugin skills now
   receive a verified, user-managed professional profile, while matter-linked
   work adds a bounded matter snapshot containing the summary, posture, key
