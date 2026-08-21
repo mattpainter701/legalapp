@@ -61,6 +61,12 @@
   document on completion.
 
 ### Fixed
+- **Production AI provider rotation and availability:** production preflight now
+  rejects missing or placeholder primary-provider credentials, Skynet releases
+  recreate and health-gate the LiteLLM gateway so rotations take effect, and
+  Premium requests can fall back to the Standard route when Premium capacity is
+  unavailable. The fallback preserves request availability while allowing a
+  lower quality tier, and is documented for operator/customer disclosure.
 - **First-customer Call Intake launch path:** the `intake-only` plan now exposes
   Call Intake and Tasks as first-class workspaces, uses a focused navigation and
   administration surface, avoids blocked Chat/Documents shell requests, and
