@@ -1,18 +1,22 @@
 """SQLAlchemy models for contacts (clients, parties, leads) and intake pipeline."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     JSON,
     Numeric,
     String,
     Text,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
@@ -28,6 +32,38 @@ class Contact(Base):
         Index("idx_contacts_tenant_id", "tenant_id"),
         Index("idx_contacts_tenant_email", "tenant_id", "email"),
         Index("idx_contacts_tenant_last_name", "tenant_id", "last_name"),
+        Index("idx_contacts_tenant_client_status", "tenant_id", "client_status"),
+        Index("idx_contacts_tenant_qbo_customer", "tenant_id", "qbo_customer_id"),
+        Index(
+            "uq_contacts_tenant_client_number",
+            "tenant_id",
+            "client_number",
+            unique=True,
+            postgresql_where=text("client_number IS NOT NULL"),
+        ),
+        CheckConstraint(
+            "client_status IS NULL OR client_status IN "
+            "('prospect', 'active', 'inactive', 'former')",
+            name="ck_contacts_client_status",
+        ),
+        CheckConstraint(
+            "preferred_contact_method IS NULL OR preferred_contact_method IN "
+            "('email', 'phone', 'sms', 'mail', 'portal')",
+            name="ck_contacts_preferred_contact_method",
+        ),
+        CheckConstraint(
+            "preferred_payment_method IS NULL OR preferred_payment_method IN "
+            "('stripe', 'check', 'ach', 'wire', 'cash', 'other')",
+            name="ck_contacts_preferred_payment_method",
+        ),
+        CheckConstraint(
+            "billing_delivery_method IN ('email', 'mail', 'portal')",
+            name="ck_contacts_billing_delivery_method",
+        ),
+        CheckConstraint(
+            "payment_terms_days BETWEEN 0 AND 365",
+            name="ck_contacts_payment_terms_days",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -50,6 +86,8 @@ class Contact(Base):
     # Person fields
     first_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     last_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    preferred_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    date_of_birth: Mapped[date | None] = mapped_column(Date, nullable=True)
 
     # Organization fields
     organization_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -59,8 +97,52 @@ class Contact(Base):
     phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
     secondary_phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
-    # Address as JSON: {street, city, state, zip, country}
+    # Address as JSON: {street, street2, city, state, zip, country}
     address: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    # Client relationship / CRM fields. These remain nullable so the shared
+    # contact directory can still hold witnesses, experts, vendors, and other
+    # non-client parties without fabricating client-specific data.
+    client_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    client_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    preferred_contact_method: Mapped[str | None] = mapped_column(
+        String(50), nullable=True
+    )
+    preferred_language: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    emergency_contact: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    sms_opt_in: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    sms_opt_in_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    email_opt_in: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    referral_source: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    last_contacted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # Billing preferences and external customer mappings. Provider IDs are
+    # identifiers, not credentials; OAuth and API secrets remain in the
+    # encrypted tenant integration vaults.
+    preferred_payment_method: Mapped[str | None] = mapped_column(
+        String(50), nullable=True
+    )
+    billing_delivery_method: Mapped[str] = mapped_column(
+        String(50), default="email", server_default="email"
+    )
+    payment_terms_days: Mapped[int] = mapped_column(
+        Integer, default=30, server_default="30"
+    )
+    billing_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    qbo_customer_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    qbo_sync_token: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    qbo_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    stripe_customer_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     tags: Mapped[list | None] = mapped_column(JSON, nullable=True)

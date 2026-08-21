@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["111_demo_purge_claim"]
+    assert heads == ["112_demo_purge_claim"]
 
 
 def test_revision_ids_fit_the_alembic_version_column():

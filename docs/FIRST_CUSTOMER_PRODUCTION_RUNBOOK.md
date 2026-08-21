@@ -384,6 +384,12 @@ There must be one current heartbeat row for every active tenant and none with a 
 
 ## 6. Verify Zoom through production ingress
 
+Follow the complete [Zoom Phone tenant app setup](ZOOM_PHONE_TENANT_APP_SETUP.md)
+for customer prerequisites, current Marketplace screens, OAuth and webhook
+secret handling, authorization, rotations, and troubleshooting. The checks
+below are the release-gate summary, not a substitute for that onboarding
+procedure.
+
 Register these exact HTTPS URLs in the Zoom app:
 
 - OAuth callback: `https://<DOMAIN>/api/integrations/zoom-phone/callback`

@@ -89,6 +89,11 @@ meeting OAuth as proof that Zoom Phone call intake works.
 
 ## Zoom Phone intake
 
+The complete customer-admin and operator procedure is in
+[Zoom Phone tenant app setup](ZOOM_PHONE_TENANT_APP_SETUP.md). It includes the
+current Zoom General App screens, Development/Production credential boundary,
+secret rotation, webhook validation, production proof, and troubleshooting.
+
 ### Recommended tenant-owned app
 
 Create an account-level Zoom OAuth app owned by the customer. In Zoom App
@@ -131,6 +136,12 @@ display.
 The integration imports inbound call-history facts into tenant-scoped
 communication records. This release does **not** fetch Zoom recording or
 transcript content, so do not grant or market recording/transcript access.
+
+Zoom may summarize the two configured Phone read scopes on its consent screen
+with recording/transcript-oriented labels. LawHand does not call Zoom's
+recording-download or transcript-download endpoints. Stop the setup if Zoom
+requests write/manage access or an unrelated product permission; see the
+detailed setup guide for the exact API paths used.
 
 ### No shared platform fallback
 

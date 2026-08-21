@@ -268,6 +268,7 @@ customer release-note update is declared.
 - [First-customer production runbook](docs/FIRST_CUSTOMER_PRODUCTION_RUNBOOK.md)
 - [Standalone Call Intake plan and API enforcement](docs/call-intake-standalone.md)
 - [Zoom and cloud integration setup](docs/integrations-setup.md)
+- [Zoom Phone per-customer app setup](docs/ZOOM_PHONE_TENANT_APP_SETUP.md)
 - [PDF template operations](docs/PDF_TEMPLATE_OPERATIONS.md)
 - [Credential rotation and platform access](docs/credential_security_operations.md)
 - [MCP product gateway release gates](docs/mcp_product_gateway.md)

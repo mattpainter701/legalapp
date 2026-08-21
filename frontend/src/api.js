@@ -1240,6 +1240,38 @@ export const getContactCommunications = (id, params = {}) =>
 export const conflictCheck = (data) =>
   api.post('/contacts/conflict-check', data).then(r => r.data)
 
+// ── Clients & CRM ─────────────────────────────────────────────────────────
+
+export const getClients = (params = {}) =>
+  api.get('/clients', { params }).then(r => r.data)
+
+export const getClientSummary = () =>
+  api.get('/clients/summary').then(r => r.data)
+
+export const createClient = (data) =>
+  api.post('/clients', data).then(r => r.data)
+
+export const getClient = (id) =>
+  api.get(`/clients/${id}`).then(r => r.data)
+
+export const updateClient = (id, data) =>
+  api.patch(`/clients/${id}`, data).then(r => r.data)
+
+export const archiveClient = (id) =>
+  api.delete(`/clients/${id}`)
+
+export const getClientMatters = (id) =>
+  api.get(`/clients/${id}/matters`).then(r => r.data)
+
+export const importClientsCsv = (formData) =>
+  api.post('/clients/import.csv', formData).then(r => r.data)
+
+export const exportClientsCsv = () =>
+  api.get('/clients/export.csv', { responseType: 'blob' }).then(r => r.data)
+
+export const syncClientQuickBooks = (id) =>
+  api.post(`/clients/${id}/sync/quickbooks`).then(r => r.data)
+
 // ── Tasks ──────────────────────────────────────────────────────────────────
 
 export const getTasks = (params = {}) =>
