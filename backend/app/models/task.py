@@ -4,6 +4,8 @@ import uuid
 from datetime import date, datetime, time, timezone
 
 from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -38,6 +40,87 @@ class Task(Base):
             "assigned_to_user_id",
         ),
         Index("idx_tasks_tenant_status_due", "tenant_id", "status", "due_date"),
+        Index(
+            "idx_tasks_tenant_review_stage",
+            "tenant_id",
+            "review_policy",
+            "review_stage",
+        ),
+        CheckConstraint(
+            "review_policy IN ('single', 'staff_then_attorney')",
+            name="ck_tasks_review_policy",
+        ),
+        CheckConstraint(
+            "review_stage IN ('attorney', 'staff', 'attorney_pending', 'approved')",
+            name="ck_tasks_review_stage",
+        ),
+        CheckConstraint(
+            "review_policy != 'staff_then_attorney' OR "
+            "(staff_reviewer_user_id IS NOT NULL AND "
+            "attorney_reviewer_user_id IS NOT NULL)",
+            name="ck_tasks_staged_reviewers_required",
+        ),
+        CheckConstraint(
+            "review_policy != 'staff_then_attorney' OR "
+            "staff_reviewer_user_id != attorney_reviewer_user_id",
+            name="ck_tasks_staged_reviewers_distinct",
+        ),
+        CheckConstraint(
+            "(staff_reviewed_at IS NULL) = "
+            "(staff_reviewed_by_user_id IS NULL) AND "
+            "(attorney_approved_at IS NULL) = "
+            "(attorney_approved_by_user_id IS NULL)",
+            name="ck_tasks_review_evidence_pairs",
+        ),
+        CheckConstraint(
+            "staff_reviewed_by_user_id IS NULL OR "
+            "staff_reviewed_by_user_id = staff_reviewer_user_id",
+            name="ck_tasks_staff_reviewer_evidence_actor",
+        ),
+        CheckConstraint(
+            "attorney_approved_by_user_id IS NULL OR attorney_approved_by_user_id = attorney_reviewer_user_id",
+            name="ck_tasks_attorney_reviewer_evidence_actor",
+        ),
+        CheckConstraint(
+            "review_policy != 'staff_then_attorney' OR review_stage != 'staff' OR "
+            "(reviewer_user_id IS NOT NULL AND "
+            "reviewer_user_id = staff_reviewer_user_id)",
+            name="ck_tasks_staff_stage_reviewer",
+        ),
+        CheckConstraint(
+            "review_policy != 'staff_then_attorney' OR "
+            "review_stage != 'attorney_pending' OR "
+            "(reviewer_user_id IS NOT NULL AND "
+            "reviewer_user_id = attorney_reviewer_user_id)",
+            name="ck_tasks_attorney_stage_reviewer",
+        ),
+        CheckConstraint(
+            "review_policy != 'staff_then_attorney' OR review_stage != 'approved' OR "
+            "attorney_override OR (staff_reviewed_at IS NOT NULL AND "
+            "staff_reviewed_by_user_id = staff_reviewer_user_id)",
+            name="ck_tasks_approved_staff_evidence",
+        ),
+        CheckConstraint(
+            "review_policy != 'staff_then_attorney' OR "
+            "review_stage != 'attorney_pending' OR "
+            "(staff_reviewed_at IS NOT NULL AND "
+            "staff_reviewed_by_user_id IS NOT NULL)",
+            name="ck_tasks_staff_review_evidence",
+        ),
+        CheckConstraint(
+            "review_policy != 'staff_then_attorney' OR "
+            "review_stage != 'approved' OR "
+            "(attorney_approved_at IS NOT NULL AND "
+            "attorney_approved_by_user_id IS NOT NULL)",
+            name="ck_tasks_attorney_approval_evidence",
+        ),
+        CheckConstraint(
+            "NOT attorney_override OR "
+            "(review_policy = 'staff_then_attorney' AND "
+            "review_stage = 'approved' AND attorney_approved_at IS NOT NULL "
+            "AND attorney_approved_by_user_id IS NOT NULL)",
+            name="ck_tasks_attorney_override_evidence",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -128,6 +211,41 @@ class Task(Base):
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
+    )
+    review_policy: Mapped[str] = mapped_column(
+        String(30), default="single", server_default="single", nullable=False
+    )
+    review_stage: Mapped[str] = mapped_column(
+        String(30), default="attorney", server_default="attorney", nullable=False
+    )
+    staff_reviewer_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    attorney_reviewer_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    staff_reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    staff_reviewed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    attorney_approved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    attorney_approved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    attorney_override: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
     )
     # Incremented for every mutation that can make a board card stale.
     version: Mapped[int] = mapped_column(

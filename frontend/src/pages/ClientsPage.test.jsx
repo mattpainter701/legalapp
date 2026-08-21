@@ -44,7 +44,7 @@ describe('ClientsPage', () => {
   it('renders the dedicated CRM workspace with labeled controls and no axe violations', async () => {
     const { container } = render(<MemoryRouter><ClientsPage /></MemoryRouter>)
     expect(await screen.findByRole('heading', { name: 'Clients & CRM' })).toBeInTheDocument()
-    expect(screen.getByText('Jordan Rivera')).toBeInTheDocument()
+    expect(await screen.findByText('Jordan Rivera')).toBeInTheDocument()
     expect(screen.getAllByText('SMS consent').length).toBeGreaterThan(0)
     expect(screen.getByRole('textbox', { name: 'Search clients' })).toBeInTheDocument()
     expect(screen.getByRole('combobox', { name: 'Filter by client status' })).toBeInTheDocument()

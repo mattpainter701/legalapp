@@ -5,11 +5,12 @@ from __future__ import annotations
 import shutil
 import uuid
 from collections import defaultdict, deque
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import delete, func, select, update
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import delete, func, select, text, update
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 # Register every tenant-scoped table before deriving the purge plan.  The
 # scheduler imports this module without necessarily loading every router, so
@@ -42,6 +43,42 @@ class DemoPurgeRefused(RuntimeError):
     pass
 
 
+def _tenant_purge_lock_name(tenant_id: uuid.UUID) -> str:
+    return f"lawhand:demo-purge:v1:{tenant_id}"
+
+
+@asynccontextmanager
+async def _tenant_purge_lock(db: AsyncSession, tenant_id: uuid.UUID):
+    """Fence every destructive phase with one crash-safe database lock.
+
+    The row claim is committed before filesystem and table deletion so a dead
+    worker leaves recoverable state. A row lock cannot span that commit, and a
+    timestamp is not an ownership token: a slow worker could otherwise overlap
+    a reclaimer once the stale window elapsed. The transaction-scoped advisory
+    lock stays pinned on a dedicated connection for the whole purge and is
+    released automatically if the transaction, connection, or worker dies.
+    """
+    bind = db.bind
+    if bind is None:
+        raise RuntimeError("Demo purge database session is not bound to an engine")
+    lock_engine = bind.engine if isinstance(bind, AsyncConnection) else bind
+    connection = await lock_engine.connect()
+    try:
+        async with connection.begin():
+            acquired = await connection.scalar(
+                text(
+                    "SELECT pg_try_advisory_xact_lock("
+                    "hashtextextended(:lock_name, 0))"
+                ),
+                {"lock_name": _tenant_purge_lock_name(tenant_id)},
+            )
+            if acquired is not True:
+                raise DemoPurgeRefused("Demo session is already being purged")
+            yield
+    finally:
+        await connection.close()
+
+
 def _purge_tables():
     missing = [name for name in DEMO_TABLE_REGISTRY if name not in Base.metadata.tables]
     if missing:
@@ -58,6 +95,13 @@ def _delete_order(tables) -> list[str]:
             if column.nullable:
                 continue
             for fk in column.foreign_keys:
+                # Deferred constraints can participate in required cycles when
+                # both sides are deleted before this transaction commits.
+                if (
+                    fk.constraint.deferrable
+                    and str(fk.constraint.initially or "").upper() == "DEFERRED"
+                ):
+                    continue
                 parent = fk.column.table.name
                 if parent in tables and parent != name:
                     parents[name].add(parent)
@@ -98,7 +142,9 @@ def _remove_tenant_files(tenant_id: uuid.UUID) -> None:
         shutil.rmtree(target)
 
 
-async def purge_demo_tenant(db: AsyncSession, tenant_id: uuid.UUID) -> dict[str, int]:
+async def _purge_demo_tenant_locked(
+    db: AsyncSession, tenant_id: uuid.UUID
+) -> dict[str, int]:
     now = datetime.now(timezone.utc)
     tenant = await db.get(Tenant, tenant_id)
     if (
@@ -213,6 +259,12 @@ async def purge_demo_tenant(db: AsyncSession, tenant_id: uuid.UUID) -> dict[str,
         )
         await db.commit()
         raise
+
+
+async def purge_demo_tenant(db: AsyncSession, tenant_id: uuid.UUID) -> dict[str, int]:
+    """Purge one tenant while holding a cluster-wide, crash-safe fence."""
+    async with _tenant_purge_lock(db, tenant_id):
+        return await _purge_demo_tenant_locked(db, tenant_id)
 
 
 async def purge_expired_demo_tenants() -> int:

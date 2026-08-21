@@ -29,6 +29,16 @@ from app.services.email import EmailDeliveryResult
 from app.services.matter_file_store import StorageResult
 
 
+@pytest.fixture(autouse=True)
+def _approved_actor_has_legal_approval_capability(monkeypatch):
+    """Existing delivery fixtures represent work already approved by counsel."""
+
+    async def allow(_db, _actor_user_id):
+        return True
+
+    monkeypatch.setattr(task_automation, "_actor_can_approve_legal_work", allow)
+
+
 class _RecordingSender:
     """Stand-in for EmailService.send_email that counts real sends."""
 
@@ -192,15 +202,16 @@ async def test_approving_a_drafted_email_sends_it_once(
 
 
 @pytest.mark.asyncio
-async def test_approving_a_document_draft_files_an_editable_docx_and_closes_the_work(
+async def test_legacy_document_draft_is_not_uploaded_during_approval(
     db_session, test_tenant, test_user, monkeypatch
 ):
     matter = await _matter(db_session, test_tenant, test_user)
     task = await _approved_document_task(db_session, test_tenant, test_user, matter)
-    stored = {}
+    storage_called = False
 
     async def store_document(**kwargs):
-        stored.update(kwargs)
+        nonlocal storage_called
+        storage_called = True
         return StorageResult(
             provider="local",
             backend="local",
@@ -221,29 +232,25 @@ async def test_approving_a_document_draft_files_an_editable_docx_and_closes_the_
         actor_user_id=test_user.id,
     )
 
-    assert stored["filename"] == "Client Status Letter.docx"
-    assert stored["content"].startswith(b"PK")
-    assert stored["content_type"].endswith("wordprocessingml.document")
+    assert storage_called is False
     document = await db_session.scalar(
         select(MatterDocument).where(MatterDocument.matter_id == matter.id)
     )
-    assert document is not None
-    assert document.filename == "Client Status Letter.docx"
-    assert document.file_size == len(stored["content"])
-    assert document.storage_path == "/uploads/client-status-letter.docx"
-    assert document.uploaded_by_user_id == test_user.id
+    assert document is None
 
     run = await db_session.scalar(
         select(TaskAutomationRun).where(TaskAutomationRun.task_id == task.id)
     )
-    assert run.status == "sent"
-    assert run.provider == "matter_document"
-    assert run.provider_message_id == str(document.id)
+    assert run.status == "failed"
+    assert run.delivery_certainty == "not_attempted"
+    assert "predates verified cloud review" in run.error_message
+    assert run.provider is None
+    assert run.provider_message_id is None
     await db_session.refresh(task)
-    assert task.pending_action is None
-    assert task.status == "completed"
-    assert task.completed_at is not None
-    assert task.version == 2
+    assert task.pending_action is not None
+    assert task.status == "in_progress"
+    assert task.completed_at is None
+    assert task.version == 1
 
 
 @pytest.mark.asyncio
@@ -595,7 +602,7 @@ async def test_a_raising_handler_records_failure_without_corrupting_the_task(
         select(TaskAutomationRun).where(TaskAutomationRun.task_id == task.id)
     )
     assert run.status == "failed"
-    assert "smtp exploded" in run.error_message
+    assert run.error_message == "The approved action failed inside the delivery worker"
 
     await db_session.refresh(task)
     assert task.status == "in_progress"
@@ -1034,9 +1041,7 @@ async def test_approval_fails_closed_when_recipient_address_changed_after_draft(
     task = await _approved_email_task(
         db_session, test_tenant, test_user, matter, status="review"
     )
-    contact_id = uuid.UUID(
-        task.pending_action["recipient_bindings"][0]["contact_id"]
-    )
+    contact_id = uuid.UUID(task.pending_action["recipient_bindings"][0]["contact_id"])
     contact = await db_session.get(Contact, contact_id)
     contact.email = "new-address@redwood.example"
     await db_session.commit()
@@ -1077,9 +1082,7 @@ async def test_worker_rechecks_recipient_binding_immediately_before_send(
     assert approved.status_code == 200
 
     await db_session.refresh(task)
-    contact_id = uuid.UUID(
-        task.pending_action["recipient_bindings"][0]["contact_id"]
-    )
+    contact_id = uuid.UUID(task.pending_action["recipient_bindings"][0]["contact_id"])
     contact = await db_session.get(Contact, contact_id)
     contact.email = "changed-before-worker@redwood.example"
     await db_session.commit()
@@ -1456,9 +1459,7 @@ async def test_execution_kill_switch_is_rechecked_after_worker_claim(
         async with task_automation.async_session_maker() as admin_db:
             await task_automation.set_tenant_context(admin_db, str(test_tenant.id))
             settings = await admin_db.scalar(
-                select(TenantSettings).where(
-                    TenantSettings.tenant_id == test_tenant.id
-                )
+                select(TenantSettings).where(TenantSettings.tenant_id == test_tenant.id)
             )
             settings.enable_chat_actions = False
             await admin_db.commit()
@@ -1762,7 +1763,7 @@ async def test_same_state_review_without_reviewer_preserves_action_owner(
 
 
 @pytest.mark.asyncio
-async def test_assigned_non_admin_reviewer_can_approve(
+async def test_assigned_capable_non_admin_reviewer_can_approve(
     client, db_session, test_tenant, test_user
 ):
     test_user.role = "user"
@@ -1778,6 +1779,35 @@ async def test_assigned_non_admin_reviewer_can_approve(
 
     assert response.status_code == 200
     assert response.json()["reviewer_user_id"] == str(test_user.id)
+
+
+@pytest.mark.asyncio
+async def test_assignment_without_legal_approval_capability_cannot_execute(
+    client, db_session, test_tenant, test_user, monkeypatch
+):
+    async def deny(_db, _actor_user_id):
+        return False
+
+    monkeypatch.setattr(task_automation, "_actor_can_approve_legal_work", deny)
+    matter = await _matter(db_session, test_tenant, test_user)
+    task = await _approved_email_task(
+        db_session, test_tenant, test_user, matter, status="review"
+    )
+
+    response = await client.post(
+        f"/api/tasks/{task.id}/transition",
+        json={"to_status": "in_progress", "expected_version": task.version},
+    )
+
+    assert response.status_code == 409
+    await db_session.refresh(task)
+    assert task.status == "review"
+    run_count = await db_session.scalar(
+        select(func.count())
+        .select_from(TaskAutomationRun)
+        .where(TaskAutomationRun.task_id == task.id)
+    )
+    assert run_count == 0
 
 
 @pytest.mark.asyncio

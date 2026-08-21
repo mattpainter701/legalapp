@@ -9,8 +9,8 @@ claimed it, defeating the serialization guard.
 Rows already stranded in "purging" are backfilled to now() so the reclaim
 window starts at the deploy rather than firing immediately.
 
-Revision ID: 113_demo_purge_claim
-Revises: 112_client_account_relationships
+Revision ID: 117_demo_purge_claim
+Revises: 116_cloud_doc_accountability
 
 Revision ids are capped at 32 characters by alembic_version.version_num.
 """
@@ -18,8 +18,8 @@ Revision ids are capped at 32 characters by alembic_version.version_num.
 from alembic import op
 import sqlalchemy as sa
 
-revision = "113_demo_purge_claim"
-down_revision = "112_client_account_relationships"
+revision = "117_demo_purge_claim"
+down_revision = "116_cloud_doc_accountability"
 branch_labels = None
 depends_on = None
 

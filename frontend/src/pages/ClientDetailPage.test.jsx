@@ -4,11 +4,15 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ClientDetailPage from './ClientDetailPage'
 import {
-  getClient, getClientContacts, getClientMatters, getContactCommunications, getTasks,
+  getClient, getClientContacts, getClientMatters, getContactCommunications, getTasks, syncClientQuickBooks,
 } from '../api'
 
+const authHarness = vi.hoisted(() => ({
+  user: { id: 'user-1', role: 'admin', demo: { session_id: 'demo-1' } },
+}))
+
 vi.mock('../App', () => ({
-  useAuth: () => ({ user: { id: 'user-1', role: 'admin', demo: { session_id: 'demo-1' } } }),
+  useAuth: () => authHarness,
 }))
 
 vi.mock('../api', () => ({
@@ -44,6 +48,7 @@ const clientRecord = {
 describe('ClientDetailPage demo account view', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    authHarness.user = { id: 'user-1', role: 'admin', demo: { session_id: 'demo-1' } }
     getClient.mockResolvedValue(clientRecord)
     getClientMatters.mockResolvedValue([{ id: 'matter-1', matter_name: 'MSA review', status: 'open' }])
     getClientContacts.mockResolvedValue([{
@@ -80,5 +85,31 @@ describe('ClientDetailPage demo account view', () => {
     await user.click(screen.getByRole('button', { name: 'Billing & integrations' }))
     expect(screen.queryByRole('button', { name: /Sync to QuickBooks/i })).not.toBeInTheDocument()
     expect(screen.getByText('Live accounting synchronization is disabled in demo workspaces.')).toBeInTheDocument()
+  })
+
+  it('uses explicit simulation wording even when detail is omitted', async () => {
+    authHarness.user = { id: 'user-1', role: 'admin', demo: null }
+    syncClientQuickBooks.mockResolvedValue({
+      status: 'demo_simulated',
+      is_simulated: true,
+      qbo_customer_id: 'DEMO-CLIENT1',
+      detail: null,
+    })
+    const user = userEvent.setup()
+    render(
+      <MemoryRouter initialEntries={['/clients/client-1']}>
+        <Routes><Route path="/clients/:id" element={<ClientDetailPage />} /></Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Northstar Analytics, Inc.' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Billing & integrations' }))
+    await user.click(screen.getByRole('button', { name: /Sync to QuickBooks/i }))
+    expect(
+      await screen.findByText(
+        'Demo simulation DEMO-CLIENT1; QuickBooks was not contacted.',
+      ),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/is synchronized/i)).not.toBeInTheDocument()
   })
 })

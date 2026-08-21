@@ -240,3 +240,4 @@ class ClientQBOSyncResponse(BaseModel):
     qbo_customer_id: str
     synced_at: datetime
     detail: str | None = None
+    is_simulated: bool = False

@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.database import set_tenant_context
@@ -471,6 +471,84 @@ async def test_purge_does_not_reclaim_a_fresh_claim_on_a_long_expired_tenant(
 
 
 @pytest.mark.asyncio
+async def test_stale_purge_claim_is_fenced_by_an_existing_advisory_lock(
+    db_session, test_engine, tmp_path, monkeypatch
+):
+    """A stale row cannot bypass a live per-tenant purge lock.
+
+    ``purge_started_at`` is intentionally old enough to make the row
+    reclaimable.  The independent transaction-scoped advisory lock represents
+    the original worker still being alive.  The second worker must refuse
+    before touching either the filesystem or purge tables, leaving the claim
+    and tenant intact.
+    """
+    fixture_id, tenant_id = uuid.uuid4(), uuid.uuid4()
+    monkeypatch.setattr(demo_purge.get_settings(), "UPLOAD_DIR", str(tmp_path))
+    stale_at = datetime.now(timezone.utc) - (
+        demo_purge._PURGE_RECLAIM_AFTER + timedelta(minutes=5)
+    )
+    db_session.add_all(
+        [
+            _tenant(tenant_id=fixture_id, domain="purge-advisory-fixture.invalid"),
+            _tenant(
+                tenant_id=tenant_id,
+                domain="purge-advisory.demo.invalid",
+                billing_tier="demo",
+                expires_at=stale_at,
+            ),
+        ]
+    )
+    await db_session.flush()
+    await set_tenant_context(db_session, str(tenant_id))
+    db_session.add(
+        DemoSession(
+            tenant_id=tenant_id,
+            fixture_tenant_id=fixture_id,
+            fixture_version="purge-advisory-lock-test",
+            prospect_name="Synthetic Prospect",
+            prospect_email="prospect@example.invalid",
+            status="purging",
+            quota=20,
+            expires_at=stale_at,
+            purge_started_at=stale_at,
+        )
+    )
+    await db_session.commit()
+
+    def _filesystem_delete_must_not_start(_tenant_id):
+        pytest.fail("filesystem deletion began while the advisory lock was held")
+
+    def _table_plan_must_not_start():
+        pytest.fail("database purge planning began while the advisory lock was held")
+
+    monkeypatch.setattr(
+        demo_purge, "_remove_tenant_files", _filesystem_delete_must_not_start
+    )
+    monkeypatch.setattr(demo_purge, "_purge_tables", _table_plan_must_not_start)
+
+    async with test_engine.connect() as lock_connection:
+        async with lock_connection.begin():
+            await lock_connection.execute(
+                text(
+                    "SELECT pg_advisory_xact_lock(" "hashtextextended(:lock_name, 0))"
+                ),
+                {"lock_name": demo_purge._tenant_purge_lock_name(tenant_id)},
+            )
+
+            with pytest.raises(DemoPurgeRefused, match="already being purged"):
+                await purge_demo_tenant(db_session, tenant_id)
+
+    await set_tenant_context(db_session, str(tenant_id))
+    tenant = await db_session.scalar(select(Tenant).where(Tenant.id == tenant_id))
+    demo = await db_session.scalar(
+        select(DemoSession).where(DemoSession.tenant_id == tenant_id)
+    )
+    assert tenant is not None
+    assert demo is not None
+    assert demo.status == "purging"
+
+
+@pytest.mark.asyncio
 async def test_purge_stamps_the_claim_so_the_next_worker_measures_its_own_window(
     db_session, tmp_path, monkeypatch
 ):
@@ -622,9 +700,7 @@ def test_claim_timestamps_are_normalised_to_utc():
     assert (
         demo_purge._claim_started_at(SimpleNamespace(purge_started_at=aware)) == aware
     )
-    normalised = demo_purge._claim_started_at(
-        SimpleNamespace(purge_started_at=naive)
-    )
+    normalised = demo_purge._claim_started_at(SimpleNamespace(purge_started_at=naive))
     assert normalised == aware
     assert normalised.tzinfo is timezone.utc
 

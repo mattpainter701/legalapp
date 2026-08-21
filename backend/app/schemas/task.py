@@ -104,7 +104,7 @@ class PendingActionEdit(BaseModel):
     """
 
     subject: Optional[str] = Field(None, min_length=1, max_length=300)
-    body: Optional[str] = Field(None, min_length=1, max_length=20_000)
+    body: Optional[str] = Field(None, min_length=1, max_length=50_000)
     title: Optional[str] = Field(None, min_length=1, max_length=300)
     expected_version: int = Field(ge=1)
 
@@ -119,6 +119,10 @@ class PendingActionEdit(BaseModel):
         if value is not None and any(char in value for char in ("/", "\\", "\x00")):
             raise ValueError("Document title cannot contain a path")
         return " ".join(value.split()) if value is not None else None
+
+
+class PendingActionCloudSync(BaseModel):
+    expected_version: int = Field(ge=1)
 
 
 class TaskUpdate(BaseModel):
@@ -200,6 +204,30 @@ class TaskContactedRequest(BaseModel):
         return v
 
 
+class TaskReviewDecisionRequest(BaseModel):
+    decision: Literal["approve", "request_changes"]
+    expected_version: int = Field(ge=1)
+    reason: Optional[str] = Field(None, max_length=5000)
+
+    @field_validator("reason")
+    @classmethod
+    def clean_reason(cls, value: Optional[str]) -> Optional[str]:
+        return value.strip() or None if value is not None else None
+
+
+class AttorneyOverrideRequest(BaseModel):
+    expected_version: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=5000)
+
+    @field_validator("reason")
+    @classmethod
+    def clean_reason(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("An attorney override reason is required")
+        return cleaned
+
+
 class IntakeTaskQualifyRequest(BaseModel):
     assigned_to_user_id: uuid.UUID
     partner_notes: Optional[str] = None
@@ -243,6 +271,15 @@ class TaskResponse(BaseModel):
     waiting_follow_up_date: Optional[date] = None
     reviewer_user_id: Optional[uuid.UUID] = None
     version: int = 1
+    review_policy: str = "single"
+    review_stage: str = "attorney"
+    staff_reviewer_user_id: Optional[uuid.UUID] = None
+    attorney_reviewer_user_id: Optional[uuid.UUID] = None
+    staff_reviewed_at: Optional[datetime] = None
+    staff_reviewed_by_user_id: Optional[uuid.UUID] = None
+    attorney_approved_at: Optional[datetime] = None
+    attorney_approved_by_user_id: Optional[uuid.UUID] = None
+    attorney_override: bool = False
     source: str
     external_ref: Optional[str]
     # Drafted follow-through awaiting approval, e.g. an email_client payload.
@@ -255,6 +292,12 @@ class TaskResponse(BaseModel):
     delivery_history: list[TaskDeliveryState] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+
+
+class TaskCloudSyncResponse(BaseModel):
+    task: TaskResponse
+    changed: bool
+    message: str
 
 
 class TaskListResponse(BaseModel):
@@ -289,6 +332,13 @@ class TaskBoardCard(BaseModel):
     created_by_user_id: Optional[uuid.UUID] = None
     reviewer_user_id: Optional[uuid.UUID] = None
     matter: Optional[TaskCardMatter] = None
+    review_policy: str = "single"
+    review_stage: str = "attorney"
+    staff_reviewer_user_id: Optional[uuid.UUID] = None
+    attorney_reviewer_user_id: Optional[uuid.UUID] = None
+    staff_reviewed_at: Optional[datetime] = None
+    attorney_approved_at: Optional[datetime] = None
+    attorney_override: bool = False
     assignee: Optional[TaskCardPerson] = None
     reviewer: Optional[TaskCardPerson] = None
     viewed_at: Optional[datetime] = None

@@ -88,10 +88,26 @@ BLOCKED_DEMO_ROUTES = [
     ),
 ]
 
+DEMO_OAUTH_PROVIDERS = ("microsoft", "google", "zoom", "zoom-phone", "qbo")
+DEMO_OAUTH_PHASES = ("connect", "callback")
+DEMO_PROVIDER_GET_ROUTES = ("/api/integrations/qbo/items",)
+
 
 @pytest.mark.parametrize(("method", "template", "path"), BLOCKED_DEMO_ROUTES)
 def test_demo_outbound_routes_are_blocked(method, template, path):
     assert _is_blocked_demo_action(path, method)
+
+
+@pytest.mark.parametrize("provider", DEMO_OAUTH_PROVIDERS)
+@pytest.mark.parametrize("phase", DEMO_OAUTH_PHASES)
+def test_demo_integration_oauth_routes_are_blocked(provider, phase):
+    path = f"/api/integrations/{provider}/{phase}"
+    assert _is_blocked_demo_action(path, "GET")
+
+
+@pytest.mark.parametrize("path", DEMO_PROVIDER_GET_ROUTES)
+def test_demo_provider_bound_get_routes_are_blocked(path):
+    assert _is_blocked_demo_action(path, "GET")
 
 
 def _registered_routes(routes, prefix: str = ""):
@@ -123,6 +139,32 @@ def test_demo_outbound_guard_targets_registered_routes(method, template, path):
     assert (template, method) in set(_registered_routes(app.routes))
 
 
+def test_demo_oauth_guard_covers_every_registered_integration_oauth_route():
+    from app.main import app
+
+    registered = {
+        (path, method)
+        for path, method in _registered_routes(app.routes)
+        if path.startswith("/api/integrations/")
+        and method == "GET"
+        and path.rsplit("/", 1)[-1] in DEMO_OAUTH_PHASES
+    }
+    expected = {
+        (f"/api/integrations/{provider}/{phase}", "GET")
+        for provider in DEMO_OAUTH_PROVIDERS
+        for phase in DEMO_OAUTH_PHASES
+    }
+    assert registered == expected
+
+
+def test_demo_provider_get_guard_targets_registered_routes():
+    from app.main import app
+
+    registered = set(_registered_routes(app.routes))
+    for path in DEMO_PROVIDER_GET_ROUTES:
+        assert (path, "GET") in registered
+
+
 @pytest.mark.parametrize(
     "path",
     [
@@ -133,8 +175,8 @@ def test_demo_outbound_guard_targets_registered_routes(method, template, path):
         "/api/plugins/mediation/cases/123/assets/456/approve",
         "/api/clients",
         "/api/clients/import.csv",
-        # Served by the router's demo branch, which records the mapping
-        # locally instead of calling QuickBooks. See
+        # Served by the router's demo branch, which returns an audited,
+        # ephemeral simulation without calling QuickBooks. See
         # test_demo_client_quickbooks_sync_is_simulated_without_provider_calls.
         "/api/clients/123/sync/quickbooks",
     ],

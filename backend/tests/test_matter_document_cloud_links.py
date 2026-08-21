@@ -310,6 +310,94 @@ async def test_google_drive_upload_result_captures_file_id_and_parent(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_google_drive_reuses_only_a_byte_identical_existing_file(monkeypatch):
+    async def fake_token(db, tenant_id, provider):
+        return "token"
+
+    async def fake_find_file(self, token, parent_id, filename):
+        return {
+            "id": "existing-file",
+            "webViewLink": "https://drive.google.com/file/d/existing-file/view",
+            "sha256Checksum": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            "version": "7",
+        }
+
+    class UnexpectedClient:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("byte-identical retry must not create a new file")
+
+    monkeypatch.setattr(matter_file_store_module, "get_fresh_token", fake_token)
+    monkeypatch.setattr(MatterFileStore, "_find_gdrive_file", fake_find_file)
+    monkeypatch.setattr(matter_file_store_module.httpx, "AsyncClient", UnexpectedClient)
+
+    result = await MatterFileStore()._try_store_google_drive(
+        db=None,
+        tenant_id="tenant-1",
+        matter_slug="matter-a",
+        category="documents",
+        filename="draft.docx",
+        content=b"abc",
+        content_type=(
+            "application/vnd.openxmlformats-officedocument." "wordprocessingml.document"
+        ),
+        folder_id="gparent-123",
+    )
+
+    assert result.succeeded
+    assert result.provider_item_id == "existing-file"
+    assert (
+        result.provider_checksum
+        == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    )
+
+
+@pytest.mark.asyncio
+async def test_google_drive_does_not_reuse_a_changed_same_name_file(monkeypatch):
+    async def fake_token(db, tenant_id, provider):
+        return "token"
+
+    async def fake_find_file(self, token, parent_id, filename):
+        return {
+            "id": "user-edited-file",
+            "webViewLink": "https://drive.google.com/file/d/user-edited-file/view",
+            "sha256Checksum": "0000000000000000000000000000000000000000000000000000000000000000",
+        }
+
+    created = {
+        "id": "new-snapshot-file",
+        "webViewLink": "https://drive.google.com/file/d/new-snapshot-file/view",
+        "sha256Checksum": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+    }
+    monkeypatch.setattr(matter_file_store_module, "get_fresh_token", fake_token)
+    monkeypatch.setattr(MatterFileStore, "_find_gdrive_file", fake_find_file)
+    monkeypatch.setattr(
+        matter_file_store_module.httpx,
+        "AsyncClient",
+        lambda *args, **kwargs: _FakeAsyncClient(
+            post_response=_response(200, created),
+            timeout=kwargs.get("timeout"),
+        ),
+    )
+
+    result = await MatterFileStore()._try_store_google_drive(
+        db=None,
+        tenant_id="tenant-1",
+        matter_slug="matter-a",
+        category="documents",
+        filename="draft.docx",
+        content=b"abc",
+        content_type=(
+            "application/vnd.openxmlformats-officedocument." "wordprocessingml.document"
+        ),
+        folder_id="gparent-123",
+    )
+
+    assert result.succeeded
+    assert result.provider_item_id == "new-snapshot-file"
+    assert result.provider_item_id != "user-edited-file"
+
+
+@pytest.mark.asyncio
 async def test_delete_cloud_backing_fails_closed_for_legacy_url_only():
     doc = SimpleNamespace(
         tenant_id=uuid.uuid4(),

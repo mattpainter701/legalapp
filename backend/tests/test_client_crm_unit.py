@@ -9,6 +9,7 @@ from fastapi import HTTPException, UploadFile
 from pydantic import ValidationError
 
 from app.models.contact import Contact
+from app.models.operator_audit import OperatorAuditLog
 from app.routers.clients import (
     MAX_CSV_BYTES,
     _csv_row_payload,
@@ -65,6 +66,18 @@ def fake_db(*execute_results, billing_tier=None):
         flush=AsyncMock(),
         commit=AsyncMock(),
         refresh=AsyncMock(),
+    )
+
+
+def _qbo_request(*, plan="full-platform", billing_tier="payg"):
+    return SimpleNamespace(
+        state=SimpleNamespace(
+            signed_plan=plan,
+            signed_billing_tier=billing_tier,
+            request_id="unit-request-id",
+        ),
+        headers={"x-idempotency-key": "unit-operation-id"},
+        client=None,
     )
 
 
@@ -464,7 +477,9 @@ async def test_quickbooks_sync_updates_provider_mapping_without_sensitive_fields
         ),
         patch("app.services.qbo_sync.QBOSyncService", return_value=service),
     ):
-        result = await sync_client_quickbooks(client_id, admin=admin, db=db)
+        result = await sync_client_quickbooks(
+            client_id, request=_qbo_request(), admin=admin, db=db
+        )
 
     assert result.qbo_customer_id == "123"
     assert contact.qbo_sync_token == "3"
@@ -491,7 +506,9 @@ async def test_quickbooks_sync_updates_provider_mapping_without_sensitive_fields
         ),
         pytest.raises(HTTPException, match="not connected"),
     ):
-        await sync_client_quickbooks(client_id, admin=admin, db=db)
+        await sync_client_quickbooks(
+            client_id, request=_qbo_request(), admin=admin, db=db
+        )
 
 
 @pytest.mark.asyncio
@@ -527,10 +544,75 @@ async def test_quickbooks_sync_simulates_for_a_demo_tenant_without_provider_look
         patch("app.routers.qbo._get_fresh_qbo_token", _fail),
         patch("app.routers.qbo._get_qbo_integration", _fail),
     ):
-        result = await sync_client_quickbooks(client_id, admin=admin, db=db)
+        result = await sync_client_quickbooks(
+            client_id,
+            request=_qbo_request(plan="demo", billing_tier="demo"),
+            admin=admin,
+            db=db,
+        )
 
     assert result.status == "demo_simulated"
-    assert result.qbo_customer_id == f"DEMO-{client_id.hex[:8].upper()}"
-    assert "never contact QuickBooks" in result.detail
-    assert contact.qbo_sync_token == "0"
-    assert contact.qbo_synced_at is not None
+    assert result.is_simulated is True
+    assert result.qbo_customer_id == f"DEMO-{client_id.hex.upper()}"
+    assert "QuickBooks was not contacted" in result.detail
+
+    assert contact.qbo_customer_id is None
+    assert contact.qbo_sync_token is None
+    assert contact.qbo_synced_at is None
+
+    audit = next(
+        call.args[0]
+        for call in db.add.call_args_list
+        if isinstance(call.args[0], OperatorAuditLog)
+    )
+    assert audit.action == "client.quickbooks_sync_simulated"
+    assert audit.metadata_json["provider_contacted"] is False
+    assert audit.metadata_json["simulated_customer_id"] == result.qbo_customer_id
+    assert audit.metadata_json["operation_id"] == "unit-operation-id"
+
+
+@pytest.mark.asyncio
+async def test_quickbooks_sync_fails_closed_when_signed_claims_disagree():
+    tenant_id = uuid.uuid4()
+    client_id = uuid.uuid4()
+    admin = SimpleNamespace(tenant_id=tenant_id, id=uuid.uuid4(), role="admin")
+    contact = Contact(
+        id=client_id,
+        tenant_id=tenant_id,
+        contact_type="client",
+        entity_type="person",
+        first_name="Sky",
+        last_name="Nolan",
+    )
+    db = fake_db(billing_tier="payg")
+
+    def _fail(*args, **kwargs):
+        raise AssertionError("claim mismatch reached a QuickBooks provider call")
+
+    with (
+        patch("app.routers.clients.set_tenant_context", new_callable=AsyncMock),
+        patch(
+            "app.routers.clients._load_client",
+            new_callable=AsyncMock,
+            return_value=contact,
+        ),
+        patch("app.routers.qbo._get_fresh_qbo_token", _fail),
+        patch("app.routers.qbo._get_qbo_integration", _fail),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await sync_client_quickbooks(
+            client_id,
+            request=_qbo_request(plan="demo", billing_tier="demo"),
+            admin=admin,
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "sign in again" in exc_info.value.detail
+    audit = next(
+        call.args[0]
+        for call in db.add.call_args_list
+        if isinstance(call.args[0], OperatorAuditLog)
+    )
+    assert audit.action == "client.quickbooks_sync_denied"
+    assert audit.metadata_json["reason"] == "signed_claim_mismatch"

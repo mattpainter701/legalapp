@@ -209,6 +209,14 @@ class Settings(BaseSettings):
     MCP_MAX_MONTHLY_CALL_LIMIT: int = 100000
     MCP_DEFAULT_BURST_LIMIT_PER_MINUTE: int = 60
     MCP_MAX_BURST_LIMIT_PER_MINUTE: int = 600
+    # User-bound workspace MCP is a separate product from the research-key
+    # gateway. It stays off until an OAuth issuer can mint audience-bound,
+    # revocable grants for individual LawHand users.
+    WORKSPACE_MCP_ENABLED: bool = False
+    WORKSPACE_MCP_AUDIENCE: str = "lawhand-workspace-mcp"
+    WORKSPACE_MCP_ISSUER: str = ""
+    WORKSPACE_MCP_TOKEN_SIGNING_KEY: str = ""
+    WORKSPACE_MCP_ACCESS_TOKEN_MAX_MINUTES: int = 60
 
     # Per-add-on entitlement enforcement for /api/plugins skills.
     #
@@ -518,6 +526,29 @@ def validate_mcp_security_settings(settings: Settings) -> None:
             "MCP_UPSTREAM_API_KEY must be at least 32 characters whenever "
             "MCP_SERVER_URL is configured"
         )
+    if settings.WORKSPACE_MCP_ENABLED:
+        if not settings.WORKSPACE_MCP_AUDIENCE.strip():
+            raise ValueError(
+                "WORKSPACE_MCP_AUDIENCE is required when workspace MCP is enabled"
+            )
+        if not settings.WORKSPACE_MCP_ISSUER.strip():
+            raise ValueError(
+                "WORKSPACE_MCP_ISSUER is required when workspace MCP is enabled"
+            )
+        signing_key = settings.WORKSPACE_MCP_TOKEN_SIGNING_KEY
+        if len(signing_key) < 32 or _looks_like_placeholder(signing_key):
+            raise ValueError(
+                "WORKSPACE_MCP_TOKEN_SIGNING_KEY must be a distinct random value "
+                "of at least 32 characters when workspace MCP is enabled"
+            )
+        if signing_key == settings.SECRET_KEY:
+            raise ValueError(
+                "WORKSPACE_MCP_TOKEN_SIGNING_KEY must not equal SECRET_KEY"
+            )
+        if not 5 <= settings.WORKSPACE_MCP_ACCESS_TOKEN_MAX_MINUTES <= 60:
+            raise ValueError(
+                "WORKSPACE_MCP_ACCESS_TOKEN_MAX_MINUTES must be between 5 and 60"
+            )
     if (
         not 1
         <= settings.MCP_DEFAULT_MONTHLY_CALL_LIMIT

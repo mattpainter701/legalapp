@@ -34,6 +34,7 @@ import {
 } from 'lucide-react'
 import {
   API_BASE_URL,
+  syncTaskCloudDocument,
   getTask,
   getTaskEvents,
   searchUsers,
@@ -286,7 +287,7 @@ function DraggableTaskCard({ task, pending, onOpen, onMoveRequest, draggable = t
       {task.pending_action?.type === 'matter_document_draft' && (
         <p data-testid="pending-document-badge" className="mt-2 flex items-start gap-1 rounded-lg bg-brand-accent/[0.07] px-2 py-1.5 text-[11px] text-brand-accent-2">
           <FileText size={11} className="mt-0.5 shrink-0" />
-          <span>{task.status === 'review' ? `Approving saves ${task.pending_action.title}.docx to Matter Documents` : 'Approved Word document is being saved'}</span>
+          <span>{task.status === 'review' ? `${task.pending_action.title}.docx is verified in tenant cloud and awaiting review` : 'The exact cloud revision is being verified'}</span>
         </p>
       )}
       {(task.pending_action?.sources || []).length > 0 && (
@@ -306,7 +307,7 @@ function DraggableTaskCard({ task, pending, onOpen, onMoveRequest, draggable = t
       {task.delivery?.status === 'failed' && (
         <p role="alert" className={`mt-2 rounded-lg px-2 py-1.5 text-[11px] ${task.delivery.delivery_certainty === 'not_attempted' ? 'bg-amber-50 text-amber-900' : 'bg-red-50 text-red-800'}`}>
           {task.delivery.action_type === 'matter_document_draft' ? (
-            <>The approved Word document could not be filed: {task.delivery.error_message || 'document storage failed'}. Open the task to review the filing record.</>
+            <>The cloud document could not be verified for approval: {task.delivery.error_message || 'document integrity check failed'}. Open the task to reconcile the working copy.</>
           ) : task.delivery.delivery_certainty === 'not_attempted' ? (
             <>Email was not sent: {task.delivery.error_message || 'delivery stopped before a provider attempt'}. Resolve the issue and approve again.</>
           ) : (
@@ -326,7 +327,7 @@ function DraggableTaskCard({ task, pending, onOpen, onMoveRequest, draggable = t
       )}
       {task.delivery?.status === 'sent' && (
         <div className="mt-2 flex items-center gap-1 text-[11px] text-brand-accent">
-          <Check size={11} /> {task.delivery.action_type === 'matter_document_draft' ? <a className="underline" target="_blank" rel="noreferrer" href={`${API_BASE_URL}/matters/${task.matter_id}/documents/${task.delivery.provider_message_id}/download`}>Open saved Word document</a> : 'Sent to the client'}
+          <Check size={11} /> {task.delivery.action_type === 'matter_document_draft' ? <a className="underline" href={`${API_BASE_URL}/matters/${task.matter_id}/documents/${task.delivery.provider_message_id}/download`}>Download approved DOCX</a> : 'Sent to the client'}
         </div>
       )}
 
@@ -479,7 +480,7 @@ function TaskTransitionDialog({ request, onClose, onConfirm, saving }) {
         <header className="flex items-start justify-between border-b border-brand-line px-5 py-4">
           <div>
             <p className="text-[11px] font-bold uppercase tracking-wider text-brand-accent">{documentApproval ? 'Document approval' : 'Move task'}</p>
-            <h2 id="transition-title" className="mt-1 text-lg font-serif font-bold text-brand-ink">{documentApproval ? 'Approve and file document' : `Move to ${config?.label || target}`}</h2>
+            <h2 id="transition-title" className="mt-1 text-lg font-serif font-bold text-brand-ink">{documentApproval ? 'Approve verified cloud revision' : `Move to ${config?.label || target}`}</h2>
             <p className="mt-1 line-clamp-2 text-xs text-brand-muted">{request.task.title}</p>
           </div>
           <button type="button" onClick={onClose} disabled={saving} aria-label="Close move dialog" className="rounded p-1 text-brand-muted hover:bg-brand-bg-soft"><X size={17} /></button>
@@ -505,7 +506,7 @@ function TaskTransitionDialog({ request, onClose, onConfirm, saving }) {
           {documentApproval && (
             <div role="note" className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5">
               <p className="flex items-center gap-1.5 text-xs font-bold text-blue-800"><FileText size={12} /> Approve this document</p>
-              <p className="mt-1 text-[11px] leading-relaxed text-brand-ink">LawHand will convert “{request.task.pending_action.title}” into an editable Word file and place it in this matter&apos;s Documents area. Nothing is emailed to the client.</p>
+              <p className="mt-1 text-[11px] leading-relaxed text-brand-ink">LawHand will read back “{request.task.pending_action.title}” from the tenant cloud and approve only the exact registered DOCX bytes. Nothing is emailed to the client.</p>
             </div>
           )}
           {request.task.status === 'review'
@@ -574,7 +575,7 @@ function TaskTransitionDialog({ request, onClose, onConfirm, saving }) {
         </div>
         <footer className="flex justify-end gap-2 border-t border-brand-line px-5 py-4">
           <button type="button" onClick={onClose} disabled={saving} className="rounded-lg px-4 py-2 text-sm text-brand-muted hover:bg-brand-bg-soft">Cancel</button>
-          <button type="submit" disabled={saving || activeDelivery || confirmedDelivery || (unknownOutcomeRetry && !deliveryRiskAcknowledged) || (target === 'cancelled' && !reason.trim())} className="btn-primary inline-flex items-center gap-2 disabled:opacity-50">{saving && <Loader2 size={14} className="animate-spin" />} {documentApproval ? 'Approve document' : 'Move task'}</button>
+          <button type="submit" disabled={saving || activeDelivery || confirmedDelivery || (unknownOutcomeRetry && !deliveryRiskAcknowledged) || (target === 'cancelled' && !reason.trim())} className="btn-primary inline-flex items-center gap-2 disabled:opacity-50">{saving && <Loader2 size={14} className="animate-spin" />} {documentApproval ? 'Approve exact revision' : 'Move task'}</button>
         </footer>
       </form>
     </div>
@@ -731,7 +732,7 @@ function PendingEmailDraftPanel({
   )
 }
 
-function PendingDocumentDraftPanel({ task, draft, editable, onOpen }) {
+function PendingDocumentDraftPanel({ task, draft, editable, onOpen, onSync, syncing }) {
   return (
     <section aria-labelledby={'document-draft-' + task.id} className="overflow-hidden rounded-2xl border border-brand-line bg-white shadow-sm">
       <div className="h-1 bg-blue-600" />
@@ -739,13 +740,14 @@ function PendingDocumentDraftPanel({ task, draft, editable, onOpen }) {
         <div className="flex items-start gap-3">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-700"><FileText size={19} /></div>
           <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2"><span className="text-[10px] font-bold uppercase tracking-[0.15em] text-blue-700">Word document draft</span><span className="rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-violet-700">In review</span></div>
+            <div className="flex flex-wrap items-center gap-2"><span className="text-[10px] font-bold uppercase tracking-[0.15em] text-blue-700">Tenant-cloud DOCX</span><span className="rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-violet-700">Cloud copy ready</span></div>
             <h3 id={'document-draft-' + task.id} className="mt-1 truncate font-serif text-lg font-bold text-brand-ink">{draft.title}</h3>
-            <p className="mt-0.5 text-[11px] text-brand-muted">Matter context and source materials are already attached.</p>
+            <p className="mt-0.5 text-[11px] text-brand-muted">The editable DOCX is already in the firm’s cloud and bound to this review.</p>
           </div>
         </div>
         <p className="mt-3 line-clamp-4 whitespace-pre-wrap rounded-xl bg-brand-bg-soft p-3 font-serif text-sm leading-6 text-brand-ink-2">{draft.body}</p>
         {(draft.sources || []).length > 0 && <p className="mt-2 text-[11px] font-semibold text-brand-muted">{draft.sources.length} supporting {draft.sources.length === 1 ? 'item' : 'items'} linked</p>}
+        {draft.document_id && <button type="button" onClick={onSync} disabled={syncing} className="ml-2 mt-3 inline-flex items-center gap-2 rounded-lg border border-brand-line px-3.5 py-2 text-xs font-bold text-brand-ink hover:border-brand-accent disabled:opacity-50">{syncing ? 'Refreshing…' : 'Refresh edits from cloud'}</button>}
         <button type="button" onClick={onOpen} className="mt-3 inline-flex items-center gap-2 rounded-lg bg-brand-ink px-3.5 py-2 text-xs font-bold text-white"><FileText size={14} />{editable ? 'Open draft workspace' : 'View document draft'}</button>
       </div>
     </section>
@@ -774,7 +776,7 @@ function DeliveryAttemptHistory({ attempts }) {
                   {snapshot.type === 'matter_document_draft' ? (
                     <>
                       <div><dt className="font-bold uppercase tracking-wide text-brand-muted">Document</dt><dd className="mt-0.5 break-words text-brand-ink">{snapshot.title || 'Untitled document'}.docx</dd></div>
-                      <div><dt className="font-bold uppercase tracking-wide text-brand-muted">Result</dt><dd className="mt-0.5 text-brand-ink">{attempt.status === 'sent' ? 'Saved to Matter Documents' : String(attempt.status || 'unknown').replaceAll('_', ' ')}</dd></div>
+                      <div><dt className="font-bold uppercase tracking-wide text-brand-muted">Result</dt><dd className="mt-0.5 text-brand-ink">{attempt.status === 'sent' ? 'Exact cloud revision approved' : String(attempt.status || 'unknown').replaceAll('_', ' ')}</dd></div>
                     </>
                   ) : (
                     <>
@@ -814,6 +816,7 @@ function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onApproveDocum
   const [draftError, setDraftError] = useState(null)
   const [draftNotice, setDraftNotice] = useState(null)
   const [documentWorkspaceOpen, setDocumentWorkspaceOpen] = useState(false)
+  const [cloudSyncing, setCloudSyncing] = useState(false)
   const drawerRef = useRef(null)
   useEffect(() => {
     let active = true
@@ -852,7 +855,16 @@ function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onApproveDocum
   const livePendingDocument = (
     task?.pending_action?.type === 'matter_document_draft' && task.pending_action
   ) || null
-  const draftDocumentEditable = Boolean(livePendingDocument) && task?.status === 'review'
+  const officeSnapshot = livePendingDocument?.document_edit_mode === 'office_snapshot'
+  const draftDocumentEditable = Boolean(livePendingDocument) && task?.status === 'review' && !officeSnapshot
+  const pendingDocumentStorageState = task?.delivery?.status === 'failed' ? 'conflict' : (livePendingDocument?.document_id ? 'verified' : 'pending')
+  const pendingDocumentId = livePendingDocument?.document_id
+  const pendingDocumentOpenUrl = pendingDocumentId && task?.matter_id
+    ? `${API_BASE_URL}/matters/${task.matter_id}/documents/${pendingDocumentId}/open`
+    : ''
+  const pendingDocumentDownloadUrl = pendingDocumentId && task?.matter_id
+    ? `${API_BASE_URL}/matters/${task.matter_id}/documents/${pendingDocumentId}/download`
+    : ''
 
   const resetDraft = (sourceTask = task) => {
     setDraftSubject(sourceTask?.pending_action?.subject || sourceTask?.pending_action?.title || '')
@@ -915,8 +927,29 @@ function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onApproveDocum
     setDraftSaving(true); setDraftError(null); setDraftNotice(null)
     try {
       const updated = await updateTaskPendingAction(task.id, { title, body: draftBody, expected_version: task.version })
-      applyUpdatedTask(updated); setDraftEditing(false); setDraftNotice('The authoritative Word document draft was saved.')
+      applyUpdatedTask(updated); setDraftEditing(false); setDraftNotice('New DOCX revision saved to tenant cloud; review reset.')
     } catch (err) { setDraftError(apiError(err, 'The document draft could not be saved.')) } finally { setDraftSaving(false) }
+  }
+  const syncCloudDocument = async () => {
+    if (!task?.id || !Number.isInteger(task?.version)) return
+    setCloudSyncing(true)
+    setDraftError(null)
+    setDraftNotice(null)
+    try {
+      const response = await syncTaskCloudDocument(task.id, task.version)
+      const updated = response?.task || response
+      applyUpdatedTask(updated)
+      setDraftNotice(response?.changed === false
+        ? 'No cloud edits were found; this review is unchanged.'
+        : response?.message || 'Cloud edits imported as a new revision; review has been reset.')
+    } catch (err) {
+      setDraftError(apiError(err, 'Cloud edits could not be imported.'))
+      if (err?.response?.status === 409) {
+        try { applyUpdatedTask(await getTask(task.id)) } catch { /* preserve conflict */ }
+      }
+    } finally {
+      setCloudSyncing(false)
+    }
   }
   return (
     <div className="fixed inset-0 z-[60] flex justify-end bg-black/30" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
@@ -970,6 +1003,8 @@ function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onApproveDocum
               {livePendingDocument && (
                 <PendingDocumentDraftPanel
                   task={task} draft={livePendingDocument} editable={draftDocumentEditable}
+                  onSync={syncCloudDocument}
+                  syncing={cloudSyncing}
                   onOpen={() => { setDocumentWorkspaceOpen(true); setDraftError(null); setDraftNotice(null) }}
                 />
               )}
@@ -1027,8 +1062,14 @@ function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onApproveDocum
           sources={livePendingDocument.sources || []}
           dirty={draftSubject !== livePendingDocument.title || draftBody !== livePendingDocument.body}
           saving={draftSaving}
+          cloudDocumentUrl={pendingDocumentOpenUrl}
+          downloadUrl={pendingDocumentDownloadUrl}
+          storageBackend={livePendingDocument.document_storage_backend}
+          storageState={pendingDocumentStorageState}
           notice={draftNotice}
           error={draftError}
+          officeSnapshot={officeSnapshot}
+          previewTruncated={Boolean(livePendingDocument?.document_preview_truncated)}
           onTitleChange={(value) => { setDraftSubject(value); setDraftNotice(null) }}
           onBodyChange={(value) => { setDraftBody(value); setDraftNotice(null) }}
           onSave={savePendingDocumentDraft}

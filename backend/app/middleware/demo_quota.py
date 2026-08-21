@@ -24,6 +24,21 @@ settings = get_settings()
 
 
 _DEMO_MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_DEMO_PROVIDER_GET_ROUTES = frozenset(
+    {
+        "/api/integrations/microsoft/connect",
+        "/api/integrations/microsoft/callback",
+        "/api/integrations/google/connect",
+        "/api/integrations/qbo/connect",
+        "/api/integrations/qbo/callback",
+        "/api/integrations/qbo/items",
+        "/api/integrations/google/callback",
+        "/api/integrations/zoom/connect",
+        "/api/integrations/zoom/callback",
+        "/api/integrations/zoom-phone/connect",
+        "/api/integrations/zoom-phone/callback",
+    }
+)
 
 
 def _is_blocked_demo_action(path: str, method: str) -> bool:
@@ -37,6 +52,11 @@ def _is_blocked_demo_action(path: str, method: str) -> bool:
     if path.startswith(("/api/auth/microsoft", "/api/auth/google")):
         # OAuth connect/callback routes are provider-bound even when they use
         # GET; status/profile reads are deliberately outside these prefixes.
+        return True
+    if method == "GET" and path in _DEMO_PROVIDER_GET_ROUTES:
+        # These endpoints redirect to, exchange credentials with, or fetch
+        # records from an external provider. They are distinct from read-only
+        # integration status endpoints.
         return True
     if (
         path.startswith(
