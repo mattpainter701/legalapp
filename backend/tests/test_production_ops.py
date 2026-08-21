@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 import yaml
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -44,6 +45,7 @@ def _production_env(**overrides: str) -> str:
         "LITELLM_SALT_KEY": "permanent-litellm-salt-key-0123456789",
         "LITELLM_DB_PASSWORD": "litellm-password-0123456789",
         "LITELLM_DATABASE_URL": "postgresql://litellm:litellm-password-0123456789@litellm-postgres:5432/litellm",
+        "DEEPSEEK_API_KEY": "deepseek-provider-key-0123456789",
         "TOKEN_ENCRYPTION_KEY": OLD_FERNET_KEY,
         "TOKEN_ENCRYPTION_KEYS": f"{NEW_FERNET_KEY},{OLD_FERNET_KEY}",
         "MCP_SERVER_URL": "http://courtlistener-mcp:8000",
@@ -726,6 +728,18 @@ def test_production_check_exercises_customer_llm_routes() -> None:
     assert '"Reply with exactly READY."' in production_check
 
 
+def test_skynet_deploy_recreates_litellm_and_bounds_litellm_diagnostics() -> None:
+    deploy = (ROOT / "scripts" / "deploy_skynet_runner.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "up -d --build --force-recreate" in deploy
+    assert "litellm backend scheduler frontend office-addin nginx" in deploy
+    assert '"${compose[@]}" ps -q litellm' in deploy
+    assert '"$litellm_health" == healthy' in deploy
+    assert 'logs --tail=120 litellm-migrator litellm-schema-migrator litellm' in deploy
+
+
 def test_host_disk_monitor_is_persistent_read_only_and_alertable() -> None:
     hypervisor = yaml.safe_load((ROOT / "docker-compose.hypervisor.yml").read_text())
     production = yaml.safe_load((ROOT / "docker-compose.prod.yml").read_text())
@@ -828,6 +842,21 @@ def test_production_preflight_rejects_missing_or_rotatable_litellm_salt(
     assert result.returncode != 0
     assert "LITELLM_SALT_KEY must be permanent and distinct" in output
     assert api_key not in output
+
+
+@pytest.mark.parametrize(
+    "provider_key", ["", "change-me-provider-key", "provider-key@example.com"]
+)
+def test_production_preflight_rejects_missing_or_placeholder_deepseek_key(
+    tmp_path: Path, provider_key: str
+) -> None:
+    result = _run_preflight(tmp_path, _production_env(DEEPSEEK_API_KEY=provider_key))
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0
+    assert "DEEPSEEK_API_KEY must be configured with a non-placeholder value" in output
+    if provider_key:
+        assert provider_key not in output
 
 
 def test_production_preflight_rejects_conflicting_inherited_compose_value(

@@ -13,7 +13,10 @@ def test_release_catalog_returns_latest_release_and_history():
     assert latest["id"] == "2026.08.20"
     assert latest["version"] == "2026.08.20"
     assert latest["is_recent"] is True
-    assert len(latest["highlights"]) == 3
+    assert len(latest["highlights"]) == 4
+    assert latest["highlights"][-1]["title"] == (
+        "Keep AI work available during provider limits"
+    )
     assert catalog["release_notes"][0] == latest
 
 

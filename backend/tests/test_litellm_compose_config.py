@@ -52,4 +52,5 @@ def test_standard_chat_route_uses_fast_primary_and_live_fallbacks():
 
     assert config["router_settings"]["fallbacks"] == [
         {"clarity-standard": ["clarity-standard-deepseek-flash-free"]},
+        {"clarity-premium": ["clarity-standard"]},
     ]
