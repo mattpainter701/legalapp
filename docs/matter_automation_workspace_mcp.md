@@ -78,10 +78,15 @@ unlicensed account.
 The production resource and discovery URLs are:
 
 ```text
-https://getlawhand.com/api/mcp/workspace
-https://getlawhand.com/.well-known/oauth-protected-resource/api/mcp/workspace
+https://mcp.getlawhand.com/api/mcp/workspace
+https://mcp.getlawhand.com/.well-known/oauth-protected-resource/api/mcp/workspace
 https://getlawhand.com/.well-known/oauth-authorization-server
 ```
+
+The protected resource is hosted at `mcp.getlawhand.com`; the authorization
+server and interactive sign-in remain on `getlawhand.com`. The former apex
+workspace URL is retained only as a bounded migration alias for existing
+grants and clients.
 
 Official OpenAI documentation confirms that Codex clients can connect to
 Streamable HTTP MCP servers using bearer-token or OAuth authentication, and
@@ -174,7 +179,9 @@ this binding; artifact-less legacy drafts fail closed and must be regenerated.
 - Shared capability catalog and actor context.
 - Matter chat consumes the shared contracts.
 - Read and proposal capabilities declare scopes and review policy.
-- Existing research MCP remains unchanged.
+- Existing research MCP capabilities and authorization remain unchanged. Its
+  canonical public hostname is `research.getlawhand.com`; apex `/api/mcp`
+  remains a compatibility alias.
 
 ### Phase 2 — artifacts and cloud review foundation (implemented)
 

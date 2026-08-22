@@ -58,6 +58,8 @@ from app.services.workspace_mcp_oauth import (
     append_workspace_mcp_audit,
     require_workspace_tenant_allowed,
     workspace_issuer_uri,
+    workspace_protected_resource_metadata_uri,
+    workspace_resource_uris,
     workspace_verification_key,
 )
 
@@ -111,10 +113,7 @@ KNOWN_WORKSPACE_SCOPES = _known_workspace_scopes()
 
 
 def workspace_bearer_challenge(*, invalid_token: bool = False) -> str:
-    metadata_url = (
-        f"{workspace_issuer_uri()}"
-        "/.well-known/oauth-protected-resource/api/mcp/workspace"
-    )
+    metadata_url = workspace_protected_resource_metadata_uri()
     challenge = f'Bearer resource_metadata="{metadata_url}", scope="matters:read"'
     if invalid_token:
         challenge += ', error="invalid_token"'
@@ -136,7 +135,11 @@ def _transport_security() -> TransportSecuritySettings:
 
     allowed_hosts: set[str] = set()
     allowed_origins: set[str] = set()
-    configured_urls = [settings.BACKEND_URL, settings.FRONTEND_URL]
+    configured_urls = [
+        settings.BACKEND_URL,
+        settings.FRONTEND_URL,
+        *workspace_resource_uris(),
+    ]
     configured_urls.extend(
         value.strip()
         for value in settings.EXTRA_CORS_ORIGINS.split(",")

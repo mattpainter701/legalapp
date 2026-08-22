@@ -359,6 +359,9 @@ def test_workspace_mcp_production_wiring_is_complete_and_fail_closed() -> None:
     keys = {
         "WORKSPACE_MCP_ENABLED",
         "WORKSPACE_MCP_RESOURCE",
+        "WORKSPACE_MCP_CANONICAL_RESOURCE",
+        "WORKSPACE_MCP_RESOURCE_ALIASES",
+        "RESEARCH_MCP_PUBLIC_URL",
         "WORKSPACE_MCP_AUDIENCE",
         "WORKSPACE_MCP_ISSUER",
         "WORKSPACE_MCP_TOKEN_SIGNING_KEY",
@@ -393,6 +396,57 @@ def test_workspace_mcp_production_wiring_is_complete_and_fail_closed() -> None:
     assert "/.well-known/oauth-authorization-server" in production_check
     assert "/api/workspace-mcp/oauth/jwks" in production_check
     assert "require_workspace_bearer_challenge" in production_check
+
+
+def test_dedicated_mcp_hosts_are_isolated_and_streamed() -> None:
+    nginx = (ROOT / "nginx" / "nginx.conf").read_text(encoding="utf-8")
+    nginx_gate = (ROOT / "scripts" / "test_nginx_webhook_ingress.sh").read_text(
+        encoding="utf-8"
+    )
+    transports = (ROOT / "nginx" / "snippets" / "mcp_transports.conf").read_text(
+        encoding="utf-8"
+    )
+    proxy = (ROOT / "nginx" / "snippets" / "mcp_transport_proxy.conf").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"mcp.getlawhand.com:/api/mcp/workspace" 0;' in nginx
+    assert (
+        '"mcp.getlawhand.com:/.well-known/oauth-protected-resource'
+        '/api/mcp/workspace" 0;'
+    ) in nginx
+    assert '"research.getlawhand.com:/api/mcp" 0;' in nginx
+    assert '"research.getlawhand.com:/api/mcp/manifest" 0;' in nginx
+    assert '"research.getlawhand.com:/api/mcp/tools/call" 0;' in nginx
+    assert "~^mcp\\.getlawhand\\.com: 1;" in nginx
+    assert "~^research\\.getlawhand\\.com: 1;" in nginx
+    assert "default 0;" in nginx
+    assert "map_hash_bucket_size 128;" in nginx
+    assert nginx.count("if ($dedicated_mcp_surface_denied)") == 2
+    assert nginx.count("include /etc/nginx/snippets/mcp_transports.conf;") == 2
+    assert "courtlistener-mcp" not in nginx
+
+    assert "location = /api/mcp {" in transports
+    assert "location = /api/mcp/workspace {" in transports
+    assert "proxy_buffering off;" in proxy
+    assert "proxy_request_buffering off;" in proxy
+    assert "proxy_cache off;" in proxy
+    assert 'proxy_set_header Connection        "";' in proxy
+    assert '"mcp.getlawhand.com")' in nginx_gate
+    assert '"research.getlawhand.com")' in nginx_gate
+    assert "platform MCP cross-product isolation" in nginx_gate
+    assert "research MCP cross-product isolation" in nginx_gate
+
+    hypervisor = (ROOT / "docker-compose.hypervisor.yml").read_text(encoding="utf-8")
+    assert (
+        "WORKSPACE_MCP_CANONICAL_RESOURCE: "
+        "${WORKSPACE_MCP_CANONICAL_RESOURCE:-"
+        "https://mcp.getlawhand.com/api/mcp/workspace}"
+    ) in hypervisor
+    assert (
+        "RESEARCH_MCP_PUBLIC_URL: "
+        "${RESEARCH_MCP_PUBLIC_URL:-https://research.getlawhand.com/api/mcp}"
+    ) in hypervisor
 
 
 def test_host_capacity_gate_accepts_supported_floor() -> None:
@@ -833,11 +887,21 @@ def test_production_check_asserts_disabled_public_mcp_surface() -> None:
     production_check = PRODUCTION_CHECK.read_text(encoding="utf-8")
     assert '"https://${DOMAIN}/api/mcp" 404' in production_check
     assert '"https://${DOMAIN}/api/mcp/manifest" 404' in production_check
+    assert 'resource_origin="https://mcp.${DOMAIN}"' in production_check
+    assert 'research_origin="https://research.${DOMAIN}"' in production_check
+    assert "platform MCP hostname isolation" in production_check
+    assert "research MCP hostname isolation" in production_check
     scheduled_health = (
         ROOT / ".github" / "workflows" / "production-health.yml"
     ).read_text(encoding="utf-8")
+    scheduled_config = yaml.safe_load(scheduled_health)
+    scheduled_env = scheduled_config["jobs"]["public-health"]["env"]
     assert "for disabled_mcp_path in /api/mcp /api/mcp/manifest" in scheduled_health
     assert '[[ "$disabled_mcp_status" == "404" ]]' in scheduled_health
+    assert scheduled_env["WORKSPACE_MCP_ORIGIN"] == "https://mcp.getlawhand.com"
+    assert scheduled_env["RESEARCH_MCP_ORIGIN"] == "https://research.getlawhand.com"
+    assert ".authorization_servers == [$issuer]" in scheduled_health
+    assert "for isolated_url in" in scheduled_health
 
 
 def test_production_check_exercises_customer_llm_routes() -> None:

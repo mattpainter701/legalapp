@@ -59,6 +59,59 @@ def protocol_app(monkeypatch):
     return app
 
 
+def test_transport_security_allows_canonical_and_legacy_workspace_hosts(monkeypatch):
+    monkeypatch.setattr(
+        workspace_mcp_protocol.settings,
+        "WORKSPACE_MCP_RESOURCE",
+        "https://getlawhand.com/api/mcp/workspace",
+    )
+    monkeypatch.setattr(
+        workspace_mcp_protocol.settings,
+        "WORKSPACE_MCP_CANONICAL_RESOURCE",
+        "https://mcp.getlawhand.com/api/mcp/workspace",
+    )
+    monkeypatch.setattr(
+        workspace_mcp_protocol.settings,
+        "WORKSPACE_MCP_RESOURCE_ALIASES",
+        "",
+    )
+
+    security = workspace_mcp_protocol._transport_security()
+
+    expected_hosts = {"mcp.getlawhand.com", "getlawhand.com"}
+    expected_origins = {"https://mcp.getlawhand.com"}
+    assert set(security.allowed_hosts) & expected_hosts == expected_hosts
+    assert set(security.allowed_origins) & expected_origins == expected_origins
+
+
+def test_bearer_challenge_uses_resource_origin_not_oauth_issuer(monkeypatch):
+    monkeypatch.setattr(
+        workspace_mcp_protocol.settings,
+        "WORKSPACE_MCP_RESOURCE",
+        "https://getlawhand.com/api/mcp/workspace",
+    )
+    monkeypatch.setattr(
+        workspace_mcp_protocol.settings,
+        "WORKSPACE_MCP_CANONICAL_RESOURCE",
+        "https://mcp.getlawhand.com/api/mcp/workspace",
+    )
+    monkeypatch.setattr(
+        workspace_mcp_protocol.settings, "WORKSPACE_MCP_RESOURCE_ALIASES", ""
+    )
+    monkeypatch.setattr(
+        workspace_mcp_protocol.settings,
+        "WORKSPACE_MCP_ISSUER",
+        "https://getlawhand.com",
+    )
+
+    challenge = workspace_mcp_protocol.workspace_bearer_challenge()
+
+    assert (
+        'resource_metadata="https://mcp.getlawhand.com'
+        '/.well-known/oauth-protected-resource/api/mcp/workspace"'
+    ) in challenge
+
+
 def _identity(
     *, scopes: set[str], app_capabilities: set[str]
 ) -> workspace_mcp_protocol.WorkspaceMCPIdentity:

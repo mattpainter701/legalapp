@@ -203,9 +203,24 @@ Other opt-in Compose profiles are:
 - `embedding`, which runs `mcp_server.dispatcher`; and
 - `embedding-scheduler`, which runs `mcp_server.embedding_scheduler`.
 
-The existing public application origin exposes the future transport at
-`/api/mcp`. Introducing a new MCP hostname would require an explicit nginx,
-origin/host allowlist, TLS, monitoring, and client-auth review.
+The canonical research transport is:
+
+```text
+https://research.getlawhand.com/api/mcp
+```
+
+The main-origin `/api/mcp` route remains a compatibility alias. Nginx isolates
+the research hostname to the research transport, manifest, and compatibility
+call routes; it does not expose the portal, workspace MCP, administrative API,
+or the raw private sidecar. The sidecar remains loopback/private and the
+backend continues to enforce product-key, tenant-entitlement, quota, and
+billing controls before proxying a call.
+
+Publishing and monitoring the hostname does not release the product.
+`MCP_PRODUCT_ENABLED=false` keeps its transport and manifest fail-closed with
+404 responses until every checklist gate below passes. See
+[MCP hostname operations](mcp_hostname_operations.md) for DNS, tunnel,
+validation, and rollback procedures.
 
 ## Product release checklist
 

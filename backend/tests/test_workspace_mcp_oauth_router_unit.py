@@ -180,6 +180,13 @@ async def test_register_valid_and_invalid_metadata_rolls_back(monkeypatch):
 @pytest.mark.asyncio
 async def test_begin_authorization_success_and_error(monkeypatch):
     monkeypatch.setattr(oauth.settings, "WORKSPACE_MCP_ENABLED", True)
+    legacy_resource = "https://lawhand.test/api/mcp/workspace"
+    canonical_resource = "https://mcp.lawhand.test/api/mcp/workspace"
+    monkeypatch.setattr(oauth.settings, "WORKSPACE_MCP_RESOURCE", legacy_resource)
+    monkeypatch.setattr(
+        oauth.settings, "WORKSPACE_MCP_CANONICAL_RESOURCE", canonical_resource
+    )
+    monkeypatch.setattr(oauth.settings, "WORKSPACE_MCP_RESOURCE_ALIASES", "")
     c = client()
     monkeypatch.setattr(oauth, "_active_client", AsyncMock(return_value=c))
     monkeypatch.setattr(oauth, "normalized_scopes", lambda s: frozenset(s.split()))
@@ -195,10 +202,11 @@ async def test_begin_authorization_success_and_error(monkeypatch):
         "st",
         "a" * 43,
         "S256",
-        oauth.workspace_resource_uri(),
+        legacy_resource,
         DB(),
     )
     assert out.status_code == 302 and "request_id=req-1" in out.headers["location"]
+    assert save.await_args.args[1]["resource"] == canonical_resource
     out = await oauth.begin_workspace_authorization(
         req(),
         "token",
@@ -208,7 +216,7 @@ async def test_begin_authorization_success_and_error(monkeypatch):
         "",
         "a" * 43,
         "S256",
-        oauth.workspace_resource_uri(),
+        canonical_resource,
         DB(),
     )
     assert out.status_code == 400 and out.body

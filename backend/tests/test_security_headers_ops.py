@@ -50,8 +50,9 @@ def test_sse_proxy_policy_preserves_server_security_header_inheritance() -> None
     assert "X-Accel-Buffering" not in streaming
 
     # The Docker-backed gate exercises the shared /api/ location through the
-    # edge-terminated HTTP path, direct TLS, direct/spoofed HTTP, and ACME.
-    assert runtime_gate.count('http_request "/api/version"') == 3
+    # edge-terminated HTTP path, direct TLS, direct/spoofed HTTP, and ACME. It
+    # also proves both dedicated MCP hosts reject the ordinary API path.
+    assert runtime_gate.count('http_request "/api/version"') == 5
     assert (
         'http_request "/api/version" "https" "$MOCK_CONTAINER" '
         '"$PROD_CONTAINER"' in runtime_gate

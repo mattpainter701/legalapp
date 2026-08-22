@@ -60,7 +60,6 @@ def _settings(**overrides):
             "canonical",
         ),
         ({"WORKSPACE_MCP_ISSUER": "/issuer"}, "absolute issuer"),
-        ({"WORKSPACE_MCP_ISSUER": "https://auth.getlawhand.com"}, "share an origin"),
         (
             {
                 "WORKSPACE_MCP_RESOURCE": "http://getlawhand.com/api/mcp/workspace",
@@ -83,6 +82,51 @@ def _settings(**overrides):
 def test_workspace_mcp_rejects_invalid_production_configuration(overrides, message):
     with pytest.raises(ValueError, match=message):
         validate_mcp_security_settings(_settings(**overrides))
+
+
+def test_workspace_mcp_accepts_canonical_subdomain_with_apex_issuer_and_aliases():
+    legacy_resource = "https://getlawhand.com/api/mcp/workspace"
+    extra_alias = "https://legacy.getlawhand.com/api/mcp/workspace"
+    settings = _settings(
+        WORKSPACE_MCP_RESOURCE=legacy_resource,
+        WORKSPACE_MCP_CANONICAL_RESOURCE=(
+            "https://mcp.getlawhand.com/api/mcp/workspace"
+        ),
+        WORKSPACE_MCP_RESOURCE_ALIASES=extra_alias,
+        WORKSPACE_MCP_ISSUER="https://getlawhand.com",
+    )
+
+    validate_mcp_security_settings(settings)
+
+    assert settings.workspace_mcp_endpoint == (
+        "https://mcp.getlawhand.com/api/mcp/workspace"
+    )
+    assert settings.workspace_mcp_legacy_resources == (
+        legacy_resource,
+        extra_alias,
+    )
+
+
+def test_workspace_mcp_rejects_canonical_resource_repeated_as_alias():
+    with pytest.raises(ValueError, match="unique"):
+        validate_mcp_security_settings(
+            _settings(
+                WORKSPACE_MCP_CANONICAL_RESOURCE=(
+                    "https://getlawhand.com/api/mcp/workspace"
+                )
+            )
+        )
+
+
+def test_research_mcp_public_url_is_exact_and_https():
+    with pytest.raises(ValueError, match="RESEARCH_MCP_PUBLIC_URL"):
+        validate_mcp_security_settings(
+            _settings(
+                RESEARCH_MCP_PUBLIC_URL=(
+                    "https://research.getlawhand.com/api/mcp?unsafe=1"
+                )
+            )
+        )
 
 
 @pytest.mark.parametrize(

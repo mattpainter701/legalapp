@@ -206,6 +206,9 @@ class Settings(BaseSettings):
     # Public/sellable MCP is fail-closed until every product, protocol and
     # operational release gate has passed. Internal research is independent.
     MCP_PRODUCT_ENABLED: bool = False
+    # Canonical public research transport. Empty preserves the historical
+    # BACKEND_URL/api/mcp endpoint for non-LawHand/self-hosted deployments.
+    RESEARCH_MCP_PUBLIC_URL: str = ""
     # Dedicated backend-to-CourtListener credential. User/app credentials are
     # never forwarded to the private service.
     MCP_UPSTREAM_API_KEY: str = ""
@@ -218,6 +221,12 @@ class Settings(BaseSettings):
     # revocable grants for individual LawHand users.
     WORKSPACE_MCP_ENABLED: bool = False
     WORKSPACE_MCP_RESOURCE: str = ""
+    # Optional canonical resource used during a hostname migration. When set,
+    # WORKSPACE_MCP_RESOURCE remains an accepted legacy resource automatically.
+    WORKSPACE_MCP_CANONICAL_RESOURCE: str = ""
+    # Additional comma-separated, exact legacy resource identifiers. Aliases
+    # are accepted only for OAuth migration and are never newly advertised.
+    WORKSPACE_MCP_RESOURCE_ALIASES: str = ""
     WORKSPACE_MCP_AUDIENCE: str = "lawhand-workspace-mcp"
     WORKSPACE_MCP_ISSUER: str = ""
     # Legacy symmetric test key. Production OAuth uses the asymmetric pair.
@@ -312,6 +321,28 @@ class Settings(BaseSettings):
     SMB_SNIPPET_MAX_CHARS: int = 500  # Max chars in snippet column
     SMB_TASK_POLL_INTERVAL: int = 30  # Seconds between agent task polls
     SMB_CONTENT_FETCH_TIMEOUT: int = 120  # Seconds to wait for content fetch
+
+    @property
+    def research_mcp_endpoint(self) -> str:
+        configured = self.RESEARCH_MCP_PUBLIC_URL.strip()
+        if configured:
+            return configured.rstrip("/")
+        return f"{self.BACKEND_URL.rstrip('/')}/api/mcp"
+
+    @property
+    def workspace_mcp_endpoint(self) -> str:
+        configured = self.WORKSPACE_MCP_CANONICAL_RESOURCE.strip()
+        return (configured or self.WORKSPACE_MCP_RESOURCE.strip()).rstrip("/")
+
+    @property
+    def workspace_mcp_legacy_resources(self) -> tuple[str, ...]:
+        values: list[str] = []
+        if self.WORKSPACE_MCP_CANONICAL_RESOURCE.strip():
+            values.append(self.WORKSPACE_MCP_RESOURCE.strip())
+        values.extend(
+            item.strip() for item in self.WORKSPACE_MCP_RESOURCE_ALIASES.split(",")
+        )
+        return tuple(item.rstrip("/") for item in values if item)
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -611,12 +642,44 @@ def _validate_workspace_signing_keys(settings: Settings) -> None:
             )
 
 
+def _validate_mcp_endpoint_url(
+    raw_value: str,
+    *,
+    setting_name: str,
+    expected_path: str,
+    dev_mode: bool,
+) -> None:
+    parsed = urlsplit(raw_value.strip())
+    if (
+        not parsed.scheme
+        or not parsed.netloc
+        or parsed.path.rstrip("/") != expected_path
+        or parsed.query
+        or parsed.fragment
+        or parsed.username
+        or parsed.password
+    ):
+        raise ValueError(
+            f"{setting_name} must be an absolute canonical {expected_path} URL"
+        )
+    if not dev_mode and parsed.scheme != "https":
+        raise ValueError(f"{setting_name} must use HTTPS outside development")
+
+
 def validate_mcp_security_settings(settings: Settings) -> None:
     if settings.MCP_SERVER_URL and len(settings.MCP_UPSTREAM_API_KEY) < 32:
         raise ValueError(
             "MCP_UPSTREAM_API_KEY must be at least 32 characters whenever "
             "MCP_SERVER_URL is configured"
         )
+    if settings.MCP_PRODUCT_ENABLED or settings.RESEARCH_MCP_PUBLIC_URL.strip():
+        _validate_mcp_endpoint_url(
+            settings.research_mcp_endpoint,
+            setting_name="RESEARCH_MCP_PUBLIC_URL",
+            expected_path="/api/mcp",
+            dev_mode=settings.DEV_MODE,
+        )
+
     if settings.WORKSPACE_MCP_ENABLED:
         if not settings.WORKSPACE_MCP_AUDIENCE.strip():
             raise ValueError(
@@ -626,20 +689,39 @@ def validate_mcp_security_settings(settings: Settings) -> None:
             raise ValueError(
                 "WORKSPACE_MCP_ISSUER is required when workspace MCP is enabled"
             )
-        resource = urlsplit(settings.WORKSPACE_MCP_RESOURCE)
-        issuer = urlsplit(settings.WORKSPACE_MCP_ISSUER)
-        if (
-            not resource.scheme
-            or not resource.netloc
-            or resource.path.rstrip("/") != "/api/mcp/workspace"
-            or resource.query
-            or resource.fragment
-            or resource.username
-            or resource.password
-        ):
+        canonical_setting = (
+            "WORKSPACE_MCP_CANONICAL_RESOURCE"
+            if settings.WORKSPACE_MCP_CANONICAL_RESOURCE.strip()
+            else "WORKSPACE_MCP_RESOURCE"
+        )
+        _validate_mcp_endpoint_url(
+            settings.workspace_mcp_endpoint,
+            setting_name=canonical_setting,
+            expected_path="/api/mcp/workspace",
+            dev_mode=settings.DEV_MODE,
+        )
+
+        legacy_resources = settings.workspace_mcp_legacy_resources
+        if len(legacy_resources) > 5:
             raise ValueError(
-                "WORKSPACE_MCP_RESOURCE must be the canonical /api/mcp/workspace URL"
+                "Workspace MCP resource migration accepts at most five aliases"
             )
+        seen_resources = {settings.workspace_mcp_endpoint}
+        for legacy_resource in legacy_resources:
+            _validate_mcp_endpoint_url(
+                legacy_resource,
+                setting_name="WORKSPACE_MCP_RESOURCE_ALIASES",
+                expected_path="/api/mcp/workspace",
+                dev_mode=settings.DEV_MODE,
+            )
+            if legacy_resource in seen_resources:
+                raise ValueError(
+                    "Workspace MCP resource aliases must be unique and must "
+                    "exclude the canonical resource"
+                )
+            seen_resources.add(legacy_resource)
+
+        issuer = urlsplit(settings.WORKSPACE_MCP_ISSUER)
         if (
             not issuer.scheme
             or not issuer.netloc
@@ -649,12 +731,8 @@ def validate_mcp_security_settings(settings: Settings) -> None:
             or issuer.password
         ):
             raise ValueError("WORKSPACE_MCP_ISSUER must be an absolute issuer URL")
-        if not settings.DEV_MODE and (
-            resource.scheme != "https" or issuer.scheme != "https"
-        ):
-            raise ValueError("Workspace MCP resource and issuer must use HTTPS")
-        if (resource.scheme, resource.netloc) != (issuer.scheme, issuer.netloc):
-            raise ValueError("Workspace MCP resource and issuer must share an origin")
+        if not settings.DEV_MODE and issuer.scheme != "https":
+            raise ValueError("WORKSPACE_MCP_ISSUER must use HTTPS")
 
         if settings.DEV_MODE and not settings.WORKSPACE_MCP_SIGNING_PRIVATE_KEY_B64:
             signing_key = settings.WORKSPACE_MCP_TOKEN_SIGNING_KEY

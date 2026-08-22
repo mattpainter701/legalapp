@@ -156,6 +156,10 @@ docker run -d --name "$MOCK_CONTAINER" \
   -c 'set -eu
       mkdir -p /tmp/backend/api
       printf "%s\n" "{\"version\":\"header-test\"}" > /tmp/backend/api/version
+      mkdir -p /tmp/backend/api/mcp/tools
+      printf "%s\n" workspace-mcp-proof > /tmp/backend/api/mcp/workspace
+      printf "%s\n" research-manifest-proof > /tmp/backend/api/mcp/manifest
+      printf "%s\n" research-call-proof > /tmp/backend/api/mcp/tools/call
       mkdir -p /tmp/frontend/privacy /tmp/frontend/terms
       printf "%s\n" "<html><head><title>Privacy Summary | WellPled</title><link rel=\"canonical\" href=\"https://headers.test/privacy\"></head><body>Privacy summary</body></html>" > /tmp/frontend/privacy/index.html
       printf "%s\n" "<html><head><title>Service Summary | WellPled</title><link rel=\"canonical\" href=\"https://headers.test/terms\"></head><body>Service summary</body></html>" > /tmp/frontend/terms/index.html
@@ -180,6 +184,7 @@ http_request() {
   forwarded_proto="${2:-}"
   source_container="${3:-$PROD_CONTAINER}"
   target_host="${4:-127.0.0.1}"
+  request_host="${5:-headers.test}"
   # BusyBox nc can exit as soon as docker closes stdin, racing nginx while it
   # is still proxying the response body. Read the complete response through
   # Python's HTTP client so route-shell assertions are deterministic in CI.
@@ -187,8 +192,8 @@ http_request() {
 import http.client
 import sys
 
-host, path, forwarded_proto = sys.argv[1:4]
-headers = {"Host": "headers.test", "Connection": "close"}
+host, path, forwarded_proto, request_host = sys.argv[1:5]
+headers = {"Host": request_host, "Connection": "close"}
 if forwarded_proto:
     headers["X-Forwarded-Proto"] = forwarded_proto
 connection = http.client.HTTPConnection(host, 80, timeout=10)
@@ -198,17 +203,18 @@ lines = [f"HTTP/1.1 {response.status} {response.reason}"]
 lines.extend(f"{name}: {value}" for name, value in response.getheaders())
 payload = ("\r\n".join(lines) + "\r\n\r\n").encode() + response.read()
 sys.stdout.buffer.write(payload)
-' "$target_host" "$request_path" "$forwarded_proto" | tr -d '\r'
+' "$target_host" "$request_path" "$forwarded_proto" "$request_host" | tr -d '\r'
 }
 
 tls_request() {
   request_path="$1"
+  request_host="${2:-headers.test}"
   {
     printf 'GET %s HTTP/1.1\r\n' "$request_path"
-    printf 'Host: headers.test\r\n'
+    printf 'Host: %s\r\n' "$request_host"
     printf 'Connection: close\r\n\r\n'
   } | docker exec -i "$PROD_CONTAINER" \
-      openssl s_client -quiet -connect 127.0.0.1:443 -servername headers.test \
+      openssl s_client -quiet -connect 127.0.0.1:443 -servername "$request_host" \
       2>/dev/null | tr -d '\r'
 }
 
@@ -362,6 +368,42 @@ assert_header_exactly_once "$local_tls" "local TLS" \
   "Strict-Transport-Security" "max-age=63072000; includeSubDomains"
 assert_plain_redirect "$plain_http" "/api/version" "plain HTTP /api/version"
 
+# Dedicated MCP hostnames are narrow products, not alternate portal origins.
+# Exercise real nginx map/location precedence over both edge-terminated HTTP
+# and locally terminated TLS. Each allowed proof path exists upstream, so a
+# 404 on a cross-product or portal path proves nginx denied it before proxying.
+for transport in edge tls; do
+  if [ "$transport" = edge ]; then
+    workspace_allowed="$(http_request "/api/mcp/workspace" "https" "$MOCK_CONTAINER" "$PROD_CONTAINER" "mcp.getlawhand.com")"
+    research_allowed="$(http_request "/api/mcp/manifest" "https" "$MOCK_CONTAINER" "$PROD_CONTAINER" "research.getlawhand.com")"
+    platform_portal="$(http_request "/api/version" "https" "$MOCK_CONTAINER" "$PROD_CONTAINER" "mcp.getlawhand.com")"
+    research_portal="$(http_request "/api/version" "https" "$MOCK_CONTAINER" "$PROD_CONTAINER" "research.getlawhand.com")"
+    platform_cross_product="$(http_request "/api/mcp/manifest" "https" "$MOCK_CONTAINER" "$PROD_CONTAINER" "mcp.getlawhand.com")"
+    research_cross_product="$(http_request "/api/mcp/workspace" "https" "$MOCK_CONTAINER" "$PROD_CONTAINER" "research.getlawhand.com")"
+  else
+    workspace_allowed="$(tls_request "/api/mcp/workspace" "mcp.getlawhand.com")"
+    research_allowed="$(tls_request "/api/mcp/manifest" "research.getlawhand.com")"
+    platform_portal="$(tls_request "/api/version" "mcp.getlawhand.com")"
+    research_portal="$(tls_request "/api/version" "research.getlawhand.com")"
+    platform_cross_product="$(tls_request "/api/mcp/manifest" "mcp.getlawhand.com")"
+    research_cross_product="$(tls_request "/api/mcp/workspace" "research.getlawhand.com")"
+  fi
+
+  assert_status "$workspace_allowed" "$transport workspace MCP allowlist" 200
+  printf '%s' "$workspace_allowed" | grep -Fq 'workspace-mcp-proof'
+  assert_status "$research_allowed" "$transport research MCP allowlist" 200
+  printf '%s' "$research_allowed" | grep -Fq 'research-manifest-proof'
+  assert_status "$platform_portal" "$transport platform MCP portal isolation" 404
+  assert_status "$research_portal" "$transport research MCP portal isolation" 404
+  assert_status "$platform_cross_product" "$transport platform MCP cross-product isolation" 404
+  assert_status "$research_cross_product" "$transport research MCP cross-product isolation" 404
+
+  assert_common_security_headers \
+    "$platform_portal" "$transport platform MCP portal isolation"
+  assert_common_security_headers \
+    "$research_portal" "$transport research MCP portal isolation"
+done
+
 for transport in edge tls; do
   office_response=""
   for attempt in 1 2 3 4 5 6 7 8 9 10; do
@@ -464,4 +506,4 @@ printf '%s' "$acme_http" | grep -q 'acme-header-proof' || {
 }
 assert_header_absent "$acme_http" "plain HTTP ACME" "Strict-Transport-Security"
 
-echo "nginx ingress/security-header gate passed (HTTP/TLS/dev webhook caps; trusted-edge/TLS API inheritance; direct HTTP redirect/spoof rejection; ACME exception)"
+echo "nginx ingress/security-header gate passed (HTTP/TLS/dev webhook caps; MCP host isolation; trusted-edge/TLS API inheritance; direct HTTP redirect/spoof rejection; ACME exception)"

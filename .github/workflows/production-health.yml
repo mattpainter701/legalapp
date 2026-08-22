@@ -20,6 +20,8 @@ jobs:
     env:
       PRODUCTION_ORIGIN: https://getlawhand.com
       PRODUCTION_DOMAIN: getlawhand.com
+      WORKSPACE_MCP_ORIGIN: https://mcp.getlawhand.com
+      RESEARCH_MCP_ORIGIN: https://research.getlawhand.com
     steps:
       - name: Verify API and frontend
         id: http
@@ -45,6 +47,39 @@ jobs:
               "$PRODUCTION_ORIGIN$disabled_mcp_path")"
             [[ "$disabled_mcp_status" == "404" ]]
           done
+          workspace_headers="$(curl --silent --show-error --max-time 20 --dump-header - --output /dev/null \
+            --request POST \
+            --header 'Content-Type: application/json' \
+            --header 'Accept: application/json, text/event-stream' \
+            --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"scheduled-health","version":"1"}}}' \
+            "$WORKSPACE_MCP_ORIGIN/api/mcp/workspace" | tr -d '\r')"
+          workspace_status="$(printf '%s\n' "$workspace_headers" | awk 'toupper($1) ~ /^HTTP\// { status=$2 } END { print status }')"
+          workspace_challenge="$(printf '%s\n' "$workspace_headers" | awk 'tolower($0) ~ /^www-authenticate:/ { sub(/^[^:]*:[[:space:]]*/, ""); print }')"
+          [[ "$workspace_status" == "401" ]]
+          [[ "$workspace_challenge" == *"resource_metadata=\"$WORKSPACE_MCP_ORIGIN/.well-known/oauth-protected-resource/api/mcp/workspace\""* ]]
+
+          workspace_metadata="$(curl --fail --silent --show-error --max-time 20 \
+            "$WORKSPACE_MCP_ORIGIN/.well-known/oauth-protected-resource/api/mcp/workspace")"
+          printf '%s' "$workspace_metadata" | jq -e \
+            --arg resource "$WORKSPACE_MCP_ORIGIN/api/mcp/workspace" \
+            --arg issuer "$PRODUCTION_ORIGIN" \
+            '.resource == $resource and .authorization_servers == [$issuer]' >/dev/null
+
+          for disabled_research_path in /api/mcp /api/mcp/manifest; do
+            research_status="$(curl --silent --show-error --max-time 20 \
+              --output /dev/null --write-out '%{http_code}' \
+              "$RESEARCH_MCP_ORIGIN$disabled_research_path")"
+            [[ "$research_status" == "404" ]]
+          done
+          for isolated_url in \
+            "$WORKSPACE_MCP_ORIGIN/api/version" \
+            "$RESEARCH_MCP_ORIGIN/api/version"; do
+            isolated_status="$(curl --silent --show-error --max-time 20 \
+              --output /dev/null --write-out '%{http_code}' "$isolated_url")"
+            [[ "$isolated_status" == "404" ]]
+          done
+          require_single_hsts "$WORKSPACE_MCP_ORIGIN/api/mcp/workspace"
+          require_single_hsts "$RESEARCH_MCP_ORIGIN/api/mcp"
           require_single_hsts "$PRODUCTION_ORIGIN/"
           require_single_hsts "$PRODUCTION_ORIGIN/api/version"
 
@@ -62,8 +97,10 @@ jobs:
         id: tls
         continue-on-error: true
         run: |
-          timeout 20 openssl s_client -connect "$PRODUCTION_DOMAIN:443" -servername "$PRODUCTION_DOMAIN" </dev/null 2>/dev/null \
-            | openssl x509 -checkend 1209600 -noout
+          for tls_domain in "$PRODUCTION_DOMAIN" mcp.getlawhand.com research.getlawhand.com; do
+            timeout 20 openssl s_client -connect "$tls_domain:443" -servername "$tls_domain" </dev/null 2>/dev/null \
+              | openssl x509 -checkend 1209600 -noout
+          done
 
       - name: Create, update, or resolve production alert
         id: reconcile
