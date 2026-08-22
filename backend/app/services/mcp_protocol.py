@@ -66,7 +66,11 @@ def _transport_security() -> TransportSecuritySettings:
 
     allowed_hosts: set[str] = set()
     allowed_origins: set[str] = set()
-    configured_urls = [settings.BACKEND_URL, settings.FRONTEND_URL]
+    configured_urls = [
+        settings.BACKEND_URL,
+        settings.FRONTEND_URL,
+        settings.research_mcp_endpoint,
+    ]
     configured_urls.extend(
         value.strip()
         for value in settings.EXTRA_CORS_ORIGINS.split(",")

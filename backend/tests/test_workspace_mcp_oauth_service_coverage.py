@@ -120,16 +120,31 @@ def test_bounded_audit_metadata_filters_secrets_and_limits_size():
 
 
 def test_resource_and_tenant_helpers(monkeypatch):
+    legacy = "https://lawhand.test/api/mcp/workspace"
+    canonical = "https://mcp.lawhand.test/api/mcp/workspace"
+    monkeypatch.setattr(oauth.settings, "WORKSPACE_MCP_RESOURCE", legacy)
     monkeypatch.setattr(
         oauth.settings,
-        "WORKSPACE_MCP_RESOURCE",
-        "https://lawhand.test/api/mcp/workspace/",
+        "WORKSPACE_MCP_CANONICAL_RESOURCE",
+        f"{canonical}/",
     )
+    monkeypatch.setattr(oauth.settings, "WORKSPACE_MCP_RESOURCE_ALIASES", "")
     monkeypatch.setattr(oauth.settings, "WORKSPACE_MCP_ISSUER", "https://lawhand.test/")
     monkeypatch.setattr(
         oauth.settings, "WORKSPACE_MCP_ALLOWED_TENANT_IDS", "tenant-a, tenant-b"
     )
-    assert oauth.workspace_resource_uri().endswith("workspace")
+
+    assert oauth.workspace_resource_uri() == canonical
+    assert oauth.workspace_resource_uris() == frozenset({canonical, legacy})
+    assert oauth.workspace_resource_is_allowed(canonical)
+    assert oauth.workspace_resource_is_allowed(legacy)
+    assert not oauth.workspace_resource_is_allowed(
+        "https://attacker.invalid/api/mcp/workspace"
+    )
+    assert oauth.workspace_protected_resource_metadata_uri() == (
+        "https://mcp.lawhand.test"
+        "/.well-known/oauth-protected-resource/api/mcp/workspace"
+    )
     assert oauth.workspace_issuer_uri() == "https://lawhand.test"
     assert oauth.workspace_tenant_allowed("tenant-a")
     assert not oauth.workspace_tenant_allowed("tenant-c")

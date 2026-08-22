@@ -111,7 +111,7 @@ def _tool_json_payload(response: dict) -> dict:
 
 
 def _public_manifest(tools: list[dict]) -> dict:
-    base_url = settings.BACKEND_URL.rstrip("/")
+    mcp_url = settings.research_mcp_endpoint
     return {
         "protocolVersion": "2025-06-18",
         "serverInfo": {
@@ -121,7 +121,7 @@ def _public_manifest(tools: list[dict]) -> dict:
         },
         "capabilities": {"tools": {}},
         "tools": tools,
-        "transports": {"streamable_http": f"{base_url}/api/mcp"},
+        "transports": {"streamable_http": mcp_url},
         "auth": {"header": "X-MCP-API-Key"},
     }
 
@@ -551,7 +551,7 @@ async def list_mcp_product_keys(
         for row in summary.get("by_key", [])
         if row.get("product_key_id")
     }
-    base_url = settings.BACKEND_URL.rstrip("/")
+    mcp_url = settings.research_mcp_endpoint
     return {
         "keys": [
             {
@@ -579,13 +579,11 @@ async def list_mcp_product_keys(
         "tools": await _proxied_tool_names(request)
         if settings.MCP_PRODUCT_ENABLED
         else [],
-        "mcp_server_url": f"{base_url}/api/mcp"
-        if settings.MCP_PRODUCT_ENABLED
-        else None,
+        "mcp_server_url": mcp_url if settings.MCP_PRODUCT_ENABLED else None,
         "transports": (
             {
-                "streamable_http": f"{base_url}/api/mcp",
-                "rest_compatibility": f"{base_url}/api/mcp/tools/call",
+                "streamable_http": mcp_url,
+                "rest_compatibility": f"{mcp_url}/tools/call",
             }
             if settings.MCP_PRODUCT_ENABLED
             else {}

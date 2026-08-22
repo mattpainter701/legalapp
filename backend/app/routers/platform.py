@@ -1240,9 +1240,9 @@ async def platform_mcp_overview(
         ),
         "keys": key_payload,
         "connection": {
-            "server_url": f"{settings.BACKEND_URL.rstrip('/')}/api/mcp",
-            "streamable_http": f"{settings.BACKEND_URL.rstrip('/')}/api/mcp",
-            "rest_compatibility": f"{settings.BACKEND_URL.rstrip('/')}/api/mcp/tools/call",
+            "server_url": settings.research_mcp_endpoint,
+            "streamable_http": settings.research_mcp_endpoint,
+            "rest_compatibility": f"{settings.research_mcp_endpoint}/tools/call",
             "auth_header": "X-MCP-API-Key",
         },
         "product_enabled": settings.MCP_PRODUCT_ENABLED,

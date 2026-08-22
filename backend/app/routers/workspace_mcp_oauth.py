@@ -56,6 +56,7 @@ from app.services.workspace_mcp_oauth import (
     verify_pkce,
     workspace_issuer_uri,
     workspace_jwks,
+    workspace_resource_is_allowed,
     workspace_resource_uri,
 )
 
@@ -339,7 +340,7 @@ async def begin_workspace_authorization(
             )
         if redirect_uri not in client.redirect_uri_set:
             raise WorkspaceOAuthError("invalid_request", "Redirect URI does not match")
-        if resource != workspace_resource_uri():
+        if not workspace_resource_is_allowed(resource):
             raise WorkspaceOAuthError("invalid_target", "OAuth resource is invalid")
         scopes = normalized_scopes(scope)
         validate_pkce_challenge(code_challenge, code_challenge_method)
@@ -555,7 +556,7 @@ async def workspace_token(request: Request, db: AsyncSession = Depends(get_db)):
         client_id = str(form.get("client_id") or "")
         client = await _active_client(db, client_id)
         resource = str(form.get("resource") or "")
-        if resource != workspace_resource_uri():
+        if not workspace_resource_is_allowed(resource):
             raise WorkspaceOAuthError("invalid_target", "OAuth resource is invalid")
 
         if grant_type == "authorization_code":
@@ -570,7 +571,7 @@ async def workspace_token(request: Request, db: AsyncSession = Depends(get_db)):
             if (
                 payload.get("client_id") != client.client_id
                 or payload.get("redirect_uri") != redirect_uri
-                or payload.get("resource") != workspace_resource_uri()
+                or not workspace_resource_is_allowed(payload.get("resource"))
                 or not verify_pkce(verifier, str(payload.get("code_challenge") or ""))
             ):
                 raise WorkspaceOAuthError(
@@ -612,9 +613,10 @@ async def workspace_token(request: Request, db: AsyncSession = Depends(get_db)):
                     "invalid_grant", "Refresh token family is invalid"
                 )
             cleanup_family_id = family_id
-            if (
-                consumed.get("client_id") != client.client_id
-                or consumed.get("resource") != workspace_resource_uri()
+            if consumed.get(
+                "client_id"
+            ) != client.client_id or not workspace_resource_is_allowed(
+                consumed.get("resource")
             ):
                 raise WorkspaceOAuthError(
                     "invalid_grant", "Refresh token binding is invalid"

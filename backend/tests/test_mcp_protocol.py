@@ -57,6 +57,19 @@ def protocol_app(monkeypatch):
     )
 
 
+def test_transport_security_allows_canonical_research_host(monkeypatch):
+    monkeypatch.setattr(
+        mcp_protocol.settings,
+        "RESEARCH_MCP_PUBLIC_URL",
+        "https://research.getlawhand.com/api/mcp",
+    )
+
+    security = mcp_protocol._transport_security()
+
+    assert "research.getlawhand.com" in security.allowed_hosts
+    assert "https://research.getlawhand.com" in security.allowed_origins
+
+
 def _identity(*tools: str) -> mcp_protocol.MCPProductIdentity:
     return mcp_protocol.MCPProductIdentity(
         product_key_id=str(uuid.uuid4()),

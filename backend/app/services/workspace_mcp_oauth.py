@@ -62,7 +62,25 @@ class WorkspaceOAuthError(ValueError):
 
 
 def workspace_resource_uri() -> str:
-    return settings.WORKSPACE_MCP_RESOURCE.rstrip("/")
+    return settings.workspace_mcp_endpoint
+
+
+def workspace_resource_uris() -> frozenset[str]:
+    return frozenset(
+        {workspace_resource_uri(), *settings.workspace_mcp_legacy_resources}
+    )
+
+
+def workspace_resource_is_allowed(resource: object) -> bool:
+    return isinstance(resource, str) and resource in workspace_resource_uris()
+
+
+def workspace_protected_resource_metadata_uri() -> str:
+    resource = urlsplit(workspace_resource_uri())
+    return (
+        f"{resource.scheme}://{resource.netloc}"
+        f"/.well-known/oauth-protected-resource{resource.path}"
+    )
 
 
 def workspace_issuer_uri() -> str:

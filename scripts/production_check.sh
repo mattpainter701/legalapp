@@ -144,10 +144,10 @@ require_http_status() {
 
 
 require_workspace_bearer_challenge() {
-  local label="$1" bearer="${2:-}" expect_invalid="${3:-false}"
+  local label="$1" bearer="${2:-}" expect_invalid="${3:-false}" transport_origin="${4:-https://${DOMAIN}}"
   local metadata_url headers status challenge_count challenge
   local -a curl_args
-  metadata_url="https://${DOMAIN}/.well-known/oauth-protected-resource/api/mcp/workspace"
+  metadata_url="https://mcp.${DOMAIN}/.well-known/oauth-protected-resource/api/mcp/workspace"
   curl_args=(
     -sS --max-time 15 -D - -o /dev/null
     -X POST
@@ -158,7 +158,7 @@ require_workspace_bearer_challenge() {
   if [[ -n "$bearer" ]]; then
     curl_args+=( -H "Authorization: Bearer $bearer" )
   fi
-  headers="$(curl "${curl_args[@]}" "https://${DOMAIN}/api/mcp/workspace" | tr -d '\r' || true)"
+  headers="$(curl "${curl_args[@]}" "${transport_origin}/api/mcp/workspace" | tr -d '\r' || true)"
   status="$(printf '%s\n' "$headers" | awk 'toupper($1) ~ /^HTTP\// { status=$2 } END { print status }')"
   challenge_count="$(printf '%s\n' "$headers" | awk 'tolower($0) ~ /^www-authenticate:/ { count++ } END { print count + 0 }')"
   challenge="$(printf '%s\n' "$headers" | awk 'tolower($0) ~ /^www-authenticate:/ { sub(/^[^:]*:[[:space:]]*/, ""); print }')"
@@ -172,10 +172,11 @@ require_workspace_bearer_challenge() {
 }
 
 require_workspace_oauth_metadata() {
-  local origin resource protected_metadata root_protected_metadata
+  local origin resource_origin resource protected_metadata root_protected_metadata canonical_protected_metadata
   local authorization_metadata jwks current_kid
   origin="https://${DOMAIN}"
-  resource="$origin/api/mcp/workspace"
+  resource_origin="https://mcp.${DOMAIN}"
+  resource="$resource_origin/api/mcp/workspace"
   protected_metadata="$(curl -fsS --max-time 15 "$origin/.well-known/oauth-protected-resource/api/mcp/workspace" || true)"
   if ! printf '%s' "$protected_metadata" | python3 -c '
 import json
@@ -200,6 +201,19 @@ assert payload.get("bearer_methods_supported") == ["header"]
   root_protected_metadata="$(curl -fsS --max-time 15 "$origin/.well-known/oauth-protected-resource" || true)"
   if [[ -z "$root_protected_metadata" || "$root_protected_metadata" != "$protected_metadata" ]]; then
     fail "workspace MCP root protected-resource metadata must match the path-specific document"
+  fi
+
+  canonical_protected_metadata="$(curl -fsS --max-time 15 "$resource_origin/.well-known/oauth-protected-resource/api/mcp/workspace" || true)"
+  if [[ -n "$canonical_protected_metadata" ]]; then
+    if [[ "$canonical_protected_metadata" != "$protected_metadata" ]]; then
+      fail "canonical workspace MCP metadata must match the legacy compatibility document"
+    fi
+    require_workspace_bearer_challenge "canonical unauthenticated workspace MCP initialize" "" false "$resource_origin"
+    require_workspace_bearer_challenge "canonical invalid workspace MCP bearer" "not-a-valid-workspace-token" true "$resource_origin"
+    require_http_status "platform MCP hostname isolation" "$resource_origin/api/version" 404
+    require_single_hsts "canonical workspace MCP transport" "$resource_origin/api/mcp/workspace"
+  else
+    echo "WARNING: canonical workspace MCP hostname is not routed yet; legacy compatibility checks remain active." >&2
   fi
 
   authorization_metadata="$(curl -fsS --max-time 15 "$origin/.well-known/oauth-authorization-server" || true)"
@@ -451,6 +465,17 @@ fi
 curl -fsS --max-time 15 "https://${DOMAIN}/" >/dev/null || fail "public frontend check failed"
 require_http_status "disabled public MCP transport" "https://${DOMAIN}/api/mcp" 404
 require_http_status "disabled public MCP manifest" "https://${DOMAIN}/api/mcp/manifest" 404
+research_origin="https://research.${DOMAIN}"
+research_status="$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' "$research_origin/api/mcp" || true)"
+if [[ "$research_status" != "000" ]]; then
+  require_http_status "disabled canonical research MCP transport" "$research_origin/api/mcp" 404
+  require_http_status "disabled canonical research MCP manifest" "$research_origin/api/mcp/manifest" 404
+  require_http_status "research MCP hostname isolation" "$research_origin/api/version" 404
+  require_single_hsts "canonical research MCP transport" "$research_origin/api/mcp"
+else
+  echo "WARNING: canonical research MCP hostname is not routed yet; the public product remains disabled." >&2
+fi
+
 if [[ "$WORKSPACE_MCP_ENABLED" == "true" ]]; then
   require_workspace_oauth_metadata
 else

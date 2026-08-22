@@ -15,12 +15,15 @@ The products must not share credentials or default tool catalogs. A research
 subscription key is never sufficient authority to read or change a firm's
 matters.
 
+DNS, Cloudflare Tunnel, isolation, validation, and rollback procedures are in
+[MCP hostname operations](mcp_hostname_operations.md).
+
 ## Endpoint and shared capability layer
 
 The workspace endpoint is Streamable HTTP at:
 
 ```text
-https://getlawhand.com/api/mcp/workspace
+https://mcp.getlawhand.com/api/mcp/workspace
 ```
 
 `backend/app/services/workspace_mcp_protocol.py` is only an adapter. It obtains
@@ -58,13 +61,13 @@ Use the workspace URL below. Never use a research MCP `clmcp_` product key for
 matter access.
 
 ```text
-https://getlawhand.com/api/mcp/workspace
+https://mcp.getlawhand.com/api/mcp/workspace
 ```
 
 OAuth discovery is available at:
 
 ```text
-https://getlawhand.com/.well-known/oauth-protected-resource/api/mcp/workspace
+https://mcp.getlawhand.com/.well-known/oauth-protected-resource/api/mcp/workspace
 https://getlawhand.com/.well-known/oauth-authorization-server
 ```
 
@@ -84,7 +87,7 @@ Codex CLI, the ChatGPT desktop app, and the Codex IDE extension share MCP
 configuration on the same Codex host. Add and authenticate with the CLI:
 
 ```powershell
-codex mcp add lawhandWorkspace --url https://getlawhand.com/api/mcp/workspace
+codex mcp add lawhandWorkspace --url https://mcp.getlawhand.com/api/mcp/workspace
 codex mcp login lawhandWorkspace
 codex mcp list
 ```
@@ -94,7 +97,7 @@ entry is:
 
 ```toml
 [mcp_servers.lawhandWorkspace]
-url = "https://getlawhand.com/api/mcp/workspace"
+url = "https://mcp.getlawhand.com/api/mcp/workspace"
 auth = "oauth"
 enabled = true
 default_tools_approval_mode = "writes"
@@ -115,7 +118,7 @@ not configured through `claude_desktop_config.json`.
 For Claude Code, add a user-scoped remote HTTP server:
 
 ```bash
-claude mcp add --transport http --scope user lawhand https://getlawhand.com/api/mcp/workspace
+claude mcp add --transport http --scope user lawhand https://mcp.getlawhand.com/api/mcp/workspace
 ```
 
 Then run `/mcp` inside Claude Code, choose `lawhand`, and authenticate in the
@@ -294,7 +297,10 @@ The surface remains hidden unless explicitly enabled:
 
 ```dotenv
 WORKSPACE_MCP_ENABLED=false
+# Existing LawHand grants retain this apex resource as a migration alias.
 WORKSPACE_MCP_RESOURCE=https://getlawhand.com/api/mcp/workspace
+WORKSPACE_MCP_CANONICAL_RESOURCE=https://mcp.getlawhand.com/api/mcp/workspace
+WORKSPACE_MCP_RESOURCE_ALIASES=
 WORKSPACE_MCP_AUDIENCE=lawhand-workspace-mcp
 WORKSPACE_MCP_ISSUER=https://getlawhand.com
 WORKSPACE_MCP_SIGNING_PRIVATE_KEY_B64=

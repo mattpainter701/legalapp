@@ -149,6 +149,11 @@ async def test_public_manifest_never_leaks_private_protocol_claim(monkeypatch):
 
     monkeypatch.setattr(mcp.settings, "MCP_SERVER_URL", "http://courtlistener-mcp:8021")
     monkeypatch.setattr(mcp.settings, "BACKEND_URL", "https://legalapp.example")
+    monkeypatch.setattr(
+        mcp.settings,
+        "RESEARCH_MCP_PUBLIC_URL",
+        "https://research.getlawhand.com/api/mcp",
+    )
     monkeypatch.setattr(mcp.settings, "MCP_PRODUCT_ENABLED", True)
     monkeypatch.setattr(mcp, "_proxy_get", private_manifest)
     mcp_protocol.clear_tool_catalog_cache()
@@ -159,8 +164,8 @@ async def test_public_manifest_never_leaks_private_protocol_claim(monkeypatch):
 
     assert manifest["protocolVersion"] == "2025-06-18"
     assert manifest["serverInfo"]["name"] == "clarity-legal"
-    assert (
-        manifest["transports"]["streamable_http"] == "https://legalapp.example/api/mcp"
+    assert manifest["transports"]["streamable_http"] == (
+        "https://research.getlawhand.com/api/mcp"
     )
     assert {tool["name"] for tool in manifest["tools"]} == set(
         mcp.DEFAULT_ALLOWED_TOOLS

@@ -276,7 +276,22 @@ posture.
 
 ## 8. MCP boundary and release gate
 
-Public MCP is not part of the first-customer product.
+LawHand publishes two isolated MCP hostnames with separate identities and tool
+catalogs:
+
+- `mcp.getlawhand.com` is the OAuth-backed workspace/platform MCP. It exposes
+  bounded tenant-scoped reads and review proposals; it has no model-facing
+  approval, filing, sending, or delivery tools.
+- `research.getlawhand.com` is the product-key-backed legal-research/RAG MCP.
+  It exposes no firm matter or workspace capabilities and remains disabled
+  pending the product release gates below.
+
+Nginx rejects unrelated paths on both hosts, while the legacy apex MCP paths
+remain bounded compatibility aliases. The workspace OAuth issuer remains the
+main application origin even though its canonical protected-resource URI is on
+the workspace hostname.
+
+Public research MCP is not part of the first-customer product.
 
 - `MCP_PRODUCT_ENABLED=false` makes the public manifest and transport
   unavailable.
