@@ -78,9 +78,10 @@ def test_transport_security_allows_canonical_and_legacy_workspace_hosts(monkeypa
 
     security = workspace_mcp_protocol._transport_security()
 
-    assert "mcp.getlawhand.com" in security.allowed_hosts
-    assert "getlawhand.com" in security.allowed_hosts
-    assert "https://mcp.getlawhand.com" in security.allowed_origins
+    expected_hosts = {"mcp.getlawhand.com", "getlawhand.com"}
+    expected_origins = {"https://mcp.getlawhand.com"}
+    assert set(security.allowed_hosts) & expected_hosts == expected_hosts
+    assert set(security.allowed_origins) & expected_origins == expected_origins
 
 
 def test_bearer_challenge_uses_resource_origin_not_oauth_issuer(monkeypatch):

@@ -894,10 +894,12 @@ def test_production_check_asserts_disabled_public_mcp_surface() -> None:
     scheduled_health = (
         ROOT / ".github" / "workflows" / "production-health.yml"
     ).read_text(encoding="utf-8")
+    scheduled_config = yaml.safe_load(scheduled_health)
+    scheduled_env = scheduled_config["jobs"]["public-health"]["env"]
     assert "for disabled_mcp_path in /api/mcp /api/mcp/manifest" in scheduled_health
     assert '[[ "$disabled_mcp_status" == "404" ]]' in scheduled_health
-    assert "https://mcp.getlawhand.com" in scheduled_health
-    assert "https://research.getlawhand.com" in scheduled_health
+    assert scheduled_env["WORKSPACE_MCP_ORIGIN"] == "https://mcp.getlawhand.com"
+    assert scheduled_env["RESEARCH_MCP_ORIGIN"] == "https://research.getlawhand.com"
     assert ".authorization_servers == [$issuer]" in scheduled_health
     assert "for isolated_url in" in scheduled_health
 
