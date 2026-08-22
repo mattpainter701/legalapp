@@ -1,3 +1,4 @@
+import uuid
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
@@ -138,3 +139,107 @@ async def test_provider_login_keeps_continuation_in_server_side_state(
     provider_state = parse_qs(urlparse(response.headers["location"]).query)["state"][0]
     assert auth._fallback_state_data[provider_state]["return_to"] == path
     assert "return_to" not in response.headers["location"]
+
+
+class _RedisCallbackStore:
+    def __init__(self):
+        self.values = {}
+
+    async def setex(self, key, _ttl, value):
+        self.values[key] = value
+
+    async def get(self, key):
+        return self.values.get(key)
+
+    async def eval(self, _script, _key_count, key):
+        return self.values.pop(key, None)
+
+
+def test_callback_payload_decoder_handles_bytes_and_rejects_bad_shapes():
+    assert auth._decode_callback_payload(None) is None
+    assert auth._decode_callback_payload("[]") is None
+    assert auth._decode_callback_payload("{}") is None
+    assert auth._decode_callback_payload('{"access_token":""}') is None
+    assert auth._decode_callback_payload(7) is None
+    assert auth._decode_callback_payload(
+        b'{"access_token":"jwt-token","return_to":"/matters"}'
+    ) == ("jwt-token", "/matters")
+    assert auth._decode_callback_payload(
+        '{"access_token":"jwt-token","return_to":"https://attacker.example"}'
+    ) == ("jwt-token", None)
+
+
+@pytest.mark.asyncio
+async def test_callback_payload_round_trips_atomically_through_redis():
+    redis = _RedisCallbackStore()
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(redis=redis)))
+
+    callback_code = await auth._save_callback_token(
+        request, "jwt-token", "/workspace-mcp/authorize?request_id=abc"
+    )
+    assert await auth._consume_callback_token(request, callback_code) == (
+        "jwt-token",
+        "/workspace-mcp/authorize?request_id=abc",
+    )
+    assert await auth._consume_callback_token(request, callback_code) is None
+
+    await auth._save_callback_replay(
+        request, "state-redis", "provider-code", "jwt-token", "/matters"
+    )
+    assert await auth._get_callback_replay_token(
+        request, "state-redis", "provider-code"
+    ) == ("jwt-token", "/matters")
+
+
+@pytest.mark.asyncio
+async def test_oauth_exchange_returns_server_validated_continuation(monkeypatch):
+    user_id = uuid.uuid4()
+    tenant_id = uuid.uuid4()
+    user = SimpleNamespace(
+        id=user_id,
+        tenant_id=tenant_id,
+        role="attorney",
+        email="attorney@example.test",
+        full_name="Test Attorney",
+        is_active=True,
+        tenant=SimpleNamespace(is_active=True),
+    )
+
+    class _Result:
+        def scalar_one_or_none(self):
+            return user
+
+    class _DB:
+        async def execute(self, _statement):
+            return _Result()
+
+    async def consume_callback_token(_request, _code):
+        return "jwt-token", "/workspace-mcp/authorize?request_id=abc"
+
+    async def no_op_async(*_args, **_kwargs):
+        return None
+
+    async def create_refresh_token(*_args, **_kwargs):
+        return "refresh-token"
+
+    monkeypatch.setattr(auth, "_consume_callback_token", consume_callback_token)
+    monkeypatch.setattr(
+        auth.jwt,
+        "decode",
+        lambda *_args, **_kwargs: {"sub": str(user_id), "tenant_id": str(tenant_id)},
+    )
+    monkeypatch.setattr(auth, "enable_rls_bypass", no_op_async)
+    monkeypatch.setattr(auth, "require_active_tenant", lambda _tenant: None)
+    monkeypatch.setattr(auth, "_create_refresh_token", create_refresh_token)
+    monkeypatch.setattr(auth, "_set_auth_cookies", lambda *_args: None)
+
+    result = await auth.exchange_oauth_callback(
+        auth.OAuthCallbackExchangeRequest(code="callback-code-123456"),
+        _request_without_redis(),
+        auth.Response(),
+        _DB(),
+    )
+
+    assert result.user_id == str(user_id)
+    assert result.tenant_id == str(tenant_id)
+    assert result.return_to == "/workspace-mcp/authorize?request_id=abc"
