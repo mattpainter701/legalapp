@@ -661,13 +661,13 @@ export const getAdminPermissions = () =>
   api.get('/admin/permissions').then((r) => r.data)
 // Workspace MCP OAuth consent and connected-client management
 export const getWorkspaceMcpAuthorizationRequest = (requestId) =>
-  api.get('/workspace-mcp/oauth/requests/' + encodeURIComponent(requestId)).then((r) => r.data)
+  api.get(`/workspace-mcp/oauth/requests/${encodeURIComponent(requestId)}`).then((r) => r.data)
 export const decideWorkspaceMcpAuthorizationRequest = (requestId, approved) =>
-  api.post('/workspace-mcp/oauth/requests/' + encodeURIComponent(requestId) + '/decision', { approved }).then((r) => r.data)
+  api.post(`/workspace-mcp/oauth/requests/${encodeURIComponent(requestId)}/decision`, { approved }).then((r) => r.data)
 export const getWorkspaceMcpGrants = () =>
   api.get('/workspace-mcp/grants').then((r) => r.data)
 export const revokeWorkspaceMcpGrant = (grantId) =>
-  api.post('/workspace-mcp/grants/' + encodeURIComponent(grantId) + '/revoke', { reason: 'Disconnected by user' }).then((r) => r.data)
+  api.post(`/workspace-mcp/grants/${encodeURIComponent(grantId)}/revoke`, { reason: 'Disconnected by user' }).then((r) => r.data)
 export const triggerUserSync = () =>
   api.post('/scheduler/agents/user-sync/run').then((r) => r.data)
 export const retryCloudInit = () =>

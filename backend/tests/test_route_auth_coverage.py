@@ -118,6 +118,42 @@ PUBLIC_ROUTES: dict[tuple[frozenset[str], str], str] = {
         frozenset({"GET"}),
         "/api/auth/microsoft/callback",
     ): "CSRF-state validated via _consume_state",
+    # Workspace MCP OAuth discovery/authorization endpoints. These are public
+    # protocol endpoints; client registration, exact redirect URI, S256 PKCE,
+    # token binding, and tenant/grant checks protect workspace data access.
+    (
+        frozenset({"GET"}),
+        "/.well-known/oauth-protected-resource",
+    ): "public MCP protected-resource metadata; no tenant data",
+    (
+        frozenset({"GET"}),
+        "/.well-known/oauth-protected-resource/api/mcp/workspace",
+    ): "public MCP protected-resource metadata; no tenant data",
+    (
+        frozenset({"GET"}),
+        "/.well-known/oauth-authorization-server",
+    ): "public OAuth authorization-server metadata; no tenant data",
+    (
+        frozenset({"GET"}),
+        "/api/workspace-mcp/oauth/jwks",
+    ): "public signing-key discovery; contains no tenant data",
+    (
+        frozenset({"POST"}),
+        "/api/workspace-mcp/oauth/register",
+    ): "feature-gated public DCR with validated public-client metadata",
+    (
+        frozenset({"GET"}),
+        "/api/workspace-mcp/oauth/authorize",
+    ): "public OAuth entry point; exact redirect and S256 PKCE validated",
+    (
+        frozenset({"POST"}),
+        "/api/workspace-mcp/oauth/token",
+    ): "one-use authorization code or bound refresh token required",
+    (
+        frozenset({"POST"}),
+        "/api/workspace-mcp/oauth/revoke",
+    ): "RFC 7009 endpoint; token and client binding enforced",
+
     # OAuth integration callbacks — all validate the CSRF state token minted
     # by the corresponding /login redirect before doing anything tenant-scoped.
     (
