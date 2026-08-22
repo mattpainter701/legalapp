@@ -1,0 +1,7 @@
+interface:
+  display_name: "LawHand Cloudflare Operations"
+  short_description: "Safely manage shared Cloudflare and LawHand routing"
+  default_prompt: "Use $lawhand-cloudflare-ops to inspect or update Cloudflare configuration safely."
+
+policy:
+  allow_implicit_invocation: true
