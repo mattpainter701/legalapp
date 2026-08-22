@@ -130,6 +130,7 @@ _PURGE_ONLY_TABLES = {
     "user_oauth_tokens",
     "user_roles",
     "users",
+    "workspace_mcp_audit_events",
     "workspace_mcp_grants",
 }
 

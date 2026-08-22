@@ -1,5 +1,5 @@
 import { Suspense, createContext, lazy, useContext, useState, useEffect, useCallback, useRef } from 'react'
-import { Routes, Route, Navigate, useParams, useSearchParams } from 'react-router-dom'
+import { Routes, Route, Navigate, useLocation, useParams, useSearchParams } from 'react-router-dom'
 import AppShell from './components/AppShell'
 import { ToastProvider } from './components/toast/ToastProvider'
 import { ConfirmProvider } from './components/dialog/ConfirmProvider'
@@ -21,6 +21,7 @@ const ProductChatPage = lazy(() => import('./pages/ProductChatPage'))
 const McpProductPage = lazy(() => import('./pages/McpProductPage'))
 const PricingPage = lazy(() => import('./pages/PricingPage'))
 const ProductPage = lazy(() => import('./pages/ProductPage'))
+const WorkspaceMcpAuthorizePage = lazy(() => import('./pages/WorkspaceMcpAuthorizePage'))
 const NotFoundPage = lazy(() => import('./pages/NotFoundPage'))
 const ChatPage = lazy(() => import('./pages/ChatPage'))
 const AdminPage = lazy(() => import('./pages/AdminPage'))
@@ -139,6 +140,7 @@ function hasFinanceAccess(user) {
 
 function ProtectedRoute({ children, adminOnly = false, financeOnly = false, module = null }) {
   const { user, loading } = useAuth()
+  const location = useLocation()
 
   if (loading) {
     return (
@@ -149,7 +151,7 @@ function ProtectedRoute({ children, adminOnly = false, financeOnly = false, modu
   }
 
   if (!user) {
-    return <Navigate to="/login" replace />
+    return <Navigate to={`/login?return_to=${encodeURIComponent(location.pathname + location.search)}`} replace />
   }
 
   if (adminOnly && user.role !== 'admin') {
@@ -213,6 +215,7 @@ export default function App() {
         <Routes>
         <Route path="/" element={<RootRedirect />} />
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/workspace-mcp/authorize" element={<ProtectedRoute><WorkspaceMcpAuthorizePage /></ProtectedRoute>} />
         <Route path="/demo" element={<DemoLoginPage />} />
         <Route path="/signup" element={<SignupPage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />

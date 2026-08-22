@@ -128,6 +128,11 @@ async def test_execute_capability_dispatches_and_commits_only_proposals(monkeypa
         protocol, "_load_workspace_actor", lambda *_args: _async_value(actor)
     )
     monkeypatch.setattr(protocol, "async_session_maker", lambda: SessionContext(db))
+    monkeypatch.setattr(
+        protocol,
+        "append_workspace_mcp_audit",
+        lambda *_args, **_kwargs: _async_noop(),
+    )
 
     async def handler(context, parsed):
         assert context.channel == "workspace_mcp"

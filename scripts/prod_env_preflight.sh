@@ -26,7 +26,7 @@ warnings=()
 required=(
   DOMAIN BACKEND_URL FRONTEND_URL VITE_PUBLIC_SITE_URL VITE_CONTACT_URL DEV_MODE PUBLIC_SIGNUP_ENABLED VITE_PUBLIC_SIGNUP_ENABLED SECRET_KEY MCP_PRODUCT_ENABLED PLATFORM_LEGACY_BOOTSTRAP_ENABLED
   POSTGRES_PASSWORD CLARITY_APP_PASSWORD REDIS_PASSWORD REDIS_URL
-  MIGRATOR_DATABASE_URL APP_DATABASE_URL LITELLM_API_KEY LITELLM_SALT_KEY LITELLM_DB_PASSWORD
+  MIGRATOR_DATABASE_URL APP_DATABASE_URL LITELLM_API_KEY LITELLM_SALT_KEY LITELLM_DB_PASSWORD WORKSPACE_MCP_ENABLED
   LITELLM_DATABASE_URL UPLOADS_HOST_DIR HOST_STATUS_HOST_DIR HOST_DISK_STATUS_FILE HEALTH_HOST_DISK_MAX_AGE_SECONDS BACKUP_STATUS_FILE HEALTH_BACKUP_MAX_AGE_SECONDS OFFSITE_BACKUP_REQUIRED
   EMAIL_ENABLED EMAIL_FROM
 )
@@ -217,6 +217,140 @@ if [[ -n "$mcp_server_url" ]]; then
   done
 fi
 
+workspace_mcp_enabled="$(get_env WORKSPACE_MCP_ENABLED)"
+if [[ "$workspace_mcp_enabled" != "true" && "$workspace_mcp_enabled" != "false" ]]; then
+  errors+=("WORKSPACE_MCP_ENABLED must be explicitly true or false")
+fi
+[[ -z "$(get_env WORKSPACE_MCP_TOKEN_SIGNING_KEY)" ]] \
+  || errors+=("WORKSPACE_MCP_TOKEN_SIGNING_KEY must remain empty in production")
+
+check_integer_range() {
+  local key="$1" minimum="$2" maximum="$3" value
+  value="$(get_env "$key")"
+  if [[ ! "$value" =~ ^[0-9]+$ ]] || (( value < minimum || value > maximum )); then
+    errors+=("$key must be an integer from $minimum to $maximum")
+  fi
+}
+
+if [[ "$workspace_mcp_enabled" == "true" ]]; then
+  workspace_required=(
+    WORKSPACE_MCP_RESOURCE WORKSPACE_MCP_AUDIENCE WORKSPACE_MCP_ISSUER
+    WORKSPACE_MCP_SIGNING_PRIVATE_KEY_B64 WORKSPACE_MCP_SIGNING_PUBLIC_KEY_B64
+    WORKSPACE_MCP_SIGNING_KEY_ID WORKSPACE_MCP_PREVIOUS_PUBLIC_KEYS_JSON
+    WORKSPACE_MCP_ACCESS_TOKEN_MAX_MINUTES WORKSPACE_MCP_AUTH_CODE_TTL_SECONDS
+    WORKSPACE_MCP_REFRESH_TOKEN_DAYS WORKSPACE_MCP_GRANT_DAYS
+    WORKSPACE_MCP_CLIENT_REGISTRATION_DAYS WORKSPACE_MCP_ALLOWED_TENANT_IDS
+    WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED
+  )
+  for key in "${workspace_required[@]}"; do
+    [[ -n "$(get_env "$key")" ]] || errors+=("$key is required when workspace MCP is enabled")
+  done
+
+  expected_workspace_origin="https://$(get_env DOMAIN)"
+  [[ "$(get_env WORKSPACE_MCP_RESOURCE)" == "$expected_workspace_origin/api/mcp/workspace" ]] \
+    || errors+=("WORKSPACE_MCP_RESOURCE must exactly match https://DOMAIN/api/mcp/workspace")
+  [[ "$(get_env WORKSPACE_MCP_ISSUER)" == "$expected_workspace_origin" ]] \
+    || errors+=("WORKSPACE_MCP_ISSUER must exactly match https://DOMAIN")
+  [[ "$(get_env WORKSPACE_MCP_AUDIENCE)" == "lawhand-workspace-mcp" ]] \
+    || errors+=("WORKSPACE_MCP_AUDIENCE must be lawhand-workspace-mcp")
+  [[ "$(get_env WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED)" == "true" ]] \
+    || errors+=("WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED must be true for the desktop pilot")
+  [[ "$(get_env WORKSPACE_MCP_SIGNING_KEY_ID)" =~ ^[A-Za-z0-9._-]{1,80}$ ]] \
+    || errors+=("WORKSPACE_MCP_SIGNING_KEY_ID is invalid")
+
+  check_integer_range WORKSPACE_MCP_ACCESS_TOKEN_MAX_MINUTES 5 60
+  check_integer_range WORKSPACE_MCP_AUTH_CODE_TTL_SECONDS 60 600
+  check_integer_range WORKSPACE_MCP_REFRESH_TOKEN_DAYS 1 90
+  check_integer_range WORKSPACE_MCP_GRANT_DAYS 1 365
+  check_integer_range WORKSPACE_MCP_CLIENT_REGISTRATION_DAYS 1 90
+  workspace_refresh_days="$(get_env WORKSPACE_MCP_REFRESH_TOKEN_DAYS)"
+  workspace_grant_days="$(get_env WORKSPACE_MCP_GRANT_DAYS)"
+  if [[ "$workspace_refresh_days" =~ ^[0-9]+$ && "$workspace_grant_days" =~ ^[0-9]+$ ]] \
+    && (( workspace_grant_days < workspace_refresh_days )); then
+    errors+=("WORKSPACE_MCP_GRANT_DAYS must cover the refresh-token lifetime")
+  fi
+
+  workspace_tenant_list="$(get_env WORKSPACE_MCP_ALLOWED_TENANT_IDS)"
+  if [[ "$workspace_tenant_list" == "*" || "$workspace_tenant_list" == ,* \
+        || "$workspace_tenant_list" == *, || "$workspace_tenant_list" == *,,* ]]; then
+    errors+=("WORKSPACE_MCP_ALLOWED_TENANT_IDS must be a non-global comma-separated UUID list")
+  else
+    IFS=',' read -r -a workspace_tenant_ids <<< "$workspace_tenant_list"
+    declare -A seen_workspace_tenant_ids=()
+    for workspace_tenant_id in "${workspace_tenant_ids[@]}"; do
+      workspace_tenant_id="${workspace_tenant_id//[[:space:]]/}"
+      if [[ ! "$workspace_tenant_id" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+        errors+=("WORKSPACE_MCP_ALLOWED_TENANT_IDS contains an invalid UUID")
+        continue
+      fi
+      if [[ -n "${seen_workspace_tenant_ids[$workspace_tenant_id]+set}" ]]; then
+        errors+=("WORKSPACE_MCP_ALLOWED_TENANT_IDS must not contain duplicates")
+      fi
+      seen_workspace_tenant_ids["$workspace_tenant_id"]=1
+    done
+  fi
+
+  workspace_crypto_tools_available=true
+  for workspace_tool in base64 openssl sha256sum python3; do
+    if ! command -v "$workspace_tool" >/dev/null 2>&1; then
+      errors+=("$workspace_tool is required to validate workspace MCP signing configuration")
+      workspace_crypto_tools_available=false
+    fi
+  done
+  if [[ "$workspace_crypto_tools_available" == "true" ]]; then
+    workspace_private_public_digest=""
+    workspace_configured_public_digest=""
+    if ! workspace_private_public_digest="$(
+      printf '%s' "$(get_env WORKSPACE_MCP_SIGNING_PRIVATE_KEY_B64)" \
+        | base64 -d 2>/dev/null \
+        | openssl pkey -pubout -outform DER 2>/dev/null \
+        | sha256sum \
+        | awk '{print $1}'
+    )" || [[ ! "$workspace_private_public_digest" =~ ^[0-9a-f]{64}$ ]]; then
+      errors+=("WORKSPACE_MCP_SIGNING_PRIVATE_KEY_B64 must contain a valid unencrypted RSA PEM key")
+    fi
+    if ! workspace_configured_public_digest="$(
+      printf '%s' "$(get_env WORKSPACE_MCP_SIGNING_PUBLIC_KEY_B64)" \
+        | base64 -d 2>/dev/null \
+        | openssl pkey -pubin -pubout -outform DER 2>/dev/null \
+        | sha256sum \
+        | awk '{print $1}'
+    )" || [[ ! "$workspace_configured_public_digest" =~ ^[0-9a-f]{64}$ ]]; then
+      errors+=("WORKSPACE_MCP_SIGNING_PUBLIC_KEY_B64 must contain a valid RSA public PEM key")
+    fi
+    if [[ -n "$workspace_private_public_digest" && -n "$workspace_configured_public_digest" \
+          && "$workspace_private_public_digest" != "$workspace_configured_public_digest" ]]; then
+      errors+=("Workspace MCP signing private/public keys do not match")
+    fi
+    workspace_public_bits="$(
+      printf '%s' "$(get_env WORKSPACE_MCP_SIGNING_PUBLIC_KEY_B64)" \
+        | base64 -d 2>/dev/null \
+        | openssl pkey -pubin -text -noout 2>/dev/null \
+        | sed -nE 's/^Public-Key: \(([0-9]+) bit\)$/\1/p' \
+        | head -n 1
+    )" || true
+    if [[ ! "$workspace_public_bits" =~ ^[0-9]+$ ]] || (( workspace_public_bits < 2048 )); then
+      errors+=("Workspace MCP signing keys must be RSA-2048 or stronger")
+    fi
+    if ! printf '%s' "$(get_env WORKSPACE_MCP_PREVIOUS_PUBLIC_KEYS_JSON)" \
+      | python3 -c 'import base64,json,re,sys
+items=json.load(sys.stdin)
+assert isinstance(items,list) and len(items)<=3
+seen=set()
+for item in items:
+    assert isinstance(item,dict)
+    kid=item.get("kid")
+    value=item.get("public_key_b64")
+    assert isinstance(kid,str) and re.fullmatch(r"[A-Za-z0-9._-]{1,80}",kid) and kid not in seen
+    assert isinstance(value,str) and base64.b64decode(value,validate=True)
+    seen.add(kid)' >/dev/null 2>&1; then
+      errors+=("WORKSPACE_MCP_PREVIOUS_PUBLIC_KEYS_JSON is invalid")
+    fi
+  fi
+elif [[ "$(get_env WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED)" == "true" ]]; then
+  errors+=("WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED must be false while workspace MCP is disabled")
+fi
+
 restic_password_file="$(get_env RESTIC_PASSWORD_FILE)"
 if [[ -n "$(get_env RESTIC_REPOSITORY)" ]]; then
   [[ -n "$restic_password_file" && -r "$restic_password_file" ]] || errors+=("RESTIC_PASSWORD_FILE must be readable when RESTIC_REPOSITORY is set")
@@ -244,7 +378,16 @@ read -r -a compose_file_list <<< "$COMPOSE_FILES"
 (( ${#compose_file_list[@]} > 0 )) || { echo "FAIL: no production Compose files configured" >&2; exit 1; }
 declare -A guarded_compose_vars=()
 compose_file_paths=()
-for key in "${required[@]}" TOKEN_ENCRYPTION_KEY TOKEN_ENCRYPTION_KEYS MCP_SERVER_URL MCP_UPSTREAM_API_KEY ZOOM_REQUIRED_TENANT_ID ZOOM_REQUIRED_TENANT_PLAN OFFSITE_RESTORE_PUBLIC_KEY_FILE DISK_PATH DISK_MAX_PERCENT; do
+workspace_mcp_guarded_vars=(
+  WORKSPACE_MCP_RESOURCE WORKSPACE_MCP_AUDIENCE WORKSPACE_MCP_ISSUER
+  WORKSPACE_MCP_TOKEN_SIGNING_KEY WORKSPACE_MCP_SIGNING_PRIVATE_KEY_B64
+  WORKSPACE_MCP_SIGNING_PUBLIC_KEY_B64 WORKSPACE_MCP_SIGNING_KEY_ID
+  WORKSPACE_MCP_PREVIOUS_PUBLIC_KEYS_JSON WORKSPACE_MCP_ACCESS_TOKEN_MAX_MINUTES
+  WORKSPACE_MCP_AUTH_CODE_TTL_SECONDS WORKSPACE_MCP_REFRESH_TOKEN_DAYS
+  WORKSPACE_MCP_GRANT_DAYS WORKSPACE_MCP_CLIENT_REGISTRATION_DAYS
+  WORKSPACE_MCP_ALLOWED_TENANT_IDS WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED
+)
+for key in "${required[@]}" "${workspace_mcp_guarded_vars[@]}" TOKEN_ENCRYPTION_KEY TOKEN_ENCRYPTION_KEYS MCP_SERVER_URL MCP_UPSTREAM_API_KEY ZOOM_REQUIRED_TENANT_ID ZOOM_REQUIRED_TENANT_PLAN OFFSITE_RESTORE_PUBLIC_KEY_FILE DISK_PATH DISK_MAX_PERCENT; do
   guarded_compose_vars["$key"]=1
 done
 for compose_file in "${compose_file_list[@]}"; do

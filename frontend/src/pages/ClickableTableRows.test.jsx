@@ -40,6 +40,8 @@ vi.mock('../api', () => ({
   getMattersV2: vi.fn().mockResolvedValue({ items: [] }),
   getTimeEntries: vi.fn().mockResolvedValue({ items: [] }),
   updateMe: vi.fn().mockResolvedValue({}),
+  getWorkspaceMcpGrants: vi.fn().mockResolvedValue({ items: [] }),
+  revokeWorkspaceMcpGrant: vi.fn().mockResolvedValue({}),
   listTrustAccounts: vi.fn().mockResolvedValue({
     items: [{ id: 'trust-1', account_name: 'Rivera Client Trust', current_balance: 500, is_active: true }],
     total_balance: 500,

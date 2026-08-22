@@ -235,13 +235,30 @@ export const login = (data) =>
 
 export const exchangeOAuthCode = (code) =>
   api.post('/auth/oauth/exchange', { code }).then((r) => r.data)
+const hasUnsafeReturnCharacter = (value) => Array.from(value).some((character) => {
+  const code = character.charCodeAt(0)
+  return character === '\\' || code < 0x20 || code === 0x7f
+})
 
-export const loginMicrosoft = () => {
-  window.location.href = `${BASE_URL}/auth/microsoft/login`
+export const isSafeInternalReturnTo = (value) =>
+  typeof value === 'string' &&
+  value.length <= 2048 &&
+  /^\/(?!\/)/.test(value) &&
+  !hasUnsafeReturnCharacter(value)
+
+export const buildOAuthLoginUrl = (provider, destination) => {
+  const query = isSafeInternalReturnTo(destination)
+    ? `?return_to=${encodeURIComponent(destination)}`
+    : ''
+  return `${BASE_URL}/auth/${provider}/login${query}`
 }
 
-export const loginGoogle = () => {
-  window.location.href = `${BASE_URL}/auth/google/login`
+export const loginMicrosoft = (destination) => {
+  window.location.href = buildOAuthLoginUrl('microsoft', destination)
+}
+
+export const loginGoogle = (destination) => {
+  window.location.href = buildOAuthLoginUrl('google', destination)
 }
 
 export const checkOAuthStatus = () =>
@@ -642,6 +659,15 @@ export const getIntegrationReadiness = () =>
   api.get('/admin/integrations/readiness').then((r) => r.data)
 export const getAdminPermissions = () =>
   api.get('/admin/permissions').then((r) => r.data)
+// Workspace MCP OAuth consent and connected-client management
+export const getWorkspaceMcpAuthorizationRequest = (requestId) =>
+  api.get(`/workspace-mcp/oauth/requests/${encodeURIComponent(requestId)}`).then((r) => r.data)
+export const decideWorkspaceMcpAuthorizationRequest = (requestId, approved) =>
+  api.post(`/workspace-mcp/oauth/requests/${encodeURIComponent(requestId)}/decision`, { approved }).then((r) => r.data)
+export const getWorkspaceMcpGrants = () =>
+  api.get('/workspace-mcp/grants').then((r) => r.data)
+export const revokeWorkspaceMcpGrant = (grantId) =>
+  api.post(`/workspace-mcp/grants/${encodeURIComponent(grantId)}/revoke`, { reason: 'Disconnected by user' }).then((r) => r.data)
 export const triggerUserSync = () =>
   api.post('/scheduler/agents/user-sync/run').then((r) => r.data)
 export const retryCloudInit = () =>

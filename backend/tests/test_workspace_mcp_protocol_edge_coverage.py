@@ -70,6 +70,9 @@ def test_origin_parser_handles_invalid_ipv6_authority():
 @pytest.mark.asyncio
 async def test_actor_loading_maps_grant_user_license_and_privacy_failures(monkeypatch):
     identity = _identity()
+    monkeypatch.setattr(
+        protocol, "require_workspace_tenant_allowed", lambda _tenant_id: None
+    )
     monkeypatch.setattr(protocol, "set_tenant_context", _none)
     monkeypatch.setattr(protocol, "require_active_tenant", lambda _tenant: None)
     monkeypatch.setattr(
@@ -147,6 +150,9 @@ async def test_capability_dispatch_rolls_back_reads_denials_and_missing_handlers
     request = Request({"type": "http", "headers": [(b"x-idempotency-key", b"idem")]})
     user = SimpleNamespace(id=uuid4(), tenant_id=uuid4())
 
+    monkeypatch.setattr(protocol, "set_tenant_context", _none)
+    monkeypatch.setattr(protocol, "append_workspace_mcp_audit", _none)
+
     async def read_handler(context, parsed):
         assert context.request_id == "idem"
         return {"query": parsed.query}
@@ -166,7 +172,7 @@ async def test_capability_dispatch_rolls_back_reads_denials_and_missing_handlers
         identity=_identity(),
     )
     assert result == {"query": "Smith"}
-    assert db.rollbacks == 1 and db.commits == 0
+    assert db.rollbacks == 1 and db.commits == 1
 
     denied_db = _DB()
     monkeypatch.setattr(protocol, "async_session_maker", lambda: _Session(denied_db))

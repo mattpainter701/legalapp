@@ -53,6 +53,14 @@ from app.services.workspace_mcp_grants import (
     require_active_workspace_grant,
 )
 
+from app.services.workspace_mcp_oauth import (
+    WorkspaceOAuthError,
+    append_workspace_mcp_audit,
+    require_workspace_tenant_allowed,
+    workspace_issuer_uri,
+    workspace_verification_key,
+)
+
 settings = get_settings()
 logger = logging.getLogger(__name__)
 
@@ -100,6 +108,17 @@ def _known_workspace_scopes() -> frozenset[str]:
 
 
 KNOWN_WORKSPACE_SCOPES = _known_workspace_scopes()
+
+
+def workspace_bearer_challenge(*, invalid_token: bool = False) -> str:
+    metadata_url = (
+        f"{workspace_issuer_uri()}"
+        "/.well-known/oauth-protected-resource/api/mcp/workspace"
+    )
+    challenge = f'Bearer resource_metadata="{metadata_url}", scope="matters:read"'
+    if invalid_token:
+        challenge += ', error="invalid_token"'
+    return challenge
 
 
 def _origin_and_host(raw_url: str) -> tuple[str | None, str | None]:
@@ -232,6 +251,7 @@ async def _load_workspace_actor(
     """Revalidate the actor and tenant inside the RLS-scoped transaction."""
 
     await set_tenant_context(db, str(identity.tenant_id))
+    require_workspace_tenant_allowed(identity.tenant_id)
     try:
         await require_active_workspace_grant(
             db,
@@ -245,7 +265,9 @@ async def _load_workspace_actor(
         raise HTTPException(
             status_code=401,
             detail="Workspace access token is not backed by an active consent grant",
-            headers={"WWW-Authenticate": 'Bearer error="invalid_token"'},
+            headers={
+                "WWW-Authenticate": workspace_bearer_challenge(invalid_token=True)
+            },
         ) from exc
     user = await db.scalar(
         select(User).where(
@@ -254,7 +276,13 @@ async def _load_workspace_actor(
         )
     )
     if user is None:
-        raise HTTPException(status_code=401, detail="Workspace user is unavailable")
+        raise HTTPException(
+            status_code=401,
+            detail="Workspace user is unavailable",
+            headers={
+                "WWW-Authenticate": workspace_bearer_challenge(invalid_token=True)
+            },
+        )
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Workspace user is inactive")
     if not user.license_active:
@@ -318,14 +346,65 @@ async def execute_workspace_capability(
                 )
             result = await handler(context, parsed)
             if spec.mutating:
+                # Proposal state and its audit evidence commit atomically.
+                await append_workspace_mcp_audit(
+                    db,
+                    request,
+                    tenant_id=identity.tenant_id,
+                    user_id=identity.user_id,
+                    grant_id=uuid.UUID(identity.grant_id),
+                    client_id=identity.client_id,
+                    event_type="tool_called",
+                    tool_name=spec.name,
+                    outcome="success",
+                    metadata={"effect": spec.effect.value},
+                )
                 await db.commit()
             else:
-                # Close the RLS transaction without retaining an idle read
-                # transaction in a long-lived MCP client connection.
+                # Roll back the application session before recording read
+                # evidence separately. This keeps read tools non-mutating even
+                # if a future handler accidentally changes an ORM object.
                 await db.rollback()
+                async with async_session_maker() as audit_db:
+                    await set_tenant_context(audit_db, str(identity.tenant_id))
+                    await append_workspace_mcp_audit(
+                        audit_db,
+                        request,
+                        tenant_id=identity.tenant_id,
+                        user_id=identity.user_id,
+                        grant_id=uuid.UUID(identity.grant_id),
+                        client_id=identity.client_id,
+                        event_type="tool_called",
+                        tool_name=spec.name,
+                        outcome="success",
+                        metadata={"effect": spec.effect.value},
+                    )
+                    await audit_db.commit()
             return result
-        except Exception:
+        except Exception as exc:
             await db.rollback()
+            try:
+                async with async_session_maker() as audit_db:
+                    await set_tenant_context(audit_db, str(identity.tenant_id))
+                    await append_workspace_mcp_audit(
+                        audit_db,
+                        request,
+                        tenant_id=identity.tenant_id,
+                        user_id=identity.user_id,
+                        grant_id=uuid.UUID(identity.grant_id),
+                        client_id=identity.client_id,
+                        event_type="tool_call_refused",
+                        tool_name=spec.name,
+                        outcome=(
+                            "denied"
+                            if isinstance(exc, (CapabilityError, HTTPException))
+                            else "error"
+                        ),
+                        metadata={"error_type": exc.__class__.__name__},
+                    )
+                    await audit_db.commit()
+            except Exception:
+                logger.exception("Workspace MCP refusal audit could not be recorded")
             raise
 
 
@@ -397,12 +476,13 @@ def decode_workspace_access_token(token: str) -> WorkspaceMCPIdentity:
             status_code=503, detail="Workspace OAuth issuer is not configured"
         )
     try:
+        verification_key, algorithm = workspace_verification_key(token)
         claims = jwt.decode(
             token,
-            settings.WORKSPACE_MCP_TOKEN_SIGNING_KEY,
-            algorithms=[settings.ALGORITHM],
+            verification_key,
+            algorithms=[algorithm],
             audience=settings.WORKSPACE_MCP_AUDIENCE,
-            issuer=settings.WORKSPACE_MCP_ISSUER,
+            issuer=workspace_issuer_uri(),
             options={
                 "require_aud": True,
                 "require_exp": True,
@@ -412,9 +492,13 @@ def decode_workspace_access_token(token: str) -> WorkspaceMCPIdentity:
                 "require_sub": True,
             },
         )
-    except (JWTError, TypeError, ValueError) as exc:
+    except (JWTError, WorkspaceOAuthError, TypeError, ValueError) as exc:
         raise HTTPException(
-            status_code=401, detail="Invalid or expired workspace access token"
+            status_code=401,
+            detail="Invalid or expired workspace access token",
+            headers={
+                "WWW-Authenticate": workspace_bearer_challenge(invalid_token=True)
+            },
         ) from exc
 
     if claims.get("type") != "workspace_mcp" or claims.get("token_use") != "access":
@@ -494,14 +578,16 @@ async def authenticate_workspace_request(scope: Scope) -> WorkspaceMCPIdentity:
         raise HTTPException(
             status_code=401,
             detail="Workspace OAuth bearer token required",
-            headers={"WWW-Authenticate": "Bearer"},
+            headers={"WWW-Authenticate": workspace_bearer_challenge()},
         )
     identity = decode_workspace_access_token(token.strip())
     if await _workspace_token_is_revoked(request, identity):
         raise HTTPException(
             status_code=401,
             detail="Workspace access token has been revoked",
-            headers={"WWW-Authenticate": 'Bearer error="invalid_token"'},
+            headers={
+                "WWW-Authenticate": workspace_bearer_challenge(invalid_token=True)
+            },
         )
 
     async with async_session_maker() as db:

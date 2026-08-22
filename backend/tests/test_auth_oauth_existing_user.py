@@ -48,10 +48,10 @@ def _mock_oauth_callback(monkeypatch, provider: str, claims: dict) -> None:
     async def issue_access_token(_db, _user, _tenant):
         return "application-jwt"
 
-    async def save_replay(_request, _state, _provider_code, _token):
+    async def save_replay(_request, _state, _provider_code, _token, _return_to=None):
         return None
 
-    async def save_callback_token(_request, _token):
+    async def save_callback_token(_request, _token, _return_to=None):
         return "one-time-callback-code"
 
     monkeypatch.setattr(auth_router, "_consume_state", consume_state)

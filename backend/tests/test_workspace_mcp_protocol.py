@@ -139,7 +139,8 @@ async def test_workspace_endpoint_requires_oauth_bearer(monkeypatch, protocol_ap
 
     assert response.status_code == 401
     assert response.json() == {"detail": "Workspace OAuth bearer token required"}
-    assert response.headers["www-authenticate"] == "Bearer"
+    assert response.headers["www-authenticate"].startswith("Bearer ")
+    assert "resource_metadata=" in response.headers["www-authenticate"]
 
 
 def test_browser_session_jwt_cannot_be_replayed_as_workspace_token(monkeypatch):
