@@ -421,6 +421,7 @@ def test_dedicated_mcp_hosts_are_isolated_and_streamed() -> None:
     assert "~^mcp\\.getlawhand\\.com: 1;" in nginx
     assert "~^research\\.getlawhand\\.com: 1;" in nginx
     assert "default 0;" in nginx
+    assert "map_hash_bucket_size 128;" in nginx
     assert nginx.count("if ($dedicated_mcp_surface_denied)") == 2
     assert nginx.count("include /etc/nginx/snippets/mcp_transports.conf;") == 2
     assert "courtlistener-mcp" not in nginx
