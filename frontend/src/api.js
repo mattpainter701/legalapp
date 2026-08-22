@@ -242,22 +242,23 @@ const hasUnsafeReturnCharacter = (value) => Array.from(value).some((character) =
 
 export const isSafeInternalReturnTo = (value) =>
   typeof value === 'string' &&
+  value.length <= 2048 &&
   /^\/(?!\/)/.test(value) &&
   !hasUnsafeReturnCharacter(value)
 
-const rememberOAuthReturnTo = (returnTo) => {
-  if (isSafeInternalReturnTo(returnTo)) window.sessionStorage.setItem('lawhand.oauth.return_to', returnTo)
-  else window.sessionStorage.removeItem('lawhand.oauth.return_to')
+export const buildOAuthLoginUrl = (provider, destination) => {
+  const query = isSafeInternalReturnTo(destination)
+    ? `?return_to=${encodeURIComponent(destination)}`
+    : ''
+  return `${BASE_URL}/auth/${provider}/login${query}`
 }
 
-export const loginMicrosoft = (returnTo) => {
-  rememberOAuthReturnTo(returnTo)
-  window.location.href = `${BASE_URL}/auth/microsoft/login`
+export const loginMicrosoft = (destination) => {
+  window.location.href = buildOAuthLoginUrl('microsoft', destination)
 }
 
-export const loginGoogle = (returnTo) => {
-  rememberOAuthReturnTo(returnTo)
-  window.location.href = `${BASE_URL}/auth/google/login`
+export const loginGoogle = (destination) => {
+  window.location.href = buildOAuthLoginUrl('google', destination)
 }
 
 export const checkOAuthStatus = () =>

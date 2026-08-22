@@ -68,6 +68,10 @@ class TokenResponse(BaseModel):
     full_name: Optional[str] = None
 
 
+class OAuthCallbackExchangeResponse(TokenResponse):
+    return_to: Optional[str] = None
+
+
 class UserInfo(BaseModel):
     id: str
     tenant_id: str

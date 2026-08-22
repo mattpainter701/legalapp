@@ -48,8 +48,8 @@ export default function LoginPage() {
   const { login: authLogin } = useAuth()
   const navigate = useNavigate()
   const contactUrl = import.meta.env.VITE_CONTACT_URL || 'mailto:matt@cybersafeadvisor.com'
-  const requestedReturnTo = new URLSearchParams(window.location.search).get('return_to')
-  const oauthReturnTo = isSafeInternalReturnTo(requestedReturnTo) ? requestedReturnTo : null
+  const requestedPath = new URLSearchParams(window.location.search).get('return_to')
+  const internalDestination = isSafeInternalReturnTo(requestedPath) ? requestedPath : null
 
   const handleEmailLogin = async (e) => {
     e.preventDefault()
@@ -62,9 +62,8 @@ export default function LoginPage() {
     try {
       await login({ email, password })
       const userObj = await authLogin()
-      window.sessionStorage.removeItem('lawhand.oauth.return_to')
-      if (oauthReturnTo) {
-        navigate(oauthReturnTo, { replace: true })
+      if (internalDestination) {
+        navigate(internalDestination, { replace: true })
         return
       }
       navigate(userObj?.default_route || '/matters', { replace: true })
@@ -101,7 +100,7 @@ export default function LoginPage() {
         {/* OAuth buttons */}
         <div className="space-y-4">
           <button
-            onClick={() => loginMicrosoft(oauthReturnTo)}
+            onClick={() => loginMicrosoft(internalDestination)}
             className="w-full flex items-center justify-center gap-3 px-5 py-3.5 rounded-xl bg-brand-surface text-brand-ink font-sans text-sm font-medium border border-brand-line hover:border-brand-ink hover:bg-brand-bg-soft hover:-translate-y-[1px] transition-all duration-200 shadow-sm"
           >
             <MicrosoftIcon />
@@ -109,7 +108,7 @@ export default function LoginPage() {
           </button>
 
           <button
-            onClick={() => loginGoogle(oauthReturnTo)}
+            onClick={() => loginGoogle(internalDestination)}
             className="w-full flex items-center justify-center gap-3 px-5 py-3.5 rounded-xl bg-brand-surface text-brand-ink font-sans text-sm font-medium border border-brand-line hover:border-brand-ink hover:bg-brand-bg-soft hover:-translate-y-[1px] transition-all duration-200 shadow-sm"
           >
             <GoogleIcon />

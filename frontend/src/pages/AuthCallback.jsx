@@ -21,12 +21,11 @@ export default function AuthCallback() {
     }
 
     exchangeOAuthCode(code)
-      .then(() => login())
-      .then((userObj) => {
-        const returnTo = window.sessionStorage.getItem('lawhand.oauth.return_to')
-        window.sessionStorage.removeItem('lawhand.oauth.return_to')
-        if (isSafeInternalReturnTo(returnTo)) {
-          navigate(returnTo, { replace: true })
+      .then((exchange) => login().then((userObj) => ({ exchange, userObj })))
+      .then(({ exchange, userObj }) => {
+        const destination = exchange?.return_to
+        if (isSafeInternalReturnTo(destination)) {
+          navigate(destination, { replace: true })
           return
         }
         const defaultRoute = userObj?.default_route || '/matters'

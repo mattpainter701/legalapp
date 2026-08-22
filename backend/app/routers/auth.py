@@ -37,6 +37,7 @@ from app.schemas.auth import (
     ForgotPasswordRequest,
     LoginRequest,
     OAuthCallbackExchangeRequest,
+    OAuthCallbackExchangeResponse,
     PlanSignupRequest,
     RegisterRequest,
     ResetPasswordRequest,
@@ -105,6 +106,23 @@ def _state_key(state: str) -> str:
 
 def _state_data_key(state: str) -> str:
     return f"oauth:statedata:{state}"
+
+
+def _validated_return_to(value: str | None) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    if (
+        len(value) > 2048
+        or not value.startswith("/")
+        or value.startswith("//")
+        or "\\" in value
+        or any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
+    ):
+        return None
+    parsed = urllib.parse.urlsplit(value)
+    if parsed.scheme or parsed.netloc:
+        return None
+    return value
 
 
 async def _save_state(request: Request, state: str, data: dict = None) -> None:
@@ -178,47 +196,83 @@ def _callback_replay_key(state: str, provider_code: str) -> str:
     return f"oauth:callbackreplay:{digest}"
 
 
-async def _save_callback_token(request: Request, token: str) -> str:
+def _encode_callback_payload(access_token: str, return_to: str | None) -> str:
+    return _json.dumps(
+        {
+            "access_token": access_token,
+            "return_to": _validated_return_to(return_to),
+        },
+        separators=(",", ":"),
+    )
+
+
+def _decode_callback_payload(
+    value: bytes | str | None,
+) -> tuple[str, str | None] | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        value = value.decode("utf-8")
+    try:
+        decoded = _json.loads(value)
+    except (_json.JSONDecodeError, TypeError):
+        return (value, None) if isinstance(value, str) and value else None
+    if not isinstance(decoded, dict):
+        return None
+    access_token = decoded.get("access_token")
+    if not isinstance(access_token, str) or not access_token:
+        return None
+    return access_token, _validated_return_to(decoded.get("return_to"))
+
+
+async def _save_callback_token(
+    request: Request, access_token: str, return_to: str | None = None
+) -> str:
     code = secrets.token_urlsafe(32)
+    callback_payload = _encode_callback_payload(access_token, return_to)
     redis = getattr(request.app.state, "redis", None)
     if redis:
-        await redis.setex(_callback_code_key(code), _CALLBACK_CODE_TTL, token)
+        await redis.setex(
+            _callback_code_key(code), _CALLBACK_CODE_TTL, callback_payload
+        )
     else:
         _gc_fallback_dicts()
-        _fallback_callback_tokens[code] = (token, _time.time())
+        _fallback_callback_tokens[code] = (callback_payload, _time.time())
     return code
 
 
 async def _save_callback_replay(
-    request: Request, state: str, provider_code: str, token: str
+    request: Request,
+    state: str,
+    provider_code: str,
+    access_token: str,
+    return_to: str | None = None,
 ) -> None:
+    callback_payload = _encode_callback_payload(access_token, return_to)
     redis = getattr(request.app.state, "redis", None)
     key = _callback_replay_key(state, provider_code)
     if redis:
-        await redis.setex(key, _CALLBACK_REPLAY_TTL, token)
+        await redis.setex(key, _CALLBACK_REPLAY_TTL, callback_payload)
     else:
         _gc_fallback_dicts()
-        _fallback_callback_replays[key] = (token, _time.time())
+        _fallback_callback_replays[key] = (callback_payload, _time.time())
 
 
 async def _get_callback_replay_token(
     request: Request, state: str, provider_code: str
-) -> str | None:
+) -> tuple[str, str | None] | None:
     redis = getattr(request.app.state, "redis", None)
     key = _callback_replay_key(state, provider_code)
     if redis:
-        token = await redis.get(key)
-        if isinstance(token, bytes):
-            return token.decode("utf-8")
-        return token
+        return _decode_callback_payload(await redis.get(key))
     entry = _fallback_callback_replays.get(key)
     if not entry:
         return None
-    token, ts = entry
+    callback_payload, ts = entry
     if _time.time() - ts > _CALLBACK_REPLAY_TTL:
         _fallback_callback_replays.pop(key, None)
         return None
-    return token
+    return _decode_callback_payload(callback_payload)
 
 
 def _frontend_callback_response(callback_code: str) -> RedirectResponse:
@@ -230,10 +284,11 @@ def _frontend_callback_response(callback_code: str) -> RedirectResponse:
 async def _replay_frontend_callback(
     request: Request, state: str, provider_code: str
 ) -> RedirectResponse | None:
-    token = await _get_callback_replay_token(request, state, provider_code)
-    if not token:
+    callback_payload = await _get_callback_replay_token(request, state, provider_code)
+    if not callback_payload:
         return None
-    callback_code = await _save_callback_token(request, token)
+    access_token, return_to = callback_payload
+    callback_code = await _save_callback_token(request, access_token, return_to)
     logger.info("Replayed recently completed OAuth callback")
     return _frontend_callback_response(callback_code)
 
@@ -249,21 +304,25 @@ async def _wait_for_replayed_frontend_callback(
     return None
 
 
-async def _consume_callback_token(request: Request, code: str) -> str | None:
+async def _consume_callback_token(
+    request: Request, code: str
+) -> tuple[str, str | None] | None:
     redis = getattr(request.app.state, "redis", None)
     if redis:
-        token = await redis.get(_callback_code_key(code))
-        await redis.delete(_callback_code_key(code))
-        if isinstance(token, bytes):
-            return token.decode("utf-8")
-        return token
+        callback_payload = await redis.eval(
+            "local value = redis.call('GET', KEYS[1]); "
+            "if value then redis.call('DEL', KEYS[1]); end; return value",
+            1,
+            _callback_code_key(code),
+        )
+        return _decode_callback_payload(callback_payload)
     entry = _fallback_callback_tokens.pop(code, None)
     if not entry:
         return None
-    token, ts = entry
+    callback_payload, ts = entry
     if _time.time() - ts > _CALLBACK_CODE_TTL:
         return None
-    return token
+    return _decode_callback_payload(callback_payload)
 
 
 def _hash_password(password: str) -> str:
@@ -766,6 +825,7 @@ async def microsoft_login(
     address: str = "",
     phone: str = "",
     staff_size: str = "",
+    return_to: str = "",
 ):
     if signup == "true":
         _require_public_signup_enabled()
@@ -788,7 +848,12 @@ async def microsoft_login(
     await _save_state(
         request,
         state,
-        {"signup": signup_data, "nonce": nonce, "pkce_verifier": code_verifier},
+        {
+            "signup": signup_data,
+            "nonce": nonce,
+            "pkce_verifier": code_verifier,
+            "return_to": _validated_return_to(return_to),
+        },
     )
 
     ms_tenant = settings.MICROSOFT_TENANT_ID
@@ -827,6 +892,7 @@ async def microsoft_callback(
             return replay
         raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
     state_meta = state_meta or {}
+    return_to = _validated_return_to(state_meta.get("return_to"))
     signup_data = state_meta.get("signup")
     expected_nonce = state_meta.get("nonce")
     code_verifier = state_meta.get("pkce_verifier")
@@ -951,8 +1017,8 @@ async def microsoft_callback(
             await provision_tenant_rbac(db, tenant.id, user.id)
 
     jwt_token = await _issue_access_token(db, user, tenant)
-    await _save_callback_replay(request, state, code, jwt_token)
-    callback_code = await _save_callback_token(request, jwt_token)
+    await _save_callback_replay(request, state, code, jwt_token, return_to)
+    callback_code = await _save_callback_token(request, jwt_token, return_to)
     return _frontend_callback_response(callback_code)
 
 
@@ -967,6 +1033,7 @@ async def google_login(
     address: str = "",
     phone: str = "",
     staff_size: str = "",
+    return_to: str = "",
 ):
     if signup == "true":
         _require_public_signup_enabled()
@@ -987,7 +1054,12 @@ async def google_login(
     await _save_state(
         request,
         state,
-        {"signup": signup_data, "nonce": nonce, "pkce_verifier": code_verifier},
+        {
+            "signup": signup_data,
+            "nonce": nonce,
+            "pkce_verifier": code_verifier,
+            "return_to": _validated_return_to(return_to),
+        },
     )
 
     redirect_uri = f"{settings.BACKEND_URL}/api/auth/google/callback"
@@ -1026,6 +1098,7 @@ async def google_callback(
             return replay
         raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
     state_meta = state_meta or {}
+    return_to = _validated_return_to(state_meta.get("return_to"))
     signup_data = state_meta.get("signup")
     expected_nonce = state_meta.get("nonce")
     code_verifier = state_meta.get("pkce_verifier")
@@ -1129,8 +1202,8 @@ async def google_callback(
             await provision_tenant_rbac(db, tenant.id, user.id)
 
     jwt_token = await _issue_access_token(db, user, tenant)
-    await _save_callback_replay(request, state, code, jwt_token)
-    callback_code = await _save_callback_token(request, jwt_token)
+    await _save_callback_replay(request, state, code, jwt_token, return_to)
+    callback_code = await _save_callback_token(request, jwt_token, return_to)
     return _frontend_callback_response(callback_code)
 
 
@@ -1218,18 +1291,19 @@ async def exchange_office_session(
     )
 
 
-@router.post("/oauth/exchange", response_model=TokenResponse)
+@router.post("/oauth/exchange", response_model=OAuthCallbackExchangeResponse)
 async def exchange_oauth_callback(
     body: OAuthCallbackExchangeRequest,
     request: Request,
     response: Response,
     db: AsyncSession = Depends(get_db),
 ):
-    token = await _consume_callback_token(request, body.code)
-    if not token:
+    callback_payload = await _consume_callback_token(request, body.code)
+    if not callback_payload:
         raise HTTPException(
             status_code=400, detail="Invalid or expired OAuth callback code"
         )
+    token, return_to = callback_payload
 
     try:
         payload = jwt.decode(
@@ -1250,12 +1324,13 @@ async def exchange_oauth_callback(
     refresh_token = await _create_refresh_token(request, user)
     _set_auth_cookies(response, token, refresh_token)
 
-    return TokenResponse(
+    return OAuthCallbackExchangeResponse(
         user_id=str(user.id),
         tenant_id=str(user.tenant_id),
         role=user.role,
         email=user.email,
         full_name=user.full_name,
+        return_to=return_to,
     )
 
 

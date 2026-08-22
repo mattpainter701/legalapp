@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { isSafeInternalReturnTo, readBlobErrorDetail, streamMessage } from './api'
+import { buildOAuthLoginUrl, isSafeInternalReturnTo, readBlobErrorDetail, streamMessage } from './api'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -10,6 +10,7 @@ describe('binary API errors', () => {
     const blob = new Blob([JSON.stringify({ detail: 'This PDF has no fillable AcroForm fields.' })], { type: 'application/json' })
     expect(await readBlobErrorDetail(blob)).toBe('This PDF has no fillable AcroForm fields.')
   })
+})
 describe('OAuth return paths', () => {
   it('accepts only internal paths without control characters or backslashes', () => {
     expect(isSafeInternalReturnTo('/workspace-mcp/authorize?request_id=abc')).toBe(true)
@@ -17,10 +18,19 @@ describe('OAuth return paths', () => {
     expect(isSafeInternalReturnTo('/\\attacker.example')).toBe(false)
     expect(isSafeInternalReturnTo('/matters\nnext')).toBe(false)
     expect(isSafeInternalReturnTo('https://attacker.example')).toBe(false)
+    expect(isSafeInternalReturnTo('/' + 'a'.repeat(2048))).toBe(false)
+  })
+
+  it('sends a validated continuation only to the LawHand OAuth login endpoint', () => {
+    expect(buildOAuthLoginUrl('google', '/workspace-mcp/authorize?request_id=abc')).toBe(
+      '/api/auth/google/login?return_to=%2Fworkspace-mcp%2Fauthorize%3Frequest_id%3Dabc',
+    )
+    expect(buildOAuthLoginUrl('google', '//attacker.example/callback')).toBe(
+      '/api/auth/google/login',
+    )
   })
 })
 
-})
 
 describe('chat event stream', () => {
   const collectStream = async (...args) => {
