@@ -297,7 +297,10 @@ class LLMService:
             )
             metadata = sanitized_gateway_metadata(**(gateway_metadata or {}))
             if metadata and not customer_api_key:
-                create_kwargs["extra_body"] = {"metadata": metadata}
+                # Keep accounting context internal to LiteLLM. Generic
+                # ``metadata`` is provider-visible and can replace a model's
+                # mandatory ``extra_body`` privacy controls.
+                create_kwargs["extra_body"] = {"litellm_metadata": metadata}
             if response_format:
                 create_kwargs["response_format"] = response_format
 
@@ -415,7 +418,7 @@ class LLMService:
                 )
                 metadata = sanitized_gateway_metadata(**(gateway_metadata or {}))
                 if metadata and not customer_api_key:
-                    create_kwargs["extra_body"] = {"metadata": metadata}
+                    create_kwargs["extra_body"] = {"litellm_metadata": metadata}
                 if not customer_api_key:
                     create_kwargs["stream_options"] = {"include_usage": True}
                 stream = await client.chat.completions.create(**create_kwargs)

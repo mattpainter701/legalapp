@@ -69,6 +69,19 @@ CONFIDENTIAL_DATA_BLOCK_CODE = "confidential_data_not_allowed"
 PROVIDER_CANARY_MAX_TOKENS = 512
 ROUTE_ACTIVATION_CANARY_MAX_TOKENS = 512
 
+# Customer prompts may contain privileged or otherwise confidential matter data.
+# OpenRouter only qualifies for those routes when every request is forced onto a
+# zero-data-retention endpoint and provider data collection is denied. Keep the
+# controls in the registered LiteLLM deployment rather than relying on an
+# account dashboard toggle, so they travel with every request and fail closed
+# when no compliant upstream is available.
+#
+# OpenRouter ZDR: https://openrouter.ai/docs/guides/features/zdr
+OPENROUTER_CONFIDENTIAL_PROVIDER_PREFERENCES = {
+    "zdr": True,
+    "data_collection": "deny",
+}
+
 ZEN_FREE_MODELS = {
     "big-pickle",
     "deepseek-v4-flash-free",
@@ -587,6 +600,11 @@ def _model_data_policy(
     if provider_id == "opencode-go":
         return {
             "data_policy": "zero_retention",
+            "confidential_data_allowed": True,
+        }
+    if provider_id == "openrouter":
+        return {
+            "data_policy": "zero_retention_enforced",
             "confidential_data_allowed": True,
         }
     return {"data_policy": "provider_terms", "confidential_data_allowed": None}
@@ -1410,6 +1428,10 @@ def _build_litellm_model_entry(
     }
     if mode == "openai_compatible" and preset.get("base_url"):
         entry["litellm_params"]["api_base"] = preset["base_url"]
+    if provider_id == "openrouter":
+        entry["litellm_params"]["extra_body"] = {
+            "provider": dict(OPENROUTER_CONFIDENTIAL_PROVIDER_PREFERENCES)
+        }
     if capacity:
         entry["litellm_params"]["weight"] = _capacity(capacity)
     if deployment_id:
@@ -2955,6 +2977,11 @@ async def test_route(
             ],
             max_tokens=PROVIDER_CANARY_MAX_TOKENS,
             temperature=0,
+            extra_body=(
+                {"provider": dict(OPENROUTER_CONFIDENTIAL_PROVIDER_PREFERENCES)}
+                if body.provider_id == "openrouter"
+                else None
+            ),
         )
         elapsed_ms = int((time.monotonic() - provider_start) * 1000)
         text = (resp.choices[0].message.content or "").strip()
