@@ -133,6 +133,11 @@ async def test_begin_and_get_authorization_request(monkeypatch):
         "workspace_resource_uri",
         lambda: "https://lawhand.test/api/mcp/workspace",
     )
+    monkeypatch.setattr(
+        oauth_router,
+        "workspace_resource_is_allowed",
+        lambda value: value == "https://lawhand.test/api/mcp/workspace",
+    )
     client = SimpleNamespace(
         client_id="desktop-client",
         client_name="Desktop",
@@ -315,6 +320,9 @@ async def test_token_authorization_code_refresh_and_replay(monkeypatch):
     monkeypatch.setattr(oauth_router.settings, "WORKSPACE_MCP_ENABLED", True)
     resource = "https://lawhand.test/api/mcp/workspace"
     monkeypatch.setattr(oauth_router, "workspace_resource_uri", lambda: resource)
+    monkeypatch.setattr(
+        oauth_router, "workspace_resource_is_allowed", lambda value: value == resource
+    )
     client = SimpleNamespace(client_id="desktop-client", last_used_at=None)
     user = _user()
     grant = SimpleNamespace(id=uuid.uuid4())
