@@ -160,6 +160,14 @@ docker run -d --name "$MOCK_CONTAINER" \
       printf "%s\n" workspace-mcp-proof > /tmp/backend/api/mcp/workspace
       printf "%s\n" research-manifest-proof > /tmp/backend/api/mcp/manifest
       printf "%s\n" research-call-proof > /tmp/backend/api/mcp/tools/call
+      mkdir -p /tmp/backend/.well-known/oauth-protected-resource/api/mcp
+      printf "%s\n" workspace-resource-metadata-proof > /tmp/backend/.well-known/oauth-protected-resource/api/mcp/workspace
+      printf "%s\n" authorization-metadata-proof > /tmp/backend/.well-known/oauth-authorization-server
+      mkdir -p /tmp/frontend/.git /tmp/frontend/.cursor
+      printf "%s\n" hidden-env-bait > /tmp/frontend/.env
+      printf "%s\n" hidden-git-bait > /tmp/frontend/.git/config
+      printf "%s\n" hidden-mcp-bait > /tmp/frontend/.mcp.json
+      printf "%s\n" hidden-cursor-bait > /tmp/frontend/.cursor/mcp.json
       mkdir -p /tmp/frontend/privacy /tmp/frontend/terms
       printf "%s\n" "<html><head><title>Privacy Summary | WellPled</title><link rel=\"canonical\" href=\"https://headers.test/privacy\"></head><body>Privacy summary</body></html>" > /tmp/frontend/privacy/index.html
       printf "%s\n" "<html><head><title>Service Summary | WellPled</title><link rel=\"canonical\" href=\"https://headers.test/terms\"></head><body>Service summary</body></html>" > /tmp/frontend/terms/index.html
@@ -185,6 +193,7 @@ http_request() {
   source_container="${3:-$PROD_CONTAINER}"
   target_host="${4:-127.0.0.1}"
   request_host="${5:-headers.test}"
+  request_method="${6:-GET}"
   # BusyBox nc can exit as soon as docker closes stdin, racing nginx while it
   # is still proxying the response body. Read the complete response through
   # Python's HTTP client so route-shell assertions are deterministic in CI.
@@ -192,25 +201,26 @@ http_request() {
 import http.client
 import sys
 
-host, path, forwarded_proto, request_host = sys.argv[1:5]
+host, path, forwarded_proto, request_host, request_method = sys.argv[1:6]
 headers = {"Host": request_host, "Connection": "close"}
 if forwarded_proto:
     headers["X-Forwarded-Proto"] = forwarded_proto
 connection = http.client.HTTPConnection(host, 80, timeout=10)
-connection.request("GET", path, headers=headers)
+connection.request(request_method, path, headers=headers)
 response = connection.getresponse()
 lines = [f"HTTP/1.1 {response.status} {response.reason}"]
 lines.extend(f"{name}: {value}" for name, value in response.getheaders())
 payload = ("\r\n".join(lines) + "\r\n\r\n").encode() + response.read()
 sys.stdout.buffer.write(payload)
-' "$target_host" "$request_path" "$forwarded_proto" "$request_host" | tr -d '\r'
+' "$target_host" "$request_path" "$forwarded_proto" "$request_host" "$request_method" | tr -d '\r'
 }
 
 tls_request() {
   request_path="$1"
   request_host="${2:-headers.test}"
+  request_method="${3:-GET}"
   {
-    printf 'GET %s HTTP/1.1\r\n' "$request_path"
+    printf '%s %s HTTP/1.1\r\n' "$request_method" "$request_path"
     printf 'Host: %s\r\n' "$request_host"
     printf 'Connection: close\r\n\r\n'
   } | docker exec -i "$PROD_CONTAINER" \
@@ -402,6 +412,81 @@ for transport in edge tls; do
     "$platform_portal" "$transport platform MCP portal isolation"
   assert_common_security_headers \
     "$research_portal" "$transport research MCP portal isolation"
+done
+
+
+# Unsupported methods must stop at nginx and retain both Allow and security
+# headers. The application also enforces this for direct/internal traffic.
+for transport in edge tls; do
+  if [ "$transport" = edge ]; then
+    workspace_method="$(http_request "/api/mcp/workspace" "https" "$MOCK_CONTAINER" "$PROD_CONTAINER" "mcp.getlawhand.com" "PUT")"
+    research_method="$(http_request "/api/mcp/manifest" "https" "$MOCK_CONTAINER" "$PROD_CONTAINER" "research.getlawhand.com" "PATCH")"
+  else
+    workspace_method="$(tls_request "/api/mcp/workspace" "mcp.getlawhand.com" "PUT")"
+    research_method="$(tls_request "/api/mcp/manifest" "research.getlawhand.com" "PATCH")"
+  fi
+
+  assert_status "$workspace_method" "$transport workspace MCP method gate" 405
+  assert_header_exactly_once "$workspace_method" \
+    "$transport workspace MCP method gate" "Allow" "GET, POST, DELETE"
+  assert_common_security_headers \
+    "$workspace_method" "$transport workspace MCP method gate"
+
+  assert_status "$research_method" "$transport research MCP method gate" 405
+  assert_header_exactly_once "$research_method" \
+    "$transport research MCP method gate" "Allow" "GET"
+  assert_common_security_headers \
+    "$research_method" "$transport research MCP method gate"
+done
+
+# Hidden-file scanner paths must be definitive 404s rather than SPA HTML or
+# upstream files. The mock upstream intentionally contains bait at each path.
+for hidden_path in /.env /.git/config /.mcp.json /.cursor/mcp.json; do
+  for transport in edge tls; do
+    if [ "$transport" = edge ]; then
+      hidden_response="$(http_request "$hidden_path" "https" "$MOCK_CONTAINER" "$PROD_CONTAINER")"
+    else
+      hidden_response="$(tls_request "$hidden_path")"
+    fi
+    hidden_label="$transport hidden-path gate $hidden_path"
+    assert_status "$hidden_response" "$hidden_label" 404
+    assert_common_security_headers "$hidden_response" "$hidden_label"
+    if printf '%s' "$hidden_response" | grep -Fq 'hidden-'; then
+      echo "ERROR: $hidden_label reached hidden upstream bait" >&2
+      exit 1
+    fi
+  done
+done
+
+# The hidden-path gate must not suppress intentional OAuth discovery routes.
+for transport in edge tls; do
+  if [ "$transport" = edge ]; then
+    resource_metadata="$(http_request "/.well-known/oauth-protected-resource/api/mcp/workspace" "https" "$MOCK_CONTAINER" "$PROD_CONTAINER" "mcp.getlawhand.com")"
+    authorization_metadata="$(http_request "/.well-known/oauth-authorization-server" "https" "$MOCK_CONTAINER" "$PROD_CONTAINER")"
+  else
+    resource_metadata="$(tls_request "/.well-known/oauth-protected-resource/api/mcp/workspace" "mcp.getlawhand.com")"
+    authorization_metadata="$(tls_request "/.well-known/oauth-authorization-server")"
+  fi
+
+  assert_status "$resource_metadata" \
+    "$transport workspace OAuth protected-resource metadata" 200
+  printf '%s' "$resource_metadata" | grep -Fq \
+    'workspace-resource-metadata-proof' || {
+      echo "ERROR: $transport workspace OAuth metadata did not reach upstream" >&2
+      exit 1
+    }
+  assert_common_security_headers "$resource_metadata" \
+    "$transport workspace OAuth protected-resource metadata"
+
+  assert_status "$authorization_metadata" \
+    "$transport OAuth authorization-server metadata" 200
+  printf '%s' "$authorization_metadata" | grep -Fq \
+    'authorization-metadata-proof' || {
+      echo "ERROR: $transport OAuth authorization metadata did not reach upstream" >&2
+      exit 1
+    }
+  assert_common_security_headers "$authorization_metadata" \
+    "$transport OAuth authorization-server metadata"
 done
 
 for transport in edge tls; do

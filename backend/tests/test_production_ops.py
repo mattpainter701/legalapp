@@ -436,6 +436,32 @@ def test_dedicated_mcp_hosts_are_isolated_and_streamed() -> None:
     assert '"research.getlawhand.com")' in nginx_gate
     assert "platform MCP cross-product isolation" in nginx_gate
     assert "research MCP cross-product isolation" in nginx_gate
+    for selector in (
+        "location = /api/mcp {",
+        "location = /api/mcp/workspace {",
+        "location = /api/mcp/manifest {",
+        "location = /api/mcp/tools/call {",
+    ):
+        assert selector in transports
+
+    assert transports.count("client_max_body_size 256k;") == 4
+    assert transports.count("client_body_timeout 15s;") == 4
+    assert transports.count("limit_conn mcp_connections 10;") == 4
+    assert transports.count("limit_req zone=mcp_research burst=20 nodelay;") == 3
+    assert transports.count("limit_req zone=mcp_workspace burst=20 nodelay;") == 1
+    assert transports.count("if ($request_method !~ ^(GET|POST|DELETE)$)") == 2
+    assert "if ($request_method != GET)" in transports
+    assert "if ($request_method != POST)" in transports
+
+    assert "zone=mcp_workspace:10m rate=60r/m;" in nginx
+    assert "zone=mcp_research:10m rate=60r/m;" in nginx
+    assert "limit_conn_zone $binary_remote_addr zone=mcp_connections:10m;" in nginx
+    assert "limit_conn_status 429;" in nginx
+    assert "map $uri $mcp_allow_header" in nginx
+    assert "map $uri $hidden_path_denied" in nginx
+    assert "~(?:^|/)\\. 1;" in nginx
+    assert nginx.count("if ($hidden_path_denied)") == 2
+    assert nginx.count("add_header Allow $mcp_allow_header always;") == 2
 
     hypervisor = (ROOT / "docker-compose.hypervisor.yml").read_text(encoding="utf-8")
     assert (

@@ -47,6 +47,11 @@ from app.services.automation_capabilities import (
     resolve_capability_spec,
 )
 from app.services.rbac_service import get_user_capabilities
+from app.services.mcp_transport_security import (
+    MCPRequestBodyTooLarge,
+    buffer_bounded_request,
+    enforce_workspace_request_limit,
+)
 from app.services.tenant_state import require_active_tenant
 from app.services.workspace_mcp_grants import (
     WorkspaceMCPGrantError,
@@ -418,6 +423,12 @@ async def call_workspace_tool(
     """Invoke one user/scoped capability and normalize its MCP result."""
 
     request, identity = _request_and_identity()
+    if not isinstance(arguments, dict):
+        return _tool_error(
+            "invalid_arguments",
+            "Tool arguments must be an object",
+        )
+
     try:
         spec = resolve_capability_spec(name)
         if "workspace_mcp" not in spec.audiences:
@@ -593,6 +604,8 @@ async def authenticate_workspace_request(scope: Scope) -> WorkspaceMCPIdentity:
             },
         )
 
+    await enforce_workspace_request_limit(request, identity)
+
     async with async_session_maker() as db:
         try:
             _user, capabilities = await _load_workspace_actor(db, identity)
@@ -624,6 +637,14 @@ class WorkspaceMCPProtocolEndpoint:
             )(scope, receive, send)
             return
 
+        if scope.get("method", "").upper() not in {"GET", "POST", "DELETE"}:
+            await JSONResponse(
+                {"detail": "Method not allowed"},
+                status_code=405,
+                headers={"Allow": "GET, POST, DELETE"},
+            )(scope, receive, send)
+            return
+
         try:
             identity = await authenticate_workspace_request(scope)
         except HTTPException as exc:
@@ -641,10 +662,23 @@ class WorkspaceMCPProtocolEndpoint:
             )(scope, receive, send)
             return
 
+        try:
+            bounded_receive = await buffer_bounded_request(
+                scope,
+                receive,
+                maximum_bytes=settings.MCP_PROTOCOL_MAX_REQUEST_BYTES,
+            )
+        except MCPRequestBodyTooLarge:
+            await JSONResponse(
+                {"detail": "MCP request body exceeds the configured limit"},
+                status_code=413,
+            )(scope, receive, send)
+            return
+
         authenticated_scope = dict(scope)
         authenticated_scope[_IDENTITY_SCOPE_KEY] = identity
         await workspace_protocol_session_manager.handle_request(
-            authenticated_scope, receive, send
+            authenticated_scope, bounded_receive, send
         )
 
 

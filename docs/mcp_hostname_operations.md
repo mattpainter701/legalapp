@@ -42,6 +42,9 @@ Cloudflare documents the effect of proxied records in
 [Proxy status](https://developers.cloudflare.com/dns/proxy-status/). Keep the
 zone TLS mode at Full (strict) and maintain a valid origin certificate as
 described in [Full (strict)](https://developers.cloudflare.com/ssl/origin-configuration/ssl-modes/full-strict/).
+Defense-in-depth controls, Cloudflare rule guidance, traffic triage, and
+incident response are documented in
+[MCP security operations](mcp_security_operations.md).
 
 ## Safe rollout
 

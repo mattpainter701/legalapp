@@ -527,3 +527,62 @@ async def test_sdk_rejects_untrusted_host(monkeypatch, protocol_app):
         )
 
     assert response.status_code == 421
+
+
+@pytest.mark.asyncio
+async def test_protocol_rejects_oversized_body_after_auth(monkeypatch, protocol_app):
+    await _allow_identity(monkeypatch, "search_caselaw")
+    monkeypatch.setattr(mcp_protocol.settings, "MCP_PROTOCOL_MAX_REQUEST_BYTES", 32)
+    async with AsyncClient(
+        transport=ASGITransport(app=protocol_app),
+        base_url="http://localhost:8000",
+    ) as client:
+        response = await client.post(
+            mcp_protocol.MCP_ENDPOINT_PATH,
+            headers=_protocol_headers(),
+            content=b"x" * 33,
+        )
+
+    assert response.status_code == 413
+    assert response.json() == {
+        "detail": "MCP request body exceeds the configured limit"
+    }
+
+
+@pytest.mark.asyncio
+async def test_protocol_tool_rejects_non_object_arguments(monkeypatch):
+    monkeypatch.setattr(
+        mcp_protocol,
+        "_request_and_identity",
+        lambda: (_request(), _identity("search_caselaw")),
+    )
+
+    result = await mcp_protocol.call_protocol_tool(
+        "search_caselaw",
+        [],  # type: ignore[arg-type]
+    )
+
+    assert result.isError is True
+    assert result.content[0].text == "Tool arguments must be an object"
+
+
+@pytest.mark.asyncio
+async def test_protocol_rejects_unexpected_methods_with_allow_header(monkeypatch):
+    monkeypatch.setattr(mcp_protocol.settings, "MCP_PRODUCT_ENABLED", True)
+    method_app = Starlette(
+        routes=[
+            Route(
+                mcp_protocol.MCP_ENDPOINT_PATH,
+                endpoint=mcp_protocol.protocol_endpoint,
+                methods=["PUT"],
+            )
+        ]
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=method_app),
+        base_url="http://localhost:8000",
+    ) as client:
+        response = await client.put(mcp_protocol.MCP_ENDPOINT_PATH)
+
+    assert response.status_code == 405
+    assert response.headers["Allow"] == "GET, POST, DELETE"

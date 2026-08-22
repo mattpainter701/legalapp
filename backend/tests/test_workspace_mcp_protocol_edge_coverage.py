@@ -344,6 +344,9 @@ async def test_request_authentication_rejects_missing_and_revoked_bearers_then_c
     monkeypatch.setattr(
         protocol, "_workspace_token_is_revoked", lambda *_args: _value(False)
     )
+    monkeypatch.setattr(
+        protocol, "enforce_workspace_request_limit", lambda *_args: _value(None)
+    )
     monkeypatch.setattr(protocol, "async_session_maker", lambda: _Session(db))
     monkeypatch.setattr(
         protocol,
