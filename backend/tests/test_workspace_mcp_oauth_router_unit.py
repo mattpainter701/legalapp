@@ -10,7 +10,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.routers import workspace_mcp_oauth as oauth
-from app.services.workspace_mcp_oauth import WorkspaceOAuthError
+from app.services.workspace_mcp_oauth import WORKSPACE_SCOPE_LABELS, WorkspaceOAuthError
 
 
 class Result:
@@ -117,14 +117,40 @@ async def test_helpers_gate_redirect_and_scope_items(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_document_read_scopes_require_document_management(monkeypatch):
+    current_user = user()
+    monkeypatch.setattr(
+        oauth,
+        "get_user_capabilities",
+        AsyncMock(return_value=["manage_matters", "manage_documents"]),
+    )
+    allowed = await oauth._allowed_user_scopes(DB(), current_user)
+    assert {"documents:read", "templates:read"}.issubset(allowed)
+
+    monkeypatch.setattr(
+        oauth,
+        "get_user_capabilities",
+        AsyncMock(return_value=["manage_matters"]),
+    )
+    restricted = await oauth._allowed_user_scopes(DB(), current_user)
+    assert "documents:read" not in restricted
+    assert "templates:read" not in restricted
+
+
+@pytest.mark.asyncio
 async def test_metadata_and_jwks(monkeypatch):
     monkeypatch.setattr(oauth.settings, "WORKSPACE_MCP_ENABLED", True)
     monkeypatch.setattr(
         oauth.settings, "WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED", True
     )
     metadata = await oauth.authorization_server_metadata()
+    protected = await oauth.protected_resource_metadata()
     assert metadata["registration_endpoint"].endswith("/register")
-    assert "authorization_servers" in await oauth.protected_resource_metadata()
+    assert set(oauth._SCOPE_APP_CAPABILITIES) == set(WORKSPACE_SCOPE_LABELS)
+    assert set(metadata["scopes_supported"]) == set(WORKSPACE_SCOPE_LABELS)
+    assert protected["scopes_supported"] == metadata["scopes_supported"]
+    assert {"documents:read", "templates:read"}.issubset(metadata["scopes_supported"])
+    assert "authorization_servers" in protected
     assert "keys" in await oauth.workspace_jwks_endpoint()
 
 

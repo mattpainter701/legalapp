@@ -65,9 +65,9 @@ def test_pkce_requires_s256_and_verifier_binds_to_challenge():
 
 
 def test_scopes_are_canonicalized_and_unknown_scopes_fail_closed():
-    assert normalized_scopes("tasks:read   matters:read tasks:read") == frozenset(
-        {"tasks:read", "matters:read"}
-    )
+    assert normalized_scopes(
+        "tasks:read matters:read documents:read templates:read tasks:read"
+    ) == frozenset({"tasks:read", "matters:read", "documents:read", "templates:read"})
     with pytest.raises(WorkspaceOAuthError, match="invalid"):
         normalized_scopes("matters:read admin:all")
 
