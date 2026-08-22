@@ -859,6 +859,28 @@ def test_skynet_deploy_recreates_litellm_and_bounds_litellm_diagnostics() -> Non
     assert "logs --tail=120 litellm-migrator litellm-schema-migrator litellm" in deploy
 
 
+def test_skynet_deploy_gates_active_customer_routes_before_public_readiness() -> None:
+    deploy = (ROOT / "scripts" / "deploy_skynet_runner.sh").read_text(encoding="utf-8")
+    availability = (
+        ROOT / "backend" / "app" / "services" / "llm_availability.py"
+    ).read_text(encoding="utf-8")
+
+    post_guard = deploy.index("prod_data_guard.sh post")
+    gate_start = deploy.index("if ! timeout --kill-after=10s 140s", post_guard)
+    probe = deploy.index("python -m app.services.llm_availability", gate_start)
+    gate_end = deploy.index("\nfi", probe)
+    public_readiness = deploy.index(
+        'echo "==> Verifying public readiness and exact release metadata"'
+    )
+
+    assert post_guard < gate_start < probe < gate_end < public_readiness
+    assert '"${compose[@]}" exec -T backend' in deploy[gate_start:probe]
+    assert "exit 5" in deploy[probe:gate_end]
+    assert "active customer LiteLLM availability gate failed" in deploy[probe:gate_end]
+    assert 'CUSTOMER_LLM_TIERS = ("standard", "premium")' in availability
+    assert 'return 0 if result["ok"] else 1' in availability
+
+
 def test_host_disk_monitor_is_persistent_read_only_and_alertable() -> None:
     hypervisor = yaml.safe_load((ROOT / "docker-compose.hypervisor.yml").read_text())
     production = yaml.safe_load((ROOT / "docker-compose.prod.yml").read_text())

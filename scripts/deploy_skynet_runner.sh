@@ -115,6 +115,13 @@ echo "==> Verifying that no customer or LiteLLM data count decreased"
 COMPOSE_FILES="$guard_compose" BACKUP_DIR="$ROOT_DIR/backups" \
   bash scripts/prod_data_guard.sh post "$pre_counts" "$litellm_pre_counts"
 
+echo "==> Probing active customer LiteLLM routes"
+if ! timeout --kill-after=10s 140s "${compose[@]}" exec -T backend \
+  python -m app.services.llm_availability; then
+  echo "ERROR: active customer LiteLLM availability gate failed; release is not complete" >&2
+  exit 5
+fi
+
 echo "==> Verifying public readiness and exact release metadata"
 readiness="$(curl -fsS --retry 12 --retry-all-errors --retry-delay 5 \
   --max-time 20 "$PUBLIC_ORIGIN/health/readiness")"
