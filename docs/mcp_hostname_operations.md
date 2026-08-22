@@ -27,6 +27,10 @@ mcp.getlawhand.com      CNAME  1d780272-f71d-4b23-9381-bbfa0ff94388.cfargotunnel
 research.getlawhand.com CNAME  1d780272-f71d-4b23-9381-bbfa0ff94388.cfargotunnel.com
 ```
 
+In the Cloudflare dashboard, use `CNAME`, names `mcp` and `research`, the
+target above, `Proxied` status, and `Auto` TTL. Do not add a wildcard record or
+change the existing apex and `www` records.
+
 Keep proxying enabled. In the existing tunnel configuration, place these
 rules before the catch-all rule and preserve all existing entries:
 
@@ -49,14 +53,18 @@ incident response are documented in
 ## Safe rollout
 
 1. Merge the application, nginx, configuration, test, and monitoring changes.
-2. Create both proxied DNS records while the tunnel still sends unknown hosts
-   to its `http_status:404` catch-all.
-3. Deploy the exact green revision through the protected production workflow.
-4. Add both hostname ingress rules before the tunnel catch-all.
+2. While both MCP names are absent from public DNS, stage their exact hostname
+   ingress rules before the Tunnel catch-all and confirm the catch-all remains
+   `http_status:404`.
+3. Deploy the exact green revision through the protected production workflow,
+   then verify the apex compatibility routes and nginx hostname/path isolation.
+4. Create both proxied DNS records. DNS is deliberately last so a dedicated
+   hostname cannot reach an older or unisolated origin configuration.
 5. Run the checks below and record the deployed revision and results.
 
-This order avoids exposing the portal on a new hostname before nginx host/path
-isolation is active.
+If a DNS record must be created before deployment, leave that hostname absent
+from Tunnel ingress so it reaches only the final 404 catch-all. Never make DNS
+and ingress live together until nginx host/path isolation is deployed.
 
 ## Acceptance checks
 
