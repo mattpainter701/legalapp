@@ -400,6 +400,9 @@ def test_workspace_mcp_production_wiring_is_complete_and_fail_closed() -> None:
 
 def test_dedicated_mcp_hosts_are_isolated_and_streamed() -> None:
     nginx = (ROOT / "nginx" / "nginx.conf").read_text(encoding="utf-8")
+    nginx_gate = (ROOT / "scripts" / "test_nginx_webhook_ingress.sh").read_text(
+        encoding="utf-8"
+    )
     transports = (ROOT / "nginx" / "snippets" / "mcp_transports.conf").read_text(
         encoding="utf-8"
     )
@@ -428,6 +431,10 @@ def test_dedicated_mcp_hosts_are_isolated_and_streamed() -> None:
     assert "proxy_request_buffering off;" in proxy
     assert "proxy_cache off;" in proxy
     assert 'proxy_set_header Connection        "";' in proxy
+    assert '"mcp.getlawhand.com")' in nginx_gate
+    assert '"research.getlawhand.com")' in nginx_gate
+    assert "platform MCP cross-product isolation" in nginx_gate
+    assert "research MCP cross-product isolation" in nginx_gate
 
     hypervisor = (ROOT / "docker-compose.hypervisor.yml").read_text(encoding="utf-8")
     assert (
