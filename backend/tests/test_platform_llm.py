@@ -91,6 +91,9 @@ def test_provider_route_builder_litellm_model_prefixes():
         openrouter["litellm_params"]["model"] == "openrouter/qwen/qwen3-235b-a22b:free"
     )
     assert "api_base" not in openrouter["litellm_params"]
+    assert openrouter["litellm_params"]["extra_body"] == {
+        "provider": {"zdr": True, "data_collection": "deny"}
+    }
 
     anthropic = platform_llm_router._build_litellm_model_entry(
         "clarity-premium", "anthropic", "claude-3-5-sonnet-latest", "sk-test"
@@ -169,7 +172,9 @@ async def test_opencode_go_gpt_canary_uses_responses_endpoint(
             )
         ]
     )
-    monkeypatch.setattr(platform_llm_router.httpx, "AsyncClient", lambda **_kwargs: fake)
+    monkeypatch.setattr(
+        platform_llm_router.httpx, "AsyncClient", lambda **_kwargs: fake
+    )
 
     response = await client.post(
         "/api/platform/llm/routes/test",
@@ -502,6 +507,16 @@ def test_all_go_models_inherit_documented_zero_retention_policy():
     )
 
     assert model["data_policy"] == "zero_retention"
+    assert model["confidential_data_allowed"] is True
+
+
+def test_openrouter_models_require_zero_retention_and_deny_data_collection():
+    model = platform_llm_router._normalize_model_item(
+        {"id": "openai/gpt-5.4-mini", "name": "GPT-5.4 mini"},
+        "openrouter",
+    )
+
+    assert model["data_policy"] == "zero_retention_enforced"
     assert model["confidential_data_allowed"] is True
 
 

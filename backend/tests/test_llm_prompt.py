@@ -303,7 +303,7 @@ async def test_complete_sends_metadata_without_prompt_content():
     kwargs, usage = await run()
 
     assert kwargs["extra_body"] == {
-        "metadata": {"tenant_id": "tenant-1", "operation_type": "chat"}
+        "litellm_metadata": {"tenant_id": "tenant-1", "operation_type": "chat"}
     }
     assert usage == {
         "requested_model": settings.LITELLM_STANDARD_MODEL,
