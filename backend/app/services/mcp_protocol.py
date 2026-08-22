@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -31,8 +32,14 @@ from starlette.types import Receive, Scope, Send
 from app.config import get_settings
 from app.database import async_session_maker
 from app.services.mcp_product import DEFAULT_ALLOWED_TOOLS, resolve_product_key
+from app.services.mcp_transport_security import (
+    MCPRequestBodyTooLarge,
+    buffer_bounded_request,
+    enforce_research_request_limit,
+)
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 MCP_PROTOCOL_VERSION = "2025-06-18"
 MCP_ENDPOINT_PATH = "/api/mcp"
@@ -283,6 +290,13 @@ def _normalize_tool_result(payload: dict[str, Any]) -> mcp_types.CallToolResult:
     )
 
 
+def _protocol_tool_error(message: str) -> mcp_types.CallToolResult:
+    return mcp_types.CallToolResult(
+        content=[mcp_types.TextContent(type="text", text=message)],
+        isError=True,
+    )
+
+
 async def execute_product_tool(
     *, name: str, arguments: dict[str, Any], request: Request
 ) -> dict[str, Any]:
@@ -308,6 +322,9 @@ async def call_protocol_tool(
     """Invoke an authenticated, scoped tool and return canonical MCP content."""
 
     request, identity = _request_and_identity()
+    if not isinstance(arguments, dict):
+        return _protocol_tool_error("Tool arguments must be an object")
+
     if name not in identity.allowed_tools:
         return mcp_types.CallToolResult(
             content=[
@@ -336,6 +353,8 @@ async def call_protocol_tool(
             ],
             isError=True,
         )
+    except (jsonschema.SchemaError, TypeError):
+        return _protocol_tool_error("Tool input validation is unavailable")
 
     try:
         result = await execute_product_tool(
@@ -369,11 +388,13 @@ async def authenticate_product_request(scope: Scope) -> MCPProductIdentity:
     async with async_session_maker() as db:
         product_key, tenant = await resolve_product_key(db, raw_key)
     allowed_tools = frozenset(product_key.allowed_tools or DEFAULT_ALLOWED_TOOLS)
-    return MCPProductIdentity(
+    identity = MCPProductIdentity(
         product_key_id=str(product_key.id),
         tenant_id=str(tenant.id),
         allowed_tools=allowed_tools,
     )
+    await enforce_research_request_limit(request, identity)
+    return identity
 
 
 class MCPProtocolEndpoint:
@@ -386,18 +407,48 @@ class MCPProtocolEndpoint:
             )(scope, receive, send)
             return
 
+        if scope.get("method", "").upper() not in {"GET", "POST", "DELETE"}:
+            await JSONResponse(
+                {"detail": "Method not allowed"},
+                status_code=405,
+                headers={"Allow": "GET, POST, DELETE"},
+            )(scope, receive, send)
+            return
+
         try:
             identity = await authenticate_product_request(scope)
         except HTTPException as exc:
-            await JSONResponse({"detail": exc.detail}, status_code=exc.status_code)(
-                scope, receive, send
-            )
+            await JSONResponse(
+                {"detail": exc.detail},
+                status_code=exc.status_code,
+                headers=exc.headers,
+            )(scope, receive, send)
+            return
+        except Exception:
+            logger.exception("Research MCP authentication failed")
+            await JSONResponse(
+                {"detail": "Research authentication is unavailable"},
+                status_code=503,
+            )(scope, receive, send)
             return
 
         authenticated_scope = dict(scope)
+        try:
+            bounded_receive = await buffer_bounded_request(
+                scope,
+                receive,
+                maximum_bytes=settings.MCP_PROTOCOL_MAX_REQUEST_BYTES,
+            )
+        except MCPRequestBodyTooLarge:
+            await JSONResponse(
+                {"detail": "MCP request body exceeds the configured limit"},
+                status_code=413,
+            )(scope, receive, send)
+            return
+
         authenticated_scope["mcp_product_identity"] = identity
         await protocol_session_manager.handle_request(
-            authenticated_scope, receive, send
+            authenticated_scope, bounded_receive, send
         )
 
 

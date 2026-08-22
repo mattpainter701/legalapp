@@ -216,6 +216,14 @@ class Settings(BaseSettings):
     MCP_MAX_MONTHLY_CALL_LIMIT: int = 100000
     MCP_DEFAULT_BURST_LIMIT_PER_MINUTE: int = 60
     MCP_MAX_BURST_LIMIT_PER_MINUTE: int = 600
+    # Protocol lifecycle traffic is limited independently from per-tool burst
+    # and monthly product metering so discovery/initialize cannot evade limits.
+    RESEARCH_MCP_KEY_REQUESTS_PER_MINUTE: int = 240
+    RESEARCH_MCP_TENANT_REQUESTS_PER_MINUTE: int = 2400
+    # Streamable HTTP requests are capped independently of reverse-proxy
+    # settings so a direct/internal route cannot feed unbounded JSON to the
+    # protocol SDK. Tool inputs are structured and should remain compact.
+    MCP_PROTOCOL_MAX_REQUEST_BYTES: int = 262144
     # User-bound workspace MCP is a separate product from the research-key
     # gateway. It stays off until an OAuth issuer can mint audience-bound,
     # revocable grants for individual LawHand users.
@@ -241,6 +249,10 @@ class Settings(BaseSettings):
     WORKSPACE_MCP_REFRESH_TOKEN_DAYS: int = 30
     WORKSPACE_MCP_GRANT_DAYS: int = 90
     WORKSPACE_MCP_CLIENT_REGISTRATION_DAYS: int = 30
+    # Per-token and tenant-aggregate protocol limits cover initialize,
+    # discovery, notifications, and tool calls. Nginx separately limits IPs.
+    WORKSPACE_MCP_TOKEN_REQUESTS_PER_MINUTE: int = 120
+    WORKSPACE_MCP_TENANT_REQUESTS_PER_MINUTE: int = 1200
     # Comma-separated pilot tenant UUIDs. Empty or malformed denies everyone.
     WORKSPACE_MCP_ALLOWED_TENANT_IDS: str = ""
     WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED: bool = False
@@ -794,6 +806,19 @@ def validate_mcp_security_settings(settings: Settings) -> None:
             raise ValueError(
                 "WORKSPACE_MCP_CLIENT_REGISTRATION_DAYS must be between 1 and 90"
             )
+        if not 10 <= settings.WORKSPACE_MCP_TOKEN_REQUESTS_PER_MINUTE <= 600:
+            raise ValueError(
+                "WORKSPACE_MCP_TOKEN_REQUESTS_PER_MINUTE must be between 10 and 600"
+            )
+        if not (
+            settings.WORKSPACE_MCP_TOKEN_REQUESTS_PER_MINUTE
+            <= settings.WORKSPACE_MCP_TENANT_REQUESTS_PER_MINUTE
+            <= 10000
+        ):
+            raise ValueError(
+                "WORKSPACE_MCP_TENANT_REQUESTS_PER_MINUTE must cover the token "
+                "limit and be at most 10000"
+            )
     if (
         not 1
         <= settings.MCP_DEFAULT_MONTHLY_CALL_LIMIT
@@ -806,6 +831,22 @@ def validate_mcp_security_settings(settings: Settings) -> None:
         <= settings.MCP_MAX_BURST_LIMIT_PER_MINUTE
     ):
         raise ValueError("Invalid MCP burst limit defaults")
+    if not 10 <= settings.RESEARCH_MCP_KEY_REQUESTS_PER_MINUTE <= 1200:
+        raise ValueError(
+            "RESEARCH_MCP_KEY_REQUESTS_PER_MINUTE must be between 10 and 1200"
+        )
+    if not (
+        settings.RESEARCH_MCP_KEY_REQUESTS_PER_MINUTE
+        <= settings.RESEARCH_MCP_TENANT_REQUESTS_PER_MINUTE
+        <= 20000
+    ):
+        raise ValueError(
+            "RESEARCH_MCP_TENANT_REQUESTS_PER_MINUTE must cover the key limit and be at most 20000"
+        )
+    if not 16384 <= settings.MCP_PROTOCOL_MAX_REQUEST_BYTES <= 1048576:
+        raise ValueError(
+            "MCP_PROTOCOL_MAX_REQUEST_BYTES must be between 16384 and 1048576"
+        )
     if (
         not 1
         <= settings.PLATFORM_TOKEN_TTL_MINUTES
