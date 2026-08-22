@@ -32,6 +32,9 @@ AUTH_LIMITS = {
     "/api/auth/register": (5, 600),
     "/api/auth/forgot-password": (5, 900),
     "/api/auth/reset-password": (5, 900),
+    "/api/workspace-mcp/oauth/register": (10, 3600),
+    "/api/workspace-mcp/oauth/token": (30, 300),
+    "/api/workspace-mcp/oauth/revoke": (30, 300),
     # Public opaque-token exchanges perform bounded, tenant-by-tenant RLS
     # lookup. Keep them behind the existing source-IP auth limiter.
     "/api/portal/mediation/accept": (10, 600),

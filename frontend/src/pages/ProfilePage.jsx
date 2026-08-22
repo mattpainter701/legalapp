@@ -5,6 +5,7 @@ import { useAuth } from '../App'
 import { Briefcase, Clock, DollarSign, Building, ShieldCheck } from 'lucide-react'
 import { getMyMatters, getTimeEntries, updateMe } from '../api'
 import ReleaseInfoPanel from '../components/ReleaseInfoPanel'
+import WorkspaceMcpGrantsPanel from '../components/WorkspaceMcpGrantsPanel'
 
 export default function ProfilePage() {
   const { user, refreshUser } = useAuth()
@@ -192,6 +193,10 @@ export default function ProfilePage() {
             : 'Off for eligible private routes. Standard remains protected and cannot use matters or attachments.')}
         </p>
       </section>
+
+      <div style={{ marginBottom: 24 }}>
+        <WorkspaceMcpGrantsPanel />
+      </div>
 
       <ReleaseInfoPanel className="mb-6" />
 

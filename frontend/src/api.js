@@ -235,12 +235,28 @@ export const login = (data) =>
 
 export const exchangeOAuthCode = (code) =>
   api.post('/auth/oauth/exchange', { code }).then((r) => r.data)
+const hasUnsafeReturnCharacter = (value) => Array.from(value).some((character) => {
+  const code = character.charCodeAt(0)
+  return character === '\\' || code < 0x20 || code === 0x7f
+})
 
-export const loginMicrosoft = () => {
+export const isSafeInternalReturnTo = (value) =>
+  typeof value === 'string' &&
+  /^\/(?!\/)/.test(value) &&
+  !hasUnsafeReturnCharacter(value)
+
+const rememberOAuthReturnTo = (returnTo) => {
+  if (isSafeInternalReturnTo(returnTo)) window.sessionStorage.setItem('lawhand.oauth.return_to', returnTo)
+  else window.sessionStorage.removeItem('lawhand.oauth.return_to')
+}
+
+export const loginMicrosoft = (returnTo) => {
+  rememberOAuthReturnTo(returnTo)
   window.location.href = `${BASE_URL}/auth/microsoft/login`
 }
 
-export const loginGoogle = () => {
+export const loginGoogle = (returnTo) => {
+  rememberOAuthReturnTo(returnTo)
   window.location.href = `${BASE_URL}/auth/google/login`
 }
 
@@ -642,6 +658,15 @@ export const getIntegrationReadiness = () =>
   api.get('/admin/integrations/readiness').then((r) => r.data)
 export const getAdminPermissions = () =>
   api.get('/admin/permissions').then((r) => r.data)
+// Workspace MCP OAuth consent and connected-client management
+export const getWorkspaceMcpAuthorizationRequest = (requestId) =>
+  api.get('/workspace-mcp/oauth/requests/' + encodeURIComponent(requestId)).then((r) => r.data)
+export const decideWorkspaceMcpAuthorizationRequest = (requestId, approved) =>
+  api.post('/workspace-mcp/oauth/requests/' + encodeURIComponent(requestId) + '/decision', { approved }).then((r) => r.data)
+export const getWorkspaceMcpGrants = () =>
+  api.get('/workspace-mcp/grants').then((r) => r.data)
+export const revokeWorkspaceMcpGrant = (grantId) =>
+  api.post('/workspace-mcp/grants/' + encodeURIComponent(grantId) + '/revoke', { reason: 'Disconnected by user' }).then((r) => r.data)
 export const triggerUserSync = () =>
   api.post('/scheduler/agents/user-sync/run').then((r) => r.data)
 export const retryCloudInit = () =>

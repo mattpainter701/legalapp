@@ -1,6 +1,10 @@
+import base64
 from functools import lru_cache
 import json
+import re
+import uuid
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -213,10 +217,24 @@ class Settings(BaseSettings):
     # gateway. It stays off until an OAuth issuer can mint audience-bound,
     # revocable grants for individual LawHand users.
     WORKSPACE_MCP_ENABLED: bool = False
+    WORKSPACE_MCP_RESOURCE: str = ""
     WORKSPACE_MCP_AUDIENCE: str = "lawhand-workspace-mcp"
     WORKSPACE_MCP_ISSUER: str = ""
+    # Legacy symmetric test key. Production OAuth uses the asymmetric pair.
     WORKSPACE_MCP_TOKEN_SIGNING_KEY: str = ""
+    WORKSPACE_MCP_SIGNING_PRIVATE_KEY_B64: str = ""
+    WORKSPACE_MCP_SIGNING_PUBLIC_KEY_B64: str = ""
+    WORKSPACE_MCP_SIGNING_KEY_ID: str = ""
+    # Retain up to three public verification keys during bounded rotation.
+    WORKSPACE_MCP_PREVIOUS_PUBLIC_KEYS_JSON: str = "[]"
     WORKSPACE_MCP_ACCESS_TOKEN_MAX_MINUTES: int = 60
+    WORKSPACE_MCP_AUTH_CODE_TTL_SECONDS: int = 300
+    WORKSPACE_MCP_REFRESH_TOKEN_DAYS: int = 30
+    WORKSPACE_MCP_GRANT_DAYS: int = 90
+    WORKSPACE_MCP_CLIENT_REGISTRATION_DAYS: int = 30
+    # Comma-separated pilot tenant UUIDs. Empty or malformed denies everyone.
+    WORKSPACE_MCP_ALLOWED_TENANT_IDS: str = ""
+    WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED: bool = False
 
     # Per-add-on entitlement enforcement for /api/plugins skills.
     #
@@ -520,6 +538,79 @@ def validate_platform_bootstrap_settings(settings: Settings) -> None:
             )
 
 
+def _decoded_workspace_pem(value: str, field: str) -> bytes:
+    try:
+        decoded = base64.b64decode(value, validate=True)
+    except Exception as exc:
+        raise ValueError(f"{field} must be valid base64") from exc
+    if not decoded:
+        raise ValueError(f"{field} must not be empty")
+    return decoded
+
+
+def _validate_workspace_signing_keys(settings: Settings) -> None:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    private_pem = _decoded_workspace_pem(
+        settings.WORKSPACE_MCP_SIGNING_PRIVATE_KEY_B64,
+        "WORKSPACE_MCP_SIGNING_PRIVATE_KEY_B64",
+    )
+    public_pem = _decoded_workspace_pem(
+        settings.WORKSPACE_MCP_SIGNING_PUBLIC_KEY_B64,
+        "WORKSPACE_MCP_SIGNING_PUBLIC_KEY_B64",
+    )
+    try:
+        private_key = serialization.load_pem_private_key(private_pem, password=None)
+        public_key = serialization.load_pem_public_key(public_pem)
+    except Exception as exc:
+        raise ValueError("Workspace MCP signing keys must be valid PEM keys") from exc
+    if not isinstance(private_key, rsa.RSAPrivateKey) or not isinstance(
+        public_key, rsa.RSAPublicKey
+    ):
+        raise ValueError("Workspace MCP signing keys must be RSA keys")
+    if private_key.key_size < 2048 or public_key.key_size < 2048:
+        raise ValueError("Workspace MCP signing keys must be at least 2048 bits")
+    if private_key.public_key().public_numbers() != public_key.public_numbers():
+        raise ValueError("Workspace MCP signing private/public keys do not match")
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", settings.WORKSPACE_MCP_SIGNING_KEY_ID):
+        raise ValueError("WORKSPACE_MCP_SIGNING_KEY_ID is invalid")
+
+    try:
+        previous = json.loads(settings.WORKSPACE_MCP_PREVIOUS_PUBLIC_KEYS_JSON or "[]")
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            "WORKSPACE_MCP_PREVIOUS_PUBLIC_KEYS_JSON must be valid JSON"
+        ) from exc
+    if not isinstance(previous, list) or len(previous) > 3:
+        raise ValueError(
+            "WORKSPACE_MCP_PREVIOUS_PUBLIC_KEYS_JSON must list at most 3 keys"
+        )
+    seen = {settings.WORKSPACE_MCP_SIGNING_KEY_ID}
+    for entry in previous:
+        if not isinstance(entry, dict):
+            raise ValueError("Previous workspace MCP signing keys must be objects")
+        kid = str(entry.get("kid") or "")
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", kid) or kid in seen:
+            raise ValueError("Previous workspace MCP signing key IDs must be unique")
+        seen.add(kid)
+        try:
+            prior_key = serialization.load_pem_public_key(
+                _decoded_workspace_pem(
+                    str(entry.get("public_key_b64") or ""),
+                    "previous workspace MCP public key",
+                )
+            )
+        except Exception as exc:
+            raise ValueError(
+                "Previous workspace MCP public keys must be valid PEM keys"
+            ) from exc
+        if not isinstance(prior_key, rsa.RSAPublicKey) or prior_key.key_size < 2048:
+            raise ValueError(
+                "Previous workspace MCP public keys must be RSA-2048 or stronger"
+            )
+
+
 def validate_mcp_security_settings(settings: Settings) -> None:
     if settings.MCP_SERVER_URL and len(settings.MCP_UPSTREAM_API_KEY) < 32:
         raise ValueError(
@@ -535,19 +626,95 @@ def validate_mcp_security_settings(settings: Settings) -> None:
             raise ValueError(
                 "WORKSPACE_MCP_ISSUER is required when workspace MCP is enabled"
             )
-        signing_key = settings.WORKSPACE_MCP_TOKEN_SIGNING_KEY
-        if len(signing_key) < 32 or _looks_like_placeholder(signing_key):
+        resource = urlsplit(settings.WORKSPACE_MCP_RESOURCE)
+        issuer = urlsplit(settings.WORKSPACE_MCP_ISSUER)
+        if (
+            not resource.scheme
+            or not resource.netloc
+            or resource.path.rstrip("/") != "/api/mcp/workspace"
+            or resource.query
+            or resource.fragment
+            or resource.username
+            or resource.password
+        ):
             raise ValueError(
-                "WORKSPACE_MCP_TOKEN_SIGNING_KEY must be a distinct random value "
-                "of at least 32 characters when workspace MCP is enabled"
+                "WORKSPACE_MCP_RESOURCE must be the canonical /api/mcp/workspace URL"
             )
-        if signing_key == settings.SECRET_KEY:
+        if (
+            not issuer.scheme
+            or not issuer.netloc
+            or issuer.query
+            or issuer.fragment
+            or issuer.username
+            or issuer.password
+        ):
+            raise ValueError("WORKSPACE_MCP_ISSUER must be an absolute issuer URL")
+        if not settings.DEV_MODE and (
+            resource.scheme != "https" or issuer.scheme != "https"
+        ):
+            raise ValueError("Workspace MCP resource and issuer must use HTTPS")
+        if (resource.scheme, resource.netloc) != (issuer.scheme, issuer.netloc):
+            raise ValueError("Workspace MCP resource and issuer must share an origin")
+
+        if settings.DEV_MODE and not settings.WORKSPACE_MCP_SIGNING_PRIVATE_KEY_B64:
+            signing_key = settings.WORKSPACE_MCP_TOKEN_SIGNING_KEY
+            if len(signing_key) < 32 or _looks_like_placeholder(signing_key):
+                raise ValueError(
+                    "WORKSPACE_MCP_TOKEN_SIGNING_KEY is required for legacy dev tests"
+                )
+            if signing_key == settings.SECRET_KEY:
+                raise ValueError(
+                    "WORKSPACE_MCP_TOKEN_SIGNING_KEY must not equal SECRET_KEY"
+                )
+        else:
+            _validate_workspace_signing_keys(settings)
+
+        allowed = [
+            part.strip()
+            for part in settings.WORKSPACE_MCP_ALLOWED_TENANT_IDS.split(",")
+            if part.strip()
+        ]
+        if not allowed:
             raise ValueError(
-                "WORKSPACE_MCP_TOKEN_SIGNING_KEY must not equal SECRET_KEY"
+                "WORKSPACE_MCP_ALLOWED_TENANT_IDS must contain pilot tenant UUIDs"
             )
+        if "*" in allowed and not settings.DEV_MODE:
+            raise ValueError(
+                "WORKSPACE_MCP_ALLOWED_TENANT_IDS cannot enable every tenant "
+                "in production"
+            )
+        try:
+            for tenant_id in allowed:
+                if tenant_id != "*":
+                    uuid.UUID(tenant_id)
+        except ValueError as exc:
+            raise ValueError(
+                "WORKSPACE_MCP_ALLOWED_TENANT_IDS contains an invalid UUID"
+            ) from exc
+
         if not 5 <= settings.WORKSPACE_MCP_ACCESS_TOKEN_MAX_MINUTES <= 60:
             raise ValueError(
                 "WORKSPACE_MCP_ACCESS_TOKEN_MAX_MINUTES must be between 5 and 60"
+            )
+        if not 60 <= settings.WORKSPACE_MCP_AUTH_CODE_TTL_SECONDS <= 600:
+            raise ValueError(
+                "WORKSPACE_MCP_AUTH_CODE_TTL_SECONDS must be between 60 and 600"
+            )
+        if not 1 <= settings.WORKSPACE_MCP_REFRESH_TOKEN_DAYS <= 90:
+            raise ValueError(
+                "WORKSPACE_MCP_REFRESH_TOKEN_DAYS must be between 1 and 90"
+            )
+        if not (
+            settings.WORKSPACE_MCP_REFRESH_TOKEN_DAYS
+            <= settings.WORKSPACE_MCP_GRANT_DAYS
+            <= 365
+        ):
+            raise ValueError(
+                "WORKSPACE_MCP_GRANT_DAYS must cover refresh lifetime and be at most 365"
+            )
+        if not 1 <= settings.WORKSPACE_MCP_CLIENT_REGISTRATION_DAYS <= 90:
+            raise ValueError(
+                "WORKSPACE_MCP_CLIENT_REGISTRATION_DAYS must be between 1 and 90"
             )
     if (
         not 1

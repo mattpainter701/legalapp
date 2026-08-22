@@ -17,6 +17,7 @@ import {
   reconcileExternalImport,
 } from '../api'
 
+import WorkspaceMcpGrantsPanel from './WorkspaceMcpGrantsPanel'
 const SCOPE_LABELS_MS = {
   offline_access: 'Offline access (refresh tokens)',
   'User.Read.All': 'Read all user profiles',
@@ -402,6 +403,7 @@ export default function IntegrationsPanel() {
       </div>
 
       <Tabs3ImportPanel />
+      <WorkspaceMcpGrantsPanel />
 
       {/* Primary cloud storage selector */}
       <div className="bg-brand-surface border border-brand-line rounded-xl p-6">

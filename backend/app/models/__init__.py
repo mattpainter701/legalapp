@@ -98,6 +98,8 @@ from app.models.plugin_skill_run import PluginSkillRun
 from app.models.matter_document_revision import MatterDocumentRevision
 from app.models.chat_artifact import ChatArtifact
 from app.models.workspace_mcp_grant import WorkspaceMCPGrant
+from app.models.workspace_mcp_client import WorkspaceMCPClient
+from app.models.workspace_mcp_audit import WorkspaceMCPAuditEvent
 from app.models.generated_artifact import (
     GeneratedArtifact,
     GeneratedArtifactRevision,
@@ -205,6 +207,8 @@ __all__ = [
     "MatterDocumentRevision",
     "ChatArtifact",
     "WorkspaceMCPGrant",
+    "WorkspaceMCPClient",
+    "WorkspaceMCPAuditEvent",
     "GeneratedArtifact",
     "GeneratedArtifactRevision",
     "DocumentStorageOperation",

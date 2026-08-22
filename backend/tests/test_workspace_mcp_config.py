@@ -1,3 +1,8 @@
+import base64
+import uuid
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 import pytest
 from cryptography.fernet import Fernet
 
@@ -9,6 +14,9 @@ def _settings(**overrides):
         "_env_file": None,
         "DATABASE_URL": "postgresql://test",
         "SECRET_KEY": "x" * 48,
+        "DEV_MODE": True,
+        "WORKSPACE_MCP_RESOURCE": "https://auth.getlawhand.com/api/mcp/workspace",
+        "WORKSPACE_MCP_ALLOWED_TENANT_IDS": str(uuid.uuid4()),
         "TOKEN_ENCRYPTION_KEY": Fernet.generate_key().decode(),
     }
     values.update(overrides)
@@ -90,4 +98,53 @@ def test_workspace_mcp_rejects_unbounded_access_token_lifetime(minutes):
     )
 
     with pytest.raises(ValueError, match="WORKSPACE_MCP_ACCESS_TOKEN_MAX_MINUTES"):
+        validate_mcp_security_settings(settings)
+
+
+def _rsa_pair() -> tuple[str, str]:
+    private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = private.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    )
+    public_pem = private.public_key().public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    return (
+        base64.b64encode(private_pem).decode(),
+        base64.b64encode(public_pem).decode(),
+    )
+
+
+def test_workspace_mcp_accepts_production_asymmetric_signing():
+    private_key, public_key = _rsa_pair()
+    settings = _settings(
+        DEV_MODE=False,
+        WORKSPACE_MCP_ENABLED=True,
+        WORKSPACE_MCP_RESOURCE="https://getlawhand.com/api/mcp/workspace",
+        WORKSPACE_MCP_ISSUER="https://getlawhand.com",
+        WORKSPACE_MCP_SIGNING_PRIVATE_KEY_B64=private_key,
+        WORKSPACE_MCP_SIGNING_PUBLIC_KEY_B64=public_key,
+        WORKSPACE_MCP_SIGNING_KEY_ID="workspace-2026-08",
+    )
+
+    validate_mcp_security_settings(settings)
+
+
+def test_workspace_mcp_production_rejects_global_tenant_rollout():
+    private_key, public_key = _rsa_pair()
+    settings = _settings(
+        DEV_MODE=False,
+        WORKSPACE_MCP_ENABLED=True,
+        WORKSPACE_MCP_RESOURCE="https://getlawhand.com/api/mcp/workspace",
+        WORKSPACE_MCP_ISSUER="https://getlawhand.com",
+        WORKSPACE_MCP_SIGNING_PRIVATE_KEY_B64=private_key,
+        WORKSPACE_MCP_SIGNING_PUBLIC_KEY_B64=public_key,
+        WORKSPACE_MCP_SIGNING_KEY_ID="workspace-2026-08",
+        WORKSPACE_MCP_ALLOWED_TENANT_IDS="*",
+    )
+
+    with pytest.raises(ValueError, match="cannot enable every tenant"):
         validate_mcp_security_settings(settings)

@@ -49,6 +49,12 @@ if [[ -n "${MCP_PRODUCT_ENABLED+x}" && "$MCP_PRODUCT_ENABLED" != "$mcp_product_f
   exit 1
 fi
 MCP_PRODUCT_ENABLED="$mcp_product_from_file"
+workspace_mcp_from_file="$(get_env WORKSPACE_MCP_ENABLED)"
+if [[ -n "${WORKSPACE_MCP_ENABLED+x}" && "$WORKSPACE_MCP_ENABLED" != "$workspace_mcp_from_file" ]]; then
+  echo "FAIL: inherited WORKSPACE_MCP_ENABLED conflicts with the deployed production environment" >&2
+  exit 1
+fi
+WORKSPACE_MCP_ENABLED="$workspace_mcp_from_file"
 legacy_platform_from_file="$(get_env PLATFORM_LEGACY_BOOTSTRAP_ENABLED)"
 if [[ -n "${PLATFORM_LEGACY_BOOTSTRAP_ENABLED+x}" && "$PLATFORM_LEGACY_BOOTSTRAP_ENABLED" != "$legacy_platform_from_file" ]]; then
   echo "FAIL: inherited PLATFORM_LEGACY_BOOTSTRAP_ENABLED conflicts with the deployed production environment" >&2
@@ -82,6 +88,7 @@ for numeric_name in DISK_MAX_PERCENT SCHEDULER_MAX_AGE_MINUTES QUEUE_MAX_AGE_MIN
 done
 (( DISK_MAX_PERCENT <= 100 )) || { echo "FAIL: DISK_MAX_PERCENT must be at most 100" >&2; exit 1; }
 [[ "$MCP_PRODUCT_ENABLED" == "false" ]] || { echo "FAIL: MCP_PRODUCT_ENABLED must remain false" >&2; exit 1; }
+[[ "$WORKSPACE_MCP_ENABLED" == "true" || "$WORKSPACE_MCP_ENABLED" == "false" ]] || { echo "FAIL: WORKSPACE_MCP_ENABLED must be true or false" >&2; exit 1; }
 [[ "$PLATFORM_LEGACY_BOOTSTRAP_ENABLED" == "false" ]] || { echo "FAIL: PLATFORM_LEGACY_BOOTSTRAP_ENABLED must be explicitly false" >&2; exit 1; }
 [[ "$EMAIL_ENABLED" == "true" || "$EMAIL_ENABLED" == "false" ]] || { echo "FAIL: EMAIL_ENABLED must be true or false" >&2; exit 1; }
 if [[ "$ZOOM_REQUIRED" == true ]]; then
@@ -134,6 +141,112 @@ require_http_status() {
   actual="$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' "$url" || true)"
   [[ "$actual" == "$expected" ]] || fail "$label returned HTTP ${actual:-unavailable}, expected $expected"
 }
+
+
+require_workspace_bearer_challenge() {
+  local label="$1" bearer="${2:-}" expect_invalid="${3:-false}"
+  local metadata_url headers status challenge_count challenge
+  local -a curl_args
+  metadata_url="https://${DOMAIN}/.well-known/oauth-protected-resource/api/mcp/workspace"
+  curl_args=(
+    -sS --max-time 15 -D - -o /dev/null
+    -X POST
+    -H "Content-Type: application/json"
+    -H "Accept: application/json, text/event-stream"
+    --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"production-check","version":"1"}}}'
+  )
+  if [[ -n "$bearer" ]]; then
+    curl_args+=( -H "Authorization: Bearer $bearer" )
+  fi
+  headers="$(curl "${curl_args[@]}" "https://${DOMAIN}/api/mcp/workspace" | tr -d '\r' || true)"
+  status="$(printf '%s\n' "$headers" | awk 'toupper($1) ~ /^HTTP\// { status=$2 } END { print status }')"
+  challenge_count="$(printf '%s\n' "$headers" | awk 'tolower($0) ~ /^www-authenticate:/ { count++ } END { print count + 0 }')"
+  challenge="$(printf '%s\n' "$headers" | awk 'tolower($0) ~ /^www-authenticate:/ { sub(/^[^:]*:[[:space:]]*/, ""); print }')"
+  if [[ "$status" != "401" || "$challenge_count" != "1"         || "$challenge" != Bearer*         || "$challenge" != *"resource_metadata=\"$metadata_url\""*         || "$challenge" != *'scope="matters:read"'* ]]; then
+    fail "$label must return one RFC 9728 Bearer challenge"
+    return
+  fi
+  if [[ "$expect_invalid" == "true" && "$challenge" != *'error="invalid_token"'* ]]; then
+    fail "$label must identify an invalid bearer token"
+  fi
+}
+
+require_workspace_oauth_metadata() {
+  local origin resource protected_metadata root_protected_metadata
+  local authorization_metadata jwks current_kid
+  origin="https://${DOMAIN}"
+  resource="$origin/api/mcp/workspace"
+  protected_metadata="$(curl -fsS --max-time 15 "$origin/.well-known/oauth-protected-resource/api/mcp/workspace" || true)"
+  if ! printf '%s' "$protected_metadata" | python3 -c '
+import json
+import sys
+payload=json.load(sys.stdin)
+resource,issuer=sys.argv[1:3]
+expected={
+    "communications:propose",
+    "contacts:read",
+    "documents:propose",
+    "matters:read",
+    "tasks:propose",
+    "tasks:read",
+}
+assert payload.get("resource") == resource
+assert payload.get("authorization_servers") == [issuer]
+assert set(payload.get("scopes_supported", [])) == expected
+assert payload.get("bearer_methods_supported") == ["header"]
+' "$resource" "$origin" >/dev/null 2>&1; then
+    fail "workspace MCP protected-resource metadata is missing or invalid"
+  fi
+  root_protected_metadata="$(curl -fsS --max-time 15 "$origin/.well-known/oauth-protected-resource" || true)"
+  if [[ -z "$root_protected_metadata" || "$root_protected_metadata" != "$protected_metadata" ]]; then
+    fail "workspace MCP root protected-resource metadata must match the path-specific document"
+  fi
+
+  authorization_metadata="$(curl -fsS --max-time 15 "$origin/.well-known/oauth-authorization-server" || true)"
+  if ! printf '%s' "$authorization_metadata" | python3 -c '
+import json
+import sys
+payload=json.load(sys.stdin)
+issuer=sys.argv[1]
+assert payload.get("issuer") == issuer
+assert payload.get("authorization_endpoint") == issuer + "/api/workspace-mcp/oauth/authorize"
+assert payload.get("token_endpoint") == issuer + "/api/workspace-mcp/oauth/token"
+assert payload.get("revocation_endpoint") == issuer + "/api/workspace-mcp/oauth/revoke"
+assert payload.get("registration_endpoint") == issuer + "/api/workspace-mcp/oauth/register"
+assert payload.get("jwks_uri") == issuer + "/api/workspace-mcp/oauth/jwks"
+assert payload.get("response_types_supported") == ["code"]
+assert set(payload.get("grant_types_supported", [])) == {"authorization_code", "refresh_token"}
+assert payload.get("token_endpoint_auth_methods_supported") == ["none"]
+assert payload.get("code_challenge_methods_supported") == ["S256"]
+' "$origin" >/dev/null 2>&1; then
+    fail "workspace MCP authorization-server metadata is missing or invalid"
+  fi
+
+  current_kid="$(get_env WORKSPACE_MCP_SIGNING_KEY_ID)"
+  jwks="$(curl -fsS --max-time 15 "$origin/api/workspace-mcp/oauth/jwks" || true)"
+  if ! printf '%s' "$jwks" | python3 -c '
+import json
+import sys
+payload=json.load(sys.stdin)
+kid=sys.argv[1]
+keys=payload.get("keys")
+assert isinstance(keys,list)
+matches=[key for key in keys if key.get("kid") == kid]
+assert len(matches) == 1
+key=matches[0]
+assert key.get("kty") == "RSA"
+assert key.get("alg") == "RS256"
+assert key.get("use") == "sig"
+assert isinstance(key.get("n"),str) and key["n"]
+assert isinstance(key.get("e"),str) and key["e"]
+' "$current_kid" >/dev/null 2>&1; then
+    fail "workspace MCP JWKS is missing the configured RSA signing key"
+  fi
+
+  require_workspace_bearer_challenge "unauthenticated workspace MCP initialize"
+  require_workspace_bearer_challenge "invalid workspace MCP bearer" "not-a-valid-workspace-token" true
+}
+
 
 disk_used="$(df -P "$DISK_PATH" | awk 'NR==2 {gsub(/%/,"",$5); print $5}')"
 [[ "$disk_used" =~ ^[0-9]+$ ]] || fail "disk usage could not be read for $DISK_PATH"
@@ -338,6 +451,16 @@ fi
 curl -fsS --max-time 15 "https://${DOMAIN}/" >/dev/null || fail "public frontend check failed"
 require_http_status "disabled public MCP transport" "https://${DOMAIN}/api/mcp" 404
 require_http_status "disabled public MCP manifest" "https://${DOMAIN}/api/mcp/manifest" 404
+if [[ "$WORKSPACE_MCP_ENABLED" == "true" ]]; then
+  require_workspace_oauth_metadata
+else
+  require_http_status "disabled workspace MCP transport" "https://${DOMAIN}/api/mcp/workspace" 404
+  require_http_status "disabled workspace MCP root metadata" "https://${DOMAIN}/.well-known/oauth-protected-resource" 404
+  require_http_status "disabled workspace MCP path metadata" "https://${DOMAIN}/.well-known/oauth-protected-resource/api/mcp/workspace" 404
+  require_http_status "disabled workspace OAuth metadata" "https://${DOMAIN}/.well-known/oauth-authorization-server" 404
+  require_http_status "disabled workspace MCP JWKS" "https://${DOMAIN}/api/workspace-mcp/oauth/jwks" 404
+fi
+
 require_single_hsts "public HTTPS frontend" "https://${DOMAIN}/"
 require_single_hsts "public HTTPS /api/version" "https://${DOMAIN}/api/version"
 require_exact_http_redirect \

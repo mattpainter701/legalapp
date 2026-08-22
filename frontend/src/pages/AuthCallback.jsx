@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { useAuth } from '../App'
-import { exchangeOAuthCode, getOnboardingStatus } from '../api'
+import { exchangeOAuthCode, getOnboardingStatus, isSafeInternalReturnTo } from '../api'
 
 export default function AuthCallback() {
   const [searchParams] = useSearchParams()
@@ -23,6 +23,12 @@ export default function AuthCallback() {
     exchangeOAuthCode(code)
       .then(() => login())
       .then((userObj) => {
+        const returnTo = window.sessionStorage.getItem('lawhand.oauth.return_to')
+        window.sessionStorage.removeItem('lawhand.oauth.return_to')
+        if (isSafeInternalReturnTo(returnTo)) {
+          navigate(returnTo, { replace: true })
+          return
+        }
         const defaultRoute = userObj?.default_route || '/matters'
         const enabledModules = userObj?.enabled_modules || []
         // If admin and onboarding not complete, redirect to wizard

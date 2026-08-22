@@ -7,7 +7,12 @@ import LoginPage from './LoginPage'
 import { login } from '../api'
 
 vi.mock('../App', () => ({ useAuth: () => ({ login: vi.fn() }) }))
-vi.mock('../api', () => ({ loginMicrosoft: vi.fn(), loginGoogle: vi.fn(), login: vi.fn() }))
+vi.mock('../api', () => ({
+  isSafeInternalReturnTo: (value) => typeof value === 'string' && value.startsWith('/') && !value.startsWith('//'),
+  loginMicrosoft: vi.fn(),
+  loginGoogle: vi.fn(),
+  login: vi.fn(),
+}))
 
 describe('login', () => {
   beforeEach(() => vi.clearAllMocks())

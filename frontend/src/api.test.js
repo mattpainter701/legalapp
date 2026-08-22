@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readBlobErrorDetail, streamMessage } from './api'
+import { isSafeInternalReturnTo, readBlobErrorDetail, streamMessage } from './api'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -10,6 +10,16 @@ describe('binary API errors', () => {
     const blob = new Blob([JSON.stringify({ detail: 'This PDF has no fillable AcroForm fields.' })], { type: 'application/json' })
     expect(await readBlobErrorDetail(blob)).toBe('This PDF has no fillable AcroForm fields.')
   })
+describe('OAuth return paths', () => {
+  it('accepts only internal paths without control characters or backslashes', () => {
+    expect(isSafeInternalReturnTo('/workspace-mcp/authorize?request_id=abc')).toBe(true)
+    expect(isSafeInternalReturnTo('//attacker.example/callback')).toBe(false)
+    expect(isSafeInternalReturnTo('/\\attacker.example')).toBe(false)
+    expect(isSafeInternalReturnTo('/matters\nnext')).toBe(false)
+    expect(isSafeInternalReturnTo('https://attacker.example')).toBe(false)
+  })
+})
+
 })
 
 describe('chat event stream', () => {

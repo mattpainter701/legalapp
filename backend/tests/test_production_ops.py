@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -8,6 +9,8 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 import yaml
 import pytest
@@ -20,6 +23,23 @@ PRODUCTION_CHECK = ROOT / "scripts" / "production_check.sh"
 BASH_BIN = os.environ.get("BASH", "bash")
 NEW_FERNET_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 OLD_FERNET_KEY = "KxzLuxmIM2dFDWQmKJL9LVUK5ouA0c3_-4VqCMrn-jY="
+
+
+def _workspace_rsa_pair() -> tuple[str, str]:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = private_key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    )
+    public_pem = private_key.public_key().public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    return (
+        base64.b64encode(private_pem).decode("ascii"),
+        base64.b64encode(public_pem).decode("ascii"),
+    )
 
 
 def _production_env(**overrides: str) -> str:
@@ -35,6 +55,7 @@ def _production_env(**overrides: str) -> str:
         "SECRET_KEY": "ops-secret-key-0123456789-abcdefghijklmnopqrstuvwxyz",
         "MCP_PRODUCT_ENABLED": "false",
         "PLATFORM_LEGACY_BOOTSTRAP_ENABLED": "false",
+        "WORKSPACE_MCP_ENABLED": "false",
         "POSTGRES_PASSWORD": "owner-password-0123456789",
         "CLARITY_APP_PASSWORD": "runtime-password-0123456789",
         "REDIS_PASSWORD": "redis-password-0123456789",
@@ -100,7 +121,11 @@ def _run_preflight(
     docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
     python3 = fake_bin / "python3"
     python3.write_text(
-        "#!/bin/sh\nprintf '%s' \"$FAKE_BIND_SOURCES\"\n",
+        "#!/bin/sh\n"
+        'case "${2:-}" in\n'
+        f'  *"base64,json,re,sys"*) exec {shlex.quote(Path(sys.executable).as_posix())} "$@" ;;\n'
+        "esac\n"
+        "printf '%s' \"$FAKE_BIND_SOURCES\"\n",
         encoding="utf-8",
     )
     python3.chmod(python3.stat().st_mode | stat.S_IXUSR)
@@ -272,6 +297,102 @@ def test_production_preflight_accepts_staged_keyring_and_dedicated_mcp_auth(
     assert "Production preflight passed" in output
     assert "ops-secret-key-0123456789" not in output
     assert "mcp-upstream-key-0123456789" not in output
+
+
+def test_production_preflight_accepts_restricted_workspace_mcp_oauth(
+    tmp_path: Path,
+) -> None:
+    private_key, public_key = _workspace_rsa_pair()
+    workspace_settings = {
+        "WORKSPACE_MCP_ENABLED": "true",
+        "WORKSPACE_MCP_RESOURCE": "https://ops-test.invalid/api/mcp/workspace",
+        "WORKSPACE_MCP_AUDIENCE": "lawhand-workspace-mcp",
+        "WORKSPACE_MCP_ISSUER": "https://ops-test.invalid",
+        "WORKSPACE_MCP_TOKEN_SIGNING_KEY": "",
+        "WORKSPACE_MCP_SIGNING_PRIVATE_KEY_B64": private_key,
+        "WORKSPACE_MCP_SIGNING_PUBLIC_KEY_B64": public_key,
+        "WORKSPACE_MCP_SIGNING_KEY_ID": "workspace-test-2026-08",
+        "WORKSPACE_MCP_PREVIOUS_PUBLIC_KEYS_JSON": "[]",
+        "WORKSPACE_MCP_ACCESS_TOKEN_MAX_MINUTES": "15",
+        "WORKSPACE_MCP_AUTH_CODE_TTL_SECONDS": "300",
+        "WORKSPACE_MCP_REFRESH_TOKEN_DAYS": "30",
+        "WORKSPACE_MCP_GRANT_DAYS": "90",
+        "WORKSPACE_MCP_CLIENT_REGISTRATION_DAYS": "30",
+        "WORKSPACE_MCP_ALLOWED_TENANT_IDS": ("00000000-0000-4000-8000-000000000222"),
+        "WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED": "true",
+    }
+
+    result = _run_preflight(tmp_path, _production_env(**workspace_settings))
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, output
+    assert private_key[:48] not in output
+    assert public_key[:48] not in output
+
+    workspace_settings["WORKSPACE_MCP_ALLOWED_TENANT_IDS"] = "*"
+    global_rollout = _run_preflight(
+        tmp_path,
+        _production_env(**workspace_settings),
+    )
+    assert global_rollout.returncode != 0
+    assert "non-global comma-separated UUID list" in (
+        global_rollout.stdout + global_rollout.stderr
+    )
+
+
+def test_production_preflight_rejects_legacy_workspace_signing_secret(
+    tmp_path: Path,
+) -> None:
+    legacy_secret = "legacy-workspace-signing-secret-do-not-print"
+    result = _run_preflight(
+        tmp_path,
+        _production_env(WORKSPACE_MCP_TOKEN_SIGNING_KEY=legacy_secret),
+    )
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0
+    assert "WORKSPACE_MCP_TOKEN_SIGNING_KEY must remain empty" in output
+    assert legacy_secret not in output
+
+
+def test_workspace_mcp_production_wiring_is_complete_and_fail_closed() -> None:
+    keys = {
+        "WORKSPACE_MCP_ENABLED",
+        "WORKSPACE_MCP_RESOURCE",
+        "WORKSPACE_MCP_AUDIENCE",
+        "WORKSPACE_MCP_ISSUER",
+        "WORKSPACE_MCP_TOKEN_SIGNING_KEY",
+        "WORKSPACE_MCP_SIGNING_PRIVATE_KEY_B64",
+        "WORKSPACE_MCP_SIGNING_PUBLIC_KEY_B64",
+        "WORKSPACE_MCP_SIGNING_KEY_ID",
+        "WORKSPACE_MCP_PREVIOUS_PUBLIC_KEYS_JSON",
+        "WORKSPACE_MCP_ACCESS_TOKEN_MAX_MINUTES",
+        "WORKSPACE_MCP_AUTH_CODE_TTL_SECONDS",
+        "WORKSPACE_MCP_REFRESH_TOKEN_DAYS",
+        "WORKSPACE_MCP_GRANT_DAYS",
+        "WORKSPACE_MCP_CLIENT_REGISTRATION_DAYS",
+        "WORKSPACE_MCP_ALLOWED_TENANT_IDS",
+        "WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED",
+    }
+    for compose_name in ("docker-compose.hypervisor.yml", "docker-compose.prod.yml"):
+        services = yaml.safe_load((ROOT / compose_name).read_text(encoding="utf-8"))[
+            "services"
+        ]
+        for service_name in ("backend", "scheduler"):
+            environment = services[service_name]["environment"]
+            assert keys <= environment.keys()
+            assert environment["WORKSPACE_MCP_ENABLED"] == (
+                "${WORKSPACE_MCP_ENABLED:-false}"
+            )
+            assert environment["WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED"] == (
+                "${WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED:-false}"
+            )
+
+    production_check = PRODUCTION_CHECK.read_text(encoding="utf-8")
+    assert "/.well-known/oauth-protected-resource/api/mcp/workspace" in production_check
+    assert "/.well-known/oauth-authorization-server" in production_check
+    assert "/api/workspace-mcp/oauth/jwks" in production_check
+    assert "require_workspace_bearer_challenge" in production_check
 
 
 def test_host_capacity_gate_accepts_supported_floor() -> None:
@@ -729,15 +850,13 @@ def test_production_check_exercises_customer_llm_routes() -> None:
 
 
 def test_skynet_deploy_recreates_litellm_and_bounds_litellm_diagnostics() -> None:
-    deploy = (ROOT / "scripts" / "deploy_skynet_runner.sh").read_text(
-        encoding="utf-8"
-    )
+    deploy = (ROOT / "scripts" / "deploy_skynet_runner.sh").read_text(encoding="utf-8")
 
     assert "up -d --build --force-recreate" in deploy
     assert "litellm backend scheduler frontend office-addin nginx" in deploy
     assert '"${compose[@]}" ps -q litellm' in deploy
     assert '"$litellm_health" == healthy' in deploy
-    assert 'logs --tail=120 litellm-migrator litellm-schema-migrator litellm' in deploy
+    assert "logs --tail=120 litellm-migrator litellm-schema-migrator litellm" in deploy
 
 
 def test_host_disk_monitor_is_persistent_read_only_and_alertable() -> None:
@@ -1057,7 +1176,7 @@ def test_demo_tenants_are_excluded_from_scheduler_health_gates() -> None:
     # release/readiness population query must use the same customer boundary.
     assert "billing_tier <> 'demo'" in deploy
     assert "billing_tier <> 'demo'" in production_check
-    assert 'billing_tier <> \'demo\' ORDER BY id' in main
+    assert "billing_tier <> 'demo' ORDER BY id" in main
     assert "custom_config->>'plan'" in production_check
     assert '--tenant-id "$ZOOM_REQUIRED_TENANT_ID"' in production_check
     assert "SMTP no-delivery capability probe" in production_check
@@ -1182,20 +1301,23 @@ def test_fresh_host_workflow_rehearses_both_production_topologies() -> None:
     assert 'plain_headers.get_all("Strict-Transport-Security", []) == []' in rehearsal
     assert '"https://rehearsal.invalid/health/readiness"' in rehearsal
     assert "schema-valid synthetic artifact solely to exercise" in rehearsal
-    assert 'os.chmod(path, 0o644)' in rehearsal
-    assert 'for service in postgres redis litellm-postgres litellm migrator backend scheduler frontend nginx; do' in rehearsal
+    assert "os.chmod(path, 0o644)" in rehearsal
+    assert (
+        "for service in postgres redis litellm-postgres litellm migrator backend scheduler frontend nginx; do"
+        in rehearsal
+    )
     assert '"${compose[@]}" build "$service"' in rehearsal
     assert "docker builder prune --all --force" in rehearsal
     assert "memory: 768M" in rehearsal
     assert "cgroup_memory_current" in rehearsal
     assert "docker stats --no-stream --no-trunc" in rehearsal
     assert "litellm-schema-check" in rehearsal
-    assert 'run --rm --no-deps litellm-schema-check -c' in rehearsal
-    assert 'stop litellm' in rehearsal
-    assert 'up -d --no-deps litellm' in rehearsal
-    assert 'LITELLM_SCHEMA_CHECK=passed' in rehearsal
-    assert 'LITELLM_RECOVERY=healthy' in rehearsal
-    assert 'exec -T litellm sh -c' not in rehearsal
+    assert "run --rm --no-deps litellm-schema-check -c" in rehearsal
+    assert "stop litellm" in rehearsal
+    assert "up -d --no-deps litellm" in rehearsal
+    assert "LITELLM_SCHEMA_CHECK=passed" in rehearsal
+    assert "LITELLM_RECOVERY=healthy" in rehearsal
+    assert "exec -T litellm sh -c" not in rehearsal
     assert '"${compose[@]}" up -d --build' not in rehearsal
 
 
