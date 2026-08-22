@@ -14,6 +14,7 @@ from app.services.automation_capabilities import (
     resolve_capability_spec,
 )
 from app.services.chat_tools import ALLOWED_TOOLS
+from app.services.workspace_mcp_oauth import WORKSPACE_SCOPE_LABELS
 from app.schemas.chat_action import MatterDocumentDraftAction
 from app.schemas.task import PendingActionEdit
 
@@ -23,6 +24,16 @@ def test_chat_and_workspace_mcp_share_one_capability_catalog():
 
     assert {item["name"] for item in workspace} == set(ALLOWED_TOOLS)
     assert len({spec.name for spec in CAPABILITY_SPECS}) == len(CAPABILITY_SPECS)
+
+
+def test_workspace_oauth_advertises_every_capability_scope():
+    required_scopes = {
+        scope
+        for item in capability_catalog(audience="workspace_mcp")
+        for scope in item["required_scopes"]
+    }
+
+    assert set(WORKSPACE_SCOPE_LABELS) == required_scopes
 
 
 def test_mutations_can_only_propose_lawhand_review_work():

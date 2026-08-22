@@ -3,8 +3,14 @@ import { normalizeWorkspaceMcpScopes, workspaceMcpOrganizationName } from './wor
 
 describe('Workspace MCP display normalization', () => {
   it('normalizes strings, response objects, and scope maps', () => {
-    expect(normalizeWorkspaceMcpScopes('matters:read tasks:propose')).toEqual([
+    expect(
+      normalizeWorkspaceMcpScopes(
+        'matters:read documents:read templates:read tasks:propose',
+      ),
+    ).toEqual([
       { id: 'matters:read', label: 'Find matters and read bounded matter context' },
+      { id: 'documents:read', label: 'Read bounded matter document metadata and text' },
+      { id: 'templates:read', label: 'Read active firm document template metadata' },
       { id: 'tasks:propose', label: 'Create tasks that start in human review' },
     ])
     expect(normalizeWorkspaceMcpScopes({

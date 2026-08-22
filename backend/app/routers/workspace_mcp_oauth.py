@@ -67,6 +67,8 @@ _SCOPE_APP_CAPABILITIES: dict[str, frozenset[str]] = {
     "matters:read": frozenset({"manage_matters"}),
     "tasks:read": frozenset({"manage_matters"}),
     "contacts:read": frozenset({"manage_matters"}),
+    "documents:read": frozenset({"manage_matters", "manage_documents"}),
+    "templates:read": frozenset({"manage_matters", "manage_documents"}),
     "tasks:propose": frozenset({"manage_matters"}),
     "communications:propose": frozenset({"manage_matters"}),
     "documents:propose": frozenset({"manage_matters", "manage_documents"}),

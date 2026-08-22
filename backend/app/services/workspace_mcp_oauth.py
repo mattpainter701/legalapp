@@ -37,6 +37,8 @@ WORKSPACE_SCOPE_LABELS: dict[str, str] = {
     "matters:read": "Find matters and read bounded matter context",
     "tasks:read": "Read matter task lists",
     "contacts:read": "Read enumerated matter recipients",
+    "documents:read": "Read bounded matter document metadata and text",
+    "templates:read": "Read active firm document template metadata",
     "tasks:propose": "Create tasks that start in human review",
     "communications:propose": "Draft client email proposals without sending",
     "documents:propose": "Create cloud-backed DOCX drafts for staged review",
