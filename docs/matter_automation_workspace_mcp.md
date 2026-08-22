@@ -8,8 +8,8 @@ not the automation layer itself.
 The same capability contracts will support:
 
 - the in-app matter assistant;
-- a future OAuth-backed LawHand workspace MCP for Codex, ChatGPT desktop, and
-  other MCP clients;
+- the OAuth-backed LawHand workspace MCP for Codex, ChatGPT desktop, Claude,
+  OpenCode, and other compatible MCP clients;
 - normal LawHand UI and REST workflows; and
 - later scheduled or event-driven automations.
 
@@ -41,10 +41,10 @@ The existing `/api/mcp` gateway remains a read-only legal-research product. Its
 not an individual attorney. They are appropriate for metering research calls
 and inappropriate for firm-management actions.
 
-The workspace resource-server foundation is a separate, disabled-by-default
-Streamable HTTP endpoint at `/api/mcp/workspace`. Production enablement still
-requires the complete end-user OAuth 2.1/PKCE lifecycle. The resulting
-principal must include:
+The workspace product is a separate, disabled-by-default Streamable HTTP
+endpoint at `/api/mcp/workspace`. When enabled, it uses an end-user OAuth
+authorization-code flow with PKCE and a persisted, revocable consent grant.
+The resulting principal includes:
 
 - `tenant_id`;
 - `user_id`;
@@ -60,22 +60,28 @@ application handler.
 
 ### Current authentication boundary
 
-The endpoint that exists today is a resource-server foundation, not a complete
-desktop connection. It accepts only a dedicated LawHand-signed Bearer JWT with
-the workspace audience, user, tenant, client, grant, scope, token ID, and expiry
-claims. Every request must also match an active persisted workspace grant for
-that exact user, tenant, client, and scope set. A normal LawHand browser token
-and a research-product `clmcp_` key are both rejected.
+The complete desktop OAuth connection is implemented and production discovery
+is published. The workspace endpoint accepts only a dedicated LawHand-signed
+Bearer JWT with the workspace audience, user, tenant, client, grant, scope,
+token ID, and expiry claims. Every request must also match an active persisted
+workspace grant for that exact user, tenant, client, and scope set. A normal
+LawHand browser token and a research-product `clmcp_` key are both rejected.
 
-LawHand does **not** yet publish protected-resource or authorization-server
-metadata for this surface and does not yet provide the authorization endpoint,
-PKCE flow, client registration policy, consent UI, token/refresh endpoint,
-rotating refresh tokens, or disconnect/revocation flow that a desktop client
-needs. Consequently, Claude Desktop, Codex/GPT desktop clients, and OpenCode
-cannot yet add `/api/mcp/workspace` as a real end-user OAuth connection.
-Enabling the feature flag alone would not make that flow complete. Locally
-minted test tokens are development evidence only, not a customer onboarding
-mechanism.
+The lifecycle includes protected-resource and authorization-server metadata,
+dynamic public-client registration when enabled, PKCE S256, explicit user
+consent, one-use authorization codes, short-lived asymmetrically signed access
+tokens, rotating refresh tokens, JWKS, revocation, and grant disconnection.
+Production rollout is still feature-flagged and tenant-allowlisted. Publishing
+the endpoint does not grant access to an unapproved tenant, inactive user, or
+unlicensed account.
+
+The production resource and discovery URLs are:
+
+```text
+https://getlawhand.com/api/mcp/workspace
+https://getlawhand.com/.well-known/oauth-protected-resource/api/mcp/workspace
+https://getlawhand.com/.well-known/oauth-authorization-server
+```
 
 Official OpenAI documentation confirms that Codex clients can connect to
 Streamable HTTP MCP servers using bearer-token or OAuth authentication, and
@@ -116,6 +122,8 @@ Initial workspace scopes are intentionally narrow:
 - `matters:read`
 - `tasks:read`
 - `contacts:read`
+- `documents:read`
+- `templates:read`
 - `tasks:propose`
 - `communications:propose`
 - `documents:propose`
@@ -185,17 +193,23 @@ accept a create/copy/upload and the process can stop before LawHand commits the
 binding and operation state, leaving an orphaned tenant-cloud object with no
 durable reconciliation instruction. There is no dedicated scheduler or outbox
 worker today that scans and repairs this condition. A committed operation state
-machine, stable provider idempotency metadata, and reconciliation worker/webhook
-path are a P1 production gate for workspace MCP enablement.
+machine, stable provider idempotency metadata, and reconciliation
+worker/webhook path are a P1 gate before broader automated cloud-write rollout
+or any claim of crash-safe provider reconciliation.
 
 ### Phase 3 — production workspace MCP
 
-- Implement OAuth authorization and consent for LawHand users.
-- Complete the `/api/mcp/workspace` OAuth metadata, PKCE, registration, token
-  rotation, disconnect, and revocation lifecycle.
-- Expose only the shared read/propose catalog initially.
-- Add per-user audit, grant revocation, rate limits, and target-client
-  interoperability tests through production TLS.
+Status: implemented and deployed for a tenant-gated pilot.
+
+- OAuth authorization and explicit consent for LawHand users.
+- Protected-resource and authorization-server metadata, PKCE, dynamic client
+  registration, token rotation, JWKS, disconnect, and revocation.
+- Only the shared read/propose catalog; no model-facing approval, filing,
+  sending, delivery, or execution tools.
+- Per-user/client/grant audit, tenant allowlisting, grant revocation, and rate
+  limits.
+- Production TLS interoperability validation with Codex/GPT, Claude, and
+  OpenCode remains an active pilot gate before broad customer rollout.
 
 ### Phase 4 — deeper office automation
 

@@ -1,7 +1,7 @@
 # LawHand workspace MCP adapter
 
-Status: foundation implemented, disabled by default, not yet a production OAuth
-release.
+Status: OAuth connection implemented and production-published for a
+tenant-gated pilot; broader client interoperability remains under validation.
 
 ## Product boundary
 
@@ -20,7 +20,7 @@ matters.
 The workspace endpoint is Streamable HTTP at:
 
 ```text
-/api/mcp/workspace
+https://getlawhand.com/api/mcp/workspace
 ```
 
 `backend/app/services/workspace_mcp_protocol.py` is only an adapter. It obtains
@@ -41,17 +41,163 @@ There are deliberately no MCP tools for approval, filing, sending, delivery,
 or execution. Proposed work lands in LawHand Review; deterministic platform
 workers act only after a human completes the required review workflow.
 
+## Connect a desktop or coding client
+
+Prerequisites:
+
+- the LawHand workspace MCP feature is enabled for the tenant;
+- the person signing in is an active, licensed LawHand user in that tenant;
+- Privacy Mode is off for that user; Privacy Mode deliberately blocks
+  workspace MCP authorization; and
+- the client supports remote Streamable HTTP MCP and OAuth with PKCE.
+
+OAuth consent cannot bypass Privacy Mode. Turn it off only when firm policy
+permits the external MCP connection.
+
+Use the workspace URL below. Never use a research MCP `clmcp_` product key for
+matter access.
+
+```text
+https://getlawhand.com/api/mcp/workspace
+```
+
+OAuth discovery is available at:
+
+```text
+https://getlawhand.com/.well-known/oauth-protected-resource/api/mcp/workspace
+https://getlawhand.com/.well-known/oauth-authorization-server
+```
+
+LawHand can dynamically register supported public desktop clients when
+`WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED=true`. Registration does not
+bypass user consent, tenant allowlisting, license checks, scopes, or RBAC.
+
+The self-service commands below require dynamic registration. If it is
+disabled, stop: the client must first be provisioned through the approved
+LawHand pilot client-registration process and configured with its assigned
+client ID and redirect requirements. Never reuse another client's registration
+or enable dynamic registration ad hoc.
+
+### Codex CLI and ChatGPT desktop
+
+Codex CLI, the ChatGPT desktop app, and the Codex IDE extension share MCP
+configuration on the same Codex host. Add and authenticate with the CLI:
+
+```powershell
+codex mcp add lawhandWorkspace --url https://getlawhand.com/api/mcp/workspace
+codex mcp login lawhandWorkspace
+codex mcp list
+```
+
+For a review-first configuration, the equivalent `~/.codex/config.toml`
+entry is:
+
+```toml
+[mcp_servers.lawhandWorkspace]
+url = "https://getlawhand.com/api/mcp/workspace"
+auth = "oauth"
+enabled = true
+default_tools_approval_mode = "writes"
+startup_timeout_sec = 20
+tool_timeout_sec = 120
+```
+
+In ChatGPT desktop, open **Settings -> MCP servers**, add a **Streamable HTTP**
+server with the same URL, save, restart, and select **Authenticate**. Use
+`/mcp` in a new chat to inspect the connected server and tools.
+
+### Claude Desktop and Claude Code
+
+For Claude Desktop, add LawHand as a remote custom connector under
+**Settings -> Connectors** and complete the OAuth flow. Remote connectors are
+not configured through `claude_desktop_config.json`.
+
+For Claude Code, add a user-scoped remote HTTP server:
+
+```bash
+claude mcp add --transport http --scope user lawhand https://getlawhand.com/api/mcp/workspace
+```
+
+Then run `/mcp` inside Claude Code, choose `lawhand`, and authenticate in the
+browser. Claude Code can use dynamic client registration, so no client secret
+belongs in the project configuration.
+
+### OpenCode
+
+Run `opencode mcp add`, choose a remote server, name it `lawhand`, and enter
+the workspace URL. Then authenticate and confirm status:
+
+```bash
+opencode mcp auth lawhand
+opencode mcp list
+```
+
+OpenCode automatically discovers the OAuth server, uses PKCE, and attempts
+dynamic client registration. Do not add a bearer token or research product key
+to `opencode.json`.
+
+Client setup references:
+
+- OpenAI: <https://learn.chatgpt.com/docs/extend/mcp?surface=cli>
+- Claude Desktop: <https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp>
+- Claude Code: <https://code.claude.com/docs/en/mcp>
+- OpenCode: <https://dev.opencode.ai/docs/mcp-servers/>
+
+### Consent scopes
+
+The production metadata advertises these bounded scopes:
+
+- reads: `matters:read`, `tasks:read`, `contacts:read`,
+  `documents:read`, and `templates:read`
+- proposals: `tasks:propose`, `communications:propose`, and
+  `documents:propose`
+
+The consent screen identifies the user, tenant, client, and requested scopes.
+Access and refresh tokens are revocable; disconnecting the grant invalidates
+future workspace access.
+
+### Safe connection validation
+
+1. Confirm the server initializes and exposes the documented read/proposal tool
+   catalog.
+2. Run `find_matter` with a deliberately nonexistent smoke-test query. This
+   validates an authenticated tenant-scoped read without creating work.
+3. For an intended real matter, call `find_matter`, then
+   `get_matter_context`, and inspect tasks, documents, recipients, and
+   templates as needed.
+4. Call a proposal tool only when a real review item is intended. A proposal
+   creates auditable LawHand work and is not a disposable connectivity test.
+5. Review the resulting task and artifact in LawHand. A generated DOCX is
+   written to the tenant's connected cloud matter directory first; LawHand
+   stores its binding, immutable revision history, provider version/ETag, and
+   SHA-256 integrity evidence.
+6. Staff and attorney reviewers complete the staged review in LawHand. The
+   model cannot approve, file, send, or deliver the document.
+
+A typical supported workflow is:
+
+```text
+find matter -> load context/process evidence -> inspect templates and documents
+-> propose DOCX + review task -> staff review -> attorney review/override
+-> separately approved deterministic delivery
+```
+
+Raw provider URLs, storage object IDs, arbitrary recipient email addresses,
+final approval, filing, and sending are not exposed as model tools. External
+DOCX edits are adopted as a new exact-byte revision and reset prior approval.
+
 ## Implemented milestone
 
-The current branch now includes the disabled-by-default resource-server and
-workflow foundation:
+The implementation includes a disabled-by-default transport plus a
+production-capable OAuth and workflow foundation:
 
 - a shared, scope-filtered capability catalog used by matter chat and workspace
   MCP;
 - bounded tenant-scoped matter, task, document-text, recipient, and template
   reads;
-- durable user/tenant/client/scope consent grants and a dedicated workspace
-  token signing key;
+- durable user/tenant/client/scope consent grants, dynamic public-client
+  registration, PKCE, rotating refresh tokens, asymmetric signing/JWKS, and
+  revocation;
 - idempotent generated artifacts with immutable revisions, content hashes,
   template/source provenance fields, and exact task bindings;
 - server-resolved, separate staff and attorney reviewers drawn from the matter
@@ -73,15 +219,16 @@ workflow foundation:
   approval, changed content, lost authority, duplicate execution, or disabled
   tenant automation.
 
-This is an implementation milestone, not a production connection claim. The
-endpoint stays hidden until the OAuth and end-to-end release gates below are
-complete.
+The transport and complete OAuth lifecycle are production-published for a
+tenant-gated pilot. This is not a broad customer release: the feature flag,
+tenant allowlist, license checks, consent grant, scopes, and RBAC continue to
+fail closed.
 
 The current provider-operation records are useful accountability evidence for
 completed request transactions, but they are not yet a crash-safe outbox: a
 process can still stop after provider acceptance and before the surrounding
-database commit. Production enablement therefore requires the committed
-state-machine and reconciliation gate described below.
+database commit. Broader automated cloud-write rollout still requires the
+committed state-machine and reconciliation gate described below.
 
 Document content is a separate bounded read. It supports PDF, DOCX, and text,
 caps stored bytes, characters, PDF pages, and DOCX archive expansion, and
@@ -147,29 +294,32 @@ The surface remains hidden unless explicitly enabled:
 
 ```dotenv
 WORKSPACE_MCP_ENABLED=false
+WORKSPACE_MCP_RESOURCE=https://getlawhand.com/api/mcp/workspace
 WORKSPACE_MCP_AUDIENCE=lawhand-workspace-mcp
-WORKSPACE_MCP_ISSUER=
-WORKSPACE_MCP_TOKEN_SIGNING_KEY=
-WORKSPACE_MCP_ACCESS_TOKEN_MAX_MINUTES=60
+WORKSPACE_MCP_ISSUER=https://getlawhand.com
+WORKSPACE_MCP_SIGNING_PRIVATE_KEY_B64=
+WORKSPACE_MCP_SIGNING_PUBLIC_KEY_B64=
+WORKSPACE_MCP_SIGNING_KEY_ID=
+WORKSPACE_MCP_PREVIOUS_PUBLIC_KEYS_JSON=[]
+WORKSPACE_MCP_ACCESS_TOKEN_MAX_MINUTES=15
+WORKSPACE_MCP_ALLOWED_TENANT_IDS=<comma-separated-pilot-tenant-UUIDs>
+WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED=false
 ```
 
-Enabling it without an audience, issuer, and distinct 32+ character workspace
-signing key fails configuration validation. The workspace signing key must not
-be the browser-session `SECRET_KEY`. Production must also have Redis available
-because revocation cannot safely fall back to per-process memory across API
-workers.
+Enabling it without the canonical resource, audience, issuer, asymmetric
+signing key pair, key ID, and a valid non-wildcard pilot allowlist fails closed.
+Production uses the dedicated asymmetric workspace key; the legacy symmetric
+`WORKSPACE_MCP_TOKEN_SIGNING_KEY` is for development compatibility only and
+must never equal the browser-session `SECRET_KEY`. Redis must also be
+available because revocation cannot safely fall back to per-process memory
+across API workers.
 
-## Remaining release gates
+## Remaining broader-rollout and automation-hardening gates
 
-This adapter is not a complete OAuth authorization server. Do not enable it for
-customers until LawHand has:
+The OAuth connection and revocable consent lifecycle are complete. Before
+broad customer rollout or deeper autonomous side effects, LawHand still
+requires:
 
-- authorization-server and protected-resource metadata;
-- authorization-code flow with PKCE, a consent screen, one-use codes, token
-  issuance, and disconnect/revocation UI;
-- registered client policy (including desktop-client onboarding);
-- refresh-token rotation, asymmetric signing/JWKS, and immediate
-  revocation propagation (the durable resource-server grant check now exists);
 - a committed provider-write outbox/state machine, deterministic provider
   idempotency metadata, and a reconciliation worker/webhook path that survives
   crashes after provider acceptance and retains ambiguous/failure evidence in a
@@ -180,8 +330,8 @@ customers until LawHand has:
 - separate, attorney-approved client delivery of the filed artifact as a
   hash-bound attachment (current email automation is body-only);
 - matter visibility/ethical-wall policy beyond tenant isolation;
-- durable pause/resume workflow-run records and complete actor/client/grant
-  audit records;
+- durable pause/resume workflow-run records and complete end-to-end delivery
+  audit coverage;
 - externally anchored or WORM-retained integrity-chain checkpoints so a
   privileged database operator cannot remove the chain tail undetected;
 - real-provider end-to-end tests for Google Drive, Microsoft
@@ -190,8 +340,9 @@ customers until LawHand has:
 - an explicit native Google Docs conversion/export policy with fidelity and
   revision-binding tests (the current implementation stores DOCX in Drive; it
   does not claim native Google Docs semantics);
-- compatibility tests through the production reverse proxy with Claude
-  Desktop, Codex/GPT, and OpenCode; and
+- recorded OAuth initialization, tool-catalog, refresh, revocation, and
+  read/proposal interoperability tests through the production reverse proxy
+  with Claude Desktop, Codex/GPT, and OpenCode;
 - PostgreSQL-backed concurrency, migration, RLS, two-tenant, role, ethical-wall,
   stale-version, crash-recovery, and provider-drift suites; and
 - penetration tests covering cross-tenant IDs, stale grants, prompt injection,
