@@ -14,6 +14,7 @@ Use `docs/cloudflare_shared_configuration.md` for the canonical variable names, 
 - Store credential values only in GitHub Actions secrets or the approved secret manager.
 - Keep this skill as workflow guidance; never turn it into a credential store.
 - Never put secret values in agent memory, issues, documentation, committed files, command arguments, or chat output.
+- For every MCP-facing change, follow `docs/mcp/README.md`, update the canonical source in the same pull request, and leave a meaningful wiki handoff note.
 
 ## Safe workflow
 

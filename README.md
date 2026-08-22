@@ -264,6 +264,7 @@ customer release-note update is declared.
 
 - [Customer release notes](RELEASE_NOTES.md)
 - [Technical changelog](CHANGELOG.md)
+- [MCP documentation index and future wiki handoff](docs/mcp/README.md)
 - [Architecture and trust boundaries](docs/ARCHITECTURE.md)
 - [First-customer production runbook](docs/FIRST_CUSTOMER_PRODUCTION_RUNBOOK.md)
 - [Standalone Call Intake plan and API enforcement](docs/call-intake-standalone.md)

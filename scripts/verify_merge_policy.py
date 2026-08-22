@@ -47,6 +47,67 @@ RELEASE_NOTE_ARTIFACTS = {
     "CHANGELOG.md",
 }
 SECURITY_CHOICE = "Security and privacy impact reviewed"
+MCP_DOC_CHOICES = ("MCP documentation updated", "MCP documentation not needed")
+MCP_CANONICAL_DOCS = {
+    "docs/workspace_mcp_adapter.md",
+    "docs/matter_automation_workspace_mcp.md",
+    "docs/mcp_product_gateway.md",
+    "docs/mcp_security_operations.md",
+    "docs/mcp_hostname_operations.md",
+    "docs/cloudflare_shared_configuration.md",
+    "docs/courtlistener_mcp_operations.md",
+    "docs/courtlistener_mcp_jetson.md",
+    "docs/ARCHITECTURE.md",
+    "docs/credential_security_operations.md",
+}
+MCP_BOUNDARY_FILES = {
+    "backend/app/main.py",
+    "nginx/nginx.conf",
+    "nginx/nginx.dev.conf",
+    "backend/app/middleware/tenant.py",
+    "backend/app/services/platform_auth.py",
+    "backend/app/services/capabilities.py",
+    "backend/app/services/automation_capabilities.py",
+    "backend/app/services/matter_workspace_capabilities.py",
+    "backend/app/services/cloud_artifact_materialization.py",
+    "backend/app/services/generated_artifacts.py",
+    "backend/app/models/generated_artifact.py",
+    "backend/app/models/chat_artifact.py",
+    "backend/app/routers/chat_artifacts.py",
+    "backend/app/services/mcp_transport_security.py",
+    "backend/app/services/workspace_mcp_oauth.py",
+}
+MCP_REFERENCE_FILES = {
+    "docs/legal_rag.md",
+}
+MCP_BOUNDARY_TOKENS = (
+    "mcp_transport_security",
+    "workspace_mcp_oauth",
+    "artifact",
+    "review",
+    "delivery",
+    "task",
+)
+MCP_MIGRATION_TOKENS = (
+    "mcp",
+    "artifact",
+    "review",
+    "delivery",
+    "tenant",
+    "rls",
+    "oauth",
+    "grant",
+    "task",
+)
+MCP_PLACEHOLDER_VALUES = {
+    "",
+    "none",
+    "n/a",
+    "na",
+    "not applicable",
+    "tbd",
+    "todo",
+}
 
 
 def run_git(*args: str) -> str:
@@ -59,6 +120,48 @@ def changed_files(base: str, head: str) -> set[str]:
         for line in run_git("diff", "--name-only", f"{base}...{head}").splitlines()
         if line
     }
+
+
+def is_mcp_surface_file(name: str) -> bool:
+    normalized = name.replace("\\", "/")
+    basename = normalized.rsplit("/", 1)[-1].lower()
+    return (
+        normalized.startswith("mcp-server/")
+        or normalized.startswith("docs/mcp/")
+        or normalized in MCP_CANONICAL_DOCS
+        or normalized in MCP_REFERENCE_FILES
+        or "mcp" in basename
+        or normalized in MCP_BOUNDARY_FILES
+        or (
+            normalized.startswith("backend/app/")
+            and any(token in basename for token in MCP_BOUNDARY_TOKENS)
+        )
+        or (
+            normalized.startswith("backend/migrations/")
+            and any(token in basename for token in MCP_MIGRATION_TOKENS)
+        )
+    )
+
+
+def is_mcp_documentation_file(name: str) -> bool:
+    normalized = name.replace("\\", "/")
+    return normalized.startswith("docs/mcp/") or normalized in MCP_CANONICAL_DOCS
+
+
+def pr_field(body: str, label: str) -> str:
+    match = re.search(
+        rf"(?im)^\s*-?\s*{re.escape(label)}\s*:\s*(.*?)\s*$",
+        body,
+    )
+    return match.group(1).strip() if match else ""
+
+
+def is_meaningful_pr_field(value: str) -> bool:
+    return value.strip().lower() not in MCP_PLACEHOLDER_VALUES
+
+
+def checkbox_checked(body: str, label: str) -> bool:
+    return bool(re.search(rf"(?im)^\s*-\s*\[x\]\s*{re.escape(label)}\s*$", body))
 
 
 def check_pr_template(event_path: str | None, files: set[str]) -> list[str]:
@@ -99,6 +202,32 @@ def check_pr_template(event_path: str | None, files: set[str]) -> list[str]:
         )
     if f"- [x] {SECURITY_CHOICE}".lower() not in body.lower():
         errors.append(f"PR description must check: {SECURITY_CHOICE}")
+    if any(is_mcp_surface_file(name) for name in files):
+        checked_mcp_docs = [
+            choice
+            for choice in MCP_DOC_CHOICES
+            if checkbox_checked(body, choice)
+        ]
+        if len(checked_mcp_docs) != 1:
+            errors.append(
+                "MCP-affecting PRs must check exactly one MCP documentation option"
+            )
+        mcp_area = pr_field(body, "MCP area")
+        if not is_meaningful_pr_field(mcp_area):
+            errors.append("MCP-affecting PRs must name the MCP area")
+        wiki_note = pr_field(body, "Wiki handoff note")
+        if not is_meaningful_pr_field(wiki_note):
+            errors.append(
+                "MCP-affecting PRs must provide a meaningful wiki handoff note"
+            )
+        if (
+            checked_mcp_docs == ["MCP documentation updated"]
+            and not any(is_mcp_documentation_file(name) for name in files)
+        ):
+            errors.append(
+                "MCP documentation is declared updated, but no canonical MCP "
+                "documentation file changed"
+            )
     return errors
 
 
@@ -193,7 +322,7 @@ def main() -> int:
         )
         return 1
     print(
-        f"Merge policy passed ({len(files)} changed files; documentation, release-note, and SBOM declarations accounted for)."
+        f"Merge policy passed ({len(files)} changed files; documentation, MCP handoff, release-note, and SBOM declarations accounted for)."
     )
     return 0
 
