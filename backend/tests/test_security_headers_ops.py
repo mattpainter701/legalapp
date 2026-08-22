@@ -105,3 +105,29 @@ def test_public_health_gates_require_hsts_and_api_http_redirect() -> None:
         assert '"301"' in check
         assert "location:" in check
         assert "http://" in check
+
+
+def test_workspace_mcp_oauth_discovery_bypasses_the_spa() -> None:
+    production = (ROOT / "nginx" / "nginx.conf").read_text(encoding="utf-8")
+    development = (ROOT / "nginx" / "nginx.dev.conf").read_text(encoding="utf-8")
+    snippet = (ROOT / "nginx" / "snippets" / "workspace_mcp_oauth.conf").read_text(
+        encoding="utf-8"
+    )
+
+    include = "include /etc/nginx/snippets/workspace_mcp_oauth.conf;"
+    assert production.count(include) == 2
+    assert development.count(include) == 1
+    assert "zone=oauth:10m rate=30r/m;" in development
+
+    selectors = (
+        "= /.well-known/oauth-protected-resource",
+        "= /.well-known/oauth-protected-resource/api/mcp/workspace",
+        "= /.well-known/oauth-authorization-server",
+        "^~ /api/workspace-mcp/oauth/",
+    )
+    for selector in selectors:
+        assert snippet.count(f"location {selector} {{") == 1
+
+    assert snippet.count("include /etc/nginx/snippets/api_proxy.conf;") == 4
+    assert snippet.count("limit_req zone=oauth burst=15 nodelay;") == 4
+    assert "client_max_body_size 64k;" in snippet
