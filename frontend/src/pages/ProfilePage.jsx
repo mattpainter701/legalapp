@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { reportError } from '../utils/reportError'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../App'
-import { Briefcase, Clock, DollarSign, Building, ShieldCheck } from 'lucide-react'
+import { ArrowRight, BookOpen, Briefcase, Clock, DollarSign, Building, ShieldCheck } from 'lucide-react'
 import { getMyMatters, getTimeEntries, updateMe } from '../api'
 import ReleaseInfoPanel from '../components/ReleaseInfoPanel'
 import WorkspaceMcpGrantsPanel from '../components/WorkspaceMcpGrantsPanel'
@@ -214,6 +214,19 @@ export default function ProfilePage() {
       </div>
 
       <ReleaseInfoPanel className="mb-6" />
+
+      <div className={`grid gap-3 mb-6 ${user?.role === 'admin' ? 'sm:grid-cols-2' : ''}`}>
+        <Link to="/guide" className="group flex items-center gap-4 rounded-xl border border-brand-line bg-white p-4 shadow-sm hover:border-brand-accent">
+          <span className="rounded-xl bg-brand-accent/10 p-3 text-brand-accent"><BookOpen className="h-5 w-5" aria-hidden="true" /></span>
+          <span className="min-w-0 flex-1"><span className="block text-sm font-semibold text-brand-ink">User guide</span><span className="mt-0.5 block text-xs leading-5 text-brand-muted">Everyday workflows, safety, and practical help.</span></span>
+          <ArrowRight className="h-4 w-4 text-brand-muted group-hover:translate-x-0.5 group-hover:text-brand-accent" aria-hidden="true" />
+        </Link>
+        {user?.role === 'admin' && <Link to="/admin?tab=guide" className="group flex items-center gap-4 rounded-xl border border-brand-line bg-white p-4 shadow-sm hover:border-brand-accent">
+          <span className="rounded-xl bg-brand-ink/10 p-3 text-brand-ink"><ShieldCheck className="h-5 w-5" aria-hidden="true" /></span>
+          <span className="min-w-0 flex-1"><span className="block text-sm font-semibold text-brand-ink">Administrative guide</span><span className="mt-0.5 block text-xs leading-5 text-brand-muted">Access, integrations, AI, billing, and governance.</span></span>
+          <ArrowRight className="h-4 w-4 text-brand-muted group-hover:translate-x-0.5 group-hover:text-brand-accent" aria-hidden="true" />
+        </Link>}
+      </div>
 
       {/* Stats cards */}
       <div style={{

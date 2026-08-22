@@ -32,6 +32,8 @@ import QBOPanel from '../components/QBOPanel'
 import FirmBrandingPanel from '../components/FirmBrandingPanel'
 import ReleaseInfoPanel from '../components/ReleaseInfoPanel'
 import BillingPage from './BillingPage'
+import GuideViewer from '../components/GuideViewer'
+import { ADMINISTRATIVE_GUIDE } from '../platformDocs'
 import { Spinner, Toggle } from '../components/ui'
 import { UserPlus, ChevronDown, ChevronRight, X } from 'lucide-react'
 
@@ -57,6 +59,7 @@ function StatCard({ label, value, sub }) {
 
 const ADMIN_TABS = [
   { id: 'users', label: 'Users' },
+  { id: 'guide', label: 'Admin Guide' },
   { id: 'roles', label: 'Roles' },
   { id: 'licensing', label: 'Licensing' },
   { id: 'billing', label: 'Subscription' },
@@ -81,7 +84,7 @@ const ACCOUNTANT_TABS = ADMIN_TABS.filter((tab) =>
 // launch and operate a reception team. Unrelated platform integrations remain
 // hidden until the tenant upgrades.
 const INTAKE_ADMIN_TABS = ADMIN_TABS.filter((tab) =>
-  ['users', 'licensing', 'billing', 'usage', 'tenant', 'zoom', 'settings'].includes(tab.id)
+  ['users', 'licensing', 'billing', 'usage', 'tenant', 'zoom', 'settings', 'guide'].includes(tab.id)
 )
 const INTAKE_ACCOUNTANT_TABS = INTAKE_ADMIN_TABS.filter((tab) =>
   ['licensing', 'billing', 'usage'].includes(tab.id)
@@ -1332,6 +1335,7 @@ export default function AdminPage() {
           {activeTab === 'teams' && <TeamsPanel />}
           {activeTab === 'zoom' && <ZoomPanel />}
           {activeTab === 'qbo' && <QBOPanel />}
+          {activeTab === 'guide' && <GuideViewer documents={ADMINISTRATIVE_GUIDE} audience="admin" embedded />}
         </div>
       </div>
     </div>

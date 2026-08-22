@@ -1,0 +1,42 @@
+{
+  "user_modules": [
+    { "id": "assistant", "route": "/chat", "chapter": "assistant-and-add-ons" },
+    { "id": "matters", "route": "/matters", "chapter": "matters-and-documents" },
+    { "id": "calendar", "route": "/calendar", "chapter": "tasks-calendar-communications" },
+    { "id": "teams", "route": "/teams", "chapter": "teams-and-client-portals" },
+    { "id": "communications", "route": "/communications", "chapter": "tasks-calendar-communications" },
+    { "id": "time-tracking", "route": "/time-tracking", "chapter": "time-billing-and-reports" },
+    { "id": "invoices", "route": "/invoices", "chapter": "time-billing-and-reports" },
+    { "id": "reports", "route": "/reports", "chapter": "time-billing-and-reports" },
+    { "id": "trust-accounting", "route": "/trust", "chapter": "time-billing-and-reports" },
+    { "id": "document-automation", "route": "/templates", "chapter": "document-automation-and-esignature" },
+    { "id": "contacts", "route": "/contacts", "chapter": "contacts-and-client-relationships" },
+    { "id": "tasks", "route": "/tasks", "chapter": "tasks-calendar-communications" },
+    { "id": "client-intake", "route": "/intake", "chapter": "intake-and-call-reception" },
+    { "id": "call-intake", "route": "/intake/dashboard", "chapter": "intake-and-call-reception" },
+    { "id": "add-on-catalog", "route": "/plugins", "chapter": "add-on-module-management" },
+    { "id": "profile", "route": "/profile", "chapter": "account-safety-and-support" },
+    { "id": "commercial-renewals", "route": "/plugins/commercial/renewals", "chapter": "commercial-renewals" },
+    { "id": "trust-estate", "route": "/plugins/trust-estate/estates", "chapter": "trust-and-estate-workflows" },
+    { "id": "domestic-relations", "route": "/plugins/domestic/cases", "chapter": "domestic-relations-workflows" },
+    { "id": "mediation", "route": "/plugins/mediation/cases", "chapter": "mediation-workflows" }
+  ],
+  "admin_tabs": [
+    { "tab": "users", "chapter": "users-roles-and-licensing" },
+    { "tab": "guide", "chapter": "admin-overview" },
+    { "tab": "roles", "chapter": "users-roles-and-licensing" },
+    { "tab": "licensing", "chapter": "users-roles-and-licensing" },
+    { "tab": "billing", "chapter": "subscription-usage-alerts" },
+    { "tab": "usage", "chapter": "subscription-usage-alerts" },
+    { "tab": "mcp", "chapter": "mcp-server-operations" },
+    { "tab": "tenant", "chapter": "tenant-settings-and-branding" },
+    { "tab": "prompts", "chapter": "prompt-management" },
+    { "tab": "cloud-search", "chapter": "cloud-search-operations" },
+    { "tab": "smb", "chapter": "file-share-operations" },
+    { "tab": "integrations", "chapter": "storage-imports-and-readiness" },
+    { "tab": "teams", "chapter": "microsoft-teams-administration" },
+    { "tab": "zoom", "chapter": "zoom-phone-administration" },
+    { "tab": "qbo", "chapter": "quickbooks-administration" },
+    { "tab": "settings", "chapter": "tenant-settings-and-branding" }
+  ]
+}

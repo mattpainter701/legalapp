@@ -58,6 +58,7 @@ const TimeTrackingPage = lazy(() => import('./pages/TimeTrackingPage'))
 const InvoicesPage = lazy(() => import('./pages/InvoicesPage'))
 const InvoiceDetailPage = lazy(() => import('./pages/InvoiceDetailPage'))
 const ProfilePage = lazy(() => import('./pages/ProfilePage'))
+const GuidePage = lazy(() => import('./pages/GuidePage'))
 const OnboardingWizard = lazy(() => import('./pages/OnboardingWizard'))
 const PortalAcceptPage = lazy(() => import('./pages/PortalAcceptPage'))
 const PortalCasePage = lazy(() => import('./pages/PortalCasePage'))
@@ -344,6 +345,10 @@ export default function App() {
         <Route
           path="/profile"
           element={<ShellRoute title="Profile"><ProfilePage /></ShellRoute>}
+        />
+        <Route
+          path="/guide/:slug?"
+          element={<ShellRoute title="User Guide"><GuidePage /></ShellRoute>}
         />
 
         {/* Plugin sub-routes */}
