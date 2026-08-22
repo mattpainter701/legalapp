@@ -72,6 +72,12 @@ LawHand can dynamically register supported public desktop clients when
 `WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED=true`. Registration does not
 bypass user consent, tenant allowlisting, license checks, scopes, or RBAC.
 
+The self-service commands below require dynamic registration. If it is
+disabled, stop: the client must first be provisioned through the approved
+LawHand pilot client-registration process and configured with its assigned
+client ID and redirect requirements. Never reuse another client's registration
+or enable dynamic registration ad hoc.
+
 ### Codex CLI and ChatGPT desktop
 
 Codex CLI, the ChatGPT desktop app, and the Codex IDE extension share MCP
