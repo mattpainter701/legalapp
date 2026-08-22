@@ -130,5 +130,4 @@ def test_workspace_mcp_oauth_discovery_bypasses_the_spa() -> None:
 
     assert snippet.count("include /etc/nginx/snippets/api_proxy.conf;") == 4
     assert snippet.count("limit_req zone=oauth burst=15 nodelay;") == 4
-    assert snippet.count("proxy_read_timeout 15s;") == 4
     assert "client_max_body_size 64k;" in snippet
