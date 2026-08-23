@@ -68,3 +68,6 @@ dump.rdb
 .coverage.*
 coverage.xml
 htmlcov/
+
+# Python build metadata
+*.egg-info/

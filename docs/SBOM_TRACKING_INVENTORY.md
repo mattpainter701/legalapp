@@ -18,7 +18,7 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |scripts/tabs3_export/requirements.txt|python requirements|no|none|2|
 |frontend/package.json|npm package|yes|frontend/package-lock.json|30|
 |office-addin/package.json|npm package|yes|office-addin/package-lock.json|6|
-|agent/pyproject.toml|python project|no|none|11|
+|agent/pyproject.toml|python project|no|none|14|
 
 ## Dependency inputs to track
 
@@ -60,9 +60,12 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |npm|typescript|^5.8.3|devDependencies|office-addin/package.json|
 |npm|vite|^6.0.3|devDependencies|office-addin/package.json|
 |npm|vitest|^4.1.10|devDependencies|office-addin/package.json|
+|pypi|pyinstaller|>=6.6|optional:build|agent/pyproject.toml|
+|pypi|pywin32|>=306;sys_platform=='win32'|optional:build|agent/pyproject.toml|
 |pypi|pytest|>=8.0|optional:dev|agent/pyproject.toml|
 |pypi|pytest-asyncio|>=0.23|optional:dev|agent/pyproject.toml|
 |pypi|ruff|>=0.4|optional:dev|agent/pyproject.toml|
+|pypi|pywin32|>=306;sys_platform=='win32'|optional:windows|agent/pyproject.toml|
 |pypi|aiosqlite|>=0.20.0|runtime|agent/pyproject.toml|
 |pypi|cryptography|>=42.0|runtime|agent/pyproject.toml|
 |pypi|httpx|>=0.27.0|runtime|agent/pyproject.toml|

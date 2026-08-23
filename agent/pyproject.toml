@@ -18,6 +18,11 @@ dependencies = [
     "tomli>=2.0;python_version<'3.11'",
 ]
 
+# The repo layout now also holds packaging/ and tests/ beside the package, which
+# setuptools' flat-layout auto-discovery refuses to guess between.
+[tool.setuptools]
+packages = ["clarity_agent"]
+
 [project.scripts]
 # ``lawhand-agent`` is the documented name; the old one stays for installed agents.
 lawhand-agent = "clarity_agent.__main__:main"

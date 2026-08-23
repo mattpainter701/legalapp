@@ -2,6 +2,35 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.24",
+      "version": "2026.08.24",
+      "title": "Network file shares, connected with their own credentials",
+      "published_at": "2026-08-24",
+      "summary": "Point LawHand at a file share that stays on your network: install the agent from a packaged installer, store the share's credentials securely, and test the connection before anyone searches it.",
+      "highlights": [
+        {
+          "title": "Install the file share agent instead of building it",
+          "description": "Windows installs from an MSI that registers a background service and can pair during setup; Linux ships a binary with a service installer."
+        },
+        {
+          "title": "Store share credentials securely, per firm",
+          "description": "Save the username and password, Kerberos, or guest identity each share needs. Secrets are encrypted, never shown again, and only reach your own agent."
+        },
+        {
+          "title": "Different shares can use different accounts",
+          "description": "One agent can serve shares that need separate identities, and a credential can be restricted so it only ever reaches one agent."
+        },
+        {
+          "title": "Test a share before trusting it",
+          "description": "Test connection asks the agent to mount the share and reports which identity it used, or the exact reason it failed, instead of leaving an empty index."
+        },
+        {
+          "title": "See when a share last indexed and why it stopped",
+          "description": "Each share now shows its last scan time, file count, and failure reason, and can be rescanned on demand rather than waiting for its schedule."
+        }
+      ]
+    },
+    {
       "id": "2026.08.23",
       "version": "2026.08.23",
       "title": "Billing problems you can actually see",
