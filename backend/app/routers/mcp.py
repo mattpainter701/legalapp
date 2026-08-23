@@ -381,8 +381,13 @@ async def _call_tool_with_product_key(
     # research tools proxy to the private CourtListener sidecar.
     if body.name in PLATFORM_TOOL_SET:
         return await _call_platform_tool_metered(
-            body, request, db, product_key=product_key, tenant=tenant,
-            transport=transport, started=started,
+            body,
+            request,
+            db,
+            product_key=product_key,
+            tenant=tenant,
+            transport=transport,
+            started=started,
         )
 
     try:

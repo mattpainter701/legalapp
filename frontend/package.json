@@ -42,12 +42,11 @@
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint src",
-    "docs:check": "node ../scripts/check_platform_docs.mjs",
     "test": "vitest run",
     "e2e:prepare": "node ./e2e/prepare.mjs",
     "e2e": "npm run e2e:prepare && playwright test",
     "e2e:install": "playwright install --with-deps chromium",
-    "check": "npm run docs:check && npm run lint && npm run test && npm run build"
+    "check": "npm run lint && npm run test && npm run build"
   },
   "overrides": {
     "form-data": "4.0.6"

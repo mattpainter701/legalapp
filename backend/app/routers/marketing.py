@@ -8,7 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.database import get_db
 from app.models.marketing import MarketingDemoRequest, MarketingEvent
-from app.schemas.marketing import DemoRequestAccepted, DemoRequestCreate, MarketingEventCreate
+from app.schemas.marketing import (
+    DemoRequestAccepted,
+    DemoRequestCreate,
+    MarketingEventCreate,
+)
 from app.services.email import EmailDeliveryResult, email_service
 
 
@@ -21,7 +25,11 @@ def _clean(value: str | None) -> str:
     return html.escape(value or "Not provided")
 
 
-@router.post("/demo-requests", response_model=DemoRequestAccepted, status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/demo-requests",
+    response_model=DemoRequestAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+)
 async def create_demo_request(
     payload: DemoRequestCreate,
     db: AsyncSession = Depends(get_db),

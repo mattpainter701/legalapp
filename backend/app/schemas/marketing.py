@@ -14,7 +14,9 @@ class DemoRequestCreate(BaseModel):
     campaign: dict[str, str] | None = None
     website: str = Field(default="", max_length=200)
 
-    @field_validator("name", "firm_name", "phone", "team_size", "message", "source_path")
+    @field_validator(
+        "name", "firm_name", "phone", "team_size", "message", "source_path"
+    )
     @classmethod
     def strip_text(cls, value: str | None) -> str | None:
         return value.strip() if value else value
@@ -24,8 +26,18 @@ class DemoRequestCreate(BaseModel):
     def limit_campaign(cls, value: dict[str, str] | None) -> dict[str, str] | None:
         if not value:
             return None
-        allowed = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "placement", "referrer"}
-        return {key: str(raw)[:500] for key, raw in value.items() if key in allowed and raw} or None
+        allowed = {
+            "utm_source",
+            "utm_medium",
+            "utm_campaign",
+            "utm_term",
+            "utm_content",
+            "placement",
+            "referrer",
+        }
+        return {
+            key: str(raw)[:500] for key, raw in value.items() if key in allowed and raw
+        } or None
 
 
 class DemoRequestAccepted(BaseModel):
@@ -42,7 +54,11 @@ class MarketingEventCreate(BaseModel):
     @field_validator("name")
     @classmethod
     def allow_event_name(cls, value: str) -> str:
-        if value not in {"demo_cta_clicked", "demo_form_started", "demo_form_submitted"}:
+        if value not in {
+            "demo_cta_clicked",
+            "demo_form_started",
+            "demo_form_submitted",
+        }:
             raise ValueError("Unsupported marketing event")
         return value
 
@@ -52,4 +68,6 @@ class MarketingEventCreate(BaseModel):
         if not value:
             return None
         allowed = {"placement", "utm_source", "utm_medium", "utm_campaign"}
-        return {key: str(raw)[:200] for key, raw in value.items() if key in allowed and raw} or None
+        return {
+            key: str(raw)[:200] for key, raw in value.items() if key in allowed and raw
+        } or None

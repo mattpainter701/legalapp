@@ -49,7 +49,9 @@ def _requested_filename(filename: str | None, title: str) -> str:
         or filename in {".", ".."}
         or any(char in filename for char in '\\/:*?"<>|\r\n\x00')
     ):
-        raise HTTPException(status_code=400, detail="filename must be a single file name")
+        raise HTTPException(
+            status_code=400, detail="filename must be a single file name"
+        )
     return filename
 
 
@@ -213,9 +215,7 @@ async def _list_matter_documents(
     limit = min(max(int(arguments.get("limit") or 50), 1), 100)
 
     matter = await db.execute(
-        select(Matter).where(
-            Matter.id == matter_id, Matter.tenant_id == tenant_id
-        )
+        select(Matter).where(Matter.id == matter_id, Matter.tenant_id == tenant_id)
     )
     if matter.scalar_one_or_none() is None:
         raise HTTPException(status_code=404, detail="Matter not found")
@@ -279,9 +279,7 @@ async def _create_document(
         raise HTTPException(status_code=400, detail="content is required")
 
     matter_result = await db.execute(
-        select(Matter).where(
-            Matter.id == matter_id, Matter.tenant_id == tenant_id
-        )
+        select(Matter).where(Matter.id == matter_id, Matter.tenant_id == tenant_id)
     )
     matter = matter_result.scalar_one_or_none()
     if matter is None:

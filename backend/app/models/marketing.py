@@ -18,18 +18,34 @@ class MarketingDemoRequest(Base):
         Index("idx_marketing_demo_requests_status", "status", "created_at"),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default="gen_random_uuid()")
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default="gen_random_uuid()",
+    )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     email: Mapped[str] = mapped_column(String(320), nullable=False)
     firm_name: Mapped[str] = mapped_column(String(300), nullable=False)
     phone: Mapped[str | None] = mapped_column(String(60), nullable=True)
     team_size: Mapped[str | None] = mapped_column(String(50), nullable=True)
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    source_path: Mapped[str] = mapped_column(String(500), nullable=False, default="/demo")
+    source_path: Mapped[str] = mapped_column(
+        String(500), nullable=False, default="/demo"
+    )
     campaign: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    status: Mapped[str] = mapped_column(String(30), nullable=False, default="new", server_default="new")
-    notification_status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending", server_default="pending")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), server_default="now()")
+    status: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="new", server_default="new"
+    )
+    notification_status: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="pending", server_default="pending"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default="now()",
+    )
 
 
 class MarketingEvent(Base):
@@ -41,9 +57,19 @@ class MarketingEvent(Base):
         Index("idx_marketing_events_session", "session_id", "created_at"),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default="gen_random_uuid()")
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default="gen_random_uuid()",
+    )
     name: Mapped[str] = mapped_column(String(50), nullable=False)
     session_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     page: Mapped[str] = mapped_column(String(500), nullable=False)
     properties: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), server_default="now()")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default="now()",
+    )

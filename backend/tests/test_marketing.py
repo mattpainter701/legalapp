@@ -21,7 +21,9 @@ async def public_marketing_client(db_session, test_redis):
     previous_redis = getattr(app.state, "redis", None)
     app.state.redis = test_redis
     try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
             yield client
     finally:
         app.state.redis = previous_redis
@@ -29,10 +31,14 @@ async def public_marketing_client(db_session, test_redis):
 
 
 @pytest.mark.asyncio
-async def test_demo_request_is_stored_and_notified(public_marketing_client, db_session, monkeypatch):
+async def test_demo_request_is_stored_and_notified(
+    public_marketing_client, db_session, monkeypatch
+):
     send = AsyncMock(return_value=EmailDeliveryResult.SENT)
     monkeypatch.setattr(marketing_router.email_service, "send_email", send)
-    monkeypatch.setattr(marketing_router.settings, "MARKETING_LEAD_EMAIL", "support@getlawhand.com")
+    monkeypatch.setattr(
+        marketing_router.settings, "MARKETING_LEAD_EMAIL", "support@getlawhand.com"
+    )
 
     response = await public_marketing_client.post(
         "/api/marketing/demo-requests",
@@ -60,7 +66,9 @@ async def test_demo_request_is_stored_and_notified(public_marketing_client, db_s
 
 
 @pytest.mark.asyncio
-async def test_demo_request_survives_notification_outage(public_marketing_client, db_session, monkeypatch):
+async def test_demo_request_survives_notification_outage(
+    public_marketing_client, db_session, monkeypatch
+):
     monkeypatch.setattr(
         marketing_router.email_service,
         "send_email",
@@ -69,7 +77,11 @@ async def test_demo_request_survives_notification_outage(public_marketing_client
 
     response = await public_marketing_client.post(
         "/api/marketing/demo-requests",
-        json={"name": "Grace Legal", "email": "grace@example.com", "firm_name": "Grace LLP"},
+        json={
+            "name": "Grace Legal",
+            "email": "grace@example.com",
+            "firm_name": "Grace LLP",
+        },
     )
 
     assert response.status_code == 202
@@ -78,7 +90,9 @@ async def test_demo_request_survives_notification_outage(public_marketing_client
 
 
 @pytest.mark.asyncio
-async def test_demo_honeypot_does_not_store_or_notify(public_marketing_client, db_session, monkeypatch):
+async def test_demo_honeypot_does_not_store_or_notify(
+    public_marketing_client, db_session, monkeypatch
+):
     send = AsyncMock(return_value=EmailDeliveryResult.SENT)
     monkeypatch.setattr(marketing_router.email_service, "send_email", send)
 
@@ -93,20 +107,27 @@ async def test_demo_honeypot_does_not_store_or_notify(public_marketing_client, d
     )
 
     assert response.status_code == 202
-    count = await db_session.scalar(select(func.count()).select_from(MarketingDemoRequest))
+    count = await db_session.scalar(
+        select(func.count()).select_from(MarketingDemoRequest)
+    )
     assert count == 0
     send.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_marketing_event_is_allowlisted_and_stored(public_marketing_client, db_session):
+async def test_marketing_event_is_allowlisted_and_stored(
+    public_marketing_client, db_session
+):
     response = await public_marketing_client.post(
         "/api/marketing/events",
         json={
             "name": "demo_cta_clicked",
             "session_id": "d1b13b9c-8d9f-48dc-b10e-749876ebcb8a",
             "page": "/pricing",
-            "properties": {"placement": "pricing", "email": "must-not-store@example.com"},
+            "properties": {
+                "placement": "pricing",
+                "email": "must-not-store@example.com",
+            },
         },
     )
     assert response.status_code == 204

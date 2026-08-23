@@ -153,7 +153,6 @@ PUBLIC_ROUTES: dict[tuple[frozenset[str], str], str] = {
         frozenset({"POST"}),
         "/api/workspace-mcp/oauth/revoke",
     ): "RFC 7009 endpoint; token and client binding enforced",
-
     # OAuth integration callbacks — all validate the CSRF state token minted
     # by the corresponding /login redirect before doing anything tenant-scoped.
     (
