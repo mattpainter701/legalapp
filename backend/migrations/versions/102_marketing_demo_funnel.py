@@ -1,7 +1,7 @@
 """Add durable marketing demo requests and first-party funnel events.
 
-Revision ID: 102_marketing_demo_funnel
-Revises: 101_chat_artifact_pipeline
+Revision ID: 111_marketing_demo_funnel
+Revises: 110_chat_artifact_pipeline
 """
 
 from alembic import op
@@ -9,8 +9,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 
 
-revision = "102_marketing_demo_funnel"
-down_revision = "101_chat_artifact_pipeline"
+revision = "111_marketing_demo_funnel"
+down_revision = "110_chat_artifact_pipeline"
 branch_labels = None
 depends_on = None
 
