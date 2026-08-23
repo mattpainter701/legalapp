@@ -46,7 +46,6 @@
     "e2e:prepare": "node ./e2e/prepare.mjs",
     "e2e": "npm run e2e:prepare && playwright test",
     "e2e:install": "playwright install --with-deps chromium",
-    "docs:check": "node ../scripts/check_platform_docs.mjs",
     "check": "npm run lint && npm run test && npm run build"
   },
   "overrides": {
