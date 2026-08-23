@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from httpx import AsyncClient
+from starlette.requests import Request
 
 from app.models.workspace_mcp_audit import WorkspaceMCPAuditEvent
 from app.models.workspace_mcp_client import WorkspaceMCPClient
@@ -92,6 +93,22 @@ async def test_platform_workspace_mcp_diagnostics_reports_user_policy_and_oauth_
 
     assert response.status_code == 200
     payload = response.json()
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/platform/mcp/workspace",
+            "headers": [
+                (key.lower().encode(), value.encode())
+                for key, value in platform_headers().items()
+            ],
+        }
+    )
+    direct_payload = await platform.platform_workspace_mcp_diagnostics(
+        request,
+        db_session,
+        email=test_user.email.upper(),
+    )
     assert payload["pilot_tenants"]["active_count"] == 1
     assert payload["pilot_tenants"]["missing_count"] == 1
     assert payload["user_policy"]["found"] is True
@@ -106,3 +123,5 @@ async def test_platform_workspace_mcp_diagnostics_reports_user_policy_and_oauth_
     assert payload["recent_audit_events"][0]["event_type"] == "token_issued"
     assert "desktop-diagnostics-client" not in str(payload)
     assert "request-diagnostics" not in str(payload)
+    assert direct_payload["user_policy"] == payload["user_policy"]
+    assert direct_payload["oauth"]["audit"] == payload["oauth"]["audit"]
