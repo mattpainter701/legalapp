@@ -37,6 +37,7 @@ class TaskWorker:
         reader: SmbReader,
         share_provider=None,
         scan_callback=None,
+        share_refresher=None,
     ):
         self.config = config
         self.client = client
@@ -45,6 +46,8 @@ class TaskWorker:
         self.share_provider = share_provider
         # Runs a full scan of one share; used by ``scan_now``.
         self.scan_callback = scan_callback
+        # Forces a re-fetch of that list, for a share added moments ago.
+        self.share_refresher = share_refresher
 
     async def poll_and_execute(self) -> int:
         try:
@@ -174,10 +177,23 @@ class TaskWorker:
             return
 
         try:
-            await self.scan_callback(share)
-            await self.client.submit_task_result(
-                task_id, ok=True, detail={"share_path": share.get("share_path", "")}
-            )
+            outcome = await self.scan_callback(share) or {}
+            detail = {
+                "share_path": share.get("share_path", ""),
+                "status": outcome.get("status", "success"),
+                "file_count": outcome.get("file_count"),
+            }
+            # A scan can fail without raising (no route to the share, a sync
+            # rejection); report what it recorded rather than "finished".
+            if outcome.get("status") in ("failed", "error", "partial"):
+                await self.client.submit_task_result(
+                    task_id,
+                    ok=False,
+                    error=outcome.get("error") or f"Scan {outcome['status']}",
+                    detail=detail,
+                )
+            else:
+                await self.client.submit_task_result(task_id, ok=True, detail=detail)
         except Exception as exc:
             message = f"{type(exc).__name__}: {exc}"
             logger.error("Scan-now for %s failed: %s", share.get("share_path"), message)
@@ -200,6 +216,18 @@ class TaskWorker:
         for share in await self._shares():
             if str(share.get("share_id")) == str(share_id):
                 return share
+
+        # An admin can add a share and test it seconds later, before the cached
+        # share list expires, so a miss is worth one forced refresh.
+        if self.share_refresher is not None:
+            try:
+                shares = await self.share_refresher()
+            except Exception as exc:
+                logger.error("Could not refresh shares: %s", exc)
+                return None
+            for share in shares or []:
+                if str(share.get("share_id")) == str(share_id):
+                    return share
         return None
 
     async def _share_for_path(

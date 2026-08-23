@@ -145,7 +145,9 @@ class SmbScanner:
             self, session, path, max_depth, allowed_extensions, exclude_patterns
         )
 
-    async def _detect_changes(self, share_id: str, current_files: list[dict]) -> ChangeSet:
+    async def _detect_changes(
+        self, share_id: str, current_files: list[dict]
+    ) -> ChangeSet:
         cs = ChangeSet()
         known_paths = await self.ledger.get_all_paths(share_id)
 
@@ -153,7 +155,9 @@ class SmbScanner:
             existing = await self.ledger.get_file(finfo["path"])
             if existing is None:
                 cs.new_files.append(finfo)
-            elif existing.get("content_hash") != finfo.get("content_hash") or existing.get("is_deleted"):
+            elif existing.get("content_hash") != finfo.get(
+                "content_hash"
+            ) or existing.get("is_deleted"):
                 cs.changed_files.append(finfo)
             else:
                 cs.unchanged_files.append(finfo)
@@ -249,7 +253,11 @@ class _AsyncFileIterator:
         try:
             dir_mtime = await self._get_dir_mtime(dir_path)
             cached_mtime = await self.scanner.ledger.get_dir_mtime(dir_path)
-            skip = dir_mtime is not None and cached_mtime is not None and dir_mtime == cached_mtime
+            skip = (
+                dir_mtime is not None
+                and cached_mtime is not None
+                and dir_mtime == cached_mtime
+            )
 
             entries = []
             try:
@@ -273,13 +281,21 @@ class _AsyncFileIterator:
                     if self._excluded(entry.name, dir_path + "\\" + entry.name):
                         continue
                     if skip:
-                        existing = await self.scanner.ledger.get_file(dir_path + "\\" + entry.name)
-                        if existing and existing.get("content_hash") and not existing.get("is_deleted"):
+                        existing = await self.scanner.ledger.get_file(
+                            dir_path + "\\" + entry.name
+                        )
+                        if (
+                            existing
+                            and existing.get("content_hash")
+                            and not existing.get("is_deleted")
+                        ):
                             continue
 
                     fpath = dir_path + "\\" + entry.name
                     stat = entry
-                    content_hash = await self.scanner._compute_short_hash(self.session, fpath)
+                    content_hash = await self.scanner._compute_short_hash(
+                        self.session, fpath
+                    )
                     snippet = await self.scanner._extract_snippet(self.session, fpath)
 
                     finfo = {
@@ -291,8 +307,16 @@ class _AsyncFileIterator:
                         "snippet": snippet,
                         "owner": getattr(stat, "file_owner", "") or "",
                         "size_bytes": stat.st_size if hasattr(stat, "st_size") else 0,
-                        "modified_time": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat() if hasattr(stat, "st_mtime") and stat.st_mtime else "",
-                        "created_time": datetime.fromtimestamp(stat.st_ctime, tz=timezone.utc).isoformat() if hasattr(stat, "st_ctime") and stat.st_ctime else "",
+                        "modified_time": datetime.fromtimestamp(
+                            stat.st_mtime, tz=timezone.utc
+                        ).isoformat()
+                        if hasattr(stat, "st_mtime") and stat.st_mtime
+                        else "",
+                        "created_time": datetime.fromtimestamp(
+                            stat.st_ctime, tz=timezone.utc
+                        ).isoformat()
+                        if hasattr(stat, "st_ctime") and stat.st_ctime
+                        else "",
                         "content_hash": content_hash,
                         "dir_mtime": dir_mtime or "",
                         "synced_at": datetime.now(tz=timezone.utc).isoformat(),
@@ -301,22 +325,24 @@ class _AsyncFileIterator:
                     await self._queue.put(finfo)
 
             if dir_mtime:
-                await self.scanner.ledger.upsert_file({
-                    "path": dir_path,
-                    "share_id": "",
-                    "filename": PureWindowsPath(dir_path).name,
-                    "ext": None,
-                    "mime_type": None,
-                    "snippet": None,
-                    "owner": None,
-                    "size_bytes": None,
-                    "modified_time": dir_mtime,
-                    "created_time": None,
-                    "content_hash": None,
-                    "dir_mtime": dir_mtime,
-                    "synced_at": datetime.now(tz=timezone.utc).isoformat(),
-                    "is_deleted": False,
-                })
+                await self.scanner.ledger.upsert_file(
+                    {
+                        "path": dir_path,
+                        "share_id": "",
+                        "filename": PureWindowsPath(dir_path).name,
+                        "ext": None,
+                        "mime_type": None,
+                        "snippet": None,
+                        "owner": None,
+                        "size_bytes": None,
+                        "modified_time": dir_mtime,
+                        "created_time": None,
+                        "content_hash": None,
+                        "dir_mtime": dir_mtime,
+                        "synced_at": datetime.now(tz=timezone.utc).isoformat(),
+                        "is_deleted": False,
+                    }
+                )
         except Exception as exc:
             logger.error("Error walking %s: %s", dir_path, exc)
 
@@ -335,7 +361,9 @@ class _AsyncFileIterator:
         try:
             stat = smbclient.stat(dir_path)
             if hasattr(stat, "st_mtime") and stat.st_mtime:
-                return datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
+                return datetime.fromtimestamp(
+                    stat.st_mtime, tz=timezone.utc
+                ).isoformat()
         except Exception:
             pass
         return None

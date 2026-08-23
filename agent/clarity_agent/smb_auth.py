@@ -46,7 +46,9 @@ class ShareCredential:
             return "service account"
         if self.auth_method == GUEST:
             return "guest"
-        who = f"{self.domain}\\{self.username}" if self.domain else (self.username or "?")
+        who = (
+            f"{self.domain}\\{self.username}" if self.domain else (self.username or "?")
+        )
         return f"{who} ({self.auth_method})"
 
     @classmethod

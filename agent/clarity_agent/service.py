@@ -94,8 +94,10 @@ def _windows(action: str) -> None:
             exeName=exe_name,
             exeArgs=exe_args,
         )
-        print(f"Installed service {SERVICE_NAME}. Start it with: "
-              f"lawhand-agent service start")
+        print(
+            f"Installed service {SERVICE_NAME}. Start it with: "
+            f"lawhand-agent service start"
+        )
         return
 
     if action == "remove":
@@ -230,8 +232,10 @@ def _systemd(action: str) -> None:
         SYSTEMD_UNIT_PATH.write_text(unit)
         _systemctl("daemon-reload")
         _systemctl("enable", "lawhand-agent.service")
-        print(f"Installed {SYSTEMD_UNIT_PATH}. Start it with: "
-              f"sudo lawhand-agent service start")
+        print(
+            f"Installed {SYSTEMD_UNIT_PATH}. Start it with: "
+            f"sudo lawhand-agent service start"
+        )
         return
 
     if action == "remove":

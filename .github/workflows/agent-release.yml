@@ -74,7 +74,14 @@ jobs:
             gh release create "$TAG" \
               --title "File Share Agent ${TAG#agent-}" \
               --notes "Windows MSI/EXE and Linux binary for the on-premise file share agent. See agent/README.md for install and pairing steps."
-          gh release upload "$TAG" agent/dist/lawhand-agent.exe agent/dist/*.msi --clobber
+          # The admin console links to unversioned names under
+          # releases/latest/download, so publish a stable alias next to the
+          # versioned installer rather than a link that 404s.
+          cp agent/dist/*-x64.msi agent/dist/lawhand-agent-x64.msi
+          gh release upload "$TAG" \
+            agent/dist/lawhand-agent.exe \
+            agent/dist/*-x64.msi \
+            --clobber
 
   linux:
     name: Linux — binary and tarball
@@ -121,4 +128,9 @@ jobs:
             gh release create "$TAG" \
               --title "File Share Agent ${TAG#agent-}" \
               --notes "Windows MSI/EXE and Linux binary for the on-premise file share agent. See agent/README.md for install and pairing steps."
-          gh release upload "$TAG" agent/dist/lawhand-agent agent/dist/*.tar.gz --clobber
+          # Stable alias for the admin console's download link (see above).
+          cp agent/dist/*-linux-*.tar.gz agent/dist/lawhand-agent-linux-x86_64.tar.gz
+          gh release upload "$TAG" \
+            agent/dist/lawhand-agent \
+            agent/dist/*.tar.gz \
+            --clobber

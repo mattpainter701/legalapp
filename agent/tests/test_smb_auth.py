@@ -113,4 +113,6 @@ def test_connect_registers_a_session_with_the_credential():
     session = connect("fileserver", credential, smbclient_module=fake)
 
     assert session == "session:fileserver"
-    assert fake.calls == [("fileserver", {"username": "svc", "password": "pw", "auth_protocol": "ntlm"})]
+    assert fake.calls == [
+        ("fileserver", {"username": "svc", "password": "pw", "auth_protocol": "ntlm"})
+    ]

@@ -172,7 +172,19 @@ class SmbCredentialService:
                 await self._require_agent(db, tenant_id, data.agent_id)
                 credential.agent_id = _uuid(data.agent_id)
 
-        if data.name is not None:
+        if data.name is not None and data.name != credential.name:
+            clash = await db.execute(
+                select(SmbCredential).where(
+                    SmbCredential.tenant_id == _uuid(tenant_id),
+                    SmbCredential.name == data.name,
+                    SmbCredential.id != credential.id,
+                )
+            )
+            if clash.scalar_one_or_none() is not None:
+                # Without this the unique constraint surfaces as a 500 at flush.
+                raise SmbCredentialError(
+                    f"A credential named '{data.name}' already exists"
+                )
             credential.name = data.name
         credential.auth_method = auth_method
         if data.domain is not None:

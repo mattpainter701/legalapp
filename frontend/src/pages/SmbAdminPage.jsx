@@ -284,7 +284,7 @@ function InstallInstructions({ pairingCode }) {
   const windowsCommand =
     `msiexec /i lawhand-agent-x64.msi /qn PAIRING_CODE=${code} SAAS_URL=${window.location.origin}`
   const linuxCommand =
-    `tar xzf lawhand-agent-linux-x86_64.tar.gz && sudo ./install.sh --code ${code} --url ${window.location.origin}`
+    `tar xzf lawhand-agent-linux-x86_64.tar.gz && cd lawhand-agent-* && sudo ./install.sh --code ${code} --url ${window.location.origin}`
 
   return (
     <div className="bg-brand-surface border border-brand-line rounded-xl p-5 shadow-sm space-y-4">

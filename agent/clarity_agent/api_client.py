@@ -33,12 +33,26 @@ class SaaSClient:
                 resp.raise_for_status()
                 return resp.json()
             except httpx.HTTPStatusError as exc:
-                logger.warning("HTTP %s %s -> %d (attempt %d/%d)", method, url, exc.response.status_code, attempt, _MAX_RETRIES)
+                logger.warning(
+                    "HTTP %s %s -> %d (attempt %d/%d)",
+                    method,
+                    url,
+                    exc.response.status_code,
+                    attempt,
+                    _MAX_RETRIES,
+                )
                 last_exc = exc
                 if exc.response.status_code < 500:
                     raise
             except httpx.RequestError as exc:
-                logger.warning("Request error %s %s: %s (attempt %d/%d)", method, url, exc, attempt, _MAX_RETRIES)
+                logger.warning(
+                    "Request error %s %s: %s (attempt %d/%d)",
+                    method,
+                    url,
+                    exc,
+                    attempt,
+                    _MAX_RETRIES,
+                )
                 last_exc = exc
             delay = _BASE_DELAY * (2 ** (attempt - 1))
             await asyncio.sleep(delay)
@@ -51,7 +65,9 @@ class SaaSClient:
             json={"pairing_code": pairing_code, **agent_info},
         )
 
-    async def sync(self, files: list[dict], deletions: list[str], share_id: str) -> dict:
+    async def sync(
+        self, files: list[dict], deletions: list[str], share_id: str
+    ) -> dict:
         return await self._request(
             "POST",
             f"/api/v1/smb/agents/{self.agent_id}/sync",

@@ -224,7 +224,9 @@ async def test_updating_a_credential_without_a_password_keeps_the_secret(client)
         f"/api/v1/smb/agents/{agent_id}/shares",
         headers={"X-Agent-API-Key": api_key},
     )
-    assert delivered.json()[0]["credential"]["password"] == "correct horse battery staple"
+    assert (
+        delivered.json()[0]["credential"]["password"] == "correct horse battery staple"
+    )
     assert delivered.json()[0]["credential"]["domain"] == "CORP2"
 
 
@@ -307,7 +309,11 @@ async def test_failed_connection_test_surfaces_the_agent_error(client):
     await client.post(
         f"/api/v1/smb/agents/{agent_id}/tasks/{task_id}/result",
         headers={"X-Agent-API-Key": api_key},
-        json={"task_id": task_id, "ok": False, "error": "SMBAuthenticationError: logon failure"},
+        json={
+            "task_id": task_id,
+            "ok": False,
+            "error": "SMBAuthenticationError: logon failure",
+        },
     )
 
     shares = await client.get("/api/v1/smb/shares")
@@ -503,9 +509,7 @@ async def test_task_actions_require_an_active_agent(client):
 
 @pytest.mark.asyncio
 async def test_task_actions_404_for_an_unknown_share(client):
-    response = await client.post(
-        f"/api/v1/smb/shares/{uuid.uuid4()}/test-connection"
-    )
+    response = await client.post(f"/api/v1/smb/shares/{uuid.uuid4()}/test-connection")
 
     assert response.status_code == 404
 
@@ -519,3 +523,55 @@ async def test_pairing_code_fits_the_column_and_is_typeable(client):
     # smb_agents.pairing_code is varchar(20); a longer code fails at insert.
     assert len(code) <= 20
     assert set(code) <= set("23456789ABCDEFGHJKMNPQRSTVWXYZ-")
+
+
+@pytest.mark.asyncio
+async def test_renaming_onto_an_existing_name_is_rejected(client):
+    first = await client.post(
+        "/api/v1/smb/credentials",
+        json={
+            "name": "first",
+            "auth_method": "ntlm",
+            "username": "a",
+            "password": "pw",
+        },
+    )
+    second = await client.post(
+        "/api/v1/smb/credentials",
+        json={
+            "name": "second",
+            "auth_method": "ntlm",
+            "username": "b",
+            "password": "pw",
+        },
+    )
+    assert first.status_code == 200 and second.status_code == 200
+
+    renamed = await client.patch(
+        f"/api/v1/smb/credentials/{second.json()['id']}", json={"name": "first"}
+    )
+
+    # Without the duplicate check this surfaced as a 500 from the unique index.
+    assert renamed.status_code == 400
+    assert "already exists" in renamed.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_renaming_a_credential_to_its_own_name_is_allowed(client):
+    created = await client.post(
+        "/api/v1/smb/credentials",
+        json={
+            "name": "stable",
+            "auth_method": "ntlm",
+            "username": "a",
+            "password": "pw",
+        },
+    )
+
+    updated = await client.patch(
+        f"/api/v1/smb/credentials/{created.json()['id']}",
+        json={"name": "stable", "domain": "CORP"},
+    )
+
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["domain"] == "CORP"

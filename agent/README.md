@@ -115,11 +115,18 @@ The agent uses a 3-tier change detection strategy:
 2. **File mtime comparison** — compare individual file modification times
 3. **First-4KB hash** — SHA256 of first 4096 bytes as content fingerprint
 
-Three loops run concurrently: a scan loop on the configured interval, a task
-poll loop, and a heartbeat. The task loop handles three kinds of work queued by
-the SaaS — `content_fetch` (read one document), `verify_share` (the console's
-**Test connection**), and `scan_now` — and every scan reports its outcome back,
-which is what fills in the last-scan column and error text in the console.
+Three loops run concurrently: a scan loop, a task poll loop, and a heartbeat.
+
+The scan loop wakes once a minute and scans the shares that are due according
+to their own cron schedule from the admin console (`0 */6 * * *` by default), so
+a share set to run nightly is not walked every few hours. A share with no usable
+schedule falls back to the agent-wide `scan_interval_minutes`. Scan times are
+held in memory, so a restarted agent scans once and then resumes the schedule.
+
+The task loop handles three kinds of work queued by the SaaS — `content_fetch`
+(read one document), `verify_share` (the console's **Test connection**), and
+`scan_now` — and every scan reports its outcome back, which is what fills in the
+last-scan column and error text in the console.
 
 ## Building installers
 

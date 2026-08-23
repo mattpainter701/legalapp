@@ -5,6 +5,7 @@ import asyncio
 import getpass
 import logging
 import signal
+import time
 from datetime import datetime, timezone
 
 from clarity_agent import __version__
@@ -12,6 +13,7 @@ from clarity_agent.api_client import SaaSClient
 from clarity_agent.config import AgentConfig
 from clarity_agent.db import FileLedger
 from clarity_agent.heartbeat import HeartbeatService, host_info
+from clarity_agent.schedule import due_for_scan
 from clarity_agent.smb_auth import ShareCredential
 from clarity_agent.smb_reader import SmbReader
 from clarity_agent.smb_scanner import SmbScanner
@@ -19,6 +21,13 @@ from clarity_agent.task_worker import TaskWorker
 from clarity_agent.utils import parse_smb_path, setup_logging
 
 logger = logging.getLogger("clarity_agent")
+
+# How often the daemon wakes to see which shares are due. Shares carry their
+# own cron schedule; this is only the resolution at which those are honoured.
+SCAN_TICK_SECONDS = 60
+# How long a fetched share list (with its credentials) is reused before the
+# agent asks the SaaS again.
+SHARE_CACHE_TTL_SECONDS = 300
 
 
 def normalize_share(share: dict) -> dict:
@@ -46,10 +55,18 @@ async def _scan_share(
     ledger: FileLedger,
     client: SaaSClient,
     smb_scanner: SmbScanner,
-) -> None:
-    """Scan one share and report the outcome back to the SaaS."""
+) -> dict:
+    """Scan one share, report the outcome to the SaaS, and return it.
+
+    The outcome is returned rather than only logged because an admin-triggered
+    "Scan now" has to report the same result the share row shows; treating a
+    non-raising failure as success made the console say "Scan finished" for a
+    scan recorded as failed.
+    """
     share = normalize_share(share)
-    share_id = share.get("share_id") or f"{share.get('server', '')}/{share.get('share', '')}"
+    share_id = (
+        share.get("share_id") or f"{share.get('server', '')}/{share.get('share', '')}"
+    )
     share["share_id"] = share_id
     started_at = datetime.now(timezone.utc)
 
@@ -66,7 +83,9 @@ async def _scan_share(
     except Exception as exc:
         message = f"{type(exc).__name__}: {exc}"
         logger.error("Scan of %s failed: %s", share_id, message)
-        await _report_scan(client, share_id, "failed", error=message, started_at=started_at)
+        await _report_scan(
+            client, share_id, "failed", error=message, started_at=started_at
+        )
         raise
 
     new_and_changed = result.new_files + result.changed_files
@@ -95,7 +114,9 @@ async def _scan_share(
             await client.sync(sync_files, result.deleted_files, share_id)
             synced_count = len(sync_files)
             logger.info(
-                "Synced %d new/changed, %d deleted", synced_count, len(result.deleted_files)
+                "Synced %d new/changed, %d deleted",
+                synced_count,
+                len(result.deleted_files),
             )
         except Exception as exc:
             sync_error = f"Sync failed: {exc}"
@@ -108,7 +129,9 @@ async def _scan_share(
 
     indexed = len(new_and_changed) + len(result.unchanged_files)
     error = sync_error or (result.errors[0] if result.errors else None)
-    status = "failed" if (error and not indexed) else ("partial" if error else "success")
+    status = (
+        "failed" if (error and not indexed) else ("partial" if error else "success")
+    )
     await _report_scan(
         client,
         share_id,
@@ -117,6 +140,13 @@ async def _scan_share(
         error=error,
         started_at=started_at,
     )
+    return {
+        "share_id": share_id,
+        "status": status,
+        "file_count": indexed,
+        "synced": synced_count,
+        "error": error,
+    }
 
 
 async def _report_scan(
@@ -142,19 +172,33 @@ async def _report_scan(
 
 
 class ShareCache:
-    """Keeps the last share list so tasks and scans agree on credentials."""
+    """Keeps the last share list so tasks and scans agree on credentials.
 
-    def __init__(self, client: SaaSClient):
+    The scan loop ticks every minute to honour per-share schedules, which is
+    far more often than share configuration changes, so the list is re-fetched
+    on a TTL rather than on every tick.
+    """
+
+    def __init__(self, client: SaaSClient, ttl_seconds: int = SHARE_CACHE_TTL_SECONDS):
         self.client = client
+        self.ttl_seconds = ttl_seconds
         self._shares: list[dict] = []
+        self._fetched_at: float | None = None
 
     async def refresh(self) -> list[dict]:
         shares = await self.client.get_shares()
         self._shares = [normalize_share(s) for s in shares]
+        self._fetched_at = time.monotonic()
         return self._shares
 
-    async def get(self) -> list[dict]:
-        if not self._shares:
+    def _is_stale(self) -> bool:
+        return (
+            self._fetched_at is None
+            or time.monotonic() - self._fetched_at >= self.ttl_seconds
+        )
+
+    async def get(self, refresh_if_stale: bool = True) -> list[dict]:
+        if refresh_if_stale and self._is_stale():
             try:
                 await self.refresh()
             except Exception as exc:
@@ -162,7 +206,9 @@ class ShareCache:
         return self._shares
 
 
-async def run_daemon(config: AgentConfig, stop_event: asyncio.Event | None = None) -> None:
+async def run_daemon(
+    config: AgentConfig, stop_event: asyncio.Event | None = None
+) -> None:
     setup_logging(config.log_level)
     logger.info("LawHand Agent v%s starting", __version__)
 
@@ -173,9 +219,12 @@ async def run_daemon(config: AgentConfig, stop_event: asyncio.Event | None = Non
     smb_scanner = SmbScanner(config, ledger)
     reader = SmbReader()
     shares = ShareCache(client)
+    # Scan times are kept in memory: an agent that restarts re-indexes its
+    # shares once, which is the same behaviour as a fresh install.
+    last_scans: dict[str, datetime] = {}
 
-    async def scan_one(share: dict) -> None:
-        await _scan_share(share, ledger, client, smb_scanner)
+    async def scan_one(share: dict) -> dict:
+        return await _scan_share(share, ledger, client, smb_scanner)
 
     task_worker = TaskWorker(
         config,
@@ -183,6 +232,7 @@ async def run_daemon(config: AgentConfig, stop_event: asyncio.Event | None = Non
         reader,
         share_provider=shares.get,
         scan_callback=scan_one,
+        share_refresher=shares.refresh,
     )
     heartbeat = HeartbeatService(config, client)
 
@@ -200,18 +250,30 @@ async def run_daemon(config: AgentConfig, stop_event: asyncio.Event | None = Non
             pass
 
     async def scan_loop():
+        # Ticking every minute is what lets a share keep its own schedule; the
+        # tick itself only compares timestamps unless a share is actually due.
         while not stop_event.is_set():
             try:
-                for share in await shares.refresh():
+                for share in await shares.get():
+                    if stop_event.is_set():
+                        break
                     if not share.get("is_enabled", True):
                         continue
+                    share_id = share.get("share_id", "")
+                    now = datetime.now(timezone.utc)
+                    if not due_for_scan(
+                        share,
+                        last_scans.get(share_id),
+                        now,
+                        fallback_minutes=config.scan_interval_minutes,
+                    ):
+                        continue
+                    last_scans[share_id] = now
                     await scan_one(share)
             except Exception as exc:
                 logger.error("Scan cycle failed: %s", exc)
             try:
-                await asyncio.wait_for(
-                    stop_event.wait(), timeout=config.scan_interval_minutes * 60
-                )
+                await asyncio.wait_for(stop_event.wait(), timeout=SCAN_TICK_SECONDS)
             except asyncio.TimeoutError:
                 pass
 
@@ -242,7 +304,9 @@ async def run_daemon(config: AgentConfig, stop_event: asyncio.Event | None = Non
                 pass
 
     logger.info("Entering main loop")
-    await asyncio.gather(scan_loop(), task_loop(), heartbeat_loop(), return_exceptions=True)
+    await asyncio.gather(
+        scan_loop(), task_loop(), heartbeat_loop(), return_exceptions=True
+    )
 
     await ledger.close()
     await client.close()
@@ -331,10 +395,12 @@ def cmd_status(args) -> None:
     config = AgentConfig.load()
     print(f"Agent ID:      {config.agent_id or '(not registered)'}")
     print(f"SaaS URL:      {config.saas_url}")
-    print(f"API Key:       {config.api_key[:8] + '...' if config.api_key else '(not set)'}")
+    # Never echo any part of the key: this output is pasted into support
+    # tickets and captured in service logs.
+    print(f"API Key:       {'configured' if config.api_key else '(not set)'}")
     print(f"Config file:   {config.config_path}")
     print(f"Ledger:        {config.ledger_path}")
-    print(f"Scan interval: {config.scan_interval_minutes} min")
+    print(f"Scan interval: {config.scan_interval_minutes} min (fallback)")
     print(f"Task poll:     {config.task_poll_interval_seconds} sec")
 
     if not (config.api_key and config.agent_id):
@@ -369,16 +435,28 @@ def main():
     parser = argparse.ArgumentParser(
         prog="lawhand-agent", description="LawHand File Share Relay Agent"
     )
-    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {__version__}"
+    )
 
     sub = parser.add_subparsers(dest="command", required=True)
 
     reg = sub.add_parser("register", help="Register this agent with the SaaS")
-    reg.add_argument("--code", required=True, help="Pairing code from Administration → File Shares")
-    reg.add_argument("--name", default="", help="Agent display name (defaults to hostname)")
+    reg.add_argument(
+        "--code", required=True, help="Pairing code from Administration → File Shares"
+    )
+    reg.add_argument(
+        "--name", default="", help="Agent display name (defaults to hostname)"
+    )
     reg.add_argument("--url", default="https://getlawhand.com", help="SaaS API URL")
-    reg.add_argument("--smb-username", default="", help="Optional fallback SMB username")
-    reg.add_argument("--smb-password", default="", help="Optional fallback SMB password (prompted if omitted)")
+    reg.add_argument(
+        "--smb-username", default="", help="Optional fallback SMB username"
+    )
+    reg.add_argument(
+        "--smb-password",
+        default="",
+        help="Optional fallback SMB password (prompted if omitted)",
+    )
     reg.add_argument("--smb-domain", default="", help="Optional fallback SMB domain")
     reg.set_defaults(func=cmd_register)
 
@@ -386,7 +464,9 @@ def main():
     start.set_defaults(func=cmd_start)
 
     scan = sub.add_parser("scan", help="Scan now (all assigned shares, or one path)")
-    scan.add_argument("--share-path", default="", help='UNC path (e.g. "\\\\server\\share")')
+    scan.add_argument(
+        "--share-path", default="", help='UNC path (e.g. "\\\\server\\share")'
+    )
     scan.add_argument("--share-id", default="", help="Share ID override")
     scan.set_defaults(func=cmd_scan)
 

@@ -58,16 +58,20 @@ try {
     Pop-Location
 }
 
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCODE" }
+
 $ExePath = Join-Path $DistDir "lawhand-agent.exe"
 if (-not (Test-Path $ExePath)) { throw "Build did not produce $ExePath" }
 Write-Host "Built $ExePath" -ForegroundColor Green
 
 # Smoke test: the binary must at least report its version.
 & $ExePath --version
+if ($LASTEXITCODE -ne 0) { throw "The built agent failed to run (exit code $LASTEXITCODE)" }
 
 if ($SignToolCertThumbprint) {
     Write-Host "Signing $ExePath"
     & signtool sign /sha1 $SignToolCertThumbprint /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $ExePath
+    if ($LASTEXITCODE -ne 0) { throw "signtool failed with exit code $LASTEXITCODE" }
 }
 
 if ($SkipMsi) {
@@ -86,6 +90,12 @@ if (-not (Get-Command wix -ErrorAction SilentlyContinue)) {
     }
 }
 
+# WiX v5 resolves -ext only against extensions that were added first; without
+# this the build fails with WIX0144 for WixToolset.Util.wixext.
+Write-Host "Adding the WiX Util extension..."
+wix extension add -g WixToolset.Util.wixext | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "wix extension add failed with exit code $LASTEXITCODE" }
+
 $MsiPath = Join-Path $DistDir "lawhand-agent-$Version-x64.msi"
 wix build (Join-Path $PackagingDir "lawhand-agent.wxs") `
     -arch x64 `
@@ -93,9 +103,12 @@ wix build (Join-Path $PackagingDir "lawhand-agent.wxs") `
     -d "ProductVersion=$MsiVersion" `
     -ext WixToolset.Util.wixext `
     -o $MsiPath
+if ($LASTEXITCODE -ne 0) { throw "wix build failed with exit code $LASTEXITCODE" }
+if (-not (Test-Path $MsiPath)) { throw "wix build did not produce $MsiPath" }
 
 if ($SignToolCertThumbprint) {
     & signtool sign /sha1 $SignToolCertThumbprint /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $MsiPath
+    if ($LASTEXITCODE -ne 0) { throw "signtool failed with exit code $LASTEXITCODE" }
 }
 
 Write-Host "Built $MsiPath" -ForegroundColor Green
