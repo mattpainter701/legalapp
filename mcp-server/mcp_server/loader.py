@@ -246,6 +246,68 @@ def resolved_table_limit(default_limit: int | None, table_limit: int | None) -> 
     return table_limit if table_limit is not None else default_limit
 
 
+def database_size_bytes(conn) -> int:
+    with conn.cursor() as cur:
+        cur.execute("SELECT pg_database_size(current_database())")
+        row = cur.fetchone()
+    return int(row[0] if row else 0)
+
+
+def enforce_database_budget(conn, max_database_bytes: int | None) -> None:
+    if max_database_bytes is None:
+        return
+    actual = database_size_bytes(conn)
+    if actual >= max_database_bytes:
+        raise RuntimeError(
+            "CourtListener load stopped at database budget: "
+            f"current={actual} bytes limit={max_database_bytes} bytes"
+        )
+
+
+def refresh_courtlistener_coverage_ledger(conn, court_ids: set[str] | None = None) -> None:
+    """Persist per-court observable coverage for the operator corpus inventory."""
+    filters = ""
+    params: list[object] = []
+    if court_ids:
+        filters = "WHERE d.court_id = ANY(%s)"
+        params.append(sorted(court_ids))
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            INSERT INTO corpus_coverage_ledger (
+                source_key, partition_key, expected_coverage, acquisition_state,
+                rows_loaded, chunks_loaded, vectors_loaded, first_document_date,
+                last_document_date, last_checked_at, metadata, updated_at
+            )
+            SELECT 'courtlistener:bulk', d.court_id,
+                   jsonb_build_object('court_id', d.court_id, 'source', 'CourtListener bulk'),
+                   CASE WHEN COUNT(ch.id) = 0 THEN 'loading' ELSE 'partial' END,
+                   COUNT(DISTINCT o.opinion_id), COUNT(ch.id),
+                   COUNT(ch.id) FILTER (WHERE ch.embedding IS NOT NULL),
+                   MIN(oc.date_filed), MAX(oc.date_filed), now(),
+                   jsonb_build_object('dockets', COUNT(DISTINCT d.docket_id),
+                                      'clusters', COUNT(DISTINCT oc.cluster_id)), now()
+            FROM dockets d
+            LEFT JOIN opinion_clusters oc ON oc.docket_id = d.docket_id
+            LEFT JOIN opinions o ON o.cluster_id = oc.cluster_id
+            LEFT JOIN opinion_chunks ch ON ch.opinion_id = o.opinion_id
+            {filters}
+            GROUP BY d.court_id
+            ON CONFLICT (source_key, partition_key) DO UPDATE SET
+                rows_loaded = EXCLUDED.rows_loaded,
+                chunks_loaded = EXCLUDED.chunks_loaded,
+                vectors_loaded = EXCLUDED.vectors_loaded,
+                first_document_date = EXCLUDED.first_document_date,
+                last_document_date = EXCLUDED.last_document_date,
+                last_checked_at = EXCLUDED.last_checked_at,
+                acquisition_state = EXCLUDED.acquisition_state,
+                metadata = EXCLUDED.metadata,
+                updated_at = now()
+            """,
+            params,
+        )
+
+
 def _target_court_ids(
     conn,
     *,
@@ -346,6 +408,8 @@ def _load_csv(
     table_name: str,
     limit: int | None = None,
     row_filter: Callable[[dict], bool] | None = None,
+    max_database_bytes: int | None = None,
+    budget_check_every: int = 1000,
 ) -> int:
     if limit is not None and limit <= 0:
         return 0
@@ -473,8 +537,11 @@ def _load_csv(
                     ],
                 )
             count += max(cur.rowcount, 0)
+            if count and count % budget_check_every == 0:
+                enforce_database_budget(conn, max_database_bytes)
             if limit is not None and count >= limit:
                 break
+    enforce_database_budget(conn, max_database_bytes)
     conn.commit()
     return count
 
@@ -511,6 +578,7 @@ def load_mvp_corpus(
     include_scotus: bool = True,
     precedential_only: bool = True,
     additional_court_ids: tuple[str, ...] = (),
+    max_database_bytes: int | None = None,
 ) -> dict[str, int]:
     counts: dict[str, int] = {}
     with connect(db_url) as conn:
@@ -537,6 +605,7 @@ def load_mvp_corpus(
                 "dockets",
                 limit=resolved_table_limit(limit, docket_limit),
                 row_filter=lambda row: str(_value(row, "court_id", "court") or "") in target_courts,
+                max_database_bytes=max_database_bytes,
             )
         docket_ids = _docket_ids_for_courts(conn, target_courts)
 
@@ -551,6 +620,7 @@ def load_mvp_corpus(
                     str(_value(row, "docket_id") or "") in docket_ids
                     and should_keep_cluster(row, precedential_only=precedential_only)
                 ),
+                max_database_bytes=max_database_bytes,
             )
         cluster_ids = _cluster_ids_for_courts(
             conn,
@@ -566,6 +636,7 @@ def load_mvp_corpus(
                 "opinions",
                 limit=resolved_table_limit(limit, opinion_limit),
                 row_filter=lambda row: str(_value(row, "cluster_id") or "") in cluster_ids,
+                max_database_bytes=max_database_bytes,
             )
         opinion_ids = _opinion_ids_for_courts(
             conn,
@@ -581,6 +652,7 @@ def load_mvp_corpus(
                 "citations",
                 limit=resolved_table_limit(limit, citation_limit),
                 row_filter=lambda row: str(_value(row, "cluster_id") or "") in cluster_ids,
+                max_database_bytes=max_database_bytes,
             )
 
         citation_maps = sorted(bulk_dir.glob("citation-map-*.csv.bz2"))
@@ -594,7 +666,10 @@ def load_mvp_corpus(
                     str(_value(row, "citing_opinion_id") or "") in opinion_ids
                     and str(_value(row, "cited_opinion_id") or "") in opinion_ids
                 ),
+                max_database_bytes=max_database_bytes,
             )
+        refresh_courtlistener_coverage_ledger(conn, target_courts)
+        conn.commit()
     return counts
 
 
@@ -645,6 +720,8 @@ def create_chunks(db_url: str | None = None, limit: int | None = None) -> int:
                     )
                     created += cur.rowcount
         conn.commit()
+        refresh_courtlistener_coverage_ledger(conn)
+        conn.commit()
     return created
 
 
@@ -661,6 +738,7 @@ def main() -> None:
     parser.add_argument("--cluster-limit", type=int)
     parser.add_argument("--opinion-limit", type=int)
     parser.add_argument("--citation-limit", type=int)
+    parser.add_argument("--max-database-gb", type=float, help="Stop before this logical database size")
     parser.add_argument("--db-url")
     parser.add_argument("--mvp-states", default=os.getenv("COURTLISTENER_MVP_STATES", ",".join(DEFAULT_MVP_STATES)))
     parser.add_argument(
@@ -705,6 +783,7 @@ def main() -> None:
                     *parse_court_ids(os.getenv("COURTLISTENER_EXTRA_COURT_IDS")),
                     *(court_id.lower() for court_id in (args.court_ids or [])),
                 ))),
+                max_database_bytes=(int(args.max_database_gb * 1024 ** 3) if args.max_database_gb else None),
             )
         )
     if args.chunk_opinions:

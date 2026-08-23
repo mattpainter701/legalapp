@@ -27,6 +27,7 @@ from mcp_server.loader import (
     iter_bulk_csv_rows,
     parse_court_ids,
     parse_mvp_states,
+    parse_court_ids,
     resolved_table_limit,
     should_keep_cluster,
 )
@@ -431,6 +432,24 @@ def test_repository_status_tools_read_ingest_and_embedding_progress():
     assert "embedding IS NOT NULL" in statements
 
 
+def test_corpus_status_includes_declared_coverage_ledger():
+    conn = RecordingConnection()
+
+    CourtListenerRepository(conn).corpus_status()
+
+    statements = "\n".join(sql for sql, _ in conn.cursor_obj.executions)
+    assert "FROM corpus_coverage_ledger" in statements
+    assert "acquisition_state" in statements
+
+
+def test_loader_persists_per_court_coverage_ledger_contract():
+    source = (ROOT / "mcp_server" / "loader.py").read_text()
+
+    assert "INSERT INTO corpus_coverage_ledger" in source
+    assert "'courtlistener:bulk'" in source
+    assert "vectors_loaded" in source
+
+
 def test_query_embedding_client_posts_to_configured_provider(monkeypatch):
     calls = []
 
@@ -506,6 +525,10 @@ def test_loader_supports_table_specific_smoke_limits():
     assert resolved_table_limit(1000, None) == 1000
     assert resolved_table_limit(1000, 20) == 20
     assert resolved_table_limit(None, 20) == 20
+
+
+def test_loader_parses_explicit_court_allowlist():
+    assert parse_court_ids("scotus, CA8,scotus, ca9") == ("scotus", "ca8", "ca9")
 
 
 def test_loader_parses_backslash_escaped_multiline_csv_fields(tmp_path):

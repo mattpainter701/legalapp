@@ -156,6 +156,35 @@ CREATE TABLE IF NOT EXISTS source_sync_states (
     PRIMARY KEY (source_key, partition_key)
 );
 
+-- Declares what a source partition is expected to contain, separately from the
+-- observed sync cursor. This lets operators distinguish "complete" from a
+-- successful-but-partial sync and report known coverage gaps later.
+CREATE TABLE IF NOT EXISTS corpus_coverage_ledger (
+    source_key text NOT NULL,
+    partition_key text NOT NULL,
+    expected_coverage jsonb NOT NULL DEFAULT '{}'::jsonb,
+    expected_item_count bigint,
+    acquisition_state text NOT NULL DEFAULT 'not_started',
+    snapshot_date date,
+    source_release text,
+    rows_loaded bigint NOT NULL DEFAULT 0,
+    chunks_loaded bigint NOT NULL DEFAULT 0,
+    vectors_loaded bigint NOT NULL DEFAULT 0,
+    bytes_loaded bigint NOT NULL DEFAULT 0,
+    first_document_date date,
+    last_document_date date,
+    upstream_modified_at timestamptz,
+    last_checked_at timestamptz,
+    stale_after timestamptz,
+    gap_reason text,
+    owner text,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (source_key, partition_key),
+    CHECK (acquisition_state IN ('not_started', 'staged', 'loading', 'indexed',
+        'complete', 'partial', 'blocked', 'retired'))
+);
+
 CREATE TABLE IF NOT EXISTS legal_documents (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     source_key text NOT NULL REFERENCES legal_sources(source_key) ON DELETE RESTRICT,
@@ -218,6 +247,7 @@ CREATE INDEX IF NOT EXISTS ix_opinion_chunks_court ON opinion_chunks(court_id);
 CREATE INDEX IF NOT EXISTS ix_opinion_chunks_embedding_version ON opinion_chunks(embedding_version);
 CREATE INDEX IF NOT EXISTS ix_opinions_source_modified_at ON opinions(source_modified_at);
 CREATE INDEX IF NOT EXISTS ix_source_sync_states_status ON source_sync_states(status, updated_at);
+CREATE INDEX IF NOT EXISTS ix_corpus_coverage_ledger_state ON corpus_coverage_ledger(acquisition_state, updated_at);
 CREATE INDEX IF NOT EXISTS ix_legal_sources_priority ON legal_sources(enabled, priority, source_key);
 CREATE INDEX IF NOT EXISTS ix_legal_documents_source ON legal_documents(source_key, document_type);
 CREATE INDEX IF NOT EXISTS ix_legal_documents_citation ON legal_documents(citation) WHERE citation IS NOT NULL;
