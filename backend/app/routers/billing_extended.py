@@ -16,7 +16,11 @@ from app.database import get_db, set_tenant_context, async_session_maker
 from app.middleware.tenant import get_current_user
 from app.services.access_control import require_finance_admin
 from app.routers.billing import _SUBSCRIPTION_HANDLERS
-from app.services.stripe_webhook_guard import claim_event, ordering_object_id
+from app.services.stripe_webhook_guard import (
+    StripeTargetUnresolved,
+    claim_event,
+    ordering_object_id,
+)
 from app.models.billing import TimeEntry, Expense, Invoice, InvoiceLineItem, Payment
 from app.models.plugin import Matter
 from app.models.tenant import Tenant, TenantSettings
@@ -1518,7 +1522,15 @@ async def stripe_webhook(
     # so Stripe retries; the claim row rolls back with it, so the retry is able
     # to claim the event again. Genuine poison-pill events are bounded by
     # Stripe's own retry window rather than by silently dropping the first one.
-    await handler(db, event_data)
+    try:
+        await handler(db, event_data)
+    except StripeTargetUnresolved as exc:
+        # Release the claim so the event stays replayable once the missing
+        # metadata is backfilled. Committing a claim for an event that applied
+        # no work would make that replay a silent duplicate.
+        await db.rollback()
+        logger.error("Stripe %s applied no work: %s", event_type, exc)
+        return {"status": "unresolved"}
     await db.commit()
 
     return {"status": "received"}

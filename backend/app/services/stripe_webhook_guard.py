@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,21 +30,31 @@ logger = logging.getLogger(__name__)
 # Events whose ordering is decided per subscription/customer rather than per
 # invoice. The value is the dotted path into the event object that identifies
 # the thing whose state is being mutated.
+# Every one of these events mutates *tenant-level* billing state, so they are
+# ordered against the customer rather than the subscription.
+#
+# Ordering by subscription id looks natural and is wrong: when a firm cancels
+# and resubscribes, Stripe issues a new subscription id. A delayed
+# `customer.subscription.deleted` for the old id has no newer event under that
+# id, so it would never be classified as stale, and would then clear billing
+# state that a live subscription owns. The customer is the identity that
+# persists across the whole lifecycle.
 _OBJECT_ID_PATHS: dict[str, tuple[str, ...]] = {
-    "customer.subscription.updated": ("id",),
-    "customer.subscription.deleted": ("id",),
-    "invoice.paid": ("subscription", "customer"),
-    "invoice.payment_succeeded": ("subscription", "customer"),
-    "invoice.payment_failed": ("subscription", "customer"),
+    "customer.subscription.updated": ("customer",),
+    "customer.subscription.deleted": ("customer",),
+    "invoice.paid": ("customer",),
+    "invoice.payment_succeeded": ("customer",),
+    "invoice.payment_failed": ("customer",),
 }
 
 
 def ordering_object_id(event_type: str, obj: dict[str, Any]) -> str | None:
     """Identify which Stripe object an event's ordering should be judged against.
 
-    Subscription events order against the subscription. Invoice events order
-    against the subscription they belong to, falling back to the customer when
-    an invoice carries no subscription (one-off charges).
+    Subscription and invoice lifecycle events all order against the customer,
+    because they all write tenant-level state that outlives any one
+    subscription id. See ``_OBJECT_ID_PATHS`` for why the subscription id is
+    the wrong key.
     """
     for key in _OBJECT_ID_PATHS.get(event_type, ()):
         value = obj.get(key)
@@ -53,6 +63,17 @@ def ordering_object_id(event_type: str, obj: dict[str, Any]) -> str | None:
         if isinstance(value, str) and value:
             return value
     return None
+
+
+class StripeTargetUnresolved(Exception):
+    """A handler could not identify the tenant or record an event refers to.
+
+    Raised instead of returning quietly so the dispatcher can release the claim.
+    A claim that survives an event which applied no work is worse than no claim:
+    the operator backfills the missing metadata, replays the event from the
+    Stripe dashboard, and the replay is rejected as a duplicate -- leaving the
+    payment permanently unreconciled with no way back.
+    """
 
 
 class EventClaim:
@@ -83,6 +104,22 @@ async def claim_event(
     concurrently loses the unique-constraint race rather than double-applying.
     """
     if object_id:
+        # Serialize claims per object before reading the high-water mark.
+        #
+        # Without this, two events for the same customer delivered concurrently
+        # both read "nothing newer" before either row is committed -- the unique
+        # constraint covers event_id alone, so both inserts succeed, both
+        # handlers run, and the older one can commit last and revert billing
+        # state. That is precisely the reversion this guard exists to prevent.
+        #
+        # A transaction-scoped advisory lock keyed on the object id makes the
+        # read-then-insert atomic against other claims for the same object,
+        # while leaving unrelated customers fully concurrent. It is released
+        # when the surrounding transaction ends, on commit or rollback.
+        await db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+            {"key": f"stripe_webhook_object:{object_id}"},
+        )
         newest = await db.scalar(
             select(StripeWebhookEvent.event_created)
             .where(StripeWebhookEvent.object_id == object_id)

@@ -117,12 +117,34 @@ export const normalizeApiError = (errorOrResponse) => {
   return normalized
 }
 
-// Nginx gives the API 30s (proxy_read_timeout) before it returns 504. Axios
-// defaults to no timeout at all, so a slow query showed as an indefinite
-// spinner until the gateway gave up, then surfaced as an indistinguishable
-// network error. Time out just inside the gateway so the client owns the
-// deadline and can say something specific about it.
+// Axios defaults to no timeout at all, so a slow query showed an indefinite
+// spinner and then an indistinguishable network error. The client now owns a
+// deadline so it can say something specific about it.
+//
+// Two deadlines, because the gateway has two. `nginx/snippets/api_proxy.conf`
+// allows proxy_read_timeout 300s, and several routes legitimately use it:
+// uploads, template rendering, imports and reconciliation, document revisions,
+// and artifact/invoice exports. A blanket short timeout would abort those
+// client-side while the server kept working, inviting a retry that duplicates
+// the effect. Bounded list and query calls get the short deadline; the routes
+// below get the gateway's.
 export const REQUEST_TIMEOUT_MS = 25000
+export const LONG_REQUEST_TIMEOUT_MS = 300000
+
+// Matched against the request path. Kept here rather than at each call site so
+// a new long-running endpoint cannot silently inherit the short deadline.
+const LONG_REQUEST_PATTERNS = [
+  /\/upload(\/|$)/,
+  /\/export(\/|$)/,
+  /\/imports(\/|$)/,
+  /\/render(-file)?(\/|$)/,
+  /\/analyze(\/|$)/,
+  /\/revisions(\/|$)/,
+]
+
+export const isLongRunningPath = (url) => (
+  typeof url === 'string' && LONG_REQUEST_PATTERNS.some((pattern) => pattern.test(url))
+)
 
 const api = axios.create({
   baseURL: BASE_URL,
@@ -131,6 +153,18 @@ const api = axios.create({
     'Content-Type': 'application/json',
   },
   withCredentials: true, // Allow httpOnly cookies to be sent with requests
+})
+
+api.interceptors.request.use((config) => {
+  // An explicit per-call timeout always wins.
+  if (config.timeout === REQUEST_TIMEOUT_MS && isLongRunningPath(config.url)) {
+    config.timeout = LONG_REQUEST_TIMEOUT_MS
+  }
+  // A multipart body is a long operation whatever its path.
+  if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+    config.timeout = LONG_REQUEST_TIMEOUT_MS
+  }
+  return config
 })
 
 const isAiOperationPath = (url = '') => (

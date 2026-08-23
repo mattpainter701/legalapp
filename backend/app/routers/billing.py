@@ -12,7 +12,11 @@ from app.database import get_db
 from app.services.access_control import require_finance_admin
 from app.models.mcp_product import MCPUsageEvent
 from app.models.tenant import Tenant
-from app.services.stripe_webhook_guard import claim_event, ordering_object_id
+from app.services.stripe_webhook_guard import (
+    StripeTargetUnresolved,
+    claim_event,
+    ordering_object_id,
+)
 
 settings = get_settings()
 router = APIRouter(prefix="/billing", tags=["billing"])
@@ -258,7 +262,15 @@ async def stripe_webhook(
     # Deliberately not caught. A handler that fails must return 5xx so Stripe
     # retries; swallowing it would drop the event permanently. The claim row is
     # rolled back with the failed transaction, so the retry can claim it again.
-    await handler(db, event_data)
+    try:
+        await handler(db, event_data)
+    except StripeTargetUnresolved as exc:
+        # Release the claim so a replay after the data is repaired can still be
+        # applied. Returning 2xx is deliberate: an immediate Stripe retry cannot
+        # succeed either, and the operator replays once the cause is fixed.
+        await db.rollback()
+        logger.error("Stripe %s applied no work: %s", event_type, exc)
+        return {"status": "unresolved", "event_type": event_type}
     await db.commit()
 
     return {"status": "ok", "event_type": event_type}
@@ -266,24 +278,24 @@ async def stripe_webhook(
 
 async def _find_tenant_by_customer(
     db: AsyncSession, customer_id: str, *, event_type: str
-) -> Tenant | None:
-    """Resolve the tenant a Stripe customer belongs to, loudly.
+) -> Tenant:
+    """Resolve the tenant a Stripe customer belongs to, or refuse to proceed.
 
     A webhook for a customer we cannot place is not routine: it usually means a
     checkout completed without ``stripe_customer_id`` ever being persisted, so
-    the firm is paying and no part of the application knows. Log at error level
-    rather than returning ``None`` silently.
+    the firm is paying and no part of the application knows. Raising rather than
+    returning ``None`` both surfaces it and keeps the event replayable, because
+    the dispatcher releases the claim.
     """
     result = await db.execute(
         select(Tenant).where(Tenant.stripe_customer_id == customer_id)
     )
     tenant = result.scalar_one_or_none()
     if tenant is None:
-        logger.error(
-            "Stripe %s references customer %s with no matching tenant. A paying "
-            "customer may be unlinked -- reconcile stripe_customer_id.",
-            event_type,
-            _mask(customer_id),
+        raise StripeTargetUnresolved(
+            f"{event_type} references customer {_mask(customer_id)} with no "
+            "matching tenant; a paying customer may be unlinked -- reconcile "
+            "stripe_customer_id"
         )
     return tenant
 
@@ -296,11 +308,32 @@ async def _handle_subscription_updated(db: AsyncSession, subscription: dict) -> 
     tenant = await _find_tenant_by_customer(
         db, customer_id, event_type="customer.subscription.updated"
     )
-    if tenant is None:
-        return
 
     status = subscription.get("status", "")
     subscription_id = subscription.get("id")
+
+    # Same identity rule as deletion, for the terminal states. An update that
+    # reports a *different* subscription as finished is describing one the
+    # tenant has already moved off; applying it would rebind the tenant to the
+    # superseded id and downgrade a live subscription. A non-terminal status for
+    # another id is a genuine new subscription and is applied normally.
+    current_subscription_id = tenant.stripe_subscription_id
+    if (
+        subscription_id
+        and current_subscription_id
+        and subscription_id != current_subscription_id
+        and status in ("canceled", "incomplete_expired", "unpaid")
+    ):
+        logger.info(
+            "Ignoring Stripe %r update for superseded subscription %s on customer "
+            "%s; the tenant now holds %s.",
+            status,
+            _mask(subscription_id),
+            _mask(customer_id),
+            _mask(current_subscription_id),
+        )
+        return
+
     tenant.stripe_subscription_id = subscription_id
     tenant.stripe_subscription_status = status or "unknown"
 
@@ -346,7 +379,26 @@ async def _handle_subscription_deleted(db: AsyncSession, subscription: dict) -> 
     tenant = await _find_tenant_by_customer(
         db, customer_id, event_type="customer.subscription.deleted"
     )
-    if tenant is None:
+
+    # Only the subscription the tenant currently holds may clear its billing
+    # state. A firm that cancels and resubscribes gets a *new* subscription id,
+    # so a delayed deletion for the superseded one would otherwise suspend a
+    # paying customer. Ordering alone cannot catch this: the two ids are
+    # different objects, so the old deletion never looks stale.
+    deleted_subscription_id = subscription.get("id")
+    current_subscription_id = tenant.stripe_subscription_id
+    if (
+        deleted_subscription_id
+        and current_subscription_id
+        and deleted_subscription_id != current_subscription_id
+    ):
+        logger.info(
+            "Ignoring Stripe deletion of superseded subscription %s for customer "
+            "%s; the tenant now holds %s.",
+            _mask(deleted_subscription_id),
+            _mask(customer_id),
+            _mask(current_subscription_id),
+        )
         return
 
     tenant.billing_tier = "payg"
@@ -363,8 +415,6 @@ async def _handle_payment_failed(db: AsyncSession, invoice: dict) -> None:
     tenant = await _find_tenant_by_customer(
         db, customer_id, event_type="invoice.payment_failed"
     )
-    if tenant is None:
-        return
 
     tenant.stripe_subscription_status = "past_due"
     tenant.mcp_billing_status = "past_due"
@@ -375,8 +425,6 @@ async def _handle_payment_succeeded(db: AsyncSession, invoice: dict) -> None:
     if not customer_id:
         return
     tenant = await _find_tenant_by_customer(db, customer_id, event_type="invoice.paid")
-    if tenant is None:
-        return
     if tenant.stripe_subscription_id:
         tenant.stripe_subscription_status = "active"
         tenant.mcp_billing_status = "active"

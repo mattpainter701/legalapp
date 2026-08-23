@@ -13,27 +13,34 @@ from app.services.stripe_webhook_guard import claim_event, ordering_object_id
 
 
 class TestOrderingObjectId:
-    def test_subscription_events_order_against_the_subscription(self):
+    def test_subscription_events_order_against_the_customer(self):
+        """Not the subscription id.
+
+        A firm that cancels and resubscribes receives a new subscription id, so
+        a delayed deletion for the old one would have no newer event under its
+        own id and would never look stale. The customer persists across the
+        whole lifecycle.
+        """
         assert (
-            ordering_object_id("customer.subscription.updated", {"id": "sub_1"})
-            == "sub_1"
+            ordering_object_id(
+                "customer.subscription.updated", {"id": "sub_1", "customer": "cus_1"}
+            )
+            == "cus_1"
         )
         assert (
-            ordering_object_id("customer.subscription.deleted", {"id": "sub_9"})
-            == "sub_9"
+            ordering_object_id(
+                "customer.subscription.deleted", {"id": "sub_9", "customer": "cus_1"}
+            )
+            == "cus_1"
         )
 
-    def test_invoice_events_order_against_their_subscription(self):
+    def test_invoice_events_order_against_the_customer(self):
         obj = {"id": "in_1", "subscription": "sub_1", "customer": "cus_1"}
-        assert ordering_object_id("invoice.paid", obj) == "sub_1"
-
-    def test_invoice_without_subscription_falls_back_to_customer(self):
-        obj = {"id": "in_1", "customer": "cus_1"}
-        assert ordering_object_id("invoice.payment_failed", obj) == "cus_1"
+        assert ordering_object_id("invoice.paid", obj) == "cus_1"
 
     def test_expanded_object_reference_is_unwrapped(self):
-        obj = {"id": "in_1", "subscription": {"id": "sub_7"}, "customer": "cus_1"}
-        assert ordering_object_id("invoice.paid", obj) == "sub_7"
+        obj = {"id": "in_1", "customer": {"id": "cus_7"}}
+        assert ordering_object_id("invoice.paid", obj) == "cus_7"
 
     def test_unknown_event_type_has_no_ordering_key(self):
         assert ordering_object_id("customer.created", {"id": "cus_1"}) is None
@@ -82,14 +89,16 @@ class TestClaimEvent:
         """A retried cancellation must not undo a later resubscription.
 
         This is the sequence that previously downgraded a paying firm and
-        nulled its subscription id, disabling its own recovery path.
+        nulled its subscription id, disabling its own recovery path. Because
+        both events order against the customer, it holds even when the
+        resubscription carries a different subscription id.
         """
         newer = await claim_event(
             db_session,
             event_id="evt_active",
             event_type="customer.subscription.updated",
             event_created=2000,
-            object_id="sub_race",
+            object_id="cus_race",
         )
         assert newer.should_process is True
         await db_session.commit()
@@ -99,10 +108,44 @@ class TestClaimEvent:
             event_id="evt_canceled",
             event_type="customer.subscription.deleted",
             event_created=1000,
-            object_id="sub_race",
+            object_id="cus_race",
         )
         assert stale.should_process is False
         assert stale.reason == "stale"
+
+    async def test_resubscription_with_a_new_subscription_id_is_still_ordered(
+        self, db_session
+    ):
+        """The real Stripe shape: cancel and resubscribe issues a *new* id.
+
+        Ordering by subscription id would treat these as unrelated objects and
+        let the delayed deletion through.
+        """
+        resubscribed = await claim_event(
+            db_session,
+            event_id="evt_new_sub_active",
+            event_type="customer.subscription.updated",
+            event_created=5000,
+            object_id=ordering_object_id(
+                "customer.subscription.updated",
+                {"id": "sub_new", "customer": "cus_resub"},
+            ),
+        )
+        assert resubscribed.should_process is True
+        await db_session.commit()
+
+        delayed_delete = await claim_event(
+            db_session,
+            event_id="evt_old_sub_deleted",
+            event_type="customer.subscription.deleted",
+            event_created=4000,
+            object_id=ordering_object_id(
+                "customer.subscription.deleted",
+                {"id": "sub_old", "customer": "cus_resub"},
+            ),
+        )
+        assert delayed_delete.should_process is False
+        assert delayed_delete.reason == "stale"
 
     async def test_newer_event_for_same_object_still_applies(self, db_session):
         await claim_event(

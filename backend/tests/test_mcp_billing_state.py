@@ -66,3 +66,87 @@ async def test_subscription_deletion_suspends_mcp_billing(db_session, test_tenan
     assert test_tenant.stripe_subscription_id is None
     assert test_tenant.stripe_subscription_status == "canceled"
     assert test_tenant.mcp_billing_status == "suspended"
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_superseded_subscription_leaves_a_paying_firm_alone(
+    db_session, test_tenant
+):
+    """A resubscription issues a new subscription id.
+
+    Ordering cannot catch this on its own: the delayed deletion names a
+    different subscription, so it is not a stale event about the same object.
+    Identity has to be checked directly, or the firm that just resubscribed is
+    suspended while paying.
+    """
+    test_tenant.stripe_customer_id = "cus_resubscribed"
+    test_tenant.stripe_subscription_id = "sub_new"
+    test_tenant.stripe_subscription_status = "active"
+    test_tenant.billing_tier = "flat"
+    test_tenant.mcp_billing_status = "active"
+    await db_session.commit()
+
+    await billing._handle_subscription_deleted(
+        db_session, {"id": "sub_old", "customer": "cus_resubscribed"}
+    )
+    await db_session.commit()
+    await db_session.refresh(test_tenant)
+
+    assert test_tenant.stripe_subscription_id == "sub_new"
+    assert test_tenant.stripe_subscription_status == "active"
+    assert test_tenant.billing_tier == "flat"
+    assert test_tenant.mcp_billing_status == "active"
+
+
+@pytest.mark.asyncio
+async def test_deleting_the_current_subscription_still_suspends(db_session, test_tenant):
+    test_tenant.stripe_customer_id = "cus_current"
+    test_tenant.stripe_subscription_id = "sub_current"
+    test_tenant.mcp_billing_status = "active"
+    await db_session.commit()
+
+    await billing._handle_subscription_deleted(
+        db_session, {"id": "sub_current", "customer": "cus_current"}
+    )
+    await db_session.commit()
+    await db_session.refresh(test_tenant)
+
+    assert test_tenant.stripe_subscription_id is None
+    assert test_tenant.stripe_subscription_status == "canceled"
+    assert test_tenant.mcp_billing_status == "suspended"
+
+
+@pytest.mark.asyncio
+async def test_terminal_update_for_a_superseded_subscription_is_ignored(
+    db_session, test_tenant
+):
+    test_tenant.stripe_customer_id = "cus_terminal"
+    test_tenant.stripe_subscription_id = "sub_live"
+    test_tenant.stripe_subscription_status = "active"
+    test_tenant.billing_tier = "flat"
+    await db_session.commit()
+
+    await billing._handle_subscription_updated(
+        db_session,
+        {
+            "id": "sub_dead",
+            "customer": "cus_terminal",
+            "status": "canceled",
+            "items": {"data": []},
+        },
+    )
+    await db_session.commit()
+    await db_session.refresh(test_tenant)
+
+    assert test_tenant.stripe_subscription_id == "sub_live"
+    assert test_tenant.billing_tier == "flat"
+
+
+@pytest.mark.asyncio
+async def test_unknown_customer_raises_so_the_claim_can_be_released(db_session):
+    from app.services.stripe_webhook_guard import StripeTargetUnresolved
+
+    with pytest.raises(StripeTargetUnresolved):
+        await billing._handle_payment_failed(
+            db_session, {"customer": "cus_never_seen", "attempt_count": 1}
+        )
