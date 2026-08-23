@@ -530,7 +530,7 @@ jobs:
         shell: bash
         run: |
           changed="$(git diff --name-only "${{ steps.comparison.outputs.base }}...$GITHUB_SHA")"
-          if printf '%s\n' "$changed" | grep -Eq '^(backend/requirements\.txt|mcp-server/requirements\.txt|scripts/(requirements\.txt|tabs3_export/requirements\.txt)|(frontend|office-addin|word-addin)/package\.json|agent/pyproject\.toml|litellm_config\.yaml|docker-compose.*\.yml|(backend|frontend|nginx|litellm|mcp-server)/Dockerfile)$'; then
+          if printf '%s\n' "$changed" | grep -Eq '^(backend/requirements\.txt|mcp-server/requirements\.txt|scripts/(requirements\.txt|tabs3_export/requirements\.txt)|(frontend|office-addin)/package\.json|agent/pyproject\.toml|litellm_config\.yaml|docker-compose.*\.yml|(backend|frontend|nginx|litellm|mcp-server)/Dockerfile)$'; then
             python scripts/generate_sbom_inventory.py
             git diff --exit-code -- sbom/sbom-inventory.json docs/SBOM_TRACKING_INVENTORY.md
           else

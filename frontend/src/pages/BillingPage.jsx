@@ -25,6 +25,17 @@ export default function BillingPage({ embedded = false }) {
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState(null)
   const [error, setError] = useState(null)
+
+  // Stripe reports a live subscription while the stored tier says
+  // pay-as-you-go: a reconciliation problem, not a plan the firm chose. Never
+  // upsell in this state — the firm is already paying for what we'd be selling.
+  const subscriptionDisagrees = Boolean(
+    status?.billing_tier === 'payg'
+    && status?.subscription_status
+    && !['canceled', 'incomplete_expired', ''].includes(
+      String(status.subscription_status).toLowerCase()
+    )
+  )
   const [successMsg, setSuccessMsg] = useState(null)
 
   useEffect(() => {
@@ -123,7 +134,21 @@ export default function BillingPage({ embedded = false }) {
             </div>
           </div>
 
-          {status?.billing_tier === 'payg' && (
+          {subscriptionDisagrees && (
+            <div className="mt-4 pt-4 border-t border-brand-line">
+              <p className="text-sm font-semibold text-brand-rose font-sans">
+                This plan does not match the subscription on file.
+              </p>
+              <p className="text-sm text-brand-ink-2 font-sans mt-1">
+                Stripe reports this firm&rsquo;s subscription as
+                {' '}<span className="font-semibold">{status.subscription_status}</span>, but the plan
+                above is pay-as-you-go. Do not purchase again — contact support so billing can be
+                reconciled, otherwise you may be charged twice.
+              </p>
+            </div>
+          )}
+
+          {status?.billing_tier === 'payg' && !subscriptionDisagrees && (
             <div className="mt-4 pt-4 border-t border-brand-line">
               <p className="text-sm text-brand-ink-2 font-sans mb-3">
                 On pay-as-you-go, usage is billed at a 10× markup on model cost.

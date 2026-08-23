@@ -67,6 +67,10 @@ export default function WorkspaceMcpAuthorizePage() {
             <p className="font-bold">Review-first safety boundary</p>
             <p className="mt-1 leading-6">LawHand assistants can research and prepare proposals. They cannot approve work, send email, or deliver documents through this connection. Your firm's normal reviewers and audit trail remain in control.</p>
           </div>
+          <div className="rounded-xl border border-brand-line bg-brand-bg px-4 py-4 text-sm text-brand-ink-2">
+            <p className="font-bold text-brand-ink">What leaves this workspace</p>
+            <p className="mt-1 leading-6">Approving lets this application read matter material within the scopes above, so that content is sent to whoever operates it. LawHand governs what its own tools will do — it cannot govern other tools connected to the same assistant. Only approve applications your firm has cleared to handle client-confidential material.</p>
+          </div>
           <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
             <button type="button" disabled={busy} onClick={() => handleDecision(false)} className="px-5 py-2.5 rounded-xl border border-brand-line text-brand-ink font-semibold text-sm hover:bg-brand-bg-soft disabled:opacity-50">Deny access</button>
             <button type="button" disabled={busy} onClick={() => handleDecision(true)} className="px-5 py-2.5 rounded-xl bg-brand-ink text-white font-semibold text-sm hover:bg-brand-ink-2 disabled:opacity-50">{busy ? 'Recording decision.' : 'Approve connection'}</button>

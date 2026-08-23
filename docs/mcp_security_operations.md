@@ -30,10 +30,34 @@ Workspace MCP and research MCP are separate products and identities:
 | Research identity | 240 protocol requests per product key per minute and 2,400 per tenant per minute by default, in addition to per-tool quotas. |
 | Limiter availability | Production fails closed with 503 if Redis cannot enforce principal limits. |
 | Hidden paths | Dot-prefixed paths such as `/.env`, `/.git/config`, `/.mcp.json`, and `/.cursor/mcp.json` return 404 instead of portal HTML. Exact OAuth discovery and ACME routes remain available. |
+| Revocation durability | Redis runs with an explicit `maxmemory` below its container limit and `--maxmemory-policy noeviction`. See "Redis is a security-bearing store" below. |
+| Untrusted document text | Extracted matter-document text is returned inside `<untrusted_document_text>` delimiters with counterfeit closing tags neutralized. See the [workspace adapter](workspace_mcp_adapter.md#untrusted-text-delimiting). |
 
 Rate and body defaults are configuration, not authorization. Raising them must
 not weaken tenant scoping, tool scopes, approval gates, audit records, or cloud
 storage integrity checks.
+
+## Redis is a security-bearing store
+
+Redis holds ordinary cache alongside two controls whose loss is not merely a
+performance event:
+
+- workspace refresh-token replay tombstones and revoked-family records
+- the revoked-JWT `jti` denylist
+
+Every key written by this application carries a TTL. That makes **all** keys
+"volatile", so `volatile-lru` is no safer here than `allkeys-lru` — either would
+discard revocation state under memory pressure and allow a token that was
+already burned to be replayed. An OOM kill has the same effect, without leaving
+the store to report it.
+
+Production therefore sets an explicit `maxmemory` below the container limit and
+`--maxmemory-policy noeviction`, so exhaustion refuses writes loudly (new
+sessions error) instead of silently weakening revocation.
+
+Operational rule: monitor `used_memory` against `maxmemory`. If it trends toward
+the ceiling, move the RAG cache to a separate instance rather than relaxing the
+eviction policy on the instance holding revocation state.
 
 ## Cloudflare edge policy
 

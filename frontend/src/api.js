@@ -45,11 +45,33 @@ const STATUS_FALLBACK_MESSAGES = {
   504: 'The request timed out. Please try again.',
 }
 
+// Axios reports a client-side timeout as a bare Error with no response, which
+// would otherwise fall through to the generic "Request failed". A timeout is a
+// distinct, retryable condition and deserves to say so.
+const isTimeoutError = (error) => (
+  error?.code === 'ECONNABORTED'
+  || error?.code === 'ETIMEDOUT'
+  || (typeof error?.message === 'string' && error.message.includes('timeout'))
+)
+
+const TIMEOUT_MESSAGE = 'This is taking longer than usual. The server did not respond in time — please try again.'
+
 export const normalizeApiError = (errorOrResponse) => {
   const response = errorOrResponse?.response || errorOrResponse
   const data = response?.data
   const status = response?.status
   const headers = response?.headers
+
+  if (!errorOrResponse?.response && isTimeoutError(errorOrResponse)) {
+    const timedOut = errorOrResponse instanceof Error ? errorOrResponse : new Error(TIMEOUT_MESSAGE)
+    timedOut.message = TIMEOUT_MESSAGE
+    timedOut.name = 'ApiError'
+    timedOut.isTimeout = true
+    timedOut.status = undefined
+    timedOut.detail = TIMEOUT_MESSAGE
+    timedOut.validationErrors = []
+    return timedOut
+  }
 
   const hasStructuredData = data && typeof data === 'object' && !Array.isArray(data)
   const rawDetail = hasStructuredData ? (data.detail ?? data.error ?? data.message ?? '') : data
@@ -95,12 +117,54 @@ export const normalizeApiError = (errorOrResponse) => {
   return normalized
 }
 
+// Axios defaults to no timeout at all, so a slow query showed an indefinite
+// spinner and then an indistinguishable network error. The client now owns a
+// deadline so it can say something specific about it.
+//
+// Two deadlines, because the gateway has two. `nginx/snippets/api_proxy.conf`
+// allows proxy_read_timeout 300s, and several routes legitimately use it:
+// uploads, template rendering, imports and reconciliation, document revisions,
+// and artifact/invoice exports. A blanket short timeout would abort those
+// client-side while the server kept working, inviting a retry that duplicates
+// the effect. Bounded list and query calls get the short deadline; the routes
+// below get the gateway's.
+export const REQUEST_TIMEOUT_MS = 25000
+export const LONG_REQUEST_TIMEOUT_MS = 300000
+
+// Matched against the request path. Kept here rather than at each call site so
+// a new long-running endpoint cannot silently inherit the short deadline.
+const LONG_REQUEST_PATTERNS = [
+  /\/upload(\/|$)/,
+  /\/export(\/|$)/,
+  /\/imports(\/|$)/,
+  /\/render(-file)?(\/|$)/,
+  /\/analyze(\/|$)/,
+  /\/revisions(\/|$)/,
+]
+
+export const isLongRunningPath = (url) => (
+  typeof url === 'string' && LONG_REQUEST_PATTERNS.some((pattern) => pattern.test(url))
+)
+
 const api = axios.create({
   baseURL: BASE_URL,
+  timeout: REQUEST_TIMEOUT_MS,
   headers: {
     'Content-Type': 'application/json',
   },
   withCredentials: true, // Allow httpOnly cookies to be sent with requests
+})
+
+api.interceptors.request.use((config) => {
+  // An explicit per-call timeout always wins.
+  if (config.timeout === REQUEST_TIMEOUT_MS && isLongRunningPath(config.url)) {
+    config.timeout = LONG_REQUEST_TIMEOUT_MS
+  }
+  // A multipart body is a long operation whatever its path.
+  if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+    config.timeout = LONG_REQUEST_TIMEOUT_MS
+  }
+  return config
 })
 
 const isAiOperationPath = (url = '') => (

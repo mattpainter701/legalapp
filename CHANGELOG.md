@@ -2,6 +2,76 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Stripe webhook idempotency and ordering:** added `stripe_webhook_events`
+  (migration `119_stripe_webhook_events`) and a shared claim guard. Stripe
+  retries until it sees a 2xx and does not guarantee delivery order, so a
+  retried `customer.subscription.deleted` arriving after a resubscription
+  previously wrote `billing_tier="payg"` and nulled `stripe_subscription_id` —
+  downgrading a paying firm into a state `_handle_payment_succeeded` could not
+  repair, because its recovery branch is gated on the id that had just been
+  cleared. Events are now claimed before dispatch and refused when duplicated or
+  older than the last event applied to the same Stripe object.
+- **Stripe webhook retries no longer suppressed:** `/api/billing/webhooks/stripe`
+  caught every handler exception and returned 200, telling Stripe the event
+  succeeded and cancelling all retries; a transient database error during
+  `checkout.session.completed` meant the customer paid and the application never
+  recorded it. Handler failures now surface as 5xx, which is safe now that the
+  claim row rolls back with the failed transaction.
+- **Single Stripe dispatch table:** both webhook routes now share
+  `_SUBSCRIPTION_HANDLERS`, so whichever endpoint is configured in the Stripe
+  dashboard interprets subscription lifecycle events identically.
+- **Stripe reconciliation is no longer silent:** an unresolvable
+  `stripe_customer_id` and a plan missing `metadata.tier` are logged at error
+  level instead of being discarded or defaulted to the flat tier.
+- **O(tenants) Stripe fallback removed:** resolving an invoice's tenant iterated
+  every tenant with two queries each. Every Stripe object the application
+  creates already carries `tenant_id` in metadata, so the fallback now emits an
+  actionable error instead.
+- **Postgres and Redis sized to their limits:** postgres ran on a 128M
+  `shared_buffers` default inside an 8G container; redis had no `maxmemory` and
+  would be OOM-killed rather than reporting pressure. Redis uses `noeviction`
+  deliberately — every key here carries a TTL, so any LRU policy would evict
+  refresh-replay tombstones and the revoked-`jti` denylist and re-enable replay.
+- **Uploads rejected before buffering:** `documents`, `matter_documents`, and
+  `client_portal` now check declared `Content-Length` before `await file.read()`
+  materializes a body they are about to refuse.
+- **Untrusted document text is structurally delimited:** MCP
+  `get_matter_document_text` wraps extracted text in
+  `<untrusted_document_text>` tags and neutralizes counterfeit closing tags, so
+  authored content cannot end the wrapper and appear to speak as the product.
+  The warning field previously sat as a JSON sibling of the text it described.
+- **Office non-NAA sign-in message:** the add-in told users to "sign in to
+  LawHand first", which `COOKIE_SAMESITE=lax` makes unreachable from the add-in
+  iframe — the cookie is never sent, so the instruction could not succeed. It
+  now names the unsupported Office versions instead.
+
+### Added
+- **Billing status visible to the firm:** `/auth/me` and `/api/billing/status`
+  now return `subscription_status` and `billing_status`. The browser previously
+  received only `billing_tier` and could not learn a tenant was `past_due` even
+  in principle. An `AppShell` banner surfaces the state to every user and routes
+  finance roles to the Stripe portal; the billing page flags a tier that
+  disagrees with the subscription on file and suppresses the upsell there.
+- **Request timeout with a distinct message:** the axios instance had no
+  `timeout`, so a slow query showed an open-ended spinner until nginx returned
+  504 at 30s. Requests now abort at 25s and report a timeout rather than a
+  generic failure. A `TableSkeleton` replaces the spinner on the list surfaces
+  that go slow first.
+- **Privacy Mode consequences stated:** the toggle now says it blocks connected
+  assistants, and the grants panel it sits directly above shows a blocked state
+  for Privacy Mode, inactive licence, or inactive account — conditions that
+  previously surfaced only as a 403 inside a third-party client. The MCP consent
+  screen also states what approving means for firm data leaving the boundary.
+
+### Removed
+- **Legacy `word-addin/` prototype:** hardcoded `http://localhost:8000`, stored a
+  bearer token in `localStorage`, and received it through a URL query string —
+  the pattern the main application deliberately migrated away from. `office-addin/`
+  is the supported implementation. SBOM inventory regenerated and CI dependency
+  patterns updated in the same change, per `docs/office-document-assistant-plan.md`.
+  See `docs/archive/word-addin-removed.md`.
+
 ### Added
 - **Dedicated Clients & CRM workspace:** replaced the hidden generic contact
   entry with first-class client list and profile workspaces covering lifecycle,

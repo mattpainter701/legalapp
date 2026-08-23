@@ -452,13 +452,6 @@
       "specifier": "^4.1.10"
     },
     {
-      "ecosystem": "npm",
-      "name": "http-server",
-      "scope": "devDependencies",
-      "source": "word-addin/package.json",
-      "specifier": "^14.1.1"
-    },
-    {
       "ecosystem": "pypi",
       "name": "pytest",
       "scope": "optional:dev",
@@ -1003,12 +996,6 @@
         "office-addin/package-lock.json"
       ],
       "path": "office-addin/package.json",
-      "type": "npm package"
-    },
-    {
-      "lockfile_present": false,
-      "lockfiles": [],
-      "path": "word-addin/package.json",
       "type": "npm package"
     },
     {

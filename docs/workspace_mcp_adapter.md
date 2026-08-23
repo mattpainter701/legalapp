@@ -243,6 +243,31 @@ returns a SHA-256 evidence hash. It never returns a provider URL or storage
 identifier. Extracted text is explicitly untrusted input and cannot authorize
 another capability.
 
+### Untrusted-text delimiting
+
+Extracted document text is returned inside explicit delimiters rather than as a
+bare string:
+
+```
+<untrusted_document_text sha256={content_sha256}>
+...extracted text...
+</untrusted_document_text>
+```
+
+The response also carries `text_is_delimited: true` and a `content_warning`
+naming the boundary. This is a structural change, not only a wording one: the
+warning field is a JSON sibling of `text`, so a document instructing the reader
+to disregard prior guidance previously occupied the same structural position as
+the product's own fields. Any closing tag appearing inside the extracted content
+is replaced with `[removed closing tag]`, in any casing or spacing, so authored
+content cannot terminate the wrapper early and appear to speak outside it.
+
+Clients that render or forward this text should treat everything between the
+tags as third-party evidence. The delimiting is defence in depth: the capability
+contract already permits no direct writes, and `propose_client_email` can only
+address recipients returned by `list_matter_recipients`, so a successful
+injection cannot send or exfiltrate on its own.
+
 ## Document compatibility boundary
 
 DOCX is the canonical interchange format for Word, Word Online, and

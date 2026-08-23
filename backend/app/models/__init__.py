@@ -106,6 +106,7 @@ from app.models.generated_artifact import (
 )
 from app.models.document_storage_operation import DocumentStorageOperation
 from app.models.document_integrity_event import DocumentIntegrityEvent
+from app.models.stripe_webhook_event import StripeWebhookEvent
 
 __all__ = [
     "Tenant",
@@ -213,4 +214,5 @@ __all__ = [
     "GeneratedArtifactRevision",
     "DocumentStorageOperation",
     "DocumentIntegrityEvent",
+    "StripeWebhookEvent",
 ]

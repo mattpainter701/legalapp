@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.services.upload_guard import reject_oversized_request
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.matter_document import MatterDocument
@@ -332,6 +333,7 @@ async def upload_matter_document(
         raise HTTPException(status_code=400, detail="Filename is required")
 
     max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
+    reject_oversized_request(request, max_bytes, settings.MAX_FILE_SIZE_MB)
     file_bytes = await file.read()
     if len(file_bytes) > max_bytes:
         raise HTTPException(

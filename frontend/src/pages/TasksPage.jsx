@@ -22,6 +22,7 @@ import {
 import { CheckSquare, Plus, Calendar, Trash2, Check, AlertCircle, Bell, X, Eye, PhoneOutgoing, LayoutGrid, List, UserRound, UsersRound } from 'lucide-react'
 import { format, isToday, isTomorrow } from 'date-fns'
 import ContactPicker from '../components/ContactPicker'
+import { TableSkeleton } from '../components/LoadingSkeleton'
 import CreatableCombobox from '../components/CreatableCombobox'
 import useMatterFieldOptions from '../hooks/useMatterFieldOptions'
 import { useAuth } from '../App'
@@ -29,7 +30,6 @@ import {
   AlertBanner,
   EmptyState,
   FilterToolbar,
-  Spinner,
   WorkspacePage,
 } from '../components/ui'
 import { canAccessModuleList } from '../moduleAccess'
@@ -1488,7 +1488,7 @@ export default function TasksPage() {
             canOpenMatters={canOpenMatters}
           />
         ) : loading ? (
-          <Spinner />
+          <TableSkeleton rows={8} columns={4} ariaLabel="Loading tasks" />
         ) : error ? (
           <AlertBanner
             type="error"

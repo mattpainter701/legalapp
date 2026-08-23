@@ -7,6 +7,9 @@ const apiClient = vi.hoisted(() => ({
   put: vi.fn(),
   delete: vi.fn(),
   interceptors: {
+    // api.js registers a request interceptor to give long-running routes the
+    // gateway's 300s deadline instead of the default short one.
+    request: { use: vi.fn() },
     response: { use: vi.fn() },
   },
 }))

@@ -22,6 +22,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.services.upload_guard import reject_oversized_request
 from app.database import get_db, set_tenant_context, async_session_maker
 from app.middleware.tenant import get_current_user
 from app.models.document import Document, Chunk
@@ -283,8 +284,11 @@ async def upload_document(
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
 
-    # Validate file size
+    # Validate file size. The declared length is checked first so an oversized
+    # body is refused before it is materialized in memory; the real length is
+    # still verified below, since Content-Length is advisory.
     max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
+    reject_oversized_request(request, max_bytes, settings.MAX_FILE_SIZE_MB)
     file_bytes = await file.read()
 
     if len(file_bytes) > max_bytes:
