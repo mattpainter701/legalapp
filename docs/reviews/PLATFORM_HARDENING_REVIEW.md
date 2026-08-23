@@ -457,7 +457,185 @@ rejection.
 
 ---
 
+# 5. The user-facing face of all four
+
+Everything above is what breaks. This section is what the *user sees* when it
+breaks — reviewed because a backend failure the product never mentions is
+indistinguishable, from the firm's side, from the product being broken.
+
+The pattern across all four areas is the same: **the system knows something is
+wrong and does not say so.** These are the critical ones.
+
+## P0
+
+### 5.1 Billing state is invisible to the firm — the frontend cannot even ask
+
+```
+grep -rn "past_due|suspended|billing_status|subscription_status" frontend/src --include=*.jsx  → 0 hits
+```
+
+Not one component references payment health. And it is not an oversight in the
+UI layer alone: `/auth/me` returns `billing_tier` and nothing else
+(`app/routers/auth.py:352`). `stripe_subscription_status` and
+`mcp_billing_status` are written by the webhooks (§3) and never leave the
+database.
+
+So when a card expires and Stripe fires `invoice.payment_failed`,
+`_handle_payment_failed` dutifully sets `past_due` on the tenant — and every
+user in the firm sees a completely normal application. No banner, no warning, no
+countdown. The first signal is features quietly not working, or nothing at all
+until the subscription is cancelled.
+
+Add `stripe_subscription_status` and `mcp_billing_status` to the `/me` payload
+and render a persistent banner in `AppShell` for `past_due` / `suspended`, with a
+direct link to the Stripe portal. The demo-session banner
+(`AppShell.jsx:365-369`) is the pattern to copy — it already does exactly this
+job for a different state.
+
+### 5.2 The ordering bug shows a paying firm an ad for the plan they bought
+
+This is finding **3.1** seen from the user's chair, and it is materially worse
+than the backend defect alone.
+
+When a retried `canceled` event lands after a resubscription,
+`_handle_subscription_updated` writes `billing_tier = "payg"`. `BillingPage.jsx`
+renders from exactly that field, so the firm's billing screen now shows:
+
+- **Current Plan: payg**, and
+- the pay-as-you-go upsell block (`BillingPage.jsx:126-133`):
+  > *"On pay-as-you-go, usage is billed at a 10× markup on model cost. Upgrade
+  > to a flat-seat plan for predictable monthly pricing and significantly lower
+  > per-query costs."*
+
+A firm currently paying for a flat-seat plan is being billed at 10× markup and
+shown marketing copy urging them to purchase the plan they already have. Nothing
+on the page indicates an error, because as far as the application is concerned
+this is not an error state — it is a tier.
+
+Fixing 3.1 removes the cause. Independently, the tier display should be able to
+express *disagreement*: if `stripe_subscription_id` is null while recent
+successful invoices exist, that is a reconciliation warning, not a plan.
+
+### 5.3 The recovery path is behind a door most users cannot open
+
+`BillingPage.jsx:53-59` integrates the Stripe customer portal
+(`createPortalSession`) — the correct self-serve mechanism for updating a card.
+
+But the page lives at `/admin?tab=billing`, and `/billing` redirects there behind
+`financeOnly` (`App.jsx:301-304`), meaning only `admin` or `accountant` roles can
+reach it. Combined with 5.1, the sequence is:
+
+1. Payment fails.
+2. Nobody is told.
+3. The one screen with the fix is invisible to most of the firm.
+4. The people who *can* open it have no reason to look.
+
+The banner in 5.1 is what closes this. It should render for every user (so
+someone notices) while linking the finance-role users to the portal.
+
+### 5.4 There is no client-side timeout, so "slow" reads as "frozen"
+
+`api.js` creates the axios instance with `baseURL`, headers, and
+`withCredentials` — and **no `timeout`**. The axios default is `0`, meaning the
+request never gives up on its own.
+
+Production nginx does bound it: `proxy_read_timeout 30s` on the API location and
+60s elsewhere (`nginx/nginx.conf:270,287,304`). So the hang is not infinite. The
+user experience is:
+
+- 30 to 60 seconds of an undifferentiated spinner,
+- then a 504 surfaced through axios as a generic failure.
+
+Under precisely the conditions §1 describes — untuned postgres (1.1), and the
+unindexed `ILIKE` searches noted in `SCALE_REVIEW.md` §4 — this is the daily
+experience of a receptionist searching a caller's name with someone on the line.
+
+Set an explicit axios `timeout` below the nginx ceiling (20–25s), and distinguish
+the states: a timeout is *"this is taking longer than usual"* with a retry, not
+the same generic error as a 500.
+
+## P1
+
+### 5.5 Privacy Mode silently revokes every MCP grant, on the same screen that lists them
+
+`workspace_mcp_protocol.py:293-297` hard-403s **all** workspace MCP access when
+`user.privacy_mode` is on:
+
+```python
+if user.privacy_mode:
+    raise HTTPException(403, "Workspace MCP is unavailable while Privacy Mode is enabled")
+```
+
+The toggle that causes it says (`ProfilePage.jsx:191-194`):
+
+> *"On: detected personal details are redacted before eligible provider
+> requests."*
+
+Nothing about MCP. A user reads that as a redaction setting, enables it, and
+their ChatGPT or Claude Desktop connection stops working — with the 403
+surfacing inside a third-party client, hours or days later, with no path back to
+the cause.
+
+The detail that makes this worth fixing now: `WorkspaceMcpGrantsPanel` is
+rendered **directly beneath that toggle on the same page**
+(`ProfilePage.jsx:198`). The switch that disables every grant sits seven lines
+above the list of grants it disabled, and neither mentions the other.
+
+Add the consequence to the toggle copy, and show a blocked state on the grants
+panel whenever `privacy_mode`, `license_active`, or `is_active` would deny a
+call.
+
+### 5.6 The Office sign-in instruction cannot be followed
+
+Finding **4.2** stated as user experience. `officeSession.ts:69-73` tells a
+non-NAA user:
+
+> *"Sign in to LawHand first, or open this add-in in an Office client that
+> supports Nested App Authentication"*
+
+With `COOKIE_SAMESITE=lax`, signing in to LawHand cannot make that cookie reach
+the add-in iframe. The user follows the instruction, returns, and receives the
+identical message. There is no state reachable by that action in which it
+succeeds.
+
+Whatever is decided about the cookie, the immediate fix is to stop offering an
+action that cannot work: detect the missing capability and say *"this version of
+Office isn't supported — here's what is."*
+
+### 5.7 Degraded loading has no vocabulary
+
+`LoadingSkeleton.jsx` exists and is used in exactly one file (`Messages.jsx`).
+Twenty page components fall back to a `Spinner` or a bare "Loading…" string, and
+only eleven error states across all pages offer a retry affordance.
+
+A spinner communicates *something is happening*. A skeleton communicates *what
+is coming and roughly how much of it* — which is precisely the information that
+matters when a query is slow rather than instant. The component is already built
+and already styled; the work is applying it to the list surfaces that go slow
+first (matters, tasks, intake search, matter documents).
+
+## What is already right
+
+Worth recording so it is not lost in a refactor:
+
+- **The demo-session banner** (`AppShell.jsx:365-369`) is a well-executed
+  degraded-state notice — persistent, specific, quantified, non-blocking. It is
+  the exact template 5.1 needs.
+- **The Office taskpane's error copy** (`office-addin/src/main.ts:98-149`) is
+  unusually good: *"The Office content changed. Capture it again before applying
+  a new plan."* States what happened and what to do. 5.6 is a gap in one
+  branch, not in the add-in's general standard.
+- **The MCP consent screen** states the safety boundary plainly and offers a real
+  Deny. Its problem (§2.3) is what it omits, not what it says.
+- **Stripe customer portal integration** is the right self-serve answer to
+  payment problems. It is placed where nobody in trouble will find it (5.3),
+  which is a routing fix, not a rebuild.
+
+
 ## Suggested order
+
+Backend and UX items are interleaved deliberately: several backend fixes are only
+half a fix until the matching surface tells someone.
 
 **Ship first — small, high return:**
 
@@ -465,20 +643,30 @@ rejection.
    available on this hardware.
 2. **1.2 redis `maxmemory` + `volatile-lru`** — closes the OOM path and the
    security-state eviction path (2.1) together.
-3. **4.2 detect and explain missing NAA** — stops sending users into an
+3. **5.1 billing state in `/me` + a status banner** — the firm currently cannot
+   learn that its payments are failing. Reuses the demo-banner pattern.
+4. **5.4 axios timeout with a distinct timeout message** — one config value plus
+   an error branch; turns a 30-second freeze into a legible state.
+5. **5.6 / 4.2 detect and explain missing NAA** — stops sending users into an
    unresolvable sign-in loop while the cookie decision is made.
-4. **4.1 delete or archive `word-addin/`** — removes a shippable artifact that
+6. **4.1 delete or archive `word-addin/`** — removes a shippable artifact that
    leaks tokens.
 
 **Then — correctness under retry:**
 
-5. **3.3 idempotency store**, which makes **3.2 return 500 on failure** safe.
-6. **3.1 event ordering guard** — currently able to downgrade a paying firm into
-   a state that cannot self-heal.
-7. **3.4 consolidate the two webhook endpoints**; **3.5 / 3.6** alerting.
+7. **3.3 idempotency store**, which makes **3.2 return 500 on failure** safe.
+8. **3.1 event ordering guard** — currently able to downgrade a paying firm into
+   a state that cannot self-heal — together with **5.2**, so a tier that
+   disagrees with payment history reads as a warning rather than an upsell.
+9. **3.4 consolidate the two webhook endpoints**; **3.5 / 3.6** alerting.
+10. **5.3 route the billing fix path** so the people who see the banner can reach
+    the portal.
 
 **Then — hardening and cleanup:**
 
-8. **2.2 delimit untrusted document text**; **2.4 warn on HS256 in production**.
-9. **1.3 single-query tenant resolution**; **1.4 check `Content-Length` first**.
-10. **2.3** customer-facing MCP data-boundary documentation.
+11. **5.5 Privacy Mode copy + grants blocked state** — the toggle and the grants
+    it kills are seven lines apart on one screen.
+12. **2.2 delimit untrusted document text**; **2.4 warn on HS256 in production**.
+13. **1.3 single-query tenant resolution**; **1.4 check `Content-Length` first**.
+14. **5.7 apply the existing skeleton** to the list surfaces that go slow first.
+15. **2.3** customer-facing MCP data-boundary documentation.
