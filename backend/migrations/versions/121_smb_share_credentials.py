@@ -10,9 +10,7 @@ time, shared by every share that agent scanned. This adds:
 * ``smb_shares.credential_id`` — the credential a share mounts with, so one
   agent can serve shares that need different identities;
 * scan/verify result columns so the admin console can show why a share is not
-  indexing instead of an empty "last scan" cell;
-* a wider ``smb_agents.pairing_code``: the generated code is 22 characters and
-  the column was ``varchar(20)``, so issuing a pairing code failed outright.
+  indexing instead of an empty "last scan" cell.
 
 Revision ID: 121_smb_share_credentials
 Revises: 120_marketing_demo_funnel
@@ -71,9 +69,7 @@ def upgrade() -> None:
         ),
         sa.UniqueConstraint("tenant_id", "name", name="uq_smb_credentials_tenant_name"),
     )
-    op.create_index(
-        "ix_smb_credentials_tenant_id", "smb_credentials", ["tenant_id"]
-    )
+    op.create_index("ix_smb_credentials_tenant_id", "smb_credentials", ["tenant_id"])
 
     op.execute("ALTER TABLE smb_credentials ENABLE ROW LEVEL SECURITY")
     op.execute("ALTER TABLE smb_credentials FORCE ROW LEVEL SECURITY")
@@ -86,16 +82,6 @@ def upgrade() -> None:
             tenant_id::text = current_setting('app.current_tenant_id', true)
         )
         """
-    )
-
-    # secrets.token_urlsafe(16) is 22 characters; the original varchar(20)
-    # rejected every pairing code the API generated.
-    op.alter_column(
-        "smb_agents",
-        "pairing_code",
-        existing_type=sa.String(20),
-        type_=sa.String(64),
-        existing_nullable=True,
     )
 
     op.add_column(
@@ -125,20 +111,11 @@ def upgrade() -> None:
     )
     op.add_column(
         "smb_shares",
-        sa.Column(
-            "is_enabled", sa.Boolean(), nullable=False, server_default="true"
-        ),
+        sa.Column("is_enabled", sa.Boolean(), nullable=False, server_default="true"),
     )
 
 
 def downgrade() -> None:
-    op.alter_column(
-        "smb_agents",
-        "pairing_code",
-        existing_type=sa.String(64),
-        type_=sa.String(20),
-        existing_nullable=True,
-    )
     op.drop_column("smb_shares", "is_enabled")
     op.drop_column("smb_shares", "exclude_patterns")
     op.drop_column("smb_shares", "last_verify_error")
@@ -148,7 +125,9 @@ def downgrade() -> None:
     op.drop_constraint("fk_smb_shares_credential_id", "smb_shares", type_="foreignkey")
     op.drop_column("smb_shares", "credential_id")
 
-    op.execute("DROP POLICY IF EXISTS tenant_isolation_smb_credentials ON smb_credentials")
+    op.execute(
+        "DROP POLICY IF EXISTS tenant_isolation_smb_credentials ON smb_credentials"
+    )
     op.execute("ALTER TABLE smb_credentials DISABLE ROW LEVEL SECURITY")
     op.drop_index("ix_smb_credentials_tenant_id", table_name="smb_credentials")
     op.drop_table("smb_credentials")

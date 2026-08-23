@@ -415,3 +415,107 @@ async def test_share_scan_scope_is_normalized(client):
     share = delivered.json()[0]
     assert share["exclude_patterns"] == ["~$*"]
     assert share["max_depth"] == 4
+
+
+@pytest.mark.asyncio
+async def test_deactivated_credential_is_not_delivered_to_the_agent(client):
+    agent_id, api_key = await _register_agent(client)
+    assert (await _create_share(client, agent_id)).status_code == 200
+    credential_id = (await client.get("/api/v1/smb/credentials")).json()[0]["id"]
+
+    disabled = await client.patch(
+        f"/api/v1/smb/credentials/{credential_id}", json={"is_active": False}
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["is_active"] is False
+
+    delivered = await client.get(
+        f"/api/v1/smb/agents/{agent_id}/shares",
+        headers={"X-Agent-API-Key": api_key},
+    )
+    assert delivered.json()[0]["credential"] is None
+
+
+@pytest.mark.asyncio
+async def test_switching_to_kerberos_drops_the_stored_password(client):
+    created = await client.post(
+        "/api/v1/smb/credentials",
+        json={
+            "name": "was-ntlm",
+            "auth_method": "ntlm",
+            "username": "svc",
+            "password": "old-secret",
+        },
+    )
+    credential_id = created.json()["id"]
+
+    switched = await client.patch(
+        f"/api/v1/smb/credentials/{credential_id}", json={"auth_method": "kerberos"}
+    )
+
+    assert switched.status_code == 200, switched.text
+    assert switched.json()["has_password"] is False
+
+
+@pytest.mark.asyncio
+async def test_duplicate_credential_names_are_rejected(client):
+    body = {
+        "name": "duplicate",
+        "auth_method": "ntlm",
+        "username": "svc",
+        "password": "pw",
+    }
+    assert (await client.post("/api/v1/smb/credentials", json=body)).status_code == 200
+
+    second = await client.post("/api/v1/smb/credentials", json=body)
+
+    assert second.status_code == 400
+    assert "already exists" in second.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_unknown_credential_returns_404(client):
+    missing = str(uuid.uuid4())
+
+    patched = await client.patch(
+        f"/api/v1/smb/credentials/{missing}", json={"name": "nope"}
+    )
+    deleted = await client.delete(f"/api/v1/smb/credentials/{missing}")
+
+    assert patched.status_code == 404
+    assert deleted.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_task_actions_require_an_active_agent(client):
+    agent_id, _ = await _register_agent(client)
+    share_id = (await _create_share(client, agent_id)).json()["id"]
+    paused = await client.patch(
+        f"/api/v1/smb/agents/{agent_id}", json={"status": "paused"}
+    )
+    assert paused.status_code == 200
+
+    response = await client.post(f"/api/v1/smb/shares/{share_id}/test-connection")
+
+    assert response.status_code == 409
+    assert "paused" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_task_actions_404_for_an_unknown_share(client):
+    response = await client.post(
+        f"/api/v1/smb/shares/{uuid.uuid4()}/test-connection"
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_pairing_code_fits_the_column_and_is_typeable(client):
+    response = await client.post("/api/v1/smb/pairing-code")
+
+    assert response.status_code == 200, response.text
+    code = response.json()["pairing_code"]
+    # smb_agents.pairing_code is varchar(20); a longer code fails at insert.
+    assert len(code) <= 20
+    assert set(code) <= set("23456789ABCDEFGHJKMNPQRSTVWXYZ-")

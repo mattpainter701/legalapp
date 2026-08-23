@@ -418,6 +418,9 @@ async def create_share(
 
     await db.commit()
 
+    # The tenant GUC is transaction-local, so re-establish it before reading
+    # back through RLS after the commit.
+    await set_tenant_context(db, tenant_id)
     await db.refresh(share)
     return await smb_service.share_info(db, share)
 
@@ -465,6 +468,7 @@ async def update_share(
         raise HTTPException(status_code=404, detail=str(exc))
 
     await db.commit()
+    await set_tenant_context(db, tenant_id)
     await db.refresh(share)
     return await smb_service.share_info(db, share)
 
@@ -598,6 +602,7 @@ async def create_credential(
         raise HTTPException(status_code=400, detail=str(exc))
 
     await db.commit()
+    await set_tenant_context(db, tenant_id)
     await db.refresh(credential)
     return _credential_info(credential, {})
 
@@ -635,6 +640,7 @@ async def update_credential(
         raise HTTPException(status_code=status, detail=detail)
 
     await db.commit()
+    await set_tenant_context(db, tenant_id)
     await db.refresh(credential)
     share_counts = await smb_credential_service.share_counts(db, tenant_id)
     return _credential_info(credential, share_counts)

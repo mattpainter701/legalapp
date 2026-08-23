@@ -51,6 +51,12 @@ SMB_PAIRING_CODE_TTL_MIN = settings.SMB_PAIRING_CODE_TTL_MIN
 SMB_SNIPPET_MAX_CHARS = settings.SMB_SNIPPET_MAX_CHARS
 SMB_MAX_FILE_INDEX_PER_SHARE = settings.SMB_MAX_FILE_INDEX_PER_SHARE
 REDIS_TASK_TTL = 300  # 5 minutes
+# Pairing codes are read off a screen and typed into an installer command line,
+# so they use an alphabet without look-alike characters and are grouped in
+# fours. Sixteen symbols from thirty is ~78 bits, and the code both expires and
+# is rate limited at the registration endpoint.
+PAIRING_CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTVWXYZ"
+PAIRING_CODE_SYMBOLS = 16
 # Operational tasks (connection test, scan now) wait longer than a content
 # fetch because an agent polls on its own cadence and a scan is not instant.
 REDIS_ADMIN_TASK_TTL = 900  # 15 minutes
@@ -99,6 +105,14 @@ def _parse_unc(share_path: str) -> tuple[str | None, str | None, str | None]:
     return server, share, root
 
 
+def _pairing_code() -> str:
+    """Return a 19-character grouped pairing code (fits smb_agents.pairing_code)."""
+    raw = "".join(
+        secrets.choice(PAIRING_CODE_ALPHABET) for _ in range(PAIRING_CODE_SYMBOLS)
+    )
+    return "-".join(raw[i : i + 4] for i in range(0, PAIRING_CODE_SYMBOLS, 4))
+
+
 class SmbService:
     """Business logic for SMB file share relay agent operations."""
 
@@ -113,7 +127,7 @@ class SmbService:
         """
         await set_tenant_context(db, tenant_id)
 
-        code = secrets.token_urlsafe(16)
+        code = _pairing_code()
         expires_at = datetime.now(timezone.utc) + timedelta(
             minutes=SMB_PAIRING_CODE_TTL_MIN
         )
@@ -866,7 +880,7 @@ class SmbService:
         share.last_scan_at = status.finished_at or datetime.now(timezone.utc)
         if status.file_count is not None:
             share.last_scan_file_count = status.file_count
-        share.last_scan_error = (status.error or None) and status.error[:2000]
+        share.last_scan_error = status.error[:2000] if status.error else None
         if status.status in ("success", "completed"):
             # A completed scan is also proof the credential still works.
             share.last_verified_at = share.last_scan_at

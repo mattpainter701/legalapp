@@ -32,10 +32,11 @@
   last scan time, file count and failure reason instead of an empty cell.
 
 ### Fixed
-- **File share pairing was impossible:** `smb_agents.pairing_code` was
-  `varchar(20)` while the generated code is 22 characters, so every
-  pairing-code request failed at insert. Widened to 64 in migration
-  `121_smb_share_credentials`.
+- **File share pairing was impossible:** `smb_agents.pairing_code` is
+  `varchar(20)` while `secrets.token_urlsafe(16)` produces 22 characters, so
+  every pairing-code request failed at insert. Codes are now four groups of
+  four characters from an alphabet without look-alikes (19 characters, ~78
+  bits) — short enough for the column and for an installer command line.
 - **SMB API responses failed to serialize:** `ShareInfo`, `AgentInfo` and the
   other SMB response models declare `id` fields as `str` but are validated from
   ORM rows carrying `uuid.UUID`, which pydantic rejected — creating or listing
