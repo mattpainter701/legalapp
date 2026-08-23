@@ -1,6 +1,6 @@
 # Integration quick wins — implementation brief
 
-**Date:** 2026-08-22  
+**Date:** 2026-08-22
 **Purpose:** turn the integration audit into sequenced, evidence-backed work without promising a provider connection that has not completed tenant consent, commercial review, and production proof.
 
 ## Decision
