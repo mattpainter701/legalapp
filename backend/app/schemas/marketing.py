@@ -21,6 +21,22 @@ class DemoRequestCreate(BaseModel):
     def strip_text(cls, value: str | None) -> str | None:
         return value.strip() if value else value
 
+    @field_validator("name", "firm_name", "phone", "team_size", "source_path")
+    @classmethod
+    def reject_line_breaks(cls, value: str | None) -> str | None:
+        """Keep single-line fields on one line.
+
+        ``firm_name`` reaches the lead notification's subject header. Python's
+        email stack refuses to serialize a header containing an embedded one, so
+        a newline here does not inject a header -- it raises, the broad handler
+        in ``send_email`` turns that into a delivery failure, and the lead is
+        stored while nobody is notified. Rejecting it at the edge keeps that
+        silent-loss path closed.
+        """
+        if value and any(character in value for character in "\r\n"):
+            raise ValueError("must be a single line")
+        return value
+
     @field_validator("campaign")
     @classmethod
     def limit_campaign(cls, value: dict[str, str] | None) -> dict[str, str] | None:

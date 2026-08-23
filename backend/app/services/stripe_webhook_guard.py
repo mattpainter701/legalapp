@@ -150,6 +150,26 @@ async def claim_event(
             )
             return EventClaim(False, "stale")
 
+        if newest is not None and newest.event_created == event_created:
+            # Stripe's ``created`` has one-second resolution, so two distinct
+            # events for the same customer can share a timestamp and carry no
+            # intrinsic order. Applying the arrival is still the right default:
+            # a genuine retry of an already-applied event is rejected by the
+            # event_id unique constraint below, not here, so what reaches this
+            # branch is a second, distinct event -- and refusing it on ``>=``
+            # would silently drop legitimately newer state.
+            #
+            # The ambiguity is real but narrow, and it is worth being able to
+            # see it in the log rather than having it resolved invisibly.
+            logger.info(
+                "Stripe event %s (%s) shares created=%s with already-applied "
+                "event %s for the same customer; applying in arrival order",
+                event_id,
+                event_type,
+                event_created,
+                newest.event_id,
+            )
+
     record = StripeWebhookEvent(
         event_id=event_id,
         event_type=event_type,

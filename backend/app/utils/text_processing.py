@@ -129,6 +129,19 @@ def _extract_text_from_docx_document(doc) -> str:
     return "\n\n".join(text_parts)
 
 
+def _reject_legacy_doc(content_type: str, filename: str) -> None:
+    """Refuse legacy .doc for both extractors with one message.
+
+    The two entry points below used to disagree: one raised this, the other
+    handed the file to python-docx, which fails on a non-zip container and
+    surfaces as an opaque indexing error instead of an actionable one.
+    """
+    if content_type == "application/msword" or filename.endswith(".doc"):
+        raise ValueError(
+            "Legacy .doc files are not supported; convert to DOCX, PDF, or TXT."
+        )
+
+
 def extract_text(
     file_bytes: bytes,
     content_type: str,
@@ -141,10 +154,7 @@ def extract_text(
     ct_lower = (content_type or "").lower()
     fn_lower = (filename or "").lower()
 
-    if ct_lower == "application/msword" or fn_lower.endswith(".doc"):
-        raise ValueError(
-            "Legacy .doc files are not supported; convert to DOCX, PDF, or TXT."
-        )
+    _reject_legacy_doc(ct_lower, fn_lower)
 
     if ct_lower == "application/pdf" or fn_lower.endswith(".pdf"):
         return extract_text_from_pdf(
@@ -180,6 +190,8 @@ def extract_text_from_path(
     ct_lower = (content_type or "").lower()
     fn_lower = (filename or "").lower()
 
+    _reject_legacy_doc(ct_lower, fn_lower)
+
     if ct_lower == "application/pdf" or fn_lower.endswith(".pdf"):
         from pypdf import PdfReader
 
@@ -191,12 +203,8 @@ def extract_text_from_path(
 
     if (
         ct_lower
-        in (
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "application/msword",
-        )
+        == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         or fn_lower.endswith(".docx")
-        or fn_lower.endswith(".doc")
     ):
         from docx import Document
 

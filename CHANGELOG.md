@@ -46,6 +46,51 @@
   did not use, and sent heartbeat keys the schema drops (leaving agent version
   and hostname empty in the console). Share payloads are now normalized from the
   UNC path, and registration/heartbeat match the API contract.
+- **MCP platform tool arguments validated before use:** `list_matters`,
+  `list_matter_documents`, and `create_document` read their arguments from a raw
+  dict and passed them straight to the database and to `int()`. A client that
+  sent a matter name where a UUID belongs — what an external model does when it
+  skips `list_matters` — raised `DBAPIError`, and a non-integer `limit` raised
+  `ValueError`; both surfaced as HTTP 500. Because `_call_platform_tool_metered`
+  caught only `HTTPException`, neither reached `record_mcp_usage`, so the failed
+  call left no trace in usage or audit records. Arguments now validate against
+  Pydantic models before any query runs, the declared `inputSchema` carries the
+  same UUID formats and bounds so the protocol path's jsonschema agrees with it,
+  and every failure is metered with its real exception class. Failure metering
+  runs on its own session and commits there: the database errors it exists to
+  record leave the request transaction unusable, and that transaction is rolled
+  back as the error propagates, so a usage row written on it would either raise
+  or vanish. `content` is bounded by encoded bytes rather than characters,
+  because bytes are what the 256 KiB transport cap measures. Note two contract
+  changes for clients: a `limit` outside its range is rejected rather than
+  clamped, and an undeclared argument is rejected rather than ignored — the
+  advertised schemas now set `"additionalProperties": false` to say so.
+- **CSV export quotes tab and carriage-return formula leads:** `_csv_safe`
+  guarded `=`, `+`, `-`, and `@` but not `\t` or `\r`, which Excel and
+  LibreOffice also treat as formula leads once they strip them during cell
+  parsing.
+- **Demo requests can no longer lose a lead silently:** an embedded newline in
+  `name`, `firm_name`, `phone`, or `team_size` survived into the notification's
+  subject header. Python refuses to serialize a header containing an embedded
+  one, `send_email`'s broad handler turned that into a delivery failure, and the
+  request row was stored while nobody was notified. The single-line fields now
+  reject line breaks at the schema edge.
+- **Client and matter search escape LIKE wildcards:** a `%` or `_` in a search
+  term acted as a wildcard, so a client number containing `_` matched far more
+  than the user asked for.
+- **Stripe webhook stops returning parser internals:** the unauthenticated
+  endpoint answered a malformed payload with the exception's text. It now
+  returns a fixed string and logs the reason server-side. Same-second event
+  pairs, which Stripe's one-second `created` resolution leaves unordered, are
+  now noted in the log rather than resolved invisibly.
+- **Legacy `.doc` refused identically by both text extractors:**
+  `extract_text_from_path` routed `.doc` into python-docx, which fails on the
+  container and surfaced as an opaque indexing error instead of the actionable
+  "convert to DOCX, PDF, or TXT" message `extract_text` already returned.
+- **`GET /api/workspace-mcp/oauth/authorize` rate-limited in the application:**
+  `AUTH_LIMITS` is enforced for POST only, so the endpoint — which persists a
+  Redis key per unauthenticated call — had edge limiting but nothing covering
+  traffic that reaches the app without passing through the proxy.
 - **Stripe webhook idempotency and ordering:** added `stripe_webhook_events`
   (migration `119_stripe_webhook_events`) and a shared claim guard. Stripe
   retries until it sees a 2xx and does not guarantee delivery order, so a

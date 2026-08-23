@@ -4,6 +4,7 @@ from app.utils.guardrails import (
     apply_guardrails,
     reconcile_retrieved_source_attribution,
 )
+from app.utils.sql_filters import escape_like
 from app.utils.text_processing import (
     chunk_text,
     extract_text_from_pdf,
@@ -18,6 +19,7 @@ __all__ = [
     "check_has_citation",
     "apply_guardrails",
     "reconcile_retrieved_source_attribution",
+    "escape_like",
     "chunk_text",
     "extract_text_from_pdf",
     "extract_text_from_pdf_reader",

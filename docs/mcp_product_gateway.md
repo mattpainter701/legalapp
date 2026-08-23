@@ -79,6 +79,42 @@ currently loaded and indexed, and a deployment can be partial or empty. Check
 - `sync_status`: ingest and embedding progress.
 - `corpus_status`: global corpus counts and coverage.
 
+### Platform-Native Tools
+
+These execute in the backend against tenant data rather than proxying to the
+research sidecar. They resolve their tenant from the product key and are
+metered on the same path as research tools, including when they fail.
+
+- `list_matters`: the tenant's matters, optionally filtered by a name
+  substring. `limit` is 1-50 and defaults to 25.
+- `list_matter_documents`: documents on one matter. `limit` is 1-100 and
+  defaults to 50.
+- `create_document`: a Markdown document on a matter, optionally linked to a
+  task in the same matter.
+
+Arguments are validated against the declared `inputSchema` before any query
+runs, and an invalid argument is a `400` naming the offending field. Two
+consequences are worth knowing when writing a client:
+
+- `matter_id` and `task_id` must be UUIDs. A matter *name* is not accepted --
+  call `list_matters` first and use the `id` it returns. Passing a name
+  previously produced a `500`.
+- `limit` outside its declared range is rejected rather than clamped, and an
+  argument the schema does not declare is rejected rather than ignored. Each
+  schema sets `"additionalProperties": false`, so a schema-driven client sees
+  that constraint rather than discovering it as a 400.
+
+`create_document` bounds `content` at 200,000 bytes UTF-8 encoded, inside the
+256 KiB request cap the transport locations enforce. The bound is on encoded
+bytes rather than characters because that is what the transport measures:
+70,000 emoji fit inside a 200,000-*character* limit and still encode to roughly
+280 KB, and ordinary accented or CJK text costs two to three bytes a character.
+
+A failed call is metered like a successful one. Because a tool that fails with a
+database error leaves the request transaction unusable, and because that
+transaction is rolled back as the error propagates, the usage row is written on
+a separate session and committed there.
+
 ## Billing And Quotas
 
 `mcp_usage_events` is the billing/monitoring source:

@@ -236,7 +236,13 @@ async def stripe_webhook(
     except stripe.SignatureVerificationError:
         raise HTTPException(status_code=400, detail="Invalid Stripe webhook signature")
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Webhook error: {str(exc)}")
+        # The endpoint is unauthenticated, so the response says only that the
+        # payload was rejected. The reason goes to the log instead.
+        logger.warning(
+            "Stripe webhook payload could not be parsed (error_type=%s)",
+            type(exc).__name__,
+        )
+        raise HTTPException(status_code=400, detail="Invalid Stripe webhook payload")
 
     event_type = event["type"]
     event_data = event["data"]["object"]
