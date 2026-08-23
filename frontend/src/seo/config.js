@@ -84,7 +84,7 @@ export const PUBLIC_ROUTE_META = Object.freeze({
     breadcrumb: 'MCP',
     parentPath: '/product',
   },
-  '/demo': {
+  '/request-demo': {
     title: 'Book a LawHand Demo',
     description: 'Request a focused LawHand demo built around your firm’s workflows, sources, and review controls.',
     canonicalPath: '/demo',

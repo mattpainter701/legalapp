@@ -57,7 +57,7 @@ describe('plan signup', () => {
     expect(screen.getByRole('heading', { name: 'Request access' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Contact the LawHand team' })).toHaveAttribute(
       'href',
-      '/demo?source=signup',
+      '/request-demo?source=signup',
     )
     expect(screen.queryByRole('button', { name: 'Create Account with Email' })).not.toBeInTheDocument()
   })
