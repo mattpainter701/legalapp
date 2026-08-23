@@ -174,6 +174,23 @@ opinion/chunk tranche, wait for the Jetson embedding queue to drain, inspect
 `corpus_status`, then raise the budget only after storage and retrieval checks
 pass.
 
+### High-throughput bulk settings
+
+The loader batches 500 database writes by default and commits each batch. It
+also runs `lbzip2` with eight decompression threads by default. On Skynet this
+uses otherwise-idle CPU without launching duplicate loaders against the same
+archive. Tune only after observing host pressure:
+
+```bash
+COURTLISTENER_DECOMPRESS_THREADS=8
+COURTLISTENER_WRITE_BATCH_SIZE=500
+```
+
+Do not start multiple loaders over the same bulk CSV to chase throughput: each
+worker would rescan the entire compressed archive and contend on the same
+Postgres tables. Parallelize only independent source partitions after their
+parent docket/cluster stage has completed.
+
 As of 2026-06-26 after expansion:
 
 - `dockets`: 50,000
