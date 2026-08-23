@@ -27,6 +27,8 @@ def test_sync_schema_tracks_sources_checkpoints_and_source_hashes():
     assert "PRIMARY KEY (source_key, partition_key)" in SCHEMA_SQL
     assert "ALTER TABLE opinions ADD COLUMN IF NOT EXISTS content_hash text" in SCHEMA_SQL
     assert "source_modified_at timestamptz" in SCHEMA_SQL
+    assert "CREATE TABLE IF NOT EXISTS corpus_coverage_ledger" in SCHEMA_SQL
+    assert "acquisition_state" in SCHEMA_SQL
 
 
 def test_html_and_resource_helpers_produce_stable_searchable_values():

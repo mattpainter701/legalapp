@@ -797,6 +797,19 @@ class CourtListenerRepository:
                 """
             )
             rows = dict_rows(cur)
+            cur.execute(
+                """
+                SELECT source_key, partition_key, expected_coverage, expected_item_count,
+                       acquisition_state, snapshot_date, source_release, rows_loaded,
+                       chunks_loaded, vectors_loaded, bytes_loaded, first_document_date,
+                       last_document_date, upstream_modified_at, last_checked_at,
+                       stale_after, gap_reason, owner, metadata, updated_at
+                FROM corpus_coverage_ledger
+                ORDER BY source_key, partition_key
+                """
+            )
+            coverage_ledger = dict_rows(cur)
         status = rows[0] if rows else {}
         status["coverage"] = self.court_coverage()
+        status["coverage_ledger"] = coverage_ledger
         return status
