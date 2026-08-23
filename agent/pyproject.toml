@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "clarity-agent"
-version = "0.12.0"
+version = "0.13.0"
 description = "LawHand SMB File Share Relay Agent"
 requires-python = ">=3.11"
 dependencies = [
@@ -18,8 +18,19 @@ dependencies = [
     "tomli>=2.0;python_version<'3.11'",
 ]
 
+# The repo layout now also holds packaging/ and tests/ beside the package, which
+# setuptools' flat-layout auto-discovery refuses to guess between.
+[tool.setuptools]
+packages = ["clarity_agent"]
+
 [project.scripts]
+# ``lawhand-agent`` is the documented name; the old one stays for installed agents.
+lawhand-agent = "clarity_agent.__main__:main"
 clarity-agent = "clarity_agent.__main__:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.4"]
+# Windows service host (pywin32) — installed by the packaged MSI build.
+windows = ["pywin32>=306;sys_platform=='win32'"]
+# Everything the installer build needs on top of the runtime dependencies.
+build = ["pyinstaller>=6.6", "pywin32>=306;sys_platform=='win32'"]

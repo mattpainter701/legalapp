@@ -9,7 +9,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, or_ as sa_or, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,20 +19,29 @@ from app.models.matter_smb_share import MatterSmbShare
 from app.models.plugin import Matter
 from app.models.smb_access_log import SmbAccessLog
 from app.models.smb_agent import SmbAgent
+from app.models.smb_credential import SmbCredential
 from app.models.smb_file_index import SmbFileIndex
 from app.models.smb_share import SmbShare
 from app.services.cloud_init import MATTER_SUBFOLDERS, matter_relative_path
 from app.schemas.smb import (
     AgentRegisterRequest,
     AgentRegisterResponse,
+    AgentShareCredential,
+    AgentShareInfo,
     ContentFetchResult,
     ContentFetchTask,
     MatterSmbShareCreate,
     ShareCreate,
+    ShareInfo,
+    ShareScanStatus,
     ShareUpdate,
     SmbSearchResult,
     SyncRequest,
     SyncResponse,
+)
+from app.services.smb_credentials import (
+    SmbCredentialError,
+    smb_credential_service,
 )
 
 settings = get_settings()
@@ -42,6 +51,16 @@ SMB_PAIRING_CODE_TTL_MIN = settings.SMB_PAIRING_CODE_TTL_MIN
 SMB_SNIPPET_MAX_CHARS = settings.SMB_SNIPPET_MAX_CHARS
 SMB_MAX_FILE_INDEX_PER_SHARE = settings.SMB_MAX_FILE_INDEX_PER_SHARE
 REDIS_TASK_TTL = 300  # 5 minutes
+# Pairing codes are read off a screen and typed into an installer command line,
+# so they use an alphabet without look-alike characters and are grouped in
+# fours. Sixteen symbols from thirty is ~78 bits, and the code both expires and
+# is rate limited at the registration endpoint.
+PAIRING_CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTVWXYZ"
+PAIRING_CODE_SYMBOLS = 16
+# Operational tasks (connection test, scan now) wait longer than a content
+# fetch because an agent polls on its own cadence and a scan is not instant.
+REDIS_ADMIN_TASK_TTL = 900  # 15 minutes
+ADMIN_TASK_KINDS = ("verify_share", "scan_now")
 
 
 def _uuid(val: str | uuid.UUID | None) -> uuid.UUID | None:
@@ -51,6 +70,47 @@ def _uuid(val: str | uuid.UUID | None) -> uuid.UUID | None:
     if isinstance(val, uuid.UUID):
         return val
     return uuid.UUID(str(val))
+
+
+def _normalize_extensions(exts: list[str] | None) -> list[str] | None:
+    """Accept ``pdf``/``.PDF``/`` .pdf `` and store a canonical ``.pdf``."""
+    if exts is None:
+        return None
+    cleaned = []
+    for raw in exts:
+        item = (raw or "").strip().lower()
+        if not item:
+            continue
+        if not item.startswith("."):
+            item = f".{item}"
+        if item not in cleaned:
+            cleaned.append(item)
+    return cleaned or None
+
+
+def _parse_unc(share_path: str) -> tuple[str | None, str | None, str | None]:
+    """Split ``\\\\server\\share\\sub\\dir`` into its parts.
+
+    Returns ``(server, share, root_path)``; any part that cannot be determined
+    comes back as ``None`` so the agent can fall back to the raw path.
+    """
+    normalized = (share_path or "").replace("/", "\\").strip()
+    if not normalized.startswith("\\\\"):
+        return None, None, None
+    parts = [p for p in normalized.lstrip("\\").split("\\") if p]
+    if len(parts) < 2:
+        return None, None, None
+    server, share = parts[0], parts[1]
+    root = "\\".join(parts[2:]) if len(parts) > 2 else None
+    return server, share, root
+
+
+def _pairing_code() -> str:
+    """Return a 19-character grouped pairing code (fits smb_agents.pairing_code)."""
+    raw = "".join(
+        secrets.choice(PAIRING_CODE_ALPHABET) for _ in range(PAIRING_CODE_SYMBOLS)
+    )
+    return "-".join(raw[i : i + 4] for i in range(0, PAIRING_CODE_SYMBOLS, 4))
 
 
 class SmbService:
@@ -67,7 +127,7 @@ class SmbService:
         """
         await set_tenant_context(db, tenant_id)
 
-        code = secrets.token_urlsafe(16)
+        code = _pairing_code()
         expires_at = datetime.now(timezone.utc) + timedelta(
             minutes=SMB_PAIRING_CODE_TTL_MIN
         )
@@ -290,21 +350,44 @@ class SmbService:
         task_id: str,
         result: ContentFetchResult,
         redis=None,
+        tenant_id: str | None = None,
     ) -> None:
-        """Store content fetch result in Redis with 5-min TTL."""
+        """Store a task result in Redis and apply operational side effects.
+
+        Content fetches only need the Redis handoff. Verify/scan results also
+        update the share (and its credential) so the admin console can show why
+        a share is or is not reachable.
+        """
         if not redis:
             logger.warning("Redis not available, cannot store task result")
             return
+
+        pending_key = f"smb_task_pending:{agent_id}:{task_id}"
+        raw_meta = await redis.get(pending_key)
+        task_meta: dict = {}
+        if raw_meta:
+            try:
+                task_meta = json.loads(
+                    raw_meta if isinstance(raw_meta, str) else raw_meta.decode()
+                )
+            except (ValueError, UnicodeDecodeError):
+                task_meta = {}
 
         payload = json.dumps(
             {
                 "content": result.content,
                 "truncated": result.truncated,
                 "error": result.error,
+                "ok": result.ok and not result.error,
+                "detail": result.detail,
+                "kind": task_meta.get("kind", "content_fetch"),
             }
         )
         await redis.set(f"smb_task:{task_id}", payload, ex=REDIS_TASK_TTL)
-        await redis.delete(f"smb_task_pending:{agent_id}:{task_id}")
+        await redis.delete(pending_key)
+
+        if tenant_id and task_meta.get("kind") in ADMIN_TASK_KINDS:
+            await self.record_task_outcome(db, tenant_id, task_meta, result)
 
     async def request_content_fetch(
         self,
@@ -368,6 +451,18 @@ class SmbService:
             )
 
         return task_id, agent_id
+
+    async def get_task_result(self, task_id: str, redis=None) -> dict | None:
+        """Return the full stored result payload for a task, or None if pending."""
+        if not redis:
+            return None
+        raw = await redis.get(f"smb_task:{task_id}")
+        if not raw:
+            return None
+        try:
+            return json.loads(raw if isinstance(raw, str) else raw.decode())
+        except (ValueError, UnicodeDecodeError):
+            return None
 
     async def get_content_result(self, task_id: str, redis=None) -> str | None:
         """Poll Redis for content fetch result. Return content if available, None if pending."""
@@ -508,18 +603,32 @@ class SmbService:
         agent_id: str,
         tenant_id: str,
         data: ShareCreate,
+        user_id: str | None = None,
     ) -> SmbShare:
-        """Create a new SMB share configuration for an agent."""
+        """Create a new SMB share configuration for an agent.
+
+        The caller may either reference an existing stored credential or send a
+        new one inline, which is created (encrypted) and attached in the same
+        transaction so the admin never has to pre-create credentials just to
+        add a share.
+        """
         await set_tenant_context(db, tenant_id)
+
+        credential_id = await self._resolve_share_credential(
+            db, tenant_id, agent_id, data.credential_id, data.credential, user_id
+        )
 
         share = SmbShare(
             agent_id=_uuid(agent_id),
             tenant_id=_uuid(tenant_id),
+            credential_id=credential_id,
             share_path=data.share_path,
             display_name=data.display_name,
-            file_extensions=data.file_extensions,
-            max_depth=data.max_depth or 10,
+            file_extensions=_normalize_extensions(data.file_extensions),
+            exclude_patterns=data.exclude_patterns or None,
+            max_depth=data.max_depth if data.max_depth is not None else 10,
             scan_schedule=data.scan_schedule or "0 */6 * * *",
+            is_enabled=True if data.is_enabled is None else data.is_enabled,
         )
         db.add(share)
         await db.flush()
@@ -548,11 +657,32 @@ class SmbService:
         if data.display_name is not None:
             share.display_name = data.display_name
         if data.file_extensions is not None:
-            share.file_extensions = data.file_extensions
+            share.file_extensions = _normalize_extensions(data.file_extensions)
+        if data.exclude_patterns is not None:
+            share.exclude_patterns = data.exclude_patterns or None
         if data.max_depth is not None:
             share.max_depth = data.max_depth
         if data.scan_schedule is not None:
             share.scan_schedule = data.scan_schedule
+        if data.is_enabled is not None:
+            share.is_enabled = data.is_enabled
+
+        if data.credential is not None or data.credential_id is not None:
+            if data.credential is None and data.credential_id == "":
+                # Explicit detach: fall back to the agent's own identity.
+                share.credential_id = None
+            else:
+                share.credential_id = await self._resolve_share_credential(
+                    db,
+                    tenant_id,
+                    str(share.agent_id),
+                    data.credential_id,
+                    data.credential,
+                )
+            # A credential change invalidates the last connection test.
+            share.last_verified_at = None
+            share.last_verify_status = None
+            share.last_verify_error = None
 
         await db.flush()
         return share
@@ -595,6 +725,283 @@ class SmbService:
             )
         )
         return list(result.scalars().all())
+
+    # ── Credentials and agent-facing share config ───────────────────────────
+
+    async def _resolve_share_credential(
+        self,
+        db: AsyncSession,
+        tenant_id: str,
+        agent_id: str,
+        credential_id: str | None,
+        inline_credential=None,
+        user_id: str | None = None,
+    ):
+        """Return the credential UUID a share should use, creating it if inline."""
+        if inline_credential is not None:
+            credential = await smb_credential_service.create_credential(
+                db, tenant_id, inline_credential, user_id
+            )
+            return credential.id
+
+        if not credential_id:
+            return None
+
+        credential = await smb_credential_service.get_credential(
+            db, credential_id, tenant_id
+        )
+        if credential.agent_id and str(credential.agent_id) != str(agent_id):
+            raise SmbCredentialError(
+                f"Credential '{credential.name}' is pinned to a different agent"
+            )
+        return credential.id
+
+    async def share_info(
+        self,
+        db: AsyncSession,
+        share: SmbShare,
+        credential_names: dict[str, str] | None = None,
+        agent_names: dict[str, str] | None = None,
+    ) -> ShareInfo:
+        """Build the admin view of a share, resolving display names."""
+        info = ShareInfo.model_validate(share)
+        credential_name = None
+        if share.credential_id:
+            key = str(share.credential_id)
+            if credential_names is not None:
+                credential_name = credential_names.get(key)
+            else:
+                result = await db.execute(
+                    select(SmbCredential.name).where(
+                        SmbCredential.id == share.credential_id
+                    )
+                )
+                credential_name = result.scalar_one_or_none()
+        agent_name = None
+        if share.agent_id:
+            key = str(share.agent_id)
+            if agent_names is not None:
+                agent_name = agent_names.get(key)
+            else:
+                result = await db.execute(
+                    select(SmbAgent.agent_name).where(SmbAgent.id == share.agent_id)
+                )
+                agent_name = result.scalar_one_or_none()
+        return info.model_copy(
+            update={"credential_name": credential_name, "agent_name": agent_name}
+        )
+
+    async def name_maps(
+        self, db: AsyncSession, tenant_id: str
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        """Return ``(credential_names, agent_names)`` for a tenant."""
+        tid = _uuid(tenant_id)
+        cred_rows = await db.execute(
+            select(SmbCredential.id, SmbCredential.name).where(
+                SmbCredential.tenant_id == tid
+            )
+        )
+        agent_rows = await db.execute(
+            select(SmbAgent.id, SmbAgent.agent_name).where(SmbAgent.tenant_id == tid)
+        )
+        return (
+            {str(r[0]): r[1] for r in cred_rows.all()},
+            {str(r[0]): r[1] for r in agent_rows.all()},
+        )
+
+    async def list_agent_shares(
+        self,
+        db: AsyncSession,
+        agent_id: str,
+        tenant_id: str,
+    ) -> list[AgentShareInfo]:
+        """Share config for an authenticated agent, including its credentials.
+
+        This is the only response that carries a decrypted secret, and it only
+        reaches the agent that owns the share over its API-key-authenticated,
+        TLS-protected channel.
+        """
+        shares = await self.list_shares(db, agent_id, tenant_id)
+
+        payload: list[AgentShareInfo] = []
+        for share in shares:
+            if not share.is_enabled:
+                continue
+            server, share_name, root = _parse_unc(share.share_path)
+            secret = None
+            if share.credential_id:
+                try:
+                    secret = await smb_credential_service.resolve_secret(
+                        db, share.credential_id, tenant_id, agent_id
+                    )
+                except SmbCredentialError:
+                    secret = None
+            payload.append(
+                AgentShareInfo(
+                    share_id=str(share.id),
+                    share_path=share.share_path,
+                    server=server,
+                    share=share_name,
+                    root_path=root,
+                    display_name=share.display_name,
+                    file_extensions=share.file_extensions,
+                    exclude_patterns=share.exclude_patterns,
+                    max_depth=share.max_depth,
+                    scan_schedule=share.scan_schedule,
+                    is_enabled=share.is_enabled,
+                    credential=(AgentShareCredential(**secret) if secret else None),
+                )
+            )
+        return payload
+
+    async def record_scan_status(
+        self,
+        db: AsyncSession,
+        agent_id: str,
+        tenant_id: str,
+        share_id: str,
+        status: ShareScanStatus,
+    ) -> SmbShare:
+        """Persist a scan outcome reported by the agent."""
+        await set_tenant_context(db, tenant_id)
+
+        result = await db.execute(
+            select(SmbShare).where(
+                SmbShare.id == _uuid(share_id),
+                SmbShare.tenant_id == _uuid(tenant_id),
+                SmbShare.agent_id == _uuid(agent_id),
+            )
+        )
+        share = result.scalar_one_or_none()
+        if share is None:
+            raise ValueError("Share not found")
+
+        share.last_scan_status = status.status
+        share.last_scan_at = status.finished_at or datetime.now(timezone.utc)
+        if status.file_count is not None:
+            share.last_scan_file_count = status.file_count
+        share.last_scan_error = status.error[:2000] if status.error else None
+        if status.status in ("success", "completed"):
+            # A completed scan is also proof the credential still works.
+            share.last_verified_at = share.last_scan_at
+            share.last_verify_status = "ok"
+            share.last_verify_error = None
+            await smb_credential_service.record_verification(
+                db,
+                str(share.credential_id) if share.credential_id else None,
+                tenant_id,
+                True,
+            )
+        await db.flush()
+        return share
+
+    # ── Admin-triggered agent tasks ─────────────────────────────────────────
+
+    async def enqueue_share_task(
+        self,
+        db: AsyncSession,
+        tenant_id: str,
+        share_id: str,
+        kind: str,
+        redis=None,
+    ) -> tuple[str, str]:
+        """Queue a verify/scan task for the agent owning a share.
+
+        Returns ``(task_id, agent_id)``. Raises ``ValueError`` when the share is
+        unknown, its agent is not active, or the queue is unavailable.
+        """
+        if kind not in ADMIN_TASK_KINDS:
+            raise ValueError(f"Unsupported task kind: {kind}")
+
+        await set_tenant_context(db, tenant_id)
+
+        result = await db.execute(
+            select(SmbShare).where(
+                SmbShare.id == _uuid(share_id),
+                SmbShare.tenant_id == _uuid(tenant_id),
+            )
+        )
+        share = result.scalar_one_or_none()
+        if share is None:
+            raise ValueError("Share not found")
+
+        agent_result = await db.execute(
+            select(SmbAgent).where(SmbAgent.id == share.agent_id)
+        )
+        agent = agent_result.scalar_one_or_none()
+        if agent is None:
+            raise ValueError("Share has no agent")
+        if agent.status != "active":
+            raise ValueError(f"Agent is {agent.status}")
+
+        if not redis:
+            raise ValueError("Task queue unavailable; cannot reach the agent")
+
+        task_id = secrets.token_urlsafe(16)
+        task = ContentFetchTask(
+            task_id=task_id,
+            kind=kind,
+            share_id=str(share.id),
+            share_path=share.share_path,
+            reason="admin_request",
+        )
+        await redis.set(
+            f"smb_task_pending:{share.agent_id}:{task_id}",
+            task.model_dump_json(),
+            ex=REDIS_ADMIN_TASK_TTL,
+        )
+
+        if kind == "verify_share":
+            share.last_verify_status = "pending"
+            share.last_verify_error = None
+        else:
+            share.last_scan_status = "queued"
+        await db.flush()
+
+        return task_id, str(share.agent_id)
+
+    async def record_task_outcome(
+        self,
+        db: AsyncSession,
+        tenant_id: str,
+        task_meta: dict,
+        result: ContentFetchResult,
+    ) -> None:
+        """Apply a verify/scan task result to the share it belongs to."""
+        share_id = task_meta.get("share_id")
+        kind = task_meta.get("kind", "content_fetch")
+        if not share_id or kind not in ADMIN_TASK_KINDS:
+            return
+
+        await set_tenant_context(db, tenant_id)
+        share_result = await db.execute(
+            select(SmbShare).where(
+                SmbShare.id == _uuid(share_id),
+                SmbShare.tenant_id == _uuid(tenant_id),
+            )
+        )
+        share = share_result.scalar_one_or_none()
+        if share is None:
+            return
+
+        ok = result.ok and not result.error
+        now = datetime.now(timezone.utc)
+        if kind == "verify_share":
+            share.last_verified_at = now
+            share.last_verify_status = "ok" if ok else "failed"
+            share.last_verify_error = None if ok else (result.error or "")[:2000]
+            await smb_credential_service.record_verification(
+                db,
+                str(share.credential_id) if share.credential_id else None,
+                tenant_id,
+                ok,
+                result.error,
+            )
+        elif not ok:
+            share.last_scan_status = "failed"
+            share.last_scan_at = now
+            share.last_scan_error = (result.error or "")[:2000]
+        await db.flush()
 
     async def create_matter_binding(
         self,
@@ -778,6 +1185,36 @@ class SmbService:
             )
         ).scalar_one()
 
+        credential_count = (
+            await db.execute(
+                select(func.count(SmbCredential.id)).where(
+                    SmbCredential.tenant_id == tid
+                )
+            )
+        ).scalar_one()
+
+        # Shares an admin should look at: last scan or connection test failed.
+        shares_failing = (
+            await db.execute(
+                select(func.count(SmbShare.id)).where(
+                    SmbShare.tenant_id == tid,
+                    sa_or(
+                        SmbShare.last_scan_status.in_(["failed", "error"]),
+                        SmbShare.last_verify_status == "failed",
+                    ),
+                )
+            )
+        ).scalar_one()
+
+        shares_without_credential = (
+            await db.execute(
+                select(func.count(SmbShare.id)).where(
+                    SmbShare.tenant_id == tid,
+                    SmbShare.credential_id.is_(None),
+                )
+            )
+        ).scalar_one()
+
         return {
             "agent_count": agent_count,
             "active_agents": active_agents,
@@ -785,6 +1222,9 @@ class SmbService:
             "file_count": file_count,
             "total_size_bytes": int(total_size),
             "recent_fetches_24h": recent_fetches,
+            "credential_count": credential_count,
+            "shares_failing": shares_failing,
+            "shares_without_credential": shares_without_credential,
         }
 
     async def get_access_log(

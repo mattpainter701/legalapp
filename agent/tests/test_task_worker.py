@@ -1,0 +1,305 @@
+"""Task routing: content fetch, connection test, and scan-now.
+
+These run without a file server: ``smbclient`` is replaced with a stub so the
+tests cover what the worker decides — which credential it picks, which share a
+path belongs to, and what it reports back — rather than SMB itself.
+"""
+
+import sys
+import types
+
+import pytest
+
+pytest.importorskip("httpx", reason="agent runtime dependencies not installed")
+
+
+class FakeEntry:
+    def __init__(self, name):
+        self.name = name
+
+
+class FakeSmbClient(types.ModuleType):
+    """Stand-in for the ``smbclient`` module the worker imports at module load."""
+
+    def __init__(self):
+        super().__init__("smbclient")
+        self.sessions = []
+        self.scandir_result = [FakeEntry("a.pdf"), FakeEntry("b.docx")]
+        self.scandir_error = None
+        self.connect_error = None
+
+    def reset_connection_cache(self):
+        pass
+
+    def register_session(self, server, **kwargs):
+        if self.connect_error:
+            raise self.connect_error
+        self.sessions.append((server, kwargs))
+        return f"session:{server}"
+
+    def scandir(self, path):
+        if self.scandir_error:
+            raise self.scandir_error
+        return list(self.scandir_result)
+
+
+@pytest.fixture
+def smb(monkeypatch):
+    fake = FakeSmbClient()
+    monkeypatch.setitem(sys.modules, "smbclient", fake)
+    for name in list(sys.modules):
+        if name.startswith("clarity_agent"):
+            del sys.modules[name]
+    return fake
+
+
+class FakeClient:
+    def __init__(self, tasks=None):
+        self.tasks = tasks or []
+        self.results = []
+
+    async def get_tasks(self):
+        return self.tasks
+
+    async def submit_task_result(
+        self, task_id, content="", truncated=False, error=None, ok=None, detail=None
+    ):
+        self.results.append(
+            {
+                "task_id": task_id,
+                "content": content,
+                "truncated": truncated,
+                "error": error,
+                "ok": (error is None) if ok is None else ok,
+                "detail": detail,
+            }
+        )
+        return {"status": "ok"}
+
+
+class FakeConfig:
+    smb_username = ""
+    smb_password = ""
+    smb_domain = ""
+
+
+SHARE = {
+    "share_id": "share-1",
+    "share_path": "\\\\FS01\\Legal",
+    "server": "FS01",
+    "share": "Legal",
+    "credential": {
+        "credential_id": "cred-1",
+        "name": "svc-lawhand",
+        "auth_method": "ntlm",
+        "domain": "CORP",
+        "username": "svc-lawhand",
+        "password": "pw",
+    },
+}
+
+
+def _worker(smb, client, scan_callback=None):
+    from clarity_agent.smb_reader import SmbReader
+    from clarity_agent.task_worker import TaskWorker
+
+    async def shares():
+        return [SHARE]
+
+    return TaskWorker(
+        FakeConfig(),
+        client,
+        SmbReader(),
+        share_provider=shares,
+        scan_callback=scan_callback,
+    )
+
+
+@pytest.mark.asyncio
+async def test_verify_share_reports_the_identity_it_connected_with(smb):
+    client = FakeClient(
+        [{"task_id": "t1", "kind": "verify_share", "share_id": "share-1"}]
+    )
+
+    await _worker(smb, client).poll_and_execute()
+
+    result = client.results[0]
+    assert result["ok"] is True
+    assert result["detail"]["identity"] == "CORP\\svc-lawhand (ntlm)"
+    assert result["detail"]["entries_sampled"] == 2
+    # The share's own credential is what got used, not the local config.
+    assert smb.sessions[0][1]["username"] == "CORP\\svc-lawhand"
+
+
+@pytest.mark.asyncio
+async def test_verify_share_reports_the_real_failure(smb):
+    smb.connect_error = PermissionError("logon failure")
+    client = FakeClient(
+        [{"task_id": "t2", "kind": "verify_share", "share_id": "share-1"}]
+    )
+
+    await _worker(smb, client).poll_and_execute()
+
+    result = client.results[0]
+    assert result["ok"] is False
+    assert "logon failure" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_verify_share_refuses_a_share_this_agent_does_not_have(smb):
+    client = FakeClient(
+        [{"task_id": "t3", "kind": "verify_share", "share_id": "other"}]
+    )
+
+    await _worker(smb, client).poll_and_execute()
+
+    assert client.results[0]["ok"] is False
+    assert "not assigned" in client.results[0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_scan_now_runs_the_scan_callback(smb):
+    scanned = []
+
+    async def scan(share):
+        scanned.append(share["share_id"])
+
+    client = FakeClient([{"task_id": "t4", "kind": "scan_now", "share_id": "share-1"}])
+
+    await _worker(smb, client, scan_callback=scan).poll_and_execute()
+
+    assert scanned == ["share-1"]
+    assert client.results[0]["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_scan_now_reports_a_failing_scan(smb):
+    async def scan(share):
+        raise RuntimeError("share went offline")
+
+    client = FakeClient([{"task_id": "t5", "kind": "scan_now", "share_id": "share-1"}])
+
+    await _worker(smb, client, scan_callback=scan).poll_and_execute()
+
+    assert client.results[0]["ok"] is False
+    assert "share went offline" in client.results[0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_content_fetch_uses_the_credential_of_the_owning_share(smb, monkeypatch):
+    client = FakeClient(
+        [
+            {
+                "task_id": "t6",
+                "kind": "content_fetch",
+                "file_path": "\\\\FS01\\Legal\\Clients\\brief.txt",
+            }
+        ]
+    )
+    worker = _worker(smb, client)
+
+    from clarity_agent.smb_reader import ContentResult
+
+    async def fake_read(self, session, path, max_bytes=512000):
+        return ContentResult(content="brief text")
+
+    monkeypatch.setattr(type(worker.reader), "read_content", fake_read)
+
+    await worker.poll_and_execute()
+
+    assert client.results[0]["content"] == "brief text"
+    assert smb.sessions[0][1]["username"] == "CORP\\svc-lawhand"
+
+
+@pytest.mark.asyncio
+async def test_content_fetch_without_a_path_is_reported_not_crashed(smb):
+    client = FakeClient([{"task_id": "t7", "kind": "content_fetch"}])
+
+    await _worker(smb, client).poll_and_execute()
+
+    assert client.results[0]["ok"] is False
+    assert "file_path" in client.results[0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_unknown_task_kind_is_treated_as_a_content_fetch(smb):
+    client = FakeClient([{"task_id": "t8", "share_id": "share-1"}])
+
+    await _worker(smb, client).poll_and_execute()
+
+    # No file_path on the task, so it reports the content-fetch error rather
+    # than silently doing nothing.
+    assert client.results[0]["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_scan_now_reports_a_scan_that_failed_without_raising(smb):
+    async def scan(share):
+        # _scan_share records a failure and returns normally when the share is
+        # unreachable or the sync is rejected.
+        return {"status": "failed", "error": "Failed to connect to \\\\FS01\\Legal"}
+
+    client = FakeClient([{"task_id": "t9", "kind": "scan_now", "share_id": "share-1"}])
+
+    await _worker(smb, client, scan_callback=scan).poll_and_execute()
+
+    assert client.results[0]["ok"] is False
+    assert "Failed to connect" in client.results[0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_scan_now_reports_a_partial_scan_as_not_ok(smb):
+    async def scan(share):
+        return {"status": "partial", "file_count": 12, "error": "Sync failed: 503"}
+
+    client = FakeClient([{"task_id": "t10", "kind": "scan_now", "share_id": "share-1"}])
+
+    await _worker(smb, client, scan_callback=scan).poll_and_execute()
+
+    assert client.results[0]["ok"] is False
+    assert client.results[0]["detail"]["file_count"] == 12
+
+
+@pytest.mark.asyncio
+async def test_scan_now_reports_success_with_the_file_count(smb):
+    async def scan(share):
+        return {"status": "success", "file_count": 4210}
+
+    client = FakeClient([{"task_id": "t11", "kind": "scan_now", "share_id": "share-1"}])
+
+    await _worker(smb, client, scan_callback=scan).poll_and_execute()
+
+    assert client.results[0]["ok"] is True
+    assert client.results[0]["detail"]["file_count"] == 4210
+
+
+@pytest.mark.asyncio
+async def test_a_share_added_moments_ago_is_found_after_one_refresh(smb):
+    """A cached share list must not make a just-added share untestable."""
+    refreshed = []
+
+    async def empty_provider():
+        return []
+
+    async def refresher():
+        refreshed.append(True)
+        return [SHARE]
+
+    from clarity_agent.smb_reader import SmbReader
+    from clarity_agent.task_worker import TaskWorker
+
+    client = FakeClient(
+        [{"task_id": "t12", "kind": "verify_share", "share_id": "share-1"}]
+    )
+    worker = TaskWorker(
+        FakeConfig(),
+        client,
+        SmbReader(),
+        share_provider=empty_provider,
+        share_refresher=refresher,
+    )
+
+    await worker.poll_and_execute()
+
+    assert refreshed == [True]
+    assert client.results[0]["ok"] is True

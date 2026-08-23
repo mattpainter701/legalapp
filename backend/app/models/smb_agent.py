@@ -35,6 +35,8 @@ class SmbAgent(Base):
     last_heartbeat: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # 19 characters: four groups of four from an unambiguous alphabet. The
+    # previous token_urlsafe(16) code was 22 characters and did not fit.
     pairing_code: Mapped[str | None] = mapped_column(
         String(20), unique=True, nullable=True
     )
