@@ -353,6 +353,12 @@ def normalize_teams_voice_record(record: dict[str, Any]) -> dict[str, Any] | Non
     user_principal_name = _stringify(
         _first(record, "userPrincipalName", "user_principal_name")
     )
+    # Which feed captured this call. Both feeds converge on one row, so without
+    # this there is no way to tell from the record whether the notification path
+    # or the hourly sweep found it — the first question asked when latency looks
+    # wrong.
+    webhook_change_type = _stringify(record.get("webhook_change_type"))
+    webhook_subscription_id = _stringify(record.get("webhook_subscription_id"))
 
     body_parts = [
         f"Microsoft Teams {direction} call",
@@ -385,6 +391,9 @@ def normalize_teams_voice_record(record: dict[str, Any]) -> dict[str, Any] | Non
             "call_type": call_type,
             "join_web_url": join_url,
             "user_principal_name": user_principal_name,
+            "capture_source": "notification" if webhook_change_type else "usage_report",
+            "webhook_change_type": webhook_change_type,
+            "webhook_subscription_id": webhook_subscription_id,
             "raw": record,
         },
     }
@@ -407,6 +416,7 @@ _PROVIDER_OWNED_PARTICIPANT_KEYS = frozenset(
         "join_web_url",
         "user_principal_name",
         "raw",
+        "capture_source",
         "webhook_subscription_id",
         "webhook_change_type",
     }

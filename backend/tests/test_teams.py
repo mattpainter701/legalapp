@@ -597,3 +597,258 @@ async def test_list_joined_teams_stops_at_the_page_cap(monkeypatch):
 
 async def _immediate(value):
     return value
+
+
+# ── Graph failure messages and card/token plumbing ───────────────────────
+
+
+def test_graph_failure_message_is_actionable_per_status():
+    from app.services import teams as teams_service
+
+    denied = teams_service.graph_failure_message(httpx.Response(403), "your teams")
+    assert "Reconnect" in denied
+    throttled = teams_service.graph_failure_message(httpx.Response(429), "your teams")
+    assert "throttling" in throttled
+    other = teams_service.graph_failure_message(httpx.Response(500), "your teams")
+    assert "could not load" in other
+    assert "did not respond" in teams_service.graph_failure_message(None, "your teams")
+
+
+@pytest.mark.asyncio
+async def test_resolve_token_is_the_public_wrapper(monkeypatch):
+    from app.services import teams as teams_service
+
+    monkeypatch.setattr(
+        teams_service, "_get_token", lambda *a, **k: _immediate("wrapped-token")
+    )
+    assert await teams_service.resolve_token("tenant", "user") == "wrapped-token"
+
+
+@pytest.mark.asyncio
+async def test_create_channel_reports_a_name_collision(monkeypatch):
+    """Graph answers 409 for a duplicate name; "reconnect" would be wrong advice."""
+    from app.services import teams as teams_service
+
+    async def fake_request(method, path, *, token, json_body=None, **kw):
+        return httpx.Response(409, text="already exists")
+
+    monkeypatch.setattr(teams_service, "_graph_request", fake_request)
+    monkeypatch.setattr(
+        teams_service, "_get_token", lambda *a, **k: _immediate("token")
+    )
+
+    with pytest.raises(teams_service.TeamsIntegrationError) as exc:
+        await teams_service.create_channel("tenant", "team-1", "General")
+    assert "already exists" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_create_channel_requires_a_name():
+    from app.services import teams as teams_service
+
+    with pytest.raises(teams_service.TeamsIntegrationError):
+        await teams_service.create_channel("tenant", "team-1", "   ")
+
+
+@pytest.mark.asyncio
+async def test_list_channels_pages_and_maps(monkeypatch):
+    from app.services import teams as teams_service
+
+    async def fake_request(method, path, *, token, **kw):
+        return httpx.Response(
+            200,
+            json={
+                "value": [
+                    {"id": "c1", "displayName": "General", "membershipType": "standard"},
+                    {"displayName": "no id — dropped"},
+                ]
+            },
+        )
+
+    monkeypatch.setattr(teams_service, "_graph_request", fake_request)
+    monkeypatch.setattr(
+        teams_service, "_get_token", lambda *a, **k: _immediate("token")
+    )
+
+    channels = await teams_service.list_channels("tenant", "team-1")
+    assert channels == [
+        {"id": "c1", "display_name": "General", "membership_type": "standard"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_send_channel_message_reuses_a_supplied_token(monkeypatch):
+    from app.services import teams as teams_service
+
+    seen = {}
+
+    async def fake_request(method, path, *, token, json_body=None, **kw):
+        seen["token"] = token
+        seen["body"] = json_body
+        return httpx.Response(201, json={})
+
+    async def unexpected(*a, **k):
+        raise AssertionError("a supplied token must not be re-resolved")
+
+    monkeypatch.setattr(teams_service, "_graph_request", fake_request)
+    monkeypatch.setattr(teams_service, "_get_token", unexpected)
+
+    ok = await teams_service.send_channel_message(
+        "tenant", "team-1", "chan-1", html="<p>hi</p>", token="supplied"
+    )
+    assert ok is True
+    assert seen["token"] == "supplied"
+    assert seen["body"]["body"]["content"] == "<p>hi</p>"
+
+
+def test_card_actions_place_the_deep_link_first():
+    from app.services.teams import build_matter_card
+
+    card = build_matter_card(
+        "Title",
+        "Matter X",
+        {},
+        deep_link="https://app/matter",
+        actions=[{"type": "Action.OpenUrl", "title": "Other", "url": "https://other"}],
+    )
+    assert [a["title"] for a in card["actions"]] == ["Open in LawHand", "Other"]
+    # No fields means no FactSet block rather than an empty one.
+    assert all(b["type"] != "FactSet" for b in card["body"])
+
+
+# ── Notification dispatch guards ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_notify_refuses_an_unknown_event_type(test_tenant):
+    from app.services import teams_notify
+
+    # A caller emitting an unrouted event is a wiring bug: no routing row can
+    # ever match it, so it must not be treated as a tenant problem.
+    sent = await teams_notify.notify(
+        str(test_tenant.id), "not_a_real_event", title="x", fields={}
+    )
+    assert sent == 0
+
+
+@pytest.mark.asyncio
+async def test_notify_gives_up_when_no_token_resolves(
+    ms_connected, db_session, test_tenant, test_user, monkeypatch
+):
+    from app.services import teams_notify
+    from app.services import teams as teams_service
+
+    matter = await _add_matter(db_session, test_tenant.id, test_user.id)
+    link = __import__(
+        "app.models.teams_channel_link", fromlist=["TeamsChannelLink"]
+    ).TeamsChannelLink(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        matter_id=matter.id,
+        team_id="team-1",
+        channel_id="chan-1",
+        is_active=True,
+    )
+    db_session.add(link)
+    await db_session.commit()
+
+    async def no_token(tenant_id, user_id=None):
+        raise teams_service.TeamsIntegrationError("no usable token")
+
+    async def unexpected(*a, **k):
+        raise AssertionError("must not attempt a post without a token")
+
+    monkeypatch.setattr(teams_service, "resolve_token", no_token)
+    monkeypatch.setattr(teams_service, "send_channel_message", unexpected)
+
+    sent = await teams_notify.notify(
+        str(test_tenant.id),
+        "deadline_approaching",
+        title="x",
+        fields={},
+        matter_id=str(matter.id),
+    )
+    assert sent == 0
+
+
+@pytest.mark.asyncio
+async def test_resolve_targets_prefers_matter_specific_routes(
+    db_session, test_tenant, test_user
+):
+    from app.services import teams_notify
+    from app.models.teams_notification_setting import TeamsNotificationSetting
+
+    matter = await _add_matter(db_session, test_tenant.id, test_user.id)
+    db_session.add_all(
+        [
+            TeamsNotificationSetting(
+                id=uuid.uuid4(),
+                tenant_id=test_tenant.id,
+                event_type="deadline_approaching",
+                team_id="team-default",
+                channel_id="chan-default",
+                matter_id=None,
+                is_enabled=True,
+            ),
+            TeamsNotificationSetting(
+                id=uuid.uuid4(),
+                tenant_id=test_tenant.id,
+                event_type="deadline_approaching",
+                team_id="team-specific",
+                channel_id="chan-specific",
+                matter_id=matter.id,
+                is_enabled=True,
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    targets = await teams_notify.resolve_targets(
+        str(test_tenant.id), "deadline_approaching", str(matter.id)
+    )
+    # The matter override wins outright — the firm-wide default must not also fire.
+    assert targets == [("team-specific", "chan-specific")]
+
+    default_targets = await teams_notify.resolve_targets(
+        str(test_tenant.id), "deadline_approaching", None
+    )
+    assert default_targets == [("team-default", "chan-default")]
+
+
+def test_event_catalogue_is_ordered_and_complete():
+    from app.services import teams_notify
+
+    catalogue = teams_notify.event_type_catalogue()
+    assert [e["event_type"] for e in catalogue] == list(
+        teams_notify.TEAMS_EVENT_TYPES
+    )
+    assert teams_notify.is_known_event_type("deadline_approaching")
+    assert not teams_notify.is_known_event_type("nope")
+
+
+def test_channel_create_request_rejects_a_blank_name():
+    import pydantic
+
+    from app.schemas.teams import ChannelCreateRequest
+
+    with pytest.raises(pydantic.ValidationError):
+        ChannelCreateRequest(team_id="team-1", display_name="   ")
+    # A padded but real name is accepted and trimmed.
+    assert (
+        ChannelCreateRequest(team_id=" team-1 ", display_name=" General ").display_name
+        == "General"
+    )
+
+
+def test_intake_feed_labels_both_capture_providers():
+    from app.routers.intake_dashboard import _log_source
+    from app.models.communication_log import CommunicationLog
+
+    def log(**kw):
+        return CommunicationLog(subject="s", **kw)
+
+    assert _log_source(log(external_ref="teams_voice:call:1")) == "teams_voice"
+    assert _log_source(log(participants={"provider": "teams_voice"})) == "teams_voice"
+    assert _log_source(log(external_ref="zoom_phone:call:1")) == "zoom_phone"
+    assert _log_source(log(participants={"provider": "zoom_phone"})) == "zoom_phone"
+    assert _log_source(log(external_ref=None, participants=None)) == "manual"

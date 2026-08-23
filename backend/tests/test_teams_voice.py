@@ -585,3 +585,630 @@ class TestVoiceWebhook:
         )
         assert resp.status_code == 200
         assert resp.json()["status"] == "ignored"
+
+
+# ── App-only credential and token acquisition ─────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestAppOnlyToken:
+    async def test_prefers_a_tenant_owned_application(
+        self, db_session, test_tenant, voice_enabled
+    ):
+        from app.models.tenant_oauth_app import TenantOAuthApp
+
+        db_session.add(
+            TenantOAuthApp(
+                id=uuid.uuid4(),
+                tenant_id=test_tenant.id,
+                provider="teams_voice",
+                encrypted_client_id=encrypt_token("firm-client-id"),
+                encrypted_client_secret=encrypt_token("firm-secret"),
+                is_active=True,
+            )
+        )
+        await db_session.commit()
+
+        credentials = await teams_voice.get_voice_app_credentials(
+            db_session, tenant_id=str(test_tenant.id)
+        )
+        assert credentials.source == "tenant"
+        assert credentials.client_id == "firm-client-id"
+
+    async def test_falls_back_to_the_platform_application(
+        self, db_session, test_tenant
+    ):
+        credentials = await teams_voice.get_voice_app_credentials(
+            db_session, tenant_id=str(test_tenant.id)
+        )
+        assert credentials.source == "platform"
+
+    async def test_requires_an_enabled_tenant(self, db_session, test_tenant):
+        with pytest.raises(teams_voice.TeamsVoiceNotConfigured):
+            await teams_voice.get_app_only_token(
+                db_session, tenant_id=str(test_tenant.id)
+            )
+
+    async def test_requires_a_directory_id(
+        self, db_session, test_tenant, voice_enabled
+    ):
+        voice_enabled.entra_tenant_id = None
+        await db_session.commit()
+        with pytest.raises(teams_voice.TeamsVoiceNotConfigured):
+            await teams_voice.get_app_only_token(
+                db_session, tenant_id=str(test_tenant.id)
+            )
+
+    async def test_returns_the_access_token(
+        self, db_session, test_tenant, voice_enabled, monkeypatch
+    ):
+        captured = {}
+
+        class _Client:
+            def __init__(self, *a, **kw):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def post(self, url, data=None):
+                captured["url"] = url
+                captured["data"] = data
+                return httpx.Response(200, json={"access_token": "app-token"})
+
+        monkeypatch.setattr(httpx, "AsyncClient", _Client)
+        token = await teams_voice.get_app_only_token(
+            db_session, tenant_id=str(test_tenant.id)
+        )
+        assert token == "app-token"
+        # The directory GUID, not a multi-tenant alias, must be in the URL.
+        assert "contoso-directory-guid" in captured["url"]
+        assert captured["data"]["grant_type"] == "client_credentials"
+        assert captured["data"]["scope"] == teams_voice.TEAMS_VOICE_GRAPH_SCOPE
+
+    @pytest.mark.parametrize(
+        "detail,expected",
+        [
+            ("AADSTS7000215: Invalid client secret", "client secret"),
+            ("AADSTS700016: Application not found", "directory"),
+        ],
+    )
+    async def test_maps_entra_errors_to_actionable_text(
+        self, db_session, test_tenant, voice_enabled, monkeypatch, detail, expected
+    ):
+        monkeypatch.setattr(
+            httpx, "AsyncClient", _fake_client(httpx.Response(401, text=detail))
+        )
+        with pytest.raises(teams_voice.TeamsVoicePermanentError) as exc:
+            await teams_voice.get_app_only_token(
+                db_session, tenant_id=str(test_tenant.id)
+            )
+        assert expected in str(exc.value)
+
+    async def test_unmapped_failure_is_retryable(
+        self, db_session, test_tenant, voice_enabled, monkeypatch
+    ):
+        monkeypatch.setattr(
+            httpx, "AsyncClient", _fake_client(httpx.Response(503, text="busy"))
+        )
+        with pytest.raises(teams_voice.TeamsVoiceError) as exc:
+            await teams_voice.get_app_only_token(
+                db_session, tenant_id=str(test_tenant.id)
+            )
+        assert not isinstance(exc.value, teams_voice.TeamsVoicePermanentError)
+
+    async def test_missing_access_token_is_an_error(
+        self, db_session, test_tenant, voice_enabled, monkeypatch
+    ):
+        monkeypatch.setattr(
+            httpx, "AsyncClient", _fake_client(httpx.Response(200, json={}))
+        )
+        with pytest.raises(teams_voice.TeamsVoiceError):
+            await teams_voice.get_app_only_token(
+                db_session, tenant_id=str(test_tenant.id)
+            )
+
+    async def test_network_failure_is_reported(
+        self, db_session, test_tenant, voice_enabled, monkeypatch
+    ):
+        monkeypatch.setattr(
+            httpx, "AsyncClient", _fake_client(httpx.ConnectError("no route"))
+        )
+        with pytest.raises(teams_voice.TeamsVoiceError) as exc:
+            await teams_voice.get_app_only_token(
+                db_session, tenant_id=str(test_tenant.id)
+            )
+        assert "Entra" in str(exc.value)
+
+
+def _fake_client(result):
+    """An httpx.AsyncClient stand-in returning (or raising) one result."""
+
+    class _Client:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def _respond(self, *a, **kw):
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        post = _respond
+        request = _respond
+
+    return _Client
+
+
+# ── Graph request plumbing ────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestGraphPlumbing:
+    async def test_retries_on_throttling_then_succeeds(self, monkeypatch):
+        calls = {"n": 0}
+        sleeps = []
+
+        class _Client:
+            def __init__(self, *a, **kw):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def request(self, method, url, **kw):
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    return httpx.Response(429, headers={"Retry-After": "0.01"})
+                return httpx.Response(200, json={"ok": True})
+
+        async def fake_sleep(delay):
+            sleeps.append(delay)
+
+        monkeypatch.setattr(httpx, "AsyncClient", _Client)
+        monkeypatch.setattr(teams_voice.asyncio, "sleep", fake_sleep)
+
+        resp = await teams_voice._graph_request("GET", "/x", token="t")
+        assert resp.status_code == 200
+        assert calls["n"] == 2
+        assert sleeps == [0.01]
+
+    async def test_gives_up_after_the_retry_budget(self, monkeypatch):
+        async def fake_sleep(delay):
+            return None
+
+        monkeypatch.setattr(
+            httpx, "AsyncClient", _fake_client(httpx.Response(429, text="slow down"))
+        )
+        monkeypatch.setattr(teams_voice.asyncio, "sleep", fake_sleep)
+
+        resp = await teams_voice._graph_request(
+            "GET", "/x", token="t", max_retries=1
+        )
+        assert resp.status_code == 429
+
+    async def test_network_error_returns_none(self, monkeypatch):
+        monkeypatch.setattr(
+            httpx, "AsyncClient", _fake_client(httpx.ConnectError("down"))
+        )
+        assert await teams_voice._graph_request("GET", "/x", token="t") is None
+
+    def test_error_mapping(self):
+        assert isinstance(
+            teams_voice._graph_error(httpx.Response(403), "reading"),
+            teams_voice.TeamsVoicePermanentError,
+        )
+        assert isinstance(
+            teams_voice._graph_error(httpx.Response(404), "reading"),
+            teams_voice.TeamsVoicePermanentError,
+        )
+        transient = teams_voice._graph_error(httpx.Response(500), "reading")
+        assert not isinstance(transient, teams_voice.TeamsVoicePermanentError)
+        assert "did not respond" in str(teams_voice._graph_error(None, "reading"))
+
+    async def test_collect_follows_next_link(self, monkeypatch):
+        pages = {
+            "/first": {
+                "value": [{"id": "a"}],
+                "@odata.nextLink": "https://graph.microsoft.com/v1.0/second",
+            },
+            "https://graph.microsoft.com/v1.0/second": {"value": [{"id": "b"}]},
+        }
+
+        async def fake_request(method, path, *, token, **kw):
+            return httpx.Response(200, json=pages[path])
+
+        monkeypatch.setattr(teams_voice, "_graph_request", fake_request)
+        items = await teams_voice._graph_collect("/first", token="t", context="x")
+        assert [i["id"] for i in items] == ["a", "b"]
+
+    async def test_collect_raises_on_failure(self, monkeypatch):
+        async def fake_request(method, path, *, token, **kw):
+            return httpx.Response(403, text="nope")
+
+        monkeypatch.setattr(teams_voice, "_graph_request", fake_request)
+        with pytest.raises(teams_voice.TeamsVoicePermanentError):
+            await teams_voice._graph_collect("/first", token="t", context="x")
+
+    async def test_collect_stops_at_the_page_cap(self, monkeypatch):
+        async def fake_request(method, path, *, token, **kw):
+            return httpx.Response(
+                200,
+                json={
+                    "value": [{"id": "loop"}],
+                    "@odata.nextLink": "https://graph.microsoft.com/v1.0/loop",
+                },
+            )
+
+        monkeypatch.setattr(teams_voice, "_graph_request", fake_request)
+        items = await teams_voice._graph_collect("/first", token="t", context="x")
+        assert len(items) == teams_voice._PAGE_LIMIT
+
+
+# ── Graph reads ───────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestGraphReads:
+    @pytest_asyncio.fixture(autouse=True)
+    async def _token(self, monkeypatch):
+        async def fake_token(db, *, tenant_id, require_enabled=True):
+            return "app-token"
+
+        monkeypatch.setattr(teams_voice, "get_app_only_token", fake_token)
+
+    async def test_pstn_window_is_bounded_and_formatted(
+        self, db_session, test_tenant, monkeypatch
+    ):
+        seen = {}
+
+        async def fake_collect(path, *, token, context):
+            seen["path"] = path
+            return [_pstn_row()]
+
+        monkeypatch.setattr(teams_voice, "_graph_collect", fake_collect)
+        records = await teams_voice.fetch_pstn_calls(
+            db_session, tenant_id=str(test_tenant.id), days=500
+        )
+        assert len(records) == 1
+        assert "getPstnCalls(fromDateTime=" in seen["path"]
+        # Graph caps the report span at 90 days; a larger ask is clamped rather
+        # than sent through and rejected.
+        assert "toDateTime=" in seen["path"]
+
+    async def test_fetch_call_record_expands_sessions(
+        self, db_session, test_tenant, monkeypatch
+    ):
+        seen = {}
+
+        async def fake_request(method, path, *, token, **kw):
+            seen["path"] = path
+            return httpx.Response(200, json=_call_record())
+
+        monkeypatch.setattr(teams_voice, "_graph_request", fake_request)
+        record = await teams_voice.fetch_call_record(
+            db_session, tenant_id=str(test_tenant.id), call_record_id="record-1"
+        )
+        assert record["id"] == "record-1"
+        assert "$expand=sessions" in seen["path"]
+
+    async def test_fetch_call_record_rejects_a_non_object(
+        self, db_session, test_tenant, monkeypatch
+    ):
+        async def fake_request(method, path, *, token, **kw):
+            return httpx.Response(200, json=["not", "a", "record"])
+
+        monkeypatch.setattr(teams_voice, "_graph_request", fake_request)
+        with pytest.raises(teams_voice.TeamsVoicePermanentError):
+            await teams_voice.fetch_call_record(
+                db_session, tenant_id=str(test_tenant.id), call_record_id="record-1"
+            )
+
+    async def test_probe_counts_inbound_calls(
+        self, db_session, test_tenant, monkeypatch
+    ):
+        async def fake_collect(path, *, token, context):
+            return [_pstn_row(), _pstn_row(id="p2", callType="UserOut")]
+
+        monkeypatch.setattr(teams_voice, "_graph_collect", fake_collect)
+        result = await teams_voice.probe_voice_connection(
+            db_session, tenant_id=str(test_tenant.id)
+        )
+        assert result == {"status": "ok", "sample_count": 2, "inbound_count": 1}
+
+
+# ── Subscription lifecycle ────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestSubscription:
+    @pytest_asyncio.fixture(autouse=True)
+    async def _token(self, monkeypatch):
+        async def fake_token(db, *, tenant_id, require_enabled=True):
+            return "app-token"
+
+        monkeypatch.setattr(teams_voice, "get_app_only_token", fake_token)
+
+    async def test_requires_an_enabled_tenant(self, db_session, test_tenant):
+        with pytest.raises(teams_voice.TeamsVoiceNotConfigured):
+            await teams_voice.ensure_subscription(
+                db_session, tenant_id=str(test_tenant.id), notification_url="https://x"
+            )
+
+    async def test_renews_an_existing_subscription(
+        self, db_session, test_tenant, voice_enabled, monkeypatch
+    ):
+        calls = []
+
+        async def fake_request(method, path, *, token, json_body=None, **kw):
+            calls.append((method, path))
+            return httpx.Response(
+                200, json={"expirationDateTime": "2026-09-01T00:00:00Z"}
+            )
+
+        monkeypatch.setattr(teams_voice, "_graph_request", fake_request)
+        row = await teams_voice.ensure_subscription(
+            db_session,
+            tenant_id=str(test_tenant.id),
+            notification_url="https://app/webhook",
+        )
+        await db_session.commit()
+        assert calls == [("PATCH", "/subscriptions/sub-1")]
+        assert row.subscription_id == "sub-1"
+        assert row.notification_url == "https://app/webhook"
+
+    async def test_recreates_when_renewal_is_refused(
+        self, db_session, test_tenant, voice_enabled, monkeypatch
+    ):
+        calls = []
+
+        async def fake_request(method, path, *, token, json_body=None, **kw):
+            calls.append((method, path))
+            if method == "PATCH":
+                # Graph no longer knows this subscription.
+                return httpx.Response(404, text="not found")
+            return httpx.Response(
+                201,
+                json={"id": "sub-2", "expirationDateTime": "2026-09-01T00:00:00Z"},
+            )
+
+        monkeypatch.setattr(teams_voice, "_graph_request", fake_request)
+        row = await teams_voice.ensure_subscription(
+            db_session,
+            tenant_id=str(test_tenant.id),
+            notification_url="https://app/webhook",
+        )
+        await db_session.commit()
+        assert [c[0] for c in calls] == ["PATCH", "POST"]
+        assert row.subscription_id == "sub-2"
+
+    async def test_creates_a_first_subscription_with_client_state(
+        self, db_session, test_tenant, voice_enabled, monkeypatch
+    ):
+        voice_enabled.subscription_id = None
+        await db_session.commit()
+        bodies = []
+
+        async def fake_request(method, path, *, token, json_body=None, **kw):
+            bodies.append(json_body)
+            return httpx.Response(
+                201,
+                json={"id": "sub-new", "expirationDateTime": "2026-09-01T00:00:00Z"},
+            )
+
+        monkeypatch.setattr(teams_voice, "_graph_request", fake_request)
+        row = await teams_voice.ensure_subscription(
+            db_session,
+            tenant_id=str(test_tenant.id),
+            notification_url="https://app/webhook",
+        )
+        await db_session.commit()
+        assert row.subscription_id == "sub-new"
+        body = bodies[0]
+        assert body["resource"] == "communications/callRecords"
+        assert body["changeType"] == "created"
+        assert body["notificationUrl"] == "https://app/webhook"
+        # The secret every later notification is checked against.
+        assert body["clientState"] == "secret-client-state"
+
+    async def test_creation_failure_raises(
+        self, db_session, test_tenant, voice_enabled, monkeypatch
+    ):
+        voice_enabled.subscription_id = None
+        await db_session.commit()
+
+        async def fake_request(method, path, *, token, json_body=None, **kw):
+            return httpx.Response(403, text="denied")
+
+        monkeypatch.setattr(teams_voice, "_graph_request", fake_request)
+        with pytest.raises(teams_voice.TeamsVoicePermanentError):
+            await teams_voice.ensure_subscription(
+                db_session,
+                tenant_id=str(test_tenant.id),
+                notification_url="https://app/webhook",
+            )
+
+    async def test_delete_without_a_subscription_is_a_noop(
+        self, db_session, test_tenant
+    ):
+        assert (
+            await teams_voice.delete_subscription(
+                db_session, tenant_id=str(test_tenant.id)
+            )
+            is False
+        )
+
+
+# ── Durable webhook job and reconciliation ────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestWebhookJobImport:
+    async def test_imports_the_authoritative_record(
+        self, db_session, test_tenant, voice_enabled, monkeypatch
+    ):
+        async def fake_fetch(db, *, tenant_id, call_record_id):
+            return _call_record(id=call_record_id)
+
+        monkeypatch.setattr(teams_voice, "fetch_call_record", fake_fetch)
+        result = await teams_voice.import_teams_voice_webhook_job(
+            db_session,
+            tenant_id=str(test_tenant.id),
+            payload={"call_record_id": "record-1", "change_type": "created"},
+        )
+        await db_session.commit()
+        assert result.imported == 1
+
+        row = await db_session.scalar(
+            select(CommunicationLog).where(
+                CommunicationLog.external_ref == "teams_voice:call:record-1"
+            )
+        )
+        assert row.participants["webhook_change_type"] == "created"
+        assert row.participants["capture_source"] == "notification"
+
+    async def test_missing_id_is_rejected(self, db_session, test_tenant):
+        with pytest.raises(ValueError):
+            await teams_voice.import_teams_voice_webhook_job(
+                db_session, tenant_id=str(test_tenant.id), payload={}
+            )
+
+    async def test_a_different_record_is_refused(
+        self, db_session, test_tenant, monkeypatch
+    ):
+        async def fake_fetch(db, *, tenant_id, call_record_id):
+            # Graph answered with someone else's call.
+            return _call_record(id="a-different-record")
+
+        monkeypatch.setattr(teams_voice, "fetch_call_record", fake_fetch)
+        with pytest.raises(teams_voice.TeamsVoicePermanentError):
+            await teams_voice.import_teams_voice_webhook_job(
+                db_session,
+                tenant_id=str(test_tenant.id),
+                payload={"call_record_id": "record-1"},
+            )
+
+    async def test_sync_records_its_outcome_on_the_settings_row(
+        self, db_session, test_tenant, voice_enabled, monkeypatch
+    ):
+        async def fake_fetch(db, *, tenant_id, days):
+            return [_pstn_row()]
+
+        monkeypatch.setattr(teams_voice, "fetch_pstn_calls", fake_fetch)
+        result = await teams_voice.sync_teams_voice_call_history(
+            db_session, tenant_id=str(test_tenant.id), days=3
+        )
+        await db_session.commit()
+        assert result.imported == 1
+        await db_session.refresh(voice_enabled)
+        assert voice_enabled.last_sync_status == "ok"
+        assert voice_enabled.last_sync_at is not None
+
+
+# ── Small helpers and edge cases ──────────────────────────────────────────
+
+
+class TestNormalizeEdges:
+    def test_datetime_passthrough_and_fallbacks(self):
+        aware = datetime(2026, 8, 1, tzinfo=timezone.utc)
+        assert teams_voice._parse_datetime(aware) is aware
+        naive = datetime(2026, 8, 1)
+        assert teams_voice._parse_datetime(naive).tzinfo == timezone.utc
+        # An unparseable timestamp must not lose the call; it lands at "now".
+        assert teams_voice._parse_datetime("not-a-date").tzinfo == timezone.utc
+        assert teams_voice._parse_optional_datetime(None) is None
+        assert teams_voice._parse_optional_datetime("2026-08-01T00:00:00Z") is not None
+
+    def test_endpoint_identity_handles_junk(self):
+        assert teams_voice._endpoint_identity(None) == (None, None)
+        assert teams_voice._endpoint_identity({"identity": "not-a-dict"}) == (
+            None,
+            None,
+        )
+        number, name = teams_voice._endpoint_identity(
+            {"identity": {"phone": {"id": "+15125550143"}}, "name": "Reception"}
+        )
+        assert number == "+15125550143"
+        assert name == "Reception"
+
+    def test_parties_fall_back_to_organizer_and_participants(self):
+        record = {
+            "id": "r",
+            "organizer": {"identity": {"user": {"displayName": "Организатор"}}},
+            "participants": [
+                {"identity": {"phone": {"id": "+15125559000"}}},
+            ],
+        }
+        caller, callee = teams_voice._call_record_parties(record)
+        assert caller["name"] == "Организатор"
+        assert callee["number"] == "+15125559000"
+
+    def test_parties_ignore_malformed_sessions(self):
+        caller, callee = teams_voice._call_record_parties(
+            {"id": "r", "sessions": ["not-a-dict"]}
+        )
+        assert caller == {"number": None, "name": None}
+
+    def test_unclassifiable_direction_is_left_alone(self):
+        assert teams_voice._pstn_direction({"callType": "Sideways"}) is None
+        assert teams_voice._pstn_direction({}) is None
+
+    def test_stringify_and_first(self):
+        assert teams_voice._stringify(None) is None
+        assert teams_voice._stringify("") is None
+        assert teams_voice._stringify(7) == "7"
+        assert teams_voice._first({"a": "", "b": "x"}, "a", "b") == "x"
+        assert teams_voice._first({}, "a") is None
+
+
+@pytest.mark.asyncio
+async def test_client_state_survives_an_undecryptable_secret(
+    db_session, test_tenant, voice_enabled
+):
+    # A rotated encryption key must degrade to "reject notifications", not to a
+    # crash inside the webhook handler.
+    voice_enabled.encrypted_client_state = "not-a-valid-ciphertext"
+    await db_session.commit()
+    assert teams_voice.client_state_of(voice_enabled) is None
+
+
+@pytest.mark.asyncio
+async def test_missing_client_state_is_regenerated_on_subscribe(
+    db_session, test_tenant, voice_enabled, monkeypatch
+):
+    voice_enabled.encrypted_client_state = None
+    voice_enabled.subscription_id = None
+    await db_session.commit()
+
+    async def fake_token(db, *, tenant_id, require_enabled=True):
+        return "app-token"
+
+    bodies = []
+
+    async def fake_request(method, path, *, token, json_body=None, **kw):
+        bodies.append(json_body)
+        return httpx.Response(
+            201, json={"id": "sub-x", "expirationDateTime": "2026-09-01T00:00:00Z"}
+        )
+
+    monkeypatch.setattr(teams_voice, "get_app_only_token", fake_token)
+    monkeypatch.setattr(teams_voice, "_graph_request", fake_request)
+
+    await teams_voice.ensure_subscription(
+        db_session, tenant_id=str(test_tenant.id), notification_url="https://x"
+    )
+    await db_session.commit()
+    assert bodies[0]["clientState"]
+    await db_session.refresh(voice_enabled)
+    assert voice_enabled.encrypted_client_state
