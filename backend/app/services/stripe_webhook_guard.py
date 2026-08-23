@@ -120,22 +120,33 @@ async def claim_event(
             text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
             {"key": f"stripe_webhook_object:{object_id}"},
         )
-        newest = await db.scalar(
-            select(StripeWebhookEvent.event_created)
-            .where(StripeWebhookEvent.object_id == object_id)
-            .order_by(StripeWebhookEvent.event_created.desc())
-            .limit(1)
-        )
-        if newest is not None and newest > event_created:
+        newest = (
+            await db.execute(
+                select(
+                    StripeWebhookEvent.event_created,
+                    StripeWebhookEvent.event_id,
+                )
+                .where(StripeWebhookEvent.object_id == object_id)
+                .order_by(StripeWebhookEvent.event_created.desc())
+                .limit(1)
+            )
+        ).first()
+        if newest is not None and newest.event_created > event_created:
+            # Names both Stripe event ids and never the object id. Since
+            # subscription and invoice events order against the customer, the
+            # object id here *is* a Stripe customer id -- an identifier for a
+            # paying firm, which does not belong in a log that gets shipped and
+            # retained. Either event id resolves to its customer in the Stripe
+            # dashboard for anyone who needs it.
             logger.warning(
-                "Stripe event %s (%s, created=%s) is older than the last applied "
-                "event for object %s (created=%s); skipping to avoid reverting "
-                "current state",
+                "Stripe event %s (%s, created=%s) is older than event %s "
+                "(created=%s) already applied to the same customer; skipping to "
+                "avoid reverting current state",
                 event_id,
                 event_type,
                 event_created,
-                object_id,
-                newest,
+                newest.event_id,
+                newest.event_created,
             )
             return EventClaim(False, "stale")
 
