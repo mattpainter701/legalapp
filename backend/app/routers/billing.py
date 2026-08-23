@@ -362,12 +362,13 @@ async def _handle_subscription_updated(db: AsyncSession, subscription: dict) -> 
             # subscriber on a misconfigured Stripe price onto that tier. Keep
             # the tenant's existing tier and make the misconfiguration visible.
             billing_tier = tenant.billing_tier or "flat"
+            # Reports the misconfiguration, not the tenant's billing state. The
+            # actionable fact is that a Stripe price is missing metadata.tier;
+            # the tenant's current tier is a query away and does not need to be
+            # copied into a log line.
             logger.error(
-                "Stripe subscription for tenant %s has no plan metadata 'tier'. "
-                "Keeping existing tier %r -- set metadata.tier on the Stripe "
-                "price.",
-                tenant.id,
-                billing_tier,
+                "A Stripe subscription has no plan metadata 'tier'. Keeping the "
+                "tenant's existing tier -- set metadata.tier on the Stripe price."
             )
         tenant.billing_tier = billing_tier
         tenant.is_active = True
