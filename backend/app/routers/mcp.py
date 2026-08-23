@@ -325,7 +325,11 @@ async def _call_platform_tool_metered(
             db=db,
             tenant_id=tenant.id,
         )
-    except HTTPException as exc:
+    except Exception as exc:
+        # Meter every failure, not only HTTPException. An unexpected error is
+        # exactly the one worth having in the usage record, and catching only
+        # HTTPException meant such a call left no trace at all. Deliberately not
+        # BaseException: a cancelled request must not trigger another DB write.
         await record_mcp_usage(
             db=db,
             tenant_id=tenant.id,
@@ -333,11 +337,11 @@ async def _call_platform_tool_metered(
             auth_type="product_key",
             transport=transport,
             tool_name=body.name,
-            status_code=exc.status_code,
+            status_code=exc.status_code if isinstance(exc, HTTPException) else 500,
             latency_ms=int((time.perf_counter() - started) * 1000),
             ip_address=_request_ip(request),
             user_agent=request.headers.get("User-Agent"),
-            error_class="HTTPException",
+            error_class=type(exc).__name__,
             query_text=str((body.arguments or {}).get("query") or "")[:2000] or None,
         )
         raise
@@ -402,7 +406,11 @@ async def _call_tool_with_product_key(
                 status_code=503,
                 detail="External MCP product keys require the CourtListener MCP server",
             )
-    except HTTPException as exc:
+    except Exception as exc:
+        # Meter every failure, not only HTTPException. An unexpected error is
+        # exactly the one worth having in the usage record, and catching only
+        # HTTPException meant such a call left no trace at all. Deliberately not
+        # BaseException: a cancelled request must not trigger another DB write.
         await record_mcp_usage(
             db=db,
             tenant_id=tenant.id,
@@ -410,11 +418,11 @@ async def _call_tool_with_product_key(
             auth_type="product_key",
             transport=transport,
             tool_name=body.name,
-            status_code=exc.status_code,
+            status_code=exc.status_code if isinstance(exc, HTTPException) else 500,
             latency_ms=int((time.perf_counter() - started) * 1000),
             ip_address=_request_ip(request),
             user_agent=request.headers.get("User-Agent"),
-            error_class="HTTPException",
+            error_class=type(exc).__name__,
             query_text=str((body.arguments or {}).get("query") or "")[:2000] or None,
         )
         raise

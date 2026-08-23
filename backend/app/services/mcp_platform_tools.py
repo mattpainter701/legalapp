@@ -16,6 +16,7 @@ import uuid
 from typing import Any
 
 from fastapi import HTTPException
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,6 +25,7 @@ from app.models.plugin import Matter
 from app.models.task import Task
 from app.models.tenant import TenantSettings
 from app.services.matter_file_store import MatterFileStore
+from app.utils.sql_filters import escape_like
 
 PLATFORM_TOOL_NAMES: list[str] = [
     "list_matters",
@@ -33,6 +35,85 @@ PLATFORM_TOOL_NAMES: list[str] = [
 
 _matter_file_store = MatterFileStore()
 _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+# The nginx transport locations cap an MCP body at 256k. Bounding the document
+# body well inside that keeps the failure a readable 400 from this module rather
+# than a truncated request the caller cannot interpret.
+MAX_DOCUMENT_CONTENT_CHARS = 200_000
+
+
+class _PlatformToolArgs(BaseModel):
+    """Base contract for platform-tool arguments.
+
+    ``extra="forbid"`` matters here for the same reason it does on the chat
+    action models: these arguments are authored by an external language model,
+    and an invented argument should fail loudly rather than be dropped.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ListMattersArgs(_PlatformToolArgs):
+    query: str | None = Field(default=None, max_length=200)
+    limit: int = Field(default=25, ge=1, le=50)
+
+
+class ListMatterDocumentsArgs(_PlatformToolArgs):
+    matter_id: uuid.UUID
+    limit: int = Field(default=50, ge=1, le=100)
+
+
+class CreateDocumentArgs(_PlatformToolArgs):
+    matter_id: uuid.UUID
+    title: str = Field(min_length=1, max_length=300)
+    content: str = Field(min_length=1, max_length=MAX_DOCUMENT_CONTENT_CHARS)
+    task_id: uuid.UUID | None = None
+    filename: str | None = Field(default=None, max_length=255)
+    document_category: str = Field(default="generated", max_length=100)
+
+
+_TOOL_ARG_MODELS: dict[str, type[_PlatformToolArgs]] = {
+    "list_matters": ListMattersArgs,
+    "list_matter_documents": ListMatterDocumentsArgs,
+    "create_document": CreateDocumentArgs,
+}
+
+
+def _describe_validation_error(exc: ValidationError) -> str:
+    """Name the offending field and why it failed, bounded to one short line.
+
+    The message reaches an external MCP client, so it stays specific enough for
+    a model to correct itself on the next call and short enough not to become a
+    channel for echoing arbitrary input back.
+    """
+    first = exc.errors()[0]
+    location = ".".join(str(part) for part in first.get("loc", ())) or "arguments"
+    return f"{location}: {str(first.get('msg', 'is invalid'))[:200]}"
+
+
+def parse_platform_tool_args(name: str, arguments: dict[str, Any]) -> _PlatformToolArgs:
+    """Validate raw MCP tool arguments into a typed model, or raise HTTP 400.
+
+    These arguments arrive from an external MCP client and are shaped by a
+    language model, so a matter *name* where a UUID belongs is an ordinary
+    mistake rather than an attack. Without this, such a value reached a UUID
+    column comparison and surfaced as a 500 that also skipped usage metering,
+    because the dispatcher only meters ``HTTPException``.
+    """
+    model = _TOOL_ARG_MODELS.get(name)
+    if model is None:
+        raise HTTPException(status_code=400, detail=f"Unknown platform tool: {name}")
+    if not isinstance(arguments, dict):
+        raise HTTPException(
+            status_code=400, detail="Tool arguments must be a JSON object"
+        )
+    try:
+        return model.model_validate(arguments)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid arguments for {name} — {_describe_validation_error(exc)}",
+        ) from exc
 
 
 def _safe_filename(title: str, extension: str) -> str:
@@ -76,10 +157,13 @@ def platform_tool_definitions() -> list[dict[str, Any]]:
                 "properties": {
                     "query": {
                         "type": "string",
+                        "maxLength": 200,
                         "description": "Optional substring filter on matter name",
                     },
                     "limit": {
                         "type": "integer",
+                        "minimum": 1,
+                        "maximum": 50,
                         "description": "Max matters to return (1-50, default 25)",
                     },
                 },
@@ -97,10 +181,16 @@ def platform_tool_definitions() -> list[dict[str, Any]]:
                 "properties": {
                     "matter_id": {
                         "type": "string",
-                        "description": "UUID of the matter",
+                        "format": "uuid",
+                        "description": (
+                            "UUID of the matter. Call list_matters first to "
+                            "resolve a matter name into its id."
+                        ),
                     },
                     "limit": {
                         "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
                         "description": "Max documents to return (1-100, default 50)",
                     },
                 },
@@ -120,26 +210,37 @@ def platform_tool_definitions() -> list[dict[str, Any]]:
                 "properties": {
                     "matter_id": {
                         "type": "string",
-                        "description": "UUID of the matter to attach the document to",
+                        "format": "uuid",
+                        "description": (
+                            "UUID of the matter to attach the document to. Call "
+                            "list_matters first to resolve a name into its id."
+                        ),
                     },
                     "title": {
                         "type": "string",
+                        "minLength": 1,
+                        "maxLength": 300,
                         "description": "Document title (used for the filename)",
                     },
                     "content": {
                         "type": "string",
+                        "minLength": 1,
+                        "maxLength": MAX_DOCUMENT_CONTENT_CHARS,
                         "description": "Full document content in Markdown",
                     },
                     "task_id": {
                         "type": "string",
+                        "format": "uuid",
                         "description": "Optional UUID of a task in the matter",
                     },
                     "filename": {
                         "type": "string",
+                        "maxLength": 255,
                         "description": "Optional explicit filename (defaults to title)",
                     },
                     "document_category": {
                         "type": "string",
+                        "maxLength": 100,
                         "description": (
                             "Category folder (e.g. generated, correspondence, "
                             "pleading). Defaults to 'generated'."
@@ -161,27 +262,25 @@ async def execute_platform_tool(
     user_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """Execute a platform-native MCP tool. Returns the tool result payload."""
-    if name == "list_matters":
-        return await _list_matters(arguments, db=db, tenant_id=tenant_id)
-    if name == "list_matter_documents":
-        return await _list_matter_documents(arguments, db=db, tenant_id=tenant_id)
-    if name == "create_document":
-        return await _create_document(
-            arguments, db=db, tenant_id=tenant_id, user_id=user_id
-        )
-    raise HTTPException(status_code=400, detail=f"Unknown platform tool: {name}")
+    args = parse_platform_tool_args(name, arguments)
+    if isinstance(args, ListMattersArgs):
+        return await _list_matters(args, db=db, tenant_id=tenant_id)
+    if isinstance(args, ListMatterDocumentsArgs):
+        return await _list_matter_documents(args, db=db, tenant_id=tenant_id)
+    return await _create_document(args, db=db, tenant_id=tenant_id, user_id=user_id)
 
 
 async def _list_matters(
-    arguments: dict[str, Any], *, db: AsyncSession, tenant_id: uuid.UUID
+    args: ListMattersArgs, *, db: AsyncSession, tenant_id: uuid.UUID
 ) -> dict[str, Any]:
-    limit = min(max(int(arguments.get("limit") or 25), 1), 50)
-    query = (arguments.get("query") or "").strip()
+    query = (args.query or "").strip()
 
     stmt = select(Matter).where(Matter.tenant_id == tenant_id)
     if query:
-        stmt = stmt.where(Matter.matter_name.ilike(f"%{query}%"))
-    stmt = stmt.order_by(Matter.updated_at.desc()).limit(limit)
+        stmt = stmt.where(
+            Matter.matter_name.ilike(f"%{escape_like(query)}%", escape="\\")
+        )
+    stmt = stmt.order_by(Matter.updated_at.desc()).limit(args.limit)
 
     result = await db.execute(stmt)
     matters = result.scalars().all()
@@ -206,13 +305,9 @@ async def _list_matters(
 
 
 async def _list_matter_documents(
-    arguments: dict[str, Any], *, db: AsyncSession, tenant_id: uuid.UUID
+    args: ListMatterDocumentsArgs, *, db: AsyncSession, tenant_id: uuid.UUID
 ) -> dict[str, Any]:
-    matter_id = arguments.get("matter_id")
-    if not matter_id:
-        raise HTTPException(status_code=400, detail="matter_id is required")
-
-    limit = min(max(int(arguments.get("limit") or 50), 1), 100)
+    matter_id = args.matter_id
 
     matter = await db.execute(
         select(Matter).where(Matter.id == matter_id, Matter.tenant_id == tenant_id)
@@ -227,7 +322,7 @@ async def _list_matter_documents(
             MatterDocument.tenant_id == tenant_id,
         )
         .order_by(MatterDocument.created_at.desc())
-        .limit(limit)
+        .limit(args.limit)
     )
     docs = result.scalars().all()
     return {
@@ -256,23 +351,19 @@ async def _list_matter_documents(
 
 
 async def _create_document(
-    arguments: dict[str, Any],
+    args: CreateDocumentArgs,
     *,
     db: AsyncSession,
     tenant_id: uuid.UUID,
     user_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
-    matter_id = arguments.get("matter_id")
-    title = (arguments.get("title") or "").strip()
-    content = arguments.get("content") or ""
-    task_id = arguments.get("task_id")
-    filename_arg = (arguments.get("filename") or "").strip()
-    category = _storage_category(
-        (arguments.get("document_category") or "generated").strip()
-    )
+    matter_id = args.matter_id
+    title = args.title.strip()
+    content = args.content
+    task_id = args.task_id
+    filename_arg = (args.filename or "").strip()
+    category = _storage_category(args.document_category.strip())
 
-    if not matter_id:
-        raise HTTPException(status_code=400, detail="matter_id is required")
     if not title:
         raise HTTPException(status_code=400, detail="title is required")
     if not content.strip():
@@ -322,7 +413,7 @@ async def _create_document(
     doc = MatterDocument(
         tenant_id=tenant_id,
         matter_id=matter.id,
-        task_id=uuid.UUID(task_id) if task_id else None,
+        task_id=task_id,
         uploaded_by_user_id=user_id,
         filename=filename,
         content_type="text/markdown",
@@ -347,7 +438,7 @@ async def _create_document(
                 "json": {
                     "document_id": str(doc.id),
                     "matter_id": str(matter.id),
-                    "task_id": task_id,
+                    "task_id": str(task_id) if task_id else None,
                     "filename": filename,
                     "file_size": len(content_bytes),
                     "document_category": category,

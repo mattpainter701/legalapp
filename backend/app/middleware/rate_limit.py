@@ -45,6 +45,16 @@ AUTH_LIMITS = {
     "/api/marketing/demo-requests": (5, 3600),
     "/api/marketing/events": (60, 3600),
 }
+# AUTH_LIMITS above is enforced for POST only. These paths are unauthenticated
+# GETs that still cost server-side state, so they need the same IP limiter.
+# nginx limits them at the edge; this is the layer that also covers traffic
+# reaching the app without passing through the proxy, which is the same reason
+# the MCP transport controls live in the application rather than only in nginx.
+AUTH_GET_LIMITS = {
+    # Each call persists a short-lived authorization request in Redis.
+    "/api/workspace-mcp/oauth/authorize": (30, 300),
+}
+
 SKIP_PREFIXES = (
     "/api/auth/",
     "/api/billing/webhook",
@@ -216,8 +226,15 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     headers={"Retry-After": str(window)},
                 )
 
-        if request.method == "POST":
-            for auth_path, (limit, window_seconds) in AUTH_LIMITS.items():
+        method_limits = (
+            AUTH_LIMITS
+            if request.method == "POST"
+            else AUTH_GET_LIMITS
+            if request.method == "GET"
+            else None
+        )
+        if method_limits is not None:
+            for auth_path, (limit, window_seconds) in method_limits.items():
                 if path == auth_path:
                     key = f"rate:auth:{auth_path}:{_client_ip(request)}"
                     try:
