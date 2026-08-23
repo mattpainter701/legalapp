@@ -4,8 +4,8 @@
 
 | Host | Product and identity | Allowed public paths | Release state |
 |---|---|---|---|
-| `mcp.getlawhand.com` | Workspace/platform MCP; individual LawHand OAuth grant | `/api/mcp/workspace` and its two OAuth protected-resource metadata paths | Tenant-gated pilot |
-| `research.getlawhand.com` | Legal-research/RAG MCP; tenant product key | `/api/mcp`, `/api/mcp/manifest`, `/api/mcp/tools/call` | Disabled; expected 404 |
+| `mcp.getlawhand.com` | Workspace/platform MCP; individual LawHand OAuth grant | `/` redirects to `/api/mcp/workspace`; that transport and its two OAuth protected-resource metadata paths | Tenant-gated pilot |
+| `research.getlawhand.com` | Legal-research/RAG MCP; tenant product key | `/` redirects to `/api/mcp`; that transport, `/api/mcp/manifest`, and `/api/mcp/tools/call` | Disabled; canonical endpoint expected 404 |
 | `getlawhand.com` | Main portal and OAuth authorization server | Existing portal/API plus bounded legacy MCP aliases | Production |
 
 The workspace OAuth protected resource and authorization server intentionally
@@ -13,9 +13,12 @@ have different origins. The resource is
 `https://mcp.getlawhand.com/api/mcp/workspace`; its issuer and interactive
 authorization endpoints remain on `https://getlawhand.com`.
 
-Neither MCP hostname is a second portal origin. Nginx returns 404 for every
-path outside the corresponding allowlist. The raw CourtListener sidecar stays
-private and is never a public Cloudflare origin.
+Neither MCP hostname is a second portal origin. Its root is only a 308
+convenience redirect to the canonical MCP transport; Nginx returns 404 for
+every other path outside the corresponding allowlist. Configure MCP clients
+with the canonical full endpoint rather than relying on redirect support. The
+raw CourtListener sidecar stays private and is never a public Cloudflare
+origin.
 
 ## Cloudflare topology
 
@@ -76,6 +79,10 @@ For rollout, also verify:
 curl -i https://mcp.getlawhand.com/api/mcp/workspace
 curl -sS https://mcp.getlawhand.com/.well-known/oauth-protected-resource/api/mcp/workspace
 
+# Shorthand roots resolve to their canonical transports.
+curl -i https://mcp.getlawhand.com/
+curl -i https://research.getlawhand.com/
+
 # The research product remains unavailable until explicitly released.
 curl -i https://research.getlawhand.com/api/mcp
 curl -i https://research.getlawhand.com/api/mcp/manifest
@@ -92,6 +99,7 @@ Expected results:
 
 - workspace transports return 401 without a token, and the Bearer challenge
   identifies the canonical `mcp.getlawhand.com` protected-resource metadata;
+- the two shorthand roots return 308 to their product's canonical transport;
 - workspace metadata reports the canonical resource and the apex authorization
   server;
 - research transport and manifest return 404 while

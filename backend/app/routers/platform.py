@@ -49,6 +49,8 @@ from app.models.document import Chunk, Document
 from app.models.durable_job import DurableJob
 from app.models.integration_sync_run import IntegrationSyncRun
 from app.models.mcp_product import MCPProductKey, MCPUsageEvent
+from app.models.workspace_mcp_audit import WorkspaceMCPAuditEvent
+from app.models.workspace_mcp_client import WorkspaceMCPClient
 from app.models.operator_audit import OperatorAuditLog
 from app.models.platform_api_key import PlatformApiKey
 from app.models.tenant import Tenant, TenantSettings
@@ -73,6 +75,8 @@ from app.services.platform_auth import (
     validate_requested_key_scopes,
     verify_platform_bootstrap_key,
 )
+from app.services.workspace_mcp_oauth import workspace_resource_uri
+from app.services.rbac_service import get_user_capabilities
 
 settings = get_settings()
 router = APIRouter(prefix="/platform", tags=["platform"])
@@ -1246,6 +1250,225 @@ async def platform_mcp_overview(
             "auth_header": "X-MCP-API-Key",
         },
         "product_enabled": settings.MCP_PRODUCT_ENABLED,
+    }
+
+
+@router.get("/mcp/workspace")
+async def platform_workspace_mcp_diagnostics(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    email: str | None = Query(default=None, min_length=3, max_length=320),
+):
+    """Return operator-only readiness and OAuth evidence for Workspace MCP.
+
+    Research MCP and Workspace MCP have separate release gates. This endpoint
+    intentionally exposes configuration state and aggregate evidence only:
+    secrets, user emails, IPs, user agents, and raw tenant UUIDs never leave
+    the platform boundary.
+    """
+    _require_platform_key(request)
+
+    configured_pilot_ids = {
+        value.strip()
+        for value in settings.WORKSPACE_MCP_ALLOWED_TENANT_IDS.split(",")
+        if value.strip() and value.strip() != "*"
+    }
+    tenant_ids = await _platform_tenant_ids(db)
+    tenant_id_set = {str(value) for value in tenant_ids}
+    pilot_ids = configured_pilot_ids & tenant_id_set
+    missing_pilot_ids = configured_pilot_ids - tenant_id_set
+
+    endpoint = workspace_resource_uri()
+    checks = {
+        "feature_enabled": {
+            "ok": bool(settings.WORKSPACE_MCP_ENABLED),
+            "label": "Workspace MCP feature enabled",
+        },
+        "dynamic_registration": {
+            "ok": bool(settings.WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED),
+            "label": "OAuth dynamic client registration enabled",
+        },
+        "canonical_endpoint": {
+            "ok": bool(endpoint),
+            "label": "Canonical workspace MCP endpoint configured",
+            "value": endpoint or None,
+        },
+        "issuer": {
+            "ok": bool(settings.WORKSPACE_MCP_ISSUER.strip()),
+            "label": "OAuth issuer configured",
+        },
+        "signing_key": {
+            "ok": bool(
+                settings.WORKSPACE_MCP_SIGNING_PRIVATE_KEY_B64
+                or settings.WORKSPACE_MCP_TOKEN_SIGNING_KEY
+            ),
+            "label": "Workspace token signing key configured",
+        },
+        "pilot_allowlist": {
+            "ok": bool(configured_pilot_ids) and bool(pilot_ids),
+            "label": "At least one configured pilot tenant exists",
+        },
+    }
+    checks["ready_for_pilot"] = {
+        "ok": all(item["ok"] for item in checks.values()),
+        "label": "Workspace MCP pilot readiness",
+    }
+
+    clients = list(
+        (
+            await db.scalars(
+                select(WorkspaceMCPClient).order_by(
+                    WorkspaceMCPClient.created_at.desc()
+                )
+            )
+        ).all()
+    )
+    now = datetime.now(timezone.utc)
+    client_status = {
+        "total": len(clients),
+        "active": sum(1 for client in clients if client.is_active(now)),
+        "revoked": sum(1 for client in clients if client.status == "revoked"),
+        "expired": sum(
+            1
+            for client in clients
+            if client.status == "active" and client.expires_at <= now
+        ),
+        "last_registered_at": clients[0].created_at.isoformat()
+        if clients and clients[0].created_at
+        else None,
+        "last_used_at": max(
+            (client.last_used_at for client in clients if client.last_used_at),
+            default=None,
+        ).isoformat()
+        if any(client.last_used_at for client in clients)
+        else None,
+    }
+
+    audit_events: list[WorkspaceMCPAuditEvent] = []
+    for tenant_id in tenant_ids:
+        async with _platform_tenant_scope(db, tenant_id):
+            audit_events.extend(
+                list(
+                    (
+                        await db.scalars(
+                            select(WorkspaceMCPAuditEvent)
+                            .where(WorkspaceMCPAuditEvent.tenant_id == tenant_id)
+                            .order_by(WorkspaceMCPAuditEvent.created_at.desc())
+                            .limit(50)
+                        )
+                    ).all()
+                )
+            )
+    audit_events.sort(key=lambda event: event.created_at, reverse=True)
+    audit_events = audit_events[:50]
+    outcomes = {"success": 0, "denied": 0, "error": 0}
+    event_types: dict[str, int] = {}
+    for event in audit_events:
+        outcomes[event.outcome] = outcomes.get(event.outcome, 0) + 1
+        event_types[event.event_type] = event_types.get(event.event_type, 0) + 1
+
+    user_policy = None
+    if email:
+        normalized_email = email.strip().lower()
+        scope_requirements = {
+            "matters:read": {"manage_matters"},
+            "tasks:read": {"manage_matters"},
+            "contacts:read": {"manage_matters"},
+            "documents:read": {"manage_documents"},
+            "templates:read": {"manage_documents"},
+            "tasks:propose": {"manage_matters"},
+            "communications:propose": {"manage_matters"},
+            "documents:propose": {"manage_documents"},
+        }
+        for tenant_id in tenant_ids:
+            async with _platform_tenant_scope(db, tenant_id):
+                user = await db.scalar(
+                    select(User).where(
+                        User.tenant_id == tenant_id,
+                        func.lower(User.email) == normalized_email,
+                    )
+                )
+                if user is None:
+                    continue
+                capabilities = set(await get_user_capabilities(db, user.id))
+                effective_scopes = sorted(
+                    scope
+                    for scope, required in scope_requirements.items()
+                    if required.issubset(capabilities)
+                )
+                blocked_reasons = []
+                if not user.is_active:
+                    blocked_reasons.append("user_inactive")
+                if not user.license_active:
+                    blocked_reasons.append("license_inactive")
+                if user.privacy_mode:
+                    blocked_reasons.append("privacy_mode_enabled")
+                if not bool(settings.WORKSPACE_MCP_ENABLED):
+                    blocked_reasons.append("workspace_mcp_disabled")
+                if str(tenant_id) not in pilot_ids:
+                    blocked_reasons.append("tenant_not_in_pilot_allowlist")
+                tenant = await db.scalar(select(Tenant).where(Tenant.id == tenant_id))
+                if tenant is not None and not tenant.is_active:
+                    blocked_reasons.append("tenant_inactive")
+                user_policy = {
+                    "found": True,
+                    "tenant_id_masked": f"…{str(tenant_id)[-6:]}",
+                    "user_id_masked": f"…{str(user.id)[-6:]}",
+                    "is_active": bool(user.is_active),
+                    "license_active": bool(user.license_active),
+                    "privacy_mode": bool(user.privacy_mode),
+                    "effective_scopes": effective_scopes,
+                    "blocked_reasons": blocked_reasons,
+                    "ready": not blocked_reasons,
+                }
+                break
+        if user_policy is None:
+            user_policy = {
+                "found": False,
+                "blocked_reasons": ["user_not_found"],
+            }
+
+    return {
+        "product": "workspace",
+        "enabled": bool(settings.WORKSPACE_MCP_ENABLED),
+        "canonical_endpoint": endpoint or None,
+        "pilot_tenants": {
+            "configured_count": len(configured_pilot_ids),
+            "active_count": len(pilot_ids),
+            "missing_count": len(missing_pilot_ids),
+            "ids_masked": [f"…{value[-6:]}" for value in sorted(pilot_ids)],
+            "missing_ids_masked": [
+                f"…{value[-6:]}" for value in sorted(missing_pilot_ids)
+            ],
+            "wildcard_configured": "*" in settings.WORKSPACE_MCP_ALLOWED_TENANT_IDS,
+        },
+        "policy_checks": checks,
+        "user_policy": user_policy,
+        "oauth": {
+            "dynamic_registration_enabled": bool(
+                settings.WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED
+            ),
+            "clients": client_status,
+            "audit": {
+                "sample_size": len(audit_events),
+                "outcomes": outcomes,
+                "event_types": event_types,
+            },
+        },
+        "recent_audit_events": [
+            {
+                "id": str(event.id),
+                "tenant_id_masked": f"…{str(event.tenant_id)[-6:]}",
+                "client_id_masked": _mask(event.client_id),
+                "event_type": event.event_type,
+                "outcome": event.outcome,
+                "request_id": _mask(event.request_id),
+                "created_at": event.created_at.isoformat()
+                if event.created_at
+                else None,
+            }
+            for event in audit_events
+        ],
     }
 
 

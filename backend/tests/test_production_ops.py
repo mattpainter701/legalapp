@@ -410,17 +410,24 @@ def test_dedicated_mcp_hosts_are_isolated_and_streamed() -> None:
         encoding="utf-8"
     )
 
+    assert '"mcp.getlawhand.com:/" 0;' in nginx
     assert '"mcp.getlawhand.com:/api/mcp/workspace" 0;' in nginx
     assert (
         '"mcp.getlawhand.com:/.well-known/oauth-protected-resource'
         '/api/mcp/workspace" 0;'
     ) in nginx
+    assert '"research.getlawhand.com:/" 0;' in nginx
     assert '"research.getlawhand.com:/api/mcp" 0;' in nginx
     assert '"research.getlawhand.com:/api/mcp/manifest" 0;' in nginx
     assert '"research.getlawhand.com:/api/mcp/tools/call" 0;' in nginx
     assert "~^mcp\\.getlawhand\\.com: 1;" in nginx
     assert "~^research\\.getlawhand\\.com: 1;" in nginx
     assert "default 0;" in nginx
+    assert 'map "$host:$uri" $dedicated_mcp_root_redirect' in nginx
+    assert '"mcp.getlawhand.com:/" "/api/mcp/workspace";' in nginx
+    assert '"research.getlawhand.com:/" "/api/mcp";' in nginx
+    assert nginx.count("if ($dedicated_mcp_root_redirect)") == 2
+    assert nginx.count("return 308 https://$host$dedicated_mcp_root_redirect;") == 2
     assert "map_hash_bucket_size 128;" in nginx
     assert nginx.count("if ($dedicated_mcp_surface_denied)") == 2
     assert nginx.count("include /etc/nginx/snippets/mcp_transports.conf;") == 2
