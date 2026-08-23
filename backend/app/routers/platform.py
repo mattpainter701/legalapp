@@ -1407,9 +1407,7 @@ async def platform_workspace_mcp_diagnostics(
                     blocked_reasons.append("workspace_mcp_disabled")
                 if str(tenant_id) not in pilot_ids:
                     blocked_reasons.append("tenant_not_in_pilot_allowlist")
-                tenant = await db.scalar(
-                    select(Tenant).where(Tenant.id == tenant_id)
-                )
+                tenant = await db.scalar(select(Tenant).where(Tenant.id == tenant_id))
                 if tenant is not None and not tenant.is_active:
                     blocked_reasons.append("tenant_inactive")
                 user_policy = {
