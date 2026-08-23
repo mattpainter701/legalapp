@@ -20,6 +20,7 @@ const LegalNoticePage = lazy(() => import('./pages/LegalNoticePage'))
 const ProductChatPage = lazy(() => import('./pages/ProductChatPage'))
 const McpProductPage = lazy(() => import('./pages/McpProductPage'))
 const PricingPage = lazy(() => import('./pages/PricingPage'))
+const DemoRequestPage = lazy(() => import('./pages/DemoRequestPage'))
 const ProductPage = lazy(() => import('./pages/ProductPage'))
 const WorkspaceMcpAuthorizePage = lazy(() => import('./pages/WorkspaceMcpAuthorizePage'))
 const NotFoundPage = lazy(() => import('./pages/NotFoundPage'))
@@ -58,6 +59,7 @@ const TimeTrackingPage = lazy(() => import('./pages/TimeTrackingPage'))
 const InvoicesPage = lazy(() => import('./pages/InvoicesPage'))
 const InvoiceDetailPage = lazy(() => import('./pages/InvoiceDetailPage'))
 const ProfilePage = lazy(() => import('./pages/ProfilePage'))
+const GuidePage = lazy(() => import('./pages/GuidePage'))
 const OnboardingWizard = lazy(() => import('./pages/OnboardingWizard'))
 const PortalAcceptPage = lazy(() => import('./pages/PortalAcceptPage'))
 const PortalCasePage = lazy(() => import('./pages/PortalCasePage'))
@@ -225,7 +227,8 @@ export default function App() {
         <Route path="/product" element={<ProductPage />} />
         <Route path="/product/chat" element={<ProductChatPage />} />
         <Route path="/product/mcp" element={<McpProductPage />} />
-        <Route path="/pricing" element={<PricingPage />} />
+          <Route path="/pricing" element={<PricingPage />} />
+          <Route path="/request-demo" element={<DemoRequestPage />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path="/portal/accept" element={<PortalAcceptPage />} />
         <Route path="/portal/case" element={<PortalCasePage />} />
@@ -344,6 +347,10 @@ export default function App() {
         <Route
           path="/profile"
           element={<ShellRoute title="Profile"><ProfilePage /></ShellRoute>}
+        />
+        <Route
+          path="/guide/:slug?"
+          element={<ShellRoute title="User Guide"><GuidePage /></ShellRoute>}
         />
 
         {/* Plugin sub-routes */}

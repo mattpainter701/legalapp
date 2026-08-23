@@ -153,7 +153,6 @@ PUBLIC_ROUTES: dict[tuple[frozenset[str], str], str] = {
         frozenset({"POST"}),
         "/api/workspace-mcp/oauth/revoke",
     ): "RFC 7009 endpoint; token and client binding enforced",
-
     # OAuth integration callbacks — all validate the CSRF state token minted
     # by the corresponding /login redirect before doing anything tenant-scoped.
     (
@@ -227,6 +226,16 @@ PUBLIC_ROUTES: dict[tuple[frozenset[str], str], str] = {
         frozenset({"POST"}),
         "/api/v1/smb/agents/register",
     ): "pairing-code registration, rate-limited",
+    # Public marketing conversion endpoints — accept only validated, bounded
+    # fields and are protected by source-IP rate limits in RateLimitMiddleware.
+    (
+        frozenset({"POST"}),
+        "/api/marketing/demo-requests",
+    ): "public lead capture, validated and rate-limited",
+    (
+        frozenset({"POST"}),
+        "/api/marketing/events",
+    ): "allowlisted first-party funnel events, rate-limited",
     # MCP discovery — manifest/SSE-endpoint-URL only, no tenant data. Actual
     # Tool calls use the gated /api/mcp Streamable HTTP endpoint. Retired
     # pseudo-transports below return only HTTP 410 and no tenant data.

@@ -713,10 +713,10 @@ async def _read_template_sample(file: UploadFile) -> tuple[bytes, str]:
             status_code=400,
             detail="Unsupported file type. Allowed: DOCX, PDF, TXT.",
         )
-    file_bytes = await file.read()
+    max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
+    file_bytes = await file.read(max_bytes + 1)
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Uploaded template file is empty")
-    max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
     if len(file_bytes) > max_bytes:
         raise HTTPException(
             status_code=413,

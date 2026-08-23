@@ -266,6 +266,30 @@ def test_pdf_flatten_preserves_rotated_and_cropped_repeated_field_pages() -> Non
     assert all("CV-2026-0042" in (page.extract_text() or "") for page in reader.pages)
 
 
+def test_pdf_fill_parses_source_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    source = _multiline_pdf()
+    schema = _schema(source)
+    open_count = 0
+    original_open = pdf_template_service._open_pdf
+
+    def counted_open(content: bytes):
+        nonlocal open_count
+        open_count += 1
+        return original_open(content)
+
+    monkeypatch.setattr(pdf_template_service, "_open_pdf", counted_open)
+
+    fill_pdf_template(
+        source,
+        variable_schema=schema,
+        variables={"narrative": "Reviewed text"},
+        flatten=True,
+    )
+
+    # One parse validates the source; one validates the generated artifact.
+    assert open_count == 2
+
+
 @pytest.mark.parametrize(
     ("unsafe_content", "message"),
     [

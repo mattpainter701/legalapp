@@ -7,8 +7,10 @@ from app.utils.guardrails import (
 from app.utils.text_processing import (
     chunk_text,
     extract_text_from_pdf,
+    extract_text_from_pdf_reader,
     extract_text_from_docx,
     extract_text,
+    extract_text_from_path,
 )
 
 __all__ = [
@@ -18,6 +20,8 @@ __all__ = [
     "reconcile_retrieved_source_attribution",
     "chunk_text",
     "extract_text_from_pdf",
+    "extract_text_from_pdf_reader",
     "extract_text_from_docx",
     "extract_text",
+    "extract_text_from_path",
 ]

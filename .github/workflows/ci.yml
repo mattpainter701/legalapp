@@ -283,6 +283,10 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      - name: Validate in-product platform documentation
+        working-directory: frontend
+        run: node ../scripts/check_platform_docs.mjs
+
       - name: Lint frontend
         working-directory: frontend
         run: npm run lint

@@ -90,6 +90,7 @@ from app.routers.platform_llm import router as platform_llm_router
 from app.routers.external_imports import router as external_imports_router
 from app.routers.roles import router as roles_router  # noqa: E402
 from app.routers.office_assistant import router as office_assistant_router
+from app.routers.marketing import router as marketing_router
 from app.routers.matter_document_revisions import (
     router as matter_document_revisions_router,
 )
@@ -441,6 +442,7 @@ app.include_router(users_router)
 app.include_router(external_imports_router)
 app.include_router(roles_router)
 app.include_router(office_assistant_router)
+app.include_router(marketing_router)
 app.include_router(matter_document_revisions_router)
 
 

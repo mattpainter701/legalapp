@@ -302,6 +302,7 @@ class Settings(BaseSettings):
     EMAIL_USER: str = ""
     EMAIL_PASS: str = ""
     EMAIL_FROM: str = "matt@cybersafeadvisor.com"
+    MARKETING_LEAD_EMAIL: str = "support@getlawhand.com"
     SLACK_WEBHOOK_URL: str = ""  # Optional: Slack incoming webhook URL
 
     # Never set True in production — enables /dev/* endpoints

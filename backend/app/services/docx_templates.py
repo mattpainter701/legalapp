@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import re
+from bisect import bisect_left, bisect_right
 from typing import Any, Iterable
 
 from docx import Document
@@ -28,72 +29,83 @@ def _iter_paragraphs(document: Document) -> Iterable[Any]:
                 seen.add(marker)
                 yield paragraph
 
+    def emit_tables(tables):
+        for table in tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    yield from emit(cell.paragraphs)
+                    yield from emit_tables(cell.tables)
+
     yield from emit(document.paragraphs)
-    for table in document.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                yield from emit(cell.paragraphs)
-                for nested in cell.tables:
-                    for nested_row in nested.rows:
-                        for nested_cell in nested_row.cells:
-                            yield from emit(nested_cell.paragraphs)
+    yield from emit_tables(document.tables)
     for section in document.sections:
         for container in (section.header, section.footer):
             yield from emit(container.paragraphs)
-            for table in container.tables:
-                for row in table.rows:
-                    for cell in row.cells:
-                        yield from emit(cell.paragraphs)
+            yield from emit_tables(container.tables)
 
 
-def _replace_in_paragraph(paragraph: Any, replacements: list[tuple[str, str]]) -> int:
-    """Replace text that may be split across Word runs."""
+def _compile_replacements(
+    replacements: list[tuple[str, str]],
+) -> tuple[re.Pattern[str] | None, dict[str, str]]:
+    """Compile ordered, literal replacements once for the whole document."""
+
+    replacement_by_source: dict[str, str] = {}
+    for source, replacement in replacements:
+        if source and source not in replacement_by_source:
+            replacement_by_source[source] = replacement
+    if not replacement_by_source:
+        return None, replacement_by_source
+    pattern = re.compile(
+        "|".join(re.escape(source) for source in replacement_by_source)
+    )
+    return pattern, replacement_by_source
+
+
+def _replace_in_paragraph(
+    paragraph: Any,
+    pattern: re.Pattern[str] | None,
+    replacement_by_source: dict[str, str],
+) -> int:
+    """Replace original paragraph text, including matches split across Word runs.
+
+    Matches are collected before any mutation, so inserted values can never be
+    interpreted as another field's source text.  Run boundaries are indexed
+    once and edits are applied right-to-left to keep original offsets stable.
+    """
 
     runs = list(paragraph.runs)
-    if not runs:
+    if not runs or pattern is None:
         return 0
-    count = 0
-    for needle, replacement in replacements:
-        if not needle:
+    combined = "".join(run.text for run in runs)
+    matches = list(pattern.finditer(combined))
+    if not matches:
+        return 0
+
+    run_starts: list[int] = []
+    run_ends: list[int] = []
+    offset = 0
+    for run in runs:
+        run_starts.append(offset)
+        offset += len(run.text)
+        run_ends.append(offset)
+
+    applied = 0
+    for match in reversed(matches):
+        start, end = match.span()
+        first = bisect_right(run_ends, start)
+        last = bisect_left(run_starts, end) - 1
+        if first >= len(runs) or last < first:
             continue
-        combined = "".join(run.text for run in runs)
-        starts: list[int] = []
-        cursor = 0
-        while True:
-            start = combined.find(needle, cursor)
-            if start < 0:
-                break
-            starts.append(start)
-            cursor = start + len(needle)
-        # Work right-to-left so replacement length changes never invalidate an
-        # earlier source offset. This also prevents an inserted value that
-        # contains the source text from being replaced repeatedly.
-        for start in reversed(starts):
-            end = start + len(needle)
-            offsets: list[tuple[int, int]] = []
-            offset = 0
-            for run in runs:
-                offsets.append((offset, offset + len(run.text)))
-                offset += len(run.text)
-            affected = [
-                index
-                for index, (left, right) in enumerate(offsets)
-                if right > start and left < end
-            ]
-            if not affected:
-                break
-            first, last = affected[0], affected[-1]
-            first_left = offsets[first][0]
-            last_left = offsets[last][0]
-            prefix = runs[first].text[: start - first_left]
-            suffix = runs[last].text[end - last_left :]
-            runs[first].text = prefix + replacement + (suffix if first == last else "")
-            for index in range(first + 1, last):
-                runs[index].text = ""
-            if last != first:
-                runs[last].text = suffix
-            count += 1
-    return count
+        replacement = replacement_by_source[match.group(0)]
+        prefix = runs[first].text[: start - run_starts[first]]
+        suffix = runs[last].text[end - run_starts[last] :]
+        runs[first].text = prefix + replacement + (suffix if first == last else "")
+        for index in range(first + 1, last):
+            runs[index].text = ""
+        if last != first:
+            runs[last].text = suffix
+        applied += 1
+    return applied
 
 
 def _open_docx(content: bytes) -> Document:
@@ -156,8 +168,13 @@ def fill_docx_template(
             replacements.append((source_text, value))
 
     replacement_count = 0
+    replacement_pattern, replacement_by_source = _compile_replacements(replacements)
     for paragraph in _iter_paragraphs(document):
-        replacement_count += _replace_in_paragraph(paragraph, replacements)
+        replacement_count += _replace_in_paragraph(
+            paragraph,
+            replacement_pattern,
+            replacement_by_source,
+        )
 
     if any(variables.values()) and replacement_count == 0:
         raise TemplateDocxError(

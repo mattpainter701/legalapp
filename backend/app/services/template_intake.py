@@ -6,8 +6,11 @@ import os
 import re
 from dataclasses import dataclass, field
 
-from app.utils.text_processing import extract_text
-from app.services.pdf_templates import discover_pdf_fields, discover_pdf_overlay_fields
+from app.utils.text_processing import extract_text, extract_text_from_pdf_reader
+from app.services.pdf_templates import (
+    _discover_pdf_overlay_fields,
+    _inspect_pdf_template,
+)
 from app.services.docx_templates import TemplateDocxError
 from app.services.template_ocr import TemplateOcrError, ocr_pdf
 
@@ -156,15 +159,25 @@ def analyze_template_upload(
         or media_type
         == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
-    pdf_fields = discover_pdf_fields(file_bytes) if is_pdf else []
+    pdf_reader = None
+    pdf_fields: list[dict] = []
+    if is_pdf:
+        pdf_reader, pdf_fields = _inspect_pdf_template(file_bytes)
     try:
-        text = extract_text(
-            file_bytes,
-            media_type,
-            filename,
-            max_pdf_pages=50,
-            max_pdf_chars=20_000,
-        )
+        if pdf_reader is not None:
+            text = extract_text_from_pdf_reader(
+                pdf_reader,
+                max_pages=50,
+                max_chars=20_000,
+            )
+        else:
+            text = extract_text(
+                file_bytes,
+                media_type,
+                filename,
+                max_pdf_pages=50,
+                max_pdf_chars=20_000,
+            )
     except Exception as exc:
         if is_docx:
             raise TemplateDocxError(
@@ -226,8 +239,8 @@ def analyze_template_upload(
         ]
         schema_source = "pdf_acroform"
     elif is_pdf:
-        fields_for_schema = discover_pdf_overlay_fields(
-            file_bytes,
+        fields_for_schema = _discover_pdf_overlay_fields(
+            pdf_reader,
             [field.as_dict() for field in fields],
             fragments=ocr_result.fragments() if ocr_result else None,
         )

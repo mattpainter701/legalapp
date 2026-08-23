@@ -31,7 +31,6 @@ export default function SignupPage() {
   const { login: authLogin } = useAuth()
   const plan = searchParams.get('plan')
   const publicSignupEnabled = import.meta.env.VITE_PUBLIC_SIGNUP_ENABLED === 'true'
-  const contactUrl = import.meta.env.VITE_CONTACT_URL || 'mailto:matt@cybersafeadvisor.com'
   const isPlanSignup = plan === 'intake-only'
   const planLabel = plan === 'intake-only' ? 'Call Intake + Tasks' : null
   const [form, setForm] = useState({
@@ -58,9 +57,9 @@ export default function SignupPage() {
             New workspaces are provisioned with your team so Call Intake, Tasks,
             and Zoom Phone are configured before launch.
           </p>
-          <a href={contactUrl} className="mt-6 inline-flex rounded-lg bg-brand-accent px-5 py-3 text-sm font-medium text-white hover:bg-brand-accent-2">
+          <Link to="/request-demo?source=signup" className="mt-6 inline-flex rounded-lg bg-brand-accent px-5 py-3 text-sm font-medium text-white hover:bg-brand-accent-2">
             Contact the LawHand team
-          </a>
+          </Link>
           <p className="mt-5 text-sm text-brand-muted">
             Already have an account?{' '}
             <Link to="/login" className="font-medium text-brand-accent hover:text-brand-accent-2">Sign in</Link>

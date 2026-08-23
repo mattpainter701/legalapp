@@ -1,4 +1,5 @@
 import io
+from pathlib import Path
 from typing import List
 
 import tiktoken
@@ -46,6 +47,21 @@ def extract_text_from_pdf(
     from pypdf import PdfReader
 
     reader = PdfReader(io.BytesIO(file_bytes))
+    return extract_text_from_pdf_reader(
+        reader,
+        max_pages=max_pages,
+        max_chars=max_chars,
+    )
+
+
+def extract_text_from_pdf_reader(
+    reader,
+    *,
+    max_pages: int | None = None,
+    max_chars: int | None = None,
+) -> str:
+    """Extract bounded text from an existing PDF reader without reparsing it."""
+
     text_parts = []
     extracted_chars = 0
 
@@ -73,6 +89,12 @@ def extract_text_from_docx(file_bytes: bytes) -> str:
     from docx import Document
 
     doc = Document(io.BytesIO(file_bytes))
+    return _extract_text_from_docx_document(doc)
+
+
+def _extract_text_from_docx_document(doc) -> str:
+    """Extract body, nested-table, header, and footer text from a DOCX object."""
+
     text_parts: list[str] = []
     seen_paragraphs: set[int] = set()
 
@@ -142,3 +164,42 @@ def extract_text(
         return file_bytes.decode("utf-8", errors="replace")
     except Exception:
         return ""
+
+
+def extract_text_from_path(
+    file_path: str | Path,
+    content_type: str,
+    filename: str,
+    *,
+    max_pdf_pages: int | None = None,
+    max_pdf_chars: int | None = None,
+) -> str:
+    """Extract from a staged file without first copying the binary into memory."""
+
+    path = Path(file_path)
+    ct_lower = (content_type or "").lower()
+    fn_lower = (filename or "").lower()
+
+    if ct_lower == "application/pdf" or fn_lower.endswith(".pdf"):
+        from pypdf import PdfReader
+
+        return extract_text_from_pdf_reader(
+            PdfReader(str(path)),
+            max_pages=max_pdf_pages,
+            max_chars=max_pdf_chars,
+        )
+
+    if (
+        ct_lower
+        in (
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/msword",
+        )
+        or fn_lower.endswith(".docx")
+        or fn_lower.endswith(".doc")
+    ):
+        from docx import Document
+
+        return _extract_text_from_docx_document(Document(str(path)))
+
+    return path.read_text(encoding="utf-8", errors="replace")

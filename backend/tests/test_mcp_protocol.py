@@ -168,7 +168,9 @@ def test_upstream_catalog_requires_complete_real_contract():
     search = next(tool for tool in validated if tool.name == "search_caselaw")
     assert search.inputSchema["properties"]["top_k"]["maximum"] == 50
 
-    manifest["tools"].pop()
+    manifest["tools"] = [
+        tool for tool in manifest["tools"] if tool["name"] != "search_caselaw"
+    ]
     with pytest.raises(ValueError, match="missing product tools"):
         mcp_protocol._validate_upstream_catalog(manifest)
 
@@ -468,6 +470,53 @@ async def test_tools_call_returns_canonical_structured_result(
     assert result["isError"] is False
     assert result["content"][0]["type"] == "text"
     assert result["structuredContent"] == {"results": [{"citation": "410 U.S. 113"}]}
+
+
+@pytest.mark.asyncio
+async def test_platform_tool_uses_the_metered_product_gateway(
+    monkeypatch, protocol_app
+):
+    await _allow_identity(monkeypatch, "list_matters")
+    platform_tool = mcp_types.Tool(
+        name="list_matters",
+        description="List tenant matters.",
+        inputSchema={"type": "object", "properties": {}},
+    )
+
+    async def catalog(request):
+        return (platform_tool,)
+
+    async def execute_product_tool(*, name, arguments, request):
+        assert name == "list_matters"
+        assert arguments == {}
+        # This is the shared gateway, which applies product-key rate limits,
+        # monthly quota, metering, and tenant context to local platform tools.
+        assert request.headers["X-MCP-API-Key"] == "clmcp_test"
+        return {"content": [{"type": "json", "json": {"matters": []}}]}
+
+    monkeypatch.setattr(mcp_protocol, "get_tool_catalog", catalog)
+    monkeypatch.setattr(mcp_protocol, "execute_product_tool", execute_product_tool)
+    headers = {
+        **_protocol_headers(),
+        "Mcp-Protocol-Version": mcp_protocol.MCP_PROTOCOL_VERSION,
+    }
+    async with AsyncClient(
+        transport=ASGITransport(app=protocol_app),
+        base_url="http://localhost:8000",
+    ) as client:
+        response = await client.post(
+            mcp_protocol.MCP_ENDPOINT_PATH,
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {"name": "list_matters", "arguments": {}},
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["result"]["structuredContent"] == {"matters": []}
 
 
 @pytest.mark.asyncio

@@ -268,7 +268,7 @@ function AddonCard({ addon, isOpen, onToggle }) {
 export default function HomePage() {
   const [expandedSkill, setExpandedSkill] = useState('commercial')
   const [expandedAddon, setExpandedAddon] = useState(null)
-  const contactUrl = import.meta.env.VITE_CONTACT_URL || 'mailto:matt@cybersafeadvisor.com'
+  const demoUrl = '/request-demo?source=home'
   const { hash } = useLocation()
   const scrollTo = (id) => (e) => {
     e.preventDefault()
@@ -309,9 +309,9 @@ export default function HomePage() {
               Every fact, deadline, document, and decision—connected in one living record.
             </p>
             <div className="grid sm:flex sm:flex-wrap items-center gap-3 mt-7">
-              <a href={contactUrl} className="inline-flex min-h-12 items-center justify-center gap-2 px-6 py-3.5 bg-brand-accent text-white font-sans font-semibold rounded-lg hover:bg-brand-accent-2 transition-all shadow-sm hover:-translate-y-[1px]">
+              <Link to={demoUrl} className="inline-flex min-h-12 items-center justify-center gap-2 px-6 py-3.5 bg-brand-accent text-white font-sans font-semibold rounded-lg hover:bg-brand-accent-2 transition-all shadow-sm hover:-translate-y-[1px]">
                 Book a demo <ArrowRight size={18} />
-              </a>
+              </Link>
               <a href="#how" onClick={scrollTo('how')} className="inline-flex min-h-12 items-center justify-center gap-2 px-6 py-3.5 bg-brand-surface border border-brand-line text-brand-ink font-sans font-semibold rounded-xl hover:border-brand-ink hover:bg-brand-bg-soft transition-all shadow-sm">
                 See how it works
               </a>
@@ -593,9 +593,9 @@ export default function HomePage() {
             <span className="font-bold text-brand-ink">The module library keeps growing.</span>{' '}
             We scope the records, roles, and review points around the work your firm actually handles.
           </p>
-          <a href={contactUrl} className="inline-flex shrink-0 items-center gap-2 font-sans text-[12px] font-bold text-brand-accent-2 hover:underline">
+          <Link to={demoUrl} className="inline-flex shrink-0 items-center gap-2 font-sans text-[12px] font-bold text-brand-accent-2 hover:underline">
             Discuss your workflow <ArrowRight size={14} />
-          </a>
+          </Link>
         </div>
       </section>
 
@@ -725,7 +725,7 @@ export default function HomePage() {
               </Link>
               <p className="text-center text-brand-muted font-sans text-[12.5px] mt-4">
                 Questions about onboarding or commercial terms?{' '}
-                <a href={contactUrl} className="text-brand-accent-2 font-semibold hover:underline">Talk to us</a>.
+                <Link to={demoUrl} className="text-brand-accent-2 font-semibold hover:underline">Talk to us</Link>.
               </p>
             </div>
           </div>
@@ -769,12 +769,12 @@ export default function HomePage() {
               broader matter platform when the workflow is right for your firm.
             </p>
             <div className="flex flex-wrap items-center justify-center gap-3 mt-8">
-              <a href={contactUrl} className="inline-flex items-center gap-2 px-6 py-3.5 bg-white text-brand-ink font-sans font-semibold rounded-lg hover:bg-brand-bg transition-all shadow-sm">
+              <Link to={demoUrl} className="inline-flex items-center gap-2 px-6 py-3.5 bg-white text-brand-ink font-sans font-semibold rounded-lg hover:bg-brand-bg transition-all shadow-sm">
                 Book a demo <ArrowRight size={18} />
-              </a>
-              <a href={contactUrl} className="inline-flex items-center gap-2 px-6 py-3.5 bg-transparent border border-white/25 text-white font-sans font-semibold rounded-xl hover:bg-white/10 transition-all">
+              </Link>
+              <Link to={demoUrl} className="inline-flex items-center gap-2 px-6 py-3.5 bg-transparent border border-white/25 text-white font-sans font-semibold rounded-xl hover:bg-white/10 transition-all">
                 Request a 20-min walkthrough
-              </a>
+              </Link>
             </div>
           </div>
         </div>
