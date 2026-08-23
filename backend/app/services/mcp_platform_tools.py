@@ -16,7 +16,7 @@ import uuid
 from typing import Any
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,10 +36,17 @@ PLATFORM_TOOL_NAMES: list[str] = [
 _matter_file_store = MatterFileStore()
 _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
-# The nginx transport locations cap an MCP body at 256k. Bounding the document
-# body well inside that keeps the failure a readable 400 from this module rather
-# than a truncated request the caller cannot interpret.
-MAX_DOCUMENT_CONTENT_CHARS = 200_000
+# The nginx transport locations cap an MCP body at 256 KiB. Bounding the
+# document body well inside that keeps the failure a readable 400 from this
+# module rather than a 413 the caller cannot attribute to a field.
+#
+# The bound is on encoded bytes, not characters, because that is what the
+# transport measures: 70,000 emoji satisfy a 200,000-character limit and still
+# encode to ~280 KB, and ordinary accented or CJK legal text costs 2-3 bytes a
+# character. A character ceiling can never exceed the byte ceiling in UTF-8, so
+# max_length stays as the cheap first check.
+MAX_DOCUMENT_CONTENT_BYTES = 200_000
+MAX_DOCUMENT_CONTENT_CHARS = MAX_DOCUMENT_CONTENT_BYTES
 
 
 class _PlatformToolArgs(BaseModel):
@@ -70,6 +77,17 @@ class CreateDocumentArgs(_PlatformToolArgs):
     task_id: uuid.UUID | None = None
     filename: str | None = Field(default=None, max_length=255)
     document_category: str = Field(default="generated", max_length=100)
+
+    @field_validator("content")
+    @classmethod
+    def bound_encoded_size(cls, value: str) -> str:
+        """Measure the body the way the transport does, in encoded bytes."""
+        if len(value.encode("utf-8")) > MAX_DOCUMENT_CONTENT_BYTES:
+            raise ValueError(
+                f"must be at most {MAX_DOCUMENT_CONTENT_BYTES} bytes when "
+                "UTF-8 encoded"
+            )
+        return value
 
 
 _TOOL_ARG_MODELS: dict[str, type[_PlatformToolArgs]] = {
@@ -167,6 +185,11 @@ def platform_tool_definitions() -> list[dict[str, Any]]:
                         "description": "Max matters to return (1-50, default 25)",
                     },
                 },
+                # The runtime models use extra="forbid"; say so in the advertised
+                # contract too, so the protocol path's jsonschema and any
+                # schema-driven client reject an invented argument here rather
+                # than letting it through to a 400 further in.
+                "additionalProperties": False,
             },
         },
         {
@@ -195,6 +218,7 @@ def platform_tool_definitions() -> list[dict[str, Any]]:
                     },
                 },
                 "required": ["matter_id"],
+                "additionalProperties": False,
             },
         },
         {
@@ -226,7 +250,10 @@ def platform_tool_definitions() -> list[dict[str, Any]]:
                         "type": "string",
                         "minLength": 1,
                         "maxLength": MAX_DOCUMENT_CONTENT_CHARS,
-                        "description": "Full document content in Markdown",
+                        "description": (
+                            "Full document content in Markdown, at most "
+                            f"{MAX_DOCUMENT_CONTENT_BYTES} bytes UTF-8 encoded"
+                        ),
                     },
                     "task_id": {
                         "type": "string",
@@ -248,6 +275,7 @@ def platform_tool_definitions() -> list[dict[str, Any]]:
                     },
                 },
                 "required": ["matter_id", "title", "content"],
+                "additionalProperties": False,
             },
         },
     ]

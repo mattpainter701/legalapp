@@ -13,9 +13,15 @@
   call left no trace in usage or audit records. Arguments now validate against
   Pydantic models before any query runs, the declared `inputSchema` carries the
   same UUID formats and bounds so the protocol path's jsonschema agrees with it,
-  and every failure is metered with its real exception class. Note two contract
+  and every failure is metered with its real exception class. Failure metering
+  runs on its own session and commits there: the database errors it exists to
+  record leave the request transaction unusable, and that transaction is rolled
+  back as the error propagates, so a usage row written on it would either raise
+  or vanish. `content` is bounded by encoded bytes rather than characters,
+  because bytes are what the 256 KiB transport cap measures. Note two contract
   changes for clients: a `limit` outside its range is rejected rather than
-  clamped, and an undeclared argument is rejected rather than ignored.
+  clamped, and an undeclared argument is rejected rather than ignored — the
+  advertised schemas now set `"additionalProperties": false` to say so.
 - **CSV export quotes tab and carriage-return formula leads:** `_csv_safe`
   guarded `=`, `+`, `-`, and `@` but not `\t` or `\r`, which Excel and
   LibreOffice also treat as formula leads once they strip them during cell

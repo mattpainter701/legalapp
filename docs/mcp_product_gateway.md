@@ -100,10 +100,20 @@ consequences are worth knowing when writing a client:
   call `list_matters` first and use the `id` it returns. Passing a name
   previously produced a `500`.
 - `limit` outside its declared range is rejected rather than clamped, and an
-  argument the schema does not declare is rejected rather than ignored.
+  argument the schema does not declare is rejected rather than ignored. Each
+  schema sets `"additionalProperties": false`, so a schema-driven client sees
+  that constraint rather than discovering it as a 400.
 
-`create_document` bounds `content` at 200,000 characters, inside the 256 KiB
-request cap the transport locations enforce.
+`create_document` bounds `content` at 200,000 bytes UTF-8 encoded, inside the
+256 KiB request cap the transport locations enforce. The bound is on encoded
+bytes rather than characters because that is what the transport measures:
+70,000 emoji fit inside a 200,000-*character* limit and still encode to roughly
+280 KB, and ordinary accented or CJK text costs two to three bytes a character.
+
+A failed call is metered like a successful one. Because a tool that fails with a
+database error leaves the request transaction unusable, and because that
+transaction is rolled back as the error propagates, the usage row is written on
+a separate session and committed there.
 
 ## Billing And Quotas
 

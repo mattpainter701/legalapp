@@ -356,3 +356,115 @@ async def test_an_http_error_keeps_its_own_status_when_metered(monkeypatch) -> N
 
     assert recorded[0]["status_code"] == 404
     assert recorded[0]["error_class"] == "HTTPException"
+
+
+@pytest.mark.asyncio
+async def test_a_database_failure_is_metered_despite_the_poisoned_session(
+    monkeypatch, test_tenant, db_session
+) -> None:
+    """The failure this metering exists for is the one that breaks its session.
+
+    A tool that fails with a database error leaves the request session in a
+    failed transaction, so writing usage on that same session raises instead of
+    recording and masks the original exception. Metering therefore runs on a
+    session of its own.
+    """
+    import sqlalchemy as sa
+    from app.models.mcp_product import MCPUsageEvent
+    from app.routers import mcp as mcp_router
+
+    async def _explode(*args, **kwargs):
+        # Exactly what a non-UUID matter_id used to do inside the tool.
+        await db_session.execute(sa.text("SELECT 'not-a-uuid'::uuid"))
+
+    monkeypatch.setattr(mcp_router, "execute_platform_tool", _explode)
+
+    # Read the id before the failing statement: the rollback below expires the
+    # ORM instance, and refreshing it mid-assertion is its own async trap.
+    tenant_id = test_tenant.id
+
+    body = mcp_router.ToolCallRequest(name="list_matters", arguments={})
+    request = SimpleNamespace(
+        headers={"User-Agent": "probe/1.0"}, client=SimpleNamespace(host="203.0.113.7")
+    )
+
+    with pytest.raises(Exception):
+        await mcp_router._call_platform_tool_metered(
+            body,
+            request,
+            db_session,
+            product_key=SimpleNamespace(id=None),
+            tenant=SimpleNamespace(id=tenant_id),
+            transport="rest",
+            started=0.0,
+        )
+
+    await db_session.rollback()
+    recorded = (
+        (
+            await db_session.execute(
+                sa.select(MCPUsageEvent).where(
+                    MCPUsageEvent.tenant_id == tenant_id,
+                    MCPUsageEvent.tool_name == "list_matters",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    # Committed on its own session, so it survives the rolled-back request.
+    assert len(recorded) == 1
+    assert recorded[0].status_code == 500
+    assert recorded[0].error_class in {"DBAPIError", "ProgrammingError"}
+
+
+def test_advertised_schemas_reject_undeclared_arguments(monkeypatch) -> None:
+    """The protocol path validates against inputSchema, so it must forbid extras."""
+    import jsonschema
+    from app.services import mcp_platform_tools as platform_tools
+
+    schemas = {
+        item["name"]: item["inputSchema"]
+        for item in platform_tools.platform_tool_definitions()
+    }
+    for schema in schemas.values():
+        assert schema["additionalProperties"] is False
+
+    with pytest.raises(jsonschema.ValidationError, match="Additional properties"):
+        jsonschema.validate(
+            {
+                "matter_id": "11111111-1111-1111-1111-111111111111",
+                "title": "Notes",
+                "content": "body",
+                "delete_everything": True,
+            },
+            schemas["create_document"],
+        )
+
+
+def test_document_content_is_bounded_by_encoded_bytes_not_characters() -> None:
+    """nginx measures bytes; a character-only bound promised a 400 and got a 413."""
+    matter_id = uuid.uuid4()
+    # Comfortably inside the character limit, far outside the byte limit.
+    emoji_body = "🙂" * 70_000
+    assert len(emoji_body) < tools.MAX_DOCUMENT_CONTENT_CHARS
+    assert len(emoji_body.encode("utf-8")) > tools.MAX_DOCUMENT_CONTENT_BYTES
+
+    with pytest.raises(HTTPException) as caught:
+        tools.parse_platform_tool_args(
+            "create_document",
+            {"matter_id": str(matter_id), "title": "Notes", "content": emoji_body},
+        )
+    assert caught.value.status_code == 400
+    assert "content" in caught.value.detail
+
+    # An ASCII body of the same byte size is still accepted.
+    tools.parse_platform_tool_args(
+        "create_document",
+        {
+            "matter_id": str(matter_id),
+            "title": "Notes",
+            "content": "x" * (tools.MAX_DOCUMENT_CONTENT_BYTES - 1),
+        },
+    )
