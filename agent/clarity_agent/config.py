@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-import os
-import tomllib
 import logging
+import os
+import stat
+import sys
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -10,12 +12,38 @@ from cryptography.fernet import Fernet
 
 try:
     import tomli_w
-except ImportError:
+except ImportError:  # pragma: no cover - optional at runtime, present in builds
     tomli_w = None
 
 _logger = logging.getLogger(__name__)
 
-CONFIG_DIR = Path.home() / ".clarity-agent"
+LEGACY_CONFIG_DIR = Path.home() / ".clarity-agent"
+
+
+def _default_config_dir() -> Path:
+    """Where the agent keeps its config, key and ledger.
+
+    A service runs as LocalSystem (Windows) or a system user (Linux), which has
+    no useful home directory, so the machine-wide location is the default and
+    the old per-user directory is honoured when it already exists.
+    """
+    override = os.environ.get("CLARITY_CONFIG_DIR")
+    if override:
+        return Path(override)
+    if LEGACY_CONFIG_DIR.exists():
+        return LEGACY_CONFIG_DIR
+    if sys.platform == "win32":
+        base = os.environ.get("ProgramData") or os.environ.get("ALLUSERSPROFILE")
+        if base:
+            return Path(base) / "LawHand" / "Agent"
+        return LEGACY_CONFIG_DIR
+    system_dir = Path("/etc/lawhand-agent")
+    if system_dir.exists():
+        return system_dir
+    return LEGACY_CONFIG_DIR
+
+
+CONFIG_DIR = _default_config_dir()
 CONFIG_FILE = CONFIG_DIR / "config.toml"
 KEY_FILE = CONFIG_DIR / ".key"
 
@@ -33,6 +61,21 @@ _ENV_MAP = {
     "heartbeat_interval_seconds": "CLARITY_HEARTBEAT_INTERVAL",
 }
 
+_INT_FIELDS = (
+    "scan_interval_minutes",
+    "task_poll_interval_seconds",
+    "heartbeat_interval_seconds",
+)
+
+
+def _restrict(path: Path) -> None:
+    """Make a file readable only by its owner where the OS supports it."""
+    try:
+        if os.name != "nt":
+            path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    except OSError as exc:  # pragma: no cover - depends on the filesystem
+        _logger.warning("Could not restrict permissions on %s: %s", path, exc)
+
 
 def _load_or_create_key() -> bytes:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -40,6 +83,7 @@ def _load_or_create_key() -> bytes:
         return KEY_FILE.read_bytes()
     key = Fernet.generate_key()
     KEY_FILE.write_bytes(key)
+    _restrict(KEY_FILE)
     return key
 
 
@@ -53,6 +97,13 @@ def _decrypt(ciphertext: str) -> str:
 
 @dataclass
 class AgentConfig:
+    """Local agent settings.
+
+    The SMB fields here are only a *fallback*: shares normally carry their own
+    credential from the tenant's credential vault, delivered per poll and kept
+    in memory. They exist for air-gapped setups and for pre-vault installs.
+    """
+
     saas_url: str = "https://getlawhand.com"
     api_key: str = ""
     agent_id: str = ""
@@ -65,6 +116,14 @@ class AgentConfig:
     task_poll_interval_seconds: int = 30
     heartbeat_interval_seconds: int = 300
     _encrypted_smb_password: str = field(default="", repr=False)
+
+    @property
+    def config_path(self) -> Path:
+        return CONFIG_FILE
+
+    @property
+    def config_dir(self) -> Path:
+        return CONFIG_DIR
 
     @classmethod
     def load(cls) -> AgentConfig:
@@ -84,7 +143,7 @@ class AgentConfig:
         for field_name, env_var in _ENV_MAP.items():
             val = os.environ.get(env_var)
             if val is not None:
-                if field_name in ("scan_interval_minutes", "task_poll_interval_seconds", "heartbeat_interval_seconds"):
+                if field_name in _INT_FIELDS:
                     val = int(val)
                 setattr(cfg, field_name, val)
         return cfg
@@ -98,6 +157,7 @@ class AgentConfig:
         except Exception:
             try:
                 import json
+
                 with open(CONFIG_FILE, "r") as f:
                     return json.load(f)
             except Exception:
@@ -127,8 +187,10 @@ class AgentConfig:
                 "Install tomli_w for proper TOML support: pip install tomli_w"
             )
             import json
+
             with open(CONFIG_FILE, "w") as f:
                 json.dump(data, f, indent=2)
         else:
             with open(CONFIG_FILE, "wb") as f:
                 tomli_w.dump(data, f)
+        _restrict(CONFIG_FILE)

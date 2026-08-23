@@ -35,8 +35,10 @@ class SmbAgent(Base):
     last_heartbeat: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # secrets.token_urlsafe(16) produces 22 characters, so this cannot be the
+    # String(20) it was originally declared as (see migration 121).
     pairing_code: Mapped[str | None] = mapped_column(
-        String(20), unique=True, nullable=True
+        String(64), unique=True, nullable=True
     )
     pairing_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

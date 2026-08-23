@@ -2,7 +2,49 @@
 
 ## [Unreleased]
 
+### Added
+- **File share agent is now built and shipped:** `agent/packaging/` adds a
+  PyInstaller spec plus Windows (`build.ps1` → `lawhand-agent.exe` and a WiX v5
+  MSI) and Linux (`build.sh` → binary + systemd install tarball) builds, and
+  `.github/workflows/agent-release.yml` builds both on every change to `agent/`
+  and attaches them to an `agent-v*` tag release. The MSI registers an
+  auto-starting service and can pair during install
+  (`msiexec /i … PAIRING_CODE=… SAAS_URL=…`); `lawhand-agent service
+  install|start|stop|restart|status|remove` manages the Windows service or the
+  systemd unit from one command.
+- **Per-tenant credential vault for file shares** (migration
+  `121_smb_share_credentials`): `smb_credentials` stores NTLM/Kerberos/guest
+  identities encrypted with the `TOKEN_ENCRYPTION_KEYS` keyring, RLS-scoped to
+  the tenant, and `smb_shares.credential_id` binds one to each share — so a
+  single agent can serve shares needing different identities. Admin APIs never
+  return a secret (`has_password` only) and a credential may be pinned to one
+  agent; the plaintext is delivered exclusively to that agent over its
+  API-key-authenticated share endpoint and held in memory.
+- **Authentication panel in Administration → File Shares:** adding a share now
+  exposes the credential (reuse a stored one, create one inline, or use the
+  agent's own identity), file types, exclusion globs, folder depth and scan
+  schedule, plus per-share **Test connection** and **Scan now** actions that
+  round-trip through the agent and report the identity used and the real error
+  text. A Credentials tab manages the vault, and the Agents tab shows the
+  Windows/Linux install commands for the generated pairing code.
+- **Agent scan reporting:** the agent posts scan outcomes to
+  `/api/v1/smb/agents/{id}/shares/{share_id}/scan-status`, so the console shows
+  last scan time, file count and failure reason instead of an empty cell.
+
 ### Fixed
+- **File share pairing was impossible:** `smb_agents.pairing_code` was
+  `varchar(20)` while the generated code is 22 characters, so every
+  pairing-code request failed at insert. Widened to 64 in migration
+  `121_smb_share_credentials`.
+- **SMB API responses failed to serialize:** `ShareInfo`, `AgentInfo` and the
+  other SMB response models declare `id` fields as `str` but are validated from
+  ORM rows carrying `uuid.UUID`, which pydantic rejected — creating or listing
+  a share returned a 500. They now share a base model that coerces UUIDs.
+- **Agent could not use the shares the API returned:** it expected `server`/
+  `share` keys the API never sent, registered with an `agent_name` field name it
+  did not use, and sent heartbeat keys the schema drops (leaving agent version
+  and hostname empty in the console). Share payloads are now normalized from the
+  UNC path, and registration/heartbeat match the API contract.
 - **Stripe webhook idempotency and ordering:** added `stripe_webhook_events`
   (migration `119_stripe_webhook_events`) and a shared claim guard. Stripe
   retries until it sees a 2xx and does not guarantee delivery order, so a

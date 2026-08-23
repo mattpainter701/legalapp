@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MSI for the LawHand file share agent (WiX Toolset v5).
+
+  Installs a single self-contained exe into Program Files, registers it as an
+  auto-starting Windows service, and creates the machine-wide data directory
+  the agent keeps its config, key and ledger in.
+
+  Build:  wix build lawhand-agent.wxs -arch x64 -d AgentExe=..\..\dist\lawhand-agent.exe -d ProductVersion=0.13.0 -ext WixToolset.Util.wixext -o lawhand-agent.msi
+
+  Unattended install, pairing in one step:
+      msiexec /i lawhand-agent-0.13.0-x64.msi /qn ^
+              PAIRING_CODE=<code from Administration -> File Shares> ^
+              SAAS_URL=https://getlawhand.com
+
+  Run the service as a domain account instead of LocalSystem (only needed when
+  shares are mounted with the machine's own identity rather than a credential
+  stored in the tenant vault):
+      msiexec /i ... SERVICE_ACCOUNT=CORP\svc-lawhand SERVICE_PASSWORD=...
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <Package Name="LawHand File Share Agent"
+           Manufacturer="LawHand"
+           Version="$(ProductVersion)"
+           UpgradeCode="d3f674f5-b516-4ecc-b82d-b2495b4aa260"
+           Scope="perMachine"
+           Compressed="yes">
+
+    <SummaryInformation Description="On-premise file share indexing agent for LawHand" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of the LawHand File Share Agent is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Pairing details. Empty PAIRING_CODE simply skips registration, so the
+         MSI can be deployed by GPO and paired later from the command line. -->
+    <Property Id="PAIRING_CODE" Secure="yes" />
+    <Property Id="SAAS_URL" Secure="yes" Value="https://getlawhand.com" />
+    <Property Id="SERVICE_ACCOUNT" Secure="yes" Value="LocalSystem" />
+    <Property Id="SERVICE_PASSWORD" Secure="yes" Hidden="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="COMPANYFOLDER" Name="LawHand">
+        <Directory Id="INSTALLFOLDER" Name="Agent" />
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="DATACOMPANYFOLDER" Name="LawHand">
+        <Directory Id="DATAFOLDER" Name="Agent" />
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="LawHand File Share Agent" Level="1">
+      <ComponentGroupRef Id="AgentComponents" />
+    </Feature>
+
+    <InstallExecuteSequence>
+      <!-- Pair before StartServices so the service comes up already registered. -->
+      <Custom Action="RegisterAgent" Before="StartServices" Condition="PAIRING_CODE AND NOT Installed" />
+    </InstallExecuteSequence>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="AgentComponents">
+      <Component Id="AgentExeComponent" Directory="INSTALLFOLDER">
+        <File Id="LawHandAgentExe"
+              Name="lawhand-agent.exe"
+              Source="$(AgentExe)"
+              KeyPath="yes" />
+
+        <ServiceInstall Id="LawHandAgentService"
+                        Name="LawHandAgent"
+                        DisplayName="LawHand File Share Agent"
+                        Description="Indexes approved on-premise file shares and relays document text to LawHand on request."
+                        Type="ownProcess"
+                        Start="auto"
+                        ErrorControl="normal"
+                        Arguments="service run"
+                        Account="[SERVICE_ACCOUNT]"
+                        Password="[SERVICE_PASSWORD]"
+                        Vital="yes">
+          <!-- A file server reboot or a transient network outage should not
+               leave the share un-indexed until someone notices. -->
+          <util:ServiceConfig FirstFailureActionType="restart"
+                              SecondFailureActionType="restart"
+                              ThirdFailureActionType="restart"
+                              RestartServiceDelayInSeconds="60" />
+        </ServiceInstall>
+
+        <ServiceControl Id="LawHandAgentServiceControl"
+                        Name="LawHandAgent"
+                        Start="install"
+                        Stop="both"
+                        Remove="uninstall"
+                        Wait="yes" />
+      </Component>
+
+      <Component Id="DataFolderComponent" Directory="DATAFOLDER">
+        <CreateFolder />
+        <RemoveFolder Id="RemoveDataFolder" On="uninstall" />
+        <RegistryValue Root="HKLM"
+                       Key="Software\LawHand\Agent"
+                       Name="DataFolder"
+                       Type="string"
+                       Value="[DATAFOLDER]"
+                       KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- Deferred + no impersonation: registration writes into ProgramData and
+         must run with the installing service's privileges. -->
+    <CustomAction Id="RegisterAgent"
+                  FileRef="LawHandAgentExe"
+                  ExeCommand="register --code &quot;[PAIRING_CODE]&quot; --url &quot;[SAAS_URL]&quot;"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="check" />
+  </Fragment>
+</Wix>

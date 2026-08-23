@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
+import fnmatch
 import io
 import logging
 import os
@@ -15,10 +15,10 @@ from docx import Document
 
 from clarity_agent.config import AgentConfig
 from clarity_agent.db import FileLedger
+from clarity_agent.smb_auth import ShareCredential, connect
 from clarity_agent.utils import (
     compute_short_hash,
     format_smb_path,
-    parse_smb_path,
     truncate_snippet,
 )
 
@@ -71,18 +71,25 @@ class SmbScanner:
         max_depth = share_config.get("max_depth", 10)
         result = ScanResult()
 
-        session = await self._connect_smb(server, share)
-        if session is None:
-            result.errors.append(f"Failed to connect to \\\\{server}\\{share}")
+        credential = ShareCredential.from_share(share_config, self.config)
+        session, error = await self._connect_smb(server, share, credential)
+        if session is None and error:
+            result.errors.append(error)
             return result
 
-        root = format_smb_path(server, share, "")
+        # A share may be scoped to a subfolder rather than the whole export.
+        root = format_smb_path(server, share, share_config.get("root_path") or "")
         current_files = []
         allowed_exts = set(file_extensions) if file_extensions else LEGAL_EXTENSIONS
+        exclude_patterns = share_config.get("exclude_patterns") or []
 
         try:
             async for finfo in self._walk_directory(
-                session, root, max_depth=max_depth, allowed_extensions=allowed_exts
+                session,
+                root,
+                max_depth=max_depth,
+                allowed_extensions=allowed_exts,
+                exclude_patterns=exclude_patterns,
             ):
                 current_files.append(finfo)
         except Exception as exc:
@@ -101,31 +108,42 @@ class SmbScanner:
 
         return result
 
-    async def _connect_smb(self, server: str, share: str) -> smbclient.Session | None:
+    async def _connect_smb(
+        self,
+        server: str,
+        share: str,
+        credential: ShareCredential | None = None,
+    ) -> tuple[object | None, str | None]:
+        """Open a session for a share. Returns ``(session, error_message)``.
+
+        The error message is propagated verbatim to the SaaS so an admin sees
+        "logon failure" or "network path not found" rather than a generic
+        failure they cannot act on.
+        """
+        credential = credential or ShareCredential.from_share({}, self.config)
         try:
             smbclient.reset_connection_cache()
-            if self.config.smb_domain:
-                session = smbclient.register_session(
-                    server,
-                    username=self.config.smb_username,
-                    password=self.config.smb_password,
-                    domain=self.config.smb_domain,
-                )
-            else:
-                session = smbclient.register_session(
-                    server,
-                    username=self.config.smb_username,
-                    password=self.config.smb_password,
-                )
-            return session
+            session = connect(server, credential, smbclient_module=smbclient)
+            return session, None
         except Exception as exc:
-            logger.error("SMB connection to %s failed: %s", server, exc)
-            return None
+            message = (
+                f"Failed to connect to \\\\{server}\\{share} "
+                f"as {credential.describe}: {exc}"
+            )
+            logger.error("%s", message)
+            return None, message
 
     async def _walk_directory(
-        self, session, path: str, max_depth: int = 10, allowed_extensions: set[str] | None = None
+        self,
+        session,
+        path: str,
+        max_depth: int = 10,
+        allowed_extensions: set[str] | None = None,
+        exclude_patterns: list[str] | None = None,
     ) -> _AsyncFileIterator:
-        return _AsyncFileIterator(self, session, path, max_depth, allowed_extensions)
+        return _AsyncFileIterator(
+            self, session, path, max_depth, allowed_extensions, exclude_patterns
+        )
 
     async def _detect_changes(self, share_id: str, current_files: list[dict]) -> ChangeSet:
         cs = ChangeSet()
@@ -198,12 +216,14 @@ class _AsyncFileIterator:
         path: str,
         max_depth: int,
         allowed_extensions: set[str] | None = None,
+        exclude_patterns: list[str] | None = None,
     ):
         self.scanner = scanner
         self.session = session
         self.path = path
         self.max_depth = max_depth
         self.allowed_extensions = allowed_extensions or LEGAL_EXTENSIONS
+        self.exclude_patterns = exclude_patterns or []
         self._queue: asyncio.Queue[dict | None] = asyncio.Queue()
 
     def __aiter__(self):
@@ -241,10 +261,16 @@ class _AsyncFileIterator:
 
             for entry in entries:
                 if entry.is_dir():
-                    await self._walk_dir(dir_path + "\\" + entry.name, depth + 1)
+                    child = dir_path + "\\" + entry.name
+                    if self._excluded(entry.name, child):
+                        logger.debug("Skipping excluded directory %s", child)
+                        continue
+                    await self._walk_dir(child, depth + 1)
                 elif entry.is_file():
                     ext = os.path.splitext(entry.name)[1].lower()
                     if ext not in self.allowed_extensions:
+                        continue
+                    if self._excluded(entry.name, dir_path + "\\" + entry.name):
                         continue
                     if skip:
                         existing = await self.scanner.ledger.get_file(dir_path + "\\" + entry.name)
@@ -293,6 +319,17 @@ class _AsyncFileIterator:
                 })
         except Exception as exc:
             logger.error("Error walking %s: %s", dir_path, exc)
+
+    def _excluded(self, name: str, full_path: str) -> bool:
+        """True when a name or path matches any configured exclude glob."""
+        for pattern in self.exclude_patterns:
+            if not pattern:
+                continue
+            if fnmatch.fnmatch(name.lower(), pattern.lower()) or fnmatch.fnmatch(
+                full_path.lower(), pattern.lower()
+            ):
+                return True
+        return False
 
     async def _get_dir_mtime(self, dir_path: str) -> str | None:
         try:
