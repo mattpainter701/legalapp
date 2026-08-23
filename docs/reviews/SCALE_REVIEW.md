@@ -10,31 +10,34 @@ not.** Most list endpoints paginate correctly, use `selectinload` against N+1,
 and roll up aggregates in one query. Then the client requests page 1, never asks
 for page 2, and filters what it got in JavaScript.
 
-The result is a product that is correct at demo scale, silently wrong somewhere
-between 100 and 200 records, and never tells anyone it crossed the line.
+The result is a product that is often correct at demo scale but either silently
+wrong or impossible to browse completely once a list crosses 100-200 records.
 
 ---
 
 ## The shape of the problem
 
 Nothing here degrades loudly. There is no error, no spinner that never stops, no
-"too many results" warning. Every surface below simply shows a prefix of the
-truth and presents it as the whole.
+"too many results" warning. Several surfaces below simply show a prefix of the
+truth and present it as the whole. Clients and contacts are a narrower failure:
+the UI preserves the API total and server-side search, but offers no way to page
+past the first 100 matching records.
 
 | Surface | Fetch | Hard ceiling | At 10,000 matters |
 |---|---|---|---|
 | Matters portfolio | `getMattersV2({page_size:100})` | **100** | 9,900 matters invisible; search can't reach them |
 | Tasks list | `getTasks({limit:200})`, firm-wide | **200** | ~200 of tens of thousands |
 | Overdue tasks | `getOverdueTasks()` — **no limit parameter exists** | **unbounded** | entire overdue backlog in one response |
-| Clients | `getClients({limit:100})` | **100** | client 101 does not exist to the UI |
-| Contacts | `getContacts({limit:100})` | **100** | same |
+| Clients | `getClients({limit:100, q})` | **100 per result page** | total remains accurate and records remain searchable; no way to browse past the first 100 |
+| Contacts | `getContacts({limit:100, q})` | **100 per result page** | same |
 | Matter documents | no limit/offset/page at all | **unbounded** | every document rendered, unsearchable |
 | Chat sidebar documents | `getDocuments()`, full list | **unbounded** | re-fetched every 3s per upload (see #7) |
 | Partner log | `getPartnerLog({limit:25})` | **25** | under one morning |
 | Revision history | `priorRevisions.slice(0, 5)` | **5** | version 6+ unreachable |
 
-Two failure classes, opposite directions: **silent truncation** (a prefix
-presented as the whole) and **unbounded fetch** (everything, rendered).
+Three failure classes: **silent truncation** (a prefix presented as the whole),
+**acknowledged but unpageable results** (the total is known but the next page is
+unreachable), and **unbounded fetch** (everything, rendered).
 
 ---
 
@@ -207,15 +210,21 @@ screen in the product.
 
 ## P2 — Truncation without acknowledgment
 
-### 9. Clients, contacts, and partner log truncate silently
+### 9. Clients and contacts stop at 100; partner log truncates silently
 
-`ClientsPage.jsx:161` (`limit: 100`), `ContactsPage.jsx:177` (`limit: 100`),
-`IntakeDashboardPage.jsx:387` (`limit: 25`) — none render a total, a page
-control, or any indication that more exist.
+`ClientsPage.jsx:161-167` (`limit: 100`) and `ContactsPage.jsx:177-183`
+(`limit: 100`) both pass the user's search query to the backend and retain the
+API's `total`. Their page headers display that total. A record beyond the first
+100 therefore remains searchable, and the user can see that more records exist.
+However, neither page renders pagination or a load-more control, so broad
+browsing still stops after the first 100 matches.
 
-The consistent failure is not the cap itself. It is that **nothing tells the
-user a cap was hit.** A "showing 100 of 4,312" line, on its own, would convert
-every one of these from a silent correctness bug into a known limitation.
+The partner log is the stronger correctness failure:
+`IntakeDashboardPage.jsx:387` requests `limit: 25` without a displayed total,
+page control, or indication that more entries exist.
+
+Add pagination to clients and contacts. For the partner log, expose and display
+a total or next-page signal as well as a way to retrieve the remaining entries.
 
 ### 10. Matter documents fetch and render everything
 
@@ -256,7 +265,8 @@ and the partner log they'd use to track handoffs holds 25 rows (#9).
 4. **#5 priority ordering** — reuse the helper that already exists.
 5. **#4 trigram/FTS indexes** — the largest infrastructure item, and the one the
    receptionist feels on every call. Follow the pattern already used for chunks.
-6. **#9 "showing N of M"** everywhere — cheap, and converts silent wrongness into
-   honest limitation while the rest is built.
+6. **#9 directory pagination and partner-log disclosure** — let clients and
+   contacts traverse the totals they already show, and give the partner log a
+   total or next-page signal instead of a silent 25-row ceiling.
 7. **#7 / #8 / #10** — polling, board counts, document lists.
 8. **#6 sort_by allowlist** — robustness cleanup.

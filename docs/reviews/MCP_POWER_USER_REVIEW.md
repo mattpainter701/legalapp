@@ -63,7 +63,7 @@ Everything downstream of this function is solid — versioned cloud revisions,
 SHA-256 verification of the exact bound bytes, staff-then-attorney review. That
 machinery is faithfully preserving a badly rendered document.
 
-### 2. The 50,000-character wall arrives at the worst moment
+### 2. The 50,000-character wall is machine-visible but poorly explained
 
 `backend/app/schemas/chat_action.py:170`
 
@@ -74,10 +74,15 @@ body: str = Field(min_length=1, max_length=50_000)
 Roughly 8,000 words — about 25 pages. A summary judgment brief with a statement
 of facts, a lengthy trust instrument, or a discovery response set clears that.
 
-The failure lands *after* the user has done all the work, as a Pydantic
-validation error surfaced through the MCP error channel. There is no way to
-learn the limit in advance: it appears in no tool description, and
-`ProposeMatterDocumentArgs` does not document it.
+The MCP tool contract does expose this bound: `_as_mcp_tool` publishes
+`ProposeMatterDocumentArgs.model_json_schema()` as the tool's `inputSchema`,
+including `maxLength: 50000` (`workspace_mcp_protocol.py:205-210`). Oversized
+calls are rejected by schema validation before the handler runs.
+
+The remaining product problem is the last-mile planning and error experience.
+The prose tool description does not call out the limit, and a rejection surfaces
+as a generic Pydantic validation error in the third-party client rather than
+stating the submitted size and the allowed size.
 
 Two fixes, both cheap. State the limit in the `propose_matter_document`
 description so the model can plan around it. Then make the error actionable —
@@ -87,20 +92,23 @@ rejection.
 Longer term, a chunked or multi-part push would remove the ceiling, but naming
 the number honestly fixes most of the pain.
 
-### 3. Research citations cap at ten, silently and twice
+### 3. Research citations hard-cap at ten
 
 `chat_action.py:172` sets `source_ids: max_length=10`, and the handler then
 truncates again with `args.source_ids[:10]` in two places
 (`chat_tools/handlers.py:908,946`).
 
-A research-heavy brief cites far more than ten authorities. The cap is not in
-the tool description, and the belt-and-braces `[:10]` means that if the schema
-bound were ever raised, sources would still be silently dropped in the handler.
+A research-heavy brief cites far more than ten authorities. The cap is exposed
+to MCP clients as `maxItems: 10` through the generated `inputSchema`, and
+`CapabilitySpec.parse_arguments` validates against the Pydantic model before the
+handler runs. An eleven-item call is therefore rejected; the two slices do not
+silently truncate accepted input today.
 
-For a product whose README commits to a rigorous citation contract, silently
-discarding an attorney's eleventh through fortieth authorities is the wrong
-default. Raise the bound, and if a cap must remain, return which sources were
-dropped rather than truncating quietly.
+The ceiling is still restrictive, and the redundant `[:10]` slices are a future
+maintenance trap: raising the schema bound alone would leave a second, silent
+limit in the handler. Raise the bound if the downstream citation contract can
+support it and remove the slices in the same change. If the cap remains, repeat
+it in the prose description and return an actionable validation error.
 
 ---
 
@@ -108,9 +116,10 @@ dropped rather than truncating quietly.
 
 ### 4. There is no in-product way to connect an assistant
 
-The revocation half is done well: `WorkspaceMcpGrantsPanel` is mounted on
+The grant-management half is done well: `WorkspaceMcpGrantsPanel` is mounted on
 `/profile` (`ProfilePage.jsx:198`) and in `IntegrationsPanel`, so any user can
-see and revoke their own grants without an admin.
+see each grant's status, scopes, creation time, expiry, and last use, and revoke
+it without an admin.
 
 But the panel is 83 lines of list-and-revoke. It shows **no server URL, no
 client-id, no setup instructions** — and neither does anything else a normal
@@ -125,20 +134,7 @@ carefully designed the consent screen has no page that gets you to it.
 Add a "Connect an assistant" section to the grants panel with the workspace MCP
 URL, a copy button, and the two or three lines of client config.
 
-### 5. Grants show status but never expiry
-
-`WorkspaceMcpGrantsPanel.jsx:75` renders client name, organization, and an
-active/inactive pill. There is no issued-at, no last-used, no expiry.
-
-A power user with three assistants connected across two laptops cannot tell
-which grant is which, which one is still working, or when any of them lapses.
-The first they learn of an expiry is a tool call failing inside ChatGPT, with an
-error surfaced by someone else's client.
-
-Show issued, last used, and expires. The revocation UI is otherwise the right
-shape.
-
-### 6. Three hard 403s with no forewarning
+### 5. Three hard 403s with no forewarning
 
 `workspace_mcp_protocol.py:290-305` rejects a call outright when the user is
 inactive, when `license_active` is false, and when `privacy_mode` is on:
@@ -160,7 +156,7 @@ grants panel when any of the three conditions is active.
 
 ## P2 — Framing
 
-### 7. Half the advertised surface is off by design
+### 6. Half the advertised surface is off by design
 
 The workflow described as "platform & research MCP" is really two products. The
 workspace MCP (the ten capabilities above) is live. The research/product MCP is
@@ -183,7 +179,9 @@ arrive in matters as unformatted text too.
 
 1. **#1 Markdown rendering** — the workflow's entire value proposition is
    currently destroyed at the last step. Highest impact by a wide margin.
-2. **#2 / #3 limits** — put both numbers in the tool descriptions today; make
-   the errors actionable next.
+2. **#2 / #3 limits** — both are machine-visible in the input schema; repeat the
+   numbers in the prose descriptions and make validation errors actionable,
+   then revisit the ceilings.
 3. **#4 connection instructions** — the consent flow is finished and unreachable.
-4. **#6 blocked-state forewarning** and **#5 grant metadata** — both small.
+4. **#5 blocked-state forewarning** — a small change that explains otherwise
+   surprising 403s before the user reaches a third-party client.
