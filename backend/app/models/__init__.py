@@ -46,6 +46,7 @@ from app.models.tenant_oauth_app import TenantOAuthApp
 from app.models.user_oauth_token import UserOAuthToken
 from app.models.teams_channel_link import TeamsChannelLink
 from app.models.teams_notification_setting import TeamsNotificationSetting
+from app.models.teams_voice_setting import TeamsVoiceSetting
 from app.models.error_log import ErrorLog
 from app.models.integration_sync_run import IntegrationSyncRun
 from app.models.contact import Contact, Lead
@@ -162,6 +163,7 @@ __all__ = [
     "UserOAuthToken",
     "TeamsChannelLink",
     "TeamsNotificationSetting",
+    "TeamsVoiceSetting",
     "ErrorLog",
     "IntegrationSyncRun",
     "Contact",

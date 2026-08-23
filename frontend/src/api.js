@@ -778,8 +778,24 @@ export const getTeamsNotificationSettings = () =>
   api.get('/integrations/teams/notification-settings').then((r) => r.data)
 export const updateTeamsNotificationSettings = (settings) =>
   api.put('/integrations/teams/notification-settings', { settings }).then((r) => r.data)
+export const getTeamsEventTypes = () =>
+  api.get('/integrations/teams/event-types').then((r) => r.data)
 export const sendTeamsTestMessage = (data) =>
   api.post('/integrations/teams/test-message', data).then((r) => r.data)
+
+// ── Microsoft Teams voice (Teams Phone capture) ──────────────────────────────
+export const getTeamsVoiceStatus = () =>
+  api.get('/integrations/teams/voice/status').then((r) => r.data)
+export const updateTeamsVoiceSettings = (data) =>
+  api.put('/integrations/teams/voice/settings', data).then((r) => r.data)
+export const createTeamsVoiceSubscription = () =>
+  api.post('/integrations/teams/voice/subscription').then((r) => r.data)
+export const deleteTeamsVoiceSubscription = () =>
+  api.delete('/integrations/teams/voice/subscription').then((r) => r.data)
+export const testTeamsVoiceConnection = () =>
+  api.post('/integrations/teams/voice/test').then((r) => r.data)
+export const syncTeamsVoiceCalls = (days = 7) =>
+  api.post('/integrations/teams/voice/sync', null, { params: { days } }).then((r) => r.data)
 
 // ── Zoom ─────────────────────────────────────────────────────────────────────
 export const getZoomStatus = () =>

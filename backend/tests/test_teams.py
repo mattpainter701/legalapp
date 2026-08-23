@@ -235,6 +235,104 @@ class TestLinkCRUD:
         assert resp.status_code == 404
         assert resp.json()["detail"] == "Matter not found"
 
+    async def test_links_carry_the_matter_name(
+        self, client, ms_connected, db_session, test_tenant, test_user
+    ):
+        matter = await _add_matter(db_session, test_tenant.id, test_user.id)
+        await client.post(
+            "/api/integrations/teams/links",
+            json={
+                "matter_id": str(matter.id),
+                "team_id": "team-1",
+                "channel_id": "chan-1",
+            },
+        )
+
+        listed = await client.get("/api/integrations/teams/links")
+        row = next(r for r in listed.json() if r["matter_id"] == str(matter.id))
+        assert row["matter_name"] == "Acme v. Globex"
+
+    async def test_delete_rejects_a_malformed_id(self, client, ms_connected):
+        # Previously reached the UUID column and surfaced as a 500.
+        resp = await client.delete("/api/integrations/teams/links/not-a-uuid")
+        assert resp.status_code == 422
+
+    async def test_delete_reports_a_missing_link(self, client, ms_connected):
+        resp = await client.delete(f"/api/integrations/teams/links/{uuid.uuid4()}")
+        assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+class TestNotificationRouting:
+    async def test_event_types_are_published(self, client, ms_connected):
+        resp = await client.get("/api/integrations/teams/event-types")
+        assert resp.status_code == 200
+        types = {row["event_type"] for row in resp.json()}
+        assert "deadline_approaching" in types
+        assert all(row["label"] for row in resp.json())
+
+    async def test_unknown_event_type_is_rejected(self, client, ms_connected):
+        # An unroutable event would save happily and then never fire.
+        resp = await client.put(
+            "/api/integrations/teams/notification-settings",
+            json={
+                "settings": [
+                    {
+                        "event_type": "deadline_aproaching",
+                        "team_id": "team-1",
+                        "channel_id": "chan-1",
+                    }
+                ]
+            },
+        )
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert detail["error"] == "teams_unknown_event_type"
+        assert detail["unknown_event_types"] == ["deadline_aproaching"]
+
+    async def test_duplicate_routes_collapse_instead_of_failing(
+        self, client, ms_connected
+    ):
+        route = {
+            "event_type": "deadline_approaching",
+            "team_id": "team-1",
+            "channel_id": "chan-1",
+        }
+        resp = await client.put(
+            "/api/integrations/teams/notification-settings",
+            json={"settings": [route, dict(route)]},
+        )
+        assert resp.status_code == 200
+        assert len(resp.json()) == 1
+
+    async def test_replace_is_a_full_replacement(self, client, ms_connected):
+        await client.put(
+            "/api/integrations/teams/notification-settings",
+            json={
+                "settings": [
+                    {
+                        "event_type": "deadline_approaching",
+                        "team_id": "team-1",
+                        "channel_id": "chan-1",
+                    }
+                ]
+            },
+        )
+        await client.put(
+            "/api/integrations/teams/notification-settings",
+            json={
+                "settings": [
+                    {
+                        "event_type": "voice_call_captured",
+                        "team_id": "team-2",
+                        "channel_id": "chan-2",
+                    }
+                ]
+            },
+        )
+        listed = await client.get("/api/integrations/teams/notification-settings")
+        assert [r["event_type"] for r in listed.json()] == ["voice_call_captured"]
+
 
 @pytest.mark.asyncio
 class TestChannels:
@@ -346,7 +444,12 @@ class TestDispatch:
             captured["channel"] = channel_id
             return True
 
+        async def fake_token(tenant_id, user_id=None):
+            captured["token_calls"] = captured.get("token_calls", 0) + 1
+            return "graph-token"
+
         monkeypatch.setattr(teams_service, "send_channel_message", fake_send)
+        monkeypatch.setattr(teams_service, "resolve_token", fake_token)
 
         fields = {"matter_name": "Acme v. Globex", "Due": "2026-07-01"}
 
@@ -368,6 +471,8 @@ class TestDispatch:
         facts = next(b for b in card["body"] if b["type"] == "FactSet")["facts"]
         assert any(f["title"] == "Due" for f in facts)
         assert card["actions"][0]["url"] == "https://app/matters/x"
+        # One credential resolution for the whole fan-out, not one per channel.
+        assert captured["token_calls"] == 1
 
     async def test_notify_noop_when_not_connected(self, test_tenant):
         from app.services import teams_notify
@@ -417,3 +522,78 @@ async def test_graph_request_retries_on_429(monkeypatch):
     assert resp is not None
     assert resp.status_code == 200
     assert calls["n"] == 2
+
+
+# ── Graph collection paging + error surfacing ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_list_joined_teams_follows_next_link(monkeypatch):
+    """A firm with more teams than one Graph page must see all of them."""
+    from app.services import teams as teams_service
+
+    pages = {
+        "/me/joinedTeams": {
+            "value": [{"id": "t1", "displayName": "Litigation"}],
+            "@odata.nextLink": "https://graph.microsoft.com/v1.0/page2",
+        },
+        "https://graph.microsoft.com/v1.0/page2": {
+            "value": [{"id": "t2", "displayName": "Corporate"}]
+        },
+    }
+
+    async def fake_request(method, path, *, token, **kw):
+        return httpx.Response(200, json=pages[path])
+
+    monkeypatch.setattr(teams_service, "_graph_request", fake_request)
+    monkeypatch.setattr(
+        teams_service, "_get_token", lambda *a, **k: _immediate("token")
+    )
+
+    teams = await teams_service.list_joined_teams("tenant", "user")
+    assert [t["id"] for t in teams] == ["t1", "t2"]
+
+
+@pytest.mark.asyncio
+async def test_list_joined_teams_raises_on_graph_error(monkeypatch):
+    """A Graph failure must not read to the admin as "you have no teams"."""
+    from app.services import teams as teams_service
+
+    async def fake_request(method, path, *, token, **kw):
+        return httpx.Response(403, text="Forbidden")
+
+    monkeypatch.setattr(teams_service, "_graph_request", fake_request)
+    monkeypatch.setattr(
+        teams_service, "_get_token", lambda *a, **k: _immediate("token")
+    )
+
+    with pytest.raises(teams_service.TeamsIntegrationError) as exc:
+        await teams_service.list_joined_teams("tenant", "user")
+    assert "Reconnect" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_list_joined_teams_stops_at_the_page_cap(monkeypatch):
+    """A cyclic nextLink must terminate rather than spin forever."""
+    from app.services import teams as teams_service
+
+    async def fake_request(method, path, *, token, **kw):
+        return httpx.Response(
+            200,
+            json={
+                "value": [{"id": "t", "displayName": "Loop"}],
+                "@odata.nextLink": "https://graph.microsoft.com/v1.0/loop",
+            },
+        )
+
+    monkeypatch.setattr(teams_service, "_graph_request", fake_request)
+    monkeypatch.setattr(
+        teams_service, "_get_token", lambda *a, **k: _immediate("token")
+    )
+
+    teams = await teams_service.list_joined_teams("tenant", "user")
+    assert len(teams) == teams_service.GRAPH_PAGE_LIMIT
+
+
+async def _immediate(value):
+    return value

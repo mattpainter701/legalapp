@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { PhoneCall, RefreshCw } from 'lucide-react'
 import CallFeedItem from './CallFeedItem'
+import { callSourceChip, isCapturedSource } from './callSource'
 
 const FILTER_STORAGE_KEY = 'intake.callFeed.filters'
 
@@ -30,7 +31,7 @@ function internalCallType(caller) {
   const calleeLooksInternal = calleeDigits > 0 && calleeDigits < 10
   const hasExternalParty = callerDigits >= 10 || calleeDigits >= 10
   if (direction === 'outbound' && callerLooksInternal) return 'internal_outbound'
-  if (!hasExternalParty && caller?.source === 'zoom_phone' && (callerLooksInternal || calleeLooksInternal)) {
+  if (!hasExternalParty && isCapturedSource(caller?.source) && (callerLooksInternal || calleeLooksInternal)) {
     return 'internal_to_internal'
   }
   return null
@@ -105,7 +106,7 @@ export default function CallFeed({
                 filter === s ? 'bg-brand-ink text-white' : 'bg-brand-bg-soft text-brand-muted'
               }`}
             >
-              {s === 'all' ? 'All' : s === 'zoom_phone' ? 'Zoom' : s}
+              {callSourceChip(s)}
             </button>
           ))}
         </div>

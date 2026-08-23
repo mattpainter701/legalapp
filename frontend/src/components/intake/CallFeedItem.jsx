@@ -1,4 +1,5 @@
 import { Clock, ExternalLink, PhoneIncoming, PhoneMissed, PhoneOutgoing } from 'lucide-react'
+import { callSourceBadge } from './callSource'
 
 const STATUS = {
   missed: { label: 'missed', cls: 'bg-red-100 text-red-700' },
@@ -77,7 +78,7 @@ export default function CallFeedItem({ caller, selected, isNew, onSelect }) {
         {durationLabel(caller.duration_seconds) && <span>{durationLabel(caller.duration_seconds)}</span>}
         {direction && <span className="font-bold capitalize">{direction}</span>}
         {internalLabel && <span className="rounded-full bg-slate-200 px-2 py-0.5 font-bold text-slate-700">{internalLabel}</span>}
-        {caller.source === 'zoom_phone' && <span className="font-bold text-brand-ink">Zoom</span>}
+        {callSourceBadge(caller.source) && <span className="font-bold text-brand-ink">{callSourceBadge(caller.source)}</span>}
         {caller.recording_url && (
           <a
             href={caller.recording_url}

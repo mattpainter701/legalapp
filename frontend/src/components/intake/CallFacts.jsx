@@ -1,4 +1,5 @@
 import { ExternalLink } from 'lucide-react'
+import { callSourceLabel, isCapturedSource } from './callSource'
 
 function durationLabel(seconds) {
   const value = Number(seconds)
@@ -31,7 +32,7 @@ export default function CallFacts({ caller }) {
     ['Status', caller.result || '—'],
     ['Answered by', caller.answered_by || '—'],
     ['Duration', durationLabel(caller.duration_seconds) || '—'],
-    ['Source', caller.source === 'zoom_phone' ? 'Zoom Phone' : 'Manual'],
+    ['Source', callSourceLabel(caller.source)],
   ]
   if (caller.lead_id) {
     fields.push(['Lead status', caller.lead_status ? caller.lead_status.replace('_', ' ') : '—'])
@@ -87,17 +88,17 @@ export default function CallFacts({ caller }) {
           </div>
         ))}
       </dl>
-      {caller.source === 'zoom_phone' && (
+      {isCapturedSource(caller.source) && (
         <div className="mt-5 space-y-3 border-t border-brand-line pt-4">
           <div>
-            <dt className="font-black uppercase tracking-widest text-brand-muted">Zoom call summary</dt>
+            <dt className="font-black uppercase tracking-widest text-brand-muted">{callSourceLabel(caller.source)} call summary</dt>
             {caller.call_summary ? (
               <dd className="mt-1 whitespace-pre-wrap text-sm leading-6 text-brand-ink">{caller.call_summary}</dd>
             ) : (
               <dd className="mt-1 text-xs text-brand-muted">
                 {caller.has_call_summary
                   ? 'Generated — restricted by your role.'
-                  : 'Not generated or not provided by Zoom for this call.'}
+                  : `Not generated or not provided by ${callSourceLabel(caller.source)} for this call.`}
               </dd>
             )}
           </div>
@@ -109,11 +110,11 @@ export default function CallFacts({ caller }) {
           )}
           {!caller.transcript_text && (
             <div>
-              <dt className="font-black uppercase tracking-widest text-brand-muted">Zoom transcript</dt>
+              <dt className="font-black uppercase tracking-widest text-brand-muted">{callSourceLabel(caller.source)} transcript</dt>
               <dd className="mt-1 text-xs text-brand-muted">
                 {caller.has_transcript
-                  ? (caller.can_view_confidential_call_content ? 'Available from Zoom via the transcript link.' : 'Available — restricted by your role.')
-                  : 'Not generated or not provided by Zoom for this call.'}
+                  ? (caller.can_view_confidential_call_content ? `Available from ${callSourceLabel(caller.source)} via the transcript link.` : 'Available — restricted by your role.')
+                  : `Not generated or not provided by ${callSourceLabel(caller.source)} for this call.`}
               </dd>
             </div>
           )}

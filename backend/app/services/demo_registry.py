@@ -120,6 +120,7 @@ _PURGE_ONLY_TABLES = {
     "task_automation_runs",
     "teams_channel_links",
     "teams_notification_settings",
+    "teams_voice_settings",
     "tenant_credentials",
     "tenant_oauth_apps",
     "tenant_plugin_entitlements",
@@ -155,6 +156,9 @@ SENSITIVE_NEVER_CLONE = frozenset(
         "smb_agents",
         "smb_shares",
         "teams_channel_links",
+        # Carries the Entra directory binding and the notification clientState
+        # secret — never cloned into a demo tenant.
+        "teams_voice_settings",
         "tenant_credentials",
         "tenant_oauth_apps",
         "tenant_plugin_setups",

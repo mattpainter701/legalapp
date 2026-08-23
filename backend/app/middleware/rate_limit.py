@@ -49,6 +49,7 @@ SKIP_PREFIXES = (
     "/api/auth/",
     "/api/billing/webhook",
     "/api/integrations/zoom-phone/webhook",
+    "/api/integrations/teams/voice/webhook",
     "/api/platform/",  # handled by the dedicated operator limiter below
     "/health",
     "/docs",

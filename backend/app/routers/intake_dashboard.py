@@ -787,11 +787,19 @@ def _task_linked_lead_id(task: Task | None) -> uuid.UUID | None:
 
 
 def _log_source(log: CommunicationLog) -> str:
+    """Which telephony provider (if any) captured this call.
+
+    Drives the provider badge on the intake feed. Both captured providers write
+    a ``participants.provider`` marker and a namespaced ``external_ref``; either
+    is sufficient, since older rows predate one of them.
+    """
     participants = log.participants or {}
-    if participants.get("provider") == "zoom_phone" or (
-        log.external_ref or ""
-    ).startswith("zoom_phone:call:"):
+    provider = participants.get("provider")
+    external_ref = log.external_ref or ""
+    if provider == "zoom_phone" or external_ref.startswith("zoom_phone:call:"):
         return "zoom_phone"
+    if provider == "teams_voice" or external_ref.startswith("teams_voice:call:"):
+        return "teams_voice"
     return "manual"
 
 

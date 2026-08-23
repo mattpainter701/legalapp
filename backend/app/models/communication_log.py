@@ -34,6 +34,13 @@ class CommunicationLog(Base):
             unique=True,
             postgresql_where=text("external_ref LIKE 'zoom_phone:call:%'"),
         ),
+        Index(
+            "uq_commlogs_teams_voice_external_ref",
+            "tenant_id",
+            "external_ref",
+            unique=True,
+            postgresql_where=text("external_ref LIKE 'teams_voice:call:%'"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
