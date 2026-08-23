@@ -5,6 +5,17 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.23 — Billing problems you can actually see
+
+Released August 23, 2026.
+
+Your firm is now told when a subscription payment fails, slow pages say so instead of spinning, and Privacy Mode explains what it turns off.
+
+- **Know about a payment problem before it costs you access.** A banner now appears for everyone in the firm when a subscription payment fails or is suspended, with a direct route to update the payment method.
+- **No more being offered a plan you already pay for.** If the plan on file disagrees with the subscription your firm actually holds, the billing page says so and stops prompting you to buy again.
+- **Slow is now distinguishable from stuck.** Requests that take too long end with a clear message and a retry instead of an open-ended spinner, and long lists show their shape while loading.
+- **Privacy Mode says what it affects.** The Privacy Mode switch now states that it also blocks connected assistants, and the connected assistants list shows when access is blocked and why.
+
 ## 2026.08.21 — A dedicated home for client relationships
 
 Released August 21, 2026.
