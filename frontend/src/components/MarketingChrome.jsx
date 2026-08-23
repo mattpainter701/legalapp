@@ -7,13 +7,13 @@ const NAV_ITEMS = [
   { label: 'AI Chat', to: '/product/chat' },
   { label: 'MCP', to: '/product/mcp' },
   { label: 'Pricing', to: '/pricing' },
+  { label: 'Book demo', to: '/request-demo' },
   // Rendered as a router link so a visitor arriving from another marketing
   // page still lands on the home section; HomePage honours the hash on mount.
   { label: 'Security', to: '/#security', section: 'security' },
 ]
 
 export function MarketingHeader({ onSectionClick }) {
-  const contactUrl = import.meta.env.VITE_CONTACT_URL || 'mailto:matt@cybersafeadvisor.com'
 
   return (
     <header className="sticky top-0 z-40 border-b border-brand-line bg-brand-bg/90 backdrop-blur">
@@ -45,9 +45,9 @@ export function MarketingHeader({ onSectionClick }) {
           <Link to="/login" className="inline-flex min-h-11 items-center px-2 text-[14px] font-semibold text-brand-ink transition-colors hover:text-brand-accent-2">
             Sign in
           </Link>
-          <a href={contactUrl} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-brand-ink px-3.5 text-[13px] font-semibold text-white shadow-sm transition-all hover:-translate-y-px hover:bg-brand-ink-2 sm:px-4 sm:text-[14px]">
+          <Link to="/request-demo" className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-brand-ink px-3.5 text-[13px] font-semibold text-white shadow-sm transition-all hover:-translate-y-px hover:bg-brand-ink-2 sm:px-4 sm:text-[14px]">
             Book demo <ArrowRight size={15} className="hidden sm:block" aria-hidden="true" />
-          </a>
+          </Link>
         </div>
       </div>
     </header>

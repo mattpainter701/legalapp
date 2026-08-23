@@ -239,3 +239,20 @@
 .prose-legal strong { @apply font-semibold text-brand-ink; }
 .prose-legal em { @apply italic; }
 .prose-legal a { @apply text-brand-accent underline hover:text-brand-accent-2 transition-colors; }
+
+/* In-product platform guide typography. The source remains plain Markdown. */
+.guide-prose { @apply text-[15px] leading-7 text-brand-ink-2; }
+.guide-prose h2 { @apply mb-4 mt-10 border-t border-brand-line pt-8 text-2xl font-bold text-brand-ink first:mt-0 first:border-t-0 first:pt-0; }
+.guide-prose h3 { @apply mb-3 mt-7 text-lg font-bold text-brand-ink; }
+.guide-prose p { @apply mb-5; }
+.guide-prose ul { @apply mb-5 ml-5 list-disc space-y-2 marker:text-brand-accent; }
+.guide-prose ol { @apply mb-5 ml-5 list-decimal space-y-2 marker:font-semibold marker:text-brand-accent; }
+.guide-prose li { @apply pl-1; }
+.guide-prose strong { @apply font-semibold text-brand-ink; }
+.guide-prose a { @apply font-semibold text-brand-accent underline decoration-brand-accent/30 underline-offset-4 hover:text-brand-accent-2 hover:decoration-brand-accent-2; }
+.guide-prose blockquote { @apply my-6 rounded-r-xl border-l-4 border-brand-accent bg-brand-bg-soft px-5 py-4 text-brand-ink; }
+.guide-prose blockquote p { @apply mb-0; }
+.guide-prose code { @apply rounded bg-brand-bg-soft px-1.5 py-0.5 font-mono text-[13px] text-brand-accent-2; }
+.guide-prose table { @apply w-full border-collapse text-sm; }
+.guide-prose th { @apply bg-brand-surface-2 px-4 py-3 text-left font-semibold text-brand-ink; }
+.guide-prose td { @apply border-t border-brand-line px-4 py-3 align-top; }

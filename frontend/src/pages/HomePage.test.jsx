@@ -29,7 +29,7 @@ describe('HomePage launch routing and claims', () => {
     expect(screen.queryByText(/\bSSO\b|\bSLA\b/)).not.toBeInTheDocument()
 
     for (const link of screen.getAllByRole('link', { name: 'Book a demo' })) {
-      expect(link).toHaveAttribute('href', expect.stringMatching(/^(https:\/\/|mailto:)/))
+      expect(link).toHaveAttribute('href', expect.stringMatching(/^\/request-demo\?source=/))
       expect(link).not.toHaveAttribute('href', '/signup?plan=intake-only')
     }
   })
@@ -43,11 +43,11 @@ describe('HomePage launch routing and claims', () => {
 
     expect(screen.getByRole('link', { name: 'Talk to us' })).toHaveAttribute(
       'href',
-      expect.stringMatching(/^(https:\/\/|mailto:)/),
+      expect.stringMatching(/^\/request-demo\?source=/),
     )
     expect(screen.getByRole('link', { name: 'Request a 20-min walkthrough' })).toHaveAttribute(
       'href',
-      expect.stringMatching(/^(https:\/\/|mailto:)/),
+      expect.stringMatching(/^\/request-demo\?source=/),
     )
   })
 

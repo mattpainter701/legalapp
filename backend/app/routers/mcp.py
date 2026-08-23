@@ -36,11 +36,16 @@ from app.services.mcp_product import (
     revoke_product_key,
     usage_summary,
 )
+from app.services.mcp_platform_tools import (
+    PLATFORM_TOOL_NAMES,
+    execute_platform_tool,
+)
 from app.services.rag import full_rag_query
 
 settings = get_settings()
 router = APIRouter(prefix="/mcp", tags=["mcp"])
 _embedding_service = EmbeddingService()
+PLATFORM_TOOL_SET = frozenset(PLATFORM_TOOL_NAMES)
 
 
 def _mcp_proxy_url(base_url: str, path: str) -> str:
@@ -302,6 +307,57 @@ def parse_mcp_message_body(body: dict) -> ToolCallRequest:
     return ToolCallRequest.model_validate(body)
 
 
+async def _call_platform_tool_metered(
+    body: "ToolCallRequest",
+    request: Request,
+    db: AsyncSession,
+    *,
+    product_key,
+    tenant,
+    transport: str,
+    started: float,
+):
+    """Execute a platform-native tool with the same metering as research tools."""
+    try:
+        response = await execute_platform_tool(
+            body.name,
+            body.arguments or {},
+            db=db,
+            tenant_id=tenant.id,
+        )
+    except HTTPException as exc:
+        await record_mcp_usage(
+            db=db,
+            tenant_id=tenant.id,
+            product_key_id=product_key.id,
+            auth_type="product_key",
+            transport=transport,
+            tool_name=body.name,
+            status_code=exc.status_code,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            ip_address=_request_ip(request),
+            user_agent=request.headers.get("User-Agent"),
+            error_class="HTTPException",
+            query_text=str((body.arguments or {}).get("query") or "")[:2000] or None,
+        )
+        raise
+    await record_mcp_usage(
+        db=db,
+        tenant_id=tenant.id,
+        product_key_id=product_key.id,
+        auth_type="product_key",
+        transport=transport,
+        tool_name=body.name,
+        status_code=200,
+        result_count=_result_count(response),
+        latency_ms=int((time.perf_counter() - started) * 1000),
+        ip_address=_request_ip(request),
+        user_agent=request.headers.get("User-Agent"),
+        query_text=str((body.arguments or {}).get("query") or "")[:2000] or None,
+    )
+    return response
+
+
 async def _call_tool_with_product_key(
     body: ToolCallRequest,
     request: Request,
@@ -320,6 +376,20 @@ async def _call_tool_with_product_key(
     redis = getattr(getattr(app, "state", None), "redis", None)
     await enforce_product_key_burst_limit(redis, product_key)
     await enforce_product_key_quota(db, product_key)
+
+    # Platform-native tools execute in the backend against tenant data;
+    # research tools proxy to the private CourtListener sidecar.
+    if body.name in PLATFORM_TOOL_SET:
+        return await _call_platform_tool_metered(
+            body,
+            request,
+            db,
+            product_key=product_key,
+            tenant=tenant,
+            transport=transport,
+            started=started,
+        )
+
     try:
         if settings.MCP_SERVER_URL:
             response = await _proxy_post(
