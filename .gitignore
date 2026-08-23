@@ -58,3 +58,7 @@ entities.json
 
 # Superpowers brainstorm mockups (local only)
 .superpowers/
+
+# Redis persistence artifacts from a locally started server during testing
+dump.rdb
+*.rdb
