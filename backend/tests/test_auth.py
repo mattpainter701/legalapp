@@ -149,7 +149,14 @@ class TestAuthMe:
         user = SimpleNamespace(
             id=uuid.uuid4(),
             tenant_id=tenant_id,
-            tenant=SimpleNamespace(billing_tier="flat"),
+            # Stands in for a Tenant row, so it must carry the columns /me
+            # reads -- including the payment-health fields the billing banner
+            # depends on.
+            tenant=SimpleNamespace(
+                billing_tier="flat",
+                stripe_subscription_status="active",
+                mcp_billing_status="active",
+            ),
             email="lawyer@example.test",
             full_name="Test Lawyer",
             role="attorney",

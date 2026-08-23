@@ -12,10 +12,31 @@ from app.database import get_db
 from app.services.access_control import require_finance_admin
 from app.models.mcp_product import MCPUsageEvent
 from app.models.tenant import Tenant
+from app.services.stripe_webhook_guard import (
+    StripeTargetUnresolved,
+    claim_event,
+    ordering_object_id,
+)
 
 settings = get_settings()
 router = APIRouter(prefix="/billing", tags=["billing"])
 logger = logging.getLogger(__name__)
+
+
+def _mask(val: str | None) -> str | None:
+    """Truncate a Stripe identifier for display in an API response.
+
+    The caller is already authenticated and entitled to the record, so enough
+    of the id survives to correlate it with the Stripe dashboard.
+
+    Deliberately not used for logging. Logs are shipped, aggregated, and
+    retained far beyond the request that produced them, and a truncated Stripe
+    id still carries most of its distinguishing characters. Log statements name
+    the tenant id or the Stripe event id instead.
+    """
+    if not val:
+        return None
+    return val[:8] + "..." + val[-4:]
 
 
 # ── Stripe customer helper (called from auth on tenant creation) ───────────────
@@ -53,11 +74,6 @@ async def billing_status(
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
 
-    def _mask(val: str | None) -> str | None:
-        if not val:
-            return None
-        return val[:8] + "..." + val[-4:]
-
     since = datetime.now(timezone.utc) - timedelta(days=30)
     mcp_usage = (
         await db.execute(
@@ -76,6 +92,11 @@ async def billing_status(
         "billing_tier": tenant.billing_tier,
         "stripe_customer_id": _mask(tenant.stripe_customer_id),
         "stripe_subscription_id": _mask(tenant.stripe_subscription_id),
+        # Surfaced so the billing page can notice a tier that disagrees with the
+        # subscription Stripe actually holds, rather than presenting a stale
+        # downgrade as a plan and upselling the firm on what it already bought.
+        "subscription_status": tenant.stripe_subscription_status,
+        "billing_status": tenant.mcp_billing_status,
         "flat_seat_count": tenant.flat_seat_count,
         "mcp_usage": {
             "mode": "payg",
@@ -220,26 +241,70 @@ async def stripe_webhook(
     event_type = event["type"]
     event_data = event["data"]["object"]
 
-    if event_type == "customer.subscription.updated":
-        await _handle_subscription_updated(db, event_data)
+    handler = _SUBSCRIPTION_HANDLERS.get(event_type)
+    if handler is None:
+        logger.debug("Unhandled Stripe event type: %s", event_type)
+        return {"status": "ok", "event_type": event_type}
 
-    elif event_type == "customer.subscription.deleted":
-        await _handle_subscription_deleted(db, event_data)
+    # Claim before dispatching. This rejects a retried delivery and, more
+    # importantly, refuses an event that is older than one already applied to
+    # the same subscription -- Stripe does not guarantee order, and applying a
+    # stale cancellation after a resubscription downgrades a paying firm.
+    claim = await claim_event(
+        db,
+        event_id=str(event["id"]),
+        event_type=event_type,
+        event_created=int(event.get("created") or 0),
+        object_id=ordering_object_id(event_type, event_data),
+    )
+    if not claim.should_process:
+        # Nothing for Stripe to retry: the effect is already applied, or
+        # deliberately not applied because newer state won.
+        return {"status": "skipped", "reason": claim.reason, "event_type": event_type}
 
-    elif event_type == "invoice.payment_failed":
-        await _handle_payment_failed(db, event_data)
-
-    elif event_type in ("invoice.paid", "invoice.payment_succeeded"):
-        await _handle_payment_succeeded(db, event_data)
+    # Deliberately not caught. A handler that fails must return 5xx so Stripe
+    # retries; swallowing it would drop the event permanently. The claim row is
+    # rolled back with the failed transaction, so the retry can claim it again.
+    try:
+        await handler(db, event_data)
+    except StripeTargetUnresolved as exc:
+        # Release the claim so a replay after the data is repaired can still be
+        # applied. Returning 2xx is deliberate: an immediate Stripe retry cannot
+        # succeed either, and the operator replays once the cause is fixed.
+        await db.rollback()
+        logger.error("Stripe event %s applied no work: %s", event.get("id"), exc)
+        return {"status": "unresolved", "event_type": event_type}
+    await db.commit()
 
     return {"status": "ok", "event_type": event_type}
 
 
-async def _find_tenant_by_customer(db: AsyncSession, customer_id: str) -> Tenant | None:
+async def _find_tenant_by_customer(
+    db: AsyncSession, customer_id: str, *, event_type: str
+) -> Tenant:
+    """Resolve the tenant a Stripe customer belongs to, or refuse to proceed.
+
+    A webhook for a customer we cannot place is not routine: it usually means a
+    checkout completed without ``stripe_customer_id`` ever being persisted, so
+    the firm is paying and no part of the application knows. Raising rather than
+    returning ``None`` both surfaces it and keeps the event replayable, because
+    the dispatcher releases the claim.
+    """
     result = await db.execute(
         select(Tenant).where(Tenant.stripe_customer_id == customer_id)
     )
-    return result.scalar_one_or_none()
+    tenant = result.scalar_one_or_none()
+    if tenant is None:
+        # No tenant id exists to name here, and the Stripe customer id must
+        # not go into a log. The dispatcher logs the Stripe event id alongside
+        # this message; the event names its own customer in the Stripe
+        # dashboard, which is where reconciliation happens anyway.
+        raise StripeTargetUnresolved(
+            f"{event_type} references a Stripe customer with no matching "
+            "tenant; a paying customer may be unlinked -- look up the event in "
+            "Stripe and reconcile tenants.stripe_customer_id"
+        )
+    return tenant
 
 
 async def _handle_subscription_updated(db: AsyncSession, subscription: dict) -> None:
@@ -247,24 +312,64 @@ async def _handle_subscription_updated(db: AsyncSession, subscription: dict) -> 
     if not customer_id:
         return
 
-    tenant = await _find_tenant_by_customer(db, customer_id)
-    if tenant is None:
-        return
+    tenant = await _find_tenant_by_customer(
+        db, customer_id, event_type="customer.subscription.updated"
+    )
 
     status = subscription.get("status", "")
     subscription_id = subscription.get("id")
+
+    # Same identity rule as deletion, for the terminal states. An update that
+    # reports a *different* subscription as finished is describing one the
+    # tenant has already moved off; applying it would rebind the tenant to the
+    # superseded id and downgrade a live subscription. A non-terminal status for
+    # another id is a genuine new subscription and is applied normally.
+    current_subscription_id = tenant.stripe_subscription_id
+    if (
+        subscription_id
+        and current_subscription_id
+        and subscription_id != current_subscription_id
+        and status in ("canceled", "incomplete_expired", "unpaid")
+    ):
+        # Deliberately identifier-free. Logs are shipped, aggregated, and
+        # retained well beyond the request, so a Stripe customer or
+        # subscription id -- which names a paying firm -- does not belong in
+        # them. The tenant id is this application's own identifier and is
+        # enough to investigate; the Stripe side is reachable from the event id
+        # the dispatcher logs.
+        logger.info(
+            "Ignoring Stripe %r update for a superseded subscription on tenant "
+            "%s, which now holds a different subscription.",
+            status,
+            tenant.id,
+        )
+        return
+
     tenant.stripe_subscription_id = subscription_id
     tenant.stripe_subscription_status = status or "unknown"
 
     if status in ("active", "trialing"):
         items = subscription.get("items", {}).get("data", [])
-        billing_tier = "flat"
+        billing_tier = None
         for item in items:
             plan = item.get("plan", {})
             metadata = plan.get("metadata", {})
             if metadata.get("tier"):
                 billing_tier = metadata["tier"]
                 break
+        if billing_tier is None:
+            # Falling through to a default here silently places every
+            # subscriber on a misconfigured Stripe price onto that tier. Keep
+            # the tenant's existing tier and make the misconfiguration visible.
+            billing_tier = tenant.billing_tier or "flat"
+            # Reports the misconfiguration, not the tenant's billing state. The
+            # actionable fact is that a Stripe price is missing metadata.tier;
+            # the tenant's current tier is a query away and does not need to be
+            # copied into a log line.
+            logger.error(
+                "A Stripe subscription has no plan metadata 'tier'. Keeping the "
+                "tenant's existing tier -- set metadata.tier on the Stripe price."
+            )
         tenant.billing_tier = billing_tier
         tenant.is_active = True
         tenant.mcp_billing_status = "active"
@@ -276,23 +381,39 @@ async def _handle_subscription_updated(db: AsyncSession, subscription: dict) -> 
         if status == "canceled":
             tenant.stripe_subscription_id = None
 
-    await db.commit()
-
 
 async def _handle_subscription_deleted(db: AsyncSession, subscription: dict) -> None:
     customer_id = subscription.get("customer")
     if not customer_id:
         return
 
-    tenant = await _find_tenant_by_customer(db, customer_id)
-    if tenant is None:
+    tenant = await _find_tenant_by_customer(
+        db, customer_id, event_type="customer.subscription.deleted"
+    )
+
+    # Only the subscription the tenant currently holds may clear its billing
+    # state. A firm that cancels and resubscribes gets a *new* subscription id,
+    # so a delayed deletion for the superseded one would otherwise suspend a
+    # paying customer. Ordering alone cannot catch this: the two ids are
+    # different objects, so the old deletion never looks stale.
+    deleted_subscription_id = subscription.get("id")
+    current_subscription_id = tenant.stripe_subscription_id
+    if (
+        deleted_subscription_id
+        and current_subscription_id
+        and deleted_subscription_id != current_subscription_id
+    ):
+        logger.info(
+            "Ignoring Stripe deletion of a superseded subscription on tenant %s, "
+            "which now holds a different subscription.",
+            tenant.id,
+        )
         return
 
     tenant.billing_tier = "payg"
     tenant.stripe_subscription_id = None
     tenant.stripe_subscription_status = "canceled"
     tenant.mcp_billing_status = "suspended"
-    await db.commit()
 
 
 async def _handle_payment_failed(db: AsyncSession, invoice: dict) -> None:
@@ -300,23 +421,30 @@ async def _handle_payment_failed(db: AsyncSession, invoice: dict) -> None:
     if not customer_id:
         return
 
-    tenant = await _find_tenant_by_customer(db, customer_id)
-    if tenant is None:
-        return
+    tenant = await _find_tenant_by_customer(
+        db, customer_id, event_type="invoice.payment_failed"
+    )
 
     tenant.stripe_subscription_status = "past_due"
     tenant.mcp_billing_status = "past_due"
-    await db.commit()
 
 
 async def _handle_payment_succeeded(db: AsyncSession, invoice: dict) -> None:
     customer_id = invoice.get("customer")
     if not customer_id:
         return
-    tenant = await _find_tenant_by_customer(db, customer_id)
-    if tenant is None:
-        return
+    tenant = await _find_tenant_by_customer(db, customer_id, event_type="invoice.paid")
     if tenant.stripe_subscription_id:
         tenant.stripe_subscription_status = "active"
         tenant.mcp_billing_status = "active"
-        await db.commit()
+
+
+# Dispatch table shared with the /api/billing/webhooks/stripe alias so both
+# routes interpret subscription lifecycle events identically.
+_SUBSCRIPTION_HANDLERS = {
+    "customer.subscription.updated": _handle_subscription_updated,
+    "customer.subscription.deleted": _handle_subscription_deleted,
+    "invoice.payment_failed": _handle_payment_failed,
+    "invoice.paid": _handle_payment_succeeded,
+    "invoice.payment_succeeded": _handle_payment_succeeded,
+}

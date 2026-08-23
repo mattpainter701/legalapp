@@ -3,6 +3,7 @@ import { reportError } from '../utils/reportError'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../App'
 import Sidebar from './Sidebar'
+import BillingStatusBanner from './BillingStatusBanner'
 import { getConversations, createConversation, deleteConversation, getDocuments, deleteDocument, logout } from '../api'
 import { canAccessModuleList } from '../moduleAccess'
 import { useConfirm } from './dialog/ConfirmProvider'
@@ -369,6 +370,8 @@ export default function AppShell({ children, title }) {
               )}
             </div>
           </header>
+
+          <BillingStatusBanner user={user} canManageBilling={hasFinanceAccess} />
 
           {user?.demo && (
             <div role="status" aria-label="Demo session status" className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-center text-xs font-semibold text-amber-950 md:text-sm">

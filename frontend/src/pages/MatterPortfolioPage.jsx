@@ -4,6 +4,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { format, parseISO, differenceInDays } from 'date-fns'
 import { getMattersV2, getMyMatters, setAssignmentActive } from '../api'
 import NewMatterModal from '../components/NewMatterModal'
+import { TableSkeleton } from '../components/LoadingSkeleton'
 import { AlertBanner, EmptyState, Spinner } from '../components/ui'
 
 function Icon({ d, size = 16, className = '' }) {
@@ -664,7 +665,7 @@ export default function MatterPortfolioPage() {
 
         {/* Table */}
         {loading ? (
-          <Spinner />
+          <TableSkeleton rows={8} columns={6} ariaLabel="Loading matters" />
         ) : filtered.length === 0 ? (
           <EmptyState
             visual={<Icon d={Icons.briefcase} size={24} />}

@@ -9,11 +9,11 @@ function date(value) {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString()
 }
 
-export default function WorkspaceMcpGrantsPanel() {
-  return <ConfirmProvider><WorkspaceMcpGrantsPanelContent /></ConfirmProvider>
+export default function WorkspaceMcpGrantsPanel({ blockedReason = '' }) {
+  return <ConfirmProvider><WorkspaceMcpGrantsPanelContent blockedReason={blockedReason} /></ConfirmProvider>
 }
 
-function WorkspaceMcpGrantsPanelContent() {
+function WorkspaceMcpGrantsPanelContent({ blockedReason = '' }) {
   const confirm = useConfirm()
   const [grants, setGrants] = useState([])
   const [loading, setLoading] = useState(true)
@@ -64,6 +64,7 @@ function WorkspaceMcpGrantsPanelContent() {
       <div><h3 id="workspace-mcp-grants-heading" className="text-brand-ink font-sans text-base font-bold">Workspace MCP assistants</h3><p className="mt-1 text-brand-ink-2 font-sans text-xs leading-5">Review and revoke assistants connected to this tenant. All access is scope-limited and audit logged.</p></div>
       <button type="button" onClick={load} disabled={loading} className="px-3 py-1.5 border border-brand-line rounded-lg text-xs font-semibold text-brand-ink hover:bg-brand-bg-soft disabled:opacity-50">{loading ? 'Refreshing.' : 'Refresh'}</button>
     </div>
+    {blockedReason && <div role="status" className="mt-4 px-3 py-2 bg-amber-50 border border-amber-300 rounded-lg text-amber-950 text-xs font-semibold leading-5">Connected assistants are currently blocked. {blockedReason}</div>}
     {error && <div role="alert" className="mt-4 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-red-700 text-xs font-medium">{error}</div>}
     {loading ? <div className="py-8 text-center text-sm text-brand-muted">Loading connected assistants.</div> :
       grants.length === 0 ? <div className="mt-5 rounded-lg bg-brand-bg px-4 py-5 text-sm text-brand-ink-2">No Workspace MCP assistants are connected.</div> :

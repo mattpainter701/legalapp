@@ -70,7 +70,17 @@ export class OfficeSession {
     if (existing) return existing
 
     if (!naaAvailable) {
-      throw new Error('Sign in to LawHand first, or open this add-in in an Office client that supports Nested App Authentication')
+      // The previous message told the user to "sign in to LawHand first", which
+      // cannot work: the LawHand session cookie is SameSite=Lax, so it is never
+      // sent on this add-in's cross-site request to /auth/me. Signing in, coming
+      // back, and retrying produces the identical failure forever. Say what is
+      // actually wrong instead of offering an action with no reachable success.
+      throw new Error(
+        'This version of Office cannot sign in to LawHand. The add-in needs Nested App Authentication, '
+        + 'which is available in Microsoft 365 desktop and web clients — perpetual editions such as '
+        + 'Office 2016, 2019, and 2021 do not support it. Open this matter in LawHand in your browser, '
+        + 'or ask your administrator about a Microsoft 365 client.'
+      )
     }
 
     const accessToken = await this.acquireAccessToken()

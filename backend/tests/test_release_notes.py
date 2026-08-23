@@ -6,21 +6,25 @@ from app.release_notes import RECENT_RELEASE_DAYS, build_release_catalog
 from app.main import app_version
 
 
+LATEST_RELEASE_ID = "2026.08.23"
+LATEST_RELEASE_DATE = date(2026, 8, 23)
+
+
 def test_release_catalog_returns_latest_release_and_history():
-    catalog = build_release_catalog(today=date(2026, 8, 21))
+    catalog = build_release_catalog(today=LATEST_RELEASE_DATE)
 
     latest = catalog["latest_release"]
-    assert latest["id"] == "2026.08.21"
-    assert latest["version"] == "2026.08.21"
+    assert latest["id"] == LATEST_RELEASE_ID
+    assert latest["version"] == LATEST_RELEASE_ID
     assert latest["is_recent"] is True
-    assert len(latest["highlights"]) == 3
-    assert latest["highlights"][-1]["title"] == "Move client data safely"
+    assert len(latest["highlights"]) == 4
+    assert latest["highlights"][-1]["title"] == "Privacy Mode says what it affects"
     assert catalog["release_notes"][0] == latest
 
 
 def test_release_catalog_stops_marking_old_releases_recent():
     catalog = build_release_catalog(
-        today=date(2026, 8, 21) + timedelta(days=RECENT_RELEASE_DAYS + 1)
+        today=LATEST_RELEASE_DATE + timedelta(days=RECENT_RELEASE_DAYS + 1)
     )
 
     assert catalog["latest_release"]["is_recent"] is False

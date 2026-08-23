@@ -194,6 +194,18 @@ services:
   postgres:
     restart: unless-stopped
     ports: []    # no external exposure in prod
+    # Defaults assume a tiny box: shared_buffers ships at 128MB regardless of the
+    # 8G limit below, so the database would cache ~2% of the RAM reserved for it
+    # and plan as if it had 4MB to sort in. These values are sized for the limit.
+    command: >
+      postgres
+      -c shared_buffers=2GB
+      -c effective_cache_size=6GB
+      -c work_mem=32MB
+      -c maintenance_work_mem=512MB
+      -c max_connections=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
     environment:
       POSTGRES_USER: legalapp
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
@@ -211,7 +223,21 @@ services:
   redis:
     restart: unless-stopped
     ports: []    # no external exposure in prod
+    # maxmemory stays below the container limit so Redis reports pressure
+    # instead of being OOM-killed by the kernel.
+    #
+    # noeviction is deliberate. This instance holds refresh-token replay
+    # tombstones and the revoked-jti denylist alongside ordinary cache, and
+    # every key here is written with a TTL -- so volatile-lru would be no safer
+    # than allkeys-lru and would silently drop revocation state under pressure,
+    # re-enabling replay of a token that was already burned. Refusing writes is
+    # the fail-closed answer: new sessions error loudly, revocation holds.
+    #
+    # Watch `used_memory` against maxmemory; if it trends up, split the RAG
+    # cache onto its own instance rather than switching this one to an eviction
+    # policy.
     command: redis-server --requirepass ${REDIS_PASSWORD} --save 60 1 --appendonly yes
+      --maxmemory 384mb --maxmemory-policy noeviction
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
     healthcheck:

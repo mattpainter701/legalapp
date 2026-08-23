@@ -352,7 +352,7 @@ Each supported cell includes sign-in, selection/context capture, preview, apply,
 - Record action success/stale/reject/failure rates, but never raw document content.
 - Provide a kill switch that disables plan creation and writes while leaving the main web application unaffected.
 - Manifest changes require admin deployment/consent planning; task-pane web code can roll forward independently only when contracts remain backward compatible.
-- Preserve the legacy `word-addin/` until Word MVP parity; then remove it and update SBOM inventory in the same change.
+- ~~Preserve the legacy `word-addin/` until Word MVP parity; then remove it and update SBOM inventory in the same change.~~ Done: `word-addin/` removed and the SBOM inventory updated in the same change. See `docs/archive/word-addin-removed.md`.
 
 ## Recommended Sequencing and Size
 
