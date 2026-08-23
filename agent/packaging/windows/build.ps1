@@ -83,17 +83,24 @@ if ($SkipMsi) {
 if (-not (Get-Command wix -ErrorAction SilentlyContinue)) {
     if (Get-Command dotnet -ErrorAction SilentlyContinue) {
         Write-Host "Installing WiX CLI as a dotnet tool..."
-        dotnet tool install --global wix --version 5.* | Out-Null
+        dotnet tool install --global wix --version 5.*
+        if ($LASTEXITCODE -ne 0) { throw "installing the WiX CLI failed with exit code $LASTEXITCODE" }
         $env:PATH = "$env:PATH;$env:USERPROFILE\.dotnet\tools"
     } else {
         throw "WiX CLI not found and dotnet is unavailable. Re-run with -SkipMsi or install WiX v5."
     }
 }
 
-# WiX v5 resolves -ext only against extensions that were added first; without
-# this the build fails with WIX0144 for WixToolset.Util.wixext.
-Write-Host "Adding the WiX Util extension..."
-wix extension add -g WixToolset.Util.wixext | Out-Null
+# WiX resolves -ext only against extensions that were added first, and an
+# extension package must match the CLI's own version — an unpinned add pulls
+# the newest release (7.x today), which a 5.x CLI rejects. Ask the installed
+# CLI what it is and pin the extension to it.
+$WixVersion = (& wix --version | Select-Object -First 1)
+if ($LASTEXITCODE -ne 0 -or -not $WixVersion) { throw "could not determine the WiX CLI version" }
+# "5.0.2+aa65968c14" -> "5.0.2"
+$WixVersion = ($WixVersion.ToString() -split '\+')[0].Trim()
+Write-Host "Adding WixToolset.Util.wixext/$WixVersion for WiX $WixVersion..."
+wix extension add -g "WixToolset.Util.wixext/$WixVersion"
 if ($LASTEXITCODE -ne 0) { throw "wix extension add failed with exit code $LASTEXITCODE" }
 
 $MsiPath = Join-Path $DistDir "lawhand-agent-$Version-x64.msi"
