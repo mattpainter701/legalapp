@@ -64,6 +64,10 @@ matter access.
 https://mcp.getlawhand.com/api/mcp/workspace
 ```
 
+`https://mcp.getlawhand.com/` is a convenience URL that redirects to this
+endpoint. Use the full URL when configuring an MCP client, since redirect
+handling is not guaranteed by every client.
+
 OAuth discovery is available at:
 
 ```text

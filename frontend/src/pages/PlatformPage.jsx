@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { createPlatformSession, getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformIntegrationReadiness, getPlatformMcpOverview, getPlatformTenant, updatePlatformTenant, getPlatformPlans, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMModelCatalog, refreshLLMModelCatalog, getLLMRoutes, recommendLLMRoutes, saveLLMRoutes, getLLMGatewayStatus, reloadLLMRoutes, testLLMRoute } from '../api'
+import { createPlatformSession, getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformIntegrationReadiness, getPlatformMcpOverview, getPlatformWorkspaceMcpDiagnostics, getPlatformTenant, updatePlatformTenant, getPlatformPlans, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMModelCatalog, refreshLLMModelCatalog, getLLMRoutes, recommendLLMRoutes, saveLLMRoutes, getLLMGatewayStatus, reloadLLMRoutes, testLLMRoute } from '../api'
 import { Activity, AlertTriangle, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3, FileText, Globe, Key, Plus, Trash2, RefreshCw, CheckCircle, XCircle, Cpu, ArrowDown, ArrowUp, Save, Settings2, PhoneCall, Video } from 'lucide-react'
 import { useConfirm } from '../components/dialog/ConfirmProvider'
 
@@ -198,7 +198,10 @@ function PlatformIntegrationsTab({ platformKey, onAuthError }) {
   )
 }
 
-function PlatformMcpTab({ platformKey, onAuthError }) {
+// Research MCP is intentionally kept as a self-contained release-controls pane.
+// The workspace OAuth diagnostics pane can sit beside it without sharing product
+// flags, key ledgers, or billing telemetry.
+export function ResearchMcpReleaseControls({ platformKey, onAuthError }) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -227,14 +230,14 @@ function PlatformMcpTab({ platformKey, onAuthError }) {
   const tenants = data?.tenants || []
 
   return (
-    <div className="space-y-6">
+    <section className="space-y-6" aria-labelledby="research-mcp-release-controls" data-testid="research-mcp-release-controls">
       <div className="bg-brand-surface border border-brand-line rounded-xl p-6 shadow-sm">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <p className="text-xs font-bold uppercase tracking-widest text-brand-muted mb-2">MCP release controls</p>
-            <h2 className="text-brand-ink font-serif text-2xl font-bold tracking-tight">Protocol, keys, usage, and billing</h2>
+            <p className="text-xs font-bold uppercase tracking-widest text-brand-muted mb-2">Research MCP · release controls</p>
+            <h2 id="research-mcp-release-controls" className="text-brand-ink font-serif text-2xl font-bold tracking-tight">Research MCP operations</h2>
             <p className="text-brand-ink-2 font-sans text-sm mt-2 max-w-3xl">
-              Operator visibility for MCP release validation. Customer access remains unavailable while the product flag is disabled.
+              Manage the public research product’s release gate and retain protocol, key, metering, and billing visibility while customer access is disabled.
             </p>
           </div>
           <button
@@ -258,13 +261,35 @@ function PlatformMcpTab({ platformKey, onAuthError }) {
         <div className="flex justify-center py-12">
           <div className="w-8 h-8 border-4 border-brand-ink border-t-transparent rounded-full animate-spin" />
         </div>
-      ) : data?.product_enabled === false ? (
-        <div className="rounded-xl border border-amber-300 bg-amber-50 px-5 py-4 text-amber-950" role="status">
-          <p className="font-semibold">MCP product access is disabled</p>
-          <p className="mt-1 text-sm">No customer keys can be issued or used until the production release flag is deliberately enabled.</p>
-        </div>
       ) : (
         <>
+          {data?.product_enabled === false && (
+            <div className="rounded-xl border border-amber-300 bg-amber-50 px-5 py-4 text-amber-950" role="status">
+              <p className="font-semibold">Research MCP release gate: disabled</p>
+              <p className="mt-1 text-sm">
+                Customer keys and external research calls remain blocked. Existing telemetry and configuration remain visible for release validation and test planning.
+              </p>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4" aria-label="Research MCP release summary">
+            <div className="bg-brand-surface border border-brand-line rounded-xl p-4 shadow-sm">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-brand-muted">Release gate</p>
+              <p className={`mt-2 text-lg font-bold font-serif ${data?.product_enabled ? 'text-brand-accent' : 'text-brand-amber'}`}>{data?.product_enabled ? 'Enabled' : 'Disabled'}</p>
+              <p className="mt-1 text-xs text-brand-muted">Controls customer research traffic.</p>
+            </div>
+            <div className="bg-brand-surface border border-brand-line rounded-xl p-4 shadow-sm">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-brand-muted">Key issuance</p>
+              <p className={`mt-2 text-lg font-bold font-serif ${data?.product_enabled ? 'text-brand-accent' : 'text-brand-amber'}`}>{data?.product_enabled ? 'Available' : 'Blocked'}</p>
+              <p className="mt-1 text-xs text-brand-muted">{overview.active_keys || 0} active · {overview.total_keys || 0} total keys.</p>
+            </div>
+            <div className="bg-brand-surface border border-brand-line rounded-xl p-4 shadow-sm">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-brand-muted">Metering & billing</p>
+              <p className="mt-2 text-lg font-bold font-serif text-brand-ink">Visible</p>
+              <p className="mt-1 text-xs text-brand-muted">{(overview.calls_30d || 0).toLocaleString()} calls in the last 30 days.</p>
+            </div>
+          </div>
+
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <StatCard label="Active Keys" value={overview.active_keys || 0} sub={`${overview.total_keys || 0} total`} icon={Key} />
             <StatCard label="Tenants" value={overview.tenants_with_keys || 0} sub="with MCP keys" icon={Users} />
@@ -273,10 +298,19 @@ function PlatformMcpTab({ platformKey, onAuthError }) {
           </div>
 
           <div className="bg-brand-surface border border-brand-line rounded-xl p-5 shadow-sm">
-            <h3 className="font-serif font-bold text-brand-ink mb-4">Client connection</h3>
+            <div className="flex items-start justify-between gap-3 mb-4">
+              <div>
+                <h3 className="font-serif font-bold text-brand-ink">Research MCP connection</h3>
+                <p className="mt-1 text-xs text-brand-muted font-sans">Canonical endpoint and authentication contract for release validation.</p>
+              </div>
+              <span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider ${data?.product_enabled ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-900'}`}>
+                {data?.product_enabled ? 'Enabled' : 'Disabled'}
+              </span>
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {[
-                ['Streamable HTTP', connection.streamable_http],
+                ['Streamable HTTP', connection.streamable_http || 'https://research.getlawhand.com/api/mcp'],
+                ['Shorthand URL', connection.shorthand || 'https://research.getlawhand.com/'],
                 ['Auth header', `${connection.auth_header || 'X-MCP-API-Key'}: clmcp_...`],
               ].map(([label, value]) => (
                 <div key={label} className="rounded-lg border border-brand-line bg-brand-bg px-3 py-2">
@@ -286,7 +320,7 @@ function PlatformMcpTab({ platformKey, onAuthError }) {
               ))}
             </div>
             <p className="mt-3 text-xs text-brand-muted font-sans">
-              Standards-compliant clients connect to the Streamable HTTP endpoint. The REST endpoint is compatibility-only.
+              Standards-compliant clients connect to the Streamable HTTP endpoint. The REST endpoint is compatibility-only; a disabled release state still rejects customer traffic.
             </p>
           </div>
 
@@ -383,8 +417,123 @@ function PlatformMcpTab({ platformKey, onAuthError }) {
 
         </>
       )}
-    </div>
+    </section>
   )
+}
+
+function WorkspaceMcpDiagnostics({ platformKey, onAuthError }) {
+  const [data, setData] = useState(null)
+  const [lookupEmail, setLookupEmail] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [lookingUp, setLookingUp] = useState(false)
+  const [error, setError] = useState(null)
+
+  const load = useCallback(async (email = '') => {
+    setError(null)
+    try {
+      const next = await getPlatformWorkspaceMcpDiagnostics(platformKey, email.trim())
+      setData(next)
+    } catch (e) {
+      if (e?.response?.status === 403) onAuthError?.()
+      else setError(apiErrorMessage(e, 'Failed to load Workspace MCP diagnostics.'))
+    }
+  }, [platformKey, onAuthError])
+
+  useEffect(() => {
+    setLoading(true)
+    load().finally(() => setLoading(false))
+  }, [load])
+
+  const runLookup = async (event) => {
+    event.preventDefault()
+    if (!lookupEmail.trim()) return
+    setLookingUp(true)
+    await load(lookupEmail)
+    setLookingUp(false)
+  }
+
+  const checks = Object.entries(data?.policy_checks || {})
+  const audit = data?.oauth?.audit || {}
+  const policy = data?.user_policy
+
+  return (
+    <section className="space-y-6" aria-labelledby="workspace-mcp-diagnostics" data-testid="workspace-mcp-diagnostics">
+      <div className="bg-brand-surface border border-brand-line rounded-xl p-6 shadow-sm">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-widest text-brand-muted mb-2">Workspace MCP · diagnostics</p>
+            <h2 id="workspace-mcp-diagnostics" className="text-brand-ink font-serif text-2xl font-bold tracking-tight">Workspace OAuth readiness</h2>
+            <p className="text-brand-ink-2 font-sans text-sm mt-2 max-w-3xl">Operator-only policy and OAuth evidence for Claude, ChatGPT, and other workspace clients. This is separate from the Research MCP customer release gate.</p>
+          </div>
+          <button onClick={() => load()} disabled={loading} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-brand-line text-xs font-bold text-brand-ink hover:bg-brand-bg-soft disabled:opacity-50">
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Refresh
+          </button>
+        </div>
+      </div>
+
+      {error && <div className="rounded-xl border border-brand-rose/20 bg-brand-rose/10 text-brand-rose px-4 py-3 text-sm font-sans">{error}</div>}
+
+      {loading && !data ? (
+        <div className="flex justify-center py-12"><div className="w-8 h-8 border-4 border-brand-ink border-t-transparent rounded-full animate-spin" /></div>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <StatCard label="Workspace feature" value={data?.enabled ? 'Enabled' : 'Disabled'} sub={data?.policy_checks?.ready_for_pilot?.ok ? 'Pilot ready' : 'Pilot not ready'} icon={Key} />
+            <StatCard label="Pilot tenants" value={data?.pilot_tenants?.active_count || 0} sub={`${data?.pilot_tenants?.configured_count || 0} configured`} icon={Users} />
+            <StatCard label="OAuth clients" value={data?.oauth?.clients?.active || 0} sub={`${data?.oauth?.clients?.total || 0} registered`} icon={Globe} />
+            <StatCard label="Audit failures" value={(audit.outcomes?.denied || 0) + (audit.outcomes?.error || 0)} sub={`${audit.sample_size || 0} recent events`} icon={AlertTriangle} />
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+            <div className="bg-brand-surface border border-brand-line rounded-xl p-5 shadow-sm">
+              <h3 className="font-serif font-bold text-brand-ink">Connection and release checks</h3>
+              <p className="mt-1 text-xs text-brand-muted">Canonical endpoint: <span className="font-mono break-all">{data?.canonical_endpoint || 'Not configured'}</span></p>
+              <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {checks.map(([name, check]) => (
+                  <div key={name} className="rounded-lg border border-brand-line bg-brand-bg px-3 py-3 flex items-start justify-between gap-3">
+                    <div><p className="text-xs font-medium text-brand-ink">{check.label || name}</p>{check.value && <p className="mt-1 text-[10px] font-mono text-brand-muted break-all">{check.value}</p>}</div>
+                    <span className={`shrink-0 text-[10px] font-bold uppercase ${check.ok ? 'text-green-700' : 'text-brand-rose'}`}>{check.ok ? 'Ready' : 'Blocked'}</span>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-4 text-xs text-brand-muted">Dynamic registration: {data?.oauth?.dynamic_registration_enabled ? 'enabled' : 'disabled'} · {data?.pilot_tenants?.missing_count || 0} configured pilot tenants missing from the database.</p>
+            </div>
+
+            <div className="bg-brand-surface border border-brand-line rounded-xl p-5 shadow-sm">
+              <h3 className="font-serif font-bold text-brand-ink">User policy preflight</h3>
+              <p className="mt-1 text-xs text-brand-muted">Look up a LawHand user before retrying OAuth. The result never returns the email, IP address, or raw IDs.</p>
+              <form className="mt-4 flex gap-2" onSubmit={runLookup}>
+                <input value={lookupEmail} onChange={(e) => setLookupEmail(e.target.value)} type="email" placeholder="user@firm.com" className="min-w-0 flex-1 rounded-lg border border-brand-line bg-brand-bg px-3 py-2 text-sm text-brand-ink" aria-label="LawHand user email" />
+                <button type="submit" disabled={lookingUp || !lookupEmail.trim()} className="rounded-lg bg-brand-ink px-4 py-2 text-xs font-bold text-white disabled:opacity-50">{lookingUp ? 'Checking…' : 'Check'}</button>
+              </form>
+              {policy && (
+                <div className="mt-4 rounded-lg border border-brand-line bg-brand-bg px-3 py-3 text-sm">
+                  {!policy.found ? <p className="text-brand-rose">No LawHand user was found for that email.</p> : <>
+                    <p className={policy.ready ? 'font-semibold text-green-700' : 'font-semibold text-brand-rose'}>{policy.ready ? 'Ready to authorize' : 'Not ready to authorize'}</p>
+                    <p className="mt-1 text-xs text-brand-muted">Active: {policy.is_active ? 'yes' : 'no'} · Licensed: {policy.license_active ? 'yes' : 'no'} · Privacy Mode: {policy.privacy_mode ? 'on' : 'off'}</p>
+                    <p className="mt-2 text-xs text-brand-muted">Effective scopes: {policy.effective_scopes?.length ? policy.effective_scopes.join(', ') : 'none'}</p>
+                    {policy.blocked_reasons?.length > 0 && <p className="mt-2 text-xs text-brand-rose">Blocked by: {policy.blocked_reasons.join(', ')}</p>}
+                  </>}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden">
+            <div className="px-5 py-4 border-b border-brand-line"><h3 className="font-serif font-bold text-brand-ink">Recent Workspace OAuth evidence</h3><p className="mt-1 text-xs text-brand-muted">Redacted platform-wide audit sample; use the masked request ID for support correlation.</p></div>
+            <div className="divide-y divide-brand-line">
+              {(data?.recent_audit_events || []).map((event) => <div key={event.id} className="grid grid-cols-1 sm:grid-cols-4 gap-2 px-5 py-3 text-xs"><span className="font-medium text-brand-ink">{event.event_type}</span><span className={event.outcome === 'success' ? 'text-green-700' : event.outcome === 'error' ? 'text-brand-rose' : 'text-brand-amber'}>{event.outcome}</span><span className="font-mono text-brand-muted">{event.request_id || 'No request ID'}</span><span className="text-brand-muted">{event.created_at ? new Date(event.created_at).toLocaleString() : 'Unknown time'}</span></div>)}
+              {(data?.recent_audit_events || []).length === 0 && <p className="px-5 py-8 text-center text-sm text-brand-muted">No Workspace OAuth audit events recorded yet.</p>}
+            </div>
+          </div>
+        </>
+      )}
+    </section>
+  )
+}
+
+function PlatformMcpTab({ platformKey, onAuthError }) {
+  return <div className="space-y-10"><WorkspaceMcpDiagnostics platformKey={platformKey} onAuthError={onAuthError} /><ResearchMcpReleaseControls platformKey={platformKey} onAuthError={onAuthError} /></div>
 }
 
 function ReadinessBadge({ ready, label }) {

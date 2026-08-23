@@ -1163,6 +1163,11 @@ export const getPlatformUsage = (key) =>
 export const getPlatformMcpOverview = (key) =>
   platformApi(key).get('/platform/mcp').then((r) => r.data)
 
+export const getPlatformWorkspaceMcpDiagnostics = (key, email) =>
+  platformApi(key).get('/platform/mcp/workspace', {
+    params: email ? { email } : undefined,
+  }).then((r) => r.data)
+
 export const getPlatformHealth = (key) =>
   platformApi(key).get('/platform/health').then((r) => r.data)
 
