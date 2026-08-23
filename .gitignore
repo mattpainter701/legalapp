@@ -62,3 +62,12 @@ entities.json
 # Redis persistence artifacts from a locally started server during testing
 dump.rdb
 *.rdb
+
+# Coverage run artifacts (the .coveragerc config itself is tracked)
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Python build metadata
+*.egg-info/

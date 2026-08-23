@@ -1,0 +1,7 @@
+# SQLAlchemy's asyncio bridge resumes request coroutines inside greenlets
+# (``greenlet_spawn``). Without the greenlet concurrency plugin coverage stops
+# tracing at the first ``await`` that touches the database, so every endpoint
+# body reads as unexecuted and the changed-line gate measures noise instead of
+# real test coverage.
+[run]
+concurrency = greenlet,thread

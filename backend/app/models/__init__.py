@@ -71,6 +71,7 @@ from app.models.mediation import (
     MediationProposal,
 )
 from app.models.smb_agent import SmbAgent
+from app.models.smb_credential import SmbCredential
 from app.models.smb_share import SmbShare
 from app.models.smb_file_index import SmbFileIndex
 from app.models.smb_access_log import SmbAccessLog
@@ -183,6 +184,7 @@ __all__ = [
     "PromptOverride",
     "CloudMetadata",
     "SmbAgent",
+    "SmbCredential",
     "SmbShare",
     "SmbFileIndex",
     "SmbAccessLog",
