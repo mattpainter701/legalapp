@@ -13,6 +13,8 @@ import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 
+from psycopg2.extras import execute_batch
+
 from .database import connect
 from .bulk_manifest import (
     choose_latest_snapshot,
@@ -93,14 +95,21 @@ def _download_object(key: str, path: Path, expected_size: int | None) -> None:
     if expected_size is not None and tmp_path.stat().st_size != expected_size:
         actual_size = tmp_path.stat().st_size
         tmp_path.unlink(missing_ok=True)
-        raise IOError(f"Incomplete download for {key}: expected {expected_size}, got {actual_size}")
+        raise IOError(
+            f"Incomplete download for {key}: expected {expected_size}, got {actual_size}"
+        )
     tmp_path.replace(path)
 
 
 def bz2_decompress_command(path: Path) -> list[str] | None:
     lbzip2 = shutil.which("lbzip2")
     if lbzip2:
-        return [lbzip2, "-dc", str(path)]
+        # CourtListener exports are large enough that the default single
+        # decompressor worker leaves most of Skynet idle.  Keep the setting
+        # configurable for smaller hosts, but reserve a sensible number of
+        # cores by default for the PostgreSQL writer and embedding services.
+        threads = max(1, int(os.getenv("COURTLISTENER_DECOMPRESS_THREADS", "8")))
+        return [lbzip2, "-n", str(threads), "-dc", str(path)]
     return None
 
 
@@ -112,7 +121,11 @@ def stage_latest_snapshot(target_dir: Path) -> list[Path]:
         path = target_dir / Path(key).name
         paths.append(path)
         expected_size = _remote_content_length(key)
-        if path.exists() and expected_size is not None and path.stat().st_size == expected_size:
+        if (
+            path.exists()
+            and expected_size is not None
+            and path.stat().st_size == expected_size
+        ):
             continue
         _download_object(key, path, expected_size)
     return paths
@@ -122,7 +135,13 @@ def _open_csv(path: Path):
     if path.suffix == ".bz2":
         command = bz2_decompress_command(path)
         if command:
-            process = subprocess.Popen(command, stdout=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
             if process.stdout is None:
                 raise RuntimeError(f"Unable to read decompressor output for {path}")
             return process.stdout
@@ -144,7 +163,15 @@ def _value(row: dict, *names: str):
 
 
 def best_opinion_text(row: dict) -> str | None:
-    return _value(row, "plain_text", "html_with_citations", "html", "xml_harvard", "html_lawbox", "html_columbia")
+    return _value(
+        row,
+        "plain_text",
+        "html_with_citations",
+        "html",
+        "xml_harvard",
+        "html_lawbox",
+        "html_columbia",
+    )
 
 
 def parse_mvp_states(value: str | None) -> tuple[str, ...]:
@@ -164,9 +191,7 @@ def parse_mvp_states(value: str | None) -> tuple[str, ...]:
 def parse_court_ids(value: str | None) -> tuple[str, ...]:
     return tuple(
         dict.fromkeys(
-            part.strip().lower()
-            for part in (value or "").split(",")
-            if part.strip()
+            part.strip().lower() for part in (value or "").split(",") if part.strip()
         )
     )
 
@@ -215,15 +240,27 @@ def court_matches_mvp(
 ) -> bool:
     text = _row_text(row)
     court_id = str(_value(row, "id", "court_id") or "").lower()
-    if include_scotus and (court_id == "scotus" or "supreme court of the united states" in text):
+    if include_scotus and (
+        court_id == "scotus" or "supreme court of the united states" in text
+    ):
         return True
     if court_id in {id_ for state in states for id_ in _STATE_COURT_IDS[state]}:
         return True
-    if _matches_state(text, states) and any(token in text for token in ("supreme court", "court of appeals", "attorney general", "tax appeal board")):
+    if _matches_state(text, states) and any(
+        token in text
+        for token in (
+            "supreme court",
+            "court of appeals",
+            "attorney general",
+            "tax appeal board",
+        )
+    ):
         return True
     if not include_specialty:
         return False
-    regional_bankruptcy_ids = {id_ for state in states for id_ in _REGIONAL_BANKRUPTCY_IDS[state]}
+    regional_bankruptcy_ids = {
+        id_ for state in states for id_ in _REGIONAL_BANKRUPTCY_IDS[state]
+    }
     if court_id == "tax" or "united states tax court" in text:
         return True
     if "board of immigration appeals" in text or "immigration appeals" in text:
@@ -242,7 +279,9 @@ def should_keep_cluster(row: dict, *, precedential_only: bool = True) -> bool:
     return status in _PRECEDENTIAL_STATUSES
 
 
-def resolved_table_limit(default_limit: int | None, table_limit: int | None) -> int | None:
+def resolved_table_limit(
+    default_limit: int | None, table_limit: int | None
+) -> int | None:
     return table_limit if table_limit is not None else default_limit
 
 
@@ -264,7 +303,9 @@ def enforce_database_budget(conn, max_database_bytes: int | None) -> None:
         )
 
 
-def refresh_courtlistener_coverage_ledger(conn, court_ids: set[str] | None = None) -> None:
+def refresh_courtlistener_coverage_ledger(
+    conn, court_ids: set[str] | None = None
+) -> None:
     """Persist per-court observable coverage for the operator corpus inventory."""
     filters = ""
     params: list[object] = []
@@ -317,7 +358,9 @@ def _target_court_ids(
     additional_court_ids: tuple[str, ...] = (),
 ) -> set[str]:
     with conn.cursor() as cur:
-        cur.execute("SELECT court_id, short_name, full_name, jurisdiction, metadata FROM courts")
+        cur.execute(
+            "SELECT court_id, short_name, full_name, jurisdiction, metadata FROM courts"
+        )
         rows = cur.fetchall()
     ids: set[str] = set()
     for court_id, short_name, full_name, jurisdiction, metadata in rows:
@@ -410,143 +453,162 @@ def _load_csv(
     row_filter: Callable[[dict], bool] | None = None,
     max_database_bytes: int | None = None,
     budget_check_every: int = 1000,
+    write_batch_size: int | None = None,
 ) -> int:
     if limit is not None and limit <= 0:
         return 0
+    batch_size = write_batch_size or max(
+        1, int(os.getenv("COURTLISTENER_WRITE_BATCH_SIZE", "500"))
+    )
     count = 0
+    pending: list[list[object]] = []
+
+    statements = {
+        "courts": """
+            INSERT INTO courts (court_id, short_name, full_name, jurisdiction, metadata)
+            VALUES (%s, %s, %s, %s, %s::jsonb)
+            ON CONFLICT (court_id) DO UPDATE
+            SET short_name = EXCLUDED.short_name,
+                full_name = EXCLUDED.full_name,
+                jurisdiction = EXCLUDED.jurisdiction,
+                metadata = EXCLUDED.metadata
+        """,
+        "dockets": """
+            INSERT INTO dockets (docket_id, court_id, docket_number, case_name, date_filed, date_terminated, metadata)
+            VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+            ON CONFLICT (docket_id) DO NOTHING
+        """,
+        "opinion_clusters": """
+            INSERT INTO opinion_clusters (cluster_id, docket_id, case_name, date_filed, precedential_status, citations, metadata)
+            VALUES (%s, %s, %s, %s, %s, COALESCE(%s::jsonb, '[]'::jsonb), %s::jsonb)
+            ON CONFLICT (cluster_id) DO NOTHING
+        """,
+        "opinions": """
+            INSERT INTO opinions (opinion_id, cluster_id, type, author_id, html_with_citations, plain_text, sha1, source_url)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (opinion_id) DO UPDATE
+            SET plain_text = EXCLUDED.plain_text,
+                html_with_citations = EXCLUDED.html_with_citations
+            WHERE opinions.plain_text IS DISTINCT FROM EXCLUDED.plain_text
+               OR opinions.html_with_citations IS DISTINCT FROM EXCLUDED.html_with_citations
+        """,
+        "citation_map": """
+            INSERT INTO opinion_citations (citing_opinion_id, cited_opinion_id, depth)
+            SELECT %s, %s, COALESCE(%s, 0)
+            WHERE NOT EXISTS (
+                SELECT 1 FROM opinion_citations
+                WHERE citing_opinion_id = %s AND cited_opinion_id = %s
+            )
+        """,
+        "citations": """
+            INSERT INTO opinion_citations (cited_cluster_id, cited_reporter, cited_volume, cited_page)
+            SELECT %s, %s, %s, %s
+            WHERE NOT EXISTS (
+                SELECT 1 FROM opinion_citations
+                WHERE cited_cluster_id = %s
+                  AND cited_reporter IS NOT DISTINCT FROM %s
+                  AND cited_volume IS NOT DISTINCT FROM %s
+                  AND cited_page IS NOT DISTINCT FROM %s
+            )
+        """,
+    }
+    if table_name not in statements:
+        raise ValueError(f"Unsupported bulk table: {table_name}")
+
+    def parameters(row: dict) -> list[object]:
+        if table_name == "courts":
+            return [
+                _value(row, "id", "court_id"),
+                _value(row, "short_name"),
+                _value(row, "full_name") or _value(row, "id"),
+                _value(row, "jurisdiction"),
+                json.dumps(row),
+            ]
+        if table_name == "dockets":
+            return [
+                _value(row, "id"),
+                _value(row, "court_id", "court"),
+                _value(row, "docket_number"),
+                _value(row, "case_name"),
+                _value(row, "date_filed"),
+                _value(row, "date_terminated"),
+                json.dumps(row),
+            ]
+        if table_name == "opinion_clusters":
+            citations = _value(row, "citations")
+            return [
+                _value(row, "id"),
+                _value(row, "docket_id"),
+                _value(row, "case_name"),
+                _value(row, "date_filed"),
+                _value(row, "precedential_status"),
+                citations if citations else None,
+                json.dumps(row),
+            ]
+        if table_name == "opinions":
+            return [
+                _value(row, "id"),
+                _value(row, "cluster_id"),
+                _value(row, "type"),
+                _value(row, "author_id"),
+                _value(row, "html_with_citations", "html", "xml_harvard"),
+                _value(row, "plain_text"),
+                _value(row, "sha1"),
+                _value(row, "download_url", "local_path"),
+            ]
+        if table_name == "citation_map":
+            citing_id, cited_id = (
+                _value(row, "citing_opinion_id"),
+                _value(row, "cited_opinion_id"),
+            )
+            return [citing_id, cited_id, _value(row, "depth"), citing_id, cited_id]
+        cluster_id = _value(row, "cluster_id")
+        reporter, volume, page = (
+            _value(row, "reporter"),
+            _value(row, "volume"),
+            _value(row, "page"),
+        )
+        return [cluster_id, reporter, volume, page, cluster_id, reporter, volume, page]
+
     with conn.cursor() as cur:
+
+        def flush() -> None:
+            nonlocal count
+            if not pending:
+                return
+            # execute_batch turns hundreds of client/server round trips into a
+            # single request while preserving every table's existing conflict
+            # and idempotency behavior.  The fallback keeps lightweight test
+            # cursors and non-psycopg adapters compatible.
+            if hasattr(cur, "mogrify"):
+                execute_batch(
+                    cur, statements[table_name], pending, page_size=len(pending)
+                )
+            else:
+                for values in pending:
+                    cur.execute(statements[table_name], values)
+            count += len(pending)
+            pending.clear()
+            if count % budget_check_every == 0:
+                enforce_database_budget(conn, max_database_bytes)
+            conn.commit()
+
         for row in iter_bulk_csv_rows(path):
             if row_filter and not row_filter(row):
                 continue
-            if table_name == "courts":
-                cur.execute(
-                    """
-                    INSERT INTO courts (court_id, short_name, full_name, jurisdiction, metadata)
-                    VALUES (%s, %s, %s, %s, %s::jsonb)
-                    ON CONFLICT (court_id) DO UPDATE
-                    SET short_name = EXCLUDED.short_name,
-                        full_name = EXCLUDED.full_name,
-                        jurisdiction = EXCLUDED.jurisdiction,
-                        metadata = EXCLUDED.metadata
-                    """,
-                    [
-                        _value(row, "id", "court_id"),
-                        _value(row, "short_name"),
-                        _value(row, "full_name") or _value(row, "id"),
-                        _value(row, "jurisdiction"),
-                        json.dumps(row),
-                    ],
-                )
-            elif table_name == "dockets":
-                cur.execute(
-                    """
-                    INSERT INTO dockets (docket_id, court_id, docket_number, case_name, date_filed, date_terminated, metadata)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
-                    ON CONFLICT (docket_id) DO NOTHING
-                    """,
-                    [
-                        _value(row, "id"),
-                        _value(row, "court_id", "court"),
-                        _value(row, "docket_number"),
-                        _value(row, "case_name"),
-                        _value(row, "date_filed"),
-                        _value(row, "date_terminated"),
-                        json.dumps(row),
-                    ],
-                )
-            elif table_name == "opinion_clusters":
-                citations = _value(row, "citations")
-                cur.execute(
-                    """
-                    INSERT INTO opinion_clusters (cluster_id, docket_id, case_name, date_filed, precedential_status, citations, metadata)
-                    VALUES (%s, %s, %s, %s, %s, COALESCE(%s::jsonb, '[]'::jsonb), %s::jsonb)
-                    ON CONFLICT (cluster_id) DO NOTHING
-                    """,
-                    [
-                        _value(row, "id"),
-                        _value(row, "docket_id"),
-                        _value(row, "case_name"),
-                        _value(row, "date_filed"),
-                        _value(row, "precedential_status"),
-                        citations if citations else None,
-                        json.dumps(row),
-                    ],
-                )
-            elif table_name == "opinions":
-                cur.execute(
-                    """
-                    INSERT INTO opinions (opinion_id, cluster_id, type, author_id, html_with_citations, plain_text, sha1, source_url)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (opinion_id) DO UPDATE
-                    SET plain_text = EXCLUDED.plain_text,
-                        html_with_citations = EXCLUDED.html_with_citations
-                    WHERE opinions.plain_text IS DISTINCT FROM EXCLUDED.plain_text
-                       OR opinions.html_with_citations IS DISTINCT FROM EXCLUDED.html_with_citations
-                    """,
-                    [
-                        _value(row, "id"),
-                        _value(row, "cluster_id"),
-                        _value(row, "type"),
-                        _value(row, "author_id"),
-                        _value(row, "html_with_citations", "html", "xml_harvard"),
-                        _value(row, "plain_text"),
-                        _value(row, "sha1"),
-                        _value(row, "download_url", "local_path"),
-                    ],
-                )
-            elif table_name == "citation_map":
-                cur.execute(
-                    """
-                    INSERT INTO opinion_citations (citing_opinion_id, cited_opinion_id, depth)
-                    SELECT %s, %s, COALESCE(%s, 0)
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM opinion_citations
-                        WHERE citing_opinion_id = %s AND cited_opinion_id = %s
-                    )
-                    """,
-                    [
-                        _value(row, "citing_opinion_id"),
-                        _value(row, "cited_opinion_id"),
-                        _value(row, "depth"),
-                        _value(row, "citing_opinion_id"),
-                        _value(row, "cited_opinion_id"),
-                    ],
-                )
-            elif table_name == "citations":
-                cur.execute(
-                    """
-                    INSERT INTO opinion_citations (cited_cluster_id, cited_reporter, cited_volume, cited_page)
-                    SELECT %s, %s, %s, %s
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM opinion_citations
-                        WHERE cited_cluster_id = %s
-                          AND cited_reporter IS NOT DISTINCT FROM %s
-                          AND cited_volume IS NOT DISTINCT FROM %s
-                          AND cited_page IS NOT DISTINCT FROM %s
-                    )
-                    """,
-                    [
-                        _value(row, "cluster_id"),
-                        _value(row, "reporter"),
-                        _value(row, "volume"),
-                        _value(row, "page"),
-                        _value(row, "cluster_id"),
-                        _value(row, "reporter"),
-                        _value(row, "volume"),
-                        _value(row, "page"),
-                    ],
-                )
-            count += max(cur.rowcount, 0)
-            if count and count % budget_check_every == 0:
-                enforce_database_budget(conn, max_database_bytes)
-            if limit is not None and count >= limit:
+            pending.append(parameters(row))
+            if len(pending) >= batch_size:
+                flush()
+            if limit is not None and count + len(pending) >= limit:
                 break
+        flush()
     enforce_database_budget(conn, max_database_bytes)
-    conn.commit()
     return count
 
 
-def load_staged_core(bulk_dir: Path, db_url: str | None = None, limit: int | None = None) -> dict[str, int]:
+def load_staged_core(
+    bulk_dir: Path, db_url: str | None = None, limit: int | None = None
+) -> dict[str, int]:
     load_order = [
         ("courts-*.csv.bz2", "courts"),
         ("dockets-*.csv.bz2", "dockets"),
@@ -604,7 +666,8 @@ def load_mvp_corpus(
                 dockets[-1],
                 "dockets",
                 limit=resolved_table_limit(limit, docket_limit),
-                row_filter=lambda row: str(_value(row, "court_id", "court") or "") in target_courts,
+                row_filter=lambda row: str(_value(row, "court_id", "court") or "")
+                in target_courts,
                 max_database_bytes=max_database_bytes,
             )
         docket_ids = _docket_ids_for_courts(conn, target_courts)
@@ -635,7 +698,8 @@ def load_mvp_corpus(
                 opinions[-1],
                 "opinions",
                 limit=resolved_table_limit(limit, opinion_limit),
-                row_filter=lambda row: str(_value(row, "cluster_id") or "") in cluster_ids,
+                row_filter=lambda row: str(_value(row, "cluster_id") or "")
+                in cluster_ids,
                 max_database_bytes=max_database_bytes,
             )
         opinion_ids = _opinion_ids_for_courts(
@@ -651,7 +715,8 @@ def load_mvp_corpus(
                 citations[-1],
                 "citations",
                 limit=resolved_table_limit(limit, citation_limit),
-                row_filter=lambda row: str(_value(row, "cluster_id") or "") in cluster_ids,
+                row_filter=lambda row: str(_value(row, "cluster_id") or "")
+                in cluster_ids,
                 max_database_bytes=max_database_bytes,
             )
 
@@ -738,9 +803,14 @@ def main() -> None:
     parser.add_argument("--cluster-limit", type=int)
     parser.add_argument("--opinion-limit", type=int)
     parser.add_argument("--citation-limit", type=int)
-    parser.add_argument("--max-database-gb", type=float, help="Stop before this logical database size")
+    parser.add_argument(
+        "--max-database-gb", type=float, help="Stop before this logical database size"
+    )
     parser.add_argument("--db-url")
-    parser.add_argument("--mvp-states", default=os.getenv("COURTLISTENER_MVP_STATES", ",".join(DEFAULT_MVP_STATES)))
+    parser.add_argument(
+        "--mvp-states",
+        default=os.getenv("COURTLISTENER_MVP_STATES", ",".join(DEFAULT_MVP_STATES)),
+    )
     parser.add_argument(
         "--coverage-profile",
         choices=COVERAGE_PROFILES,
@@ -753,8 +823,16 @@ def main() -> None:
         dest="court_ids",
         help="repeatable CourtListener court ID to add to the selected profile",
     )
-    parser.add_argument("--no-specialty", action="store_true", default=not _env_bool("COURTLISTENER_MVP_SPECIALTY", True))
-    parser.add_argument("--no-scotus", action="store_true", default=not _env_bool("COURTLISTENER_MVP_SCOTUS", True))
+    parser.add_argument(
+        "--no-specialty",
+        action="store_true",
+        default=not _env_bool("COURTLISTENER_MVP_SPECIALTY", True),
+    )
+    parser.add_argument(
+        "--no-scotus",
+        action="store_true",
+        default=not _env_bool("COURTLISTENER_MVP_SCOTUS", True),
+    )
     parser.add_argument("--include-unpublished", action="store_true")
     args = parser.parse_args()
     if args.init_schema:
@@ -778,18 +856,36 @@ def main() -> None:
                 include_specialty=not args.no_specialty,
                 include_scotus=not args.no_scotus,
                 precedential_only=not args.include_unpublished,
-                additional_court_ids=tuple(dict.fromkeys((
-                    *coverage_court_ids(args.coverage_profile),
-                    *parse_court_ids(os.getenv("COURTLISTENER_EXTRA_COURT_IDS")),
-                    *(court_id.lower() for court_id in (args.court_ids or [])),
-                ))),
-                max_database_bytes=(int(args.max_database_gb * 1024 ** 3) if args.max_database_gb else None),
+                additional_court_ids=tuple(
+                    dict.fromkeys(
+                        (
+                            *coverage_court_ids(args.coverage_profile),
+                            *parse_court_ids(
+                                os.getenv("COURTLISTENER_EXTRA_COURT_IDS")
+                            ),
+                            *(court_id.lower() for court_id in (args.court_ids or [])),
+                        )
+                    )
+                ),
+                max_database_bytes=(
+                    int(args.max_database_gb * 1024**3)
+                    if args.max_database_gb
+                    else None
+                ),
             )
         )
     if args.chunk_opinions:
         print({"chunks_created": create_chunks(args.db_url, args.limit)})
-    if not (args.init_schema or args.stage_latest or args.load_staged or args.load_mvp or args.chunk_opinions):
-        raise SystemExit("Use --init-schema, --stage-latest, --load-staged, --load-mvp, or --chunk-opinions")
+    if not (
+        args.init_schema
+        or args.stage_latest
+        or args.load_staged
+        or args.load_mvp
+        or args.chunk_opinions
+    ):
+        raise SystemExit(
+            "Use --init-schema, --stage-latest, --load-staged, --load-mvp, or --chunk-opinions"
+        )
 
 
 if __name__ == "__main__":
