@@ -2,6 +2,8 @@
   "user_modules": [
     { "id": "assistant", "route": "/chat", "chapter": "assistant-and-add-ons" },
     { "id": "matters", "route": "/matters", "chapter": "matters-and-documents" },
+    { "id": "document-revisions", "route": "/matters/documents/revisions", "chapter": "matters-and-documents" },
+    { "id": "document-revise", "route": "/matters/documents/revise", "chapter": "matters-and-documents" },
     { "id": "calendar", "route": "/calendar", "chapter": "tasks-calendar-communications" },
     { "id": "teams", "route": "/teams", "chapter": "teams-and-client-portals" },
     { "id": "communications", "route": "/communications", "chapter": "tasks-calendar-communications" },
@@ -11,6 +13,7 @@
     { "id": "trust-accounting", "route": "/trust", "chapter": "time-billing-and-reports" },
     { "id": "document-automation", "route": "/templates", "chapter": "document-automation-and-esignature" },
     { "id": "contacts", "route": "/contacts", "chapter": "contacts-and-client-relationships" },
+    { "id": "clients", "route": "/clients", "chapter": "contacts-and-client-relationships" },
     { "id": "tasks", "route": "/tasks", "chapter": "tasks-calendar-communications" },
     { "id": "client-intake", "route": "/intake", "chapter": "intake-and-call-reception" },
     { "id": "call-intake", "route": "/intake/dashboard", "chapter": "intake-and-call-reception" },

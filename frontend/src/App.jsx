@@ -228,7 +228,7 @@ export default function App() {
         <Route path="/product/chat" element={<ProductChatPage />} />
         <Route path="/product/mcp" element={<McpProductPage />} />
           <Route path="/pricing" element={<PricingPage />} />
-          <Route path="/demo" element={<DemoRequestPage />} />
+          <Route path="/request-demo" element={<DemoRequestPage />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path="/portal/accept" element={<PortalAcceptPage />} />
         <Route path="/portal/case" element={<PortalCasePage />} />

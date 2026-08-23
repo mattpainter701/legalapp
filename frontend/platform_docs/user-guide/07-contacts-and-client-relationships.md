@@ -11,6 +11,8 @@ icon: users
 
 [Contacts](/contacts) is the firm-wide relationship directory. A contact can represent a client, prospect, opposing party, attorney, court, vendor, expert, or another participant. Good contact data reduces duplicate work and keeps matter activity connected to the correct person or organization.
 
+Use [Clients](/clients) when you need the client-focused view of those relationships.
+
 ## Find before you create
 
 Search by name, organization, email, or phone before adding a record. Check spelling variations and prior names. If a likely match exists, open it and verify the details rather than creating a duplicate.

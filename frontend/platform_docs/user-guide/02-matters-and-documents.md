@@ -27,6 +27,8 @@ Within a matter:
 
 ## Documents
 
+Use [Document revisions](/matters/documents/revisions) to inspect a document's saved revision history. When the review workflow requests changes, open [Revise a document](/matters/documents/revise) and preserve the original source and reviewed output.
+
 Before uploading, confirm that the document belongs to the tenant and matter shown on screen. Use a descriptive filename that another team member can recognize. Avoid unexplained names such as `scan1.pdf` or `final-final.docx`.
 
 Document automation can create a new draft from an approved template. Open [Document Automation](/templates), choose the right template, review detected fields, and preview the result before saving it to a matter. Generated content is a draft until a qualified person reviews and approves it.

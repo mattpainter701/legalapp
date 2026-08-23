@@ -10,7 +10,7 @@ const appSource = readFileSync(join(repositoryRoot, 'frontend', 'src', 'App.jsx'
 const adminPageSource = readFileSync(join(repositoryRoot, 'frontend', 'src', 'pages', 'AdminPage.jsx'), 'utf8')
 const requiredFields = ['slug', 'title', 'description', 'order', 'read_time', 'icon']
 const allowedRouteRoots = new Set([
-  'admin', 'calendar', 'chat', 'communications', 'contacts', 'guide', 'intake',
+  'admin', 'calendar', 'chat', 'clients', 'communications', 'contacts', 'guide', 'intake',
   'invoices', 'matters', 'onboarding', 'plugins', 'profile', 'reports', 'tasks',
   'teams', 'templates', 'time-tracking', 'trust',
 ])
