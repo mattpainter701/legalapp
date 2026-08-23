@@ -12,7 +12,6 @@ from sqlalchemy import select
 
 from app.config import get_settings
 from app.models.stripe_webhook_event import StripeWebhookEvent
-from app.models.tenant import Tenant
 from app.routers import billing
 
 settings = get_settings()
