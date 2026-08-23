@@ -146,7 +146,7 @@ async def _allow_identity(monkeypatch, *tools: str) -> None:
 
 def _complete_upstream_manifest() -> dict:
     tools = []
-    for name in mcp_protocol._UPSTREAM_TOOL_SET:
+    for name in mcp_protocol.DEFAULT_ALLOWED_TOOLS:
         schema = {"type": "object", "properties": {}, "required": []}
         if name == "search_caselaw":
             schema = _test_catalog()[0].inputSchema
@@ -164,7 +164,7 @@ def test_upstream_catalog_requires_complete_real_contract():
     manifest = _complete_upstream_manifest()
     validated = mcp_protocol._validate_upstream_catalog(manifest)
 
-    assert {tool.name for tool in validated} == mcp_protocol._UPSTREAM_TOOL_SET
+    assert {tool.name for tool in validated} == set(mcp_protocol.DEFAULT_ALLOWED_TOOLS)
     search = next(tool for tool in validated if tool.name == "search_caselaw")
     assert search.inputSchema["properties"]["top_k"]["maximum"] == 50
 
