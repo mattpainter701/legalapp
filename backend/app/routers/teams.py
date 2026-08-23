@@ -429,13 +429,13 @@ async def _voice_status_payload(
     captured = await db.scalar(
         select(func.count(CommunicationLog.id)).where(
             CommunicationLog.tenant_id == uuid.UUID(str(tenant_id)),
-            CommunicationLog.external_ref.like("teams_voice:call:%"),
+            CommunicationLog.external_ref.like("teams_voice:%"),
         )
     )
     last_call_at = await db.scalar(
         select(func.max(CommunicationLog.occurred_at)).where(
             CommunicationLog.tenant_id == uuid.UUID(str(tenant_id)),
-            CommunicationLog.external_ref.like("teams_voice:call:%"),
+            CommunicationLog.external_ref.like("teams_voice:%"),
         )
     )
 

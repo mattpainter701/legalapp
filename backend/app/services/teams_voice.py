@@ -17,8 +17,17 @@ Two things make it structurally different from ``app.services.teams``:
       (Microsoft publishes it with a delay), so it is the backstop that heals
       missed or dropped notifications, not the primary feed.
 
-``teams_voice:call:<callRecordId>`` is the idempotency key, enforced by a
-partial unique index, so both feeds converge on one communication log.
+The two feeds do **not** share an identifier. Microsoft documents that "the ID
+of a pstnCallLogRow can't be used to retrieve a callRecord object", and
+``pstnCallLogRow.callId`` is explicitly not unique — so neither can serve as a
+cross-feed key. Each feed therefore owns a namespace
+(``teams_voice:call:<callRecordId>`` and ``teams_voice:pstn:<pstnCallLogRow id>``),
+a partial unique index over ``teams_voice:%`` makes each feed idempotent, and
+the two are correlated on a natural key (inbound, same caller number, start
+within ``CROSS_FEED_TOLERANCE``) before insert. Without that correlation the
+hourly sweep inserts a second communication log for a call the notification
+feed already captured — one client, two entries in the intake feed, two
+follow-up tasks.
 """
 
 from __future__ import annotations
@@ -51,6 +60,20 @@ settings = get_settings()
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 TEAMS_VOICE_PROVIDER = "teams_voice"
 TEAMS_VOICE_APP_PROVIDER = "teams_voice"
+
+# One namespace per feed, because the two feeds' GUIDs are unrelated.
+NOTIFICATION_FEED = "notification"
+USAGE_REPORT_FEED = "usage_report"
+_FEED_REF_PREFIX = {
+    NOTIFICATION_FEED: "teams_voice:call:",
+    USAGE_REPORT_FEED: "teams_voice:pstn:",
+}
+
+# How far apart the same call may look across the two feeds. A PSTN usage row
+# may describe one leg of a larger call, so its start time can differ slightly
+# from the call record's. Wide enough to survive that, narrow enough that two
+# genuinely separate calls from one number are not merged.
+CROSS_FEED_TOLERANCE = timedelta(minutes=3)
 
 # The single application role voice capture needs. Surfaced to admins verbatim
 # so the Entra consent screen and our setup instructions cannot drift.
@@ -279,13 +302,24 @@ def _call_record_parties(record: dict[str, Any]) -> tuple[dict, dict]:
 # ── Normalization / import ───────────────────────────────────────────────
 
 
-def normalize_teams_voice_record(record: dict[str, Any]) -> dict[str, Any] | None:
+def normalize_teams_voice_record(
+    record: dict[str, Any],
+    *,
+    feed: str = USAGE_REPORT_FEED,
+) -> dict[str, Any] | None:
     """Normalize a Graph call record or PSTN report row into log fields.
+
+    ``feed`` selects the identifier namespace. The two feeds' GUIDs are not
+    interchangeable, so a record is keyed under the feed it came from;
+    cross-feed deduplication happens on a natural key at import time.
 
     Returns ``None`` for anything that is not an inbound call — outbound and
     internal Teams traffic is out of scope for intake capture, matching the
     Zoom Phone behavior.
     """
+    prefix = _FEED_REF_PREFIX.get(feed)
+    if prefix is None:
+        raise ValueError(f"Unknown Teams voice feed: {feed!r}")
     call_id = _stringify(
         _first(
             record,
@@ -370,7 +404,7 @@ def normalize_teams_voice_record(record: dict[str, Any]) -> dict[str, Any] | Non
     ]
 
     return {
-        "external_ref": f"teams_voice:call:{call_id}",
+        "external_ref": f"{prefix}{call_id}",
         "direction": direction,
         "subject": f"Teams {direction} call: {display_name}",
         "summary": result or f"Microsoft Teams {direction} call",
@@ -391,7 +425,7 @@ def normalize_teams_voice_record(record: dict[str, Any]) -> dict[str, Any] | Non
             "call_type": call_type,
             "join_web_url": join_url,
             "user_principal_name": user_principal_name,
-            "capture_source": "notification" if webhook_change_type else "usage_report",
+            "capture_source": feed,
             "webhook_change_type": webhook_change_type,
             "webhook_subscription_id": webhook_subscription_id,
             "raw": record,
@@ -423,20 +457,104 @@ _PROVIDER_OWNED_PARTICIPANT_KEYS = frozenset(
 )
 
 
+async def _find_cross_feed_match(
+    db: AsyncSession,
+    *,
+    tenant_uuid: uuid.UUID,
+    normalized: dict[str, Any],
+) -> CommunicationLog | None:
+    """Find the same call already captured by the *other* feed.
+
+    Microsoft gives the two feeds unrelated identifiers, so the only way to
+    recognize one call across both is a natural key: an inbound Teams voice
+    call from the same number, starting within ``CROSS_FEED_TOLERANCE``.
+
+    Returns ``None`` when the record carries no usable caller number — an
+    unmatchable record is better imported twice than merged into the wrong
+    call, since a duplicate is visible and a wrong merge is not.
+    """
+    phone = normalized["participants"].get("normalized_phone")
+    if not phone:
+        return None
+
+    occurred_at = normalized["occurred_at"]
+    result = await db.execute(
+        select(CommunicationLog)
+        .where(
+            CommunicationLog.tenant_id == tenant_uuid,
+            CommunicationLog.channel == "call",
+            CommunicationLog.external_ref.like("teams_voice:%"),
+            CommunicationLog.external_ref != normalized["external_ref"],
+            CommunicationLog.participants["normalized_phone"].astext == phone,
+            CommunicationLog.occurred_at >= occurred_at - CROSS_FEED_TOLERANCE,
+            CommunicationLog.occurred_at <= occurred_at + CROSS_FEED_TOLERANCE,
+        )
+        .order_by(CommunicationLog.occurred_at)
+        .limit(1)
+        .with_for_update()
+    )
+    return result.scalar_one_or_none()
+
+
+def _enrich_from_other_feed(
+    existing: CommunicationLog, normalized: dict[str, Any]
+) -> bool:
+    """Fill gaps on a call the other feed already recorded. Returns True if changed.
+
+    The first feed to see a call owns its identity and narrative. A later feed
+    may only fill in provider facts the first one lacked — the usage report
+    knows the billed duration, the call record knows who answered.
+    """
+    merged = dict(existing.participants or {})
+    changed = False
+    for key, value in normalized["participants"].items():
+        if key in {"provider", "raw", "capture_source", "call_id"}:
+            continue
+        if value in (None, "") or merged.get(key) not in (None, ""):
+            continue
+        merged[key] = value
+        changed = True
+
+    feeds = merged.get("capture_feeds") or [merged.get("capture_source")]
+    feed = normalized["participants"].get("capture_source")
+    if feed and feed not in feeds:
+        merged["capture_feeds"] = [f for f in feeds if f] + [feed]
+        changed = True
+
+    if changed:
+        existing.participants = merged
+        existing.updated_at = datetime.now(timezone.utc)
+    return changed
+
+
 async def import_teams_voice_records(
     db: AsyncSession,
     *,
     tenant_id: str,
     records: list[dict[str, Any]],
+    feed: str = USAGE_REPORT_FEED,
 ) -> TeamsVoiceImportResult:
     """Idempotently import Teams voice records as ``CommunicationLog`` rows."""
     result = TeamsVoiceImportResult()
     tenant_uuid = uuid.UUID(str(tenant_id))
 
     for record in records:
-        normalized = normalize_teams_voice_record(record)
+        normalized = normalize_teams_voice_record(record, feed=feed)
         if not normalized:
             result.skipped += 1
+            continue
+
+        # A call the other feed already captured must be enriched, never
+        # inserted again: two rows would be two calls in the intake feed and
+        # two follow-up tasks for one client.
+        twin = await _find_cross_feed_match(
+            db, tenant_uuid=tenant_uuid, normalized=normalized
+        )
+        if twin is not None:
+            if _enrich_from_other_feed(twin, normalized):
+                result.updated += 1
+            else:
+                result.skipped += 1
             continue
 
         values = {
@@ -459,7 +577,7 @@ async def import_teams_voice_records(
                     CommunicationLog.tenant_id,
                     CommunicationLog.external_ref,
                 ],
-                index_where=text("external_ref LIKE 'teams_voice:call:%'"),
+                index_where=text("external_ref LIKE 'teams_voice:%'"),
             )
             .returning(CommunicationLog.id)
         )
@@ -962,6 +1080,23 @@ async def ensure_subscription(
 
     token = await get_app_only_token(db, tenant_id=tenant_id)
 
+    # A PATCH can extend a subscription's life but not repoint it. If the
+    # notification URL has moved (a new BACKEND_URL, say), renewing in place
+    # would leave Graph posting to the old endpoint while we record the new one
+    # locally — live capture silently dead until the subscription expires. An
+    # unrecorded URL counts as "moved": a subscription we cannot attribute to
+    # the current endpoint is exactly the one that might be pointing at a stale
+    # one, and recreating costs a single Graph call.
+    if row.subscription_id and row.notification_url != notification_url:
+        logger.info(
+            "Teams voice notification URL changed for tenant %s; recreating the "
+            "subscription instead of renewing it",
+            tenant_id,
+        )
+        await _delete_remote_subscription(row.subscription_id, token=token)
+        row.subscription_id = None
+        row.subscription_expires_at = None
+
     if row.subscription_id:
         expiration = datetime.now(timezone.utc) + timedelta(
             minutes=SUBSCRIPTION_MINUTES
@@ -1009,6 +1144,14 @@ async def ensure_subscription(
     return row
 
 
+async def _delete_remote_subscription(subscription_id: str, *, token: str) -> bool:
+    """Remove a subscription at Graph. 404 counts as removed."""
+    resp = await _graph_request(
+        "DELETE", f"/subscriptions/{subscription_id}", token=token
+    )
+    return bool(resp is not None and resp.status_code in (200, 204, 404))
+
+
 async def delete_subscription(db: AsyncSession, *, tenant_id: str) -> bool:
     """Remove the tenant's subscription; always clears local state."""
     row = await get_voice_settings(db, tenant_id=tenant_id)
@@ -1030,10 +1173,7 @@ async def delete_subscription(db: AsyncSession, *, tenant_id: str) -> bool:
             exc_info=True,
         )
         return False
-    resp = await _graph_request(
-        "DELETE", f"/subscriptions/{subscription_id}", token=token
-    )
-    return bool(resp is not None and resp.status_code in (200, 204, 404))
+    return await _delete_remote_subscription(subscription_id, token=token)
 
 
 def subscription_needs_renewal(row: TeamsVoiceSetting) -> bool:
@@ -1076,7 +1216,9 @@ async def import_teams_voice_webhook_job(
         "webhook_subscription_id": _stringify(payload.get("subscription_id")),
         "webhook_change_type": _stringify(payload.get("change_type")),
     }
-    return await import_teams_voice_records(db, tenant_id=tenant_id, records=[enriched])
+    return await import_teams_voice_records(
+        db, tenant_id=tenant_id, records=[enriched], feed=NOTIFICATION_FEED
+    )
 
 
 async def sync_teams_voice_call_history(
@@ -1087,7 +1229,9 @@ async def sync_teams_voice_call_history(
 ) -> TeamsVoiceImportResult:
     """Reconcile against the PSTN usage report."""
     records = await fetch_pstn_calls(db, tenant_id=tenant_id, days=days)
-    result = await import_teams_voice_records(db, tenant_id=tenant_id, records=records)
+    result = await import_teams_voice_records(
+        db, tenant_id=tenant_id, records=records, feed=USAGE_REPORT_FEED
+    )
     row = await get_voice_settings(db, tenant_id=tenant_id)
     if row:
         row.last_sync_at = datetime.now(timezone.utc)

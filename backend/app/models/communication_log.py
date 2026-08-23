@@ -39,7 +39,7 @@ class CommunicationLog(Base):
             "tenant_id",
             "external_ref",
             unique=True,
-            postgresql_where=text("external_ref LIKE 'teams_voice:call:%'"),
+            postgresql_where=text("external_ref LIKE 'teams_voice:%'"),
         ),
     )
 

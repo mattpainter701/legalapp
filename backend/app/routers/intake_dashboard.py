@@ -798,7 +798,7 @@ def _log_source(log: CommunicationLog) -> str:
     external_ref = log.external_ref or ""
     if provider == "zoom_phone" or external_ref.startswith("zoom_phone:call:"):
         return "zoom_phone"
-    if provider == "teams_voice" or external_ref.startswith("teams_voice:call:"):
+    if provider == "teams_voice" or external_ref.startswith("teams_voice:"):
         return "teams_voice"
     return "manual"
 

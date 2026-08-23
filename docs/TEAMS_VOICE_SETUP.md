@@ -85,11 +85,41 @@ A notification for a disabled tenant is accepted and dropped rather than
 refused. Replying non-2xx would make Graph retry and eventually tear down the
 subscription for a firm that switched the feature off deliberately.
 
-## Idempotency
+## Idempotency and cross-feed deduplication
 
-`teams_voice:call:<callRecordId>` is the idempotency key, enforced by a partial
-unique index on `communication_logs`. The notification path and the hourly sweep
-both write through it, so a call seen twice is stored once.
+The two feeds do **not** share an identifier, and this is the single most
+important thing to understand about the design. Microsoft states plainly that
+"the ID of a pstnCallLogRow can't be used to retrieve a callRecord object", and
+documents `pstnCallLogRow.callId` as *not guaranteed to be unique*. Neither can
+serve as a cross-feed key.
+
+Each feed therefore owns its own namespace:
+
+| Feed | External ref |
+|---|---|
+| Change notifications (`callRecords`) | `teams_voice:call:<callRecordId>` |
+| Usage report (`getPstnCalls`) | `teams_voice:pstn:<pstnCallLogRow id>` |
+
+A partial unique index over `teams_voice:%` makes each feed idempotent on its
+own. Across feeds, one real call arrives under two unrelated GUIDs, so before
+inserting anything LawHand looks for the same call already captured by the other
+feed on a natural key: an inbound Teams voice call from the same normalized
+caller number, starting within three minutes. A match is enriched in place
+rather than inserted.
+
+Without that step the hourly sweep would insert a second communication log for
+every call the notification path already captured — one client showing as two
+calls in the intake feed, with two follow-up tasks.
+
+Two deliberate limits are worth knowing:
+
+- A record with no usable caller number is not correlated, and may therefore be
+  imported twice. A visible duplicate is recoverable; a wrong merge of two
+  different clients' calls is not.
+- Correlation reads before it writes, so two importers racing on the same call
+  could both miss and both insert. In practice the sweep runs one job per tenant
+  at a time and notifications are keyed per call id, so the window is small — but
+  it is a window, not an impossibility.
 
 Once intake staff have worked a captured call — corrected the caller, linked a
 contact, opened a task — reconciliation refreshes only provider-owned metadata
@@ -109,6 +139,14 @@ uninterrupted. Do not treat a failed renewal as an outage of capture itself.
 Changing the directory GUID clears the stored subscription id: the old
 subscription lived in the old directory, and renewing against it would target a
 subscription the firm no longer owns.
+
+A renewal PATCH can extend a subscription's life but cannot repoint it. If the
+notification URL changes — a new `BACKEND_URL`, a migrated host — LawHand
+deletes and recreates the subscription rather than renewing it, because
+renewing in place would leave Graph delivering to the old endpoint while the new
+URL was recorded locally, with live capture silently dead until expiry. A
+subscription whose URL was never recorded is treated the same way, since it
+cannot be attributed to the current endpoint.
 
 ## Verification checklist
 

@@ -659,7 +659,11 @@ async def test_list_channels_pages_and_maps(monkeypatch):
             200,
             json={
                 "value": [
-                    {"id": "c1", "displayName": "General", "membershipType": "standard"},
+                    {
+                        "id": "c1",
+                        "displayName": "General",
+                        "membershipType": "standard",
+                    },
                     {"displayName": "no id — dropped"},
                 ]
             },
@@ -819,9 +823,7 @@ def test_event_catalogue_is_ordered_and_complete():
     from app.services import teams_notify
 
     catalogue = teams_notify.event_type_catalogue()
-    assert [e["event_type"] for e in catalogue] == list(
-        teams_notify.TEAMS_EVENT_TYPES
-    )
+    assert [e["event_type"] for e in catalogue] == list(teams_notify.TEAMS_EVENT_TYPES)
     assert teams_notify.is_known_event_type("deadline_approaching")
     assert not teams_notify.is_known_event_type("nope")
 

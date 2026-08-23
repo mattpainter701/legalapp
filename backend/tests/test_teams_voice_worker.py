@@ -94,9 +94,7 @@ class TestHandlers:
         async def fake_import(session, *, tenant_id, payload):
             return teams_voice.TeamsVoiceImportResult(imported=1, captured=[])
 
-        monkeypatch.setattr(
-            teams_voice, "import_teams_voice_webhook_job", fake_import
-        )
+        monkeypatch.setattr(teams_voice, "import_teams_voice_webhook_job", fake_import)
         row = _job(
             test_tenant.id,
             worker.TEAMS_VOICE_CALL_JOB,
@@ -132,9 +130,7 @@ class TestHandlers:
 
         from app.services import teams_notify
 
-        monkeypatch.setattr(
-            teams_voice, "import_teams_voice_webhook_job", fake_import
-        )
+        monkeypatch.setattr(teams_voice, "import_teams_voice_webhook_job", fake_import)
         monkeypatch.setattr(teams_notify, "notify", fake_notify)
 
         row = _job(
@@ -167,9 +163,7 @@ class TestHandlers:
         )
         assert sent["fields"]["matter_name"] == "+15125550143"
 
-    async def test_announcement_names_an_unknown_caller(
-        self, test_tenant, monkeypatch
-    ):
+    async def test_announcement_names_an_unknown_caller(self, test_tenant, monkeypatch):
         sent = {}
 
         async def fake_notify(tenant_id, event_type, *, title, fields, **kw):
@@ -179,9 +173,9 @@ class TestHandlers:
         from app.services import teams_notify
 
         monkeypatch.setattr(teams_notify, "notify", fake_notify)
-        assert await worker._announce_captured_voice_calls(
-            str(test_tenant.id), [{}]
-        ) == 0
+        assert (
+            await worker._announce_captured_voice_calls(str(test_tenant.id), [{}]) == 0
+        )
         assert sent["fields"]["matter_name"] == "Unknown caller"
 
     async def test_reconcile_clamps_the_window(

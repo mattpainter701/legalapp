@@ -5,9 +5,12 @@ capture needs its own per-tenant configuration row (Entra tenant GUID, change
 notification subscription state, clientState secret) rather than riding the
 delegated Teams credential.
 
-The partial unique index mirrors the Zoom Phone one: it makes
-``teams_voice:call:<id>`` the idempotency key for captured calls so the webhook
-path and the reconciliation sweep converge on a single communication log.
+The partial unique index covers the whole ``teams_voice:`` namespace. The two
+Graph feeds do not share an identifier — Microsoft documents that a
+pstnCallLogRow id cannot be used to retrieve a callRecord — so each feed keys
+its own rows (``teams_voice:call:`` for change notifications,
+``teams_voice:pstn:`` for the usage report) and the service correlates them on
+a natural key before insert.
 
 Revision ID: 121_teams_voice_capture
 Revises: 120_marketing_demo_funnel
@@ -87,7 +90,7 @@ def upgrade() -> None:
         """
         CREATE UNIQUE INDEX IF NOT EXISTS uq_commlogs_teams_voice_external_ref
         ON communication_logs (tenant_id, external_ref)
-        WHERE external_ref LIKE 'teams_voice:call:%'
+        WHERE external_ref LIKE 'teams_voice:%'
         """
     )
 

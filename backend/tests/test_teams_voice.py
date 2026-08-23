@@ -48,6 +48,7 @@ async def voice_enabled(db_session, test_tenant):
         encrypted_client_state=encrypt_token("secret-client-state"),
         subscription_id="sub-1",
         subscription_expires_at=datetime.now(timezone.utc) + timedelta(days=2),
+        notification_url="https://app/api/integrations/teams/voice/webhook/x",
     )
     db_session.add(row)
     await db_session.commit()
@@ -148,7 +149,7 @@ class TestHelpers:
 class TestNormalize:
     def test_pstn_inbound_row(self):
         normalized = teams_voice.normalize_teams_voice_record(_pstn_row())
-        assert normalized["external_ref"] == "teams_voice:call:pstn-1"
+        assert normalized["external_ref"] == "teams_voice:pstn:pstn-1"
         assert normalized["direction"] == "inbound"
         participants = normalized["participants"]
         assert participants["provider"] == "teams_voice"
@@ -192,7 +193,7 @@ class TestNormalize:
         normalized = teams_voice.normalize_teams_voice_record(
             _pstn_row(canonical_call_id="webhook-id")
         )
-        assert normalized["external_ref"] == "teams_voice:call:webhook-id"
+        assert normalized["external_ref"] == "teams_voice:pstn:webhook-id"
 
 
 # ── Change notifications ──────────────────────────────────────────────────
@@ -309,7 +310,7 @@ class TestImport:
 
         row = await db_session.scalar(
             select(CommunicationLog).where(
-                CommunicationLog.external_ref == "teams_voice:call:pstn-1"
+                CommunicationLog.external_ref == "teams_voice:pstn:pstn-1"
             )
         )
         # Intake staff worked the call: corrected the caller and owned the row.
@@ -348,7 +349,7 @@ class TestImport:
 
         row = await db_session.scalar(
             select(CommunicationLog).where(
-                CommunicationLog.external_ref == "teams_voice:call:pstn-1"
+                CommunicationLog.external_ref == "teams_voice:pstn:pstn-1"
             )
         )
         assert row.participants["duration_seconds"] == 210
@@ -793,9 +794,7 @@ class TestGraphPlumbing:
         )
         monkeypatch.setattr(teams_voice.asyncio, "sleep", fake_sleep)
 
-        resp = await teams_voice._graph_request(
-            "GET", "/x", token="t", max_retries=1
-        )
+        resp = await teams_voice._graph_request("GET", "/x", token="t", max_retries=1)
         assert resp.status_code == 429
 
     async def test_network_error_returns_none(self, monkeypatch):
@@ -803,19 +802,6 @@ class TestGraphPlumbing:
             httpx, "AsyncClient", _fake_client(httpx.ConnectError("down"))
         )
         assert await teams_voice._graph_request("GET", "/x", token="t") is None
-
-    def test_error_mapping(self):
-        assert isinstance(
-            teams_voice._graph_error(httpx.Response(403), "reading"),
-            teams_voice.TeamsVoicePermanentError,
-        )
-        assert isinstance(
-            teams_voice._graph_error(httpx.Response(404), "reading"),
-            teams_voice.TeamsVoicePermanentError,
-        )
-        transient = teams_voice._graph_error(httpx.Response(500), "reading")
-        assert not isinstance(transient, teams_voice.TeamsVoicePermanentError)
-        assert "did not respond" in str(teams_voice._graph_error(None, "reading"))
 
     async def test_collect_follows_next_link(self, monkeypatch):
         pages = {
@@ -961,12 +947,11 @@ class TestSubscription:
         row = await teams_voice.ensure_subscription(
             db_session,
             tenant_id=str(test_tenant.id),
-            notification_url="https://app/webhook",
+            notification_url=voice_enabled.notification_url,
         )
         await db_session.commit()
         assert calls == [("PATCH", "/subscriptions/sub-1")]
         assert row.subscription_id == "sub-1"
-        assert row.notification_url == "https://app/webhook"
 
     async def test_recreates_when_renewal_is_refused(
         self, db_session, test_tenant, voice_enabled, monkeypatch
@@ -987,7 +972,7 @@ class TestSubscription:
         row = await teams_voice.ensure_subscription(
             db_session,
             tenant_id=str(test_tenant.id),
-            notification_url="https://app/webhook",
+            notification_url=voice_enabled.notification_url,
         )
         await db_session.commit()
         assert [c[0] for c in calls] == ["PATCH", "POST"]
@@ -1212,3 +1197,265 @@ async def test_missing_client_state_is_regenerated_on_subscribe(
     assert bodies[0]["clientState"]
     await db_session.refresh(voice_enabled)
     assert voice_enabled.encrypted_client_state
+
+
+# ── Cross-feed deduplication ──────────────────────────────────────────────
+#
+# Microsoft gives the two feeds unrelated identifiers: "the ID of a
+# pstnCallLogRow can't be used to retrieve a callRecord object", and callId is
+# documented as not unique. So one real call arrives under two different keys,
+# and only a natural-key correlation keeps it one row in the intake feed.
+
+
+@pytest.mark.asyncio
+class TestCrossFeedDeduplication:
+    async def test_the_feeds_use_separate_namespaces(self):
+        report = teams_voice.normalize_teams_voice_record(
+            _pstn_row(), feed=teams_voice.USAGE_REPORT_FEED
+        )
+        notification = teams_voice.normalize_teams_voice_record(
+            _call_record(), feed=teams_voice.NOTIFICATION_FEED
+        )
+        assert report["external_ref"].startswith("teams_voice:pstn:")
+        assert notification["external_ref"].startswith("teams_voice:call:")
+
+    async def test_an_unknown_feed_is_refused(self):
+        with pytest.raises(ValueError):
+            teams_voice.normalize_teams_voice_record(_pstn_row(), feed="guesswork")
+
+    async def test_the_sweep_does_not_duplicate_a_notified_call(
+        self, db_session, test_tenant
+    ):
+        """The regression this whole namespace split exists to prevent."""
+        await teams_voice.import_teams_voice_records(
+            db_session,
+            tenant_id=str(test_tenant.id),
+            records=[_call_record()],
+            feed=teams_voice.NOTIFICATION_FEED,
+        )
+        await db_session.commit()
+
+        # The same physical call, an hour later, in the usage report — under a
+        # completely different GUID.
+        sweep = await teams_voice.import_teams_voice_records(
+            db_session,
+            tenant_id=str(test_tenant.id),
+            records=[_pstn_row(id="a-totally-different-guid")],
+            feed=teams_voice.USAGE_REPORT_FEED,
+        )
+        await db_session.commit()
+
+        assert sweep.imported == 0
+        rows = (
+            (
+                await db_session.execute(
+                    select(CommunicationLog).where(
+                        CommunicationLog.tenant_id == test_tenant.id,
+                        CommunicationLog.external_ref.like("teams_voice:%"),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(rows) == 1
+        assert rows[0].external_ref == "teams_voice:call:record-1"
+
+    async def test_the_notification_does_not_duplicate_a_swept_call(
+        self, db_session, test_tenant
+    ):
+        # The reverse order: the sweep caught it first (notifications were
+        # down), then a late notification arrives.
+        await teams_voice.import_teams_voice_records(
+            db_session,
+            tenant_id=str(test_tenant.id),
+            records=[_pstn_row()],
+            feed=teams_voice.USAGE_REPORT_FEED,
+        )
+        await db_session.commit()
+
+        late = await teams_voice.import_teams_voice_records(
+            db_session,
+            tenant_id=str(test_tenant.id),
+            records=[_call_record()],
+            feed=teams_voice.NOTIFICATION_FEED,
+        )
+        await db_session.commit()
+        assert late.imported == 0
+
+        rows = (
+            (
+                await db_session.execute(
+                    select(CommunicationLog).where(
+                        CommunicationLog.external_ref.like("teams_voice:%")
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(rows) == 1
+        assert rows[0].external_ref == "teams_voice:pstn:pstn-1"
+        # Both feeds are recorded as having seen it.
+        assert set(rows[0].participants["capture_feeds"]) == {
+            teams_voice.USAGE_REPORT_FEED,
+            teams_voice.NOTIFICATION_FEED,
+        }
+
+    async def test_the_second_feed_fills_gaps_without_overwriting(
+        self, db_session, test_tenant
+    ):
+        # A call record with no duration; the usage report knows the billed one.
+        await teams_voice.import_teams_voice_records(
+            db_session,
+            tenant_id=str(test_tenant.id),
+            records=[_call_record(endDateTime=None)],
+            feed=teams_voice.NOTIFICATION_FEED,
+        )
+        await db_session.commit()
+
+        row = await db_session.scalar(
+            select(CommunicationLog).where(
+                CommunicationLog.external_ref == "teams_voice:call:record-1"
+            )
+        )
+        assert row.participants.get("callee_name") == "Front Desk"
+
+        await teams_voice.import_teams_voice_records(
+            db_session,
+            tenant_id=str(test_tenant.id),
+            records=[_pstn_row(id="report-1", userDisplayName="Billing Export")],
+            feed=teams_voice.USAGE_REPORT_FEED,
+        )
+        await db_session.commit()
+        await db_session.refresh(row)
+
+        # The first feed owns identity; the second only fills what was missing.
+        assert row.participants["callee_name"] == "Front Desk"
+        assert row.participants["duration_seconds"] == 133
+
+    async def test_calls_outside_the_window_stay_separate(
+        self, db_session, test_tenant
+    ):
+        await teams_voice.import_teams_voice_records(
+            db_session,
+            tenant_id=str(test_tenant.id),
+            records=[_call_record()],
+            feed=teams_voice.NOTIFICATION_FEED,
+        )
+        # The same number calling back an hour later is a different call.
+        await teams_voice.import_teams_voice_records(
+            db_session,
+            tenant_id=str(test_tenant.id),
+            records=[_pstn_row(id="later", startDateTime="2026-08-01T16:30:00Z")],
+            feed=teams_voice.USAGE_REPORT_FEED,
+        )
+        await db_session.commit()
+
+        rows = (
+            (
+                await db_session.execute(
+                    select(CommunicationLog).where(
+                        CommunicationLog.external_ref.like("teams_voice:%")
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(rows) == 2
+
+    async def test_a_different_caller_is_never_merged(self, db_session, test_tenant):
+        await teams_voice.import_teams_voice_records(
+            db_session,
+            tenant_id=str(test_tenant.id),
+            records=[_call_record()],
+            feed=teams_voice.NOTIFICATION_FEED,
+        )
+        await teams_voice.import_teams_voice_records(
+            db_session,
+            tenant_id=str(test_tenant.id),
+            records=[_pstn_row(id="other", callerNumber="+15125559999")],
+            feed=teams_voice.USAGE_REPORT_FEED,
+        )
+        await db_session.commit()
+
+        rows = (
+            (
+                await db_session.execute(
+                    select(CommunicationLog).where(
+                        CommunicationLog.external_ref.like("teams_voice:%")
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(rows) == 2
+
+    async def test_a_record_without_a_number_is_not_correlated(
+        self, db_session, test_tenant
+    ):
+        # Better a visible duplicate than a silent merge into the wrong call.
+        assert (
+            await teams_voice._find_cross_feed_match(
+                db_session,
+                tenant_uuid=test_tenant.id,
+                normalized={
+                    "external_ref": "teams_voice:pstn:x",
+                    "occurred_at": datetime.now(timezone.utc),
+                    "participants": {"normalized_phone": None},
+                },
+            )
+            is None
+        )
+
+
+@pytest.mark.asyncio
+async def test_url_change_recreates_the_subscription(
+    db_session, test_tenant, voice_enabled, monkeypatch
+):
+    """A PATCH extends a subscription's life but cannot repoint it."""
+    calls = []
+
+    async def fake_token(db, *, tenant_id, require_enabled=True):
+        return "app-token"
+
+    async def fake_request(method, path, *, token, json_body=None, **kw):
+        calls.append((method, path))
+        if method == "DELETE":
+            return httpx.Response(204)
+        return httpx.Response(
+            201, json={"id": "sub-new", "expirationDateTime": "2026-09-01T00:00:00Z"}
+        )
+
+    monkeypatch.setattr(teams_voice, "get_app_only_token", fake_token)
+    monkeypatch.setattr(teams_voice, "_graph_request", fake_request)
+
+    row = await teams_voice.ensure_subscription(
+        db_session,
+        tenant_id=str(test_tenant.id),
+        notification_url="https://new-host/api/integrations/teams/voice/webhook/x",
+    )
+    await db_session.commit()
+
+    # The stale subscription is torn down rather than renewed in place, which
+    # would leave Graph posting to the old host forever.
+    assert [c[0] for c in calls] == ["DELETE", "POST"]
+    assert row.subscription_id == "sub-new"
+    assert row.notification_url.startswith("https://new-host/")
+
+
+def test_graph_error_maps_status_to_retryability():
+    assert isinstance(
+        teams_voice._graph_error(httpx.Response(403), "reading"),
+        teams_voice.TeamsVoicePermanentError,
+    )
+    assert isinstance(
+        teams_voice._graph_error(httpx.Response(404), "reading"),
+        teams_voice.TeamsVoicePermanentError,
+    )
+    # A 500 is worth retrying; a 403 never is.
+    transient = teams_voice._graph_error(httpx.Response(500), "reading")
+    assert not isinstance(transient, teams_voice.TeamsVoicePermanentError)
+    assert "did not respond" in str(teams_voice._graph_error(None, "reading"))

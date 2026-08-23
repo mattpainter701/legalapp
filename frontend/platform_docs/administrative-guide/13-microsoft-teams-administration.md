@@ -78,7 +78,7 @@ Firms that prefer to own the application registration can register a single-tena
 
 Captured calls arrive two ways. Change notifications from Microsoft deliver a call within moments of it ending. A separate hourly pass over the Teams PSTN usage report re-reads the same window and fills anything the notification path dropped. Microsoft publishes that usage report with a lag, which is exactly why it is the backstop and not the primary feed.
 
-Both feeds converge on the same record: a call captured twice is stored once. If live notifications lapse, capture keeps working through the hourly pass — slower, but uninterrupted. The Voice tab distinguishes these two states rather than reporting both as "on".
+Microsoft gives the two feeds unrelated identifiers, so LawHand matches a call across them on the caller's number and its start time before recording anything. A call both feeds see is stored once, with the later feed filling in facts the first one lacked. If live notifications lapse, capture keeps working through the hourly pass — slower, but uninterrupted. The Voice tab distinguishes these two states rather than reporting both as "on".
 
 ### Verification and maintenance
 
