@@ -54,8 +54,11 @@ Prerequisites:
   workspace MCP authorization; and
 - the client supports remote Streamable HTTP MCP and OAuth with PKCE.
 
-OAuth consent cannot bypass Privacy Mode. Turn it off only when firm policy
-permits the external MCP connection.
+OAuth consent cannot bypass Privacy Mode. Enabling Privacy Mode immediately
+revokes that user's active external-assistant grants (for example Claude,
+ChatGPT, or Codex); turning it off does not restore them. Reconnect and review
+scopes only when firm policy permits the external MCP connection. Native
+LawHand features remain available under their normal Privacy Mode safeguards.
 
 Use the workspace URL below. Never use a research MCP `clmcp_` product key for
 matter access.
