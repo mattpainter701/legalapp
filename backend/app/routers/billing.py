@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -24,16 +25,33 @@ logger = logging.getLogger(__name__)
 
 
 def _mask(val: str | None) -> str | None:
-    """Truncate a Stripe identifier for display or logging.
+    """Truncate a Stripe identifier for display in an API response.
 
-    Stripe customer and subscription ids identify a paying firm, so they are
-    treated as sensitive wherever they leave the database -- in API responses
-    and equally in log output. Enough of the id survives to correlate a record
-    with the Stripe dashboard without writing it out in full.
+    The caller is already authenticated and entitled to the record, so enough
+    of the id survives to correlate it with the Stripe dashboard. Not for logs
+    -- see ``_log_ref``.
     """
     if not val:
         return None
     return val[:8] + "..." + val[-4:]
+
+
+def _log_ref(val: str | None) -> str:
+    """Derive a one-way correlator for a Stripe identifier in log output.
+
+    Logs are shipped, aggregated, and retained far beyond the request that
+    produced them, so an identifier that names a paying firm should not appear
+    in them at all -- not even truncated. ``_mask`` keeps a prefix and suffix,
+    which is fine behind authentication but still leaks most of a Stripe id's
+    distinguishing characters into a log pipeline.
+
+    A short SHA-256 prefix is stable, so an operator can group every line about
+    the same customer and match it against a value they hash themselves, while
+    the log itself reveals nothing.
+    """
+    if not val:
+        return "none"
+    return "ref:" + hashlib.sha256(val.encode("utf-8")).hexdigest()[:12]
 
 
 # ── Stripe customer helper (called from auth on tenant creation) ───────────────
@@ -293,7 +311,7 @@ async def _find_tenant_by_customer(
     tenant = result.scalar_one_or_none()
     if tenant is None:
         raise StripeTargetUnresolved(
-            f"{event_type} references customer {_mask(customer_id)} with no "
+            f"{event_type} references customer {_log_ref(customer_id)} with no "
             "matching tenant; a paying customer may be unlinked -- reconcile "
             "stripe_customer_id"
         )
@@ -328,9 +346,9 @@ async def _handle_subscription_updated(db: AsyncSession, subscription: dict) -> 
             "Ignoring Stripe %r update for superseded subscription %s on customer "
             "%s; the tenant now holds %s.",
             status,
-            _mask(subscription_id),
-            _mask(customer_id),
-            _mask(current_subscription_id),
+            _log_ref(subscription_id),
+            _log_ref(customer_id),
+            _log_ref(current_subscription_id),
         )
         return
 
@@ -355,8 +373,8 @@ async def _handle_subscription_updated(db: AsyncSession, subscription: dict) -> 
                 "Stripe subscription %s for customer %s has no plan metadata "
                 "'tier'. Keeping existing tier %r -- set metadata.tier on the "
                 "Stripe price.",
-                _mask(subscription_id),
-                _mask(customer_id),
+                _log_ref(subscription_id),
+                _log_ref(customer_id),
                 billing_tier,
             )
         tenant.billing_tier = billing_tier
@@ -395,9 +413,9 @@ async def _handle_subscription_deleted(db: AsyncSession, subscription: dict) -> 
         logger.info(
             "Ignoring Stripe deletion of superseded subscription %s for customer "
             "%s; the tenant now holds %s.",
-            _mask(deleted_subscription_id),
-            _mask(customer_id),
-            _mask(current_subscription_id),
+            _log_ref(deleted_subscription_id),
+            _log_ref(customer_id),
+            _log_ref(current_subscription_id),
         )
         return
 

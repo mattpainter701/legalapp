@@ -150,3 +150,32 @@ async def test_unknown_customer_raises_so_the_claim_can_be_released(db_session):
         await billing._handle_payment_failed(
             db_session, {"customer": "cus_never_seen", "attempt_count": 1}
         )
+
+
+def test_log_references_do_not_carry_the_stripe_identifier():
+    """Logs are shipped and retained; identifiers that name a paying firm
+    should not travel with them, not even truncated.
+
+    `_mask` keeps a prefix and suffix, which is fine behind authentication in
+    an API response but still leaks most of a Stripe id's distinguishing
+    characters into a log pipeline.
+    """
+    customer_id = "cus_ABC123DEF456GHI789"
+    ref = billing._log_ref(customer_id)
+
+    assert customer_id not in ref
+    assert "cus_" not in ref
+    # No meaningful substring of the original survives.
+    assert not any(part in ref for part in (customer_id[:8], customer_id[-4:]))
+    # Stable, so an operator can group lines about the same customer.
+    assert ref == billing._log_ref(customer_id)
+    assert ref != billing._log_ref("cus_somethingelse")
+    assert billing._log_ref(None) == "none"
+
+
+def test_api_responses_still_show_a_correlatable_masked_id():
+    masked = billing._mask("cus_ABC123DEF456GHI789")
+    assert masked is not None
+    assert masked.startswith("cus_ABC1")
+    assert masked.endswith("I789")
+    assert billing._mask(None) is None

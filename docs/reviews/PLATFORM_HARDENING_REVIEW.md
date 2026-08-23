@@ -550,20 +550,30 @@ someone notices) while linking the finance-role users to the portal.
 `withCredentials` — and **no `timeout`**. The axios default is `0`, meaning the
 request never gives up on its own.
 
-Production nginx does bound it: `proxy_read_timeout 30s` on the API location and
-60s elsewhere (`nginx/nginx.conf:270,287,304`). So the hang is not infinite. The
-user experience is:
+**Corrected from an earlier draft**, which cited `proxy_read_timeout 30s` from
+the inline blocks in `nginx/nginx.conf`. Those are not what the API location
+uses. `nginx/snippets/api_proxy.conf:9` sets **`proxy_read_timeout 300s`**, and
+several routes legitimately need it — uploads, template rendering, imports and
+reconciliation, document revisions, and artifact/invoice exports.
 
-- 30 to 60 seconds of an undifferentiated spinner,
+That makes the gap worse, not smaller, and it also rules out the naive fix. The
+user experience today is:
+
+- up to five minutes of an undifferentiated spinner,
 - then a 504 surfaced through axios as a generic failure.
+
+And a blanket short client timeout would be its own bug: it would abort a
+legitimate long operation client-side while the server kept working, inviting a
+retry that duplicates the effect.
 
 Under precisely the conditions §1 describes — untuned postgres (1.1), and the
 unindexed `ILIKE` searches noted in `SCALE_REVIEW.md` §4 — this is the daily
 experience of a receptionist searching a caller's name with someone on the line.
 
-Set an explicit axios `timeout` below the nginx ceiling (20–25s), and distinguish
-the states: a timeout is *"this is taking longer than usual"* with a retry, not
-the same generic error as a 500.
+So the deadline has to be split, not merely set: a short one (20–25s) for
+bounded list and query calls, and the gateway's own 300s for the long routes and
+for any multipart body. Distinguish the states too — a timeout is *"this is
+taking longer than usual"* with a retry, not the same generic error as a 500.
 
 ## P1
 
