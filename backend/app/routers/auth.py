@@ -32,6 +32,7 @@ from app.models.tenant_credential import TenantCredential
 from app.models.user_oauth_token import UserOAuthToken
 from app.models.user import User
 from app.models.demo_session import DemoSession
+from app.models.workspace_mcp_grant import WorkspaceMCPGrant
 from app.routers.billing import ensure_stripe_customer
 from app.schemas.auth import (
     ForgotPasswordRequest,
@@ -1881,9 +1882,63 @@ async def update_me(
     """Update only the caller's verified professional profile fields."""
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
+    enabling_privacy_mode = body.privacy_mode is True and not user.privacy_mode
     for field, value in body.model_dump(exclude_unset=True).items():
         setattr(user, field, value)
+
+    revoked_workspace_grants: list[WorkspaceMCPGrant] = []
+    if enabling_privacy_mode:
+        # Privacy Mode must take effect immediately—not only on the next MCP
+        # request. Revoke every active external-assistant grant for this user;
+        # native LawHand features continue to use their normal privacy-safe
+        # processing path and have no Workspace MCP grant to revoke.
+        revoked_workspace_grants = list(
+            (
+                await db.scalars(
+                    select(WorkspaceMCPGrant)
+                    .where(
+                        WorkspaceMCPGrant.tenant_id == user.tenant_id,
+                        WorkspaceMCPGrant.user_id == user.id,
+                        WorkspaceMCPGrant.status == "active",
+                        WorkspaceMCPGrant.revoked_at.is_(None),
+                    )
+                    .with_for_update()
+                )
+            ).all()
+        )
+        if revoked_workspace_grants:
+            from app.services.workspace_mcp_oauth import append_workspace_mcp_audit
+
+            revoked_at = datetime.now(timezone.utc)
+            for grant in revoked_workspace_grants:
+                grant.status = "revoked"
+                grant.revoked_at = revoked_at
+                grant.revoked_by_user_id = user.id
+                grant.revocation_reason = "Privacy Mode enabled"
+                await append_workspace_mcp_audit(
+                    db,
+                    request,
+                    tenant_id=user.tenant_id,
+                    user_id=user.id,
+                    grant_id=grant.id,
+                    client_id=grant.client_id,
+                    event_type="grant_revoked",
+                    outcome="success",
+                    metadata={"reason": grant.revocation_reason},
+                )
     await db.commit()
+    if revoked_workspace_grants:
+        # The database grant is authoritative. Redis cleanup is best effort so
+        # an unavailable cache cannot prevent the privacy-policy change.
+        try:
+            from app.services.workspace_mcp_oauth import revoke_grant_refresh_tokens
+
+            for grant in revoked_workspace_grants:
+                await revoke_grant_refresh_tokens(request, grant.id)
+        except Exception:
+            logger.exception(
+                "Workspace MCP refresh-token cleanup failed after Privacy Mode enable"
+            )
     # SET LOCAL tenant context ends at commit. Restore it before the refresh
     # and every subsequent RLS-protected query in this transaction.
     await set_tenant_context(db, str(user.tenant_id))

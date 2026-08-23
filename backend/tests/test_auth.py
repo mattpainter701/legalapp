@@ -137,6 +137,33 @@ class TestAuthMe:
         assert data["primary_jurisdictions"] == ["North Dakota"]
         assert data["full_name"] == original_name
 
+    async def test_enabling_privacy_mode_revokes_workspace_mcp_grants(
+        self, client, db_session, test_tenant, test_user
+    ):
+        from app.models.workspace_mcp_grant import WorkspaceMCPGrant
+
+        grant = WorkspaceMCPGrant(
+            tenant_id=test_tenant.id,
+            user_id=test_user.id,
+            client_id="claude-desktop",
+            client_name="Claude",
+            scopes=["matters:read"],
+            consent_version="v1",
+            consent_sha256="a" * 64,
+            expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+        )
+        db_session.add(grant)
+        await db_session.commit()
+
+        response = await client.patch("/api/auth/me", json={"privacy_mode": True})
+
+        assert response.status_code == 200, response.text
+        assert response.json()["privacy_mode"] is True
+        await db_session.refresh(grant)
+        assert grant.status == "revoked"
+        assert grant.revoked_at is not None
+        assert grant.revocation_reason == "Privacy Mode enabled"
+
     async def test_me_profile_patch_restores_rls_context_after_commit(
         self, monkeypatch
     ):
@@ -210,6 +237,93 @@ class TestAuthMe:
             ("tenant", str(tenant_id)),
             "refresh",
         ]
+
+    async def test_enabling_privacy_mode_revokes_and_cleans_up_grants(
+        self, monkeypatch
+    ):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from app.routers import auth
+        from app.schemas.auth import UserProfileUpdate
+        from app.services import workspace_mcp_oauth
+
+        tenant_id = uuid.uuid4()
+        user = SimpleNamespace(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            tenant=SimpleNamespace(
+                billing_tier="flat",
+                stripe_subscription_status="active",
+                mcp_billing_status="active",
+            ),
+            email="lawyer@example.test",
+            full_name="Test Lawyer",
+            role="attorney",
+            is_active=True,
+            license_active=True,
+            premium_ai_enabled=False,
+            created_at=datetime.now(timezone.utc),
+            professional_role=None,
+            job_title=None,
+            office_location=None,
+            primary_jurisdictions=[],
+            privacy_mode=False,
+        )
+        grant = SimpleNamespace(
+            id=uuid.uuid4(),
+            client_id="claude-desktop",
+            status="active",
+            revoked_at=None,
+            revoked_by_user_id=None,
+            revocation_reason=None,
+        )
+
+        class Result:
+            def all(self):
+                return [grant]
+
+        class FakeSession:
+            async def scalars(self, _statement):
+                return Result()
+
+            async def commit(self):
+                return None
+
+            async def refresh(self, _user):
+                return None
+
+        async def current_user(_request, _db):
+            return user
+
+        async def tenant_context(_db, _value):
+            return None
+
+        async def enabled_modules(_db, _tenant_id, *, user):
+            return ["chat"], "/chat"
+
+        async def plan_meta(_db, _tenant_id):
+            return "full-platform", None
+
+        audit = AsyncMock()
+        cleanup = AsyncMock(side_effect=RuntimeError("Redis unavailable"))
+        monkeypatch.setattr(auth, "get_current_user", current_user)
+        monkeypatch.setattr(auth, "set_tenant_context", tenant_context)
+        monkeypatch.setattr(auth, "resolve_enabled_modules", enabled_modules)
+        monkeypatch.setattr(auth, "resolve_plan_meta", plan_meta)
+        monkeypatch.setattr(workspace_mcp_oauth, "append_workspace_mcp_audit", audit)
+        monkeypatch.setattr(workspace_mcp_oauth, "revoke_grant_refresh_tokens", cleanup)
+
+        response = await auth.update_me(
+            UserProfileUpdate(privacy_mode=True), SimpleNamespace(), FakeSession()
+        )
+
+        assert response.privacy_mode is True
+        assert grant.status == "revoked"
+        assert grant.revoked_by_user_id == user.id
+        assert grant.revocation_reason == "Privacy Mode enabled"
+        audit.assert_awaited_once()
+        cleanup.assert_awaited_once()
 
     async def test_me_no_token_returns_401(self, db_session):
         from httpx import ASGITransport, AsyncClient

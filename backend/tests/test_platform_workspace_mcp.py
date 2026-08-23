@@ -121,7 +121,16 @@ async def test_platform_workspace_mcp_diagnostics_reports_user_policy_and_oauth_
         "error": 0,
     }
     assert payload["recent_audit_events"][0]["event_type"] == "token_issued"
+    assert payload["recent_audit_events"][0]["actor_name"] == "Test Attorney"
+    assert payload["audit_pagination"] == {"page_size": 5, "next_before": None}
     assert "desktop-diagnostics-client" not in str(payload)
     assert "request-diagnostics" not in str(payload)
     assert direct_payload["user_policy"] == payload["user_policy"]
     assert direct_payload["oauth"]["audit"] == payload["oauth"]["audit"]
+    paged_payload = await platform.platform_workspace_mcp_diagnostics(
+        request,
+        db_session,
+        email=test_user.email.upper(),
+        audit_before=now + timedelta(seconds=1),
+    )
+    assert paged_payload["recent_audit_events"][0]["event_type"] == "token_issued"

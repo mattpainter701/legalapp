@@ -306,6 +306,37 @@ async def test_decide_deny_approve_and_rollback_restoration(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_approve_refuses_privacy_mode_before_creating_a_grant(monkeypatch):
+    monkeypatch.setattr(oauth.settings, "WORKSPACE_MCP_ENABLED", True)
+    u = user()
+    u.privacy_mode = True
+    c = client()
+    pending = {
+        "client_id": c.client_id,
+        "redirect_uri": c.redirect_uris[0],
+        "scopes": ["matters:read"],
+        "state": "s",
+        "code_challenge": "cc",
+    }
+    monkeypatch.setattr(oauth, "require_workspace_tenant_allowed", lambda *_: None)
+    monkeypatch.setattr(
+        oauth, "claim_authorization_request", AsyncMock(return_value=pending)
+    )
+    monkeypatch.setattr(oauth, "_active_client", AsyncMock(return_value=c))
+    replace_grant = AsyncMock()
+    monkeypatch.setattr(oauth, "replace_active_grant", replace_grant)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await oauth.decide_workspace_authorization(
+            "r", oauth.ConsentDecision(approved=True), req(), u, DB()
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Workspace MCP is unavailable while Privacy Mode is enabled"
+    replace_grant.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_token_code_binding_and_success(monkeypatch):
     monkeypatch.setattr(oauth.settings, "WORKSPACE_MCP_ENABLED", True)
     c = client()
