@@ -142,6 +142,38 @@ Current MVP filter behavior:
 
 ## Current Corpus Checkpoint
 
+## Corpus Coverage Inventory
+
+`corpus_status` now includes a `coverage_ledger` in addition to global counts
+and per-court coverage. Each CourtListener court partition records its observed
+opinions, chunks, embedded vectors, date range, and acquisition state. Official
+authority source partitions continue to be tracked by `legal_sources` and
+`source_sync_states`.
+
+Use this inventory to answer whether a court, title, agency source, or time
+period is loaded, partial, stale, or intentionally absent. A successful sync is
+not itself evidence of complete coverage; consult the declared source partition
+and its observed counts.
+
+## Guarded Bulk Expansion
+
+Never run `--load-staged` against production. Use `--load-mvp` with the
+existing coverage profile and optional repeatable `--court-id` values, plus a
+logical database ceiling:
+
+```bash
+python -m mcp_server.loader --load-mvp \
+  --coverage-profile national-priority \
+  --court-id ca8 \
+  --max-database-gb 350
+```
+
+The loader checks the PostgreSQL logical database size as it processes the
+tranche and stops before the configured ceiling. Start with a bounded
+opinion/chunk tranche, wait for the Jetson embedding queue to drain, inspect
+`corpus_status`, then raise the budget only after storage and retrieval checks
+pass.
+
 As of 2026-06-26 after expansion:
 
 - `dockets`: 50,000
