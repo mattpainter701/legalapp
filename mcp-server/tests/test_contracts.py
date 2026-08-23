@@ -518,7 +518,13 @@ def test_loader_prefers_parallel_bz2_decompressor(monkeypatch, tmp_path):
         lambda name: "/usr/bin/lbzip2" if name == "lbzip2" else None,
     )
 
-    assert bz2_decompress_command(archive) == ["/usr/bin/lbzip2", "-dc", str(archive)]
+    assert bz2_decompress_command(archive) == [
+        "/usr/bin/lbzip2",
+        "-n",
+        "8",
+        "-dc",
+        str(archive),
+    ]
 
 
 def test_loader_supports_table_specific_smoke_limits():
