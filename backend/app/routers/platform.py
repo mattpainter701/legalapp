@@ -1258,7 +1258,7 @@ async def platform_workspace_mcp_diagnostics(
     request: Request,
     db: AsyncSession = Depends(get_db),
     email: str | None = Query(default=None, min_length=3, max_length=320),
-    audit_before: datetime | None = Query(default=None),
+    audit_before: datetime | None = None,
 ):
     """Return operator-only readiness and OAuth evidence for Workspace MCP.
 
