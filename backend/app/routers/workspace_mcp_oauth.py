@@ -426,6 +426,16 @@ async def decide_workspace_authorization(
             raise HTTPException(
                 status_code=400, detail="OAuth redirect no longer matches"
             )
+        # Do this before creating a grant or authorization code.  Consent is
+        # not useful when the user's privacy policy prevents the resulting
+        # client from receiving a token or reaching the workspace transport.
+        # Previously this was checked only during token exchange/runtime,
+        # leaving an apparently active but unusable assistant in the portal.
+        if user.privacy_mode:
+            raise HTTPException(
+                status_code=403,
+                detail="Workspace MCP is unavailable while Privacy Mode is enabled",
+            )
         scopes = frozenset(str(value) for value in pending.get("scopes", []))
         if not scopes or not scopes.issubset(await _allowed_user_scopes(db, user)):
             raise HTTPException(

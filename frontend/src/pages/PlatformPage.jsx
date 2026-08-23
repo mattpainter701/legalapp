@@ -234,8 +234,8 @@ export function ResearchMcpReleaseControls({ platformKey, onAuthError }) {
       <div className="bg-brand-surface border border-brand-line rounded-xl p-6 shadow-sm">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <p className="text-xs font-bold uppercase tracking-widest text-brand-muted mb-2">Research MCP · release controls</p>
-            <h2 id="research-mcp-release-controls" className="text-brand-ink font-serif text-2xl font-bold tracking-tight">Research MCP operations</h2>
+            <p className="text-xs font-bold uppercase tracking-widest text-brand-muted mb-2">LawHand Research MCP · release controls</p>
+            <h2 id="research-mcp-release-controls" className="text-brand-ink font-serif text-2xl font-bold tracking-tight">LawHand Research MCP operations</h2>
             <p className="text-brand-ink-2 font-sans text-sm mt-2 max-w-3xl">
               Manage the public research product’s release gate and retain protocol, key, metering, and billing visibility while customer access is disabled.
             </p>
@@ -428,10 +428,10 @@ function WorkspaceMcpDiagnostics({ platformKey, onAuthError }) {
   const [lookingUp, setLookingUp] = useState(false)
   const [error, setError] = useState(null)
 
-  const load = useCallback(async (email = '') => {
+  const load = useCallback(async (email = '', auditBefore = '') => {
     setError(null)
     try {
-      const next = await getPlatformWorkspaceMcpDiagnostics(platformKey, email.trim())
+      const next = await getPlatformWorkspaceMcpDiagnostics(platformKey, email.trim(), auditBefore)
       setData(next)
     } catch (e) {
       if (e?.response?.status === 403) onAuthError?.()
@@ -455,17 +455,39 @@ function WorkspaceMcpDiagnostics({ platformKey, onAuthError }) {
   const checks = Object.entries(data?.policy_checks || {})
   const audit = data?.oauth?.audit || {}
   const policy = data?.user_policy
+  const auditPagination = data?.audit_pagination || {}
+  const [auditHistory, setAuditHistory] = useState([])
+  const [auditCursor, setAuditCursor] = useState('')
+
+  const changeAuditPage = async (before) => {
+    let nextCursor = before
+    if (before) {
+      setAuditHistory((currentHistory) => [...currentHistory, auditCursor])
+    }
+    else {
+      const previous = auditHistory[auditHistory.length - 1]
+      setAuditHistory((currentHistory) => currentHistory.slice(0, -1))
+      nextCursor = previous || ''
+    }
+    setAuditCursor(nextCursor)
+    setLoading(true)
+    try {
+      await load('', nextCursor)
+    } finally {
+      setLoading(false)
+    }
+  }
 
   return (
     <section className="space-y-6" aria-labelledby="workspace-mcp-diagnostics" data-testid="workspace-mcp-diagnostics">
       <div className="bg-brand-surface border border-brand-line rounded-xl p-6 shadow-sm">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <p className="text-xs font-bold uppercase tracking-widest text-brand-muted mb-2">Workspace MCP · diagnostics</p>
-            <h2 id="workspace-mcp-diagnostics" className="text-brand-ink font-serif text-2xl font-bold tracking-tight">Workspace OAuth readiness</h2>
+            <p className="text-xs font-bold uppercase tracking-widest text-brand-muted mb-2">LawHand Platform MCP · diagnostics</p>
+            <h2 id="workspace-mcp-diagnostics" className="text-brand-ink font-serif text-2xl font-bold tracking-tight">LawHand Platform MCP OAuth readiness</h2>
             <p className="text-brand-ink-2 font-sans text-sm mt-2 max-w-3xl">Operator-only policy and OAuth evidence for Claude, ChatGPT, and other workspace clients. This is separate from the Research MCP customer release gate.</p>
           </div>
-          <button onClick={() => load()} disabled={loading} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-brand-line text-xs font-bold text-brand-ink hover:bg-brand-bg-soft disabled:opacity-50">
+          <button onClick={() => { setAuditHistory([]); setAuditCursor(''); load() }} disabled={loading} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-brand-line text-xs font-bold text-brand-ink hover:bg-brand-bg-soft disabled:opacity-50">
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Refresh
           </button>
         </div>
@@ -520,10 +542,14 @@ function WorkspaceMcpDiagnostics({ platformKey, onAuthError }) {
           </div>
 
           <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden">
-            <div className="px-5 py-4 border-b border-brand-line"><h3 className="font-serif font-bold text-brand-ink">Recent Workspace OAuth evidence</h3><p className="mt-1 text-xs text-brand-muted">Redacted platform-wide audit sample; use the masked request ID for support correlation.</p></div>
+            <div className="px-5 py-4 border-b border-brand-line"><h3 className="font-serif font-bold text-brand-ink">Recent Workspace OAuth evidence</h3><p className="mt-1 text-xs text-brand-muted">Shows the consenting LawHand user by display name; request IDs remain masked for support correlation.</p></div>
             <div className="divide-y divide-brand-line">
-              {(data?.recent_audit_events || []).map((event) => <div key={event.id} className="grid grid-cols-1 sm:grid-cols-4 gap-2 px-5 py-3 text-xs"><span className="font-medium text-brand-ink">{event.event_type}</span><span className={event.outcome === 'success' ? 'text-green-700' : event.outcome === 'error' ? 'text-brand-rose' : 'text-brand-amber'}>{event.outcome}</span><span className="font-mono text-brand-muted">{event.request_id || 'No request ID'}</span><span className="text-brand-muted">{event.created_at ? new Date(event.created_at).toLocaleString() : 'Unknown time'}</span></div>)}
+              {(data?.recent_audit_events || []).map((event) => <div key={event.id} className="grid grid-cols-1 sm:grid-cols-5 gap-2 px-5 py-3 text-xs"><span className="font-medium text-brand-ink">{event.event_type}</span><span className={event.outcome === 'success' ? 'text-green-700' : event.outcome === 'error' ? 'text-brand-rose' : 'text-brand-amber'}>{event.outcome}</span><span className="text-brand-ink-2">{event.actor_name || 'Unknown user'}</span><span className="font-mono text-brand-muted">{event.request_id || 'No request ID'}</span><span className="text-brand-muted">{event.created_at ? new Date(event.created_at).toLocaleString() : 'Unknown time'}</span></div>)}
               {(data?.recent_audit_events || []).length === 0 && <p className="px-5 py-8 text-center text-sm text-brand-muted">No Workspace OAuth audit events recorded yet.</p>}
+            </div>
+            <div className="flex items-center justify-between gap-3 border-t border-brand-line px-5 py-3">
+              <p className="text-xs text-brand-muted">{auditPagination.page_size || 5} events per page</p>
+              <div className="flex gap-2"><button type="button" onClick={() => changeAuditPage('')} disabled={loading || auditHistory.length === 0} className="rounded-lg border border-brand-line px-3 py-1.5 text-xs font-semibold text-brand-ink disabled:opacity-50">Newer</button><button type="button" onClick={() => changeAuditPage(auditPagination.next_before)} disabled={loading || !auditPagination.next_before} className="rounded-lg border border-brand-line px-3 py-1.5 text-xs font-semibold text-brand-ink disabled:opacity-50">Older</button></div>
             </div>
           </div>
         </>

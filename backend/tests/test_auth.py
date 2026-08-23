@@ -137,6 +137,33 @@ class TestAuthMe:
         assert data["primary_jurisdictions"] == ["North Dakota"]
         assert data["full_name"] == original_name
 
+    async def test_enabling_privacy_mode_revokes_workspace_mcp_grants(
+        self, client, db_session, test_tenant, test_user
+    ):
+        from app.models.workspace_mcp_grant import WorkspaceMCPGrant
+
+        grant = WorkspaceMCPGrant(
+            tenant_id=test_tenant.id,
+            user_id=test_user.id,
+            client_id="claude-desktop",
+            client_name="Claude",
+            scopes=["matters:read"],
+            consent_version="v1",
+            consent_sha256="a" * 64,
+            expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+        )
+        db_session.add(grant)
+        await db_session.commit()
+
+        response = await client.patch("/api/auth/me", json={"privacy_mode": True})
+
+        assert response.status_code == 200, response.text
+        assert response.json()["privacy_mode"] is True
+        await db_session.refresh(grant)
+        assert grant.status == "revoked"
+        assert grant.revoked_at is not None
+        assert grant.revocation_reason == "Privacy Mode enabled"
+
     async def test_me_profile_patch_restores_rls_context_after_commit(
         self, monkeypatch
     ):

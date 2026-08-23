@@ -287,7 +287,9 @@ export default function ChatHeader({
                     <span className="mt-0.5 block text-[11px] leading-snug text-brand-muted">
                       {!usePremium
                         ? 'Standard always redacts detected details and excludes matters, attachments, and private context.'
-                        : 'Redact detected personal details before eligible provider requests.'}
+                        : privacyMode
+                          ? 'External MCP assistants are disconnected. Native LawHand assistance remains available.'
+                          : 'Redact detected personal details before eligible provider requests. Turning this on disconnects external MCP assistants.'}
                     </span>
                   </span>
                   <span
