@@ -368,3 +368,25 @@ class TestExtendedStripeWebhookDispatch:
         extended_stripe_event(_event("evt_extended_nosig", "customer.created", 1, {}))
         response = await client.post(EXTENDED_WEBHOOK_PATH, json={})
         assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_payload_does_not_leak_the_parser_error(
+    client, stripe_event, monkeypatch
+):
+    """The endpoint is unauthenticated, so the reason stays server-side."""
+    secret_detail = "Stripe internals: expected payload at /srv/app/secret.py:42"
+
+    def _explode(payload, sig_header, secret):
+        raise ValueError(secret_detail)
+
+    stripe_event({})
+    monkeypatch.setattr(billing.stripe.Webhook, "construct_event", _explode)
+
+    response = await client.post(
+        WEBHOOK_PATH, json={}, headers={"stripe-signature": "t=1,v1=test"}
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid Stripe webhook payload"
+    assert secret_detail not in response.text

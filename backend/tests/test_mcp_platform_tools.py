@@ -281,3 +281,78 @@ def test_declared_input_schema_matches_the_validated_contract() -> None:
     assert creation["matter_id"]["format"] == "uuid"
     assert creation["task_id"]["format"] == "uuid"
     assert creation["content"]["maxLength"] == tools.MAX_DOCUMENT_CONTENT_CHARS
+
+
+# ── Metering on failure ─────────────────────────────────────────────────────
+
+
+def _metering_stubs(monkeypatch, raises: Exception):
+    """Stub the router's metering seam and make the tool call fail."""
+    from app.routers import mcp as mcp_router
+
+    recorded: list[dict] = []
+
+    async def _record(**kwargs):
+        recorded.append(kwargs)
+
+    async def _execute(*args, **kwargs):
+        raise raises
+
+    monkeypatch.setattr(mcp_router, "record_mcp_usage", _record)
+    monkeypatch.setattr(mcp_router, "execute_platform_tool", _execute)
+    return mcp_router, recorded
+
+
+@pytest.mark.asyncio
+async def test_an_unexpected_tool_failure_is_still_metered(monkeypatch) -> None:
+    """Catching only HTTPException left a failed call absent from usage records."""
+    boom = RuntimeError("database said no")
+    mcp_router, recorded = _metering_stubs(monkeypatch, boom)
+
+    body = mcp_router.ToolCallRequest(name="list_matters", arguments={"query": "ada"})
+    request = SimpleNamespace(
+        headers={"User-Agent": "probe/1.0"}, client=SimpleNamespace(host="203.0.113.7")
+    )
+    product_key = SimpleNamespace(id=uuid.uuid4())
+    tenant = SimpleNamespace(id=uuid.uuid4())
+
+    with pytest.raises(RuntimeError):
+        await mcp_router._call_platform_tool_metered(
+            body,
+            request,
+            db=object(),
+            product_key=product_key,
+            tenant=tenant,
+            transport="rest",
+            started=0.0,
+        )
+
+    assert len(recorded) == 1
+    assert recorded[0]["status_code"] == 500
+    assert recorded[0]["error_class"] == "RuntimeError"
+    assert recorded[0]["tool_name"] == "list_matters"
+
+
+@pytest.mark.asyncio
+async def test_an_http_error_keeps_its_own_status_when_metered(monkeypatch) -> None:
+    refusal = HTTPException(status_code=404, detail="Matter not found")
+    mcp_router, recorded = _metering_stubs(monkeypatch, refusal)
+
+    body = mcp_router.ToolCallRequest(name="create_document", arguments={})
+    request = SimpleNamespace(
+        headers={"User-Agent": "probe/1.0"}, client=SimpleNamespace(host="203.0.113.7")
+    )
+
+    with pytest.raises(HTTPException):
+        await mcp_router._call_platform_tool_metered(
+            body,
+            request,
+            db=object(),
+            product_key=SimpleNamespace(id=uuid.uuid4()),
+            tenant=SimpleNamespace(id=uuid.uuid4()),
+            transport="rest",
+            started=0.0,
+        )
+
+    assert recorded[0]["status_code"] == 404
+    assert recorded[0]["error_class"] == "HTTPException"
