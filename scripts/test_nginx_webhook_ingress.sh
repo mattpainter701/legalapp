@@ -1,6 +1,9 @@
 #!/bin/sh
-# Release gate: prove every shipped nginx server caps Zoom Phone webhook JSON
-# before it can inherit the much larger general API upload allowance.
+# Release gate: prove every shipped nginx server caps provider webhook JSON
+# before it can inherit the much larger general API upload allowance. Both the
+# Zoom Phone and Microsoft Teams voice endpoints are called unauthenticated by
+# their provider, so the body cap is the only thing standing between them and
+# the 55 MiB /api/ policy.
 set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
@@ -65,7 +68,7 @@ assert_location_policy() {
         }
       }
     ' "$config" || {
-      echo "ERROR: invalid Zoom webhook ingress policy for '$selector' in $config" >&2
+      echo "ERROR: invalid provider webhook ingress policy for '$selector' in $config" >&2
       return 1
     }
 }
@@ -79,6 +82,10 @@ assert_location_policy "$PROD_CONFIG" "= /api/integrations/zoom-phone/webhook" 2
 assert_location_policy "$PROD_CONFIG" "^~ /api/integrations/zoom-phone/webhook/" 2 1
 assert_location_policy "$DEV_CONFIG" "= /api/integrations/zoom-phone/webhook" 1 0
 assert_location_policy "$DEV_CONFIG" "^~ /api/integrations/zoom-phone/webhook/" 1 0
+assert_location_policy "$PROD_CONFIG" "= /api/integrations/teams/voice/webhook" 2 1
+assert_location_policy "$PROD_CONFIG" "^~ /api/integrations/teams/voice/webhook/" 2 1
+assert_location_policy "$DEV_CONFIG" "= /api/integrations/teams/voice/webhook" 1 0
+assert_location_policy "$DEV_CONFIG" "^~ /api/integrations/teams/voice/webhook/" 1 0
 
 # The shared API proxy snippet is the source of backend routing, forwarded
 # client/protocol headers, and bounded upstream timeouts for every location.
@@ -573,6 +580,7 @@ for direct_path in \
   /api/auth/me \
   /api/billing/webhook \
   /api/integrations/zoom-phone/webhook/test \
+  /api/integrations/teams/voice/webhook/test \
   /health/readiness \
   /docs \
   /openapi.json \
