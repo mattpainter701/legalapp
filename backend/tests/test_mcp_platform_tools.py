@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from datetime import datetime, timezone
 import uuid
 
 import pytest
@@ -89,3 +90,48 @@ async def test_list_matters_bounds_limit_and_serializes_scoped_records() -> None
         "count": 1,
     }
     assert db.execute.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_list_matter_documents_checks_the_matter_and_serializes_documents() -> (
+    None
+):
+    tenant_id = uuid.uuid4()
+    matter_id = uuid.uuid4()
+    document = SimpleNamespace(
+        id=uuid.uuid4(),
+        filename="notes.md",
+        document_category="generated",
+        file_size=42,
+        task_id=None,
+        created_at=datetime(2026, 8, 23, tzinfo=timezone.utc),
+    )
+    matter_result = SimpleNamespace(scalar_one_or_none=lambda: object())
+    documents_result = SimpleNamespace(
+        scalars=lambda: SimpleNamespace(all=lambda: [document])
+    )
+    db = SimpleNamespace(
+        execute=AsyncMock(side_effect=[matter_result, documents_result])
+    )
+
+    response = await tools._list_matter_documents(
+        {"matter_id": str(matter_id), "limit": 999}, db=db, tenant_id=tenant_id
+    )
+
+    assert response["content"][0]["json"] == {
+        "documents": [
+            {
+                "id": str(document.id),
+                "filename": "notes.md",
+                "category": "generated",
+                "file_size": 42,
+                "task_id": None,
+                "created_at": "2026-08-23T00:00:00+00:00",
+            }
+        ],
+        "count": 1,
+    }
+    assert db.execute.await_count == 2
+
+    with pytest.raises(HTTPException, match="matter_id is required"):
+        await tools._list_matter_documents({}, db=db, tenant_id=tenant_id)
