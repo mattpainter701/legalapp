@@ -15,7 +15,6 @@ PYTHON_REQUIREMENTS = re.compile(r"(?:^|/)requirements\.txt$")
 NPM_MANIFESTS = (
     "frontend/package.json",
     "office-addin/package.json",
-    "word-addin/package.json",
 )
 
 
@@ -24,18 +23,36 @@ def main() -> int:
     parser.add_argument("--base", required=True)
     parser.add_argument("--head", required=True)
     args = parser.parse_args()
-    changed = set(
-        subprocess.check_output(
-            ["git", "diff", "--name-only", f"{args.base}...{args.head}"],
-            cwd=ROOT,
-            text=True,
-        ).splitlines()
+    changed: set[str] = set()
+    deleted: set[str] = set()
+    name_status = subprocess.check_output(
+        ["git", "diff", "--name-status", f"{args.base}...{args.head}"],
+        cwd=ROOT,
+        text=True,
     )
+    for line in name_status.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        status = parts[0]
+        # Renames and copies report the destination path last.
+        path = parts[-1]
+        changed.add(path)
+        if status.startswith("D"):
+            deleted.add(path)
+
     errors: list[str] = []
     for manifest in NPM_MANIFESTS:
         lockfile = manifest.replace("package.json", "package-lock.json")
-        if manifest in changed and lockfile not in changed:
-            errors.append(f"{manifest} changed without {lockfile}")
+        if manifest not in changed or lockfile in changed:
+            continue
+        # A removed package.json declares no dependencies, so there is no
+        # lockfile left to regenerate. Requiring one here fails any change that
+        # deletes a package -- and fails hardest when the package never had a
+        # lockfile to begin with.
+        if manifest in deleted:
+            continue
+        errors.append(f"{manifest} changed without {lockfile}")
 
     diff = subprocess.check_output(
         ["git", "diff", "--unified=0", f"{args.base}...{args.head}"],

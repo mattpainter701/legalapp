@@ -24,9 +24,5 @@ _COUNTERFEIT_CLOSE = re.compile(r"</\s*untrusted_document_text\s*>", re.IGNORECA
 
 def wrap_untrusted_text(text: str, content_sha256: str) -> str:
     """Return `text` fenced by tags it cannot forge its way out of."""
-    neutralized = _COUNTERFEIT_CLOSE.sub(
-        "[removed closing tag]", str(text or "")
-    )
-    return "\n".join(
-        (OPEN_TAG.format(sha=content_sha256), neutralized, CLOSE_TAG)
-    )
+    neutralized = _COUNTERFEIT_CLOSE.sub("[removed closing tag]", str(text or ""))
+    return "\n".join((OPEN_TAG.format(sha=content_sha256), neutralized, CLOSE_TAG))

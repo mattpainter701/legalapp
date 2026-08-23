@@ -19,7 +19,7 @@ from app.routers.billing import _SUBSCRIPTION_HANDLERS
 from app.services.stripe_webhook_guard import claim_event, ordering_object_id
 from app.models.billing import TimeEntry, Expense, Invoice, InvoiceLineItem, Payment
 from app.models.plugin import Matter
-from app.models.tenant import Tenant, TenantSettings
+from app.models.tenant import TenantSettings
 from app.schemas.billing import (
     TimeEntryCreate,
     TimeEntryUpdate,

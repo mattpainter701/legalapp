@@ -366,9 +366,7 @@ async def _handle_payment_succeeded(db: AsyncSession, invoice: dict) -> None:
     customer_id = invoice.get("customer")
     if not customer_id:
         return
-    tenant = await _find_tenant_by_customer(
-        db, customer_id, event_type="invoice.paid"
-    )
+    tenant = await _find_tenant_by_customer(db, customer_id, event_type="invoice.paid")
     if tenant is None:
         return
     if tenant.stripe_subscription_id:
