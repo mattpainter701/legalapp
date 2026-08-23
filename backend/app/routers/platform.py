@@ -1258,6 +1258,7 @@ async def platform_workspace_mcp_diagnostics(
     request: Request,
     db: AsyncSession = Depends(get_db),
     email: str | None = Query(default=None, min_length=3, max_length=320),
+    audit_before: datetime | None = None,
 ):
     """Return operator-only readiness and OAuth evidence for Workspace MCP.
 
@@ -1344,23 +1345,29 @@ async def platform_workspace_mcp_diagnostics(
         else None,
     }
 
-    audit_events: list[WorkspaceMCPAuditEvent] = []
+    # Fetch one small candidate page per tenant, then merge it in memory. RLS
+    # remains in force for every query, while the opaque-looking timestamp
+    # cursor keeps the operator view fast and avoids leaking audit IDs.
+    audit_page_size = 5
+    audit_rows: list[tuple[WorkspaceMCPAuditEvent, User | None]] = []
     for tenant_id in tenant_ids:
         async with _platform_tenant_scope(db, tenant_id):
-            audit_events.extend(
-                list(
-                    (
-                        await db.scalars(
-                            select(WorkspaceMCPAuditEvent)
-                            .where(WorkspaceMCPAuditEvent.tenant_id == tenant_id)
-                            .order_by(WorkspaceMCPAuditEvent.created_at.desc())
-                            .limit(50)
-                        )
-                    ).all()
-                )
+            statement = (
+                select(WorkspaceMCPAuditEvent, User)
+                .outerjoin(User, WorkspaceMCPAuditEvent.user_id == User.id)
+                .where(WorkspaceMCPAuditEvent.tenant_id == tenant_id)
             )
-    audit_events.sort(key=lambda event: event.created_at, reverse=True)
-    audit_events = audit_events[:50]
+            if audit_before is not None:
+                statement = statement.where(
+                    WorkspaceMCPAuditEvent.created_at < audit_before
+                )
+            statement = statement.order_by(
+                WorkspaceMCPAuditEvent.created_at.desc()
+            ).limit(audit_page_size)
+            audit_rows.extend(list((await db.execute(statement)).all()))
+    audit_rows.sort(key=lambda row: row[0].created_at, reverse=True)
+    audit_rows = audit_rows[:audit_page_size]
+    audit_events = [event for event, _user in audit_rows]
     outcomes = {"success": 0, "denied": 0, "error": 0}
     event_types: dict[str, int] = {}
     for event in audit_events:
@@ -1455,6 +1462,12 @@ async def platform_workspace_mcp_diagnostics(
                 "event_types": event_types,
             },
         },
+        "audit_pagination": {
+            "page_size": audit_page_size,
+            "next_before": audit_events[-1].created_at.isoformat()
+            if len(audit_events) == audit_page_size
+            else None,
+        },
         "recent_audit_events": [
             {
                 "id": str(event.id),
@@ -1463,11 +1476,17 @@ async def platform_workspace_mcp_diagnostics(
                 "event_type": event.event_type,
                 "outcome": event.outcome,
                 "request_id": _mask(event.request_id),
+                # The operator needs to distinguish who authorized a client;
+                # prefer the displayed name and never return the email, IP, or
+                # raw user identifier from this platform-wide feed.
+                "actor_name": user.full_name
+                if user and user.full_name
+                else "Unknown user",
                 "created_at": event.created_at.isoformat()
                 if event.created_at
                 else None,
             }
-            for event in audit_events
+            for event, user in audit_rows
         ],
     }
 

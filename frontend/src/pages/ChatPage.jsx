@@ -363,9 +363,11 @@ export default function ChatPage() {
 
   const togglePrivacyMode = useCallback(async () => {
     if (privacySaving || !usePremium) return
+    const nextValue = !user?.privacy_mode
+    if (nextValue && !window.confirm('Turn on Privacy Mode? This immediately revokes any connected Claude, ChatGPT, Codex, or other external MCP assistant. Native LawHand features remain available with Privacy Mode safeguards.')) return
     setPrivacySaving(true)
     try {
-      await updateMe({ privacy_mode: !user?.privacy_mode })
+      await updateMe({ privacy_mode: nextValue })
       await refreshUser?.()
     } catch (err) {
       showErrorNotice('Privacy preference could not be saved', 'Please try again.', err)

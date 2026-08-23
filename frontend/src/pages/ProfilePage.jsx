@@ -3,7 +3,7 @@ import { reportError } from '../utils/reportError'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../App'
 import { ArrowRight, BookOpen, Briefcase, Clock, DollarSign, Building, ShieldCheck } from 'lucide-react'
-import { getMyMatters, getTimeEntries, updateMe } from '../api'
+import { getMyMatters, getTimeEntries, getWorkspaceMcpGrants, updateMe } from '../api'
 import ReleaseInfoPanel from '../components/ReleaseInfoPanel'
 import WorkspaceMcpGrantsPanel from '../components/WorkspaceMcpGrantsPanel'
 
@@ -102,14 +102,27 @@ export default function ProfilePage() {
 
   const togglePrivacyMode = async () => {
     if (privacySaving) return
+    const nextValue = !user?.privacy_mode
+    if (nextValue) {
+      let connectedNames = []
+      try {
+        const result = await getWorkspaceMcpGrants()
+        const grants = result?.items || result?.grants || (Array.isArray(result) ? result : [])
+        connectedNames = grants.filter((grant) => (grant.status || 'active') === 'active').map((grant) => grant.client_name || grant.client?.name || 'Connected assistant')
+      } catch {
+        // The server still revokes grants atomically; this is only a clearer
+        // confirmation message when the list is currently reachable.
+      }
+      const assistants = connectedNames.length ? `\n\nThis immediately revokes: ${connectedNames.join(', ')}.` : ''
+      if (!window.confirm(`Turn on Privacy Mode? External MCP assistants such as Claude, ChatGPT, and Codex will lose workspace access and must be reconnected after Privacy Mode is turned off.${assistants}\n\nNative LawHand features remain available with Privacy Mode safeguards.`)) return
+    }
     setPrivacySaving(true)
     setPrivacyStatus('')
     try {
-      const nextValue = !user?.privacy_mode
       await updateMe({ privacy_mode: nextValue })
       await refreshUser?.()
       setPrivacyStatus(nextValue
-        ? 'Private-detail protection is on for eligible routes.'
+        ? 'Private-detail protection is on. Connected external assistants were revoked; native LawHand features remain available.'
         : 'Private-detail protection preference is off. Standard still removes detected details and excludes private context.')
     } catch (err) {
       setPrivacyStatus(err?.response?.data?.detail || 'Privacy preference could not be saved. Please try again.')
