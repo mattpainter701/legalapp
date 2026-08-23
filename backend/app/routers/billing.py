@@ -19,6 +19,19 @@ router = APIRouter(prefix="/billing", tags=["billing"])
 logger = logging.getLogger(__name__)
 
 
+def _mask(val: str | None) -> str | None:
+    """Truncate a Stripe identifier for display or logging.
+
+    Stripe customer and subscription ids identify a paying firm, so they are
+    treated as sensitive wherever they leave the database -- in API responses
+    and equally in log output. Enough of the id survives to correlate a record
+    with the Stripe dashboard without writing it out in full.
+    """
+    if not val:
+        return None
+    return val[:8] + "..." + val[-4:]
+
+
 # ── Stripe customer helper (called from auth on tenant creation) ───────────────
 
 
@@ -53,11 +66,6 @@ async def billing_status(
     tenant = result.scalar_one_or_none()
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
-
-    def _mask(val: str | None) -> str | None:
-        if not val:
-            return None
-        return val[:8] + "..." + val[-4:]
 
     since = datetime.now(timezone.utc) - timedelta(days=30)
     mcp_usage = (
@@ -275,7 +283,7 @@ async def _find_tenant_by_customer(
             "Stripe %s references customer %s with no matching tenant. A paying "
             "customer may be unlinked -- reconcile stripe_customer_id.",
             event_type,
-            customer_id,
+            _mask(customer_id),
         )
     return tenant
 
@@ -314,8 +322,8 @@ async def _handle_subscription_updated(db: AsyncSession, subscription: dict) -> 
                 "Stripe subscription %s for customer %s has no plan metadata "
                 "'tier'. Keeping existing tier %r -- set metadata.tier on the "
                 "Stripe price.",
-                subscription_id,
-                customer_id,
+                _mask(subscription_id),
+                _mask(customer_id),
                 billing_tier,
             )
         tenant.billing_tier = billing_tier

@@ -1,3 +1,13 @@
+"""MCP billing state transitions driven by Stripe subscription events.
+
+These call the private handlers directly. Each handler mutates the session and
+leaves the commit to its caller -- the webhook dispatcher commits once, so the
+claim row recording the Stripe event and the state change it produced land in
+the same transaction. Committing here reproduces that boundary before
+``refresh()``, which would otherwise discard the pending changes and reload the
+row unchanged.
+"""
+
 import pytest
 
 from app.routers import billing
@@ -18,6 +28,7 @@ async def test_active_subscription_enables_billing_but_not_entitlement(
             "items": {"data": []},
         },
     )
+    await db_session.commit()
     await db_session.refresh(test_tenant)
     assert test_tenant.stripe_subscription_status == "active"
     assert test_tenant.mcp_billing_status == "active"
@@ -35,6 +46,7 @@ async def test_first_payment_failure_suspends_product_key_traffic(
         db_session,
         {"customer": "cus_mcp_failed", "attempt_count": 1},
     )
+    await db_session.commit()
     await db_session.refresh(test_tenant)
     assert test_tenant.stripe_subscription_status == "past_due"
     assert test_tenant.mcp_billing_status == "past_due"
@@ -49,6 +61,7 @@ async def test_subscription_deletion_suspends_mcp_billing(db_session, test_tenan
     await billing._handle_subscription_deleted(
         db_session, {"customer": "cus_mcp_deleted"}
     )
+    await db_session.commit()
     await db_session.refresh(test_tenant)
     assert test_tenant.stripe_subscription_id is None
     assert test_tenant.stripe_subscription_status == "canceled"

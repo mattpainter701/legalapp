@@ -19,7 +19,7 @@ from app.routers.billing import _SUBSCRIPTION_HANDLERS
 from app.services.stripe_webhook_guard import claim_event, ordering_object_id
 from app.models.billing import TimeEntry, Expense, Invoice, InvoiceLineItem, Payment
 from app.models.plugin import Matter
-from app.models.tenant import TenantSettings
+from app.models.tenant import Tenant, TenantSettings
 from app.schemas.billing import (
     TimeEntryCreate,
     TimeEntryUpdate,
@@ -1553,25 +1553,33 @@ async def _resolve_and_bind_stripe_tenant(
     if not invoice_id:
         return None
 
-    # This previously iterated every tenant -- setting RLS context and
-    # re-querying per candidate, two round trips each -- to discover which
-    # tenant owned an invoice. That is O(tenants) per webhook on the degraded
-    # path, and it only ran when Stripe metadata was already incomplete.
+    # Fallback for a Stripe object that reached us without tenant_id metadata.
+    # Every object this application creates carries it (see
+    # create_invoice_payment_intent), so this path means the object predates
+    # that metadata or was created outside the app.
     #
-    # It is also unnecessary. Every Stripe object this application creates
-    # carries `tenant_id` in its metadata (see create_invoice_payment_intent),
-    # so the loop could only ever help for objects created outside the app or
-    # before that metadata existed. Postgres RLS blocks a single cross-tenant
-    # lookup here -- `enable_rls_bypass` keys the `rls_bypass_users` policy on
-    # the users table only, and is documented as auth-path-exclusive -- so the
-    # honest choice is to fail loudly with something an operator can act on
-    # rather than to spend a thousand queries guessing.
-    logger.error(
-        "Stripe webhook metadata for invoice %s carries no tenant_id, so the "
-        "owning tenant cannot be resolved under RLS. Backfill metadata.tenant_id "
-        "on the Stripe object and replay the event from the Stripe dashboard.",
+    # Resolving it costs two round trips per tenant -- Postgres RLS admits no
+    # single cross-tenant lookup here, and `enable_rls_bypass` keys the
+    # `rls_bypass_users` policy on the users table alone and is documented as
+    # auth-path-exclusive. The scan is therefore kept, but it is no longer
+    # silent: an operator who sees this warning can backfill the metadata and
+    # stop the scan from recurring.
+    logger.warning(
+        "Stripe webhook metadata for invoice %s carries no tenant_id; falling "
+        "back to a per-tenant scan. Backfill metadata.tenant_id on the Stripe "
+        "object to avoid this path.",
         invoice_id,
     )
+    tenant_result = await db.execute(select(Tenant.id))
+    for candidate_tenant_id in tenant_result.scalars().all():
+        await set_tenant_context(db, str(candidate_tenant_id))
+        inv_result = await db.execute(
+            select(Invoice.tenant_id).where(Invoice.id == invoice_id)
+        )
+        resolved_tenant_id = inv_result.scalar_one_or_none()
+        if resolved_tenant_id:
+            return resolved_tenant_id
+
     return None
 
 
