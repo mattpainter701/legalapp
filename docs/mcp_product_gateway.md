@@ -79,6 +79,32 @@ currently loaded and indexed, and a deployment can be partial or empty. Check
 - `sync_status`: ingest and embedding progress.
 - `corpus_status`: global corpus counts and coverage.
 
+### Platform-Native Tools
+
+These execute in the backend against tenant data rather than proxying to the
+research sidecar. They resolve their tenant from the product key and are
+metered on the same path as research tools, including when they fail.
+
+- `list_matters`: the tenant's matters, optionally filtered by a name
+  substring. `limit` is 1-50 and defaults to 25.
+- `list_matter_documents`: documents on one matter. `limit` is 1-100 and
+  defaults to 50.
+- `create_document`: a Markdown document on a matter, optionally linked to a
+  task in the same matter.
+
+Arguments are validated against the declared `inputSchema` before any query
+runs, and an invalid argument is a `400` naming the offending field. Two
+consequences are worth knowing when writing a client:
+
+- `matter_id` and `task_id` must be UUIDs. A matter *name* is not accepted --
+  call `list_matters` first and use the `id` it returns. Passing a name
+  previously produced a `500`.
+- `limit` outside its declared range is rejected rather than clamped, and an
+  argument the schema does not declare is rejected rather than ignored.
+
+`create_document` bounds `content` at 200,000 characters, inside the 256 KiB
+request cap the transport locations enforce.
+
 ## Billing And Quotas
 
 `mcp_usage_events` is the billing/monitoring source:
