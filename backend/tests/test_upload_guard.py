@@ -55,3 +55,36 @@ def test_the_allowance_boundary_is_inclusive():
 @pytest.mark.parametrize("header", [None, "", "not-a-number"])
 def test_an_absent_or_unusable_header_defers_to_the_post_read_check(header):
     reject_oversized_request(_request(header), MAX_BYTES, MAX_MB)
+
+
+@pytest.mark.asyncio
+async def test_document_upload_refuses_an_oversized_declared_body(client):
+    """Exercises the guard at its call site.
+
+    The multipart body is valid and small; only the declared Content-Length is
+    oversized. A 413 proves the header check ran and short-circuited the
+    handler before `await file.read()` pulled the body into memory as a single
+    bytes object.
+
+    Note the guard cannot prevent FastAPI parsing the multipart form -- that
+    happens while resolving the `UploadFile` dependency, before the function
+    body runs. It spools to a temp file rather than RAM, so the allocation this
+    guard avoids is the one that mattered.
+    """
+    response = await client.post(
+        "/api/documents/upload",
+        files={"file": ("big.pdf", b"%PDF-1.4 tiny", "application/pdf")},
+        headers={"content-length": str(MAX_BYTES * 4)},
+    )
+    assert response.status_code == 413
+    assert "50MB" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_document_upload_accepts_a_body_within_the_allowance(client):
+    """The same call site must not reject a normal upload."""
+    response = await client.post(
+        "/api/documents/upload",
+        files={"file": ("small.pdf", b"%PDF-1.4 tiny", "application/pdf")},
+    )
+    assert response.status_code != 413
