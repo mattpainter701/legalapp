@@ -177,9 +177,10 @@ pass.
 ### High-throughput bulk settings
 
 The loader batches 500 database writes by default and commits each batch. It
-also runs `lbzip2` with eight decompression threads by default. On Skynet this
-uses otherwise-idle CPU without launching duplicate loaders against the same
-archive. Tune only after observing host pressure:
+also runs `lbzip2` with eight decompression threads by default. These are
+throughput defaults, not a reason to launch duplicate loaders. On Skynet they
+use otherwise-idle CPU without rescanning the same archive. Tune only after
+observing host pressure:
 
 ```bash
 COURTLISTENER_DECOMPRESS_THREADS=8
