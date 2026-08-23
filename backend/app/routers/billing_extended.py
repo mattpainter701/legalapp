@@ -1529,7 +1529,7 @@ async def stripe_webhook(
         # metadata is backfilled. Committing a claim for an event that applied
         # no work would make that replay a silent duplicate.
         await db.rollback()
-        logger.error("Stripe %s applied no work: %s", event_type, exc)
+        logger.error("Stripe event %s applied no work: %s", event.get("id"), exc)
         return {"status": "unresolved"}
     await db.commit()
 

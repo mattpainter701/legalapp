@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -28,30 +27,16 @@ def _mask(val: str | None) -> str | None:
     """Truncate a Stripe identifier for display in an API response.
 
     The caller is already authenticated and entitled to the record, so enough
-    of the id survives to correlate it with the Stripe dashboard. Not for logs
-    -- see ``_log_ref``.
+    of the id survives to correlate it with the Stripe dashboard.
+
+    Deliberately not used for logging. Logs are shipped, aggregated, and
+    retained far beyond the request that produced them, and a truncated Stripe
+    id still carries most of its distinguishing characters. Log statements name
+    the tenant id or the Stripe event id instead.
     """
     if not val:
         return None
     return val[:8] + "..." + val[-4:]
-
-
-def _log_ref(val: str | None) -> str:
-    """Derive a one-way correlator for a Stripe identifier in log output.
-
-    Logs are shipped, aggregated, and retained far beyond the request that
-    produced them, so an identifier that names a paying firm should not appear
-    in them at all -- not even truncated. ``_mask`` keeps a prefix and suffix,
-    which is fine behind authentication but still leaks most of a Stripe id's
-    distinguishing characters into a log pipeline.
-
-    A short SHA-256 prefix is stable, so an operator can group every line about
-    the same customer and match it against a value they hash themselves, while
-    the log itself reveals nothing.
-    """
-    if not val:
-        return "none"
-    return "ref:" + hashlib.sha256(val.encode("utf-8")).hexdigest()[:12]
 
 
 # ── Stripe customer helper (called from auth on tenant creation) ───────────────
@@ -287,7 +272,7 @@ async def stripe_webhook(
         # applied. Returning 2xx is deliberate: an immediate Stripe retry cannot
         # succeed either, and the operator replays once the cause is fixed.
         await db.rollback()
-        logger.error("Stripe %s applied no work: %s", event_type, exc)
+        logger.error("Stripe event %s applied no work: %s", event.get("id"), exc)
         return {"status": "unresolved", "event_type": event_type}
     await db.commit()
 
@@ -310,10 +295,14 @@ async def _find_tenant_by_customer(
     )
     tenant = result.scalar_one_or_none()
     if tenant is None:
+        # No tenant id exists to name here, and the Stripe customer id must
+        # not go into a log. The dispatcher logs the Stripe event id alongside
+        # this message; the event names its own customer in the Stripe
+        # dashboard, which is where reconciliation happens anyway.
         raise StripeTargetUnresolved(
-            f"{event_type} references customer {_log_ref(customer_id)} with no "
-            "matching tenant; a paying customer may be unlinked -- reconcile "
-            "stripe_customer_id"
+            f"{event_type} references a Stripe customer with no matching "
+            "tenant; a paying customer may be unlinked -- look up the event in "
+            "Stripe and reconcile tenants.stripe_customer_id"
         )
     return tenant
 
@@ -342,13 +331,17 @@ async def _handle_subscription_updated(db: AsyncSession, subscription: dict) -> 
         and subscription_id != current_subscription_id
         and status in ("canceled", "incomplete_expired", "unpaid")
     ):
+        # Deliberately identifier-free. Logs are shipped, aggregated, and
+        # retained well beyond the request, so a Stripe customer or
+        # subscription id -- which names a paying firm -- does not belong in
+        # them. The tenant id is this application's own identifier and is
+        # enough to investigate; the Stripe side is reachable from the event id
+        # the dispatcher logs.
         logger.info(
-            "Ignoring Stripe %r update for superseded subscription %s on customer "
-            "%s; the tenant now holds %s.",
+            "Ignoring Stripe %r update for a superseded subscription on tenant "
+            "%s, which now holds a different subscription.",
             status,
-            _log_ref(subscription_id),
-            _log_ref(customer_id),
-            _log_ref(current_subscription_id),
+            tenant.id,
         )
         return
 
@@ -370,11 +363,10 @@ async def _handle_subscription_updated(db: AsyncSession, subscription: dict) -> 
             # the tenant's existing tier and make the misconfiguration visible.
             billing_tier = tenant.billing_tier or "flat"
             logger.error(
-                "Stripe subscription %s for customer %s has no plan metadata "
-                "'tier'. Keeping existing tier %r -- set metadata.tier on the "
-                "Stripe price.",
-                _log_ref(subscription_id),
-                _log_ref(customer_id),
+                "Stripe subscription for tenant %s has no plan metadata 'tier'. "
+                "Keeping existing tier %r -- set metadata.tier on the Stripe "
+                "price.",
+                tenant.id,
                 billing_tier,
             )
         tenant.billing_tier = billing_tier
@@ -411,11 +403,9 @@ async def _handle_subscription_deleted(db: AsyncSession, subscription: dict) -> 
         and deleted_subscription_id != current_subscription_id
     ):
         logger.info(
-            "Ignoring Stripe deletion of superseded subscription %s for customer "
-            "%s; the tenant now holds %s.",
-            _log_ref(deleted_subscription_id),
-            _log_ref(customer_id),
-            _log_ref(current_subscription_id),
+            "Ignoring Stripe deletion of a superseded subscription on tenant %s, "
+            "which now holds a different subscription.",
+            tenant.id,
         )
         return
 
