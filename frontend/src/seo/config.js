@@ -84,8 +84,13 @@ export const PUBLIC_ROUTE_META = Object.freeze({
     breadcrumb: 'MCP',
     parentPath: '/product',
   },
-  '/pricing': {
-    title: 'Pricing | LawHand',
+  '/demo': {
+    title: 'Book a LawHand Demo',
+    description: 'Request a focused LawHand demo built around your firm’s workflows, sources, and review controls.',
+    canonicalPath: '/demo',
+    indexable: true,
+  },
+  '/pricing': {    title: 'Pricing | LawHand',
     description:
       `LawHand is $${PLATFORM_PRICE_USD} per user per month billed annually. LawHand MCP is in private preview at an intended public price of $${MCP_TOOL_CALL_PRICE_USD} per tool call.`,
     canonicalPath: '/pricing',
@@ -146,6 +151,7 @@ const WORKSPACE_ROUTE_TITLES = [
   ['/intake', 'Caller intake'],
   ['/plugins', 'Add-on modules'],
   ['/profile', 'Profile'],
+  ['/guide', 'User guide'],
   ['/admin', 'Administration'],
   ['/onboarding', 'Onboarding'],
   ['/platform', 'Platform administration'],

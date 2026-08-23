@@ -40,6 +40,10 @@ DEFAULT_ALLOWED_TOOLS = [
     "export_research_bundle",
     "sync_status",
     "corpus_status",
+    # Platform-native document tools (executed in the backend, not proxied).
+    "list_matters",
+    "list_matter_documents",
+    "create_document",
 ]
 
 

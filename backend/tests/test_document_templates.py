@@ -5,6 +5,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
 from app.routers import document_templates
 from app.services.template_intake import analyze_template_upload
@@ -105,6 +106,31 @@ async def _grant_manage_documents(db_session, test_tenant, test_user) -> None:
         )
     )
     await db_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_template_upload_read_is_bounded_before_size_rejection(monkeypatch):
+    class OversizedUpload:
+        filename = "oversized.docx"
+        content_type = (
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
+
+        def __init__(self):
+            self.requested_size = None
+
+        async def read(self, size=-1):
+            self.requested_size = size
+            return b"x" * size
+
+    upload = OversizedUpload()
+    monkeypatch.setattr(document_templates.settings, "MAX_FILE_SIZE_MB", 1)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await document_templates._read_template_sample(upload)
+
+    assert getattr(exc_info.value, "status_code", None) == 413
+    assert upload.requested_size == (1024 * 1024) + 1
 
 
 async def _prepare_active_pdf_generation(
@@ -723,6 +749,37 @@ def test_static_application_pdf_discovers_and_renders_reviewed_overlay_fields():
     assert "CV-2026-42" not in rendered_text
 
 
+def test_pdf_intake_reuses_one_validated_reader(monkeypatch):
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+    import app.services.pdf_templates as pdf_template_service
+
+    output = BytesIO()
+    pdf = canvas.Canvas(output, pagesize=letter)
+    pdf.drawString(72, 720, "Applicant Name:")
+    pdf.drawString(72, 690, "Dear Ada Lovelace,")
+    pdf.save()
+
+    open_count = 0
+    original_open = pdf_template_service._open_pdf
+
+    def counted_open(content):
+        nonlocal open_count
+        open_count += 1
+        return original_open(content)
+
+    monkeypatch.setattr(pdf_template_service, "_open_pdf", counted_open)
+
+    analysis = analyze_template_upload(
+        file_bytes=output.getvalue(),
+        filename="application.pdf",
+        content_type="application/pdf",
+    )
+
+    assert analysis.variable_schema["source"] == "pdf_text_overlay"
+    assert open_count == 1
+
+
 def test_image_only_pdf_uses_ocr_coordinates_and_renders_flattened_fields(
     monkeypatch,
 ):
@@ -844,6 +901,55 @@ def test_docx_source_render_preserves_structure_and_replaces_split_run_values():
     assert reopened.paragraphs[1].text == "Case No. CV-2027-9"
     assert reopened.tables[0].cell(0, 0).text == "Client: Ada Lovelace Jr."
     assert len(reopened.tables) == 1
+
+
+def test_docx_render_recurses_through_deep_tables():
+    from docx import Document
+
+    document = Document()
+    outer = document.add_table(rows=1, cols=1)
+    middle = outer.cell(0, 0).add_table(rows=1, cols=1)
+    inner = middle.cell(0, 0).add_table(rows=1, cols=1)
+    inner.cell(0, 0).text = "Deep value: {{deep_value}}"
+    source = BytesIO()
+    document.save(source)
+
+    rendered = fill_docx_template(
+        source.getvalue(),
+        variable_schema={"fields": [{"name": "deep_value"}]},
+        variables={"deep_value": "Found"},
+    )
+    reopened = Document(BytesIO(rendered))
+    reopened_middle = reopened.tables[0].cell(0, 0).tables[0]
+    reopened_inner = reopened_middle.cell(0, 0).tables[0]
+
+    assert reopened_inner.cell(0, 0).text == "Deep value: Found"
+
+
+def test_docx_render_never_reinterprets_inserted_values_as_source_text():
+    from docx import Document
+
+    document = Document()
+    document.add_paragraph("{{first_value}} / ORIGINAL SECOND")
+    source = BytesIO()
+    document.save(source)
+
+    rendered = fill_docx_template(
+        source.getvalue(),
+        variable_schema={
+            "fields": [
+                {"name": "first_value"},
+                {"name": "second_value", "source_text": "ORIGINAL SECOND"},
+            ]
+        },
+        variables={
+            "first_value": "ORIGINAL SECOND",
+            "second_value": "FINAL SECOND",
+        },
+    )
+    reopened = Document(BytesIO(rendered))
+
+    assert reopened.paragraphs[0].text == "ORIGINAL SECOND / FINAL SECOND"
 
 
 def test_docx_analysis_rejects_damaged_upload_with_actionable_error():

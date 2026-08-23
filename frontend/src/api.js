@@ -291,6 +291,9 @@ export const updateMe = (data) => api.patch('/auth/me', data).then((r) => r.data
 export const register = (data) =>
   api.post('/auth/register', data).then((r) => r.data)
 
+export const submitDemoRequest = (data) =>
+  api.post('/marketing/demo-requests', data, { _suppressAuthRedirect: true }).then((r) => r.data)
+
 export const signupWithPlan = (data) =>
   api.post('/auth/signup/plan', data).then((r) => r.data)
 

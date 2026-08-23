@@ -300,9 +300,9 @@ def _widgets(reader: PdfReader) -> list[PdfWidget]:
     return widgets
 
 
-def discover_pdf_fields(content: bytes) -> list[dict[str, Any]]:
-    """Return stable variable metadata for every AcroForm widget."""
-    reader = _open_pdf(content)
+def _discover_pdf_fields(reader: PdfReader) -> list[dict[str, Any]]:
+    """Return stable variable metadata from an already validated reader."""
+
     raw_fields = reader.get_fields() or {}
     widgets = _widgets(reader)
     if len(widgets) > 200:
@@ -370,6 +370,20 @@ def discover_pdf_fields(content: bytes) -> list[dict[str, Any]]:
     return discovered
 
 
+def _inspect_pdf_template(content: bytes) -> tuple[PdfReader, list[dict[str, Any]]]:
+    """Validate and parse template bytes once for a multi-stage operation."""
+
+    reader = _open_pdf(content)
+    return reader, _discover_pdf_fields(reader)
+
+
+def discover_pdf_fields(content: bytes) -> list[dict[str, Any]]:
+    """Return stable variable metadata for every AcroForm widget."""
+
+    _, fields = _inspect_pdf_template(content)
+    return fields
+
+
 _LABEL_BLANK_PATTERN = re.compile(r"^\s*([A-Za-z][A-Za-z0-9 /&.'()-]{1,48})\s*:\s*$")
 _LABEL_BLANK_ALIASES = {
     "name": "client_name",
@@ -395,13 +409,13 @@ _LABEL_BLANK_ALIASES = {
 }
 
 
-def discover_pdf_overlay_fields(
-    content: bytes,
+def _discover_pdf_overlay_fields(
+    reader: PdfReader,
     candidates: list[dict[str, Any]],
     *,
     fragments: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Locate reusable text values and labeled blanks in an ordinary PDF.
+    """Locate reusable values using an already validated PDF reader.
 
     These are deliberately conservative, review-required virtual fields.  The
     source coordinates are immutable server-discovered metadata, not arbitrary
@@ -410,7 +424,6 @@ def discover_pdf_overlay_fields(
 
     from reportlab.pdfbase import pdfmetrics
 
-    reader = _open_pdf(content)
     located_fragments: list[dict[str, Any]] = []
     if fragments is not None:
         for fragment in fragments:
@@ -491,7 +504,12 @@ def discover_pdf_overlay_fields(
             return measured
         return measured * float(text_width) / full_width
 
+    for fragment in located_fragments:
+        fragment["_folded_text"] = str(fragment["text"]).casefold()
+
+    page_widths = [float(page.mediabox.width) for page in reader.pages]
     discovered: list[dict[str, Any]] = []
+    discovered_by_name: dict[str, dict[str, Any]] = {}
     occupied: set[tuple[int, int, int]] = set()
 
     def add_field(
@@ -510,7 +528,7 @@ def discover_pdf_overlay_fields(
         page_index = int(fragment["page_index"])
         size = float(fragment["font_size"])
         left = float(fragment["x"]) + fragment_width(fragment, fragment["text"][:start])
-        page_width = float(reader.pages[page_index].mediabox.width)
+        page_width = page_widths[page_index]
         source_width = fragment_width(fragment, source_text)
         if erase_source:
             right = min(page_width - 18.0, left + max(8.0, source_width + 3.0))
@@ -531,33 +549,14 @@ def discover_pdf_overlay_fields(
             "source_text": source_text,
             "source_kind": str(fragment.get("source_kind") or "text"),
         }
-        existing = next(
-            (field for field in discovered if field.get("name") == normalized),
-            None,
-        )
+        existing = discovered_by_name.get(normalized)
         if existing is not None:
             overlays = existing.setdefault(
                 "pdf_overlays", [dict(existing["pdf_overlay"])]
             )
             overlays.append(overlay_spec)
-            existing["pdf_source_key"] = (
-                "overlay:"
-                + hashlib.sha256(
-                    json.dumps(overlays, sort_keys=True, separators=(",", ":")).encode(
-                        "utf-8"
-                    )
-                ).hexdigest()[:24]
-            )
             occupied.add(marker)
             return
-        source_key = (
-            "overlay:"
-            + hashlib.sha256(
-                json.dumps(
-                    [overlay_spec], sort_keys=True, separators=(",", ":")
-                ).encode("utf-8")
-            ).hexdigest()[:24]
-        )
         field = {
             "name": normalized,
             "label": label.strip() or normalized.replace("_", " ").title(),
@@ -566,7 +565,6 @@ def discover_pdf_overlay_fields(
             "multiline": False,
             "page": page_index + 1,
             "rect": rect,
-            "pdf_source_key": source_key,
             "pdf_overlay": overlay_spec,
             "pdf_overlays": [overlay_spec],
             "source_text": source_text,
@@ -578,6 +576,7 @@ def discover_pdf_overlay_fields(
         if example:
             field["example"] = example
         discovered.append(field)
+        discovered_by_name[normalized] = field
         occupied.add(marker)
 
     for candidate in candidates:
@@ -587,10 +586,10 @@ def discover_pdf_overlay_fields(
         name = str(candidate.get("name") or "")
         if not source_text or not name:
             continue
+        folded_source = source_text.casefold()
         for fragment in located_fragments:
             cursor = 0
-            folded_fragment = fragment["text"].casefold()
-            folded_source = source_text.casefold()
+            folded_fragment = fragment["_folded_text"]
             while True:
                 start = folded_fragment.find(folded_source, cursor)
                 if start < 0:
@@ -631,12 +630,35 @@ def discover_pdf_overlay_fields(
             erase_source=False,
         )
 
+    for field in discovered:
+        overlays = field.get("pdf_overlays") or []
+        field["pdf_source_key"] = (
+            "overlay:"
+            + hashlib.sha256(
+                json.dumps(overlays, sort_keys=True, separators=(",", ":")).encode(
+                    "utf-8"
+                )
+            ).hexdigest()[:24]
+        )
+
     location_count = sum(len(field.get("pdf_overlays") or []) for field in discovered)
     if len(discovered) > 200 or location_count > 400:
         raise TemplatePdfError(
             "A PDF template may contain at most 200 detected fields."
         )
     return discovered
+
+
+def discover_pdf_overlay_fields(
+    content: bytes,
+    candidates: list[dict[str, Any]],
+    *,
+    fragments: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Validate a PDF and locate conservative, review-required overlays."""
+
+    reader = _open_pdf(content)
+    return _discover_pdf_overlay_fields(reader, candidates, fragments=fragments)
 
 
 def _schema_value_map(schema: dict | None, variables: dict[str, str]) -> dict[str, str]:
@@ -1367,8 +1389,7 @@ def fill_pdf_template(
     enforce_required: bool = False,
 ) -> bytes:
     """Fill a PDF's named fields and optionally return a non-editable artifact."""
-    reader = _open_pdf(content)
-    discovered_fields = discover_pdf_fields(content)
+    reader, discovered_fields = _inspect_pdf_template(content)
     schema_fields = (variable_schema or {}).get("fields") or []
     if not discovered_fields:
         overlay_fields = [

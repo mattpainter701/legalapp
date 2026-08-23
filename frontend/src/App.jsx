@@ -20,6 +20,7 @@ const LegalNoticePage = lazy(() => import('./pages/LegalNoticePage'))
 const ProductChatPage = lazy(() => import('./pages/ProductChatPage'))
 const McpProductPage = lazy(() => import('./pages/McpProductPage'))
 const PricingPage = lazy(() => import('./pages/PricingPage'))
+const DemoRequestPage = lazy(() => import('./pages/DemoRequestPage'))
 const ProductPage = lazy(() => import('./pages/ProductPage'))
 const WorkspaceMcpAuthorizePage = lazy(() => import('./pages/WorkspaceMcpAuthorizePage'))
 const NotFoundPage = lazy(() => import('./pages/NotFoundPage'))
@@ -226,7 +227,8 @@ export default function App() {
         <Route path="/product" element={<ProductPage />} />
         <Route path="/product/chat" element={<ProductChatPage />} />
         <Route path="/product/mcp" element={<McpProductPage />} />
-        <Route path="/pricing" element={<PricingPage />} />
+          <Route path="/pricing" element={<PricingPage />} />
+          <Route path="/demo" element={<DemoRequestPage />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path="/portal/accept" element={<PortalAcceptPage />} />
         <Route path="/portal/case" element={<PortalCasePage />} />
