@@ -45,11 +45,33 @@ const STATUS_FALLBACK_MESSAGES = {
   504: 'The request timed out. Please try again.',
 }
 
+// Axios reports a client-side timeout as a bare Error with no response, which
+// would otherwise fall through to the generic "Request failed". A timeout is a
+// distinct, retryable condition and deserves to say so.
+const isTimeoutError = (error) => (
+  error?.code === 'ECONNABORTED'
+  || error?.code === 'ETIMEDOUT'
+  || (typeof error?.message === 'string' && error.message.includes('timeout'))
+)
+
+const TIMEOUT_MESSAGE = 'This is taking longer than usual. The server did not respond in time — please try again.'
+
 export const normalizeApiError = (errorOrResponse) => {
   const response = errorOrResponse?.response || errorOrResponse
   const data = response?.data
   const status = response?.status
   const headers = response?.headers
+
+  if (!errorOrResponse?.response && isTimeoutError(errorOrResponse)) {
+    const timedOut = errorOrResponse instanceof Error ? errorOrResponse : new Error(TIMEOUT_MESSAGE)
+    timedOut.message = TIMEOUT_MESSAGE
+    timedOut.name = 'ApiError'
+    timedOut.isTimeout = true
+    timedOut.status = undefined
+    timedOut.detail = TIMEOUT_MESSAGE
+    timedOut.validationErrors = []
+    return timedOut
+  }
 
   const hasStructuredData = data && typeof data === 'object' && !Array.isArray(data)
   const rawDetail = hasStructuredData ? (data.detail ?? data.error ?? data.message ?? '') : data
@@ -95,8 +117,16 @@ export const normalizeApiError = (errorOrResponse) => {
   return normalized
 }
 
+// Nginx gives the API 30s (proxy_read_timeout) before it returns 504. Axios
+// defaults to no timeout at all, so a slow query showed as an indefinite
+// spinner until the gateway gave up, then surfaced as an indistinguishable
+// network error. Time out just inside the gateway so the client owns the
+// deadline and can say something specific about it.
+export const REQUEST_TIMEOUT_MS = 25000
+
 const api = axios.create({
   baseURL: BASE_URL,
+  timeout: REQUEST_TIMEOUT_MS,
   headers: {
     'Content-Type': 'application/json',
   },

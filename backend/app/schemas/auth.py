@@ -83,6 +83,12 @@ class UserInfo(BaseModel):
     premium_ai_enabled: bool = False
     created_at: datetime
     billing_tier: str
+    # Payment health, so the browser can tell a firm its subscription is in
+    # trouble. Without these the UI cannot distinguish a healthy tenant from
+    # one Stripe has marked past_due, and the firm learns only when features
+    # stop working.
+    subscription_status: Optional[str] = None
+    billing_status: Optional[str] = None
     enabled_modules: list[str] = []
     default_route: str = "/matters"
     plan: str = "full-platform"

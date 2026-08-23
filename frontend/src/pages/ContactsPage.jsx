@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { TableSkeleton } from '../components/LoadingSkeleton'
 import { useNavigate } from 'react-router-dom'
 import { getContacts, createContact } from '../api'
 import { Users, Building2, User, Plus, Search, ChevronRight, Phone, Mail } from 'lucide-react'
@@ -7,7 +8,6 @@ import {
   AlertBanner,
   EmptyState,
   FilterToolbar,
-  Spinner,
   WorkspacePage,
   WorkspacePageHeader,
 } from '../components/ui'
@@ -241,7 +241,7 @@ export default function ContactsPage() {
 
         {/* List */}
         {loading ? (
-          <Spinner />
+          <TableSkeleton rows={8} columns={5} ariaLabel="Loading contacts" />
         ) : error ? (
           <AlertBanner
             type="error"

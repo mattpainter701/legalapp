@@ -15,6 +15,8 @@ from app.config import get_settings
 from app.database import get_db, set_tenant_context, async_session_maker
 from app.middleware.tenant import get_current_user
 from app.services.access_control import require_finance_admin
+from app.routers.billing import _SUBSCRIPTION_HANDLERS
+from app.services.stripe_webhook_guard import claim_event, ordering_object_id
 from app.models.billing import TimeEntry, Expense, Invoice, InvoiceLineItem, Payment
 from app.models.plugin import Matter
 from app.models.tenant import Tenant, TenantSettings
@@ -1484,21 +1486,48 @@ async def stripe_webhook(
     event_data = event["data"]["object"]
     logger.info(f"Stripe webhook received: {event_type} (id={event['id']})")
 
-    try:
-        if event_type == "payment_intent.succeeded":
-            await _handle_payment_intent_succeeded(db, event_data)
-        elif event_type == "payment_intent.payment_failed":
-            await _handle_payment_intent_failed(db, event_data)
-        elif event_type == "checkout.session.completed":
-            await _handle_checkout_session_completed(db, event_data)
-        else:
-            logger.debug(f"Unhandled Stripe event type: {event_type}")
-    except Exception as exc:
-        logger.exception(f"Stripe webhook handler failed for {event_type}: {exc}")
-        # Still return 200 to Stripe — we logged the error for investigation
-        return {"status": "received", "warning": str(exc)}
+    handlers = {
+        "payment_intent.succeeded": _handle_payment_intent_succeeded,
+        "payment_intent.payment_failed": _handle_payment_intent_failed,
+        "checkout.session.completed": _handle_checkout_session_completed,
+        # Subscription lifecycle is owned by the dispatch table in billing.py so
+        # that this route and /api/billing/webhook cannot drift apart. Whichever
+        # endpoint is configured in the Stripe dashboard now behaves the same.
+        **_SUBSCRIPTION_HANDLERS,
+    }
+    handler = handlers.get(event_type)
+    if handler is None:
+        logger.debug(f"Unhandled Stripe event type: {event_type}")
+        return {"status": "received"}
+
+    claim = await claim_event(
+        db,
+        event_id=str(event["id"]),
+        event_type=event_type,
+        event_created=int(event.get("created") or 0),
+        object_id=ordering_object_id(event_type, event_data)
+        or _payment_object_id(event_data),
+    )
+    if not claim.should_process:
+        return {"status": "skipped", "reason": claim.reason}
+
+    # Previously this caught every exception and returned 200, which tells
+    # Stripe the event succeeded and stops all retries -- a transient database
+    # error during checkout.session.completed meant the customer paid and the
+    # application never recorded it, permanently. Let the error surface as 5xx
+    # so Stripe retries; the claim row rolls back with it, so the retry is able
+    # to claim the event again. Genuine poison-pill events are bounded by
+    # Stripe's own retry window rather than by silently dropping the first one.
+    await handler(db, event_data)
+    await db.commit()
 
     return {"status": "received"}
+
+
+def _payment_object_id(obj: dict) -> str | None:
+    """Order payment-intent and checkout events against their own object id."""
+    value = obj.get("id")
+    return value if isinstance(value, str) and value else None
 
 
 def _uuid_from_stripe_metadata(metadata: dict, key: str) -> uuid.UUID | None:
@@ -1524,16 +1553,25 @@ async def _resolve_and_bind_stripe_tenant(
     if not invoice_id:
         return None
 
-    tenant_result = await db.execute(select(Tenant.id))
-    for candidate_tenant_id in tenant_result.scalars().all():
-        await set_tenant_context(db, str(candidate_tenant_id))
-        inv_result = await db.execute(
-            select(Invoice.tenant_id).where(Invoice.id == invoice_id)
-        )
-        resolved_tenant_id = inv_result.scalar_one_or_none()
-        if resolved_tenant_id:
-            return resolved_tenant_id
-
+    # This previously iterated every tenant -- setting RLS context and
+    # re-querying per candidate, two round trips each -- to discover which
+    # tenant owned an invoice. That is O(tenants) per webhook on the degraded
+    # path, and it only ran when Stripe metadata was already incomplete.
+    #
+    # It is also unnecessary. Every Stripe object this application creates
+    # carries `tenant_id` in its metadata (see create_invoice_payment_intent),
+    # so the loop could only ever help for objects created outside the app or
+    # before that metadata existed. Postgres RLS blocks a single cross-tenant
+    # lookup here -- `enable_rls_bypass` keys the `rls_bypass_users` policy on
+    # the users table only, and is documented as auth-path-exclusive -- so the
+    # honest choice is to fail loudly with something an operator can act on
+    # rather than to spend a thousand queries guessing.
+    logger.error(
+        "Stripe webhook metadata for invoice %s carries no tenant_id, so the "
+        "owning tenant cannot be resolved under RLS. Backfill metadata.tenant_id "
+        "on the Stripe object and replay the event from the Stripe dashboard.",
+        invoice_id,
+    )
     return None
 
 

@@ -1,6 +1,6 @@
 # LawHand Office Add-in
 
-This package is the shared Microsoft 365 task pane for Word, Excel, and Outlook. It is intentionally separate from the main React SPA and replaces the legacy `word-addin/` only after Word parity is proven.
+This package is the shared Microsoft 365 task pane for Word, Excel, and Outlook. It is intentionally separate from the main React SPA and is the only supported Office add-in: the legacy `word-addin/` prototype has been removed (see `docs/archive/word-addin-removed.md`).
 
 ## Safety contract
 

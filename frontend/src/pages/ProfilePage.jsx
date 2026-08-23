@@ -7,6 +7,21 @@ import { getMyMatters, getTimeEntries, updateMe } from '../api'
 import ReleaseInfoPanel from '../components/ReleaseInfoPanel'
 import WorkspaceMcpGrantsPanel from '../components/WorkspaceMcpGrantsPanel'
 
+// Three server-side conditions reject every workspace MCP call with a 403 that
+// only ever surfaces inside a third-party client. Name them here instead.
+function mcpBlockedReason(user) {
+  if (user?.privacy_mode) {
+    return 'Privacy Mode is on, so connected assistants cannot reach this workspace. Turn it off above to restore access.'
+  }
+  if (user && user.license_active === false) {
+    return 'A Standard license is required for connected assistants. Ask a firm administrator to assign one.'
+  }
+  if (user && user.is_active === false) {
+    return 'This account is inactive, so connected assistants cannot reach this workspace.'
+  }
+  return ''
+}
+
 export default function ProfilePage() {
   const { user, refreshUser } = useAuth()
   const [myMatters, setMyMatters] = useState([])
@@ -189,13 +204,13 @@ export default function ProfilePage() {
         </div>
         <p role="status" style={{ margin: '12px 0 0', color: privacyStatus.includes('could not') ? '#9C4F3F' : '#426146', fontSize: 13 }}>
           {privacyStatus || (user?.privacy_mode
-            ? 'On: detected personal details are redacted before eligible provider requests.'
-            : 'Off for eligible private routes. Standard remains protected and cannot use matters or attachments.')}
+            ? 'On: detected personal details are redacted before eligible provider requests. This also blocks every connected assistant below — workspace MCP is unavailable while Privacy Mode is on.'
+            : 'Off for eligible private routes. Standard remains protected and cannot use matters or attachments. Turning this on will also stop any connected assistant listed below from reaching this workspace.')}
         </p>
       </section>
 
       <div style={{ marginBottom: 24 }}>
-        <WorkspaceMcpGrantsPanel />
+        <WorkspaceMcpGrantsPanel blockedReason={mcpBlockedReason(user)} />
       </div>
 
       <ReleaseInfoPanel className="mb-6" />

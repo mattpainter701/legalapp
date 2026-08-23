@@ -69,6 +69,33 @@ export function ConversationListSkeleton() {
   )
 }
 
+// Row-shaped placeholder for the list surfaces that go slow first (matters,
+// tasks, contacts, matter documents). A spinner says "something is happening";
+// a skeleton says what is coming and roughly how much of it, which is the
+// information that matters when a query takes seconds rather than milliseconds.
+export function TableSkeleton({ rows = 6, columns = 5, ariaLabel = 'Loading results' }) {
+  return (
+    <div role="status" aria-live="polite" aria-label={ariaLabel} className="w-full">
+      <div className="space-y-2">
+        {Array.from({ length: rows }, (_, rowIndex) => (
+          <div
+            key={rowIndex}
+            className="flex items-center gap-4 rounded-lg border border-brand-line bg-brand-surface px-4 py-3"
+          >
+            {Array.from({ length: columns }, (_, columnIndex) => (
+              <div
+                key={columnIndex}
+                className={`h-4 skeleton rounded ${columnIndex === 0 ? 'flex-[2]' : 'flex-1'}`}
+              />
+            ))}
+          </div>
+        ))}
+      </div>
+      <span className="sr-only">Loading results, please wait.</span>
+    </div>
+  )
+}
+
 export default function LoadingSkeleton({ type = 'message' }) {
   switch (type) {
     case 'message':
@@ -77,6 +104,8 @@ export default function LoadingSkeleton({ type = 'message' }) {
       return <InputSkeleton />
     case 'list':
       return <ConversationListSkeleton />
+    case 'table':
+      return <TableSkeleton />
     default:
       return <MessageSkeleton />
   }

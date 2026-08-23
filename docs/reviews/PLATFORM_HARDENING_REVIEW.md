@@ -75,11 +75,19 @@ Set an explicit ceiling below the cgroup limit and choose the policy
 deliberately:
 
 ```
---maxmemory 384mb --maxmemory-policy volatile-lru
+--maxmemory 384mb --maxmemory-policy noeviction
 ```
 
-`volatile-lru` matters specifically: `allkeys-lru` would evict security state
-(see 2.1). This is the fix, not merely a tuning nicety.
+**Corrected from an earlier draft**, which recommended `volatile-lru` on the
+reasoning that it would spare security state. It would not. Every Redis write in
+this codebase carries a TTL (`setex`, or `set(..., ex=)`), so *all* keys are
+"volatile" and `volatile-lru` would evict replay tombstones and revoked-`jti`
+entries exactly as readily as `allkeys-lru`.
+
+`noeviction` is the fail-closed choice for a store bearing revocation state:
+when the ceiling is reached Redis refuses writes, so new sessions error loudly
+and revocation holds. If `used_memory` trends toward the ceiling, split the RAG
+cache onto its own instance rather than relaxing the policy.
 
 ### 1.3 A Stripe webhook can scan every tenant
 
@@ -177,14 +185,14 @@ Per finding 1.2, that Redis runs with no `maxmemory` and no eviction policy in a
   that was already tombstoned becomes replayable, and explicitly revoked access
   tokens become valid again for the remainder of their TTL
   (`WORKSPACE_MCP_ACCESS_TOKEN_MAX_MINUTES` defaults to 60).
-- **Wrong eviction policy.** If `maxmemory` is later added without thought and
-  set to `allkeys-lru`, Redis will evict security state under pressure — the
-  same outcome, without a crash to notice.
+- **Any LRU policy.** Because every key here is written with a TTL, both
+  `allkeys-lru` and `volatile-lru` will evict security state under pressure —
+  the same outcome as an OOM kill, without a crash to notice.
 
 This is why 1.2 belongs in both sections. The cryptographic design is sound; its
-durability assumption is unmanaged. Set `--maxmemory` with `volatile-lru`, and
-consider whether the revocation denylist should have a persistent backstop
-rather than living only in a cache tier.
+durability assumption is unmanaged. Set `--maxmemory` with `noeviction` (see the
+correction in 1.2), and consider whether the revocation denylist should have a
+persistent backstop rather than living only in a cache tier.
 
 ## P1
 
@@ -233,16 +241,19 @@ LawHand's connection cannot do. It should also say what connecting *any*
 assistant means for firm data leaving the boundary — this is a confidentiality
 question a law firm's risk committee will ask.
 
-### 2.4 HS256 fallback should warn in production
+### 2.4 HS256 fallback — no change needed (corrected)
 
-`workspace_mcp_oauth.py:129` selects RS256 when
-`WORKSPACE_MCP_SIGNING_PRIVATE_KEY_B64` is set and falls back to HS256
-otherwise. The HS256 key is validated for length and placeholder content, so
-this is not weak by accident — but a production deployment that simply never set
-the RS256 key gets symmetric signing silently, which forecloses key rotation and
-public verification.
+An earlier draft of this review recommended warning when production runs HS256.
+That was wrong, and the correction is recorded rather than deleted.
 
-Log a startup warning, or refuse HS256 when the environment is production.
+`workspace_mcp_oauth.py:129` does select HS256 when no RS256 private key is
+configured, but config validation already makes that state unreachable outside
+development. `config.py:749` guards the HS256 branch on `settings.DEV_MODE`; with
+`DEV_MODE` false, `_validate_workspace_signing_keys()` runs unconditionally and
+requires a matched RSA keypair of at least 2048 bits. A production deployment
+cannot start on symmetric signing.
+
+No code change was made for this item.
 
 ---
 
