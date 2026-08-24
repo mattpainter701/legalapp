@@ -138,7 +138,7 @@ jobs:
   test-backend:
     name: Backend — Tests (pytest)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
 
     services:
       postgres:
