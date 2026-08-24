@@ -123,15 +123,44 @@ LAST_SEEN_REFRESH_SECONDS = 300
 ALLOWED_UPLOAD_EXTENSIONS = frozenset(
     {
         # Documents
-        "pdf", "doc", "docx", "rtf", "odt", "txt", "md", "pages",
+        "pdf",
+        "doc",
+        "docx",
+        "rtf",
+        "odt",
+        "txt",
+        "md",
+        "pages",
         # Spreadsheets / presentations
-        "xls", "xlsx", "csv", "ods", "numbers", "ppt", "pptx", "odp", "key",
+        "xls",
+        "xlsx",
+        "csv",
+        "ods",
+        "numbers",
+        "ppt",
+        "pptx",
+        "odp",
+        "key",
         # Images / scans
-        "jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "tif", "tiff", "bmp",
+        "jpg",
+        "jpeg",
+        "png",
+        "gif",
+        "webp",
+        "heic",
+        "heif",
+        "tif",
+        "tiff",
+        "bmp",
         # Correspondence exports
-        "eml", "msg",
+        "eml",
+        "msg",
         # Media clients commonly send as evidence
-        "mp3", "m4a", "wav", "mp4", "mov",
+        "mp3",
+        "m4a",
+        "wav",
+        "mp4",
+        "mov",
         # Bundles
         "zip",
     }
@@ -510,9 +539,7 @@ def _build_key_dates(raw: dict | None) -> list[PortalKeyDate]:
     return entries
 
 
-async def _unread_message_count(
-    db: AsyncSession, ctx: ClientPortalContext
-) -> int:
+async def _unread_message_count(db: AsyncSession, ctx: ClientPortalContext) -> int:
     """Count firm messages posted after the client's read high-water mark."""
     stmt = select(func.count(CommunicationLog.id)).where(
         CommunicationLog.matter_id == ctx.matter_id,
@@ -525,9 +552,7 @@ async def _unread_message_count(
     return int(await db.scalar(stmt) or 0)
 
 
-async def _pending_signature_count(
-    db: AsyncSession, ctx: ClientPortalContext
-) -> int:
+async def _pending_signature_count(db: AsyncSession, ctx: ClientPortalContext) -> int:
     """Signature requests open for *this* portal identity.
 
     Matches the signer the same way ``esignature._portal_signer_matches_context``
@@ -538,7 +563,9 @@ async def _pending_signature_count(
     if ctx.contact_id:
         signer_match.append(SignatureSigner.contact_id == ctx.contact_id)
     if ctx.email:
-        signer_match.append(func.lower(SignatureSigner.email) == ctx.email.strip().lower())
+        signer_match.append(
+            func.lower(SignatureSigner.email) == ctx.email.strip().lower()
+        )
     if not signer_match:
         return 0
     from sqlalchemy import or_
@@ -642,7 +669,9 @@ async def portal_list_messages(
         CommunicationLog.tenant_id == ctx.tenant_id,
         CommunicationLog.channel == "portal",
     )
-    total = int(await db.scalar(select(func.count(CommunicationLog.id)).where(*base)) or 0)
+    total = int(
+        await db.scalar(select(func.count(CommunicationLog.id)).where(*base)) or 0
+    )
     # Page from the newest end so a long history still opens on what matters,
     # then present the page oldest-first the way a conversation reads.
     result = await db.execute(
