@@ -66,6 +66,11 @@
   last scan time, file count and failure reason instead of an empty cell.
 
 ### Fixed
+- **Mobile task rows no longer collapse the task name underneath its due date
+  and controls:** below the small-screen breakpoint, the completion control and
+  task content occupy a two-column grid while due dates, state badges, and row
+  actions wrap on a separate line. Desktop rows retain their compact horizontal
+  layout, and the responsive class contract is covered by the Tasks page test.
 - **Any commit inside a client-portal request silently emptied the portal:** the
   tenant GUC that RLS filters on is transaction-local, and `get_db` only
   registers the per-transaction rebind for a tenant the middleware resolved from
