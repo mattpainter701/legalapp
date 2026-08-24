@@ -12,16 +12,16 @@ its own rows (``teams_voice:call:`` for change notifications,
 ``teams_voice:pstn:`` for the usage report) and the service correlates them on
 a natural key before insert.
 
-Revision ID: 121_teams_voice_capture
-Revises: 120_marketing_demo_funnel
+Revision ID: 122_teams_voice_capture
+Revises: 121_smb_share_credentials
 """
 
 from alembic import op
 import sqlalchemy as sa
 
 
-revision = "121_teams_voice_capture"
-down_revision = "120_marketing_demo_funnel"
+revision = "122_teams_voice_capture"
+down_revision = "121_smb_share_credentials"
 branch_labels = None
 depends_on = None
 
