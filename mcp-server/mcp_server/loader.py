@@ -445,6 +445,26 @@ def _opinion_ids_for_courts(
         return {str(row[0]) for row in cur.fetchall()}
 
 
+def _existing_ids(conn, table_name: str, id_column: str) -> set[str]:
+    """Return the stable primary keys already present in a bulk table.
+
+    Bulk snapshots are deterministic and are read from their beginning on each
+    run.  A bounded follow-on tranche must therefore explicitly skip the rows
+    already persisted, otherwise its row limit is consumed by conflict updates
+    before it reaches the next court partition.
+    """
+    allowed = {
+        ("dockets", "docket_id"),
+        ("opinion_clusters", "cluster_id"),
+        ("opinions", "opinion_id"),
+    }
+    if (table_name, id_column) not in allowed:
+        raise ValueError(f"Unsupported existing-ID lookup: {table_name}.{id_column}")
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT {id_column} FROM {table_name}")
+        return {str(row[0]) for row in cur.fetchall()}
+
+
 def _load_csv(
     conn,
     path: Path,
@@ -641,6 +661,7 @@ def load_mvp_corpus(
     precedential_only: bool = True,
     additional_court_ids: tuple[str, ...] = (),
     max_database_bytes: int | None = None,
+    skip_existing: bool = False,
 ) -> dict[str, int]:
     counts: dict[str, int] = {}
     with connect(db_url) as conn:
@@ -661,19 +682,29 @@ def load_mvp_corpus(
 
         dockets = sorted(bulk_dir.glob("dockets-*.csv.bz2"))
         if dockets:
+            existing_docket_ids = (
+                _existing_ids(conn, "dockets", "docket_id") if skip_existing else set()
+            )
             counts["dockets"] = _load_csv(
                 conn,
                 dockets[-1],
                 "dockets",
                 limit=resolved_table_limit(limit, docket_limit),
-                row_filter=lambda row: str(_value(row, "court_id", "court") or "")
-                in target_courts,
+                row_filter=lambda row: (
+                    str(_value(row, "court_id", "court") or "") in target_courts
+                    and str(_value(row, "id") or "") not in existing_docket_ids
+                ),
                 max_database_bytes=max_database_bytes,
             )
         docket_ids = _docket_ids_for_courts(conn, target_courts)
 
         clusters = sorted(bulk_dir.glob("opinion-clusters-*.csv.bz2"))
         if clusters:
+            existing_cluster_ids = (
+                _existing_ids(conn, "opinion_clusters", "cluster_id")
+                if skip_existing
+                else set()
+            )
             counts["opinion_clusters"] = _load_csv(
                 conn,
                 clusters[-1],
@@ -681,6 +712,7 @@ def load_mvp_corpus(
                 limit=resolved_table_limit(limit, cluster_limit),
                 row_filter=lambda row: (
                     str(_value(row, "docket_id") or "") in docket_ids
+                    and str(_value(row, "id") or "") not in existing_cluster_ids
                     and should_keep_cluster(row, precedential_only=precedential_only)
                 ),
                 max_database_bytes=max_database_bytes,
@@ -693,13 +725,18 @@ def load_mvp_corpus(
 
         opinions = sorted(bulk_dir.glob("opinions-*.csv.bz2"))
         if opinions:
+            existing_opinion_ids = (
+                _existing_ids(conn, "opinions", "opinion_id") if skip_existing else set()
+            )
             counts["opinions"] = _load_csv(
                 conn,
                 opinions[-1],
                 "opinions",
                 limit=resolved_table_limit(limit, opinion_limit),
-                row_filter=lambda row: str(_value(row, "cluster_id") or "")
-                in cluster_ids,
+                row_filter=lambda row: (
+                    str(_value(row, "cluster_id") or "") in cluster_ids
+                    and str(_value(row, "id") or "") not in existing_opinion_ids
+                ),
                 max_database_bytes=max_database_bytes,
             )
         opinion_ids = _opinion_ids_for_courts(
@@ -834,6 +871,11 @@ def main() -> None:
         default=not _env_bool("COURTLISTENER_MVP_SCOTUS", True),
     )
     parser.add_argument("--include-unpublished", action="store_true")
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="skip existing bulk IDs so a bounded follow-on tranche reaches new rows",
+    )
     args = parser.parse_args()
     if args.init_schema:
         init_schema(args.db_url)
@@ -872,6 +914,7 @@ def main() -> None:
                     if args.max_database_gb
                     else None
                 ),
+                skip_existing=args.skip_existing,
             )
         )
     if args.chunk_opinions:

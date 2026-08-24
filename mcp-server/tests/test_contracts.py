@@ -19,6 +19,7 @@ from mcp_server.dispatcher import (
 from mcp_server.embedding_scheduler import SchedulerConfig, run_scheduler_once
 from mcp_server.loader import (
     DEFAULT_MVP_STATES,
+    _existing_ids,
     _load_csv,
     best_opinion_text,
     bz2_decompress_command,
@@ -744,3 +745,34 @@ def test_courtlistener_scale_profiles_are_explicit_and_deduplicated():
 
 def test_zero_table_limit_skips_bulk_file_instead_of_meaning_unlimited(tmp_path):
     assert _load_csv(None, tmp_path / "missing.csv.bz2", "citations", limit=0) == 0
+
+
+def test_existing_id_lookup_reads_only_supported_primary_keys():
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, sql):
+            self.sql = sql
+
+        def fetchall(self):
+            return [("101",), ("202",)]
+
+    class Connection:
+        def __init__(self):
+            self.cursor_obj = Cursor()
+
+        def cursor(self):
+            return self.cursor_obj
+
+    conn = Connection()
+    assert _existing_ids(conn, "opinions", "opinion_id") == {"101", "202"}
+    assert "SELECT opinion_id FROM opinions" in conn.cursor_obj.sql
+
+    import pytest
+
+    with pytest.raises(ValueError):
+        _existing_ids(conn, "opinions", "source_url")

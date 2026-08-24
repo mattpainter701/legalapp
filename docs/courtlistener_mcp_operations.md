@@ -174,6 +174,22 @@ opinion/chunk tranche, wait for the Jetson embedding queue to drain, inspect
 `corpus_status`, then raise the budget only after storage and retrieval checks
 pass.
 
+For a follow-on tranche from the same immutable bulk snapshot, add
+`--skip-existing`. This reads the existing docket, cluster, and opinion IDs
+before scanning, so the row ceilings apply to new rows rather than being
+consumed by conflict no-ops from an earlier tranche. Combine it with a new,
+explicit court partition; running the same court profile again can correctly
+finish with zero new chunks when that partition is already complete.
+
+```bash
+python -m mcp_server.loader --load-mvp \
+  --coverage-profile national-priority \
+  --court-id <new-court-id> \
+  --skip-existing \
+  --docket-limit 2000000 --cluster-limit 500000 --opinion-limit 250000 \
+  --citation-limit 0 --max-database-gb 350
+```
+
 ### High-throughput bulk settings
 
 The loader batches 500 database writes by default and commits each batch. It
