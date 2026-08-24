@@ -1137,11 +1137,20 @@ const clientPortalApi = axios.create({
 export const acceptClientPortalInvite = (token) =>
   clientPortalApi.post('/portal/client/accept', { token }).then((r) => r.data)
 
+export const getClientPortalSession = () =>
+  clientPortalApi.get('/portal/client/session').then((r) => r.data)
+
+export const logoutClientPortal = () =>
+  clientPortalApi.post('/portal/client/logout').then((r) => r.data)
+
 export const getClientPortalMatter = () =>
   clientPortalApi.get('/portal/client/matter').then((r) => r.data)
 
-export const listClientPortalMessages = () =>
-  clientPortalApi.get('/portal/client/messages').then((r) => r.data)
+export const listClientPortalMessages = (params) =>
+  clientPortalApi.get('/portal/client/messages', { params }).then((r) => r.data)
+
+export const markClientPortalMessagesRead = () =>
+  clientPortalApi.post('/portal/client/messages/read').then((r) => r.data)
 
 export const sendClientPortalMessage = (data) =>
   clientPortalApi.post('/portal/client/messages', data).then((r) => r.data)
@@ -1149,13 +1158,16 @@ export const sendClientPortalMessage = (data) =>
 export const listClientPortalDocuments = () =>
   clientPortalApi.get('/portal/client/documents').then((r) => r.data)
 
-export const uploadClientPortalDocument = (file, description) => {
+export const uploadClientPortalDocument = (file, description, onProgress) => {
   const form = new FormData()
   form.append('file', file)
   if (description) form.append('description', description)
   return clientPortalApi
     .post('/portal/client/documents/upload', form, {
       headers: { 'Content-Type': 'multipart/form-data' },
+      onUploadProgress: onProgress
+        ? (e) => onProgress(e.total ? Math.round((e.loaded / e.total) * 100) : 0)
+        : undefined,
     })
     .then((r) => r.data)
 }

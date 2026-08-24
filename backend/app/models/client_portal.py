@@ -51,6 +51,16 @@ class ClientPortalInvite(Base):
     revoked: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
     )
+    # Most recent authenticated portal request on this invite. Surfaced on the
+    # firm side so staff can tell a live portal from an unopened invitation.
+    last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # High-water mark the client has read messages up to; the portal's unread
+    # badge counts firm messages newer than this.
+    messages_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),

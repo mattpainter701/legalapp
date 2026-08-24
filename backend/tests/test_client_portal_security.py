@@ -28,12 +28,19 @@ class _FakeSession:
     def __init__(self, invite, *, tenant_active=True):
         self.invite = invite
         self.tenant_active = tenant_active
+        self.committed = False
 
     async def scalar(self, stmt):
         return SimpleNamespace(is_active=True) if self.tenant_active else None
 
     async def execute(self, stmt):
         return _FakeResult(self.invite)
+
+    async def commit(self):
+        self.committed = True
+
+    async def rollback(self):
+        pass
 
 
 class _FakeRequest:
@@ -65,10 +72,10 @@ async def test_client_portal_context_rejects_revoked_invite(monkeypatch):
         revoked=True,
     )
 
-    async def noop_set_tenant_context(db, tenant):
+    async def noop_bind_tenant_context(db, tenant):
         return None
 
-    monkeypatch.setattr(client_portal, "set_tenant_context", noop_set_tenant_context)
+    monkeypatch.setattr(client_portal, "bind_tenant_context", noop_bind_tenant_context)
 
     with pytest.raises(HTTPException) as exc:
         await client_portal.get_client_portal_context(
@@ -100,10 +107,10 @@ async def test_client_portal_context_rejects_inactive_tenant(monkeypatch):
         revoked=False,
     )
 
-    async def noop_set_tenant_context(db, tenant):
+    async def noop_bind_tenant_context(db, tenant):
         return None
 
-    monkeypatch.setattr(client_portal, "set_tenant_context", noop_set_tenant_context)
+    monkeypatch.setattr(client_portal, "bind_tenant_context", noop_bind_tenant_context)
 
     with pytest.raises(HTTPException) as exc:
         await client_portal.get_client_portal_context(
@@ -143,10 +150,10 @@ async def test_client_portal_context_rejects_legacy_token_without_invite_id(
         algorithm=settings.ALGORITHM,
     )
 
-    async def noop_set_tenant_context(db, tenant):
+    async def noop_bind_tenant_context(db, tenant):
         return None
 
-    monkeypatch.setattr(client_portal, "set_tenant_context", noop_set_tenant_context)
+    monkeypatch.setattr(client_portal, "bind_tenant_context", noop_bind_tenant_context)
 
     with pytest.raises(HTTPException) as exc:
         await client_portal.get_client_portal_context(

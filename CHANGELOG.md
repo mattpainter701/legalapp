@@ -3,6 +3,32 @@
 ## [Unreleased]
 
 ### Added
+- **The client portal now tells the client what is waiting on them:** the
+  overview opens on counters for unread messages, documents awaiting signature,
+  shared documents and balance due, each linking to its tab, plus the next key
+  date called out with plain-language timing. Firm key dates are parsed from
+  the formats staff actually type and presented in chronological order, with
+  undated notes kept rather than dropped. The tabs themselves carry badges, so
+  the client can see what needs attention without opening each one.
+- **Clients can sign out of the portal** (`POST /api/portal/client/logout`),
+  which blacklists the session's JTI and clears the cookie — a shared or
+  borrowed device no longer keeps a live matter session for the rest of the
+  seven-day token life. `GET /api/portal/client/session` reports which identity
+  the portal is signed in as, shown in the portal header.
+- **Portal activity is visible to the firm** (migration
+  `123_client_portal_activity`): `client_portal_invites.last_seen_at` records
+  each portal session's most recent use, and the matter's Client Portal tab
+  shows every invitation's real state — awaiting first sign-in, active, expired
+  or revoked — alongside when it was last used, so an invite that never reached
+  its recipient is obvious. Issuing an invite can now revoke the matter's other
+  live invitations in the same step, and the one-time link has a copy button.
+- **The firm is notified when a client writes in:** a portal message emails the
+  matter's assigned users with a bounded preview and a link to the matter,
+  instead of waiting to be noticed in the communications log.
+- **Messages track read state** (`messages_seen_at` on the invite): firm
+  messages the client has not seen are marked unread and counted, the portal
+  marks them read when the thread is opened, and the thread refreshes itself
+  while the client is reading it.
 - **File share agent is now built and shipped:** `agent/packaging/` adds a
   PyInstaller spec plus Windows (`build.ps1` → `lawhand-agent.exe` and a WiX v5
   MSI) and Linux (`build.sh` → binary + systemd install tarball) builds, and
@@ -32,6 +58,27 @@
   last scan time, file count and failure reason instead of an empty cell.
 
 ### Fixed
+- **Any commit inside a client-portal request silently emptied the portal:** the
+  tenant GUC that RLS filters on is transaction-local, and `get_db` only
+  registers the per-transaction rebind for a tenant the middleware resolved from
+  the firm `access_token` cookie — which it never reads for the portal's own
+  cookie. A commit mid-request therefore dropped the tenant, and every later
+  query fell through to RLS's fail-closed path. `bind_tenant_context` now pins
+  the portal session to its tenant across commits, and a runtime-role test
+  covers it (the suite's superuser bypasses RLS, so nothing else could catch it).
+- **Portal uploads accepted any file type and any size of message:** client
+  uploads are now checked against an allowlist of document, image, mail and
+  media extensions, rejected when empty, and stripped to a basename that also
+  handles Windows paths; message bodies are capped at 10,000 characters and
+  subjects at 200, and blank bodies are refused rather than stored.
+- **Portal invoices hid what was actually owed:** each invoice now carries the
+  amount paid, the outstanding balance, and whether (and by how long) it is
+  overdue, with matter-level totals — previously the client saw only the invoice
+  total, with no way to tell a part-paid invoice from an unpaid one. An invoice
+  marked paid settles its balance even when the firm recorded no payment row.
+- **Matter names were interpolated unescaped into portal invitation emails,**
+  so a name containing HTML broke (or could inject into) the message body. Both
+  the client and mediation invite templates now escape the name and the link.
 - **File share pairing was impossible:** `smb_agents.pairing_code` is
   `varchar(20)` while `secrets.token_urlsafe(16)` produces 22 characters, so
   every pairing-code request failed at insert. Codes are now four groups of
