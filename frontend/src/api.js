@@ -1149,8 +1149,10 @@ export const getClientPortalMatter = () =>
 export const listClientPortalMessages = (params) =>
   clientPortalApi.get('/portal/client/messages', { params }).then((r) => r.data)
 
-export const markClientPortalMessagesRead = () =>
-  clientPortalApi.post('/portal/client/messages/read').then((r) => r.data)
+export const markClientPortalMessagesRead = (seenThrough) =>
+  clientPortalApi
+    .post('/portal/client/messages/read', { seen_through: seenThrough ?? null })
+    .then((r) => r.data)
 
 export const sendClientPortalMessage = (data) =>
   clientPortalApi.post('/portal/client/messages', data).then((r) => r.data)

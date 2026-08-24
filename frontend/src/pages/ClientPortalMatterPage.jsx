@@ -31,6 +31,8 @@ const TABS = [
 // The client's own tab is refreshed while they sit on it — a portal is only
 // useful if a reply from the firm shows up without a manual reload.
 const MESSAGE_POLL_MS = 30_000
+// Matches the backend's default page size for /portal/client/messages.
+const MESSAGE_PAGE_SIZE = 50
 const MAX_MESSAGE_LENGTH = 10_000
 
 function fmtBytes(n) {
@@ -488,20 +490,40 @@ function Field({ label, value }) {
 // ── Messages ────────────────────────────────────────────────────────────────
 
 function MessagesTab({ onSessionError, onChanged }) {
-  const [messages, setMessages] = useState([])
+  // The newest page is polled; older pages are fetched on demand and never
+  // re-fetched. Keeping them apart means a new arrival cannot renumber the
+  // offsets of history the client has already scrolled back through.
+  const [newest, setNewest] = useState([])
+  const [older, setOlder] = useState([])
+  const [total, setTotal] = useState(0)
   const [body, setBody] = useState('')
   const [sending, setSending] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [loadingOlder, setLoadingOlder] = useState(false)
   const [err, setErr] = useState('')
   const scrollRef = useRef(null)
   const markedRef = useRef(false)
 
+  const messages = useMemo(() => {
+    // A message posted between two page fetches can land in both, so identity
+    // decides what is rendered, not concatenation order.
+    const seen = new Set()
+    return [...older, ...newest].filter((m) => {
+      if (seen.has(m.id)) return false
+      seen.add(m.id)
+      return true
+    })
+  }, [older, newest])
+
+  const hasOlder = messages.length < total
+
   const load = useCallback(
     ({ quiet = false } = {}) => {
       if (!quiet) setLoading(true)
-      return listClientPortalMessages()
+      return listClientPortalMessages({ limit: MESSAGE_PAGE_SIZE })
         .then((data) => {
-          setMessages(data?.messages || [])
+          setNewest(data?.messages || [])
+          setTotal(data?.total || 0)
           setErr('')
           return data
         })
@@ -516,6 +538,30 @@ function MessagesTab({ onSessionError, onChanged }) {
     [onSessionError],
   )
 
+  const loadOlder = useCallback(() => {
+    if (loadingOlder) return
+    setLoadingOlder(true)
+    setErr('')
+    const node = scrollRef.current
+    const anchorHeight = node ? node.scrollHeight : 0
+    listClientPortalMessages({ limit: MESSAGE_PAGE_SIZE, offset: messages.length })
+      .then((data) => {
+        setOlder((prev) => [...(data?.messages || []), ...prev])
+        setTotal(data?.total || 0)
+        // Hold the client's place: prepending would otherwise jump them to the
+        // top of a thread they were reading the middle of.
+        requestAnimationFrame(() => {
+          if (node) node.scrollTop = node.scrollHeight - anchorHeight
+        })
+      })
+      .catch((e) => {
+        if (!onSessionError(e)) {
+          setErr('Unable to load earlier messages. Please try again.')
+        }
+      })
+      .finally(() => setLoadingOlder(false))
+  }, [loadingOlder, messages.length, onSessionError])
+
   useEffect(() => { load() }, [load])
 
   // Keep the thread live while the client is reading it.
@@ -524,20 +570,21 @@ function MessagesTab({ onSessionError, onChanged }) {
     return () => clearInterval(id)
   }, [load])
 
-  // Opening the tab is the read receipt; only clear the badge once.
+  // Opening the tab is the read receipt; only clear the badge once, and only up
+  // to the newest message actually delivered here.
   useEffect(() => {
     if (markedRef.current || loading || messages.length === 0) return
     if (!messages.some((m) => m.unread)) return
     markedRef.current = true
-    markClientPortalMessagesRead()
+    markClientPortalMessagesRead(messages[messages.length - 1]?.occurred_at)
       .then(() => onChanged())
       .catch(() => {})
   }, [loading, messages, onChanged])
 
   useEffect(() => {
     const node = scrollRef.current
-    if (node) node.scrollTop = node.scrollHeight
-  }, [messages.length])
+    if (node && older.length === 0) node.scrollTop = node.scrollHeight
+  }, [newest.length, older.length])
 
   const send = async (e) => {
     e.preventDefault()
@@ -582,31 +629,46 @@ function MessagesTab({ onSessionError, onChanged }) {
               No messages yet. Send your legal team a message below.
             </p>
           ) : (
-            <ul className="space-y-3">
-              {messages.map((m) => {
-                const fromClient = m.direction === 'inbound'
-                return (
-                  <li
-                    key={m.id}
-                    className={`text-sm p-3 rounded-lg max-w-[85%] ${
-                      fromClient
-                        ? 'bg-brand-accent/10 ml-auto'
-                        : `bg-brand-bg-soft mr-auto ${m.unread ? 'ring-1 ring-brand-accent/40' : ''}`
-                    }`}
+            <>
+              {hasOlder && (
+                <div className="text-center mb-3">
+                  <button
+                    onClick={loadOlder}
+                    disabled={loadingOlder}
+                    className="text-sm font-sans font-medium text-brand-accent hover:text-brand-ink disabled:opacity-50"
                   >
-                    <p className="text-xs text-brand-ink-2 mb-1 flex items-center gap-1.5">
-                      {fromClient ? 'You' : 'Legal team'} · {fmtDateTime(m.occurred_at)}
-                      {m.unread && (
-                        <span className="text-[10px] uppercase tracking-wide font-semibold text-brand-accent">
-                          New
-                        </span>
-                      )}
-                    </p>
-                    <p className="text-brand-ink whitespace-pre-wrap break-words">{m.body}</p>
-                  </li>
-                )
-              })}
-            </ul>
+                    {loadingOlder
+                      ? 'Loading earlier messages…'
+                      : `Load earlier messages (${total - messages.length} older)`}
+                  </button>
+                </div>
+              )}
+              <ul className="space-y-3">
+                {messages.map((m) => {
+                  const fromClient = m.direction === 'inbound'
+                  return (
+                    <li
+                      key={m.id}
+                      className={`text-sm p-3 rounded-lg max-w-[85%] ${
+                        fromClient
+                          ? 'bg-brand-accent/10 ml-auto'
+                          : `bg-brand-bg-soft mr-auto ${m.unread ? 'ring-1 ring-brand-accent/40' : ''}`
+                      }`}
+                    >
+                      <p className="text-xs text-brand-ink-2 mb-1 flex items-center gap-1.5">
+                        {fromClient ? 'You' : 'Legal team'} · {fmtDateTime(m.occurred_at)}
+                        {m.unread && (
+                          <span className="text-[10px] uppercase tracking-wide font-semibold text-brand-accent">
+                            New
+                          </span>
+                        )}
+                      </p>
+                      <p className="text-brand-ink whitespace-pre-wrap break-words">{m.body}</p>
+                    </li>
+                  )
+                })}
+              </ul>
+            </>
           )}
         </div>
       </Card>

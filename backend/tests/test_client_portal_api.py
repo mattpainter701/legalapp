@@ -722,6 +722,7 @@ async def _add_signature_request(db_session, tenant, matter, user, signer_email,
         status=kw.pop("status", "sent"),
         created_by_user_id=user.id,
         sent_at=datetime.now(timezone.utc),
+        enforce_signing_order=kw.pop("enforce_signing_order", False),
     )
     db_session.add(request)
     db_session.add(
@@ -733,8 +734,22 @@ async def _add_signature_request(db_session, tenant, matter, user, signer_email,
             email=signer_email,
             role="client",
             status=kw.pop("signer_status", "pending"),
+            sign_order=kw.pop("sign_order", 0),
         )
     )
+    for extra in kw.pop("other_signers", []):
+        db_session.add(
+            SignatureSigner(
+                id=uuid.uuid4(),
+                tenant_id=tenant.id,
+                request_id=request.id,
+                name=extra.get("name", "Other Signer"),
+                email=extra["email"],
+                role=extra.get("role", "counterparty"),
+                status=extra.get("status", "pending"),
+                sign_order=extra.get("sign_order", 0),
+            )
+        )
     await db_session.commit()
     return request
 
@@ -782,3 +797,192 @@ async def test_overview_ignores_signatures_this_client_already_signed(
         await client.get(f"{PORTAL}/matter", headers=_portal_headers(portal_cookie))
     ).json()
     assert body["pending_signature_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_logout_expires_the_cookie_in_the_browser(client, portal_cookie):
+    """Sign-out must expire the cookie, not just blacklist the JTI.
+
+    The blacklist is the second line of defence: without Redis it is per-worker,
+    and with Redis it lapses when the entry is evicted or the server restarts.
+    If the browser keeps the cookie, either of those silently restores a session
+    the client believed they had ended.
+    """
+    resp = await client.post(f"{PORTAL}/logout", headers=_portal_headers(portal_cookie))
+    assert resp.status_code == 204
+
+    set_cookie = resp.headers.get("set-cookie", "")
+    assert CLIENT_PORTAL_COOKIE_NAME in set_cookie
+    # An immediate expiry is what actually removes it from the browser's jar.
+    assert 'Max-Age=0' in set_cookie or "Expires=Thu, 01 Jan 1970" in set_cookie
+
+
+@pytest.mark.asyncio
+async def test_overview_ignores_signatures_blocked_by_signing_order(
+    client, db_session, test_tenant, test_user, portal_matter, portal_cookie
+):
+    """The badge must agree with what the Signatures tab will actually show.
+
+    With an enforced signing order and the client second, the e-signature list
+    endpoint filters the request out. Counting it here would badge the tab for
+    a client who opens it and finds nothing to do.
+    """
+    await _add_signature_request(
+        db_session,
+        test_tenant,
+        portal_matter,
+        test_user,
+        "client@example.com",
+        enforce_signing_order=True,
+        sign_order=1,
+        other_signers=[{"email": "first@firm.com", "sign_order": 0}],
+    )
+    body = (
+        await client.get(f"{PORTAL}/matter", headers=_portal_headers(portal_cookie))
+    ).json()
+    assert body["pending_signature_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_overview_counts_a_signature_once_the_client_turn_arrives(
+    client, db_session, test_tenant, test_user, portal_matter, portal_cookie
+):
+    await _add_signature_request(
+        db_session,
+        test_tenant,
+        portal_matter,
+        test_user,
+        "client@example.com",
+        status="partially_signed",
+        enforce_signing_order=True,
+        sign_order=1,
+        other_signers=[
+            {"email": "first@firm.com", "sign_order": 0, "status": "signed"}
+        ],
+    )
+    body = (
+        await client.get(f"{PORTAL}/matter", headers=_portal_headers(portal_cookie))
+    ).json()
+    assert body["pending_signature_count"] == 1
+
+
+# ── Read receipts ───────────────────────────────────────────────────────────
+
+
+async def _add_firm_message(db_session, tenant, matter, subject, occurred_at):
+    db_session.add(
+        CommunicationLog(
+            id=uuid.uuid4(),
+            tenant_id=tenant.id,
+            matter_id=matter.id,
+            direction="outbound",
+            channel="portal",
+            status="sent",
+            subject=subject,
+            body=subject,
+            occurred_at=occurred_at,
+        )
+    )
+    await db_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_read_receipt_does_not_swallow_a_message_the_client_never_saw(
+    client, db_session, test_tenant, portal_matter, portal_cookie
+):
+    """A message that arrives between the list and the receipt stays unread.
+
+    Marking read at server ``now`` would clear the badge for correspondence the
+    client was never shown — the worst failure mode for a legal portal, because
+    nothing later flags it as new.
+    """
+    headers = _portal_headers(portal_cookie)
+    seen = datetime.now(timezone.utc) - timedelta(minutes=5)
+    await _add_firm_message(db_session, test_tenant, portal_matter, "Delivered", seen)
+
+    # Arrives after the client's list request, before their read receipt.
+    await _add_firm_message(
+        db_session,
+        test_tenant,
+        portal_matter,
+        "Arrived mid-flight",
+        datetime.now(timezone.utc) - timedelta(minutes=1),
+    )
+
+    resp = await client.post(
+        f"{PORTAL}/messages/read",
+        headers=headers,
+        json={"seen_through": seen.isoformat()},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["unread_count"] == 1
+
+    listing = (await client.get(f"{PORTAL}/messages", headers=headers)).json()
+    unread = [m["subject"] for m in listing["messages"] if m["unread"]]
+    assert unread == ["Arrived mid-flight"]
+
+
+@pytest.mark.asyncio
+async def test_read_receipt_falls_back_to_now_without_a_bound(
+    client, db_session, test_tenant, portal_matter, portal_cookie
+):
+    headers = _portal_headers(portal_cookie)
+    await _add_firm_message(
+        db_session,
+        test_tenant,
+        portal_matter,
+        "Anything",
+        datetime.now(timezone.utc) - timedelta(minutes=1),
+    )
+    resp = await client.post(f"{PORTAL}/messages/read", headers=headers, json={})
+    assert resp.status_code == 200
+    assert resp.json()["unread_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_read_receipt_never_moves_the_mark_backwards(
+    client, db_session, test_tenant, portal_matter, portal_cookie
+):
+    """A stale tab posting an old receipt must not un-read newer messages."""
+    headers = _portal_headers(portal_cookie)
+    await _add_firm_message(
+        db_session,
+        test_tenant,
+        portal_matter,
+        "Old news",
+        datetime.now(timezone.utc) - timedelta(hours=2),
+    )
+    assert (await client.post(f"{PORTAL}/messages/read", headers=headers, json={})).json()[
+        "unread_count"
+    ] == 0
+
+    stale = datetime.now(timezone.utc) - timedelta(days=1)
+    resp = await client.post(
+        f"{PORTAL}/messages/read", headers=headers, json={"seen_through": stale.isoformat()}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["unread_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_read_receipt_cannot_be_dated_into_the_future(
+    client, db_session, test_tenant, portal_matter, portal_cookie
+):
+    """A future bound must not pre-read messages that have not arrived yet."""
+    headers = _portal_headers(portal_cookie)
+    future = datetime.now(timezone.utc) + timedelta(days=7)
+    resp = await client.post(
+        f"{PORTAL}/messages/read",
+        headers=headers,
+        json={"seen_through": future.isoformat()},
+    )
+    assert resp.status_code == 200
+    assert datetime.fromisoformat(resp.json()["messages_seen_at"]) <= datetime.now(
+        timezone.utc
+    ) + timedelta(seconds=5)
+
+    await _add_firm_message(
+        db_session, test_tenant, portal_matter, "After the receipt", datetime.now(timezone.utc)
+    )
+    body = (await client.get(f"{PORTAL}/matter", headers=headers)).json()
+    assert body["unread_message_count"] == 1

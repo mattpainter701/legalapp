@@ -119,6 +119,17 @@ class PortalMessageList(BaseModel):
     has_more: bool = False
 
 
+class PortalMarkReadRequest(BaseModel):
+    """Bounds a read receipt to what the client was actually shown.
+
+    ``seen_through`` is the timestamp of the newest message the client received.
+    Without it the server can only mark read up to *now*, which would swallow a
+    message the firm posted between the client's list request and this one.
+    """
+
+    seen_through: datetime | None = None
+
+
 class PortalMarkReadResponse(BaseModel):
     messages_seen_at: datetime
     unread_count: int = 0

@@ -244,7 +244,7 @@ async def test_client_portal_session_survives_its_own_commits_under_runtime_rls(
             assert view.unread_message_count == 1
 
             # The read receipt commits again; the next read must still be scoped.
-            await client_portal.portal_mark_messages_read((ctx, matter), runtime_db)
+            await client_portal.portal_mark_messages_read(None, (ctx, matter), runtime_db)
             listing = await client_portal.portal_list_messages(
                 (ctx, matter), runtime_db, limit=50, offset=0
             )

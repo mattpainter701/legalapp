@@ -38,6 +38,7 @@ from fastapi import (
 from jose import JWTError, jwt
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.config import get_settings
 from app.services.upload_guard import reject_oversized_request
@@ -64,6 +65,7 @@ from app.schemas.client_portal import (
     PortalInvoiceList,
     PortalInvoiceResponse,
     PortalKeyDate,
+    PortalMarkReadRequest,
     PortalMarkReadResponse,
     PortalMatterView,
     PortalMessageCreate,
@@ -95,6 +97,7 @@ from app.services.portal_invites import (
     PORTAL_INVITE_UNAVAILABLE_STATUS,
     resolve_active_portal_invite,
 )
+from app.services.esign.service import signer_can_act_now
 from app.services.portal_token import (
     PORTAL_TOKEN_EXPIRE_MINUTES,
     create_matter_portal_token,
@@ -455,12 +458,18 @@ async def portal_session(
 
 
 @router.post("/logout", status_code=204)
-async def portal_logout(request: Request, response: Response):
-    """End the portal session: blacklist the JTI and clear the cookie.
+async def portal_logout(request: Request):
+    """End the portal session: expire the cookie and blacklist the JTI.
 
     Deliberately tolerant of a missing or unreadable token — signing out must
     always clear the cookie and report success, never leave a client stuck on a
     session they are trying to end.
+
+    The cookie is cleared on the response this returns, not on an injected
+    ``Response`` parameter: FastAPI discards the injected object's headers when
+    a handler returns a ``Response`` of its own, so the browser would keep the
+    portal JWT. The JTI blacklist alone is not enough to cover that — without
+    Redis it is per-worker, and with Redis it lapses on eviction or restart.
     """
     token = _read_token(request)
     if token:
@@ -475,10 +484,17 @@ async def portal_logout(request: Request, response: Response):
                 await _revoke_jti(request, payload.get("jti"), payload.get("exp"))
         except JWTError:
             pass
+    response = Response(status_code=204)
+    # Attributes must mirror ``_set_cookie`` or the browser will not match the
+    # cookie being expired.
     response.delete_cookie(
-        CLIENT_PORTAL_COOKIE_NAME, httponly=True, samesite="Lax", path="/"
+        CLIENT_PORTAL_COOKIE_NAME,
+        httponly=True,
+        secure=settings.BACKEND_URL.startswith("https://"),
+        samesite="Lax",
+        path="/",
     )
-    return Response(status_code=204)
+    return response
 
 
 # ── Matter overview ─────────────────────────────────────────────────────────
@@ -552,37 +568,51 @@ async def _unread_message_count(db: AsyncSession, ctx: ClientPortalContext) -> i
     return int(await db.scalar(stmt) or 0)
 
 
-async def _pending_signature_count(db: AsyncSession, ctx: ClientPortalContext) -> int:
-    """Signature requests open for *this* portal identity.
+def _signer_matches_portal(signer: SignatureSigner, ctx: ClientPortalContext) -> bool:
+    """Contact first, then email — the same rule the e-signature portal uses.
 
-    Matches the signer the same way ``esignature._portal_signer_matches_context``
-    does — contact first, then email — without importing it, since that module
-    imports this one.
+    Reimplemented rather than imported because ``app.routers.esignature`` imports
+    this module; ``signer_can_act_now`` below comes from the esign *service*,
+    which imports no routers, so that one is safe to share.
     """
-    signer_match = []
-    if ctx.contact_id:
-        signer_match.append(SignatureSigner.contact_id == ctx.contact_id)
-    if ctx.email:
-        signer_match.append(
-            func.lower(SignatureSigner.email) == ctx.email.strip().lower()
-        )
-    if not signer_match:
-        return 0
-    from sqlalchemy import or_
+    if (
+        ctx.contact_id
+        and signer.contact_id
+        and str(signer.contact_id) == str(ctx.contact_id)
+    ):
+        return True
+    if ctx.email and signer.email:
+        return signer.email.strip().lower() == ctx.email.strip().lower()
+    return False
 
-    stmt = (
-        select(func.count(func.distinct(SignatureRequest.id)))
-        .select_from(SignatureRequest)
-        .join(SignatureSigner, SignatureSigner.request_id == SignatureRequest.id)
+
+async def _pending_signature_count(db: AsyncSession, ctx: ClientPortalContext) -> int:
+    """Signature requests this portal identity can act on *right now*.
+
+    Must agree with what ``esignature.portal_list_signatures`` will actually
+    show. Counting every pending signer would badge the tab for a client who is
+    second in an enforced signing order — they would open Signatures and find
+    nothing to do — so signing-order eligibility is applied here too.
+    """
+    if not ctx.contact_id and not ctx.email:
+        return 0
+    result = await db.execute(
+        select(SignatureRequest)
+        .options(selectinload(SignatureRequest.signers))
         .where(
             SignatureRequest.matter_id == ctx.matter_id,
             SignatureRequest.tenant_id == ctx.tenant_id,
             SignatureRequest.status.in_(("sent", "partially_signed")),
-            SignatureSigner.status == "pending",
-            or_(*signer_match),
         )
     )
-    return int(await db.scalar(stmt) or 0)
+    return sum(
+        1
+        for request in result.scalars().all()
+        if any(
+            _signer_matches_portal(signer, ctx) and signer_can_act_now(request, signer)
+            for signer in request.signers
+        )
+    )
 
 
 @router.get("/matter", response_model=PortalMatterView)
@@ -739,20 +769,36 @@ async def portal_create_message(
 
 @router.post("/messages/read", response_model=PortalMarkReadResponse)
 async def portal_mark_messages_read(
+    body: PortalMarkReadRequest | None = None,
     resolved: tuple[ClientPortalContext, Matter] = Depends(portal_matter_dep),
     db: AsyncSession = Depends(get_db),
 ):
-    """Advance the client's read high-water mark to now."""
+    """Advance the client's read high-water mark.
+
+    Bounded by ``seen_through`` — the newest message the client was actually
+    shown. Marking up to *now* would swallow anything the firm posted between
+    the client's list request and this one: the badge would clear and the
+    message would arrive already looking read. Falls back to now only when the
+    client sends no bound, and never moves the mark backwards, so an out-of-order
+    receipt from a stale tab cannot un-read newer messages.
+    """
     ctx, _matter = resolved
     now = datetime.now(timezone.utc)
     invite = await db.get(ClientPortalInvite, uuid.UUID(ctx.invite_id))
     if invite is None:
         raise HTTPException(status_code=401, detail="Portal session has been revoked")
-    invite.messages_seen_at = now
+
+    target = _aware(body.seen_through) if body and body.seen_through else now
+    target = min(target, now)
+    existing = _aware(invite.messages_seen_at)
+    if existing and existing > target:
+        target = existing
+
+    invite.messages_seen_at = target
     await db.commit()
-    ctx.messages_seen_at = now
+    ctx.messages_seen_at = target
     return PortalMarkReadResponse(
-        messages_seen_at=now, unread_count=await _unread_message_count(db, ctx)
+        messages_seen_at=target, unread_count=await _unread_message_count(db, ctx)
     )
 
 

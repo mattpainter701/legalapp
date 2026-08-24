@@ -130,6 +130,74 @@ describe('ClientPortalMatterPage', () => {
     await user.click(await screen.findByRole('tab', { name: /Messages/ }))
     expect(await screen.findByText('We filed the motion.')).toBeInTheDocument()
     await waitFor(() => expect(markClientPortalMessagesRead).toHaveBeenCalledTimes(1))
+    // Bounded to the newest message actually rendered, so a message that
+    // arrives mid-flight is not marked read without ever being shown.
+    expect(markClientPortalMessagesRead).toHaveBeenCalledWith('2026-08-20T12:00:00Z')
+  })
+
+  it('lets the client reach correspondence older than one page', async () => {
+    const page = (start, count) =>
+      Array.from({ length: count }, (_, i) => ({
+        id: `m${start + i}`,
+        direction: 'outbound',
+        subject: `Update ${start + i}`,
+        body: `Message ${start + i}`,
+        occurred_at: '2026-08-20T12:00:00Z',
+        unread: false,
+      }))
+
+    listClientPortalMessages.mockImplementation(({ offset = 0 } = {}) =>
+      Promise.resolve({
+        messages: offset === 0 ? page(50, 50) : page(0, 50),
+        unread_count: 0,
+        total: 100,
+        has_more: offset === 0,
+      }),
+    )
+    const user = userEvent.setup()
+    render(<ClientPortalMatterPage />)
+
+    await user.click(await screen.findByRole('tab', { name: /Messages/ }))
+    expect(await screen.findByText('Message 99')).toBeInTheDocument()
+    // The oldest half is not reachable until asked for.
+    expect(screen.queryByText('Message 0')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /Load earlier messages/ }))
+
+    expect(await screen.findByText('Message 0')).toBeInTheDocument()
+    // Older pages are prepended, not swapped in.
+    expect(screen.getByText('Message 99')).toBeInTheDocument()
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', { name: /Load earlier messages/ }),
+      ).not.toBeInTheDocument(),
+    )
+  })
+
+  it('offers no older-messages action when the thread fits one page', async () => {
+    listClientPortalMessages.mockResolvedValue({
+      messages: [
+        {
+          id: 'm1',
+          direction: 'outbound',
+          subject: 'Only one',
+          body: 'Just this',
+          occurred_at: '2026-08-20T12:00:00Z',
+          unread: false,
+        },
+      ],
+      unread_count: 0,
+      total: 1,
+      has_more: false,
+    })
+    const user = userEvent.setup()
+    render(<ClientPortalMatterPage />)
+
+    await user.click(await screen.findByRole('tab', { name: /Messages/ }))
+    expect(await screen.findByText('Just this')).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /Load earlier messages/ }),
+    ).not.toBeInTheDocument()
   })
 
   it('sends a trimmed message and refreshes the thread', async () => {
