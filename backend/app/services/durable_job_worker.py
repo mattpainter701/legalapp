@@ -25,6 +25,12 @@ from app.services.durable_jobs import (
 ZOOM_PHONE_CALL_JOB = "zoom_phone_call_import"
 ZOOM_PHONE_RECONCILE_JOB = "zoom_phone_reconcile"
 ZOOM_PHONE_JOB_KINDS = {ZOOM_PHONE_CALL_JOB, ZOOM_PHONE_RECONCILE_JOB}
+TEAMS_VOICE_CALL_JOB = "teams_voice_call_import"
+TEAMS_VOICE_RECONCILE_JOB = "teams_voice_reconcile"
+TEAMS_VOICE_JOB_KINDS = {TEAMS_VOICE_CALL_JOB, TEAMS_VOICE_RECONCILE_JOB}
+# Both providers capture inbound calls into the intake dashboard, so both are
+# drained on the low-latency path rather than behind general background work.
+VOICE_JOB_KINDS = ZOOM_PHONE_JOB_KINDS | TEAMS_VOICE_JOB_KINDS
 # Declared here rather than imported so the worker's kind table stays readable
 # in one place; task_automation owns the same literal.
 TASK_AUTOMATION_JOB = "task_automation"
@@ -506,6 +512,110 @@ async def _run_zoom_phone_reconcile(row: DurableJob) -> dict:
         }
 
 
+async def _teams_voice_tenant_ready(session, row: DurableJob) -> bool:
+    """Recheck tenant + voice configuration immediately before Graph egress."""
+    from app.models.teams_voice_setting import TeamsVoiceSetting
+    from app.services.teams_voice import TeamsVoiceNotConfigured
+
+    active = await session.scalar(
+        select(Tenant.is_active).where(Tenant.id == row.tenant_id)
+    )
+    if not active:
+        return False
+    voice = await session.scalar(
+        select(TeamsVoiceSetting).where(
+            TeamsVoiceSetting.tenant_id == row.tenant_id,
+            TeamsVoiceSetting.is_enabled.is_(True),
+        )
+    )
+    if not voice or not voice.entra_tenant_id:
+        # Permanent for this job: a disabled or unconfigured tenant will not
+        # become ready by retrying the same Graph read.
+        raise TeamsVoiceNotConfigured(
+            "Teams voice capture is not enabled for this tenant."
+        )
+    return True
+
+
+async def _announce_captured_voice_calls(tenant_id: str, captured: list[dict]) -> int:
+    """Post a Teams card for each newly captured inbound call.
+
+    Runs after the capture transaction commits: a channel post is an outward
+    side effect and must never be able to roll back with — or hold open — the
+    write that recorded the call.
+    """
+    from app.services import teams_notify
+
+    announced = 0
+    for call in captured:
+        caller = (
+            call.get("caller_name") or call.get("caller_number") or "Unknown caller"
+        )
+        fields = {"matter_name": caller}
+        if call.get("caller_number"):
+            fields["Number"] = str(call["caller_number"])
+        if call.get("callee_name"):
+            fields["Answered by"] = str(call["callee_name"])
+        if call.get("duration_seconds") is not None:
+            fields["Duration"] = f"{call['duration_seconds']}s"
+        if call.get("result"):
+            fields["Result"] = str(call["result"])
+        announced += await teams_notify.notify(
+            tenant_id,
+            "voice_call_captured",
+            title="Inbound Teams call captured",
+            fields=fields,
+        )
+    return announced
+
+
+async def _run_teams_voice_call_import(row: DurableJob) -> dict:
+    from app.services.teams_voice import import_teams_voice_webhook_job
+
+    tenant_id = str(row.tenant_id)
+    async with async_session_maker() as session:
+        await set_tenant_context(session, tenant_id)
+        if not await _teams_voice_tenant_ready(session, row):
+            return {"ignored": "inactive_tenant"}
+        result = await import_teams_voice_webhook_job(
+            session,
+            tenant_id=tenant_id,
+            payload=row.payload,
+        )
+        await session.commit()
+
+    announced = await _announce_captured_voice_calls(tenant_id, result.captured)
+    return {
+        "imported": result.imported,
+        "updated": result.updated,
+        "skipped": result.skipped,
+        "announced": announced,
+    }
+
+
+async def _run_teams_voice_reconcile(row: DurableJob) -> dict:
+    from app.services.teams_voice import sync_teams_voice_call_history
+
+    tenant_id = str(row.tenant_id)
+    days = max(1, min(int(row.payload.get("days") or 2), 7))
+    async with async_session_maker() as session:
+        await set_tenant_context(session, tenant_id)
+        if not await _teams_voice_tenant_ready(session, row):
+            return {"ignored": "inactive_tenant"}
+        result = await sync_teams_voice_call_history(
+            session,
+            tenant_id=tenant_id,
+            days=days,
+        )
+        await session.commit()
+        return {
+            "imported": result.imported,
+            "updated": result.updated,
+            "skipped": result.skipped,
+            "days": days,
+        }
+
+
 async def process_job(job_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
     async with async_session_maker() as db:
         await set_tenant_context(db, str(tenant_id))
@@ -520,7 +630,7 @@ async def process_job(job_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
             )
             if not tenant_active and row.kind not in {
                 "mcp_stripe_meter",
-                *ZOOM_PHONE_JOB_KINDS,
+                *VOICE_JOB_KINDS,
             }:
                 result = {"ignored": "inactive_tenant"}
             elif row.kind == "document_ingest":
@@ -541,12 +651,20 @@ async def process_job(job_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
                 result = await _run_zoom_phone_call_import(row)
             elif row.kind == ZOOM_PHONE_RECONCILE_JOB:
                 result = await _run_zoom_phone_reconcile(row)
+            elif row.kind == TEAMS_VOICE_CALL_JOB:
+                result = await _run_teams_voice_call_import(row)
+            elif row.kind == TEAMS_VOICE_RECONCILE_JOB:
+                result = await _run_teams_voice_reconcile(row)
             else:
                 raise ValueError(f"Unsupported durable job kind: {row.kind}")
             await set_tenant_context(db, str(tenant_id))
             row = await db.get(DurableJob, job_id)
             await finish_job(db, row, result=result)
         except Exception as exc:
+            from app.services.teams_voice import (
+                TeamsVoiceNotConfigured,
+                TeamsVoicePermanentError,
+            )
             from app.services.zoom_phone import (
                 ZoomPhonePermanentError,
                 ZoomPhoneReauthorizationRequired,
@@ -560,7 +678,12 @@ async def process_job(job_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
                 exc,
                 retryable=not isinstance(
                     exc,
-                    (ZoomPhonePermanentError, ZoomPhoneReauthorizationRequired),
+                    (
+                        ZoomPhonePermanentError,
+                        ZoomPhoneReauthorizationRequired,
+                        TeamsVoicePermanentError,
+                        TeamsVoiceNotConfigured,
+                    ),
                 ),
             )
         return True
@@ -593,7 +716,9 @@ async def _process_pending_jobs(
                 .order_by(
                     case(
                         (DurableJob.kind == ZOOM_PHONE_CALL_JOB, 0),
+                        (DurableJob.kind == TEAMS_VOICE_CALL_JOB, 0),
                         (DurableJob.kind == ZOOM_PHONE_RECONCILE_JOB, 1),
+                        (DurableJob.kind == TEAMS_VOICE_RECONCILE_JOB, 1),
                         else_=2,
                     ),
                     DurableJob.available_at,
@@ -612,13 +737,21 @@ async def _process_pending_jobs(
 
 async def process_pending_jobs() -> None:
     """Process general jobs without letting them block near-real-time calls."""
-    await _process_pending_jobs(exclude_kinds=ZOOM_PHONE_JOB_KINDS)
+    await _process_pending_jobs(exclude_kinds=VOICE_JOB_KINDS)
 
 
 async def process_pending_zoom_phone_jobs() -> None:
     """Dedicated bounded drain for latency-sensitive Zoom Phone work."""
     await _process_pending_jobs(
         include_kinds=ZOOM_PHONE_JOB_KINDS,
+        per_tenant_limit=10,
+    )
+
+
+async def process_pending_teams_voice_jobs() -> None:
+    """Dedicated bounded drain for latency-sensitive Teams voice work."""
+    await _process_pending_jobs(
+        include_kinds=TEAMS_VOICE_JOB_KINDS,
         per_tenant_limit=10,
     )
 
@@ -676,4 +809,118 @@ async def enqueue_zoom_phone_reconciliation_jobs() -> None:
                 idempotency_key=f"hour:{bucket}",
                 payload={"days": 1},
             )
+            await db.commit()
+
+
+async def enqueue_teams_voice_reconciliation_jobs() -> None:
+    """Enqueue one bounded reconciliation per voice-enabled tenant.
+
+    Graph change notifications are the primary feed; this hourly sweep of the
+    PSTN report is the backstop that heals anything the notification path
+    dropped. One outstanding job per tenant at a time.
+    """
+    from app.models.teams_voice_setting import TeamsVoiceSetting
+
+    now = datetime.now(timezone.utc)
+    bucket = int(now.timestamp() // (60 * 60))
+    async with async_session_maker() as root:
+        tenant_ids = list(
+            (
+                await root.scalars(
+                    select(Tenant.id)
+                    .where(Tenant.is_active.is_(True))
+                    .order_by(Tenant.id)
+                )
+            ).all()
+        )
+    for tenant_id in tenant_ids:
+        async with async_session_maker() as db:
+            await set_tenant_context(db, str(tenant_id))
+            voice_ready = await db.scalar(
+                select(TeamsVoiceSetting).where(
+                    TeamsVoiceSetting.tenant_id == tenant_id,
+                    TeamsVoiceSetting.is_enabled.is_(True),
+                    TeamsVoiceSetting.entra_tenant_id.is_not(None),
+                )
+            )
+            if not voice_ready:
+                continue
+            outstanding = await db.scalar(
+                select(DurableJob.id).where(
+                    DurableJob.tenant_id == tenant_id,
+                    DurableJob.kind == TEAMS_VOICE_RECONCILE_JOB,
+                    DurableJob.status.in_(["pending", "running"]),
+                )
+            )
+            if outstanding:
+                continue
+            await enqueue_job(
+                db,
+                tenant_id=tenant_id,
+                kind=TEAMS_VOICE_RECONCILE_JOB,
+                idempotency_key=f"hour:{bucket}",
+                payload={"days": 1},
+            )
+            await db.commit()
+
+
+async def renew_teams_voice_subscriptions() -> None:
+    """Renew Graph call-record subscriptions before they lapse.
+
+    A callRecords subscription lives at most ~3 days. Left to expire, the
+    tenant silently loses the low-latency feed and only the hourly PSTN sweep
+    keeps working — so this runs on its own schedule rather than as a durable
+    job, and failures are recorded on the settings row for the admin panel.
+    """
+    from app.config import get_settings as _get_settings
+    from app.models.teams_voice_setting import TeamsVoiceSetting
+    from app.services.teams_voice import (
+        TeamsVoiceError,
+        ensure_subscription,
+        subscription_needs_renewal,
+    )
+
+    app_settings = _get_settings()
+    async with async_session_maker() as root:
+        tenant_ids = list(
+            (
+                await root.scalars(
+                    select(Tenant.id)
+                    .where(Tenant.is_active.is_(True))
+                    .order_by(Tenant.id)
+                )
+            ).all()
+        )
+
+    for tenant_id in tenant_ids:
+        async with async_session_maker() as db:
+            await set_tenant_context(db, str(tenant_id))
+            row = await db.scalar(
+                select(TeamsVoiceSetting).where(
+                    TeamsVoiceSetting.tenant_id == tenant_id,
+                    TeamsVoiceSetting.is_enabled.is_(True),
+                    TeamsVoiceSetting.entra_tenant_id.is_not(None),
+                )
+            )
+            if not row or not subscription_needs_renewal(row):
+                continue
+            notification_url = row.notification_url or (
+                f"{app_settings.BACKEND_URL}/api/integrations/teams/voice/webhook/"
+                f"{tenant_id}"
+            )
+            try:
+                await ensure_subscription(
+                    db,
+                    tenant_id=str(tenant_id),
+                    notification_url=notification_url,
+                )
+                row.last_sync_error = None
+            except TeamsVoiceError as exc:
+                # Surfaced in the admin panel; the PSTN sweep keeps capturing
+                # calls in the meantime, just with more delay.
+                row.last_sync_status = "subscription_error"
+                row.last_sync_error = str(exc)[:1000]
+            except Exception:
+                row.last_sync_status = "subscription_error"
+                row.last_sync_error = "Unexpected error renewing the subscription."
             await db.commit()

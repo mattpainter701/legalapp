@@ -47,3 +47,43 @@ Do not solve a membership problem by linking the matter to a broader channel. Tr
 Tell affected users what classes of matter updates may be sent to Teams, whether messages are authoritative records or notifications, and where the official client file remains. Do not include more matter detail in a card or notification than the channel audience needs.
 
 After authorization or a mapping change, verify the grant owner, displayed scopes, team/channel identifiers, membership, a non-sensitive test delivery, deduplication behavior, and the removal path. Revoking Microsoft access stops future delivery but does not remove messages already posted to Teams or records already retained in LawHand.
+
+## Notification routing
+
+Beyond per-matter channel links, [Teams](/admin?tab=teams) carries firm-wide routing: each notification event LawHand can raise may be pointed at one team and channel. A matter linked to its own channel always posts there instead, so a matter-specific link overrides the firm-wide default for that matter.
+
+Only events LawHand actually raises can be routed. A route saved against an unrecognized event is rejected rather than stored, because a stored route that can never fire is indistinguishable to an administrator from a broken integration.
+
+## Teams voice (Teams Phone) call capture
+
+Firms whose telephony runs on Teams Phone can have inbound calls captured into the intake dashboard alongside Zoom Phone calls. The two providers share one feed, one set of follow-up tasks, and one export. Outbound and internal Teams calls are not captured.
+
+### How it differs from Teams chat
+
+Teams chat features use the delegated Microsoft grant an administrator authorized under [Integrations](/admin?tab=integrations). Microsoft exposes call records only through an **application** permission, `CallRecords.Read.All`, which has no delegated equivalent. Voice capture therefore runs on a separate application-only credential and requires its own administrator consent. Enabling voice does not widen the chat grant, and disabling it does not affect chat.
+
+Call records cover call metadata — the numbers, the participants, the timing, the outcome. They are not recordings or transcripts.
+
+### Setup
+
+Setup is three ordered steps on the Voice tab:
+
+1. **Name the Microsoft Entra directory.** Supply the directory (tenant) ID from Entra admin center → Overview. The shared `common` endpoint cannot issue an application-only token, so it is rejected rather than saved.
+2. **Grant the application permission.** A Microsoft 365 global administrator consents once, through the link the panel builds for your directory. `CallRecords.Read.All` is the only permission voice capture uses.
+3. **Enable capture and start live notifications.** Microsoft validates LawHand's notification URL before it begins sending. The panel shows that URL for firms that need it recorded in a change ticket.
+
+Firms that prefer to own the application registration can register a single-tenant Entra app holding only `CallRecords.Read.All` and supply its credentials; otherwise the LawHand application is used.
+
+### Two feeds, deliberately
+
+Captured calls arrive two ways. Change notifications from Microsoft deliver a call within moments of it ending. A separate hourly pass over the Teams PSTN usage report re-reads the same window and fills anything the notification path dropped. Microsoft publishes that usage report with a lag, which is exactly why it is the backstop and not the primary feed.
+
+Microsoft gives the two feeds unrelated identifiers, so LawHand matches a call across them on the caller's number and its start time before recording anything. A call both feeds see is stored once, with the later feed filling in facts the first one lacked. If live notifications lapse, capture keeps working through the hourly pass — slower, but uninterrupted. The Voice tab distinguishes these two states rather than reporting both as "on".
+
+### Verification and maintenance
+
+Use the connection test to prove the credential and permission before waiting on a real call; it reads the last 24 hours of usage without changing anything. The manual import re-runs the reconciliation pass over the last seven days.
+
+Microsoft expires a call-record subscription after roughly three days. LawHand renews it well before that on its own schedule; a renewal that fails is reported on the Voice tab, and capture continues through the hourly pass in the meantime. Re-pointing the integration at a different Entra directory invalidates the existing subscription, so LawHand clears it rather than renewing a subscription in a directory the firm no longer uses.
+
+Disabling voice capture removes the subscription at Microsoft, not just LawHand's willingness to store what arrives. Calls already captured remain in the intake dashboard and follow that data's normal retention.

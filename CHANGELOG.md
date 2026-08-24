@@ -91,6 +91,53 @@
   `AUTH_LIMITS` is enforced for POST only, so the endpoint — which persists a
   Redis key per unauthenticated call — had edge limiting but nothing covering
   traffic that reaches the app without passing through the proxy.
+
+- **Microsoft Teams Phone (voice) call capture:** inbound Teams Phone calls are
+  imported into `communication_logs` so the intake dashboard treats them exactly
+  like Zoom Phone calls. Graph exposes call records only through the
+  `CallRecords.Read.All` *application* permission — there is no delegated
+  equivalent — so `app/services/teams_voice.py` runs an app-only
+  client-credentials grant against the customer's Entra directory instead of
+  reusing the delegated Teams token. `teams_voice_settings` (migration
+  `121_teams_voice_capture`) holds the directory GUID, the per-tenant
+  notification `clientState`, and the Graph subscription state, under RLS and
+  excluded from demo cloning.
+- **Two converging capture feeds:** `communications/callRecords` change
+  notifications carry latency, and an hourly sweep of the Teams PSTN usage
+  report is the backstop for anything the notification path drops (Microsoft
+  publishes that report with a lag, which is why it is not the primary feed).
+  Both write through a `teams_voice:call:<id>` partial unique index, so a call
+  seen twice is stored once. After intake staff have worked a call,
+  reconciliation refreshes only provider-owned metadata and never overwrites the
+  curated caller identity or narrative.
+- **Notification routing UI:** `PUT /api/integrations/teams/notification-settings`
+  existed with no interface able to reach it. The Teams admin panel is now
+  tabbed (Channels / Notifications / Voice) and the routing editor is driven by
+  a new `GET /event-types`, served from the dispatcher's own catalogue so the UI
+  and the code that fires notifications cannot drift apart.
+
+### Fixed
+- **Teams Graph reads were silently truncated and silently failing:**
+  `list_joined_teams` / `list_channels` read a single Graph page and discarded
+  `@odata.nextLink`, so a firm with more teams than fit one page lost the rest;
+  both also returned `[]` on any error, so a 403 from expired consent rendered
+  in the admin panel as "you have no teams". Collection reads now page to
+  completion under a cycle-safe cap and raise `TeamsIntegrationError` with text
+  naming the remedy.
+- **`DELETE /api/integrations/teams/links/{id}` 500ed on a malformed id:** the
+  raw path string reached the UUID column and Postgres raised. It is now
+  validated (422) and reports 404 for a link that does not exist, instead of
+  204 for a delete that removed nothing.
+- **Unroutable notification events could be saved:** a typo'd `event_type` was
+  stored happily and then never fired, which is indistinguishable to an admin
+  from a broken integration. Routes are validated against the catalogue, and
+  duplicate `(event, channel, matter)` rows in one payload are collapsed rather
+  than reaching the unique index and failing the whole save.
+- **Teams link and routing responses carry the matter name,** so the admin UI
+  no longer renders a truncated UUID as a matter's identity.
+- **`teams_notify.notify` resolved a credential per channel,** reopening a
+  session and re-decrypting the token for every target of one event; it now
+  resolves once for the whole fan-out.
 - **Stripe webhook idempotency and ordering:** added `stripe_webhook_events`
   (migration `119_stripe_webhook_events`) and a shared claim guard. Stripe
   retries until it sees a 2xx and does not guarantee delivery order, so a

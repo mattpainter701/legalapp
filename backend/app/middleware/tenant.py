@@ -27,6 +27,7 @@ SKIP_PREFIXES = (
     "/auth/",
     "/api/auth/",
     "/api/integrations/zoom-phone/webhook",
+    "/api/integrations/teams/voice/webhook",
 )
 
 LICENSE_EXEMPT_PREFIXES = (

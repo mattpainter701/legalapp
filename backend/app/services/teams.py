@@ -1,10 +1,14 @@
 """Microsoft Teams collaboration via Microsoft Graph (delegated tokens).
 
 Reuses the existing tenant-wide Microsoft credential (``TenantCredential``
-provider="microsoft") through the token vault. Phase 1 supports listing the
-admin's joined teams + channels and posting messages / Adaptive Cards to a
-channel. Token configuration errors are surfaced to admin endpoints; background
+provider="microsoft") through the token vault. Supports listing the admin's
+joined teams + channels and posting messages / Adaptive Cards to a channel.
+Token configuration errors are surfaced to admin endpoints; background
 notification dispatch catches them and degrades to a no-op.
+
+Teams *voice* (Teams Phone call records) lives in ``app.services.teams_voice``:
+call records are an application-permission surface in Graph, so it cannot share
+this module's delegated token path.
 """
 
 import asyncio
@@ -24,6 +28,11 @@ from app.services.token_vault import get_fresh_token, get_fresh_user_token
 logger = logging.getLogger(__name__)
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
+
+# Safety bound on ``@odata.nextLink`` following. Graph pages joined teams and
+# channels at 20-50 items; 20 pages covers any realistic firm while keeping a
+# malformed paging loop from spinning forever.
+GRAPH_PAGE_LIMIT = 20
 
 # Delegated Graph scopes required for Teams features. Kept separate from the
 # base MICROSOFT_ADMIN_SCOPES so existing cloud-only tenants are not marked as
@@ -143,6 +152,16 @@ async def _get_token(tenant_id: str, user_id: str | None = None) -> str:
         raise TeamsIntegrationError("Unable to resolve Microsoft Teams token")
 
 
+async def resolve_token(tenant_id: str, user_id: str | None = None) -> str:
+    """Public wrapper over the token resolver.
+
+    Callers that fan a single event out to many channels resolve once and pass
+    the result to ``send_channel_message``, instead of re-opening a session and
+    re-decrypting the credential per channel.
+    """
+    return await _get_token(tenant_id, user_id)
+
+
 async def _graph_request(
     method: str,
     path: str,
@@ -196,26 +215,78 @@ async def _graph_request(
             await asyncio.sleep(delay)
 
 
+def graph_failure_message(resp: httpx.Response | None, context: str) -> str:
+    """Turn a Graph failure into something an admin can act on."""
+    if resp is None:
+        return f"Microsoft Graph did not respond while loading {context}."
+    if resp.status_code in (401, 403):
+        return (
+            f"Microsoft Graph denied access to {context} ({resp.status_code}). "
+            "Reconnect Microsoft Teams so consent is refreshed."
+        )
+    if resp.status_code == 429:
+        return (
+            f"Microsoft Graph is throttling requests for {context}. "
+            "Wait a moment and try again."
+        )
+    return f"Microsoft Graph could not load {context} ({resp.status_code})."
+
+
+async def _graph_collect(
+    path: str,
+    *,
+    token: str,
+    context: str,
+    params: dict | None = None,
+) -> list[dict[str, Any]]:
+    """GET a Graph collection, following ``@odata.nextLink`` to completion.
+
+    Raises ``TeamsIntegrationError`` on any failure. Returning ``[]`` instead
+    would render in the admin UI as "you have no teams", which sends admins
+    hunting for a Teams problem when the real fault is expired consent.
+    """
+    items: list[dict[str, Any]] = []
+    next_path: str | None = path
+    next_params = params
+    pages = 0
+
+    while next_path and pages < GRAPH_PAGE_LIMIT:
+        pages += 1
+        resp = await _graph_request("GET", next_path, token=token, params=next_params)
+        if resp is None or resp.status_code != 200:
+            if resp is not None:
+                logger.warning(
+                    "Graph GET %s failed loading %s: %s %s",
+                    next_path,
+                    context,
+                    resp.status_code,
+                    resp.text[:200],
+                )
+            raise TeamsIntegrationError(graph_failure_message(resp, context))
+        payload = resp.json()
+        items.extend(v for v in payload.get("value", []) if isinstance(v, dict))
+        # nextLink is an absolute URL that already carries the query string.
+        next_path = payload.get("@odata.nextLink")
+        next_params = None
+
+    if next_path:
+        logger.warning(
+            "Graph paging for %s stopped at the %d page cap", context, GRAPH_PAGE_LIMIT
+        )
+    return items
+
+
 async def list_joined_teams(
     tenant_id: str, user_id: str | None = None
 ) -> list[dict[str, Any]]:
     """List the teams the consenting account belongs to (``/me/joinedTeams``)."""
     token = await _get_token(tenant_id, user_id)
-    if not token:
-        return []
-    resp = await _graph_request("GET", "/me/joinedTeams", token=token)
-    if not resp or resp.status_code != 200:
-        if resp is not None:
-            logger.warning(
-                "list_joined_teams failed for tenant %s: %s %s",
-                tenant_id,
-                resp.status_code,
-                resp.text[:200],
-            )
-        return []
+    teams = await _graph_collect(
+        "/me/joinedTeams", token=token, context="your Teams list"
+    )
     return [
         {"id": t.get("id"), "display_name": t.get("displayName")}
-        for t in resp.json().get("value", [])
+        for t in teams
         if t.get("id")
     ]
 
@@ -225,26 +296,16 @@ async def list_channels(
 ) -> list[dict[str, Any]]:
     """List channels of a team (``/teams/{team_id}/channels``)."""
     token = await _get_token(tenant_id, user_id)
-    if not token:
-        return []
-    resp = await _graph_request("GET", f"/teams/{team_id}/channels", token=token)
-    if not resp or resp.status_code != 200:
-        if resp is not None:
-            logger.warning(
-                "list_channels failed for tenant %s team %s: %s %s",
-                tenant_id,
-                team_id,
-                resp.status_code,
-                resp.text[:200],
-            )
-        return []
+    channels = await _graph_collect(
+        f"/teams/{team_id}/channels", token=token, context="the team's channels"
+    )
     return [
         {
             "id": c.get("id"),
             "display_name": c.get("displayName"),
             "membership_type": c.get("membershipType"),
         }
-        for c in resp.json().get("value", [])
+        for c in channels
         if c.get("id")
     ]
 
@@ -282,6 +343,10 @@ async def create_channel(
                 resp.status_code,
                 resp.text[:500],
             )
+            if resp.status_code == 409:
+                raise TeamsIntegrationError(
+                    f"A channel named “{name[:50]}” already exists in this team."
+                )
             raise TeamsIntegrationError(
                 f"Microsoft Graph could not create the channel ({resp.status_code}). "
                 "Reconnect Teams if Channel.Create consent is missing."
@@ -304,12 +369,15 @@ async def send_channel_message(
     html: str | None = None,
     adaptive_card: dict | None = None,
     user_id: str | None = None,
+    token: str | None = None,
 ) -> bool:
     """Post a message to a channel. Supports plain HTML or an Adaptive Card.
 
+    Pass ``token`` to reuse an already-resolved credential across a fan-out.
     Returns True on success. Never raises — logs and returns False on failure.
     """
-    token = await _get_token(tenant_id, user_id)
+    if token is None:
+        token = await _get_token(tenant_id, user_id)
     if not token:
         return False
 
@@ -355,6 +423,8 @@ def build_matter_card(
     matter_name: str,
     fields: dict[str, str],
     deep_link: str | None = None,
+    *,
+    actions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build an Adaptive Card (v1.4) summarizing a matter notification."""
     body: list[dict[str, Any]] = [
@@ -389,8 +459,12 @@ def build_matter_card(
         "version": "1.4",
         "body": body,
     }
+    card_actions: list[dict[str, Any]] = list(actions or [])
     if deep_link:
-        card["actions"] = [
-            {"type": "Action.OpenUrl", "title": "Open in LawHand", "url": deep_link}
-        ]
+        card_actions.insert(
+            0,
+            {"type": "Action.OpenUrl", "title": "Open in LawHand", "url": deep_link},
+        )
+    if card_actions:
+        card["actions"] = card_actions
     return card

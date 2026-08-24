@@ -522,9 +522,12 @@ class LegalScheduler:
         # Durable queue poller: short cadence; row-level SKIP LOCKED claims and
         # leases provide concurrency control and stale-worker recovery.
         from app.services.durable_job_worker import (
+            enqueue_teams_voice_reconciliation_jobs,
             enqueue_zoom_phone_reconciliation_jobs,
             process_pending_jobs,
+            process_pending_teams_voice_jobs,
             process_pending_zoom_phone_jobs,
+            renew_teams_voice_subscriptions,
         )
 
         self.scheduler.add_job(
@@ -551,6 +554,43 @@ class LegalScheduler:
             hours=1,
             id="zoom-phone-reconciliation",
             name="Zoom Phone Reconciliation Enqueuer",
+            replace_existing=True,
+            max_instances=1,
+        )
+        self.scheduler.add_job(
+            process_pending_teams_voice_jobs,
+            "interval",
+            seconds=2,
+            id="teams-voice-job-worker",
+            name="Durable Teams Voice Job Worker",
+            replace_existing=True,
+            max_instances=1,
+        )
+        self.scheduler.add_job(
+            enqueue_teams_voice_reconciliation_jobs,
+            "interval",
+            hours=1,
+            id="teams-voice-reconciliation",
+            name="Teams Voice Reconciliation Enqueuer",
+            replace_existing=True,
+            max_instances=1,
+        )
+        # Graph caps a callRecords subscription at roughly three days. Checking
+        # every six hours renews well inside that window even if a few ticks
+        # are missed during a deploy.
+        #
+        # Unlike the queue pollers above, this one does the work directly rather
+        # than claiming a durable-job row, so it takes the advisory lock: two
+        # schedulers both finding no subscription would each create one, and the
+        # loser's subscription would be orphaned at Microsoft.
+        self.scheduler.add_job(
+            self._guarded(
+                "teams-voice-subscription-renewal", renew_teams_voice_subscriptions
+            ),
+            "interval",
+            hours=6,
+            id="teams-voice-subscription-renewal",
+            name="Teams Voice Subscription Renewal",
             replace_existing=True,
             max_instances=1,
         )

@@ -31,6 +31,31 @@
       ]
     },
     {
+      "id": "2026.08.23.1",
+      "version": "2026.08.23.1",
+      "title": "Teams calls land in your intake feed",
+      "published_at": "2026-08-23",
+      "summary": "Inbound Microsoft Teams Phone calls now appear in the intake dashboard beside Zoom Phone calls, and the Teams admin panel gains notification routing and a guided voice setup.",
+      "highlights": [
+        {
+          "title": "Teams Phone calls reach intake automatically",
+          "description": "Inbound calls to your firm's Teams numbers appear in the intake dashboard beside Zoom Phone calls, with the same follow-up tasks and export."
+        },
+        {
+          "title": "Choose where each Teams notification lands",
+          "description": "The Teams admin panel now routes each kind of notification to a team and channel you pick, with a matter's own linked channel still taking precedence."
+        },
+        {
+          "title": "Linked channels name the matter",
+          "description": "The list of linked channels now shows the matter name instead of an internal identifier, so you can tell at a glance what each channel is bound to."
+        },
+        {
+          "title": "Teams errors say what to do",
+          "description": "When Microsoft refuses a request, the panel explains what happened and how to fix it instead of showing an empty list of teams."
+        }
+      ]
+    },
+    {
       "id": "2026.08.23",
       "version": "2026.08.23",
       "title": "Billing problems you can actually see",

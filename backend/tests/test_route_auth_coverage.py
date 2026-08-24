@@ -189,6 +189,13 @@ PUBLIC_ROUTES: dict[tuple[frozenset[str], str], str] = {
         frozenset({"POST"}),
         "/api/integrations/zoom-phone/webhook/{tenant_id}",
     ): "verifies per-tenant webhook secret",
+    (
+        frozenset({"POST"}),
+        "/api/integrations/teams/voice/webhook/{tenant_id}",
+    ): (
+        "Microsoft Graph calls this unauthenticated; it verifies the "
+        "per-tenant clientState and treats the payload as an id only"
+    ),
     # Portal magic-link acceptance — the invite token IS the credential; there
     # is no prior session to authenticate against.
     (

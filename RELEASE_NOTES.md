@@ -17,6 +17,17 @@ Point LawHand at a file share that stays on your network: install the agent from
 - **Test a share before trusting it.** Test connection asks the agent to mount the share and reports which identity it used, or the exact reason it failed, instead of leaving an empty index.
 - **See when a share last indexed and why it stopped.** Each share now shows its last scan time, file count, and failure reason, and can be rescanned on demand rather than waiting for its schedule.
 
+## 2026.08.23.1 — Teams calls land in your intake feed
+
+Released August 23, 2026.
+
+Inbound Microsoft Teams Phone calls now appear in the intake dashboard beside Zoom Phone calls, and the Teams admin panel gains notification routing and a guided voice setup.
+
+- **Teams Phone calls reach intake automatically.** Inbound calls to your firm's Teams numbers appear in the intake dashboard beside Zoom Phone calls, with the same follow-up tasks and export.
+- **Choose where each Teams notification lands.** The Teams admin panel now routes each kind of notification to a team and channel you pick, with a matter's own linked channel still taking precedence.
+- **Linked channels name the matter.** The list of linked channels now shows the matter name instead of an internal identifier, so you can tell at a glance what each channel is bound to.
+- **Teams errors say what to do.** When Microsoft refuses a request, the panel explains what happened and how to fix it instead of showing an empty list of teams.
+
 ## 2026.08.23 — Billing problems you can actually see
 
 Released August 23, 2026.
