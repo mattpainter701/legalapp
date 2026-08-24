@@ -327,6 +327,16 @@ class Settings(BaseSettings):
     CORRESPONDENCE_CAPTURE_INTERVAL_MIN: int = 30  # Background scan interval
     CORRESPONDENCE_CAPTURE_MAX_EMAILS: int = 50  # Per mailbox per run
 
+    # ── Inbound Matter Email ─────────────────────────────────────────────────
+    # Cloudflare Email Worker sends the original RFC 822 bytes to the signed
+    # backend ingress endpoint. Keep the HMAC secret only in the backend secret
+    # store and the Worker's encrypted secret binding.
+    INBOUND_EMAIL_ENABLED: bool = False
+    INBOUND_EMAIL_DOMAIN: str = "intake.getlawhand.com"
+    INBOUND_EMAIL_WEBHOOK_SECRET: str = ""
+    INBOUND_EMAIL_MAX_BYTES: int = 25 * 1024 * 1024
+    INBOUND_EMAIL_SIGNATURE_TOLERANCE_SECONDS: int = 300
+
     # ── SMB File Share Relay Agent ──────────────────────────────────────────
     SMB_ENABLED: bool = False  # Master feature flag
     SMB_PAIRING_CODE_TTL_MIN: int = 10  # Pairing code expiry in minutes
@@ -882,6 +892,26 @@ def validate_dev_mode_urls(settings: Settings) -> None:
             )
 
 
+def validate_inbound_email_settings(settings: Settings) -> None:
+    if not settings.INBOUND_EMAIL_ENABLED:
+        return
+    domain = settings.INBOUND_EMAIL_DOMAIN.strip().lower().rstrip(".")
+    if not domain or "@" in domain or "." not in domain:
+        raise ValueError("INBOUND_EMAIL_DOMAIN must be a valid email domain")
+    if len(settings.INBOUND_EMAIL_WEBHOOK_SECRET) < 32:
+        raise ValueError(
+            "INBOUND_EMAIL_WEBHOOK_SECRET must be at least 32 characters when inbound email is enabled"
+        )
+    if _looks_like_placeholder(settings.INBOUND_EMAIL_WEBHOOK_SECRET):
+        raise ValueError("INBOUND_EMAIL_WEBHOOK_SECRET is still a placeholder")
+    if not 1024 <= settings.INBOUND_EMAIL_MAX_BYTES <= 50 * 1024 * 1024:
+        raise ValueError("INBOUND_EMAIL_MAX_BYTES must be between 1 KiB and 50 MiB")
+    if not 30 <= settings.INBOUND_EMAIL_SIGNATURE_TOLERANCE_SECONDS <= 900:
+        raise ValueError(
+            "INBOUND_EMAIL_SIGNATURE_TOLERANCE_SECONDS must be between 30 and 900"
+        )
+
+
 @lru_cache()
 def get_settings() -> Settings:
     settings = Settings()
@@ -892,5 +922,6 @@ def get_settings() -> Settings:
     validate_platform_secret_key(settings)
     validate_platform_bootstrap_settings(settings)
     validate_mcp_security_settings(settings)
+    validate_inbound_email_settings(settings)
     validate_dev_mode_urls(settings)
     return settings

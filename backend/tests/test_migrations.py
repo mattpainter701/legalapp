@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["123_client_portal_activity"]
+    assert heads == ["124_inbound_email"]
 
 
 def test_revision_ids_fit_the_alembic_version_column():
@@ -378,3 +378,16 @@ def test_unlinked_sync_email_cleanup_is_bounded_and_truly_reversible():
         < downgrade.index("SET status = h.previous_status")
         < downgrade.index(force)
     )
+
+
+def test_inbound_email_tables_are_force_rls_with_select_only_route_lookup():
+    backend_dir = Path(__file__).resolve().parents[1]
+    source = (
+        backend_dir / "migrations" / "versions" / "124_inbound_email.py"
+    ).read_text(encoding="utf-8")
+
+    assert '_tenant_rls("inbound_email_aliases")' in source
+    assert '_tenant_rls("inbound_emails")' in source
+    assert "ON inbound_email_aliases FOR SELECT" in source
+    assert "app.inbound_email_route_lookup" in source
+    assert "WITH CHECK (current_setting('app.inbound_email_route_lookup'" not in source

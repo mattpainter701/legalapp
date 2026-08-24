@@ -196,6 +196,13 @@ PUBLIC_ROUTES: dict[tuple[frozenset[str], str], str] = {
         "Microsoft Graph calls this unauthenticated; it verifies the "
         "per-tenant clientState and treats the payload as an id only"
     ),
+    (
+        frozenset({"POST"}),
+        "/api/inbound-email/cloudflare",
+    ): (
+        "feature-gated ingress verifies a timestamped HMAC over the exact "
+        "envelope and RFC 822 bytes before its select-only alias lookup"
+    ),
     # Portal magic-link acceptance — the invite token IS the credential; there
     # is no prior session to authenticate against.
     (

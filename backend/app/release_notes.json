@@ -2,6 +2,31 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.24.2",
+      "version": "2026.08.24.2",
+      "title": "Forward email straight to the right matter",
+      "published_at": "2026-08-24",
+      "summary": "Give each matter its own secure forwarding address, see exactly which contact addresses are tracked, and review incoming mail before it becomes official correspondence.",
+      "highlights": [
+        {
+          "title": "Use one unique forwarding address per matter",
+          "description": "Create an opaque address from the Correspondence tab and forward or BCC a message there without putting a client name or matter number in the address."
+        },
+        {
+          "title": "Review mail before filing it",
+          "description": "Forwarded messages wait in a review queue until a firm user files or rejects them, so an email cannot silently become part of the matter record."
+        },
+        {
+          "title": "See what automatic matching tracks",
+          "description": "Correspondence rules now list the client and matter-party email addresses they use instead of leaving the matching behavior implicit."
+        },
+        {
+          "title": "Rotate or disable an address immediately",
+          "description": "Replace a forwarding address when it has been shared too broadly, or turn it off when the matter no longer needs inbound mail."
+        }
+      ]
+    },
+    {
       "id": "2026.08.24.1",
       "version": "2026.08.24.1",
       "title": "A client portal that shows clients what needs their attention",

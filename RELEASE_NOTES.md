@@ -5,6 +5,17 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.24.2 — Forward email straight to the right matter
+
+Released August 24, 2026.
+
+Give each matter its own secure forwarding address, see exactly which contact addresses are tracked, and review incoming mail before it becomes official correspondence.
+
+- **Use one unique forwarding address per matter.** Create an opaque address from the Correspondence tab and forward or BCC a message there without putting a client name or matter number in the address.
+- **Review mail before filing it.** Forwarded messages wait in a review queue until a firm user files or rejects them, so an email cannot silently become part of the matter record.
+- **See what automatic matching tracks.** Correspondence rules now list the client and matter-party email addresses they use instead of leaving the matching behavior implicit.
+- **Rotate or disable an address immediately.** Replace a forwarding address when it has been shared too broadly, or turn it off when the matter no longer needs inbound mail.
+
 ## 2026.08.24.1 — A client portal that shows clients what needs their attention
 
 Released August 24, 2026.

@@ -29,6 +29,14 @@
   messages the client has not seen are marked unread and counted, the portal
   marks them read when the thread is opened, and the thread refreshes itself
   while the client is reading it.
+- **Secure per-matter inbound email** (migration `124_inbound_email`): each
+  matter can create one opaque, rotatable address at
+  `intake.getlawhand.com`. A Cloudflare Email Worker signs the exact RFC 822
+  bytes before the backend performs a select-only alias lookup; tenant RLS is
+  established immediately afterward. Messages enter a tenant-scoped
+  quarantine and require an explicit **File to matter** or **Reject** decision
+  before they become correspondence. The Correspondence panel also exposes the
+  party addresses used by automatic capture rules.
 - **File share agent is now built and shipped:** `agent/packaging/` adds a
   PyInstaller spec plus Windows (`build.ps1` → `lawhand-agent.exe` and a WiX v5
   MSI) and Linux (`build.sh` → binary + systemd install tarball) builds, and
