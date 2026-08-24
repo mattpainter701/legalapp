@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["122_teams_voice_capture"]
+    assert heads == ["123_client_portal_activity"]
 
 
 def test_revision_ids_fit_the_alembic_version_column():

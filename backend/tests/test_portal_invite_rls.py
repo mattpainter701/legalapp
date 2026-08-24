@@ -178,3 +178,81 @@ async def test_concurrent_mediation_accept_is_single_use_under_runtime_rls(
         assert failure == PORTAL_INVITE_UNAVAILABLE_DETAIL
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_client_portal_session_survives_its_own_commits_under_runtime_rls(
+    db_session, test_tenant, test_user
+):
+    """A portal request must still see its tenant after the session commits.
+
+    The tenant GUC that RLS keys on is transaction-local, and the portal
+    authenticates on its own cookie, so the middleware never registers the
+    rebind that ordinary firm requests get. Any commit inside a portal request
+    — the activity stamp, a sent message, a read receipt — would otherwise
+    leave every later query running with no tenant, and RLS fails closed: the
+    client would see an empty matter. Only the least-privilege role catches
+    this; the suite's superuser bypasses RLS entirely.
+    """
+    from types import SimpleNamespace
+
+    from app.models.communication_log import CommunicationLog
+    from app.services.portal_token import create_matter_portal_token
+
+    url = os.getenv("RLS_TEST_DATABASE_URL")
+    if not url:
+        pytest.skip("RLS_TEST_DATABASE_URL is required for runtime-role integration")
+
+    _mediation_raw, _client_raw, _mi, client_invite = await _seed_invites(
+        db_session, test_tenant, test_user
+    )
+    db_session.add(
+        CommunicationLog(
+            tenant_id=test_tenant.id,
+            matter_id=client_invite.matter_id,
+            direction="outbound",
+            channel="portal",
+            status="sent",
+            subject="Filed today",
+            body="The motion is on file.",
+        )
+    )
+    await db_session.commit()
+
+    token = create_matter_portal_token(
+        tenant_id=str(test_tenant.id),
+        matter_id=str(client_invite.matter_id),
+        contact_id=None,
+        email=client_invite.email,
+        invite_id=str(client_invite.id),
+    )
+    request = SimpleNamespace(
+        cookies={client_portal.CLIENT_PORTAL_COOKIE_NAME: token},
+        headers={},
+        app=SimpleNamespace(state=SimpleNamespace(redis=None, jti_blacklist={})),
+    )
+
+    engine = create_async_engine(url, pool_pre_ping=True)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with maker() as runtime_db:
+            # Resolving the context stamps last_seen_at and commits.
+            ctx = await client_portal.get_client_portal_context(request, runtime_db)
+            matter = await client_portal._load_matter(runtime_db, ctx)
+            view = await client_portal.portal_matter((ctx, matter), runtime_db)
+            assert view.matter_id == str(client_invite.matter_id)
+            assert view.unread_message_count == 1
+
+            # The read receipt commits again; the next read must still be scoped.
+            await client_portal.portal_mark_messages_read((ctx, matter), runtime_db)
+            listing = await client_portal.portal_list_messages(
+                (ctx, matter), runtime_db, limit=50, offset=0
+            )
+            assert listing.total == 1
+            assert listing.unread_count == 0
+
+        await db_session.refresh(client_invite)
+        assert client_invite.last_seen_at is not None
+        assert client_invite.messages_seen_at is not None
+    finally:
+        await engine.dispose()

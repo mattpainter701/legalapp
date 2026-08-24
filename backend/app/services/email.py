@@ -760,6 +760,8 @@ async def send_portal_invite(
 ) -> EmailDeliveryResult:
     """Email a mediation-portal invite link to a party (client or opposing)."""
     now_str = datetime.now(timezone.utc).strftime("%B %d, %Y %H:%M UTC")
+    safe_case_name = escape(case_name)
+    safe_invite_url = escape(invite_url, quote=True)
     content = f"""
     <div class="header">
       <h1>LawHand — Mediation Portal</h1>
@@ -767,18 +769,18 @@ async def send_portal_invite(
     </div>
     <div class="body">
       <p>You have been invited to participate in the mediation matter
-         <strong>{case_name}</strong>.</p>
+         <strong>{safe_case_name}</strong>.</p>
       <p>Use the secure link below to access the portal, where you can review
          and submit financial disclosures, upload supporting documents, and
          exchange settlement proposals.</p>
       <p style="margin:24px 0;">
-        <a href="{invite_url}"
+        <a href="{safe_invite_url}"
            style="background:#0f2d5e;color:#ffffff;text-decoration:none;
                   padding:12px 24px;border-radius:6px;font-weight:bold;
                   display:inline-block;">Open Mediation Portal</a>
       </p>
       <p style="font-size:12px;color:#888;">If the button doesn't work, copy
-         and paste this link into your browser:<br/>{invite_url}</p>
+         and paste this link into your browser:<br/>{safe_invite_url}</p>
       <p style="font-size:12px;color:#888;">This invitation link is confidential
          and will expire. Do not forward it.</p>
     </div>
@@ -801,6 +803,8 @@ async def send_client_portal_invite(
 ) -> EmailDeliveryResult:
     """Email a client-portal invite link to a firm client for a matter."""
     now_str = datetime.now(timezone.utc).strftime("%B %d, %Y %H:%M UTC")
+    safe_matter_name = escape(matter_name)
+    safe_invite_url = escape(invite_url, quote=True)
     content = f"""
     <div class="header">
       <h1>LawHand — Client Portal</h1>
@@ -808,18 +812,18 @@ async def send_client_portal_invite(
     </div>
     <div class="body">
       <p>Your legal team has invited you to the secure client portal for
-         <strong>{matter_name}</strong>.</p>
+         <strong>{safe_matter_name}</strong>.</p>
       <p>Use the link below to view matter status and key dates, exchange secure
          messages with your legal team, review and upload documents, and view
          and pay invoices.</p>
       <p style="margin:24px 0;">
-        <a href="{invite_url}"
+        <a href="{safe_invite_url}"
            style="background:#0f2d5e;color:#ffffff;text-decoration:none;
                   padding:12px 24px;border-radius:6px;font-weight:bold;
                   display:inline-block;">Open Client Portal</a>
       </p>
       <p style="font-size:12px;color:#888;">If the button doesn't work, copy
-         and paste this link into your browser:<br/>{invite_url}</p>
+         and paste this link into your browser:<br/>{safe_invite_url}</p>
       <p style="font-size:12px;color:#888;">This invitation link is confidential
          and will expire. Do not forward it.</p>
     </div>
@@ -832,6 +836,62 @@ async def send_client_portal_invite(
     return await email_service.send_email(
         to=[to_email],
         subject=f"LawHand — Client Portal Invitation: {matter_name}",
+        html_body=html_body,
+        text_body=text_body,
+    )
+
+
+async def send_client_portal_message_alert(
+    to_emails: List[str],
+    matter_name: str,
+    sender: str,
+    body: str,
+    matter_url: str,
+) -> EmailDeliveryResult:
+    """Tell the assigned legal team that a client wrote in through the portal.
+
+    Carries a short preview only. The portal is the system of record for the
+    conversation, and privileged client communication should not be fanned out
+    in full to whatever inboxes happen to be on the assignment list.
+    """
+    now_str = datetime.now(timezone.utc).strftime("%B %d, %Y %H:%M UTC")
+    preview = body.strip()
+    truncated = len(preview) > 400
+    preview = preview[:400] + ("…" if truncated else "")
+    safe_matter_name = escape(matter_name)
+    safe_sender = escape(sender)
+    safe_preview = escape(preview).replace("\n", "<br/>")
+    safe_matter_url = escape(matter_url, quote=True)
+    content = f"""
+    <div class="header">
+      <h1>LawHand — Client Portal</h1>
+      <p>New secure message from your client</p>
+    </div>
+    <div class="body">
+      <p><strong>{safe_sender}</strong> sent a portal message on
+         <strong>{safe_matter_name}</strong>.</p>
+      <blockquote style="margin:16px 0;padding:12px 16px;border-left:3px solid #0f2d5e;
+                         background:#f6f7f9;color:#333;font-size:14px;">
+        {safe_preview}
+      </blockquote>
+      <p style="margin:24px 0;">
+        <a href="{safe_matter_url}"
+           style="background:#0f2d5e;color:#ffffff;text-decoration:none;
+                  padding:12px 24px;border-radius:6px;font-weight:bold;
+                  display:inline-block;">Open the matter</a>
+      </p>
+      <p style="font-size:12px;color:#888;">Reply from the matter's
+         communications tab so the client sees it in their portal.</p>
+    </div>
+    """
+    html_body = _BASE_HTML.format(content=content, timestamp=now_str)
+    text_body = (
+        f"{sender} sent a portal message on '{matter_name}'.\n\n"
+        f"{preview}\n\nOpen the matter: {matter_url}\n"
+    )
+    return await email_service.send_email(
+        to=to_emails,
+        subject=f"LawHand — New client portal message: {matter_name}",
         html_body=html_body,
         text_body=text_body,
     )

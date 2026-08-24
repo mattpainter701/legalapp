@@ -31,6 +31,20 @@ Before inviting:
 4. confirm the invitation's intended duration and purpose; and
 5. use a separate test identity when validating a new portal workflow.
 
+### What the client sees
+
+A client portal opens on a summary of the matter: status and stage, the next
+key date, the assigned legal team, and counters for unread messages, documents
+awaiting signature, and any balance due. From there the client can exchange
+secure messages with the team, download what the firm has shared, upload
+documents of their own, sign acknowledgments, and pay invoices.
+
+The portal list on the matter shows each invitation's state — awaiting first
+sign-in, active, expired, or revoked — alongside when that portal was last
+used. An invitation that has never been opened is the usual sign that a link
+did not reach its recipient. Clients can sign out from the portal header, which
+ends that session immediately; revoking the invitation ends every session on it.
+
 ## Signature and document requests
 
 Portal access may accompany document or signature requests. Confirm that each attachment is final and appropriate for the recipient. Do not expose internal notes, other-party materials, draft strategy, or documents from another matter.

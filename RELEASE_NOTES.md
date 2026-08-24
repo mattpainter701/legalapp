@@ -5,6 +5,19 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.24.1 — A client portal that shows clients what needs their attention
+
+Released August 24, 2026.
+
+The client portal now opens on what is waiting for the client, tracks what they have read, lets them sign out, and shows the firm whether an invitation is actually being used.
+
+- **Clients see what needs them, first.** The portal opens on unread messages, documents awaiting signature, shared documents, and the balance due, with the next key date called out and how soon it falls.
+- **New messages are marked as new.** Messages from the legal team show as unread and are counted on the tab until the client opens the thread, which refreshes on its own while they are reading it.
+- **The legal team hears about a client message.** When a client writes in through the portal, the people assigned to the matter are emailed a short preview and a link, rather than waiting for someone to notice.
+- **Clients can sign out.** A sign-out button ends the portal session immediately, so a borrowed or shared device does not keep access to the matter.
+- **Invoices show what is actually owed.** Each invoice shows the amount paid, the balance remaining, and how far past due it is, with a running total for the matter.
+- **See whether a portal invitation was ever opened.** The matter's Client Portal tab shows each invitation as awaiting first sign-in, active, expired, or revoked, and when it was last used.
+
 ## 2026.08.24 — Network file shares, connected with their own credentials
 
 Released August 24, 2026.

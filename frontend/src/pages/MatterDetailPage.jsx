@@ -1970,11 +1970,33 @@ export default function MatterDetailPage() {
 }
 
 // ── Client Portal management (firm side) ────────────────────────────────────
+function isInviteExpired(invite) {
+  return Boolean(invite?.expires_at) && new Date(invite.expires_at) < new Date()
+}
+
+function inviteState(invite) {
+  if (invite.revoked) return { label: 'Revoked', tone: 'text-brand-rose' }
+  if (isInviteExpired(invite)) return { label: 'Expired', tone: 'text-brand-muted' }
+  if (invite.accepted_at) return { label: 'Active', tone: 'text-brand-green' }
+  return { label: 'Awaiting first sign-in', tone: 'text-brand-amber' }
+}
+
+function formatPortalTimestamp(value) {
+  if (!value) return null
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return null
+  return d.toLocaleString(undefined, {
+    month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+  })
+}
+
 function ClientPortalTab({ matterId, matter }) {
   const [invites, setInvites] = useState([])
   const [email, setEmail] = useState(matter?.client?.email || '')
   const [creating, setCreating] = useState(false)
+  const [revokeExisting, setRevokeExisting] = useState(false)
   const [lastUrl, setLastUrl] = useState('')
+  const [copied, setCopied] = useState(false)
   const [deliveryWarning, setDeliveryWarning] = useState('')
   const [err, setErr] = useState('')
 
@@ -1988,9 +2010,12 @@ function ClientPortalTab({ matterId, matter }) {
 
   const invite = async (e) => {
     e.preventDefault()
-    setErr(''); setLastUrl(''); setDeliveryWarning(''); setCreating(true)
+    setErr(''); setLastUrl(''); setDeliveryWarning(''); setCopied(false); setCreating(true)
     try {
-      const res = await createMatterPortalInvite(matterId, email ? { email } : {})
+      const res = await createMatterPortalInvite(matterId, {
+        ...(email ? { email } : {}),
+        revoke_existing: revokeExisting,
+      })
       setLastUrl(res.invite_url || '')
       setDeliveryWarning(res.email_sent === false ? (res.delivery_error || 'Email delivery was not confirmed. Copy and share the invite link manually.') : '')
       load()
@@ -2010,6 +2035,19 @@ function ClientPortalTab({ matterId, matter }) {
       setErr(e2?.response?.data?.detail || 'Failed to revoke invite')
     }
   }
+
+  const copyInviteLink = async () => {
+    try {
+      await navigator.clipboard.writeText(lastUrl)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Clipboard access can be blocked; the link is on screen to copy by hand.
+      setErr('Could not copy automatically — select the link above and copy it.')
+    }
+  }
+
+  const activeInvites = invites.filter((i) => !i.revoked && !isInviteExpired(i))
 
   return (
     <div className="space-y-8">
@@ -2044,13 +2082,43 @@ function ClientPortalTab({ matterId, matter }) {
           </button>
         </form>
 
+        {activeInvites.length > 0 && (
+          <label className="flex items-start gap-2 text-xs text-brand-muted font-sans">
+            <input
+              type="checkbox"
+              checked={revokeExisting}
+              onChange={(e) => setRevokeExisting(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span>
+              Revoke the {activeInvites.length} live invitation
+              {activeInvites.length === 1 ? '' : 's'} on this matter when sending.
+              Use this when re-issuing a link to the same person; leave it off to
+              give a second recipient their own access.
+            </span>
+          </label>
+        )}
+
         {err && <p className="text-sm text-brand-rose">{err}</p>}
         {lastUrl && (
           <div className="bg-brand-green/10 border border-brand-green/20 rounded-lg px-4 py-3 text-sm">
-            <p className="text-brand-ink font-medium mb-1">
-              {deliveryWarning ? 'Invite created. Shareable link:' : 'Invite sent. Shareable link:'}
-            </p>
+            <div className="flex items-start justify-between gap-3 mb-1">
+              <p className="text-brand-ink font-medium">
+                {deliveryWarning ? 'Invite created. Shareable link:' : 'Invite sent. Shareable link:'}
+              </p>
+              <button
+                type="button"
+                onClick={copyInviteLink}
+                className="text-xs font-sans font-semibold text-brand-accent hover:underline shrink-0"
+              >
+                {copied ? 'Copied' : 'Copy link'}
+              </button>
+            </div>
             <code className="text-xs text-brand-ink-2 break-all">{lastUrl}</code>
+            <p className="text-xs text-brand-muted mt-2">
+              This link is shown once and grants access to the matter — share it
+              with the client directly, never in a group thread.
+            </p>
             {deliveryWarning && <p className="text-xs text-brand-rose mt-2">{deliveryWarning}</p>}
           </div>
         )}
@@ -2061,25 +2129,34 @@ function ClientPortalTab({ matterId, matter }) {
             <p className="text-sm text-brand-muted">No invitations yet.</p>
           ) : (
             <ul className="divide-y divide-brand-line border border-brand-line rounded-lg">
-              {invites.map((inv) => (
-                <li key={inv.id} className="flex items-center justify-between px-4 py-3 text-sm">
-                  <div>
-                    <p className="text-brand-ink">{inv.email || '—'}</p>
-                    <p className="text-xs text-brand-muted">
-                      {inv.revoked ? 'Revoked' : inv.accepted_at ? `Accepted ${new Date(inv.accepted_at).toLocaleDateString()}` : 'Pending'}
-                      {' · expires '}{new Date(inv.expires_at).toLocaleDateString()}
-                    </p>
-                  </div>
-                  {!inv.revoked && (
-                    <button
-                      onClick={() => revoke(inv.id)}
-                      className="text-brand-rose hover:underline text-xs font-medium"
-                    >
-                      Revoke
-                    </button>
-                  )}
-                </li>
-              ))}
+              {invites.map((inv) => {
+                const state = inviteState(inv)
+                const lastSeen = formatPortalTimestamp(inv.last_seen_at)
+                return (
+                  <li key={inv.id} className="flex items-start justify-between gap-3 px-4 py-3 text-sm">
+                    <div className="min-w-0">
+                      <p className="text-brand-ink truncate">{inv.email || '—'}</p>
+                      <p className="text-xs">
+                        <span className={`font-medium ${state.tone}`}>{state.label}</span>
+                        <span className="text-brand-muted">
+                          {' · expires '}{new Date(inv.expires_at).toLocaleDateString()}
+                        </span>
+                      </p>
+                      <p className="text-xs text-brand-muted">
+                        {lastSeen ? `Last active ${lastSeen}` : 'Never opened'}
+                      </p>
+                    </div>
+                    {!inv.revoked && (
+                      <button
+                        onClick={() => revoke(inv.id)}
+                        className="text-brand-rose hover:underline text-xs font-medium shrink-0"
+                      >
+                        Revoke
+                      </button>
+                    )}
+                  </li>
+                )
+              })}
             </ul>
           )}
         </div>

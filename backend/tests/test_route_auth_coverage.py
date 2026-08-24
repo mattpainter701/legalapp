@@ -209,6 +209,13 @@ PUBLIC_ROUTES: dict[tuple[frozenset[str], str], str] = {
     # Client-portal data routes — authenticated by get_client_portal_context,
     # a separate JWT scheme (client_portal claim) not covered by the
     # canonical-name literal fallback since it's imported by exact name here.
+    # Sign-out deliberately takes no auth dependency: it blacklists whatever
+    # portal JTI it can read and always clears the cookie, so a client with an
+    # expired or unreadable session can still end it.
+    (
+        frozenset({"POST"}),
+        "/api/portal/client/logout",
+    ): "clears the portal cookie; tolerates a missing or expired token by design",
     (frozenset({"GET"}), "/api/portal/client/matter"): "get_client_portal_context",
     (frozenset({"GET"}), "/api/portal/client/messages"): "get_client_portal_context",
     (frozenset({"POST"}), "/api/portal/client/messages"): "get_client_portal_context",

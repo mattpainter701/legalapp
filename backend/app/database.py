@@ -72,6 +72,37 @@ async def get_db(request: Request = None) -> AsyncGenerator[AsyncSession, None]:
             await session.close()
 
 
+async def bind_tenant_context(session: AsyncSession, tenant_id: str) -> None:
+    """Pin a session to one tenant for its whole life, across commits.
+
+    ``set_tenant_context`` writes transaction-local GUCs, so the next commit
+    drops them and every later query on that session runs with no tenant — RLS
+    then fails closed and returns nothing. ``get_db`` avoids that for ordinary
+    requests by registering an ``after_begin`` rebind, but it can only do so for
+    a tenant the middleware already resolved from the firm ``access_token``.
+
+    Surfaces that resolve their own tenant after the session already exists —
+    the client portal authenticates on its own cookie, which the middleware
+    never reads — need the same rebind installed at that point instead.
+    """
+    normalized = str(UUID(str(tenant_id))) if tenant_id else NO_TENANT_CONTEXT
+
+    @event.listens_for(session.sync_session, "after_begin")
+    def _rebind_tenant_context(sync_session, transaction, connection):
+        connection.execute(
+            text(
+                """
+                SELECT
+                  set_config('app.current_tenant_id', :tenant_id, true),
+                  set_config('app.tenant_id', :tenant_id, true)
+                """
+            ),
+            {"tenant_id": normalized},
+        )
+
+    await set_tenant_context(session, normalized)
+
+
 async def set_tenant_context(session: AsyncSession, tenant_id: str) -> None:
     """Set the current tenant context for RLS policies.
 
