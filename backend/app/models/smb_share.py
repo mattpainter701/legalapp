@@ -3,7 +3,16 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -33,6 +42,13 @@ class SmbShare(Base):
         ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
     )
+    # Credential used to mount this share. Null means the agent falls back to
+    # its locally configured identity (machine account / config.toml).
+    credential_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("smb_credentials.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     share_path: Mapped[str] = mapped_column(String(500), nullable=False)
     display_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     file_extensions: Mapped[list[str] | None] = mapped_column(
@@ -49,6 +65,18 @@ class SmbShare(Base):
     )
     last_scan_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     last_scan_file_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_scan_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_verify_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    last_verify_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    exclude_patterns: Mapped[list[str] | None] = mapped_column(
+        ARRAY(String), nullable=True
+    )
+    is_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

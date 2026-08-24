@@ -1,0 +1,136 @@
+# =============================================================================
+# File Share Agent — build and publish installers
+# =============================================================================
+# Produces the artifacts customers actually install on a file server:
+#
+#   lawhand-agent-<version>-x64.msi          Windows installer (registers the
+#                                            service, can pair during install)
+#   lawhand-agent.exe                        standalone Windows binary
+#   lawhand-agent-<version>-linux-x86_64.tar.gz  Linux binary + systemd installer
+#
+# Runs on every change to agent/ so a broken build is caught in the PR, and
+# publishes a GitHub release when an `agent-v*` tag is pushed.
+# =============================================================================
+
+name: Agent release
+
+permissions:
+  contents: read
+
+on:
+  push:
+    # No path filter here: a tag push carries whatever files the tagged commit
+    # changed, so filtering would skip the release build itself.
+    branches: [main]
+    tags: ["agent-v*"]
+  pull_request:
+    branches: [main]
+    paths:
+      - "agent/**"
+      - ".github/workflows/agent-release.yml"
+  workflow_dispatch:
+
+jobs:
+  windows:
+    name: Windows — exe and MSI
+    runs-on: windows-latest
+    timeout-minutes: 30
+    # Release uploads happen from the job that produced the artifact, so no
+    # extra action is needed to shuttle files between jobs.
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5.1 (Node.js 24)
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3 (Node.js 24)
+        with:
+          python-version: "3.11"
+
+      - name: Build agent installers
+        shell: pwsh
+        run: ./agent/packaging/windows/build.ps1
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node.js 24)
+        with:
+          name: lawhand-agent-windows
+          path: |
+            agent/dist/lawhand-agent.exe
+            agent/dist/*.msi
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/agent-v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" \
+              --title "File Share Agent ${TAG#agent-}" \
+              --notes "Windows MSI/EXE and Linux binary for the on-premise file share agent. See agent/README.md for install and pairing steps."
+          # The admin console links to unversioned names under
+          # releases/latest/download, so publish a stable alias next to the
+          # versioned installer rather than a link that 404s.
+          cp agent/dist/*-x64.msi agent/dist/lawhand-agent-x64.msi
+          gh release upload "$TAG" \
+            agent/dist/lawhand-agent.exe \
+            agent/dist/*-x64.msi \
+            --clobber
+
+  linux:
+    name: Linux — binary and tarball
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5.1 (Node.js 24)
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3 (Node.js 24)
+        with:
+          python-version: "3.11"
+
+      - name: Install agent with test extras
+        run: python -m pip install "./agent[dev]"
+
+      - name: Run agent tests
+        run: python -m pytest agent/tests -q
+
+      - name: Build agent binary
+        run: ./agent/packaging/linux/build.sh
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node.js 24)
+        with:
+          name: lawhand-agent-linux
+          path: |
+            agent/dist/lawhand-agent
+            agent/dist/*.tar.gz
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/agent-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" \
+              --title "File Share Agent ${TAG#agent-}" \
+              --notes "Windows MSI/EXE and Linux binary for the on-premise file share agent. See agent/README.md for install and pairing steps."
+          # Stable alias for the admin console's download link (see above).
+          cp agent/dist/*-linux-*.tar.gz agent/dist/lawhand-agent-linux-x86_64.tar.gz
+          gh release upload "$TAG" \
+            agent/dist/lawhand-agent \
+            agent/dist/*.tar.gz \
+            --clobber

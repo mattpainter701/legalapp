@@ -1,0 +1,22 @@
+[Unit]
+Description=LawHand File Share Agent
+Documentation=https://getlawhand.com/docs/file-shares
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=@EXEC_START@
+Restart=on-failure
+RestartSec=30
+User=@USER@
+Environment=CLARITY_CONFIG_DIR=@CONFIG_DIR@
+# The agent reads file shares and talks HTTPS to the SaaS; nothing else.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=@CONFIG_DIR@
+
+[Install]
+WantedBy=multi-user.target

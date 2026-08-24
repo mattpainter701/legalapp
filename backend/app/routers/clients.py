@@ -40,6 +40,7 @@ from app.schemas.client import (
     ClientUpdate,
 )
 from app.services.operator_audit import record_operator_audit
+from app.utils.sql_filters import escape_like
 
 router = APIRouter(prefix="/api/clients", tags=["clients", "crm"])
 
@@ -193,17 +194,19 @@ async def list_clients(
     if sms_opt_in is not None:
         stmt = stmt.where(Contact.sms_opt_in.is_(sms_opt_in))
     if q:
-        pattern = f"%{q.strip()}%"
+        # Escape wildcards so a client number containing "_" matches literally
+        # rather than standing in for any character.
+        pattern = f"%{escape_like(q.strip())}%"
         stmt = stmt.where(
             or_(
-                Contact.first_name.ilike(pattern),
-                Contact.last_name.ilike(pattern),
-                Contact.preferred_name.ilike(pattern),
-                Contact.organization_name.ilike(pattern),
-                Contact.email.ilike(pattern),
-                Contact.phone.ilike(pattern),
-                Contact.secondary_phone.ilike(pattern),
-                Contact.client_number.ilike(pattern),
+                Contact.first_name.ilike(pattern, escape="\\"),
+                Contact.last_name.ilike(pattern, escape="\\"),
+                Contact.preferred_name.ilike(pattern, escape="\\"),
+                Contact.organization_name.ilike(pattern, escape="\\"),
+                Contact.email.ilike(pattern, escape="\\"),
+                Contact.phone.ilike(pattern, escape="\\"),
+                Contact.secondary_phone.ilike(pattern, escape="\\"),
+                Contact.client_number.ilike(pattern, escape="\\"),
             )
         )
 
@@ -798,9 +801,15 @@ async def client_matters(
     ]
 
 
+#: Leading characters a spreadsheet treats as the start of a formula. Tab and
+#: carriage return belong here alongside the obvious four: Excel and LibreOffice
+#: strip them during cell parsing and evaluate whatever follows.
+_CSV_FORMULA_LEADS = ("=", "+", "-", "@", "\t", "\r")
+
+
 def _csv_safe(value) -> str:
     text = "" if value is None else str(value)
-    return f"'{text}" if text.startswith(("=", "+", "-", "@")) else text
+    return f"'{text}" if text.startswith(_CSV_FORMULA_LEADS) else text
 
 
 def _parse_bool(value: str, field: str) -> bool:

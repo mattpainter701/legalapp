@@ -3,6 +3,95 @@
 ## [Unreleased]
 
 ### Added
+- **File share agent is now built and shipped:** `agent/packaging/` adds a
+  PyInstaller spec plus Windows (`build.ps1` → `lawhand-agent.exe` and a WiX v5
+  MSI) and Linux (`build.sh` → binary + systemd install tarball) builds, and
+  `.github/workflows/agent-release.yml` builds both on every change to `agent/`
+  and attaches them to an `agent-v*` tag release. The MSI registers an
+  auto-starting service and can pair during install
+  (`msiexec /i … PAIRING_CODE=… SAAS_URL=…`); `lawhand-agent service
+  install|start|stop|restart|status|remove` manages the Windows service or the
+  systemd unit from one command.
+- **Per-tenant credential vault for file shares** (migration
+  `121_smb_share_credentials`): `smb_credentials` stores NTLM/Kerberos/guest
+  identities encrypted with the `TOKEN_ENCRYPTION_KEYS` keyring, RLS-scoped to
+  the tenant, and `smb_shares.credential_id` binds one to each share — so a
+  single agent can serve shares needing different identities. Admin APIs never
+  return a secret (`has_password` only) and a credential may be pinned to one
+  agent; the plaintext is delivered exclusively to that agent over its
+  API-key-authenticated share endpoint and held in memory.
+- **Authentication panel in Administration → File Shares:** adding a share now
+  exposes the credential (reuse a stored one, create one inline, or use the
+  agent's own identity), file types, exclusion globs, folder depth and scan
+  schedule, plus per-share **Test connection** and **Scan now** actions that
+  round-trip through the agent and report the identity used and the real error
+  text. A Credentials tab manages the vault, and the Agents tab shows the
+  Windows/Linux install commands for the generated pairing code.
+- **Agent scan reporting:** the agent posts scan outcomes to
+  `/api/v1/smb/agents/{id}/shares/{share_id}/scan-status`, so the console shows
+  last scan time, file count and failure reason instead of an empty cell.
+
+### Fixed
+- **File share pairing was impossible:** `smb_agents.pairing_code` is
+  `varchar(20)` while `secrets.token_urlsafe(16)` produces 22 characters, so
+  every pairing-code request failed at insert. Codes are now four groups of
+  four characters from an alphabet without look-alikes (19 characters, ~78
+  bits) — short enough for the column and for an installer command line.
+- **SMB API responses failed to serialize:** `ShareInfo`, `AgentInfo` and the
+  other SMB response models declare `id` fields as `str` but are validated from
+  ORM rows carrying `uuid.UUID`, which pydantic rejected — creating or listing
+  a share returned a 500. They now share a base model that coerces UUIDs.
+- **Agent could not use the shares the API returned:** it expected `server`/
+  `share` keys the API never sent, registered with an `agent_name` field name it
+  did not use, and sent heartbeat keys the schema drops (leaving agent version
+  and hostname empty in the console). Share payloads are now normalized from the
+  UNC path, and registration/heartbeat match the API contract.
+- **MCP platform tool arguments validated before use:** `list_matters`,
+  `list_matter_documents`, and `create_document` read their arguments from a raw
+  dict and passed them straight to the database and to `int()`. A client that
+  sent a matter name where a UUID belongs — what an external model does when it
+  skips `list_matters` — raised `DBAPIError`, and a non-integer `limit` raised
+  `ValueError`; both surfaced as HTTP 500. Because `_call_platform_tool_metered`
+  caught only `HTTPException`, neither reached `record_mcp_usage`, so the failed
+  call left no trace in usage or audit records. Arguments now validate against
+  Pydantic models before any query runs, the declared `inputSchema` carries the
+  same UUID formats and bounds so the protocol path's jsonschema agrees with it,
+  and every failure is metered with its real exception class. Failure metering
+  runs on its own session and commits there: the database errors it exists to
+  record leave the request transaction unusable, and that transaction is rolled
+  back as the error propagates, so a usage row written on it would either raise
+  or vanish. `content` is bounded by encoded bytes rather than characters,
+  because bytes are what the 256 KiB transport cap measures. Note two contract
+  changes for clients: a `limit` outside its range is rejected rather than
+  clamped, and an undeclared argument is rejected rather than ignored — the
+  advertised schemas now set `"additionalProperties": false` to say so.
+- **CSV export quotes tab and carriage-return formula leads:** `_csv_safe`
+  guarded `=`, `+`, `-`, and `@` but not `\t` or `\r`, which Excel and
+  LibreOffice also treat as formula leads once they strip them during cell
+  parsing.
+- **Demo requests can no longer lose a lead silently:** an embedded newline in
+  `name`, `firm_name`, `phone`, or `team_size` survived into the notification's
+  subject header. Python refuses to serialize a header containing an embedded
+  one, `send_email`'s broad handler turned that into a delivery failure, and the
+  request row was stored while nobody was notified. The single-line fields now
+  reject line breaks at the schema edge.
+- **Client and matter search escape LIKE wildcards:** a `%` or `_` in a search
+  term acted as a wildcard, so a client number containing `_` matched far more
+  than the user asked for.
+- **Stripe webhook stops returning parser internals:** the unauthenticated
+  endpoint answered a malformed payload with the exception's text. It now
+  returns a fixed string and logs the reason server-side. Same-second event
+  pairs, which Stripe's one-second `created` resolution leaves unordered, are
+  now noted in the log rather than resolved invisibly.
+- **Legacy `.doc` refused identically by both text extractors:**
+  `extract_text_from_path` routed `.doc` into python-docx, which fails on the
+  container and surfaced as an opaque indexing error instead of the actionable
+  "convert to DOCX, PDF, or TXT" message `extract_text` already returned.
+- **`GET /api/workspace-mcp/oauth/authorize` rate-limited in the application:**
+  `AUTH_LIMITS` is enforced for POST only, so the endpoint — which persists a
+  Redis key per unauthenticated call — had edge limiting but nothing covering
+  traffic that reaches the app without passing through the proxy.
+
 - **Microsoft Teams Phone (voice) call capture:** inbound Teams Phone calls are
   imported into `communication_logs` so the intake dashboard treats them exactly
   like Zoom Phone calls. Graph exposes call records only through the

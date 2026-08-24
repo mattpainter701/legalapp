@@ -6,6 +6,7 @@ accepted only by the compatibility REST adapter. Legacy ``X-API-Key`` tenant
 credentials are rejected and cannot be issued.
 """
 
+import logging
 import time
 import uuid
 
@@ -16,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.database import get_db, set_tenant_context
+from app.database import async_session_maker, get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.middleware.rate_limit import _client_ip as _trusted_client_ip
 from app.models.tenant import Tenant
@@ -43,6 +44,7 @@ from app.services.mcp_platform_tools import (
 from app.services.rag import full_rag_query
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/mcp", tags=["mcp"])
 _embedding_service = EmbeddingService()
 PLATFORM_TOOL_SET = frozenset(PLATFORM_TOOL_NAMES)
@@ -307,6 +309,55 @@ def parse_mcp_message_body(body: dict) -> ToolCallRequest:
     return ToolCallRequest.model_validate(body)
 
 
+async def _record_failed_tool_call(
+    body: "ToolCallRequest",
+    request: Request,
+    *,
+    product_key,
+    tenant,
+    transport: str,
+    started: float,
+    exc: BaseException,
+) -> None:
+    """Persist a failed tool call on a session of its own.
+
+    The request session cannot carry this write. A tool that fails with a
+    database error leaves that session in a failed transaction, so the usage
+    write raises ``InFailedSQLTransactionError`` instead of recording anything
+    -- and masks the original exception on its way out. Even when the session is
+    healthy, ``get_db`` rolls it back as the exception propagates, so a row
+    merely flushed there would not survive the request that produced it.
+
+    Metering is evidence about a failure, never a reason to convert one into a
+    different failure, so this swallows its own errors after logging them.
+    """
+    try:
+        async with async_session_maker() as usage_db:
+            await set_tenant_context(usage_db, str(tenant.id))
+            await record_mcp_usage(
+                db=usage_db,
+                tenant_id=tenant.id,
+                product_key_id=product_key.id,
+                auth_type="product_key",
+                transport=transport,
+                tool_name=body.name,
+                status_code=exc.status_code if isinstance(exc, HTTPException) else 500,
+                latency_ms=int((time.perf_counter() - started) * 1000),
+                ip_address=_request_ip(request),
+                user_agent=request.headers.get("User-Agent"),
+                error_class=type(exc).__name__,
+                query_text=str((body.arguments or {}).get("query") or "")[:2000]
+                or None,
+            )
+            await usage_db.commit()
+    except Exception:
+        logger.exception(
+            "MCP usage metering failed for tool %s after %s",
+            body.name,
+            type(exc).__name__,
+        )
+
+
 async def _call_platform_tool_metered(
     body: "ToolCallRequest",
     request: Request,
@@ -325,20 +376,18 @@ async def _call_platform_tool_metered(
             db=db,
             tenant_id=tenant.id,
         )
-    except HTTPException as exc:
-        await record_mcp_usage(
-            db=db,
-            tenant_id=tenant.id,
-            product_key_id=product_key.id,
-            auth_type="product_key",
+    except Exception as exc:
+        # Meter every failure, not only HTTPException: an unexpected error is
+        # exactly the one worth having in the usage record. Deliberately not
+        # BaseException -- a cancelled request must not trigger another write.
+        await _record_failed_tool_call(
+            body,
+            request,
+            product_key=product_key,
+            tenant=tenant,
             transport=transport,
-            tool_name=body.name,
-            status_code=exc.status_code,
-            latency_ms=int((time.perf_counter() - started) * 1000),
-            ip_address=_request_ip(request),
-            user_agent=request.headers.get("User-Agent"),
-            error_class="HTTPException",
-            query_text=str((body.arguments or {}).get("query") or "")[:2000] or None,
+            started=started,
+            exc=exc,
         )
         raise
     await record_mcp_usage(
@@ -402,20 +451,18 @@ async def _call_tool_with_product_key(
                 status_code=503,
                 detail="External MCP product keys require the CourtListener MCP server",
             )
-    except HTTPException as exc:
-        await record_mcp_usage(
-            db=db,
-            tenant_id=tenant.id,
-            product_key_id=product_key.id,
-            auth_type="product_key",
+    except Exception as exc:
+        # Meter every failure, not only HTTPException: an unexpected error is
+        # exactly the one worth having in the usage record. Deliberately not
+        # BaseException -- a cancelled request must not trigger another write.
+        await _record_failed_tool_call(
+            body,
+            request,
+            product_key=product_key,
+            tenant=tenant,
             transport=transport,
-            tool_name=body.name,
-            status_code=exc.status_code,
-            latency_ms=int((time.perf_counter() - started) * 1000),
-            ip_address=_request_ip(request),
-            user_agent=request.headers.get("User-Agent"),
-            error_class="HTTPException",
-            query_text=str((body.arguments or {}).get("query") or "")[:2000] or None,
+            started=started,
+            exc=exc,
         )
         raise
     await record_mcp_usage(

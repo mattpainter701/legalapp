@@ -115,6 +115,7 @@ _PURGE_ONLY_TABLES = {
     "signature_signers",
     "smb_access_log",
     "smb_agents",
+    "smb_credentials",
     "smb_file_index",
     "smb_shares",
     "task_automation_runs",
@@ -154,6 +155,7 @@ SENSITIVE_NEVER_CLONE = frozenset(
         "external_system_connections",
         "mcp_product_keys",
         "smb_agents",
+        "smb_credentials",
         "smb_shares",
         "teams_channel_links",
         # Carries the Entra directory binding and the notification clientState

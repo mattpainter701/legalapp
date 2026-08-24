@@ -5,6 +5,18 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.24 — Network file shares, connected with their own credentials
+
+Released August 24, 2026.
+
+Point LawHand at a file share that stays on your network: install the agent from a packaged installer, store the share's credentials securely, and test the connection before anyone searches it.
+
+- **Install the file share agent instead of building it.** Windows installs from an MSI that registers a background service and can pair during setup; Linux ships a binary with a service installer.
+- **Store share credentials securely, per firm.** Save the username and password, Kerberos, or guest identity each share needs. Secrets are encrypted, never shown again, and only reach your own agent.
+- **Different shares can use different accounts.** One agent can serve shares that need separate identities, and a credential can be restricted so it only ever reaches one agent.
+- **Test a share before trusting it.** Test connection asks the agent to mount the share and reports which identity it used, or the exact reason it failed, instead of leaving an empty index.
+- **See when a share last indexed and why it stopped.** Each share now shows its last scan time, file count, and failure reason, and can be rescanned on demand rather than waiting for its schedule.
+
 ## 2026.08.23.1 — Teams calls land in your intake feed
 
 Released August 23, 2026.

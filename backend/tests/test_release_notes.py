@@ -6,8 +6,8 @@ from app.release_notes import RECENT_RELEASE_DAYS, build_release_catalog
 from app.main import app_version
 
 
-LATEST_RELEASE_ID = "2026.08.23.1"
-LATEST_RELEASE_DATE = date(2026, 8, 23)
+LATEST_RELEASE_ID = "2026.08.24"
+LATEST_RELEASE_DATE = date(2026, 8, 24)
 
 
 def test_release_catalog_returns_latest_release_and_history():
@@ -17,8 +17,11 @@ def test_release_catalog_returns_latest_release_and_history():
     assert latest["id"] == LATEST_RELEASE_ID
     assert latest["version"] == LATEST_RELEASE_ID
     assert latest["is_recent"] is True
-    assert len(latest["highlights"]) == 4
-    assert latest["highlights"][-1]["title"] == "Teams errors say what to do"
+    assert len(latest["highlights"]) == 5
+    assert (
+        latest["highlights"][-1]["title"]
+        == "See when a share last indexed and why it stopped"
+    )
     assert catalog["release_notes"][0] == latest
 
 

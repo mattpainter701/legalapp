@@ -17,6 +17,7 @@ from app.schemas.smb import (
     AgentInfo,
     AgentRegisterRequest,
     AgentRegisterResponse,
+    AgentShareInfo,
     AgentStatusUpdate,
     ContentFetchResult,
     MatterSmbShareCreate,
@@ -24,13 +25,22 @@ from app.schemas.smb import (
     PairingCodeResponse,
     ShareCreate,
     ShareInfo,
+    ShareScanStatus,
     ShareUpdate,
     SmbAccessLogEntry,
+    SmbCredentialCreate,
+    SmbCredentialInfo,
+    SmbCredentialUpdate,
     SmbSearchResult,
     SyncRequest,
     SyncResponse,
+    TaskAck,
 )
 from app.services.smb import smb_service
+from app.services.smb_credentials import (
+    SmbCredentialError,
+    smb_credential_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -135,24 +145,62 @@ async def submit_task_result(
         raise HTTPException(status_code=403, detail="Agent ID mismatch")
 
     redis = getattr(request.app.state, "redis", None)
-    await smb_service.submit_task_result(db, agent_id, task_id, body, redis=redis)
+    await smb_service.submit_task_result(
+        db,
+        agent_id,
+        task_id,
+        body,
+        redis=redis,
+        tenant_id=str(agent.tenant_id),
+    )
+    await db.commit()
     return {"status": "ok"}
 
 
-@router.get("/agents/{agent_id}/shares", response_model=list[ShareInfo])
+@router.get("/agents/{agent_id}/shares", response_model=list[AgentShareInfo])
 async def list_agent_shares(
     agent_id: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
     agent: SmbAgent = Depends(get_smb_agent),
 ):
-    """List shares assigned to this agent."""
+    """List enabled shares for this agent, with the credential to mount each.
+
+    This is the only response that carries a decrypted share secret. It is
+    reachable only with the agent's own API key, over TLS, and a credential
+    pinned to another agent is never included.
+    """
     if str(agent.id) != agent_id:
         raise HTTPException(status_code=403, detail="Agent ID mismatch")
 
     tenant_id = str(agent.tenant_id)
-    shares = await smb_service.list_shares(db, agent_id, tenant_id)
-    return [ShareInfo.model_validate(s) for s in shares]
+    shares = await smb_service.list_agent_shares(db, agent_id, tenant_id)
+    await db.commit()
+    return shares
+
+
+@router.post("/agents/{agent_id}/shares/{share_id}/scan-status")
+async def report_scan_status(
+    agent_id: str,
+    share_id: str,
+    body: ShareScanStatus,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    agent: SmbAgent = Depends(get_smb_agent),
+):
+    """Record the outcome of a share scan so admins can see it went through."""
+    if str(agent.id) != agent_id:
+        raise HTTPException(status_code=403, detail="Agent ID mismatch")
+
+    try:
+        await smb_service.record_scan_status(
+            db, agent_id, str(agent.tenant_id), share_id, body
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    await db.commit()
+    return {"status": "ok"}
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -349,7 +397,7 @@ async def create_share(
     db: AsyncSession = Depends(get_db),
     admin=Depends(require_admin),
 ):
-    """Create a new SMB share on an agent."""
+    """Create a new SMB share on an agent, with its mount credential."""
     tenant_id = str(admin.tenant_id)
 
     agent_result = await db.execute(
@@ -361,11 +409,20 @@ async def create_share(
     if agent_result.scalar_one_or_none() is None:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    share = await smb_service.create_share(db, agent_id, tenant_id, body)
+    try:
+        share = await smb_service.create_share(
+            db, agent_id, tenant_id, body, user_id=str(admin.id)
+        )
+    except SmbCredentialError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
     await db.commit()
 
+    # The tenant GUC is transaction-local, so re-establish it before reading
+    # back through RLS after the commit.
+    await set_tenant_context(db, tenant_id)
     await db.refresh(share)
-    return ShareInfo.model_validate(share)
+    return await smb_service.share_info(db, share)
 
 
 @router.get("/shares", response_model=list[ShareInfo])
@@ -385,7 +442,11 @@ async def list_shares(
 
     result = await db.execute(stmt)
     shares = result.scalars().all()
-    return [ShareInfo.model_validate(s) for s in shares]
+    credential_names, agent_names = await smb_service.name_maps(db, tenant_id)
+    return [
+        await smb_service.share_info(db, share, credential_names, agent_names)
+        for share in shares
+    ]
 
 
 @router.patch("/shares/{share_id}", response_model=ShareInfo)
@@ -401,12 +462,15 @@ async def update_share(
 
     try:
         share = await smb_service.update_share(db, share_id, tenant_id, body)
+    except SmbCredentialError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
     await db.commit()
+    await set_tenant_context(db, tenant_id)
     await db.refresh(share)
-    return ShareInfo.model_validate(share)
+    return await smb_service.share_info(db, share)
 
 
 @router.delete("/shares/{share_id}")
@@ -421,6 +485,189 @@ async def delete_share(
     await smb_service.delete_share(db, share_id, tenant_id)
     await db.commit()
     return {"status": "deleted", "share_id": share_id}
+
+
+@router.post("/shares/{share_id}/test-connection", response_model=TaskAck)
+async def test_share_connection(
+    share_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(require_admin),
+):
+    """Ask the owning agent to mount the share and report back.
+
+    Returns a task id; poll ``GET /shares/{share_id}/task/{task_id}`` for the
+    outcome. The agent does the probing — the SaaS never touches the customer
+    network itself.
+    """
+    tenant_id = str(admin.tenant_id)
+    redis = getattr(request.app.state, "redis", None) if request else None
+
+    try:
+        task_id, agent_id = await smb_service.enqueue_share_task(
+            db, tenant_id, share_id, "verify_share", redis=redis
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status = 404 if detail == "Share not found" else 409
+        raise HTTPException(status_code=status, detail=detail)
+
+    await db.commit()
+    return TaskAck(task_id=task_id, agent_id=agent_id, kind="verify_share")
+
+
+@router.post("/shares/{share_id}/scan", response_model=TaskAck)
+async def scan_share_now(
+    share_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(require_admin),
+):
+    """Queue an immediate re-scan of a share instead of waiting for its cron."""
+    tenant_id = str(admin.tenant_id)
+    redis = getattr(request.app.state, "redis", None) if request else None
+
+    try:
+        task_id, agent_id = await smb_service.enqueue_share_task(
+            db, tenant_id, share_id, "scan_now", redis=redis
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status = 404 if detail == "Share not found" else 409
+        raise HTTPException(status_code=status, detail=detail)
+
+    await db.commit()
+    return TaskAck(task_id=task_id, agent_id=agent_id, kind="scan_now")
+
+
+@router.get("/shares/{share_id}/task/{task_id}")
+async def get_share_task_result(
+    share_id: str,
+    task_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(require_admin),
+):
+    """Poll for the result of a connection test or scan request."""
+    await set_tenant_context(db, str(admin.tenant_id))
+    share_result = await db.execute(
+        select(SmbShare).where(
+            SmbShare.id == share_id,
+            SmbShare.tenant_id == admin.tenant_id,
+        )
+    )
+    if share_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Share not found")
+
+    redis = getattr(request.app.state, "redis", None) if request else None
+    payload = await smb_service.get_task_result(task_id, redis=redis)
+    if payload is None:
+        return {"status": "pending"}
+    return {
+        "status": "ok" if payload.get("ok") else "failed",
+        "error": payload.get("error"),
+        "detail": payload.get("detail"),
+    }
+
+
+# ── Credential vault (admin) ────────────────────────────────────────────────
+
+
+def _credential_info(credential, share_counts: dict[str, int]) -> SmbCredentialInfo:
+    """Project a credential row into its admin view (never the secret)."""
+    info = SmbCredentialInfo.model_validate(credential)
+    return info.model_copy(
+        update={
+            "has_password": bool(credential.encrypted_password),
+            "agent_id": (str(credential.agent_id) if credential.agent_id else None),
+            "share_count": share_counts.get(str(credential.id), 0),
+        }
+    )
+
+
+@router.post("/credentials", response_model=SmbCredentialInfo)
+async def create_credential(
+    body: SmbCredentialCreate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(require_admin),
+):
+    """Store a file share credential for this tenant (secret encrypted at rest)."""
+    tenant_id = str(admin.tenant_id)
+    try:
+        credential = await smb_credential_service.create_credential(
+            db, tenant_id, body, user_id=str(admin.id)
+        )
+    except SmbCredentialError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    await db.commit()
+    await set_tenant_context(db, tenant_id)
+    await db.refresh(credential)
+    return _credential_info(credential, {})
+
+
+@router.get("/credentials", response_model=list[SmbCredentialInfo])
+async def list_credentials(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(require_admin),
+):
+    """List stored credentials. Secrets are never returned."""
+    tenant_id = str(admin.tenant_id)
+    credentials = await smb_credential_service.list_credentials(db, tenant_id)
+    share_counts = await smb_credential_service.share_counts(db, tenant_id)
+    return [_credential_info(c, share_counts) for c in credentials]
+
+
+@router.patch("/credentials/{credential_id}", response_model=SmbCredentialInfo)
+async def update_credential(
+    credential_id: str,
+    body: SmbCredentialUpdate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(require_admin),
+):
+    """Update a credential. Omit ``password`` to keep the stored secret."""
+    tenant_id = str(admin.tenant_id)
+    try:
+        credential = await smb_credential_service.update_credential(
+            db, credential_id, tenant_id, body
+        )
+    except SmbCredentialError as exc:
+        detail = str(exc)
+        status = 404 if detail == "Credential not found" else 400
+        raise HTTPException(status_code=status, detail=detail)
+
+    await db.commit()
+    await set_tenant_context(db, tenant_id)
+    await db.refresh(credential)
+    share_counts = await smb_credential_service.share_counts(db, tenant_id)
+    return _credential_info(credential, share_counts)
+
+
+@router.delete("/credentials/{credential_id}")
+async def delete_credential(
+    credential_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(require_admin),
+):
+    """Delete a credential; shares that used it fall back to the agent identity."""
+    tenant_id = str(admin.tenant_id)
+    try:
+        detached = await smb_credential_service.delete_credential(
+            db, credential_id, tenant_id
+        )
+    except SmbCredentialError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    await db.commit()
+    return {
+        "status": "deleted",
+        "credential_id": credential_id,
+        "detached_shares": detached,
+    }
 
 
 @router.get("/stats")

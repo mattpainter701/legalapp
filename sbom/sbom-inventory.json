@@ -453,6 +453,20 @@
     },
     {
       "ecosystem": "pypi",
+      "name": "pyinstaller",
+      "scope": "optional:build",
+      "source": "agent/pyproject.toml",
+      "specifier": ">=6.6"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "pywin32",
+      "scope": "optional:build",
+      "source": "agent/pyproject.toml",
+      "specifier": ">=306;sys_platform=='win32'"
+    },
+    {
+      "ecosystem": "pypi",
       "name": "pytest",
       "scope": "optional:dev",
       "source": "agent/pyproject.toml",
@@ -471,6 +485,13 @@
       "scope": "optional:dev",
       "source": "agent/pyproject.toml",
       "specifier": ">=0.4"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "pywin32",
+      "scope": "optional:windows",
+      "source": "agent/pyproject.toml",
+      "specifier": ">=306;sys_platform=='win32'"
     },
     {
       "ecosystem": "pypi",

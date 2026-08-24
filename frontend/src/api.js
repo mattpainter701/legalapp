@@ -2154,8 +2154,35 @@ export const removeMatterSmbShare = (matterId, bindingId) =>
 export const createSmbShare = ({ agent_id, ...data }) =>
   api.post('/v1/smb/shares', data, { params: { agent_id } }).then(r => r.data)
 
+export const updateSmbShare = (shareId, data) =>
+  api.patch(`/v1/smb/shares/${shareId}`, data).then(r => r.data)
+
 export const deleteSmbShare = (shareId) =>
   api.delete(`/v1/smb/shares/${shareId}`).then(r => r.data)
+
+// Ask the agent to mount the share and report back; poll with getSmbShareTask.
+export const testSmbShareConnection = (shareId) =>
+  api.post(`/v1/smb/shares/${shareId}/test-connection`).then(r => r.data)
+
+export const scanSmbShareNow = (shareId) =>
+  api.post(`/v1/smb/shares/${shareId}/scan`).then(r => r.data)
+
+export const getSmbShareTask = (shareId, taskId) =>
+  api.get(`/v1/smb/shares/${shareId}/task/${taskId}`).then(r => r.data)
+
+// ── SMB credential vault (secrets are write-only) ────────────────────────────
+
+export const getSmbCredentials = () =>
+  api.get('/v1/smb/credentials').then(r => r.data)
+
+export const createSmbCredential = (data) =>
+  api.post('/v1/smb/credentials', data).then(r => r.data)
+
+export const updateSmbCredential = (credentialId, data) =>
+  api.patch(`/v1/smb/credentials/${credentialId}`, data).then(r => r.data)
+
+export const deleteSmbCredential = (credentialId) =>
+  api.delete(`/v1/smb/credentials/${credentialId}`).then(r => r.data)
 
 export const searchSmbFiles = (params) =>
   api.get('/v1/smb/files/search', { params }).then(r => r.data)
