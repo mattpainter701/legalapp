@@ -12,6 +12,13 @@ import {
   Plus,
   X,
   Check,
+  Copy,
+  RotateCcw,
+  Trash2,
+  Inbox,
+  ShieldCheck,
+  FileCheck,
+  Ban,
 } from 'lucide-react'
 import {
   getMatterCorrespondence,
@@ -19,7 +26,15 @@ import {
   getCorrespondenceRules,
   updateCorrespondenceRules,
   matterCorrespondenceDownloadUrl,
+  getMatterInboundAlias,
+  createMatterInboundAlias,
+  rotateMatterInboundAlias,
+  disableMatterInboundAlias,
+  getMatterInboundEmail,
+  acceptMatterInboundEmail,
+  rejectMatterInboundEmail,
 } from '../api'
+import { useConfirm } from './dialog/ConfirmProvider'
 
 function fmtDate(value) {
   if (!value) return '—'
@@ -149,6 +164,32 @@ function CaptureRulesPanel({ matterId, onClose }) {
         Capture emails involving the matter's parties (client, attorney, etc.)
       </label>
 
+      <div className="rounded-lg border border-brand-line bg-brand-surface p-4">
+        <div className="text-sm font-sans font-medium text-brand-ink">Tracked email addresses</div>
+        <p className="mt-1 text-xs text-brand-muted">
+          {rules.match_parties === false
+            ? 'Party-address matching is off. Enable it above to capture emails involving these addresses.'
+            : 'Party matching captures emails involving any of these addresses.'}{' '}
+          Update a contact or matter party to change this list.
+        </p>
+        {(rules.tracked_addresses || []).length > 0 ? (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {rules.tracked_addresses.map((address) => (
+              <span
+                key={address}
+                className="rounded-full border border-brand-line bg-brand-bg-soft px-2.5 py-1 font-mono text-xs text-brand-ink"
+              >
+                {address}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <p className="mt-3 text-sm text-brand-muted">
+            No client or matter-party email addresses are available to match yet.
+          </p>
+        )}
+      </div>
+
       <div>
         <div className="text-sm font-sans font-medium text-brand-ink mb-2">Case / court numbers</div>
         <div className="flex flex-wrap gap-2 mb-2">
@@ -204,6 +245,221 @@ function CaptureRulesPanel({ matterId, onClose }) {
         )}
       </div>
     </div>
+  )
+}
+function InboundEmailPanel({ matterId, onFiled }) {
+  const confirmAction = useConfirm()
+  const [aliasState, setAliasState] = useState(null)
+  const [pending, setPending] = useState([])
+  const [busy, setBusy] = useState(null)
+  const [message, setMessage] = useState(null)
+
+  const load = useCallback(async () => {
+    try {
+      const [alias, queue] = await Promise.all([
+        getMatterInboundAlias(matterId),
+        getMatterInboundEmail(matterId),
+      ])
+      setAliasState(alias)
+      setPending(Array.isArray(queue?.items) ? queue.items : [])
+    } catch {
+      setAliasState({ enabled: false, alias: null })
+      setPending([])
+    }
+  }, [matterId])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  const createAlias = async () => {
+    setBusy('alias')
+    setMessage(null)
+    try {
+      setAliasState(await createMatterInboundAlias(matterId))
+    } catch (error) {
+      setMessage(error?.response?.data?.detail || 'Could not create the forwarding address.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const copyAlias = async () => {
+    if (!aliasState?.alias?.address) return
+    try {
+      await navigator.clipboard.writeText(aliasState.alias.address)
+      setMessage('Forwarding address copied.')
+    } catch {
+      setMessage('Copy failed. Select and copy the address manually.')
+    }
+  }
+
+  const rotateAlias = async () => {
+    if (!await confirmAction({
+      title: 'Rotate forwarding address?',
+      message: 'The old address will stop accepting email immediately.',
+      confirmLabel: 'Rotate address',
+      destructive: true,
+    })) return
+    setBusy('alias')
+    setMessage(null)
+    try {
+      setAliasState(await rotateMatterInboundAlias(matterId))
+      setMessage('A new forwarding address is active. The previous address was disabled.')
+    } catch (error) {
+      setMessage(error?.response?.data?.detail || 'Could not rotate the forwarding address.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const disableAlias = async () => {
+    if (!await confirmAction({
+      title: 'Disable forwarding address?',
+      message: 'New mail sent to this address will no longer be accepted.',
+      confirmLabel: 'Disable address',
+      destructive: true,
+    })) return
+    setBusy('alias')
+    setMessage(null)
+    try {
+      await disableMatterInboundAlias(matterId)
+      setAliasState((state) => ({ ...state, alias: null }))
+      setMessage('Forwarding address disabled.')
+    } catch (error) {
+      setMessage(error?.response?.data?.detail || 'Could not disable the forwarding address.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const review = async (item, action) => {
+    setBusy(item.id)
+    setMessage(null)
+    try {
+      if (action === 'accept') {
+        await acceptMatterInboundEmail(matterId, item.id)
+        setMessage('Email filed to this matter.')
+        onFiled()
+      } else {
+        await rejectMatterInboundEmail(matterId, item.id)
+        setMessage('Email rejected and its quarantined message removed.')
+      }
+      setPending((items) => items.filter((candidate) => candidate.id !== item.id))
+    } catch (error) {
+      setMessage(error?.response?.data?.detail || 'Could not review this email.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  if (!aliasState) {
+    return <div className="h-24 rounded-xl border border-brand-line bg-brand-bg-soft/30 animate-pulse" />
+  }
+
+  return (
+    <section className="rounded-xl border border-brand-line bg-brand-bg-soft/30 overflow-hidden">
+      <div className="p-4 sm:p-5 border-b border-brand-line">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h3 className="font-sans font-semibold text-brand-ink flex items-center gap-2">
+              <Inbox size={17} /> Forward email to this matter
+            </h3>
+            <p className="mt-1 text-sm text-brand-muted">
+              Mail sent here waits for review before it becomes official correspondence.
+            </p>
+          </div>
+          {!aliasState.alias && aliasState.enabled && (
+            <button
+              onClick={createAlias}
+              disabled={busy === 'alias'}
+              className="shrink-0 px-3 py-2 rounded-lg bg-brand-ink text-white text-sm font-medium disabled:opacity-60"
+            >
+              Create address
+            </button>
+          )}
+        </div>
+
+        {!aliasState.enabled ? (
+          <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            Inbound forwarding is not enabled on this deployment yet.
+          </div>
+        ) : aliasState.alias ? (
+          <div className="mt-4 rounded-lg border border-brand-line bg-brand-surface p-3">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <code className="min-w-0 break-all text-sm text-brand-ink">
+                {aliasState.alias.address}
+              </code>
+              <div className="flex flex-wrap gap-2">
+                <button onClick={copyAlias} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-brand-line text-xs font-medium hover:bg-brand-bg-soft">
+                  <Copy size={13} /> Copy
+                </button>
+                <button onClick={rotateAlias} disabled={busy === 'alias'} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-brand-line text-xs font-medium hover:bg-brand-bg-soft disabled:opacity-60">
+                  <RotateCcw size={13} /> Rotate
+                </button>
+                <button onClick={disableAlias} disabled={busy === 'alias'} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-rose-200 text-xs font-medium text-brand-rose hover:bg-rose-50 disabled:opacity-60">
+                  <Trash2 size={13} /> Disable
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {message && <p className="mt-3 text-sm text-brand-muted">{message}</p>}
+      </div>
+
+      <div className="p-4 sm:p-5">
+        <div className="flex items-center justify-between gap-3">
+          <h4 className="font-sans font-semibold text-sm text-brand-ink">Emails awaiting review</h4>
+          <span className="rounded-full bg-brand-surface border border-brand-line px-2 py-0.5 text-xs text-brand-muted">
+            {pending.length}
+          </span>
+        </div>
+        {pending.length === 0 ? (
+          <p className="mt-3 text-sm text-brand-muted">Nothing is waiting to be filed.</p>
+        ) : (
+          <div className="mt-3 space-y-3">
+            {pending.map((item) => {
+              return (
+                <article key={item.id} className="rounded-lg border border-brand-line bg-brand-surface p-3 sm:p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0">
+                      <p className="font-sans font-semibold text-brand-ink break-words">{item.subject}</p>
+                      <p className="mt-1 text-xs text-brand-muted break-all">
+                        From {item.participants?.from || item.envelope_sender} · {fmtDate(item.occurred_at)}
+                      </p>
+                      <span className="mt-2 inline-flex items-center gap-1 text-[11px] text-amber-700">
+                        <ShieldCheck size={12} />
+                        Verify the sender before filing
+                      </span>
+                      {item.body_preview && (
+                        <p className="mt-2 text-sm text-brand-ink-2 line-clamp-3">{item.body_preview}</p>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 flex-wrap gap-2">
+                      <button
+                        onClick={() => review(item, 'accept')}
+                        disabled={busy === item.id}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-brand-ink px-3 py-2 text-xs font-medium text-white disabled:opacity-60"
+                      >
+                        <FileCheck size={14} /> File to matter
+                      </button>
+                      <button
+                        onClick={() => review(item, 'reject')}
+                        disabled={busy === item.id}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-brand-line px-3 py-2 text-xs font-medium text-brand-muted hover:text-brand-rose disabled:opacity-60"
+                      >
+                        <Ban size={14} /> Reject
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    </section>
   )
 }
 
@@ -309,6 +565,8 @@ export default function MatterCorrespondenceTab({ matterId }) {
         )}
 
         {showRules && <CaptureRulesPanel matterId={matterId} onClose={() => setShowRules(false)} />}
+
+        <InboundEmailPanel matterId={matterId} onFiled={load} />
 
         {/* Filters */}
         <div className="flex items-center gap-2 flex-wrap">
