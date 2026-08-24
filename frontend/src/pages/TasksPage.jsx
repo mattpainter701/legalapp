@@ -942,13 +942,13 @@ function TaskRow({
   return (
     <div
       id={`task-${task.id}`}
-      className={`flex items-center gap-3 px-4 py-3 group hover:bg-brand-bg-soft transition-colors ${isOverdue ? 'bg-brand-rose/3' : ''} ${highlighted ? 'bg-brand-accent/10 ring-1 ring-inset ring-brand-accent/40' : ''}`}
+      className={`grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-3 gap-y-2 px-4 py-3 group hover:bg-brand-bg-soft transition-colors sm:flex sm:items-center sm:gap-3 ${isOverdue ? 'bg-brand-rose/3' : ''} ${highlighted ? 'bg-brand-accent/10 ring-1 ring-inset ring-brand-accent/40' : ''}`}
     >
       <button
         onClick={() => onComplete(task)}
         aria-label={`${isClosed ? 'Reopen' : 'Complete'} task: ${task.title}`}
         aria-pressed={isClosed}
-        className={`flex-shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
+        className={`mt-0.5 flex-shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors sm:mt-0 ${
           task.status === 'completed'
             ? 'bg-brand-green border-brand-green text-white'
             : 'border-brand-line hover:border-brand-green'
@@ -957,7 +957,7 @@ function TaskRow({
         {task.status === 'completed' && <Check size={12} />}
       </button>
       <div className="flex-1 min-w-0">
-        <span className={`text-sm ${isClosed ? 'line-through text-brand-muted' : 'text-brand-ink'}`}>
+        <span className={`block break-words text-sm ${isClosed ? 'line-through text-brand-muted' : 'text-brand-ink'}`}>
           {task.title}
         </span>
         {task.description && (
@@ -974,7 +974,7 @@ function TaskRow({
           </p>
         )}
       </div>
-      <div className="flex items-center gap-2 shrink-0">
+      <div className="col-start-2 flex min-w-0 flex-wrap items-center gap-2 sm:col-auto sm:flex-nowrap sm:shrink-0 sm:justify-end">
         {label && (
           <span className={`flex items-center gap-1 text-[12px] ${label.color}`}>
             <Calendar size={11} />

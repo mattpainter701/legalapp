@@ -2,6 +2,23 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.24.3",
+      "version": "2026.08.24.3",
+      "title": "Task details stay readable on phones",
+      "published_at": "2026-08-24",
+      "summary": "Mobile task rows now give the task name, due date, status, and actions their own space instead of squeezing them into one overlapping line.",
+      "highlights": [
+        {
+          "title": "Task names keep their space",
+          "description": "The task name and notes use the full mobile row width, so longer names remain readable beside the completion checkbox."
+        },
+        {
+          "title": "Dates and actions wrap cleanly",
+          "description": "Due dates, priority and unread badges, and task actions move onto a separate wrapping row instead of colliding or spilling off the screen."
+        }
+      ]
+    },
+    {
       "id": "2026.08.24.2",
       "version": "2026.08.24.2",
       "title": "Forward email straight to the right matter",

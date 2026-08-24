@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.24.3 — Task details stay readable on phones
+
+Released August 24, 2026.
+
+Mobile task rows now give the task name, due date, status, and actions their own space instead of squeezing them into one overlapping line.
+
+- **Task names keep their space.** The task name and notes use the full mobile row width, so longer names remain readable beside the completion checkbox.
+- **Dates and actions wrap cleanly.** Due dates, priority and unread badges, and task actions move onto a separate wrapping row instead of colliding or spilling off the screen.
+
 ## 2026.08.24.2 — Forward email straight to the right matter
 
 Released August 24, 2026.
