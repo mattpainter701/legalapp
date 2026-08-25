@@ -10,9 +10,13 @@ Workspace MCP and research MCP are separate products and identities:
 - `mcp.getlawhand.com/api/mcp/workspace` accepts only an individual,
   audience-bound LawHand OAuth token. Tenant, user, client, grant, scopes, and
   token revocation are revalidated before tool execution.
-- `research.getlawhand.com/api/mcp` accepts only a scoped research product key.
-  Protocol request limits are separate from the existing per-tool burst and
-  monthly product quotas, so JSON-RPC batching does not bypass metering.
+- `research.getlawhand.com/api/mcp` accepts either an individual,
+  audience/resource-bound Research OAuth token or a scoped tenant Research API
+  token. Hosted clients use OAuth 2.1; header-capable clients use
+  `X-MCP-API-Key: lhrk_...`. OAuth grants, users, tenants, entitlement, and
+  billing are revalidated before execution. Protocol request limits are
+  separate from per-tool burst and monthly quotas, so JSON-RPC batching does
+  not bypass metering.
 - Neither credential type is accepted by the other product. Matter artifacts,
   proposals, reviews, approvals, and tenant cloud-storage references continue
   through the same audited application services used by the portal and chat.
@@ -27,7 +31,7 @@ Workspace MCP and research MCP are separate products and identities:
 | HTTP method | Streamable HTTP accepts `GET`, `POST`, and `DELETE`; manifest is `GET` only; compatibility tool-call is `POST` only. Rejections are 405 with `Allow`. |
 | Application body | The ASGI boundary independently counts declared and chunked body bytes before protocol parsing. |
 | Workspace identity | 120 protocol requests per token per minute and 1,200 per tenant per minute by default. |
-| Research identity | 240 protocol requests per product key per minute and 2,400 per tenant per minute by default, in addition to per-tool quotas. |
+| Research identity | 240 protocol requests per API-token or OAuth principal per minute and 2,400 per tenant per minute by default, in addition to per-tool quotas. OAuth monthly allowance follows tenant + user across reconnects. |
 | Limiter availability | Production fails closed with 503 if Redis cannot enforce principal limits. |
 | Hidden paths | Dot-prefixed paths such as `/.env`, `/.git/config`, `/.mcp.json`, and `/.cursor/mcp.json` return 404 instead of portal HTML. Exact OAuth discovery and ACME routes remain available. |
 | Revocation durability | Redis runs with an explicit `maxmemory` below its container limit and `--maxmemory-policy noeviction`. See "Redis is a security-bearing store" below. |
@@ -42,8 +46,9 @@ storage integrity checks.
 Redis holds ordinary cache alongside two controls whose loss is not merely a
 performance event:
 
-- workspace refresh-token replay tombstones and revoked-family records
-- the revoked-JWT `jti` denylist
+- workspace and Research refresh-token replay tombstones and revoked-family
+  records
+- the workspace and Research revoked-JWT `jti` denylists
 
 Every key written by this application carries a TTL. That makes **all** keys
 "volatile", so `volatile-lru` is no safer here than `allkeys-lru` — either would
@@ -114,8 +119,8 @@ host, path, method, status, user agent, and time before classifying it.
 
 1. Disable the affected MCP product flag if identity or tenant isolation is in
    doubt. Do not disable the main portal as a first response.
-2. Revoke the affected workspace grant/token or research product key and retain
-   the related audit and request identifiers.
+2. Revoke the affected workspace grant, Research OAuth grant, or Research API
+   token and retain the related usage and request identifiers.
 3. Remove only the affected dedicated Tunnel ingress rule if the hostname must
    be withdrawn; preserve the final 404 catch-all and unrelated portal routes.
 4. Export Cloudflare and application evidence, identify the deployed commit,

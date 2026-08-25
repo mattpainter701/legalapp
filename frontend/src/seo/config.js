@@ -27,7 +27,7 @@ export const PRICING_FAQ = Object.freeze([
   ]),
   Object.freeze([
     'Is MCP generally available?',
-    `Not yet. LawHand MCP is in private preview while its public product, billing, monitoring, and recovery gates are completed. The intended public price is $${MCP_TOOL_CALL_PRICE_USD} per tool call.`,
+    `Not yet. LawHand Research MCP is in private preview while its public product, billing, monitoring, and recovery gates are completed. It is research-only, with no workspace or matter access. The intended public price is $${MCP_TOOL_CALL_PRICE_USD} per tool call.`,
   ]),
   Object.freeze([
     'Do administrators count as licensed users?',
@@ -75,9 +75,9 @@ export const PUBLIC_ROUTE_META = Object.freeze({
     parentPath: '/product',
   },
   '/product/mcp': {
-    title: 'LawHand MCP for Controlled Legal Integrations',
+    title: 'LawHand Research MCP for Public Legal Authority',
     description:
-      'Connect approved systems to LawHand through MCP with scoped keys, explicit tool access, bounded usage, and administrative visibility.',
+      'LawHand Research MCP connects ChatGPT, Claude, and API clients to approved public legal authority through OAuth or a scoped API token, with PAYG metering and no workspace or matter access.',
     canonicalPath: '/product/mcp',
     indexable: true,
     priority: '0.8',

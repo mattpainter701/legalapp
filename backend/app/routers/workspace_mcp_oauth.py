@@ -191,7 +191,16 @@ async def _load_grant_actor(
 
 @router.get("/.well-known/oauth-protected-resource")
 @router.get("/.well-known/oauth-protected-resource/api/mcp/workspace")
-async def protected_resource_metadata():
+async def protected_resource_metadata(request: Request = None):
+    research_host = urlsplit(settings.research_mcp_endpoint).hostname
+    if request is not None and request.url.hostname == research_host:
+        from app.routers.research_mcp_oauth import (
+            _require_enabled as require_research_enabled,
+            protected_resource_metadata_payload,
+        )
+
+        require_research_enabled()
+        return protected_resource_metadata_payload()
     _require_enabled()
     return {
         "resource": workspace_resource_uri(),
@@ -203,7 +212,16 @@ async def protected_resource_metadata():
 
 
 @router.get("/.well-known/oauth-authorization-server")
-async def authorization_server_metadata():
+async def authorization_server_metadata(request: Request = None):
+    research_host = urlsplit(settings.research_mcp_endpoint).hostname
+    if request is not None and request.url.hostname == research_host:
+        from app.routers.research_mcp_oauth import (
+            _require_enabled as require_research_enabled,
+            authorization_server_metadata_payload,
+        )
+
+        require_research_enabled()
+        return authorization_server_metadata_payload()
     _require_enabled()
     issuer = workspace_issuer_uri()
     metadata = {

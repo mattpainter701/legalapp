@@ -1,14 +1,16 @@
 """LawHand MCP gateway and compatibility management routes.
 
 The official SDK-backed Streamable HTTP transport is ``/api/mcp``. External
-traffic uses scoped ``X-MCP-API-Key`` product credentials; application JWTs are
-accepted only by the compatibility REST adapter. Legacy ``X-API-Key`` tenant
-credentials are rejected and cannot be issued.
+traffic uses a Research OAuth bearer token or scoped ``X-MCP-API-Key`` product
+credential; application JWTs are accepted only by the compatibility REST
+adapter. Legacy ``X-API-Key`` tenant credentials are rejected and cannot be
+issued.
 """
 
 import logging
 import time
 import uuid
+from types import SimpleNamespace
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -28,7 +30,10 @@ from app.services.mcp_product import (
     create_product_key,
     enforce_product_key_burst_limit,
     enforce_product_key_quota,
+    enforce_research_oauth_quota,
+    ensure_mcp_product_access,
     ensure_tool_allowed,
+    effective_allowed_tools,
     list_product_keys,
     mask_key,
     metering_outbox_summary,
@@ -37,17 +42,13 @@ from app.services.mcp_product import (
     revoke_product_key,
     usage_summary,
 )
-from app.services.mcp_platform_tools import (
-    PLATFORM_TOOL_NAMES,
-    execute_platform_tool,
-)
+
 from app.services.rag import full_rag_query
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/mcp", tags=["mcp"])
 _embedding_service = EmbeddingService()
-PLATFORM_TOOL_SET = frozenset(PLATFORM_TOOL_NAMES)
 
 
 def _mcp_proxy_url(base_url: str, path: str) -> str:
@@ -100,7 +101,7 @@ async def _proxied_tool_names(request: Request) -> list[str]:
     return [
         tool.get("name")
         for tool in tools
-        if isinstance(tool, dict) and tool.get("name")
+        if isinstance(tool, dict) and tool.get("name") in DEFAULT_ALLOWED_TOOLS
     ]
 
 
@@ -124,12 +125,15 @@ def _public_manifest(tools: list[dict]) -> dict:
         "serverInfo": {
             "name": "clarity-legal",
             "version": "1.0.0",
-            "description": "LawHand MCP gateway for legal research and practice tools",
+            "description": "LawHand Research MCP gateway for public legal authority",
         },
         "capabilities": {"tools": {}},
         "tools": tools,
         "transports": {"streamable_http": mcp_url},
-        "auth": {"header": "X-MCP-API-Key"},
+        "auth": {
+            "oauth": "Bearer",
+            "api_token_header": "X-MCP-API-Key",
+        },
     }
 
 
@@ -166,17 +170,22 @@ async def _require_mcp_identity(
 
 @router.get("/manifest")
 async def mcp_manifest(request: Request):
-    """Return public metadata backed by the validated private tool catalog."""
+    """Return principal-scoped metadata backed by the private tool catalog."""
     if not settings.MCP_PRODUCT_ENABLED:
         raise HTTPException(status_code=404, detail="MCP product access is disabled")
     # Import lazily to avoid a router/service cycle during application startup.
-    from app.services.mcp_protocol import get_tool_catalog
+    from app.services.mcp_protocol import (
+        authenticate_product_request,
+        get_tool_catalog,
+    )
 
+    identity = await authenticate_product_request(request.scope)
     tools = await get_tool_catalog(request)
     return _public_manifest(
         [
             tool.model_dump(mode="json", by_alias=True, exclude_none=True)
             for tool in tools
+            if tool.name in identity.allowed_tools
         ]
     )
 
@@ -313,7 +322,8 @@ async def _record_failed_tool_call(
     body: "ToolCallRequest",
     request: Request,
     *,
-    product_key,
+    product_key=None,
+    oauth_identity=None,
     tenant,
     transport: str,
     started: float,
@@ -337,8 +347,20 @@ async def _record_failed_tool_call(
             await record_mcp_usage(
                 db=usage_db,
                 tenant_id=tenant.id,
-                product_key_id=product_key.id,
-                auth_type="product_key",
+                product_key_id=product_key.id if product_key is not None else None,
+                oauth_grant_id=(
+                    uuid.UUID(oauth_identity.oauth_grant_id)
+                    if oauth_identity is not None
+                    else None
+                ),
+                user_id=(
+                    uuid.UUID(oauth_identity.user_id)
+                    if oauth_identity is not None
+                    else None
+                ),
+                auth_type=(
+                    "research_oauth" if oauth_identity is not None else "product_key"
+                ),
                 transport=transport,
                 tool_name=body.name,
                 status_code=exc.status_code if isinstance(exc, HTTPException) else 500,
@@ -358,55 +380,6 @@ async def _record_failed_tool_call(
         )
 
 
-async def _call_platform_tool_metered(
-    body: "ToolCallRequest",
-    request: Request,
-    db: AsyncSession,
-    *,
-    product_key,
-    tenant,
-    transport: str,
-    started: float,
-):
-    """Execute a platform-native tool with the same metering as research tools."""
-    try:
-        response = await execute_platform_tool(
-            body.name,
-            body.arguments or {},
-            db=db,
-            tenant_id=tenant.id,
-        )
-    except Exception as exc:
-        # Meter every failure, not only HTTPException: an unexpected error is
-        # exactly the one worth having in the usage record. Deliberately not
-        # BaseException -- a cancelled request must not trigger another write.
-        await _record_failed_tool_call(
-            body,
-            request,
-            product_key=product_key,
-            tenant=tenant,
-            transport=transport,
-            started=started,
-            exc=exc,
-        )
-        raise
-    await record_mcp_usage(
-        db=db,
-        tenant_id=tenant.id,
-        product_key_id=product_key.id,
-        auth_type="product_key",
-        transport=transport,
-        tool_name=body.name,
-        status_code=200,
-        result_count=_result_count(response),
-        latency_ms=int((time.perf_counter() - started) * 1000),
-        ip_address=_request_ip(request),
-        user_agent=request.headers.get("User-Agent"),
-        query_text=str((body.arguments or {}).get("query") or "")[:2000] or None,
-    )
-    return response
-
-
 async def _call_tool_with_product_key(
     body: ToolCallRequest,
     request: Request,
@@ -415,29 +388,45 @@ async def _call_tool_with_product_key(
     transport: str = "rest",
 ):
     started = time.perf_counter()
-    product_key, tenant = await resolve_product_key(
-        db,
-        request.headers.get("X-MCP-API-Key", ""),
-    )
+    oauth_identity = getattr(request, "scope", {}).get("mcp_product_identity")
+    if getattr(oauth_identity, "auth_type", None) == "research_oauth":
+        tenant_id = uuid.UUID(oauth_identity.tenant_id)
+        await set_tenant_context(db, str(tenant_id))
+        tenant = await db.scalar(select(Tenant).where(Tenant.id == tenant_id))
+        if tenant is None:
+            raise HTTPException(status_code=401, detail="Research tenant unavailable")
+        ensure_mcp_product_access(tenant)
+        if body.name not in DEFAULT_ALLOWED_TOOLS:
+            raise HTTPException(
+                status_code=403,
+                detail="Tool is not available through the LawHand Research MCP",
+            )
+        product_key = None
+    else:
+        product_key, tenant = await resolve_product_key(
+            db,
+            request.headers.get("X-MCP-API-Key", ""),
+        )
     await set_tenant_context(db, str(tenant.id))
-    ensure_tool_allowed(product_key, body.name)
     app = getattr(request, "app", None)
     redis = getattr(getattr(app, "state", None), "redis", None)
-    await enforce_product_key_burst_limit(redis, product_key)
-    await enforce_product_key_quota(db, product_key)
-
-    # Platform-native tools execute in the backend against tenant data;
-    # research tools proxy to the private CourtListener sidecar.
-    if body.name in PLATFORM_TOOL_SET:
-        return await _call_platform_tool_metered(
-            body,
-            request,
-            db,
-            product_key=product_key,
-            tenant=tenant,
-            transport=transport,
-            started=started,
+    if oauth_identity is not None and product_key is None:
+        await enforce_product_key_burst_limit(
+            redis,
+            SimpleNamespace(
+                id=f"oauth-user:{tenant.id}:{oauth_identity.user_id}",
+                burst_limit_per_minute=settings.MCP_DEFAULT_BURST_LIMIT_PER_MINUTE,
+            ),
         )
+        await enforce_research_oauth_quota(
+            db,
+            tenant_id=tenant.id,
+            user_id=uuid.UUID(oauth_identity.user_id),
+        )
+    else:
+        ensure_tool_allowed(product_key, body.name)
+        await enforce_product_key_burst_limit(redis, product_key)
+        await enforce_product_key_quota(db, product_key)
 
     try:
         if settings.MCP_SERVER_URL:
@@ -459,6 +448,7 @@ async def _call_tool_with_product_key(
             body,
             request,
             product_key=product_key,
+            oauth_identity=oauth_identity if product_key is None else None,
             tenant=tenant,
             transport=transport,
             started=started,
@@ -468,8 +458,12 @@ async def _call_tool_with_product_key(
     await record_mcp_usage(
         db=db,
         tenant_id=tenant.id,
-        product_key_id=product_key.id,
-        auth_type="product_key",
+        product_key_id=product_key.id if product_key is not None else None,
+        oauth_grant_id=(
+            uuid.UUID(oauth_identity.oauth_grant_id) if product_key is None else None
+        ),
+        user_id=uuid.UUID(oauth_identity.user_id) if product_key is None else None,
+        auth_type="research_oauth" if product_key is None else "product_key",
         transport=transport,
         tool_name=body.name,
         status_code=200,
@@ -675,7 +669,7 @@ async def list_mcp_product_keys(
                 "id": str(key.id),
                 "name": key.name,
                 "api_key_masked": mask_key(key.key_prefix, key.key_hash[-4:]),
-                "allowed_tools": key.allowed_tools or DEFAULT_ALLOWED_TOOLS,
+                "allowed_tools": effective_allowed_tools(key),
                 "monthly_call_limit": key.monthly_call_limit,
                 "burst_limit_per_minute": key.burst_limit_per_minute,
                 "is_active": key.is_active,
@@ -746,7 +740,7 @@ async def create_mcp_product_key(
         "api_key": raw_key,
         "api_key_masked": mask_key(raw_key),
         "name": key.name,
-        "allowed_tools": key.allowed_tools or DEFAULT_ALLOWED_TOOLS,
+        "allowed_tools": effective_allowed_tools(key),
         "monthly_call_limit": key.monthly_call_limit,
         "burst_limit_per_minute": key.burst_limit_per_minute,
         "is_active": key.is_active,

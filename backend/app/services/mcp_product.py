@@ -21,7 +21,7 @@ from app.services.durable_jobs import enqueue_job
 settings = get_settings()
 _fallback_burst_hits: dict[str, tuple[int, float]] = {}
 
-DEFAULT_ALLOWED_TOOLS = [
+RESEARCH_ALLOWED_TOOLS = [
     "search_caselaw",
     "search_legal_authorities",
     "get_case_details",
@@ -40,15 +40,15 @@ DEFAULT_ALLOWED_TOOLS = [
     "export_research_bundle",
     "sync_status",
     "corpus_status",
-    # Platform-native document tools (executed in the backend, not proxied).
-    "list_matters",
-    "list_matter_documents",
-    "create_document",
 ]
+# Public Research MCP is intentionally retrieval/status/export only. Workspace
+# and document tools belong to the OAuth-backed Workspace MCP product and must
+# not become reachable through a stale or manually edited research key.
+DEFAULT_ALLOWED_TOOLS = RESEARCH_ALLOWED_TOOLS
 
 
 def generate_product_key() -> str:
-    return "clmcp_" + secrets.token_urlsafe(32)
+    return "lhrk_" + secrets.token_urlsafe(32)
 
 
 def hash_key(raw_key: str) -> str:
@@ -76,8 +76,21 @@ def normalize_allowed_tools(tools: list[str] | None) -> list[str]:
     return normalized
 
 
+def effective_allowed_tools(product_key: MCPProductKey | Any) -> list[str]:
+    """Return only tools that belong to the public Research MCP product."""
+    stored = getattr(product_key, "allowed_tools", None)
+    if not stored:
+        return list(DEFAULT_ALLOWED_TOOLS)
+    return [tool for tool in stored if tool in DEFAULT_ALLOWED_TOOLS]
+
+
 def ensure_tool_allowed(product_key: MCPProductKey | Any, tool_name: str) -> None:
-    allowed = getattr(product_key, "allowed_tools", None) or DEFAULT_ALLOWED_TOOLS
+    if tool_name not in DEFAULT_ALLOWED_TOOLS:
+        raise HTTPException(
+            status_code=403,
+            detail="Tool is not available through the LawHand Research MCP",
+        )
+    allowed = effective_allowed_tools(product_key)
     if tool_name not in allowed:
         raise HTTPException(
             status_code=403, detail="MCP key is not allowed to call this tool"
@@ -300,6 +313,39 @@ async def enforce_product_key_quota(
         )
 
 
+async def enforce_research_oauth_quota(
+    db: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> None:
+    """Apply the default allowance across a user's rotating OAuth grants."""
+
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
+        {"lock_key": f"mcp_oauth_user:{tenant_id}:{user_id}"},
+    )
+    start, end = current_month_window()
+    used = int(
+        (
+            await db.execute(
+                select(func.count(MCPUsageEvent.id)).where(
+                    MCPUsageEvent.tenant_id == tenant_id,
+                    MCPUsageEvent.user_id == user_id,
+                    MCPUsageEvent.auth_type == "research_oauth",
+                    MCPUsageEvent.created_at >= start,
+                    MCPUsageEvent.created_at < end,
+                    MCPUsageEvent.status_code < 400,
+                )
+            )
+        ).scalar_one()
+    )
+    if used >= settings.MCP_DEFAULT_MONTHLY_CALL_LIMIT:
+        raise HTTPException(
+            status_code=429, detail="Research MCP monthly quota exceeded"
+        )
+
+
 async def record_mcp_usage(
     *,
     db: AsyncSession,
@@ -308,6 +354,7 @@ async def record_mcp_usage(
     auth_type: str,
     status_code: int,
     product_key_id: uuid.UUID | None = None,
+    oauth_grant_id: uuid.UUID | None = None,
     user_id: uuid.UUID | None = None,
     transport: str = "rest",
     result_count: int = 0,
@@ -322,6 +369,7 @@ async def record_mcp_usage(
     event = MCPUsageEvent(
         tenant_id=tenant_id,
         product_key_id=product_key_id,
+        oauth_grant_id=oauth_grant_id,
         user_id=user_id,
         auth_type=auth_type,
         transport=transport,
@@ -344,7 +392,12 @@ async def record_mcp_usage(
             .values(last_used_at=datetime.now(timezone.utc))
         )
     await db.flush()
-    stripe_value = 1 if product_key_id and status_code < 400 else 0
+    stripe_value = (
+        1
+        if (product_key_id is not None or oauth_grant_id is not None)
+        and status_code < 400
+        else 0
+    )
     if stripe_value:
         tenant = await db.scalar(select(Tenant).where(Tenant.id == tenant_id))
         if not tenant or not tenant.stripe_customer_id:

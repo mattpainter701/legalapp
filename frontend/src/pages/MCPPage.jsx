@@ -78,7 +78,13 @@ export default function MCPPage({ embedded = false }) {
     allowed_tools: [],
   })
 
-  const tools = useMemo(() => data?.tools?.length ? data.tools : TOOL_DOCS.map(([name]) => name), [data])
+  // This page is the Research MCP surface.  Keep workspace/platform tools out
+  // of the selector even if an older gateway response includes them.
+  const researchToolNames = useMemo(() => new Set(TOOL_DOCS.map(([name]) => name)), [])
+  const tools = useMemo(() => {
+    const advertised = data?.tools?.filter((name) => researchToolNames.has(name)) || []
+    return advertised.length ? advertised : TOOL_DOCS.map(([name]) => name)
+  }, [data, researchToolNames])
   const allToolsSelected = form.allowed_tools.length === 0 || form.allowed_tools.length === tools.length
 
   const load = () => {
@@ -171,7 +177,6 @@ export default function MCPPage({ embedded = false }) {
   }
 
   const usage = data?.usage || { total_calls: 0, total_results: 0 }
-  const transports = data?.transports || {}
 
   return (
     <div className={embedded ? '' : 'min-h-screen bg-brand-bg'}>
@@ -180,7 +185,8 @@ export default function MCPPage({ embedded = false }) {
           <div>
             <h1 className="font-serif text-2xl font-bold text-brand-ink">LawHand Research MCP</h1>
             <p className="mt-1 text-sm text-brand-muted">
-              Tenant-managed product keys for external MCP clients. Usage is metered separately as PAYG MCP usage.
+              Research-only access to approved legal authority. Hosted ChatGPT and Claude
+              clients use OAuth 2.1; API clients use a LawHand Research API token.
             </p>
           </div>
           {!embedded && (
@@ -228,12 +234,14 @@ export default function MCPPage({ embedded = false }) {
         <div className="mb-6 rounded-lg border border-brand-line bg-brand-surface p-5">
           <p className="mb-4 text-sm font-semibold text-brand-ink">Connection endpoints</p>
           <div className="grid gap-3 md:grid-cols-2">
-            <CodeBlock label="Official MCP URL" value={transports.streamable_http || data?.mcp_server_url || 'https://research.getlawhand.com/api/mcp'} />
-            <CodeBlock label="Supported shorthand" value={data?.shorthand || 'https://research.getlawhand.com'} />
-            <CodeBlock label="Auth header" value="X-MCP-API-Key: clmcp_..." />
+            <CodeBlock label="Official MCP URL" value="https://research.getlawhand.com/api/mcp" />
+            <CodeBlock label="Supported shorthand" value="https://research.getlawhand.com" />
+            <CodeBlock label="API client token" value="X-MCP-API-Key: lhrk_..." />
           </div>
           <p className="mt-3 text-xs text-brand-muted">
-            Use the official full URL in documentation and generated configuration. The shorthand remains supported without a redirect.
+            Use the full URL in documentation and generated configuration. The shorthand host
+            remains supported. OAuth 2.1 is the hosted-client flow; the API token is for clients
+            that support request headers. Research MCP never exposes workspace tools.
           </p>
         </div>
 

@@ -148,7 +148,10 @@ async def enforce_research_request_limit(request: Request, identity: Any) -> Non
     bucket, window_ttl = _minute_window()
     await _enforce_dual_principal_limit(
         request,
-        primary_key=(f"rate:mcp:research:key:{identity.product_key_id}:{bucket}"),
+        primary_key=(
+            f"rate:mcp:research:key:"
+            f"{getattr(identity, 'principal_id', None) or identity.product_key_id}:{bucket}"
+        ),
         tenant_key=(f"rate:mcp:research:tenant:{identity.tenant_id}:{bucket}"),
         primary_limit=settings.RESEARCH_MCP_KEY_REQUESTS_PER_MINUTE,
         tenant_limit=settings.RESEARCH_MCP_TENANT_REQUESTS_PER_MINUTE,

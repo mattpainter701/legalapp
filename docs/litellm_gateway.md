@@ -165,9 +165,14 @@ including host reboot recovery. The production monitor independently requires
 a zero diff and authenticated model discovery. Rehearse upgrades against a
 restored database copy and never downgrade the image over a newer schema.
 
-CourtListener MCP resale is handled by the LegalApp backend MCP product gateway,
-not public LiteLLM exposure. See `docs/mcp_product_gateway.md` for the
-`X-MCP-API-Key` product-key surface, usage logging, and quota controls.
+Research MCP access is handled by the LegalApp research gateway, not by public
+LiteLLM exposure. Its OAuth 2.1 and LawHand Research API-token contracts are
+documented in `docs/mcp_product_gateway.md`. Pure retrieval calls do not invoke
+LiteLLM because they perform no model inference. If a future research synthesis
+tool uses LiteLLM, it must send tenant/user/opaque research-credential metadata
+and reconcile the LiteLLM spend ledger before customer billing is reported.
+The metadata must contain only opaque key/grant identifiers; raw Research API
+tokens and OAuth access tokens must never be forwarded to LiteLLM.
 
 ### Docker Image Pinning
 

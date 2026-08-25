@@ -282,9 +282,11 @@ catalogs:
 - `mcp.getlawhand.com` is the OAuth-backed workspace/platform MCP. It exposes
   bounded tenant-scoped reads and review proposals; it has no model-facing
   approval, filing, sending, or delivery tools.
-- `research.getlawhand.com` is the product-key-backed legal-research/RAG MCP.
-  It exposes no firm matter or workspace capabilities and remains disabled
-  pending the product release gates below.
+- `research.getlawhand.com/api/mcp` is the research-only legal-research/RAG
+  MCP; the shorthand host is also supported. Hosted ChatGPT and Claude clients
+  use OAuth 2.1, while header-capable clients use a LawHand Research API
+  token. It exposes no firm matter or workspace capabilities and remains
+  disabled pending the product release gates below.
 
 Nginx rejects unrelated paths on both hosts, while the legacy apex MCP paths
 remain bounded compatibility aliases. The workspace OAuth issuer remains the
@@ -299,13 +301,17 @@ Public research MCP is not part of the first-customer product.
   invalidates existing legacy tenant API keys.
 - The implemented `/api/mcp` endpoint uses the official Python SDK Streamable
   HTTP lifecycle and protocol negotiation.
-- A product key is accepted only for an active tenant with explicit MCP
+- A Research API token is accepted only for an active tenant with explicit MCP
   entitlement, active billing, Stripe customer/meter configuration, tool scope,
   remaining monthly quota, and an available Redis burst limiter.
 - A successful product call writes its usage event and durable Stripe meter job
   in one database transaction. Delivery retries use a stable identifier.
 - Backend-to-sidecar traffic uses a dedicated `MCP_UPSTREAM_API_KEY`; application
   JWTs and customer keys are never forwarded.
+- Pure retrieval calls do not invoke LiteLLM because they perform no model
+  inference. A future model-backed synthesis tool must use internal LiteLLM
+  with tenant, user, and opaque research-credential identifiers (never the raw
+  credential) and reconciled spend.
 
 These controls make the implementation fail closed; they do not constitute
 commercial approval. Do not enable or promote MCP until the product-specific

@@ -77,6 +77,12 @@ class MCPUsageEvent(Base):
         nullable=True,
         index=True,
     )
+    oauth_grant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspace_mcp_grants.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
@@ -105,6 +111,11 @@ class MCPUsageEvent(Base):
 Index(
     "ix_mcp_usage_events_tenant_created",
     MCPUsageEvent.tenant_id,
+    MCPUsageEvent.created_at,
+)
+Index(
+    "ix_mcp_usage_events_oauth_grant_created",
+    MCPUsageEvent.oauth_grant_id,
     MCPUsageEvent.created_at,
 )
 Index(

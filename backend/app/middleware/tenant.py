@@ -35,11 +35,26 @@ LICENSE_EXEMPT_PREFIXES = (
     "/api/auth/",
     "/portal/",
     "/api/portal/",
+    # Research is a separately billed public-authority product. A user may
+    # connect/revoke it without holding a Workspace seat; each handler still
+    # enforces the Research entitlement and active billing state.
+    "/api/research-mcp/",
+    # Research-only tenant administrators must also be able to issue/revoke
+    # header credentials and inspect their metered usage. Tool execution paths
+    # are deliberately not exempted here.
+    "/api/mcp/product-keys/",
 )
+
+LICENSE_EXEMPT_PATHS = {
+    "/api/mcp/product-keys",
+    "/api/mcp/usage",
+}
 
 
 def _is_license_exempt(request: Request) -> bool:
     path = request.url.path
+    if path in LICENSE_EXEMPT_PATHS:
+        return True
     if any(path.startswith(prefix) for prefix in LICENSE_EXEMPT_PREFIXES):
         return True
     if request.method == "GET" and path.rstrip("/") == "/api/plugins":

@@ -58,12 +58,12 @@ const MARKETING_SHELLS = Object.freeze({
     ],
   },
   '/product/mcp': {
-    heading: 'Bring LawHand context into the tools you already use.',
-    lead: 'LawHand MCP connects approved systems through scoped keys, explicit tool access, bounded usage, and administrative visibility.',
+    heading: 'Bring approved public legal authority into the tools you already use.',
+    lead: 'LawHand Research MCP connects ChatGPT, Claude, and API clients through OAuth or a scoped API token for research-only retrieval, PAYG metering, and administrative visibility.',
     sections: [
-      { heading: 'Scoped product keys', body: 'Issue named credentials for a tenant and revoke them without exposing a user session.' },
-      { heading: 'Bounded access', body: 'Choose allowed tools and apply monthly and per-minute limits to each approved connection.' },
-      { heading: 'Private preview', body: 'Public key issuance remains gated while production release checks are completed. The intended public price is $0.45 per tool call.' },
+      { heading: 'Research-only boundary', body: 'Search approved public legal authority without exposing workspace matters, documents, tasks, or client files.' },
+      { heading: 'OAuth or API token', body: 'Hosted ChatGPT and Claude clients use OAuth 2.1. Header-capable API clients use a scoped LawHand Research token.' },
+      { heading: 'Private preview', body: 'Public access remains gated while production release checks are completed. The intended public price is $0.45 per tool call.' },
     ],
   },
   '/pricing': {

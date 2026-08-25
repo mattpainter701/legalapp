@@ -351,6 +351,15 @@ def test_workspace_mcp_production_wiring_is_complete_and_fail_closed() -> None:
         "WORKSPACE_MCP_CANONICAL_RESOURCE",
         "WORKSPACE_MCP_RESOURCE_ALIASES",
         "RESEARCH_MCP_PUBLIC_URL",
+        "RESEARCH_MCP_OAUTH_ENABLED",
+        "RESEARCH_MCP_AUDIENCE",
+        "RESEARCH_MCP_ISSUER",
+        "RESEARCH_MCP_ACCESS_TOKEN_MAX_MINUTES",
+        "RESEARCH_MCP_AUTH_CODE_TTL_SECONDS",
+        "RESEARCH_MCP_REFRESH_TOKEN_DAYS",
+        "RESEARCH_MCP_GRANT_DAYS",
+        "RESEARCH_MCP_CLIENT_REGISTRATION_DAYS",
+        "RESEARCH_MCP_DYNAMIC_REGISTRATION_ENABLED",
         "WORKSPACE_MCP_AUDIENCE",
         "WORKSPACE_MCP_ISSUER",
         "WORKSPACE_MCP_TOKEN_SIGNING_KEY",
@@ -377,6 +386,12 @@ def test_workspace_mcp_production_wiring_is_complete_and_fail_closed() -> None:
             )
             assert environment["WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED"] == (
                 "${WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED:-false}"
+            )
+            assert environment["RESEARCH_MCP_OAUTH_ENABLED"] == (
+                "${RESEARCH_MCP_OAUTH_ENABLED:-true}"
+            )
+            assert environment["RESEARCH_MCP_DYNAMIC_REGISTRATION_ENABLED"] == (
+                "${RESEARCH_MCP_DYNAMIC_REGISTRATION_ENABLED:-true}"
             )
 
     production_check = PRODUCTION_CHECK.read_text(encoding="utf-8")
@@ -408,6 +423,19 @@ def test_dedicated_mcp_hosts_are_isolated_and_streamed() -> None:
     assert '"research.getlawhand.com:/api/mcp" 0;' in nginx
     assert '"research.getlawhand.com:/api/mcp/manifest" 0;' in nginx
     assert '"research.getlawhand.com:/api/mcp/tools/call" 0;' in nginx
+    assert (
+        '"research.getlawhand.com:/.well-known/oauth-protected-resource/api/mcp" 0;'
+        in nginx
+    )
+    assert (
+        '"research.getlawhand.com:/.well-known/oauth-authorization-server" 0;' in nginx
+    )
+    for oauth_path in ("authorize", "token", "revoke", "register", "jwks"):
+        assert (
+            f'"research.getlawhand.com:/api/research-mcp/oauth/{oauth_path}" 0;'
+            in nginx
+        )
+    assert "~^research\\.getlawhand\\.com:/api/research-mcp/oauth/ 0;" not in nginx
     assert "~^mcp\\.getlawhand\\.com: 1;" in nginx
     assert "~^research\\.getlawhand\\.com: 1;" in nginx
     assert "default 0;" in nginx

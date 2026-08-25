@@ -14,9 +14,22 @@ from app.services import mcp_product
 def test_product_key_is_distinct_from_legacy_tenant_key():
     raw = mcp_product.generate_product_key()
 
-    assert raw.startswith("clmcp_")
+    assert raw.startswith("lhrk_")
     assert len(mcp_product.hash_key(raw)) == 64
-    assert mcp_product.mask_key(raw).startswith("clmcp_")
+    assert mcp_product.mask_key(raw).startswith("lhrk_")
+
+
+def test_research_scope_excludes_workspace_tools_and_stale_keys_cannot_use_them():
+    assert "list_matters" not in mcp_product.DEFAULT_ALLOWED_TOOLS
+    assert "list_matter_documents" not in mcp_product.DEFAULT_ALLOWED_TOOLS
+    assert "create_document" not in mcp_product.DEFAULT_ALLOWED_TOOLS
+
+    stale_key = SimpleNamespace(allowed_tools=["list_matters"])
+    with pytest.raises(HTTPException) as exc:
+        mcp_product.ensure_tool_allowed(stale_key, "list_matters")
+
+    assert exc.value.status_code == 403
+    assert "Research MCP" in exc.value.detail
 
 
 def test_product_key_scope_rejects_unknown_tools():
@@ -66,6 +79,43 @@ async def test_external_product_key_rejects_disallowed_tool_before_proxy(monkeyp
 
     async def proxy_should_not_run(*args, **kwargs):
         raise AssertionError("proxy should not run when tool is outside key scope")
+
+    async def set_context(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(mcp.settings, "MCP_SERVER_URL", "http://courtlistener-mcp:8021")
+    monkeypatch.setattr(mcp, "resolve_product_key", resolve_key)
+    monkeypatch.setattr(mcp, "set_tenant_context", set_context)
+    monkeypatch.setattr(mcp, "_proxy_post", proxy_should_not_run)
+
+    with pytest.raises(HTTPException) as exc:
+        await mcp.call_tool(body, request, object())
+
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_existing_key_with_workspace_tool_cannot_invoke_research_tool(
+    monkeypatch,
+):
+    tenant_id = uuid.uuid4()
+    product_key = SimpleNamespace(
+        id=uuid.uuid4(),
+        tenant_id=tenant_id,
+        allowed_tools=["list_matters"],
+        monthly_call_limit=None,
+    )
+    request = SimpleNamespace(
+        headers={"X-MCP-API-Key": "clmcp_legacy"},
+        client=SimpleNamespace(host="127.0.0.1"),
+    )
+    body = ToolCallRequest(name="list_matters", arguments={})
+
+    async def resolve_key(*args, **kwargs):
+        return product_key, SimpleNamespace(id=tenant_id)
+
+    async def proxy_should_not_run(*args, **kwargs):
+        raise AssertionError("stale workspace tool must not reach the research proxy")
 
     async def set_context(*args, **kwargs):
         return None
@@ -303,7 +353,7 @@ async def test_tenant_admin_can_create_product_key(monkeypatch):
         assert kwargs["user_id"] == user.id
         assert kwargs["name"] == "Partner API"
         assert kwargs["allowed_tools"] is None
-        return created_key, "clmcp_rawsecret"
+        return created_key, "lhrk_rawsecret"
 
     monkeypatch.setattr(mcp, "get_current_user", current_user)
     monkeypatch.setattr(mcp, "create_product_key", create_key)
@@ -318,8 +368,8 @@ async def test_tenant_admin_can_create_product_key(monkeypatch):
         object(),
     )
 
-    assert result["api_key"] == "clmcp_rawsecret"
-    assert result["api_key_masked"].startswith("clmcp_")
+    assert result["api_key"] == "lhrk_rawsecret"
+    assert result["api_key_masked"].startswith("lhrk_")
     assert result["monthly_call_limit"] == 250
     assert result["burst_limit_per_minute"] == 30
 

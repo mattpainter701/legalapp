@@ -470,6 +470,10 @@ research_status="$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' "$resea
 if [[ "$research_status" != "000" ]]; then
   require_http_status "disabled canonical research MCP transport" "$research_origin/api/mcp" 404
   require_http_status "disabled canonical research MCP manifest" "$research_origin/api/mcp/manifest" 404
+  require_http_status "disabled research MCP root metadata" "$research_origin/.well-known/oauth-protected-resource" 404
+  require_http_status "disabled research MCP path metadata" "$research_origin/.well-known/oauth-protected-resource/api/mcp" 404
+  require_http_status "disabled research OAuth metadata" "$research_origin/.well-known/oauth-authorization-server" 404
+  require_http_status "disabled research MCP JWKS" "$research_origin/api/research-mcp/oauth/jwks" 404
   require_http_status "research MCP hostname isolation" "$research_origin/api/version" 404
   require_single_hsts "canonical research MCP transport" "$research_origin/api/mcp"
 else

@@ -6,9 +6,9 @@ import {
 import MarketingPageLayout from '../components/MarketingChrome'
 
 const CONTROLS = [
-  { icon: KeyRound, title: 'Scoped product keys', body: 'Issue named credentials for a tenant and revoke them without exposing a user session.' },
-  { icon: SlidersHorizontal, title: 'Bounded access', body: 'Choose allowed tools and apply monthly and per-minute limits to each integration.' },
-  { icon: Activity, title: 'Visible usage', body: 'Review calls, returned results, errors, and key activity from the administrative workspace.' },
+  { icon: KeyRound, title: 'OAuth or API token', body: 'Hosted ChatGPT and Claude clients use OAuth. Header-capable API clients use a scoped LawHand Research token.' },
+  { icon: SlidersHorizontal, title: 'Research-only scope', body: 'Search approved public legal authority without exposing workspace matters, documents, or client files.' },
+  { icon: Activity, title: 'PAYG visibility', body: 'Review research calls, returned results, errors, and metered activity from the administrative workspace.' },
 ]
 
 export default function McpProductPage() {
@@ -19,14 +19,14 @@ export default function McpProductPage() {
       <section className="mx-auto grid max-w-6xl gap-14 px-6 pb-20 pt-16 md:pb-28 md:pt-24 lg:grid-cols-[1fr_0.92fr] lg:items-center">
         <div>
           <div className="flex flex-wrap items-center gap-3">
-            <span className="font-sans text-[12px] font-bold uppercase tracking-[0.16em] text-brand-accent-2">LawHand MCP</span>
+            <span className="font-sans text-[12px] font-bold uppercase tracking-[0.16em] text-brand-accent-2">LawHand Research MCP</span>
             <span className="rounded-full border border-brand-gold/30 bg-brand-gold/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.13em] text-brand-gold">Private preview</span>
           </div>
           <h1 className="mt-5 max-w-2xl font-serif text-[44px] font-bold leading-[1.04] tracking-tight md:text-[58px]">
-            Bring LawHand context into the tools you already use.
+            Bring approved public legal authority into the tools you already use.
           </h1>
           <p className="mt-6 max-w-xl font-sans text-[18px] leading-relaxed text-brand-ink-2">
-            Connect approved systems to LawHand through Model Context Protocol, with scoped keys, explicit tool access, bounded usage, and a visible audit trail.
+            Connect ChatGPT, Claude, and other MCP clients to LawHand through Model Context Protocol for research-only retrieval, with OAuth or a scoped API token, PAYG metering, and a visible usage record.
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
             <a href={contactUrl} className="inline-flex min-h-12 items-center gap-2 rounded-lg bg-brand-accent px-6 text-[14px] font-semibold text-white shadow-sm transition-all hover:-translate-y-px hover:bg-brand-accent-2">
@@ -53,10 +53,10 @@ export default function McpProductPage() {
             </div>
             <div className="mt-6 space-y-3">
               {[
-                ['Authentication', 'Scoped API key'],
-                ['Tool access', 'Explicit allowlist'],
+                ['Authentication', 'OAuth 2.1 or lhrk_ token'],
+                ['Tool access', 'Public authority only'],
                 ['Limits', 'Monthly + per minute'],
-                ['Transport', 'MCP Streamable HTTP'],
+                ['Official URL', 'research.getlawhand.com/api/mcp'],
               ].map(([label, value]) => (
                 <div key={label} className="flex items-center justify-between gap-4 rounded-xl border border-white/10 bg-white/[0.06] px-4 py-3">
                   <span className="text-[11px] font-bold uppercase tracking-[0.12em] text-white/45">{label}</span>
@@ -98,14 +98,16 @@ export default function McpProductPage() {
           <div className="rounded-3xl border border-brand-line bg-brand-surface p-8">
             <Network size={28} className="text-brand-accent-2" />
             <h2 className="mt-5 font-serif text-[28px] font-bold">Built for controlled connections.</h2>
-            <p className="mt-3 text-[15px] leading-relaxed text-brand-ink-2">The private preview is for teams ready to validate a defined integration and its access boundaries with us.</p>
+            <p className="mt-3 text-[15px] leading-relaxed text-brand-ink-2">The private preview is for teams ready to validate research access, client compatibility, and its boundaries with us.</p>
+            <p className="mt-3 font-mono text-[12px] text-brand-muted">https://research.getlawhand.com/api/mcp</p>
+            <p className="mt-2 text-[12px] leading-relaxed text-brand-muted">Use the full URL in saved configuration; the bare hostname remains supported as shorthand.</p>
           </div>
           <div className="rounded-3xl border border-brand-line bg-brand-bg-soft p-8">
             <p className="text-[11px] font-bold uppercase tracking-[0.15em] text-brand-accent-2">Preview readiness</p>
             <ul className="mt-5 grid gap-4 sm:grid-cols-2">
               {[
-                'A named system or workflow to connect',
-                'A defined set of LawHand tools it needs',
+                'A named ChatGPT, Claude, or API client',
+                'A defined public-authority research workflow',
                 'An owner for access and usage review',
                 'A production rollout after release gates pass',
               ].map((item) => (

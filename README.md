@@ -163,7 +163,7 @@ alerts, and go/no-go evidence.
 | Application session | Normal `/api/*` routes | Short-lived JWT access cookie plus rotating, revocable refresh state; tenant and module authorization still apply. |
 | Platform bootstrap key | `POST /api/platform/auth/token` only | Stored as an identity/scope/expiry-bound SHA-256 hash. It is exchanged for a short-lived scoped bearer token and is rate limited/audited. |
 | Platform bearer token | `/api/platform/*` | Defaults to a 15-minute lifetime and cannot exceed its bootstrap grant. |
-| MCP product key | `/api/mcp` and compatibility tool route | Global flag, active tenant, entitlement, billing, Stripe metering, tool scope, monthly quota, and Redis burst limit all fail closed. Product remains disabled for launch. |
+| Research MCP OAuth/API token | `https://research.getlawhand.com/api/mcp` (shorthand host supported) | OAuth 2.1 is used by hosted ChatGPT/Claude clients; header-capable clients use a LawHand Research API token. Research scope, active tenant, entitlement, billing, quota, and Redis burst limits fail closed. Workspace tools are excluded, and the product remains release-gated. |
 | MCP upstream key | Backend to private CourtListener sidecar only | Dedicated 32+ character server credential. Browser JWTs and customer keys are never forwarded upstream. |
 | Tenant BYOK | Approved model provider only | Provider URL is allowlisted/validated; arbitrary administrator-controlled hosts are rejected. |
 

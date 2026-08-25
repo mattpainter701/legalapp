@@ -85,6 +85,38 @@ def test_workspace_mcp_accepts_a_distinct_signing_key():
     assert settings.WORKSPACE_MCP_TOKEN_SIGNING_KEY != settings.SECRET_KEY
 
 
+def _dev_research_settings(**overrides):
+    values = {
+        "MCP_PRODUCT_ENABLED": True,
+        "RESEARCH_MCP_OAUTH_ENABLED": True,
+        "RESEARCH_MCP_PUBLIC_URL": "https://research.getlawhand.com/api/mcp",
+        "RESEARCH_MCP_ISSUER": "https://research.getlawhand.com",
+        "WORKSPACE_MCP_ENABLED": False,
+    }
+    values.update(overrides)
+    return _settings(**values)
+
+
+@pytest.mark.parametrize(
+    ("signing_key", "message"),
+    [
+        ("", "required for MCP OAuth"),
+        ("x" * 48, "must not equal SECRET_KEY"),
+    ],
+)
+def test_research_mcp_dev_hmac_key_is_distinct(signing_key, message):
+    with pytest.raises(ValueError, match=message):
+        validate_mcp_security_settings(
+            _dev_research_settings(WORKSPACE_MCP_TOKEN_SIGNING_KEY=signing_key)
+        )
+
+
+def test_research_mcp_dev_accepts_shared_distinct_hmac_key():
+    validate_mcp_security_settings(
+        _dev_research_settings(WORKSPACE_MCP_TOKEN_SIGNING_KEY="r" * 48)
+    )
+
+
 @pytest.mark.parametrize("minutes", [0, 4, 61, 600])
 def test_workspace_mcp_rejects_unbounded_access_token_lifetime(minutes):
     settings = _settings(

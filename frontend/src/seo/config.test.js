@@ -178,7 +178,7 @@ describe('SEO configuration', () => {
 
   it.each([
     ['/product/chat', 'Ask with the whole matter in hand.', 'matter-aware AI workspace'],
-    ['/product/mcp', 'Bring LawHand context into the tools you already use.', '$0.45 per tool call'],
+    ['/product/mcp', 'Bring approved public legal authority into the tools you already use.', '$0.45 per tool call'],
     ['/pricing', 'One clear platform price. Controlled expansion.', '$89 per user per month'],
     ['/product', 'One workspace for the whole matter.', 'Practice-area library'],
   ])('builds a substantive public product shell for %s', (route, heading, claim) => {

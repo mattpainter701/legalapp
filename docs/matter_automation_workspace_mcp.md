@@ -37,7 +37,7 @@ approval policy, consent scopes, audiences, and MCP safety annotations.
 ## Two MCP products, two identities
 
 The existing `/api/mcp` gateway remains a read-only legal-research product. Its
-`clmcp_` product keys identify a tenant subscription for CourtListener access,
+`lhrk_` product keys identify a tenant subscription for CourtListener access,
 not an individual attorney. They are appropriate for metering research calls
 and inappropriate for firm-management actions.
 
@@ -65,7 +65,7 @@ is published. The workspace endpoint accepts only a dedicated LawHand-signed
 Bearer JWT with the workspace audience, user, tenant, client, grant, scope,
 token ID, and expiry claims. Every request must also match an active persisted
 workspace grant for that exact user, tenant, client, and scope set. A normal
-LawHand browser token and a research-product `clmcp_` key are both rejected.
+LawHand browser token and a research-product `lhrk_` key are both rejected.
 
 The lifecycle includes protected-resource and authorization-server metadata,
 dynamic public-client registration when enabled, PKCE S256, explicit user

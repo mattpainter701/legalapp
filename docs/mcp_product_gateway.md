@@ -1,23 +1,49 @@
 # LawHand Research MCP product gateway
 
 LegalApp is designed to offer **LawHand Research MCP**, backed in part by the
-private CourtListener corpus service, through the LegalApp backend. It is not
-currently a public or sellable product; the global release flag remains off
-until every gate in this document has passed.
+private CourtListener corpus service, through the LegalApp backend. It is a
+research-only product boundary: workspace matters, documents, tasks, and
+other tenant-workspace tools are never exposed here.
+Production exposure remains disabled until the release gates in this document
+are approved; this contract does not enable `MCP_PRODUCT_ENABLED`.
 
 ## Runtime Shape
 
 - Internal chat path: LegalApp chat calls `MCP_SERVER_URL` directly and records
   `mcp_usage_events.auth_type='internal_chat'` under the tenant.
-- External product path: clients call the public LegalApp MCP route with
-  `X-MCP-API-Key: clmcp_...`.
+- External product path: clients use the official endpoint
+  `https://research.getlawhand.com/api/mcp`. The shorthand host
+  `https://research.getlawhand.com` is also supported.
+- Hosted ChatGPT and Claude clients authenticate with OAuth 2.1. Clients that
+  support request headers use a LawHand Research API token, currently carried
+  as `X-MCP-API-Key: lhrk_...`. Existing hashed `clmcp_...` credentials remain
+  valid until they are rotated or revoked. These are two authentication modes for
+  the same research-only product, not workspace credentials.
 - CourtListener engine: `courtlistener-mcp` remains private to the app network
   and handles tool execution against the CourtListener pgvector DB.
-- LiteLLM remains the model gateway. The current `clmcp_` implementation does
-  not issue or validate LiteLLM virtual keys. A PAYG product based on LiteLLM
-  virtual keys requires a deliberate key-authority migration (issuance,
-  validation, revocation, tool permissions, and metering) before this release
-  flag may be enabled; changing the UI label or flag alone is not sufficient.
+- LiteLLM is an internal model gateway, not the public Research MCP key
+  authority. Pure retrieval calls do not invoke LiteLLM because they perform
+  no model inference. If a future model-backed synthesis tool is added, it
+  must call internal LiteLLM with tenant, user, and opaque research-credential
+  identifiers (never the raw credential) and reconcile the resulting spend
+  before customer billing is reported.
+
+### LiteLLM authority decision
+
+LawHand, not LiteLLM, issues and validates both Research authentication modes.
+This is deliberate:
+
+- the current Research tools perform retrieval, citation, coverage, status, and
+  export operations, so they create no LiteLLM model spend to attribute;
+- a LiteLLM virtual key would not replace LawHand tenant entitlement, consent,
+  tool scope, revocation, quota, or Stripe-meter checks; and
+- exposing a LiteLLM master or virtual key as the MCP credential would couple a
+  public product boundary to the internal model gateway without adding correct
+  retrieval metering.
+
+If a model-backed Research tool is introduced, the server will call LiteLLM
+behind the Research gateway. The public credential remains LawHand-issued, and
+the server supplies only opaque correlation identifiers to LiteLLM.
 
 ## Release State And Protocol
 
@@ -32,12 +58,17 @@ until every gate in this document has passed.
 
 The server baseline is MCP `2025-06-18`; the official SDK performs version
 negotiation, initialization, `notifications/initialized`, `tools/list`, and
-`tools/call`. Header API-key authentication is a product choice, not a promise
-that every third-party MCP client can configure that header. Interoperability
-must be proven with each client the commercial offering names.
+`tools/call`. OAuth 2.1 with PKCE is the hosted-client flow; API-token
+authentication is the compatibility flow for header-capable clients. Legacy
+unscoped `X-API-Key` credentials are invalidated by migration 087 and issuance
+returns HTTP 410.
 
-External product calls use `X-MCP-API-Key`. Legacy unscoped `X-API-Key`
-credentials are invalidated by migration 087 and issuance returns HTTP 410.
+Research access requires an active LawHand user/tenant plus Research
+entitlement and billing. It does not require a Workspace seat and is not
+disabled by Workspace Privacy Mode because the Research catalog cannot read
+tenant matters, documents, tasks, or client files. Research API-token
+administration follows the same product boundary; execution still fails closed
+on entitlement, billing, quota, and metering configuration.
 
 ## Tenant Admin Controls
 
@@ -45,7 +76,7 @@ The `/mcp` admin surface can list historical keys and show disabled state while
 the release flag is off. Creation remains fail-closed. After a future approved
 release, tenant admins can:
 
-- create named `clmcp_` keys
+- create named LawHand Research API tokens (`lhrk_` format)
 - choose allowed tools
 - set bounded monthly and per-minute limits (neither can be unlimited)
 - view 30-day usage totals and per-key usage
@@ -81,58 +112,36 @@ currently loaded and indexed, and a deployment can be partial or empty. Check
 - `sync_status`: ingest and embedding progress.
 - `corpus_status`: global corpus counts and coverage.
 
-### Platform-Native Tools
+### Research-only boundary
 
-These execute in the backend against tenant data rather than proxying to the
-research sidecar. They resolve their tenant from the product key and are
-metered on the same path as research tools, including when they fail.
+The published catalog contains authority search, citation, corpus-health, and
+research-bundle operations only. Workspace matters, documents, tasks, and
+artifact mutation tools are never exposed by Research MCP.
 
-- `list_matters`: the tenant's matters, optionally filtered by a name
-  substring. `limit` is 1-50 and defaults to 25.
-- `list_matter_documents`: documents on one matter. `limit` is 1-100 and
-  defaults to 50.
-- `create_document`: a Markdown document on a matter, optionally linked to a
-  task in the same matter.
+The catalog has no tenant-workspace tools such as matter listing, document
+listing, or document creation.
 
-Arguments are validated against the declared `inputSchema` before any query
-runs, and an invalid argument is a `400` naming the offending field. Two
-consequences are worth knowing when writing a client:
-
-- `matter_id` and `task_id` must be UUIDs. A matter *name* is not accepted --
-  call `list_matters` first and use the `id` it returns. Passing a name
-  previously produced a `500`.
-- `limit` outside its declared range is rejected rather than clamped, and an
-  argument the schema does not declare is rejected rather than ignored. Each
-  schema sets `"additionalProperties": false`, so a schema-driven client sees
-  that constraint rather than discovering it as a 400.
-
-`create_document` bounds `content` at 200,000 bytes UTF-8 encoded, inside the
-256 KiB request cap the transport locations enforce. The bound is on encoded
-bytes rather than characters because that is what the transport measures:
-70,000 emoji fit inside a 200,000-*character* limit and still encode to roughly
-280 KB, and ordinary accented or CJK text costs two to three bytes a character.
-
-A failed call is metered like a successful one. Because a tool that fails with a
-database error leaves the request transaction unusable, and because that
-transaction is rolled back as the error propagates, the usage row is written on
-a separate session and committed there.
+A failed research call is retained for observability but does not consume the
+successful-call quota or create a Stripe meter unit.
 
 ## Billing And Quotas
 
-`mcp_usage_events` is the billing/monitoring source:
+`mcp_usage_events` is the billing/monitoring source for retrieval calls:
 
 - `tenant_id`
 - `product_key_id` for external keys, null for internal chat
-- `user_id` for app-authenticated calls
-- `auth_type`: `product_key`, `jwt`, or `internal_chat`
+- `oauth_grant_id` and `user_id` for Research OAuth calls
+- `auth_type`: `product_key`, `research_oauth`, `jwt`, or `internal_chat`
 - `transport`: `streamable_http`, `rest`, or `internal`
 - `tool_name`, `status_code`, `result_count`, `latency_ms`
 - IP/user-agent for external calls
 
-Quota enforcement is per key and counts successful calls in the current calendar
-month. Redis enforces the per-key burst limit. Tool scope, tenant activity,
-explicit MCP entitlement, billing state and Stripe metering configuration are
-checked before proxying.
+Quota enforcement counts successful calls in the current calendar month. API
+token quotas remain token-bound; OAuth allowance is bound to tenant + user
+across grant rotation and reconnects so reconnecting cannot reset usage. Redis
+enforces the corresponding credential/principal burst limit. Tool scope,
+tenant activity, explicit MCP entitlement, billing state and Stripe metering
+configuration are checked before proxying.
 
 Stripe subscription/payment webhooks update the MCP billing state. Past-due,
 unpaid, canceled, deleted, disabled, or suspended state is denied before tool
@@ -154,7 +163,8 @@ as drawing down credits unless a real credit ledger and pre-call balance gate sh
 
 Migration `070_mcp_product_gateway.py` creates product keys and usage. Migration
 `087_mcp_product_security.py` invalidates legacy keys, adds mandatory key limits,
-and adds explicit tenant entitlement/billing states.
+and adds explicit tenant entitlement/billing states. Migration
+`127_research_mcp_oauth_usage.py` correlates OAuth usage with its durable grant.
 
 ### Required configuration and topology
 

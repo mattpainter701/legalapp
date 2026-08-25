@@ -8,7 +8,8 @@ remains under validation.
 
 LawHand has two separate MCP products:
 
-1. The research MCP uses tenant product keys and exposes legal-research tools.
+1. The research MCP uses individual OAuth grants or tenant Research API tokens
+   and exposes legal-research tools.
 2. The workspace MCP uses an individual user's OAuth grant and exposes bounded
    matter-workspace capabilities.
 
@@ -80,8 +81,8 @@ complete explicit OAuth consent. Disabling an existing user's permission
 immediately revokes active Workspace MCP grants; re-enabling permission does
 not restore them, so the user must reconnect and review scopes.
 
-Use the official full Workspace MCP URL below. Never use a research MCP
-`clmcp_` product key for matter access.
+Use the official full Workspace MCP URL below. Never use a Research MCP
+`lhrk_` product key for matter access.
 
 ```text
 https://mcp.getlawhand.com/api/mcp/workspace

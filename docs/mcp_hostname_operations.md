@@ -5,13 +5,19 @@
 | Host | Product and identity | Allowed public paths | Release state |
 |---|---|---|---|
 | `mcp.getlawhand.com` | Workspace/platform MCP; individual LawHand OAuth grant | `/` internally routes to `/api/mcp/workspace`; that transport and its two OAuth protected-resource metadata paths | Tenant-gated pilot |
-| `research.getlawhand.com` | Legal-research/RAG MCP; tenant product key | `/` internally routes to `/api/mcp`; that transport, `/api/mcp/manifest`, and `/api/mcp/tools/call` | Disabled; shorthand root expected 404 |
+| `research.getlawhand.com` | Legal-research/RAG MCP; individual OAuth grant or tenant Research API token | `/` internally routes to `/api/mcp`; that transport, its OAuth discovery/authorization paths, `/api/mcp/manifest`, and `/api/mcp/tools/call` | Disabled; all Research paths expected 404 |
 | `getlawhand.com` | Main portal and OAuth authorization server | Existing portal/API plus bounded legacy MCP aliases | Production |
 
 The workspace OAuth protected resource and authorization server intentionally
 have different origins. The resource is
 `https://mcp.getlawhand.com/api/mcp/workspace`; its issuer and interactive
 authorization endpoints remain on `https://getlawhand.com`.
+
+Research uses its dedicated origin for both resource and issuer. Hosted
+ChatGPT and Claude clients discover OAuth 2.1 at
+`https://research.getlawhand.com/.well-known/oauth-authorization-server` and
+use dynamic client registration plus PKCE. Header-capable clients may instead
+send a LawHand Research API token as `X-MCP-API-Key: lhrk_...`.
 
 Neither MCP hostname is a second portal origin. Official documentation and
 generated configuration use the full transport URLs:
@@ -91,6 +97,8 @@ curl -i https://research.getlawhand.com/
 # The research product remains unavailable until explicitly released.
 curl -i https://research.getlawhand.com/api/mcp
 curl -i https://research.getlawhand.com/api/mcp/manifest
+curl -i https://research.getlawhand.com/.well-known/oauth-protected-resource/api/mcp
+curl -i https://research.getlawhand.com/.well-known/oauth-authorization-server
 
 # Neither dedicated hostname exposes an ordinary portal/API route.
 curl -i https://mcp.getlawhand.com/api/version
@@ -108,8 +116,8 @@ Expected results:
   canonical transport, without a `Location` redirect;
 - workspace metadata reports the canonical resource and the apex authorization
   server;
-- research transport and manifest return 404 while
-  `MCP_PRODUCT_ENABLED=false`;
+- Research transport, manifest, OAuth discovery, registration, and token paths
+  return 404 while `MCP_PRODUCT_ENABLED=false`;
 - unrelated paths on both dedicated hosts return 404;
 - all three public origins present HSTS and certificates with at least the
   configured minimum remaining lifetime.

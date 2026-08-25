@@ -10,6 +10,16 @@
   diagnostics now report the native tenant/user access model directly.
 
 ### Added
+- **Release-gated LawHand Research MCP connection contract:** the public
+  research catalog is now strictly authority retrieval/status/export and new
+  header credentials use the `lhrk_` prefix while existing hashed `clmcp_`
+  credentials remain revocable compatibility keys. Hosted ChatGPT and Claude
+  use a separate `research:read` OAuth 2.1 grant; API clients can continue to
+  use `X-MCP-API-Key`. Both paths share the same tenant entitlement, PAYG,
+  quota, and Stripe-meter boundary, and neither can discover or invoke
+  Workspace MCP tools. LiteLLM remains internal and is intentionally absent
+  from retrieval-only calls; any future model-backed research operation must
+  pass opaque correlation metadata and reconcile model spend.
 - **Tenant AI routing profiles with per-tier matter-context policy** (migration
   `125_llm_routing_profiles`): Platform operators can create and clone reusable
   Standard/Premium route profiles, independently allow confidential matter

@@ -32,10 +32,11 @@ Endpoint contract:
   `/api/mcp/manifest` and is also hidden while disabled.
 - The private sidecar requires `X-Clarity-Internal-Key` matching
   `MCP_UPSTREAM_API_KEY`. Public clients never receive this credential.
-- The backend compatibility adapter accepts an application JWT or a scoped
-  `X-MCP-API-Key`; legacy `X-API-Key` is rejected.
+- The research product supports OAuth 2.1 for hosted ChatGPT/Claude clients or
+  a scoped LawHand Research API token for header-capable clients (currently
+  carried as `X-MCP-API-Key`); legacy `X-API-Key` is rejected.
 - Legacy `GET/POST /api/mcp/api-key` issuance returns HTTP 410. Tenant admins
-  use `/api/mcp/product` and `/api/mcp/product-keys`; key creation remains
+  use `/api/mcp/product-keys`; key creation remains
   unavailable until product, tenant, entitlement, billing and Stripe gates pass.
 - Do not rotate a tenant MCP API key just for smoke tests. The raw key is shown
   only once on creation, so a live `X-MCP-API-Key` smoke requires the current

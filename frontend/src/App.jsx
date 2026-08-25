@@ -23,6 +23,7 @@ const PricingPage = lazy(() => import('./pages/PricingPage'))
 const DemoRequestPage = lazy(() => import('./pages/DemoRequestPage'))
 const ProductPage = lazy(() => import('./pages/ProductPage'))
 const WorkspaceMcpAuthorizePage = lazy(() => import('./pages/WorkspaceMcpAuthorizePage'))
+const ResearchMcpAuthorizePage = lazy(() => import('./pages/ResearchMcpAuthorizePage'))
 const NotFoundPage = lazy(() => import('./pages/NotFoundPage'))
 const ChatPage = lazy(() => import('./pages/ChatPage'))
 const AdminPage = lazy(() => import('./pages/AdminPage'))
@@ -218,6 +219,7 @@ export default function App() {
         <Route path="/" element={<RootRedirect />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/workspace-mcp/authorize" element={<ProtectedRoute><WorkspaceMcpAuthorizePage /></ProtectedRoute>} />
+        <Route path="/research-mcp/authorize" element={<ProtectedRoute><ResearchMcpAuthorizePage /></ProtectedRoute>} />
         <Route path="/demo" element={<DemoLoginPage />} />
         <Route path="/signup" element={<SignupPage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
