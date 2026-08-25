@@ -58,6 +58,7 @@ from app.services.llm import LLMService
 from app.services.llm_routing import (
     classify_query_complexity,
     resolve_llm_route,
+    standard_matter_context_allowed,
 )
 from app.services.billing import calculate_cost
 from app.services.demo_access import reject_demo_premium
@@ -638,14 +639,16 @@ _PUBLIC_GENERAL_ATTACHMENT_DETAIL = (
 )
 
 
-def _is_public_general_route(route) -> bool:
+async def _is_public_general_route(db: AsyncSession, route) -> bool:
     """Return whether this request must carry only public/general data.
 
     The route *request* is decisive, not the configured model alias. That
     keeps a tenant's managed-standard alias or a future provider change from
     accidentally receiving client context.
     """
-    return route.requested_route in {"standard", "tenant-standard"}
+    return route.requested_route in {"standard", "tenant-standard"} and not (
+        await standard_matter_context_allowed(db)
+    )
 
 
 def _assert_public_general_sources_allowed(
@@ -2147,7 +2150,7 @@ async def _send_message_under_generation_lock(
         use_premium=use_premium,
         requested_provider=body.provider,
     )
-    public_general = _is_public_general_route(route)
+    public_general = await _is_public_general_route(db, route)
     privacy_mode = public_general or bool(getattr(user, "privacy_mode", False))
     if public_general:
         _assert_public_general_sources_allowed(conv, body)
@@ -2845,7 +2848,7 @@ async def _stream_message_under_generation_lock(
             use_premium=use_premium,
             requested_provider=body.provider,
         )
-        public_general = _is_public_general_route(route)
+        public_general = await _is_public_general_route(db, route)
         privacy_mode = public_general or bool(getattr(user, "privacy_mode", False))
         if public_general:
             _assert_public_general_sources_allowed(conv, body)

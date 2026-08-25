@@ -1171,7 +1171,7 @@ function LogsTab({ platformKey, tenants }) {
 
 // ── AI Routing Tab (Task 1206) ─────────────────────────────────────────────
 
-const emptyRoute = () => ({ key_id: '', provider_id: '', model: '', capacity: 100, alternates: [], fallbacks: [] })
+const emptyRoute = () => ({ key_id: '', provider_id: '', model: '', capacity: 100, alternates: [], fallbacks: [], allow_matter_context: false })
 const isCompleteTarget = (target) => Boolean(target?.provider_id && target?.key_id && target?.model)
 const modelTarget = (model) => ({ key_id: model.key_id, provider_id: model.provider_id, model: model.id, capacity: 100 })
 
@@ -1504,6 +1504,20 @@ function RouteCard({ label, alias: activeAlias, route, allKeys, presets, platfor
 
       <div className="p-5 space-y-5">
         <RouteFlow label={label} alias={alias} route={route} presets={presets} keys={allKeys} balanceCount={balanceCount} fallbackCount={fallbackCount} />
+        {routeKey === 'standard' && (
+          <label className="flex gap-3 rounded-lg border border-brand-line bg-brand-bg px-4 py-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={Boolean(route.allow_matter_context)}
+              onChange={(e) => updateRoute({ ...route, allow_matter_context: e.target.checked })}
+              className="mt-0.5 h-4 w-4 accent-brand-ink"
+            />
+            <span>
+              <span className="block text-sm font-medium text-brand-ink font-sans">Allow confidential matter context</span>
+              <span className="block mt-1 text-xs text-brand-muted font-sans">Send matter-linked conversations and attachments through Standard. Activation requires every Standard target and fallback to be approved for confidential customer data.</span>
+            </span>
+          </label>
+        )}
         <div>
           <div className="flex items-center justify-between mb-2">
             <p className="text-xs font-bold text-brand-ink uppercase tracking-wider font-sans">Primary target</p>
@@ -2518,8 +2532,8 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
       setActivation(routesData.activation || null)
       const std = routesData.standard || {}
       const prem = routesData.premium || {}
-      setStandard({ key_id: std.key_id || '', provider_id: std.provider_id || '', model: std.model || '', capacity: std.capacity || 100, alternates: std.alternates || [], fallbacks: std.fallbacks || [] })
-      setPremium({ key_id: prem.key_id || '', provider_id: prem.provider_id || '', model: prem.model || '', capacity: prem.capacity || 100, alternates: prem.alternates || [], fallbacks: prem.fallbacks || [] })
+      setStandard({ key_id: std.key_id || '', provider_id: std.provider_id || '', model: std.model || '', capacity: std.capacity || 100, alternates: std.alternates || [], fallbacks: std.fallbacks || [], allow_matter_context: Boolean(std.allow_matter_context) })
+      setPremium({ key_id: prem.key_id || '', provider_id: prem.provider_id || '', model: prem.model || '', capacity: prem.capacity || 100, alternates: prem.alternates || [], fallbacks: prem.fallbacks || [], allow_matter_context: Boolean(prem.allow_matter_context) })
     } catch (e) {
       if (e?.response?.status === 403) {
         setLoadError('Platform access was denied. Sign in again with the current platform key.')

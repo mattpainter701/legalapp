@@ -14,6 +14,7 @@ from app.models.tenant import TenantSettings
 settings = get_settings()
 
 LLM_ROUTING_KEY = "llm_routing"
+LLM_ROUTE_CONFIG_KEY = "llm_route_config_v2"
 LITELLM_PROVIDER = "litellm"
 VALID_LLM_PROVIDERS = {LITELLM_PROVIDER}
 VALID_LLM_ROUTES = {"standard", "premium", "tenant-standard", "tenant-premium"}
@@ -206,6 +207,22 @@ async def get_platform_llm_config(db: AsyncSession) -> dict[str, str | None]:
     )
     row = result.scalar_one_or_none()
     return _normalize_config(row.value if row else None)
+
+
+async def standard_matter_context_allowed(db: AsyncSession) -> bool:
+    """Return the operator-approved data policy for the managed Standard route.
+
+    This deliberately defaults to false so legacy installations preserve the
+    public/general-only Standard boundary until an operator explicitly enables
+    confidential matter context from Platform > AI Provider Routing.
+    """
+    result = await db.execute(
+        select(PlatformSetting).where(PlatformSetting.key == LLM_ROUTE_CONFIG_KEY)
+    )
+    row = result.scalar_one_or_none()
+    config = row.value if row and isinstance(row.value, dict) else {}
+    standard = config.get("standard")
+    return bool(isinstance(standard, dict) and standard.get("allow_matter_context"))
 
 
 async def upsert_platform_llm_config(

@@ -185,6 +185,7 @@ class RouteEntry(BaseModel):
     capacity: Optional[int] = 100
     alternates: list[dict[str, Any]] = Field(default_factory=list)
     fallbacks: list[dict[str, Any]] = Field(default_factory=list)
+    allow_matter_context: bool = False
 
 
 class RoutesUpdate(BaseModel):
@@ -2644,6 +2645,7 @@ async def save_routes(
             "capacity": _capacity(entry.capacity),
             "alternates": [],
             "fallbacks": [],
+            "allow_matter_context": bool(entry.allow_matter_context),
         }
         for alternate in entry.alternates:
             normalized = {

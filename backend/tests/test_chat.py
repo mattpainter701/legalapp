@@ -42,6 +42,7 @@ from app.models.conversation import Conversation, Message
 from app.models.document import Chunk, Document
 from app.models.error_log import ErrorLog
 from app.models.plugin import Matter
+from app.models.platform import PlatformSetting
 from app.models.task import Task
 from app.models.tenant import TenantSettings
 from app.models.user import User
@@ -59,16 +60,27 @@ from app.utils.guardrails import (
 )
 
 
-def test_standard_route_is_public_general_even_with_a_managed_alias():
-    assert _is_public_general_route(
-        SimpleNamespace(requested_route="standard", gateway_alias="cheap-managed-model")
+@pytest.mark.asyncio
+async def test_standard_route_matter_policy_is_platform_managed(db_session):
+    standard = SimpleNamespace(
+        requested_route="standard", gateway_alias="cheap-managed-model"
     )
-    assert _is_public_general_route(
-        SimpleNamespace(requested_route="tenant-standard", gateway_alias="firm-default")
+    tenant_standard = SimpleNamespace(
+        requested_route="tenant-standard", gateway_alias="firm-default"
     )
-    assert not _is_public_general_route(
-        SimpleNamespace(requested_route="premium", gateway_alias="premium-model")
+    premium = SimpleNamespace(requested_route="premium", gateway_alias="premium-model")
+    assert await _is_public_general_route(db_session, standard)
+    assert await _is_public_general_route(db_session, tenant_standard)
+    assert not await _is_public_general_route(db_session, premium)
+    db_session.add(
+        PlatformSetting(
+            key="llm_route_config_v2",
+            value={"standard": {"allow_matter_context": True}},
+        )
     )
+    await db_session.commit()
+    assert not await _is_public_general_route(db_session, standard)
+    assert not await _is_public_general_route(db_session, tenant_standard)
 
 
 def test_standard_rejects_matter_or_attachment_sources_before_loading_context():
