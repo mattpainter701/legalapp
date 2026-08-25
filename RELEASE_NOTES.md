@@ -5,6 +5,44 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.24.5 — Research answers show and link the sources they use
+
+Released August 24, 2026.
+
+Standard research now gives public authority to the assistant, mixed citations remain clickable, and the review-tag guide stays visible while an answer is prepared.
+
+- **Standard answers can use retrieved public authority.** Standard answers can now use retrieved public cases, statutes, and rules with review tags. Matter and firm information remain excluded from Standard.
+- **Every retained source marker stays clickable.** Answers that mix structured citation annotations with ordinary source markers now link both kinds to the authority or the in-answer source ledger.
+- **Review tags and research progress stay in view.** The tag legend remains visible on phones and desktops, and retrieved-source previews and elapsed research phases remain visible while Premium prepares a validated answer.
+
+## 2026.08.24.4 — Matter forwarding addresses can be created
+
+Released August 24, 2026.
+
+Creating a secure forwarding address from a matter now completes normally instead of failing when the matter has no partner attorney.
+
+- **Create the address from Correspondence.** The Create address action now locks only the matter being updated, so the unique forwarding address appears immediately and is ready to use.
+
+## 2026.08.24.3 — Task details stay readable on phones
+
+Released August 24, 2026.
+
+Mobile task rows now give the task name, due date, status, and actions their own space instead of squeezing them into one overlapping line.
+
+- **Task names keep their space.** The task name and notes use the full mobile row width, so longer names remain readable beside the completion checkbox.
+- **Dates and actions wrap cleanly.** Due dates, priority and unread badges, and task actions move onto a separate wrapping row instead of colliding or spilling off the screen.
+
+## 2026.08.24.2 — Forward email straight to the right matter
+
+Released August 24, 2026.
+
+Give each matter its own secure forwarding address, see exactly which contact addresses are tracked, and review incoming mail before it becomes official correspondence.
+
+- **Use one unique forwarding address per matter.** Create an opaque address from the Correspondence tab and forward or BCC a message there without putting a client name or matter number in the address.
+- **Review mail before filing it.** Forwarded messages wait in a review queue until a firm user files or rejects them, so an email cannot silently become part of the matter record.
+- **See what automatic matching tracks.** Correspondence rules now list the client and matter-party email addresses they use instead of leaving the matching behavior implicit.
+- **Rotate or disable an address immediately.** Replace a forwarding address when it has been shared too broadly, or turn it off when the matter no longer needs inbound mail.
+
 ## 2026.08.24.1 — A client portal that shows clients what needs their attention
 
 Released August 24, 2026.

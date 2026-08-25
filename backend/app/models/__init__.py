@@ -110,6 +110,7 @@ from app.models.generated_artifact import (
 from app.models.document_storage_operation import DocumentStorageOperation
 from app.models.document_integrity_event import DocumentIntegrityEvent
 from app.models.stripe_webhook_event import StripeWebhookEvent
+from app.models.inbound_email import InboundEmail, InboundEmailAlias
 
 __all__ = [
     "Tenant",
@@ -221,4 +222,6 @@ __all__ = [
     "DocumentStorageOperation",
     "DocumentIntegrityEvent",
     "StripeWebhookEvent",
+    "InboundEmail",
+    "InboundEmailAlias",
 ]

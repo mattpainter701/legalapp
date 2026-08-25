@@ -1641,6 +1641,27 @@ export const updateCorrespondenceRules = (matterId, rules) =>
 export const matterCorrespondenceDownloadUrl = (matterId, commId) =>
   `${API_BASE_URL}/matters/${matterId}/correspondence/${commId}/download`
 
+export const getMatterInboundAlias = (matterId) =>
+  api.get(`/matters/${matterId}/inbound-email/alias`).then(r => r.data)
+
+export const createMatterInboundAlias = (matterId) =>
+  api.post(`/matters/${matterId}/inbound-email/alias`).then(r => r.data)
+
+export const rotateMatterInboundAlias = (matterId) =>
+  api.post(`/matters/${matterId}/inbound-email/alias/rotate`).then(r => r.data)
+
+export const disableMatterInboundAlias = (matterId) =>
+  api.delete(`/matters/${matterId}/inbound-email/alias`)
+
+export const getMatterInboundEmail = (matterId, status = 'pending') =>
+  api.get(`/matters/${matterId}/inbound-email`, { params: { status } }).then(r => r.data)
+
+export const acceptMatterInboundEmail = (matterId, inboundId) =>
+  api.post(`/matters/${matterId}/inbound-email/${inboundId}/accept`).then(r => r.data)
+
+export const rejectMatterInboundEmail = (matterId, inboundId) =>
+  api.post(`/matters/${matterId}/inbound-email/${inboundId}/reject`).then(r => r.data)
+
 // ── Intake / Leads ─────────────────────────────────────────────────────────
 
 export const getLeads = (params = {}) =>

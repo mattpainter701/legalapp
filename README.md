@@ -267,6 +267,8 @@ customer release-note update is declared.
 - [MCP documentation index and future wiki handoff](docs/mcp/README.md)
 - [Architecture and trust boundaries](docs/ARCHITECTURE.md)
 - [First-customer production runbook](docs/FIRST_CUSTOMER_PRODUCTION_RUNBOOK.md)
+- [Forward email to a matter — user guide](docs/inbound_email_user_guide.md)
+- [Inbound matter email — admin and operator runbook](docs/inbound_email_setup.md)
 - [Standalone Call Intake plan and API enforcement](docs/call-intake-standalone.md)
 - [Zoom and cloud integration setup](docs/integrations-setup.md)
 - [Zoom Phone per-customer app setup](docs/ZOOM_PHONE_TENANT_APP_SETUP.md)

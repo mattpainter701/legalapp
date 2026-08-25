@@ -96,6 +96,8 @@ _PURGE_ONLY_TABLES = {
     "external_system_connections",
     "generated_artifact_revisions",
     "generated_artifacts",
+    "inbound_email_aliases",
+    "inbound_emails",
     "intake_call_drafts",
     "integration_sync_runs",
     "legacy_call_records",
@@ -153,6 +155,8 @@ DEMO_TABLE_REGISTRY: dict[str, DemoTablePolicy] = {
 SENSITIVE_NEVER_CLONE = frozenset(
     {
         "external_system_connections",
+        "inbound_email_aliases",
+        "inbound_emails",
         "mcp_product_keys",
         "smb_agents",
         "smb_credentials",

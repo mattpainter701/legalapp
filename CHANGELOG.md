@@ -29,6 +29,14 @@
   messages the client has not seen are marked unread and counted, the portal
   marks them read when the thread is opened, and the thread refreshes itself
   while the client is reading it.
+- **Secure per-matter inbound email** (migration `124_inbound_email`): each
+  matter can create one opaque, rotatable address at
+  `intake.getlawhand.com`. A Cloudflare Email Worker signs the exact RFC 822
+  bytes before the backend performs a select-only alias lookup; tenant RLS is
+  established immediately afterward. Messages enter a tenant-scoped
+  quarantine and require an explicit **File to matter** or **Reject** decision
+  before they become correspondence. The Correspondence panel also exposes the
+  party addresses used by automatic capture rules.
 - **File share agent is now built and shipped:** `agent/packaging/` adds a
   PyInstaller spec plus Windows (`build.ps1` → `lawhand-agent.exe` and a WiX v5
   MSI) and Linux (`build.sh` → binary + systemd install tarball) builds, and
@@ -58,6 +66,27 @@
   last scan time, file count and failure reason instead of an empty cell.
 
 ### Fixed
+- **Chat retrieval and citation provenance now match what the user sees:** the
+  Standard route injects only its sanitized public-authority RAG context into a
+  dedicated public prompt while continuing to exclude matter, attachment,
+  memory, profile, and history data. The citation renderer combines structured
+  annotation offsets with remaining raw source markers instead of dropping the
+  latter, and the review-tag legend is sticky and responsive rather than hidden
+  on mobile or scrolled out of view. Premium's validated-response boundary is
+  preserved while live source previews remain visible, and usage telemetry now
+  records provider TTFT, provider duration, validation/release delay, retrieved
+  versus cited sources, hyperlink coverage, and source-utilization percentage.
+- **Creating a matter forwarding address no longer fails on matters without a
+  partner attorney:** `Matter.partner_attorney` is eagerly loaded with a left
+  join, and the alias endpoint's blanket `FOR UPDATE` made PostgreSQL try to
+  lock the nullable side of that join. The endpoint now emits `FOR UPDATE OF
+  matters`, preserving per-matter serialization without locking the joined
+  user table; a PostgreSQL-dialect query regression test covers the exact shape.
+- **Mobile task rows no longer collapse the task name underneath its due date
+  and controls:** below the small-screen breakpoint, the completion control and
+  task content occupy a two-column grid while due dates, state badges, and row
+  actions wrap on a separate line. Desktop rows retain their compact horizontal
+  layout, and the responsive class contract is covered by the Tasks page test.
 - **Any commit inside a client-portal request silently emptied the portal:** the
   tenant GUC that RLS filters on is transaction-local, and `get_db` only
   registers the per-transaction rebind for a tenant the middleware resolved from

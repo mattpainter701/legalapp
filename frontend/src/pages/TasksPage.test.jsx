@@ -80,7 +80,12 @@ describe('TasksPage accessibility', () => {
   it('names filters and row actions and exposes hover actions to keyboard focus without axe violations', async () => {
     const { container } = render(<MemoryRouter><TasksPage /></MemoryRouter>)
 
-    expect(await screen.findByText('Return intake call')).toBeInTheDocument()
+    const taskTitle = await screen.findByText('Return intake call')
+    expect(taskTitle).toBeInTheDocument()
+    const taskRow = taskTitle.closest('[id^="task-"]')
+    expect(taskRow).toHaveClass('grid', 'grid-cols-[auto_minmax(0,1fr)]', 'sm:flex')
+    expect(taskTitle).toHaveClass('block', 'break-words')
+    expect(taskTitle.parentElement?.nextElementSibling).toHaveClass('col-start-2', 'flex-wrap', 'sm:flex-nowrap')
     expect(screen.getByRole('combobox', { name: 'Filter tasks by status' })).toBeInTheDocument()
     expect(screen.getByRole('combobox', { name: 'Filter tasks by priority' })).toBeInTheDocument()
     expect(screen.getByRole('combobox', { name: 'Filter tasks by type' })).toBeInTheDocument()

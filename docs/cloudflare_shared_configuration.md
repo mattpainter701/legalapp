@@ -47,6 +47,25 @@ These nonsecret variables are scoped to `mattpainter701/legalapp`:
 
 `research.mcp.getlawhand.com` is a legacy spelling and must not be introduced into new configuration.
 
+## LawHand inbound email resources
+
+These resources belong only to `mattpainter701/legalapp`. They are not shared
+with the generic web repository allowlist.
+
+| Resource | Canonical value | Purpose |
+| --- | --- | --- |
+| Email Routing subdomain | `intake.getlawhand.com` | Receives opaque per-matter addresses through isolated MX/SPF records. |
+| Email Worker | `lawhand-inbound-email` | Validates the envelope and size, signs the raw MIME bytes, and posts them to LawHand. |
+| Backend ingest path | `/api/inbound-email/cloudflare` | Accepts only timestamped HMAC-authenticated raw messages from the Worker. |
+| Delivery secret name | `INBOUND_EMAIL_WEBHOOK_SECRET` | Shared secret name in the GitHub production environment, production backend, and encrypted Worker settings. Values must never be documented or printed. |
+
+The mail subdomain is not a web hostname and must not be added to Cloudflare
+Tunnel ingress. Its catch-all Email Routing action targets the Email Worker.
+The existing Tunnel terminal `http_status:404` rule remains unchanged.
+
+Deployment, verification, rotation, and troubleshooting are in the [inbound
+matter email runbook](inbound_email_setup.md).
+
 ## Secrets
 
 Use these names only when the repository and workflow require the capability:
@@ -57,6 +76,7 @@ Use these names only when the repository and workflow require the capability:
 | `CLOUDFLARE_DNS_API_TOKEN` | DNS mutation with a token restricted to the required zone and permissions. |
 | `CLOUDFLARE_R2_ACCESS_KEY_ID` | R2 access for an approved storage consumer. |
 | `CLOUDFLARE_R2_SECRET_ACCESS_KEY` | R2 access for the same approved storage consumer. |
+| `INBOUND_EMAIL_WEBHOOK_SECRET` | LawHand production environment only; authenticates Email Worker delivery to the backend. The same value is provisioned as an encrypted Worker secret. |
 
 Never store credential values in an Actions variable, repository file, skill, memory file, issue, pull request, workflow input, or command argument. Supply secrets to `gh secret set` over standard input and verify only the resulting secret name and scope.
 
@@ -68,6 +88,8 @@ Do not synchronize R2 credentials across the web allowlist. Scope them to the ex
 - `research.getlawhand.com` remains disabled until a separately authenticated research MCP is deliberately deployed.
 - MCP discovery and execution require authentication.
 - The Tunnel ingress must end in `http_status:404`.
+- `intake.getlawhand.com` uses Email Routing MX records and is never a Tunnel
+  ingress hostname.
 - Unknown and sensitive paths fail closed.
 - DNS is published only after the application route, hostname isolation, authentication, and TLS behavior are verified.
 
@@ -76,3 +98,8 @@ See `docs/mcp_hostname_operations.md` and `docs/mcp_security_operations.md` for 
 ## Change record
 
 On 2026-08-22, the generic variables were synchronized to the five repositories above, and the LawHand-only variables were added to `mattpainter701/legalapp`. No Cloudflare token or R2 credential was committed to Git or stored in an Actions variable.
+
+On 2026-08-24, `intake.getlawhand.com` was onboarded to Email Routing, its
+catch-all was attached to `lawhand-inbound-email`, and the encrypted delivery
+secret name was added to the `legalapp` production environment. The existing
+Cloudflare Tunnel ingress was not changed.
