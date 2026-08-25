@@ -187,7 +187,9 @@ class TenantSettings(Base):
     premium_llm_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
     premium_llm_model: Mapped[str | None] = mapped_column(String(200), nullable=True)
     llm_routing_profile_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("llm_routing_profiles.id", ondelete="SET NULL"), nullable=True
+        UUID(as_uuid=True),
+        ForeignKey("llm_routing_profiles.id", ondelete="SET NULL"),
+        nullable=True,
     )
 
     # Notes/audit info

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { createPlatformSession, getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformIntegrationReadiness, getPlatformMcpOverview, getPlatformWorkspaceMcpDiagnostics, getPlatformTenant, updatePlatformTenant, getPlatformPlans, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMModelCatalog, refreshLLMModelCatalog, getLLMRoutes, recommendLLMRoutes, saveLLMRoutes, getLLMGatewayStatus, reloadLLMRoutes, testLLMRoute, getLLMRoutingProfiles, createLLMRoutingProfile, updateLLMRoutingProfile } from '../api'
 import { Activity, AlertTriangle, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3, FileText, Globe, Key, Plus, Trash2, RefreshCw, CheckCircle, XCircle, Cpu, ArrowDown, ArrowUp, Save, Settings2, PhoneCall, Video } from 'lucide-react'
 import { useConfirm } from '../components/dialog/ConfirmProvider'
@@ -2487,6 +2487,8 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
   const [loadError, setLoadError] = useState(null)
   const [profiles, setProfiles] = useState([])
   const [selectedProfileId, setSelectedProfileId] = useState('')
+  const [newProfileName, setNewProfileName] = useState('')
+  const [creatingProfile, setCreatingProfile] = useState(false)
 
   const load = useCallback(async (requestedProfileId = '') => {
     setLoading(true)
@@ -2671,6 +2673,41 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
     } finally { setSaving(false) }
   }
 
+  const handleCreateProfile = async () => {
+    const name = newProfileName.trim()
+    if (!name) return
+    setCreatingProfile(true)
+    setSaveResult(null)
+    try {
+      const created = await createLLMRoutingProfile(platformKey, {
+        name,
+        clone_profile_id: selectedProfileId || null,
+      })
+      setProfiles((previous) => [...previous, created])
+      setSelectedProfileId(created.id)
+      setNewProfileName('')
+      await load(created.id)
+    } catch (error) {
+      setSaveResult({ ok: false, error: apiErrorMessage(error, 'Profile creation failed') })
+    } finally {
+      setCreatingProfile(false)
+    }
+  }
+
+  const handleMakeDefaultProfile = async () => {
+    if (!selectedProfileId) return
+    setSaveResult(null)
+    try {
+      const updated = await updateLLMRoutingProfile(platformKey, selectedProfileId, { is_default: true })
+      setProfiles((previous) => previous.map((profile) => (
+        profile.id === updated.id ? updated : { ...profile, is_default: false }
+      )))
+      setSaveResult({ ok: true, message: `${updated.name} is now the default routing profile.` })
+    } catch (error) {
+      setSaveResult({ ok: false, error: apiErrorMessage(error, 'Default profile update failed') })
+    }
+  }
+
   if (loading) {
     return <div className="flex justify-center py-16"><div className="w-8 h-8 border-2 border-brand-accent border-t-transparent rounded-full animate-spin" /></div>
   }
@@ -2702,8 +2739,9 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
           <select aria-label="Routing profile" value={selectedProfileId} onChange={(e) => { setSelectedProfileId(e.target.value); load(e.target.value) }} className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans bg-brand-surface">
             {profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}{profile.is_default ? ' (default)' : ''}</option>)}
           </select>
-          <button type="button" onClick={async () => { const name = window.prompt('New routing profile name'); if (!name?.trim()) return; const created = await createLLMRoutingProfile(platformKey, { name: name.trim(), clone_profile_id: selectedProfileId || null }); setProfiles((prev) => [...prev, created]); setSelectedProfileId(created.id); await load(created.id) }} className="px-3 py-2 border border-brand-line rounded-lg text-xs font-medium font-sans text-brand-ink hover:bg-brand-bg">New profile</button>
-          {!profiles.find((profile) => profile.id === selectedProfileId)?.is_default && <button type="button" onClick={async () => { const updated = await updateLLMRoutingProfile(platformKey, selectedProfileId, { is_default: true }); setProfiles((prev) => prev.map((profile) => profile.id === updated.id ? updated : { ...profile, is_default: false })) }} className="px-3 py-2 border border-brand-line rounded-lg text-xs font-medium font-sans text-brand-ink hover:bg-brand-bg">Make default</button>}
+          <input aria-label="New routing profile name" value={newProfileName} onChange={(event) => setNewProfileName(event.target.value)} placeholder="New profile name" className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans bg-brand-surface" />
+          <button type="button" onClick={handleCreateProfile} disabled={creatingProfile || !newProfileName.trim()} className="px-3 py-2 border border-brand-line rounded-lg text-xs font-medium font-sans text-brand-ink hover:bg-brand-bg disabled:opacity-40">{creatingProfile ? 'Creating…' : 'Create profile'}</button>
+          {!profiles.find((profile) => profile.id === selectedProfileId)?.is_default && <button type="button" onClick={handleMakeDefaultProfile} className="px-3 py-2 border border-brand-line rounded-lg text-xs font-medium font-sans text-brand-ink hover:bg-brand-bg">Make default</button>}
           {saveResult && (
             <span className={`text-xs font-sans ${saveResult.ok ? (saveResult.pending ? 'text-brand-amber' : 'text-brand-accent') : 'text-brand-rose'}`}>
               {saveResult.message || (saveResult.ok
@@ -2725,6 +2763,8 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
       {selectedProfileId && (
         <div className="mb-6 rounded-lg border border-brand-line bg-brand-bg px-4 py-3 text-xs font-sans text-brand-muted">
           <span className="font-medium text-brand-ink">Profile: {profiles.find((profile) => profile.id === selectedProfileId)?.name || 'Selected profile'}</span>
+          {' · '}{profiles.find((profile) => profile.id === selectedProfileId)?.is_default ? 'Default' : 'Tenant-assignable'}
+          {' · '}{profiles.find((profile) => profile.id === selectedProfileId)?.is_active ? 'Active' : 'Inactive'}
           {' · '}Standard matter context {standard.allow_matter_context ? 'allowed' : 'blocked'}
           {' · '}Premium matter context {premium.allow_matter_context ? 'allowed' : 'blocked'}
           {' · '}Tenants assigned to this profile inherit both route targets and these data policies.

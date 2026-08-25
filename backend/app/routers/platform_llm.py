@@ -1412,18 +1412,28 @@ async def _get_route_config(db: AsyncSession) -> dict:
 
 def _profile_payload(profile: LLMRoutingProfile) -> dict[str, Any]:
     return {
-        "id": str(profile.id), "name": profile.name,
-        "description": profile.description, "is_default": profile.is_default,
+        "id": str(profile.id),
+        "name": profile.name,
+        "description": profile.description,
+        "is_default": profile.is_default,
         "is_active": profile.is_active,
         "standard_allow_matter_context": profile.standard_allow_matter_context,
         "premium_allow_matter_context": profile.premium_allow_matter_context,
-        "standard": {**dict(profile.standard_route or {}), "allow_matter_context": profile.standard_allow_matter_context},
-        "premium": {**dict(profile.premium_route or {}), "allow_matter_context": profile.premium_allow_matter_context},
+        "standard": {
+            **dict(profile.standard_route or {}),
+            "allow_matter_context": profile.standard_allow_matter_context,
+        },
+        "premium": {
+            **dict(profile.premium_route or {}),
+            "allow_matter_context": profile.premium_allow_matter_context,
+        },
         "activation": profile.activation or {},
     }
 
 
-async def _selected_profile(db: AsyncSession, profile_id: str | None) -> LLMRoutingProfile | None:
+async def _selected_profile(
+    db: AsyncSession, profile_id: str | None
+) -> LLMRoutingProfile | None:
     if not profile_id:
         return None
     try:
@@ -2527,26 +2537,46 @@ async def recommend_routes(
 @router.get("/profiles")
 async def list_routing_profiles(request: Request, db: AsyncSession = Depends(get_db)):
     _require_platform_key(request)
-    profiles = list((await db.scalars(select(LLMRoutingProfile).order_by(LLMRoutingProfile.name))).all())
+    profiles = list(
+        (
+            await db.scalars(select(LLMRoutingProfile).order_by(LLMRoutingProfile.name))
+        ).all()
+    )
     return {"profiles": [_profile_payload(profile) for profile in profiles]}
 
 
 @router.post("/profiles", status_code=201)
-async def create_routing_profile(body: RoutingProfileCreate, request: Request, db: AsyncSession = Depends(get_db)):
+async def create_routing_profile(
+    body: RoutingProfileCreate, request: Request, db: AsyncSession = Depends(get_db)
+):
     _require_platform_key(request)
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Profile name is required")
-    if await db.scalar(select(LLMRoutingProfile.id).where(LLMRoutingProfile.name == name)):
-        raise HTTPException(status_code=409, detail="Routing profile name already exists")
-    source = await _selected_profile(db, body.clone_profile_id) if body.clone_profile_id else None
+    if await db.scalar(
+        select(LLMRoutingProfile.id).where(LLMRoutingProfile.name == name)
+    ):
+        raise HTTPException(
+            status_code=409, detail="Routing profile name already exists"
+        )
+    source = (
+        await _selected_profile(db, body.clone_profile_id)
+        if body.clone_profile_id
+        else None
+    )
     profile = LLMRoutingProfile(
-        name=name, description=(body.description or "").strip() or None,
+        name=name,
+        description=(body.description or "").strip() or None,
         standard_route=dict(source.standard_route or {}) if source else {},
         premium_route=dict(source.premium_route or {}) if source else {},
-        standard_allow_matter_context=bool(source.standard_allow_matter_context) if source else False,
-        premium_allow_matter_context=bool(source.premium_allow_matter_context) if source else True,
-        is_default=False, is_active=True,
+        standard_allow_matter_context=bool(source.standard_allow_matter_context)
+        if source
+        else False,
+        premium_allow_matter_context=bool(source.premium_allow_matter_context)
+        if source
+        else True,
+        is_default=False,
+        is_active=True,
     )
     db.add(profile)
     await db.flush()
@@ -2569,37 +2599,61 @@ async def create_routing_profile(body: RoutingProfileCreate, request: Request, d
 
 
 @router.patch("/profiles/{profile_id}")
-async def update_routing_profile(profile_id: str, body: RoutingProfileUpdate, request: Request, db: AsyncSession = Depends(get_db)):
+async def update_routing_profile(
+    profile_id: str,
+    body: RoutingProfileUpdate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
     _require_platform_key(request)
     profile = await _selected_profile(db, profile_id)
     if body.name is not None:
         name = body.name.strip()
         if not name:
             raise HTTPException(status_code=400, detail="Profile name is required")
-        duplicate = await db.scalar(select(LLMRoutingProfile.id).where(LLMRoutingProfile.name == name, LLMRoutingProfile.id != profile.id))
+        duplicate = await db.scalar(
+            select(LLMRoutingProfile.id).where(
+                LLMRoutingProfile.name == name, LLMRoutingProfile.id != profile.id
+            )
+        )
         if duplicate:
-            raise HTTPException(status_code=409, detail="Routing profile name already exists")
+            raise HTTPException(
+                status_code=409, detail="Routing profile name already exists"
+            )
         profile.name = name
     if body.description is not None:
         profile.description = body.description.strip() or None
     if body.is_active is not None:
         if not body.is_active and profile.is_default and not body.is_default:
-            raise HTTPException(status_code=400, detail="The default routing profile cannot be inactive")
+            raise HTTPException(
+                status_code=400, detail="The default routing profile cannot be inactive"
+            )
         profile.is_active = body.is_active
     if body.is_default:
-        for existing in (await db.scalars(select(LLMRoutingProfile).where(LLMRoutingProfile.is_default.is_(True)))).all():
+        for existing in (
+            await db.scalars(
+                select(LLMRoutingProfile).where(LLMRoutingProfile.is_default.is_(True))
+            )
+        ).all():
             existing.is_default = False
         await db.flush()
         profile.is_default = True
         profile.is_active = True
-        aliases = (profile.activation or {}).get("aliases", {}) if isinstance(profile.activation, dict) else {}
+        aliases = (
+            (profile.activation or {}).get("aliases", {})
+            if isinstance(profile.activation, dict)
+            else {}
+        )
         if aliases.get("standard") and aliases.get("premium"):
-            await upsert_platform_llm_config(db, {
-                "standard_provider": LITELLM_PROVIDER,
-                "standard_model": aliases["standard"],
-                "premium_provider": LITELLM_PROVIDER,
-                "premium_model": aliases["premium"],
-            })
+            await upsert_platform_llm_config(
+                db,
+                {
+                    "standard_provider": LITELLM_PROVIDER,
+                    "standard_model": aliases["standard"],
+                    "premium_provider": LITELLM_PROVIDER,
+                    "premium_model": aliases["premium"],
+                },
+            )
     await record_operator_audit(
         db,
         request,
@@ -2619,14 +2673,25 @@ async def update_routing_profile(profile_id: str, body: RoutingProfileUpdate, re
 
 
 @router.get("/routes")
-async def get_routes(request: Request, profile_id: str | None = None, db: AsyncSession = Depends(get_db)):
+async def get_routes(
+    request: Request, profile_id: str | None = None, db: AsyncSession = Depends(get_db)
+):
     _require_platform_key(request)
     profile = await _selected_profile(db, profile_id)
     config = (
-        {"standard": {**dict(profile.standard_route or {}), "allow_matter_context": profile.standard_allow_matter_context},
-         "premium": {**dict(profile.premium_route or {}), "allow_matter_context": profile.premium_allow_matter_context},
-         "activation": profile.activation or {}}
-        if profile else await _get_route_config(db)
+        {
+            "standard": {
+                **dict(profile.standard_route or {}),
+                "allow_matter_context": profile.standard_allow_matter_context,
+            },
+            "premium": {
+                **dict(profile.premium_route or {}),
+                "allow_matter_context": profile.premium_allow_matter_context,
+            },
+            "activation": profile.activation or {},
+        }
+        if profile
+        else await _get_route_config(db)
     )
 
     # Hydrate with key hints (safe, no plaintext)
@@ -2850,23 +2915,36 @@ async def save_routes(
             "activated_at": datetime.now(timezone.utc).isoformat(),
         }
         if profile:
-            profile.standard_route = {k: v for k, v in config["standard"].items() if k != "allow_matter_context"}
-            profile.premium_route = {k: v for k, v in config["premium"].items() if k != "allow_matter_context"}
+            profile.standard_route = {
+                k: v
+                for k, v in config["standard"].items()
+                if k != "allow_matter_context"
+            }
+            profile.premium_route = {
+                k: v
+                for k, v in config["premium"].items()
+                if k != "allow_matter_context"
+            }
             profile.standard_allow_matter_context = body.standard.allow_matter_context
             profile.premium_allow_matter_context = body.premium.allow_matter_context
             profile.activation = config["activation"]
         else:
             await _save_route_config(db, config)
         if profile is None or profile.is_default:
-            await upsert_platform_llm_config(db, {
-                "standard_provider": LITELLM_PROVIDER,
-                "standard_model": aliases["standard"],
-                "premium_provider": LITELLM_PROVIDER,
-                "premium_model": aliases["premium"],
-            })
+            await upsert_platform_llm_config(
+                db,
+                {
+                    "standard_provider": LITELLM_PROVIDER,
+                    "standard_model": aliases["standard"],
+                    "premium_provider": LITELLM_PROVIDER,
+                    "premium_model": aliases["premium"],
+                },
+            )
     audit_metadata = _route_audit_payload(config, reload_result)
     if profile:
-        audit_metadata.update({"profile_id": str(profile.id), "profile_name": profile.name})
+        audit_metadata.update(
+            {"profile_id": str(profile.id), "profile_name": profile.name}
+        )
     await record_operator_audit(
         db,
         request,

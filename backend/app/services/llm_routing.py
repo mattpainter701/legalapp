@@ -228,7 +228,10 @@ async def get_tenant_routing_profile(
             return assigned
     return await db.scalar(
         select(LLMRoutingProfile)
-        .where(LLMRoutingProfile.is_default.is_(True), LLMRoutingProfile.is_active.is_(True))
+        .where(
+            LLMRoutingProfile.is_default.is_(True),
+            LLMRoutingProfile.is_active.is_(True),
+        )
         .order_by(LLMRoutingProfile.updated_at.desc())
         .limit(1)
     )
@@ -244,7 +247,9 @@ async def standard_matter_context_allowed(db: AsyncSession, tenant_id: Any) -> b
     profile = await get_tenant_routing_profile(db, tenant_id)
     if profile is not None:
         return bool(profile.standard_allow_matter_context)
-    result = await db.execute(select(PlatformSetting).where(PlatformSetting.key == LLM_ROUTE_CONFIG_KEY))
+    result = await db.execute(
+        select(PlatformSetting).where(PlatformSetting.key == LLM_ROUTE_CONFIG_KEY)
+    )
     row = result.scalar_one_or_none()
     config = row.value if row and isinstance(row.value, dict) else {}
     standard = config.get("standard")
@@ -427,7 +432,7 @@ async def resolve_llm_route(
             LLMRoute(
                 requested_route=requested_route,
                 resolved_route="premium",
-            gateway_alias=(
+                gateway_alias=(
                     profile_aliases.get("premium")
                     or platform_config.get("premium_model")
                     or settings.LITELLM_PREMIUM_MODEL
@@ -441,7 +446,8 @@ async def resolve_llm_route(
             resolved_route="standard",
             gateway_alias=(
                 profile_aliases.get("standard")
-                or platform_config.get("standard_model") or settings.LITELLM_STANDARD_MODEL
+                or platform_config.get("standard_model")
+                or settings.LITELLM_STANDARD_MODEL
             ),
         ),
     )

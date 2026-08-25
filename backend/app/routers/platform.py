@@ -776,11 +776,15 @@ async def get_tenant_detail(
             "standard_model": ts.default_llm_model if ts else None,
             "premium_provider": ts.premium_llm_provider if ts else None,
             "premium_model": ts.premium_llm_model if ts else None,
-            "routing_profile_id": str(ts.llm_routing_profile_id) if ts and ts.llm_routing_profile_id else None,
+            "routing_profile_id": str(ts.llm_routing_profile_id)
+            if ts and ts.llm_routing_profile_id
+            else None,
             "routing_profile": (
                 {
-                    "id": str(routing_profile.id), "name": routing_profile.name,
-                    "is_default": routing_profile.is_default, "is_active": routing_profile.is_active,
+                    "id": str(routing_profile.id),
+                    "name": routing_profile.name,
+                    "is_default": routing_profile.is_default,
+                    "is_active": routing_profile.is_active,
                     "standard_allow_matter_context": routing_profile.standard_allow_matter_context,
                     "premium_allow_matter_context": routing_profile.premium_allow_matter_context,
                 }
@@ -1025,12 +1029,18 @@ async def update_tenant(
                 try:
                     profile_id = uuid.UUID(body.llm_routing_profile_id)
                 except ValueError:
-                    raise HTTPException(status_code=400, detail="Invalid routing profile id")
+                    raise HTTPException(
+                        status_code=400, detail="Invalid routing profile id"
+                    )
                 profile = await db.get(LLMRoutingProfile, profile_id)
                 if profile is None or not profile.is_active:
-                    raise HTTPException(status_code=400, detail="Routing profile is missing or inactive")
+                    raise HTTPException(
+                        status_code=400, detail="Routing profile is missing or inactive"
+                    )
             audit_changes["llm_routing_profile_id"] = {
-                "from": str(ts.llm_routing_profile_id) if ts.llm_routing_profile_id else None,
+                "from": str(ts.llm_routing_profile_id)
+                if ts.llm_routing_profile_id
+                else None,
                 "to": str(profile.id) if profile else None,
             }
             ts.llm_routing_profile_id = profile.id if profile else None
