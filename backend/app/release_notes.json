@@ -2,6 +2,19 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.24.4",
+      "version": "2026.08.24.4",
+      "title": "Matter forwarding addresses can be created",
+      "published_at": "2026-08-24",
+      "summary": "Creating a secure forwarding address from a matter now completes normally instead of failing when the matter has no partner attorney.",
+      "highlights": [
+        {
+          "title": "Create the address from Correspondence",
+          "description": "The Create address action now locks only the matter being updated, so the unique forwarding address appears immediately and is ready to use."
+        }
+      ]
+    },
+    {
       "id": "2026.08.24.3",
       "version": "2026.08.24.3",
       "title": "Task details stay readable on phones",

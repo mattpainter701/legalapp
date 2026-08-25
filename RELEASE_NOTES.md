@@ -5,6 +5,14 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.24.4 — Matter forwarding addresses can be created
+
+Released August 24, 2026.
+
+Creating a secure forwarding address from a matter now completes normally instead of failing when the matter has no partner attorney.
+
+- **Create the address from Correspondence.** The Create address action now locks only the matter being updated, so the unique forwarding address appears immediately and is ready to use.
+
 ## 2026.08.24.3 — Task details stay readable on phones
 
 Released August 24, 2026.
