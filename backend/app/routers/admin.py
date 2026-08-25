@@ -111,6 +111,8 @@ def _user_response(user: User, assignments: dict | None = None) -> UserResponse:
         job_title=user.job_title,
         office_location=user.office_location,
         primary_jurisdictions=user.primary_jurisdictions or [],
+        privacy_mode=user.privacy_mode,
+        workspace_mcp_enabled=user.workspace_mcp_enabled,
         created_at=user.created_at,
     )
 
@@ -1500,6 +1502,7 @@ class UserPatchRequest(_PydanticBase):
         None  # None = clear cap; pass -1 to leave unchanged
     )
     default_billing_rate: Optional[float] = None  # hourly rate for time tracking
+    workspace_mcp_enabled: Optional[bool] = None
     professional_role: Optional[str] = Field(default=None, max_length=120)
     job_title: Optional[str] = Field(default=None, max_length=160)
     office_location: Optional[str] = Field(default=None, max_length=255)
@@ -1612,7 +1615,66 @@ async def patch_user(
             else None
         )
 
+    revoke_workspace_access = False
+    revocation_reason = None
+    if body.workspace_mcp_enabled is not None:
+        disabling_workspace_mcp = (
+            not body.workspace_mcp_enabled and user.workspace_mcp_enabled
+        )
+        if disabling_workspace_mcp:
+            revoke_workspace_access = True
+            revocation_reason = "Workspace MCP disabled by tenant administrator"
+        user.workspace_mcp_enabled = body.workspace_mcp_enabled
+
+    revoked_workspace_grants = []
+    if revoke_workspace_access:
+        from app.models.workspace_mcp_grant import WorkspaceMCPGrant
+        from app.services.workspace_mcp_oauth import append_workspace_mcp_audit
+
+        revoked_workspace_grants = list(
+            (
+                await db.scalars(
+                    select(WorkspaceMCPGrant)
+                    .where(
+                        WorkspaceMCPGrant.tenant_id == user.tenant_id,
+                        WorkspaceMCPGrant.user_id == user.id,
+                        WorkspaceMCPGrant.status == "active",
+                        WorkspaceMCPGrant.revoked_at.is_(None),
+                    )
+                    .with_for_update()
+                )
+            ).all()
+        )
+        revoked_at = datetime.now(timezone.utc)
+        for grant in revoked_workspace_grants:
+            grant.status = "revoked"
+            grant.revoked_at = revoked_at
+            grant.revoked_by_user_id = admin.id
+            grant.revocation_reason = revocation_reason
+            await append_workspace_mcp_audit(
+                db,
+                request,
+                tenant_id=user.tenant_id,
+                user_id=user.id,
+                grant_id=grant.id,
+                client_id=grant.client_id,
+                event_type="grant_revoked",
+                outcome="success",
+                metadata={"reason": revocation_reason},
+            )
+
     await db.commit()
+    if revoked_workspace_grants:
+        try:
+            from app.services.workspace_mcp_oauth import revoke_grant_refresh_tokens
+
+            for grant in revoked_workspace_grants:
+                await revoke_grant_refresh_tokens(request, grant.id)
+        except Exception:
+            logger.exception(
+                "Workspace MCP refresh-token cleanup failed after admin policy change"
+            )
+        await set_tenant_context(db, str(admin.tenant_id))
     await db.refresh(user)
     assignments = await _user_role_assignments(db, [user.id])
     return _user_response(user, assignments)
@@ -1672,6 +1734,8 @@ async def invite_user(
 
     # Create inactive user with a random password (they will set their own via invite link)
     invite_token = secrets.token_urlsafe(32)
+    from app.services.workspace_mcp_access import tenant_workspace_mcp_default
+
     new_user = User(
         tenant_id=admin.tenant_id,
         email=body.email,
@@ -1679,6 +1743,7 @@ async def invite_user(
         role=role,
         is_active=False,
         license_active=True,
+        workspace_mcp_enabled=await tenant_workspace_mcp_default(db, admin.tenant_id),
         # Store invite token temporarily in password_hash field (hashed prefix)
         password_hash=f"invite:{invite_token}",
     )

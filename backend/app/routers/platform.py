@@ -1293,6 +1293,7 @@ async def platform_mcp_overview(
         "keys": key_payload,
         "connection": {
             "server_url": settings.research_mcp_endpoint,
+            "shorthand": settings.research_mcp_shorthand,
             "streamable_http": settings.research_mcp_endpoint,
             "rest_compatibility": f"{settings.research_mcp_endpoint}/tools/call",
             "auth_header": "X-MCP-API-Key",
@@ -1456,6 +1457,8 @@ async def platform_workspace_mcp_diagnostics(
                     blocked_reasons.append("user_inactive")
                 if not user.license_active:
                     blocked_reasons.append("license_inactive")
+                if not getattr(user, "workspace_mcp_enabled", True):
+                    blocked_reasons.append("user_workspace_mcp_disabled")
                 if user.privacy_mode:
                     blocked_reasons.append("privacy_mode_enabled")
                 if not bool(settings.WORKSPACE_MCP_ENABLED):
@@ -1472,6 +1475,9 @@ async def platform_workspace_mcp_diagnostics(
                     "is_active": bool(user.is_active),
                     "license_active": bool(user.license_active),
                     "privacy_mode": bool(user.privacy_mode),
+                    "workspace_mcp_enabled": bool(
+                        getattr(user, "workspace_mcp_enabled", True)
+                    ),
                     "effective_scopes": effective_scopes,
                     "blocked_reasons": blocked_reasons,
                     "ready": not blocked_reasons,

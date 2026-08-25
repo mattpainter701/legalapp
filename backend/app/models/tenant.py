@@ -135,6 +135,9 @@ class TenantSettings(Base):
     default_privacy_mode: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
     )
+    default_workspace_mcp_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
 
     # Feature flags
     enable_auto_memory: Mapped[bool] = mapped_column(

@@ -17,6 +17,7 @@ class UserDetailResponse(BaseModel):
     expertise_level: str = "mid"
     default_skill: Optional[str] = None
     privacy_mode: bool = False
+    workspace_mcp_enabled: bool = True
     professional_role: Optional[str] = None
     job_title: Optional[str] = None
     office_location: Optional[str] = None
@@ -49,6 +50,8 @@ class UserResponse(BaseModel):
     job_title: Optional[str] = None
     office_location: Optional[str] = None
     primary_jurisdictions: List[str] = Field(default_factory=list)
+    privacy_mode: bool = False
+    workspace_mcp_enabled: bool = True
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -136,6 +139,7 @@ class TenantSettingsResponse(BaseModel):
     default_expertise_level: str = "mid"
     default_practice_areas: List[str] = []
     default_privacy_mode: bool = False
+    default_workspace_mcp_enabled: bool = True
     # Feature flags
     enable_auto_memory: bool = True
     enable_pii_detection: bool = True
@@ -173,6 +177,7 @@ class TenantSettingsUpdate(BaseModel):
     default_expertise_level: Optional[str] = None
     default_practice_areas: Optional[List[str]] = None
     default_privacy_mode: Optional[bool] = None
+    default_workspace_mcp_enabled: Optional[bool] = None
     enable_auto_memory: Optional[bool] = None
     enable_pii_detection: Optional[bool] = None
     enable_skill_routing: Optional[bool] = None

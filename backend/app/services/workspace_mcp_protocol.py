@@ -295,10 +295,21 @@ async def _load_workspace_actor(
         raise HTTPException(status_code=403, detail="Workspace user is inactive")
     if not user.license_active:
         raise HTTPException(status_code=403, detail="Standard license required")
+    if not getattr(user, "workspace_mcp_enabled", True):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Workspace MCP access is disabled for this user by the tenant "
+                "administrator"
+            ),
+        )
     if user.privacy_mode:
         raise HTTPException(
             status_code=403,
-            detail="Workspace MCP is unavailable while Privacy Mode is enabled",
+            detail=(
+                "Workspace MCP is paused because Privacy Mode is enabled in the "
+                "user's LawHand profile"
+            ),
         )
     require_active_tenant(user.tenant)
     capabilities = frozenset(await get_user_capabilities(db, user.id))

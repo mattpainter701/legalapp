@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -6,6 +7,7 @@ from sqlalchemy import select
 
 from app.models.rbac import Role, UserRole
 from app.models.user import User
+from app.models.workspace_mcp_grant import WorkspaceMCPGrant
 from app.services import email as email_module
 
 
@@ -67,6 +69,47 @@ async def test_admin_users_returns_billing_and_role_assignment_fields(
     assert row["payg_monthly_budget"] == 500.0
     assert row["role_ids"] == [str(role.id)]
     assert row["roles"] == [{"id": str(role.id), "name": "Billing Manager"}]
+    assert row["workspace_mcp_enabled"] is True
+    assert row["privacy_mode"] is False
+
+
+@pytest.mark.asyncio
+async def test_admin_disabling_workspace_mcp_revokes_active_grants(
+    client, db_session, test_tenant
+):
+    user = User(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        email="connected-user@testfirm.com",
+        role="user",
+        is_active=True,
+        workspace_mcp_enabled=True,
+    )
+    db_session.add(user)
+    await db_session.flush()
+    grant = WorkspaceMCPGrant(
+        tenant_id=test_tenant.id,
+        user_id=user.id,
+        client_id="claude-desktop",
+        client_name="Claude",
+        scopes=["matters:read"],
+        consent_version="v1",
+        consent_sha256="a" * 64,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+    )
+    db_session.add(grant)
+    await db_session.commit()
+
+    response = await client.patch(
+        f"/api/admin/users/{user.id}", json={"workspace_mcp_enabled": False}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["workspace_mcp_enabled"] is False
+    await db_session.refresh(grant)
+    assert grant.status == "revoked"
+    assert grant.revoked_at is not None
+    assert grant.revocation_reason == "Workspace MCP disabled by tenant administrator"
 
 
 @pytest.mark.asyncio

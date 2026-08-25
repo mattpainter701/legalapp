@@ -637,6 +637,10 @@ async def _get_or_create_user(
             )
             is_first = len(count_result.scalars().all()) == 0
 
+            from app.services.workspace_mcp_access import (
+                tenant_workspace_mcp_default,
+            )
+
             user = User(
                 id=uuid.uuid4(),
                 tenant_id=tenant_id,
@@ -646,6 +650,7 @@ async def _get_or_create_user(
                 oauth_provider=provider,
                 oauth_subject=sub,
                 is_active=True,
+                workspace_mcp_enabled=await tenant_workspace_mcp_default(db, tenant_id),
             )
             db.add(user)
             await db.flush()
@@ -1859,6 +1864,7 @@ async def get_me(
         office_location=user.office_location,
         primary_jurisdictions=user.primary_jurisdictions or [],
         privacy_mode=user.privacy_mode,
+        workspace_mcp_enabled=getattr(user, "workspace_mcp_enabled", True),
         demo=(
             {
                 "session_id": str(demo_session.id),
@@ -1971,6 +1977,7 @@ async def update_me(
         office_location=user.office_location,
         primary_jurisdictions=user.primary_jurisdictions or [],
         privacy_mode=user.privacy_mode,
+        workspace_mcp_enabled=getattr(user, "workspace_mcp_enabled", True),
     )
 
 

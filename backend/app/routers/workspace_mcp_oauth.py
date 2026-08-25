@@ -171,6 +171,11 @@ async def _load_grant_actor(
     )
     if user is None or not user.is_active or not user.license_active:
         raise WorkspaceOAuthError("invalid_grant", "Workspace user is unavailable")
+    if not getattr(user, "workspace_mcp_enabled", True):
+        raise WorkspaceOAuthError(
+            "invalid_grant",
+            "Workspace MCP access is disabled for this user by the tenant administrator",
+        )
     if user.privacy_mode:
         raise WorkspaceOAuthError(
             "invalid_grant", "Workspace MCP is unavailable in Privacy Mode"
@@ -431,10 +436,22 @@ async def decide_workspace_authorization(
         # client from receiving a token or reaching the workspace transport.
         # Previously this was checked only during token exchange/runtime,
         # leaving an apparently active but unusable assistant in the portal.
+        if not getattr(user, "workspace_mcp_enabled", True):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Workspace MCP access is disabled for your account. "
+                    "Ask a tenant administrator to enable it in Admin > Users."
+                ),
+            )
         if user.privacy_mode:
             raise HTTPException(
                 status_code=403,
-                detail="Workspace MCP is unavailable while Privacy Mode is enabled",
+                detail=(
+                    "Workspace MCP is paused because Privacy Mode is enabled in "
+                    "your LawHand profile. Privacy Mode redacts private details and "
+                    "disconnects external assistants; turn it off to reconnect."
+                ),
             )
         scopes = frozenset(str(value) for value in pending.get("scopes", []))
         if not scopes or not scopes.issubset(await _allowed_user_scopes(db, user)):

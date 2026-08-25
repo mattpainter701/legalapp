@@ -61,7 +61,7 @@ function WorkspaceMcpGrantsPanelContent({ blockedReason = '' }) {
 
   return <section className="bg-brand-surface border border-brand-line rounded-xl p-6" aria-labelledby="workspace-mcp-grants-heading">
     <div className="flex items-start justify-between gap-4 flex-wrap">
-      <div><h3 id="workspace-mcp-grants-heading" className="text-brand-ink font-sans text-base font-bold">Workspace MCP assistants</h3><p className="mt-1 text-brand-ink-2 font-sans text-xs leading-5">Review and revoke assistants connected to this tenant. All access is scope-limited and audit logged.</p></div>
+      <div><h3 id="workspace-mcp-grants-heading" className="text-brand-ink font-sans text-base font-bold">Workspace MCP assistants</h3><p className="mt-1 text-brand-ink-2 font-sans text-xs leading-5">Official URL: <code>https://mcp.getlawhand.com/api/mcp/workspace</code>. The bare hostname is also supported. Review and revoke connected assistants; all access is scope-limited and audit logged.</p></div>
       <button type="button" onClick={load} disabled={loading} className="px-3 py-1.5 border border-brand-line rounded-lg text-xs font-semibold text-brand-ink hover:bg-brand-bg-soft disabled:opacity-50">{loading ? 'Refreshing.' : 'Refresh'}</button>
     </div>
     {blockedReason && <div role="status" className="mt-4 px-3 py-2 bg-amber-50 border border-amber-300 rounded-lg text-amber-950 text-xs font-semibold leading-5">Connected assistants are currently blocked. {blockedReason}</div>}

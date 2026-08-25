@@ -72,7 +72,7 @@ export default function MCPPage({ embedded = false }) {
   const [error, setError] = useState(null)
   const [newKey, setNewKey] = useState(null)
   const [form, setForm] = useState({
-    name: 'CourtListener API',
+    name: 'LawHand Research',
     monthly_call_limit: '5000',
     burst_limit_per_minute: '60',
     allowed_tools: [],
@@ -117,7 +117,7 @@ export default function MCPPage({ embedded = false }) {
         allowed_tools: allToolsSelected ? null : form.allowed_tools,
       })
       setNewKey(result.api_key)
-      setForm({ name: 'CourtListener API', monthly_call_limit: '5000', burst_limit_per_minute: '60', allowed_tools: [] })
+      setForm({ name: 'LawHand Research', monthly_call_limit: '5000', burst_limit_per_minute: '60', allowed_tools: [] })
       await getMcpProductKeys().then(setData)
     } catch (e) {
       setError(e?.response?.data?.detail || 'Failed to create MCP key')
@@ -157,13 +157,14 @@ export default function MCPPage({ embedded = false }) {
     return (
       <div className={embedded ? '' : 'min-h-screen bg-brand-bg'}>
         <div className={embedded ? 'space-y-4' : 'mx-auto max-w-3xl px-4 py-10'}>
-          <h1 className="font-serif text-2xl font-bold text-brand-ink">CourtListener MCP</h1>
+          <h1 className="font-serif text-2xl font-bold text-brand-ink">LawHand Research MCP</h1>
           <div className="rounded-xl border border-amber-300 bg-amber-50 p-5 text-amber-950" role="status">
-            <p className="font-semibold">MCP product access is disabled</p>
+            <p className="font-semibold">External Research MCP access is not released</p>
             <p className="mt-1 text-sm">
-              New keys and external client connections are unavailable while protocol, billing, and operational release gates are being completed.
+              This is separate from Workspace MCP. Research PAYG key issuance remains unavailable until its key authority, billing, and external-client release gates are completed.
             </p>
           </div>
+          <CodeBlock label="Official Research MCP URL (release-gated)" value="https://research.getlawhand.com/api/mcp" />
         </div>
       </div>
     )
@@ -177,7 +178,7 @@ export default function MCPPage({ embedded = false }) {
       <div className={embedded ? 'space-y-6' : 'mx-auto max-w-5xl px-4 py-10'}>
         <div className="mb-8 flex items-center justify-between gap-4">
           <div>
-            <h1 className="font-serif text-2xl font-bold text-brand-ink">CourtListener MCP</h1>
+            <h1 className="font-serif text-2xl font-bold text-brand-ink">LawHand Research MCP</h1>
             <p className="mt-1 text-sm text-brand-muted">
               Tenant-managed product keys for external MCP clients. Usage is metered separately as PAYG MCP usage.
             </p>
@@ -227,11 +228,12 @@ export default function MCPPage({ embedded = false }) {
         <div className="mb-6 rounded-lg border border-brand-line bg-brand-surface p-5">
           <p className="mb-4 text-sm font-semibold text-brand-ink">Connection endpoints</p>
           <div className="grid gap-3 md:grid-cols-2">
-            <CodeBlock label="Streamable HTTP" value={transports.streamable_http || data?.mcp_server_url || '/api/mcp'} />
+            <CodeBlock label="Official MCP URL" value={transports.streamable_http || data?.mcp_server_url || 'https://research.getlawhand.com/api/mcp'} />
+            <CodeBlock label="Supported shorthand" value={data?.shorthand || 'https://research.getlawhand.com'} />
             <CodeBlock label="Auth header" value="X-MCP-API-Key: clmcp_..." />
           </div>
           <p className="mt-3 text-xs text-brand-muted">
-            Standards-compliant clients connect to the single Streamable HTTP endpoint and negotiate the MCP protocol there.
+            Use the official full URL in documentation and generated configuration. The shorthand remains supported without a redirect.
           </p>
         </div>
 

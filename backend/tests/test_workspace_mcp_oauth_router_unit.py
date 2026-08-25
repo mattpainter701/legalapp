@@ -80,6 +80,7 @@ def user():
         full_name="Test User",
         is_active=True,
         license_active=True,
+        workspace_mcp_enabled=True,
         privacy_mode=False,
     )
 
@@ -135,6 +136,30 @@ async def test_document_read_scopes_require_document_management(monkeypatch):
     restricted = await oauth._allowed_user_scopes(DB(), current_user)
     assert "documents:read" not in restricted
     assert "templates:read" not in restricted
+
+
+@pytest.mark.asyncio
+async def test_grant_actor_refuses_tenant_admin_disabled_user(monkeypatch):
+    current_user = user()
+    current_user.workspace_mcp_enabled = False
+    database = DB(scalar=current_user)
+    monkeypatch.setattr(
+        oauth, "require_workspace_tenant_allowed", lambda _tenant_id: None
+    )
+    monkeypatch.setattr(oauth, "set_tenant_context", AsyncMock())
+    monkeypatch.setattr(
+        oauth, "require_active_workspace_grant", AsyncMock(return_value=object())
+    )
+
+    with pytest.raises(WorkspaceOAuthError, match="tenant administrator"):
+        await oauth._load_grant_actor(
+            database,
+            tenant_id=current_user.tenant_id,
+            user_id=current_user.id,
+            grant_id=str(uuid4()),
+            client_id="client-1",
+            scopes=frozenset({"matters:read"}),
+        )
 
 
 @pytest.mark.asyncio
@@ -332,7 +357,8 @@ async def test_approve_refuses_privacy_mode_before_creating_a_grant(monkeypatch)
         )
 
     assert exc_info.value.status_code == 403
-    assert exc_info.value.detail == "Workspace MCP is unavailable while Privacy Mode is enabled"
+    assert "Privacy Mode is enabled" in exc_info.value.detail
+    assert "turn it off" in exc_info.value.detail
     replace_grant.assert_not_awaited()
 
 

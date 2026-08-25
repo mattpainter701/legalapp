@@ -10,8 +10,11 @@ import WorkspaceMcpGrantsPanel from '../components/WorkspaceMcpGrantsPanel'
 // Three server-side conditions reject every workspace MCP call with a 403 that
 // only ever surfaces inside a third-party client. Name them here instead.
 function mcpBlockedReason(user) {
+  if (user?.workspace_mcp_enabled === false) {
+    return 'Your firm administrator has disabled Workspace MCP access for this account. Ask an administrator to enable it under Admin → Users.'
+  }
   if (user?.privacy_mode) {
-    return 'Privacy Mode is on, so connected assistants cannot reach this workspace. Turn it off above to restore access.'
+    return 'Privacy Mode is on. It redacts private details before eligible AI requests and pauses connected external assistants. Turn it off above to reconnect.'
   }
   if (user && user.license_active === false) {
     return 'A Standard license is required for connected assistants. Ask a firm administrator to assign one.'
@@ -217,8 +220,8 @@ export default function ProfilePage() {
         </div>
         <p role="status" style={{ margin: '12px 0 0', color: privacyStatus.includes('could not') ? '#9C4F3F' : '#426146', fontSize: 13 }}>
           {privacyStatus || (user?.privacy_mode
-            ? 'On: detected personal details are redacted before eligible provider requests. This also blocks every connected assistant below — workspace MCP is unavailable while Privacy Mode is on.'
-            : 'Off for eligible private routes. Standard remains protected and cannot use matters or attachments. Turning this on will also stop any connected assistant listed below from reaching this workspace.')}
+            ? 'On: detected personal details are redacted before eligible provider requests. Connected external assistants are paused and their existing grants are revoked.'
+            : `Off: eligible private routes may use approved context. Standard remains isolated from matters and attachments. Workspace MCP is ${user?.workspace_mcp_enabled === false ? 'disabled by your firm administrator' : 'available after your explicit OAuth consent'}.`)}
         </p>
       </section>
 

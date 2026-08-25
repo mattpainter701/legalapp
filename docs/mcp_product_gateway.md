@@ -1,9 +1,9 @@
-# MCP Product Gateway
+# LawHand Research MCP product gateway
 
-LegalApp is designed to offer CourtListener MCP access through the LegalApp
-backend, not by publicly exposing LiteLLM. It is not currently a public or
-sellable product; the global release flag remains off until every gate in this
-document has passed.
+LegalApp is designed to offer **LawHand Research MCP**, backed in part by the
+private CourtListener corpus service, through the LegalApp backend. It is not
+currently a public or sellable product; the global release flag remains off
+until every gate in this document has passed.
 
 ## Runtime Shape
 
@@ -13,9 +13,11 @@ document has passed.
   `X-MCP-API-Key: clmcp_...`.
 - CourtListener engine: `courtlistener-mcp` remains private to the app network
   and handles tool execution against the CourtListener pgvector DB.
-- LiteLLM remains the model gateway. Do not route public MCP customers directly
-  to LiteLLM unless a later design deliberately adopts LiteLLM MCP Gateway
-  virtual keys.
+- LiteLLM remains the model gateway. The current `clmcp_` implementation does
+  not issue or validate LiteLLM virtual keys. A PAYG product based on LiteLLM
+  virtual keys requires a deliberate key-authority migration (issuance,
+  validation, revocation, tool permissions, and metering) before this release
+  flag may be enabled; changing the UI label or flag alone is not sufficient.
 
 ## Release State And Protocol
 
@@ -239,18 +241,20 @@ Other opt-in Compose profiles are:
 - `embedding`, which runs `mcp_server.dispatcher`; and
 - `embedding-scheduler`, which runs `mcp_server.embedding_scheduler`.
 
-The canonical research transport is:
+The official Research MCP transport URL is:
 
 ```text
 https://research.getlawhand.com/api/mcp
 ```
 
-The main-origin `/api/mcp` route remains a compatibility alias. Nginx isolates
-the research hostname to the research transport, manifest, and compatibility
-call routes; it does not expose the portal, workspace MCP, administrative API,
-or the raw private sidecar. The sidecar remains loopback/private and the
-backend continues to enforce product-key, tenant-entitlement, quota, and
-billing controls before proxying a call.
+The shorthand `https://research.getlawhand.com` is also supported and is
+internally routed to the full transport without a redirect. The main-origin
+`/api/mcp` route remains a compatibility alias. Nginx isolates the research
+hostname to the research transport, manifest, and compatibility call routes;
+it does not expose the portal, workspace MCP, administrative API, or the raw
+private sidecar. The sidecar remains loopback/private and the backend continues
+to enforce product-key, tenant-entitlement, quota, and billing controls before
+proxying a call.
 
 Publishing and monitoring the hostname does not release the product.
 `MCP_PRODUCT_ENABLED=false` keeps its transport and manifest fail-closed with
