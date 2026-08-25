@@ -8,6 +8,7 @@ import {
   getLLMModelCatalog,
   getLLMProviderKeys,
   getLLMProviderPresets,
+  getLLMRoutingProfiles,
   getLLMRoutes,
   deleteLLMProviderKey,
   recommendLLMRoutes,
@@ -21,6 +22,7 @@ vi.mock('../api', async (importOriginal) => ({
   getLLMModelCatalog: vi.fn(),
   getLLMProviderKeys: vi.fn(),
   getLLMProviderPresets: vi.fn(),
+  getLLMRoutingProfiles: vi.fn(),
   getLLMRoutes: vi.fn(),
   deleteLLMProviderKey: vi.fn(),
   recommendLLMRoutes: vi.fn(),
@@ -40,11 +42,22 @@ const standard = {
   capacity: 100,
   alternates: [],
   fallbacks: [],
+  allow_matter_context: false,
 }
 
 const premium = {
   ...standard,
   model: 'provider/premium',
+  allow_matter_context: true,
+}
+
+const defaultProfile = {
+  id: '00000000-0000-0000-0000-000000000001',
+  name: 'Default',
+  is_default: true,
+  is_active: true,
+  standard_allow_matter_context: false,
+  premium_allow_matter_context: true,
 }
 
 beforeEach(() => {
@@ -55,6 +68,7 @@ beforeEach(() => {
   getLLMProviderPresets.mockResolvedValue({
     providers: [{ id: 'openrouter', name: 'OpenRouter', description: 'Router' }],
   })
+  getLLMRoutingProfiles.mockResolvedValue({ profiles: [defaultProfile] })
   getLLMRoutes.mockResolvedValue({
     standard,
     premium,
@@ -110,7 +124,7 @@ describe('platform AI routing', () => {
 
     expect(getLLMProviderKeys).toHaveBeenCalledWith('platform-token')
     expect(getLLMProviderPresets).toHaveBeenCalledWith('platform-token')
-    expect(getLLMRoutes).toHaveBeenCalledWith('platform-token')
+    expect(getLLMRoutes).toHaveBeenCalledWith('platform-token', defaultProfile.id)
     expect(getLLMModelCatalog).toHaveBeenCalledWith('platform-token')
     expect(getLLMGatewayStatus).toHaveBeenCalledWith('platform-token')
   })
@@ -128,7 +142,7 @@ describe('platform AI routing', () => {
       expect(saveLLMRoutes).toHaveBeenCalledWith('platform-token', {
         standard,
         premium,
-      })
+      }, defaultProfile.id)
     })
     expect(await screen.findByText(/Saved and reloaded LiteLLM/)).toBeInTheDocument()
   })
@@ -250,7 +264,7 @@ describe('platform AI routing', () => {
             expect.objectContaining({ model: 'provider/backup-b' }),
           ],
         }),
-      }))
+      }), defaultProfile.id)
     })
   })
 

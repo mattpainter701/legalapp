@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { createPlatformSession, getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformIntegrationReadiness, getPlatformMcpOverview, getPlatformWorkspaceMcpDiagnostics, getPlatformTenant, updatePlatformTenant, getPlatformPlans, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMModelCatalog, refreshLLMModelCatalog, getLLMRoutes, recommendLLMRoutes, saveLLMRoutes, getLLMGatewayStatus, reloadLLMRoutes, testLLMRoute } from '../api'
+import { createPlatformSession, getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformIntegrationReadiness, getPlatformMcpOverview, getPlatformWorkspaceMcpDiagnostics, getPlatformTenant, updatePlatformTenant, getPlatformPlans, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMModelCatalog, refreshLLMModelCatalog, getLLMRoutes, recommendLLMRoutes, saveLLMRoutes, getLLMGatewayStatus, reloadLLMRoutes, testLLMRoute, getLLMRoutingProfiles, createLLMRoutingProfile, updateLLMRoutingProfile } from '../api'
 import { Activity, AlertTriangle, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3, FileText, Globe, Key, Plus, Trash2, RefreshCw, CheckCircle, XCircle, Cpu, ArrowDown, ArrowUp, Save, Settings2, PhoneCall, Video } from 'lucide-react'
 import { useConfirm } from '../components/dialog/ConfirmProvider'
 
@@ -661,46 +661,31 @@ function RoutingOverviewPanel({ config, onOpenRouting }) {
 
 function TenantAliasOverride({ tenant, tenantDetail, platformKey, defaultAliases, onUpdate, onError, saving, setSaving }) {
   const config = tenantDetail?.llm_config || {}
-  const followManagedAlias = (alias) => {
-    if (alias === 'clarity-standard' || alias?.startsWith('clarity-standard-r')) return defaultAliases.standard || alias
-    if (alias === 'clarity-premium' || alias?.startsWith('clarity-premium-r')) return defaultAliases.premium || alias
-    return alias || ''
-  }
-  const current = {
-    standardModel: followManagedAlias(config.standard_model || config.model),
-    premiumModel: followManagedAlias(config.premium_model),
-  }
-  const [values, setValues] = useState(current)
+  const [profiles, setProfiles] = useState([])
+  const [value, setValue] = useState(config.routing_profile_id || '')
   const [saved, setSaved] = useState(false)
-  const isDirty = useRef(false)
 
   useEffect(() => {
-    if (isDirty.current) return
-    setValues(current)
+    setValue(config.routing_profile_id || '')
     setSaved(false)
-  }, [config.standard_model, config.premium_model, config.model, defaultAliases.standard, defaultAliases.premium])
+  }, [config.routing_profile_id])
 
-  const changed = JSON.stringify(values) !== JSON.stringify(current)
+  useEffect(() => {
+    getLLMRoutingProfiles(platformKey).then((data) => setProfiles(data.profiles || [])).catch(() => setProfiles([]))
+  }, [platformKey])
 
-  const setValue = (key, value) => {
-    isDirty.current = true
-    setValues((prev) => ({ ...prev, [key]: value }))
-    setSaved(false)
-  }
+  const selected = profiles.find((profile) => profile.id === value)
+    || (!value ? profiles.find((profile) => profile.is_default) : null)
+    || config.routing_profile
+  const changed = value !== (config.routing_profile_id || '')
 
   const handleSave = async () => {
     setSaving(true)
     setSaved(false)
     try {
-      const payload = {
-        standard_llm_provider: values.standardModel ? 'litellm' : null,
-        standard_llm_model: values.standardModel || null,
-        premium_llm_provider: values.premiumModel ? 'litellm' : null,
-        premium_llm_model: values.premiumModel || null,
-      }
+      const payload = { llm_routing_profile_id: value || null }
       await updatePlatformTenant(platformKey, tenant.id, payload)
-      onUpdate(tenant.id, { llm_config: payload })
-      isDirty.current = false
+      onUpdate(tenant.id, { llm_config: { ...config, routing_profile_id: value || null, routing_profile: selected || null } })
       setSaved(true)
     } catch (e) {
       onError?.(e?.response?.data?.detail || 'Failed to save tenant AI alias override.')
@@ -709,28 +694,15 @@ function TenantAliasOverride({ tenant, tenantDetail, platformKey, defaultAliases
   }
 
   return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {[
-          ['standardModel', 'Standard alias', defaultAliases.standard],
-          ['premiumModel', 'Premium alias', defaultAliases.premium],
-        ].map(([key, label, fallback]) => (
-          <div key={key}>
-            <label htmlFor={`tenant-${tenant.id}-${key}`} className="block text-xs text-brand-muted font-sans mb-1">{label}</label>
-            <select
-              id={`tenant-${tenant.id}-${key}`}
-              value={values[key] || ''}
-              onChange={(e) => setValue(key, e.target.value)}
-              className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
-            >
-              <option value="">Inherit {fallback}</option>
-              {[...new Set([defaultAliases.standard, defaultAliases.premium].filter(Boolean))].map((alias) => (
-                <option key={alias} value={alias}>{alias}</option>
-              ))}
-            </select>
-          </div>
-        ))}
+    <div className="space-y-3">
+      <div>
+        <label htmlFor={`tenant-${tenant.id}-routing-profile`} className="block text-xs text-brand-muted font-sans mb-1">AI routing profile</label>
+        <select id={`tenant-${tenant.id}-routing-profile`} value={value} onChange={(e) => { setValue(e.target.value); setSaved(false) }} className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans bg-brand-surface">
+          <option value="">Inherit default profile</option>
+          {profiles.filter((profile) => profile.is_active).map((profile) => <option key={profile.id} value={profile.id}>{profile.name}{profile.is_default ? ' (default)' : ''}</option>)}
+        </select>
       </div>
+      {selected && <div className="rounded-lg border border-brand-line bg-brand-bg px-4 py-3 text-xs font-sans"><p className="font-medium text-brand-ink">{selected.name}{!value ? ' · inherited default' : ' · tenant assignment'}</p><p className="mt-1 text-brand-muted">Standard matter context: {selected.standard_allow_matter_context ? 'Allowed' : 'Blocked'} · Premium matter context: {selected.premium_allow_matter_context ? 'Allowed' : 'Blocked'} · {selected.is_active ? 'Active' : 'Inactive'}</p></div>}
       <div className="flex items-center gap-3">
         <button
           onClick={handleSave}
@@ -743,7 +715,7 @@ function TenantAliasOverride({ tenant, tenantDetail, platformKey, defaultAliases
         >
           {saved ? 'Saved' : saving ? 'Saving...' : 'Apply Routes'}
         </button>
-        <p className="text-xs text-brand-muted font-sans">Blank fields inherit the platform aliases.</p>
+        <p className="text-xs text-brand-muted font-sans">Unassigned tenants inherit the default profile.</p>
       </div>
     </div>
   )
@@ -1504,7 +1476,7 @@ function RouteCard({ label, alias: activeAlias, route, allKeys, presets, platfor
 
       <div className="p-5 space-y-5">
         <RouteFlow label={label} alias={alias} route={route} presets={presets} keys={allKeys} balanceCount={balanceCount} fallbackCount={fallbackCount} />
-        {routeKey === 'standard' && (
+        {(
           <label className="flex gap-3 rounded-lg border border-brand-line bg-brand-bg px-4 py-3 cursor-pointer">
             <input
               type="checkbox"
@@ -1513,8 +1485,8 @@ function RouteCard({ label, alias: activeAlias, route, allKeys, presets, platfor
               className="mt-0.5 h-4 w-4 accent-brand-ink"
             />
             <span>
-              <span className="block text-sm font-medium text-brand-ink font-sans">Allow confidential matter context</span>
-              <span className="block mt-1 text-xs text-brand-muted font-sans">Send matter-linked conversations and attachments through Standard. Activation requires every Standard target and fallback to be approved for confidential customer data.</span>
+              <span className="block text-sm font-medium text-brand-ink font-sans">Allow confidential matter context on {label}</span>
+              <span className="block mt-1 text-xs text-brand-muted font-sans">Send matter-linked conversations and attachments through this profile's {label} route. Activation requires every target and fallback to be approved for confidential customer data.</span>
             </span>
           </label>
         )}
@@ -2513,15 +2485,20 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
   const [saveResult, setSaveResult] = useState(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(null)
+  const [profiles, setProfiles] = useState([])
+  const [selectedProfileId, setSelectedProfileId] = useState('')
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (requestedProfileId = '') => {
     setLoading(true)
     setLoadError(null)
     try {
+      const profilesData = await getLLMRoutingProfiles(platformKey)
+      const nextProfiles = profilesData.profiles || []
+      const profileId = requestedProfileId || nextProfiles.find((profile) => profile.is_default)?.id || nextProfiles[0]?.id || ''
       const [keysData, presetsData, routesData, catalogData, gatewayData] = await Promise.all([
         getLLMProviderKeys(platformKey),
         getLLMProviderPresets(platformKey),
-        getLLMRoutes(platformKey),
+        getLLMRoutes(platformKey, profileId),
         getLLMModelCatalog(platformKey),
         getLLMGatewayStatus(platformKey),
       ])
@@ -2529,6 +2506,8 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
       setPresets(presetsData.providers || [])
       setCatalog(catalogData)
       setGatewayStatus(gatewayData)
+      setProfiles(nextProfiles)
+      setSelectedProfileId(profileId)
       setActivation(routesData.activation || null)
       const std = routesData.standard || {}
       const prem = routesData.premium || {}
@@ -2601,7 +2580,7 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
     setReloadingRoutes(true)
     setSaveResult(null)
     try {
-      const data = await reloadLLMRoutes(platformKey)
+      const data = await reloadLLMRoutes(platformKey, selectedProfileId)
       if (data.gateway_status) setGatewayStatus(data.gateway_status)
       if (data.app_aliases) setActivation((previous) => ({ ...(previous || {}), aliases: data.app_aliases }))
       setSaveResult({
@@ -2647,8 +2626,8 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
         capacity: candidate.capacity || 100,
       })),
     }
-    if (routeName === 'standard') setStandard(nextRoute)
-    else setPremium(nextRoute)
+    if (routeName === 'standard') setStandard((previous) => ({ ...nextRoute, allow_matter_context: previous.allow_matter_context }))
+    else setPremium((previous) => ({ ...nextRoute, allow_matter_context: previous.allow_matter_context }))
     setSaveResult({
       ok: true,
       pending: true,
@@ -2664,7 +2643,7 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
     setSaving(true)
     setSaveResult(null)
     try {
-      const data = await saveLLMRoutes(platformKey, { standard, premium })
+      const data = await saveLLMRoutes(platformKey, { standard, premium }, selectedProfileId)
       if (data.gateway_status) setGatewayStatus(data.gateway_status)
       if (data.activated) {
         setActivation({
@@ -2673,6 +2652,11 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
           revision: data.app_aliases?.standard?.split('-r').pop() || null,
         })
       }
+      setProfiles((previous) => previous.map((profile) => (
+        profile.id === selectedProfileId
+          ? { ...profile, standard_allow_matter_context: standard.allow_matter_context, premium_allow_matter_context: premium.allow_matter_context, activation: { status: 'active', aliases: data.app_aliases } }
+          : profile
+      )))
       setSaveResult({
         ok: Boolean(data.litellm_updated),
         litellm_updated: data.litellm_updated,
@@ -2715,6 +2699,11 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
           </div>
         </div>
         <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+          <select aria-label="Routing profile" value={selectedProfileId} onChange={(e) => { setSelectedProfileId(e.target.value); load(e.target.value) }} className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans bg-brand-surface">
+            {profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}{profile.is_default ? ' (default)' : ''}</option>)}
+          </select>
+          <button type="button" onClick={async () => { const name = window.prompt('New routing profile name'); if (!name?.trim()) return; const created = await createLLMRoutingProfile(platformKey, { name: name.trim(), clone_profile_id: selectedProfileId || null }); setProfiles((prev) => [...prev, created]); setSelectedProfileId(created.id); await load(created.id) }} className="px-3 py-2 border border-brand-line rounded-lg text-xs font-medium font-sans text-brand-ink hover:bg-brand-bg">New profile</button>
+          {!profiles.find((profile) => profile.id === selectedProfileId)?.is_default && <button type="button" onClick={async () => { const updated = await updateLLMRoutingProfile(platformKey, selectedProfileId, { is_default: true }); setProfiles((prev) => prev.map((profile) => profile.id === updated.id ? updated : { ...profile, is_default: false })) }} className="px-3 py-2 border border-brand-line rounded-lg text-xs font-medium font-sans text-brand-ink hover:bg-brand-bg">Make default</button>}
           {saveResult && (
             <span className={`text-xs font-sans ${saveResult.ok ? (saveResult.pending ? 'text-brand-amber' : 'text-brand-accent') : 'text-brand-rose'}`}>
               {saveResult.message || (saveResult.ok
@@ -2732,6 +2721,15 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
           </button>
         </div>
       </div>
+
+      {selectedProfileId && (
+        <div className="mb-6 rounded-lg border border-brand-line bg-brand-bg px-4 py-3 text-xs font-sans text-brand-muted">
+          <span className="font-medium text-brand-ink">Profile: {profiles.find((profile) => profile.id === selectedProfileId)?.name || 'Selected profile'}</span>
+          {' · '}Standard matter context {standard.allow_matter_context ? 'allowed' : 'blocked'}
+          {' · '}Premium matter context {premium.allow_matter_context ? 'allowed' : 'blocked'}
+          {' · '}Tenants assigned to this profile inherit both route targets and these data policies.
+        </div>
+      )}
 
       <LiteLLMGatewayPanel
         status={gatewayStatus}

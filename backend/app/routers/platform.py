@@ -53,6 +53,7 @@ from app.models.workspace_mcp_audit import WorkspaceMCPAuditEvent
 from app.models.workspace_mcp_client import WorkspaceMCPClient
 from app.models.operator_audit import OperatorAuditLog
 from app.models.platform_api_key import PlatformApiKey
+from app.models.llm_routing_profile import LLMRoutingProfile
 from app.models.tenant import Tenant, TenantSettings
 from app.models.user import User
 from app.services.mcp_product import DEFAULT_ALLOWED_TOOLS, mask_key
@@ -346,6 +347,7 @@ class TenantUpdate(BaseModel):
     standard_llm_model: Optional[str] = None
     premium_llm_provider: Optional[str] = None
     premium_llm_model: Optional[str] = None
+    llm_routing_profile_id: Optional[str] = None
     enabled_modules: Optional[list[str]] = None
     default_module: Optional[str] = None
     plan: Optional[str] = None
@@ -725,6 +727,12 @@ async def get_tenant_detail(
         )
         ts = ts_result.scalar_one_or_none()
 
+    routing_profile = (
+        await db.get(LLMRoutingProfile, ts.llm_routing_profile_id)
+        if ts and ts.llm_routing_profile_id
+        else None
+    )
+
     return {
         "tenant": TenantSummary(
             id=str(tenant.id),
@@ -768,6 +776,17 @@ async def get_tenant_detail(
             "standard_model": ts.default_llm_model if ts else None,
             "premium_provider": ts.premium_llm_provider if ts else None,
             "premium_model": ts.premium_llm_model if ts else None,
+            "routing_profile_id": str(ts.llm_routing_profile_id) if ts and ts.llm_routing_profile_id else None,
+            "routing_profile": (
+                {
+                    "id": str(routing_profile.id), "name": routing_profile.name,
+                    "is_default": routing_profile.is_default, "is_active": routing_profile.is_active,
+                    "standard_allow_matter_context": routing_profile.standard_allow_matter_context,
+                    "premium_allow_matter_context": routing_profile.premium_allow_matter_context,
+                }
+                if routing_profile
+                else None
+            ),
         },
         "module_config": {
             "enabled_modules": (ts.custom_config or {}).get("enabled_modules")
@@ -950,6 +969,7 @@ async def update_tenant(
     ) or _field_was_sent(body, "llm_model")
     premium_provider_sent = _field_was_sent(body, "premium_llm_provider")
     premium_model_sent = _field_was_sent(body, "premium_llm_model")
+    routing_profile_sent = _field_was_sent(body, "llm_routing_profile_id")
 
     # LLM routing — stored on TenantSettings
     if (
@@ -957,6 +977,7 @@ async def update_tenant(
         or standard_model_sent
         or premium_provider_sent
         or premium_model_sent
+        or routing_profile_sent
     ):
         standard_provider = (
             body.standard_llm_provider
@@ -998,6 +1019,21 @@ async def update_tenant(
         if not ts:
             ts = TenantSettings(tenant_id=tenant.id)
             db.add(ts)
+        if routing_profile_sent:
+            profile = None
+            if body.llm_routing_profile_id:
+                try:
+                    profile_id = uuid.UUID(body.llm_routing_profile_id)
+                except ValueError:
+                    raise HTTPException(status_code=400, detail="Invalid routing profile id")
+                profile = await db.get(LLMRoutingProfile, profile_id)
+                if profile is None or not profile.is_active:
+                    raise HTTPException(status_code=400, detail="Routing profile is missing or inactive")
+            audit_changes["llm_routing_profile_id"] = {
+                "from": str(ts.llm_routing_profile_id) if ts.llm_routing_profile_id else None,
+                "to": str(profile.id) if profile else None,
+            }
+            ts.llm_routing_profile_id = profile.id if profile else None
         if standard_provider_sent:
             audit_changes["standard_llm_provider"] = {
                 "from": ts.default_llm_provider,

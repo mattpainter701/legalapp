@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.models.platform import PlatformSetting
+from app.models.llm_routing_profile import LLMRoutingProfile
 from app.models.tenant import TenantSettings
 
 settings = get_settings()
@@ -209,20 +210,58 @@ async def get_platform_llm_config(db: AsyncSession) -> dict[str, str | None]:
     return _normalize_config(row.value if row else None)
 
 
-async def standard_matter_context_allowed(db: AsyncSession) -> bool:
+async def get_tenant_routing_profile(
+    db: AsyncSession, tenant_id: Any
+) -> LLMRoutingProfile | None:
+    """Resolve an assigned active profile, falling back to the active default."""
+    ts = await db.scalar(
+        select(TenantSettings).where(TenantSettings.tenant_id == tenant_id)
+    )
+    if ts and ts.llm_routing_profile_id:
+        assigned = await db.scalar(
+            select(LLMRoutingProfile).where(
+                LLMRoutingProfile.id == ts.llm_routing_profile_id,
+                LLMRoutingProfile.is_active.is_(True),
+            )
+        )
+        if assigned:
+            return assigned
+    return await db.scalar(
+        select(LLMRoutingProfile)
+        .where(LLMRoutingProfile.is_default.is_(True), LLMRoutingProfile.is_active.is_(True))
+        .order_by(LLMRoutingProfile.updated_at.desc())
+        .limit(1)
+    )
+
+
+async def standard_matter_context_allowed(db: AsyncSession, tenant_id: Any) -> bool:
     """Return the operator-approved data policy for the managed Standard route.
 
     This deliberately defaults to false so legacy installations preserve the
     public/general-only Standard boundary until an operator explicitly enables
     confidential matter context from Platform > AI Provider Routing.
     """
-    result = await db.execute(
-        select(PlatformSetting).where(PlatformSetting.key == LLM_ROUTE_CONFIG_KEY)
-    )
+    profile = await get_tenant_routing_profile(db, tenant_id)
+    if profile is not None:
+        return bool(profile.standard_allow_matter_context)
+    result = await db.execute(select(PlatformSetting).where(PlatformSetting.key == LLM_ROUTE_CONFIG_KEY))
     row = result.scalar_one_or_none()
     config = row.value if row and isinstance(row.value, dict) else {}
     standard = config.get("standard")
     return bool(isinstance(standard, dict) and standard.get("allow_matter_context"))
+
+
+async def route_matter_context_allowed(
+    db: AsyncSession, tenant_id: Any, *, use_premium: bool
+) -> bool:
+    profile = await get_tenant_routing_profile(db, tenant_id)
+    if profile is not None:
+        return bool(
+            profile.premium_allow_matter_context
+            if use_premium
+            else profile.standard_allow_matter_context
+        )
+    return True if use_premium else await standard_matter_context_allowed(db, tenant_id)
 
 
 async def upsert_platform_llm_config(
@@ -336,6 +375,26 @@ async def resolve_llm_route(
             )
 
     platform_config = await get_platform_llm_config(db)
+    profile = await get_tenant_routing_profile(db, tenant_id)
+    profile_aliases = (
+        (profile.activation or {}).get("aliases", {})
+        if profile and isinstance(profile.activation, dict)
+        else {}
+    )
+    profile_alias = (
+        profile_aliases.get("premium")
+        if requested_route in {"premium", "tenant-premium"}
+        else profile_aliases.get("standard")
+    )
+    if profile_alias:
+        return _set_cached_route(
+            cache_key,
+            LLMRoute(
+                requested_route=requested_route,
+                resolved_route="profile-premium" if use_premium else "profile-standard",
+                gateway_alias=profile_alias,
+            ),
+        )
     if ts:
         if requested_route in {"premium", "tenant-premium"}:
             alias = _model_from_values(ts.premium_llm_provider, ts.premium_llm_model)
@@ -368,8 +427,9 @@ async def resolve_llm_route(
             LLMRoute(
                 requested_route=requested_route,
                 resolved_route="premium",
-                gateway_alias=(
-                    platform_config.get("premium_model")
+            gateway_alias=(
+                    profile_aliases.get("premium")
+                    or platform_config.get("premium_model")
                     or settings.LITELLM_PREMIUM_MODEL
                 ),
             ),
@@ -380,7 +440,8 @@ async def resolve_llm_route(
             requested_route=requested_route,
             resolved_route="standard",
             gateway_alias=(
-                platform_config.get("standard_model") or settings.LITELLM_STANDARD_MODEL
+                profile_aliases.get("standard")
+                or platform_config.get("standard_model") or settings.LITELLM_STANDARD_MODEL
             ),
         ),
     )
@@ -391,6 +452,13 @@ async def resolve_llm_route(
 @event.listens_for(TenantSettings, "after_delete")
 def _invalidate_route_cache_on_tenant_settings_write(mapper, connection, target):
     invalidate_llm_route_cache(target.tenant_id)
+
+
+@event.listens_for(LLMRoutingProfile, "after_insert")
+@event.listens_for(LLMRoutingProfile, "after_update")
+@event.listens_for(LLMRoutingProfile, "after_delete")
+def _invalidate_route_cache_on_profile_write(mapper, connection, target):
+    invalidate_llm_route_cache()
 
 
 # ── Query Complexity Classifier ────────────────────────────────────────────

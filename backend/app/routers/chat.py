@@ -59,6 +59,7 @@ from app.services.llm_routing import (
     classify_query_complexity,
     resolve_llm_route,
     standard_matter_context_allowed,
+    route_matter_context_allowed,
 )
 from app.services.billing import calculate_cost
 from app.services.demo_access import reject_demo_premium
@@ -639,7 +640,7 @@ _PUBLIC_GENERAL_ATTACHMENT_DETAIL = (
 )
 
 
-async def _is_public_general_route(db: AsyncSession, route) -> bool:
+async def _is_public_general_route(db: AsyncSession, route, tenant_id) -> bool:
     """Return whether this request must carry only public/general data.
 
     The route *request* is decisive, not the configured model alias. That
@@ -647,7 +648,7 @@ async def _is_public_general_route(db: AsyncSession, route) -> bool:
     accidentally receiving client context.
     """
     return route.requested_route in {"standard", "tenant-standard"} and not (
-        await standard_matter_context_allowed(db)
+        await standard_matter_context_allowed(db, tenant_id)
     )
 
 
@@ -2150,9 +2151,12 @@ async def _send_message_under_generation_lock(
         use_premium=use_premium,
         requested_provider=body.provider,
     )
-    public_general = await _is_public_general_route(db, route)
+    public_general = await _is_public_general_route(db, route, user.tenant_id)
+    matter_sources_allowed = await route_matter_context_allowed(
+        db, user.tenant_id, use_premium=use_premium
+    )
     privacy_mode = public_general or bool(getattr(user, "privacy_mode", False))
-    if public_general:
+    if not matter_sources_allowed:
         _assert_public_general_sources_allowed(conv, body)
 
     effective_matter = (
@@ -2848,9 +2852,12 @@ async def _stream_message_under_generation_lock(
             use_premium=use_premium,
             requested_provider=body.provider,
         )
-        public_general = await _is_public_general_route(db, route)
+        public_general = await _is_public_general_route(db, route, user.tenant_id)
+        matter_sources_allowed = await route_matter_context_allowed(
+            db, user.tenant_id, use_premium=use_premium
+        )
         privacy_mode = public_general or bool(getattr(user, "privacy_mode", False))
-        if public_general:
+        if not matter_sources_allowed:
             _assert_public_general_sources_allowed(conv, body)
         effective_matter = (
             None
