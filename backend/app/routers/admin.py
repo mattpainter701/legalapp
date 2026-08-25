@@ -1743,9 +1743,7 @@ async def invite_user(
         role=role,
         is_active=False,
         license_active=True,
-        workspace_mcp_enabled=await tenant_workspace_mcp_default(
-            db, admin.tenant_id
-        ),
+        workspace_mcp_enabled=await tenant_workspace_mcp_default(db, admin.tenant_id),
         # Store invite token temporarily in password_hash field (hashed prefix)
         password_hash=f"invite:{invite_token}",
     )

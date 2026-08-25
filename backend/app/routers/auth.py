@@ -650,9 +650,7 @@ async def _get_or_create_user(
                 oauth_provider=provider,
                 oauth_subject=sub,
                 is_active=True,
-                workspace_mcp_enabled=await tenant_workspace_mcp_default(
-                    db, tenant_id
-                ),
+                workspace_mcp_enabled=await tenant_workspace_mcp_default(db, tenant_id),
             )
             db.add(user)
             await db.flush()
