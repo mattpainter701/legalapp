@@ -17,11 +17,6 @@ async def test_platform_workspace_mcp_diagnostics_is_redacted(
     monkeypatch.setattr(platform.settings, "WORKSPACE_MCP_ENABLED", False)
     monkeypatch.setattr(
         platform.settings,
-        "WORKSPACE_MCP_ALLOWED_TENANT_IDS",
-        str(test_tenant.id),
-    )
-    monkeypatch.setattr(
-        platform.settings,
         "WORKSPACE_MCP_CANONICAL_RESOURCE",
         "https://mcp.example.test/api/mcp/workspace",
     )
@@ -34,10 +29,13 @@ async def test_platform_workspace_mcp_diagnostics_is_redacted(
     payload = response.json()
     assert payload["enabled"] is False
     assert payload["policy_checks"]["feature_enabled"]["ok"] is False
-    assert payload["pilot_tenants"]["active_count"] == 1
-    assert payload["pilot_tenants"]["ids_masked"] == [f"…{str(test_tenant.id)[-6:]}"]
+    assert payload["tenant_access"] == {
+        "mode": "native",
+        "tenant_count": 1,
+        "policy": "tenant_and_user_administered",
+    }
     assert str(test_tenant.id) not in str(payload)
-    assert "ready_for_pilot" in payload["policy_checks"]
+    assert "ready" in payload["policy_checks"]
     assert "oauth" in payload and "recent_audit_events" in payload
 
 
@@ -73,11 +71,6 @@ async def test_platform_workspace_mcp_diagnostics_reports_user_policy_and_oauth_
     monkeypatch.setattr(platform.settings, "WORKSPACE_MCP_ENABLED", True)
     monkeypatch.setattr(
         platform.settings,
-        "WORKSPACE_MCP_ALLOWED_TENANT_IDS",
-        f"{test_tenant.id},00000000-0000-0000-0000-000000000000",
-    )
-    monkeypatch.setattr(
-        platform.settings,
         "WORKSPACE_MCP_CANONICAL_RESOURCE",
         "https://mcp.example.test/api/mcp/workspace",
     )
@@ -109,8 +102,8 @@ async def test_platform_workspace_mcp_diagnostics_reports_user_policy_and_oauth_
         db_session,
         email=test_user.email.upper(),
     )
-    assert payload["pilot_tenants"]["active_count"] == 1
-    assert payload["pilot_tenants"]["missing_count"] == 1
+    assert payload["tenant_access"]["mode"] == "native"
+    assert payload["tenant_access"]["tenant_count"] == 1
     assert payload["user_policy"]["found"] is True
     assert payload["user_policy"]["license_active"] is True
     assert payload["oauth"]["clients"]["total"] == 1

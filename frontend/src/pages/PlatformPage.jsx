@@ -500,8 +500,8 @@ function WorkspaceMcpDiagnostics({ platformKey, onAuthError }) {
       ) : (
         <>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <StatCard label="Workspace feature" value={data?.enabled ? 'Enabled' : 'Disabled'} sub={data?.policy_checks?.ready_for_pilot?.ok ? 'Pilot ready' : 'Pilot not ready'} icon={Key} />
-            <StatCard label="Pilot tenants" value={data?.pilot_tenants?.active_count || 0} sub={`${data?.pilot_tenants?.configured_count || 0} configured`} icon={Users} />
+            <StatCard label="Workspace feature" value={data?.enabled ? 'Enabled' : 'Disabled'} sub={data?.policy_checks?.ready?.ok ? 'Ready' : 'Not ready'} icon={Key} />
+            <StatCard label="Access model" value={data?.tenant_access?.mode === 'native' ? 'Native' : 'Unknown'} sub="Tenant and user controlled" icon={Users} />
             <StatCard label="OAuth clients" value={data?.oauth?.clients?.active || 0} sub={`${data?.oauth?.clients?.total || 0} registered`} icon={Globe} />
             <StatCard label="Audit failures" value={(audit.outcomes?.denied || 0) + (audit.outcomes?.error || 0)} sub={`${audit.sample_size || 0} recent events`} icon={AlertTriangle} />
           </div>
@@ -518,7 +518,7 @@ function WorkspaceMcpDiagnostics({ platformKey, onAuthError }) {
                   </div>
                 ))}
               </div>
-              <p className="mt-4 text-xs text-brand-muted">Dynamic registration: {data?.oauth?.dynamic_registration_enabled ? 'enabled' : 'disabled'} · {data?.pilot_tenants?.missing_count || 0} configured pilot tenants missing from the database.</p>
+              <p className="mt-4 text-xs text-brand-muted">Dynamic registration: {data?.oauth?.dynamic_registration_enabled ? 'enabled' : 'disabled'} · Workspace access is administered per user by each tenant.</p>
             </div>
 
             <div className="bg-brand-surface border border-brand-line rounded-xl p-5 shadow-sm">

@@ -1,5 +1,4 @@
 import base64
-import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -34,7 +33,6 @@ def _settings(**overrides):
         "WORKSPACE_MCP_ENABLED": True,
         "WORKSPACE_MCP_RESOURCE": "https://getlawhand.com/api/mcp/workspace",
         "WORKSPACE_MCP_ISSUER": "https://getlawhand.com",
-        "WORKSPACE_MCP_ALLOWED_TENANT_IDS": str(uuid.uuid4()),
         "TOKEN_ENCRYPTION_KEY": Fernet.generate_key().decode(),
     }
     private, public = _rsa_pair()
@@ -67,8 +65,6 @@ def _settings(**overrides):
             },
             "HTTPS",
         ),
-        ({"WORKSPACE_MCP_ALLOWED_TENANT_IDS": "not-a-uuid"}, "invalid UUID"),
-        ({"WORKSPACE_MCP_ALLOWED_TENANT_IDS": ""}, "pilot tenant UUIDs"),
         ({"WORKSPACE_MCP_ACCESS_TOKEN_MAX_MINUTES": 4}, "ACCESS_TOKEN_MAX_MINUTES"),
         ({"WORKSPACE_MCP_AUTH_CODE_TTL_SECONDS": 59}, "AUTH_CODE_TTL_SECONDS"),
         ({"WORKSPACE_MCP_REFRESH_TOKEN_DAYS": 0}, "REFRESH_TOKEN_DAYS"),

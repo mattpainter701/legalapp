@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Workspace MCP now follows tenant-administered user access:** retired the
+  legacy deployment-time pilot tenant allowlist that could reject an otherwise
+  eligible user before the Admin → Users permission, Privacy Mode, license,
+  OAuth consent, RBAC, and tenant-isolation checks were evaluated. Production
+  diagnostics now report the native tenant/user access model directly.
+
 ### Added
 - **Tenant AI routing profiles with per-tier matter-context policy** (migration
   `125_llm_routing_profiles`): Platform operators can create and clone reusable

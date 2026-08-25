@@ -213,17 +213,18 @@ or any claim of crash-safe provider reconciliation.
 
 ### Phase 3 — production workspace MCP
 
-Status: implemented and deployed for a tenant-gated pilot.
+Status: implemented and deployed as a native tenant capability administered
+per user.
 
 - OAuth authorization and explicit consent for LawHand users.
 - Protected-resource and authorization-server metadata, PKCE, dynamic client
   registration, token rotation, JWKS, disconnect, and revocation.
 - Only the shared read/propose catalog; no model-facing approval, filing,
   sending, delivery, or execution tools.
-- Per-user/client/grant audit, tenant allowlisting, grant revocation, and rate
-  limits.
+- Per-user/client/grant audit, tenant-administered user access, grant
+  revocation, and rate limits.
 - Production TLS interoperability validation with Codex/GPT, Claude, and
-  OpenCode remains an active pilot gate before broad customer rollout.
+  OpenCode remains active compatibility-hardening work.
 
 ### Phase 4 — deeper office automation
 
