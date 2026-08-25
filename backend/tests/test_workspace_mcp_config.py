@@ -1,5 +1,4 @@
 import base64
-import uuid
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -16,7 +15,6 @@ def _settings(**overrides):
         "SECRET_KEY": "x" * 48,
         "DEV_MODE": True,
         "WORKSPACE_MCP_RESOURCE": "https://auth.getlawhand.com/api/mcp/workspace",
-        "WORKSPACE_MCP_ALLOWED_TENANT_IDS": str(uuid.uuid4()),
         "TOKEN_ENCRYPTION_KEY": Fernet.generate_key().decode(),
     }
     values.update(overrides)
@@ -133,7 +131,7 @@ def test_workspace_mcp_accepts_production_asymmetric_signing():
     validate_mcp_security_settings(settings)
 
 
-def test_workspace_mcp_production_rejects_global_tenant_rollout():
+def test_workspace_mcp_production_accepts_native_tenant_admin_rollout():
     private_key, public_key = _rsa_pair()
     settings = _settings(
         DEV_MODE=False,
@@ -143,8 +141,6 @@ def test_workspace_mcp_production_rejects_global_tenant_rollout():
         WORKSPACE_MCP_SIGNING_PRIVATE_KEY_B64=private_key,
         WORKSPACE_MCP_SIGNING_PUBLIC_KEY_B64=public_key,
         WORKSPACE_MCP_SIGNING_KEY_ID="workspace-2026-08",
-        WORKSPACE_MCP_ALLOWED_TENANT_IDS="*",
     )
 
-    with pytest.raises(ValueError, match="cannot enable every tenant"):
-        validate_mcp_security_settings(settings)
+    validate_mcp_security_settings(settings)

@@ -87,21 +87,22 @@ def workspace_issuer_uri() -> str:
     return settings.WORKSPACE_MCP_ISSUER.rstrip("/")
 
 
-def workspace_tenant_allowed(tenant_id: uuid.UUID | str) -> bool:
-    configured = {
-        value.strip()
-        for value in settings.WORKSPACE_MCP_ALLOWED_TENANT_IDS.split(",")
-        if value.strip()
-    }
-    return "*" in configured or str(tenant_id) in configured
+def workspace_tenant_allowed(_tenant_id: uuid.UUID | str) -> bool:
+    """Return native availability for compatibility with older adapters.
+
+    Workspace MCP authorization is tenant-scoped by the authenticated user,
+    OAuth grant, token, and RLS context. Tenant administrators control access
+    per user; the retired deployment-time pilot allowlist no longer overrides
+    that policy.
+    """
+
+    return True
 
 
 def require_workspace_tenant_allowed(tenant_id: uuid.UUID | str) -> None:
-    if not workspace_tenant_allowed(tenant_id):
-        raise HTTPException(
-            status_code=403,
-            detail="Workspace MCP is not enabled for this organization",
-        )
+    """Compatibility shim for callers written during the pilot rollout."""
+
+    workspace_tenant_allowed(tenant_id)
 
 
 def _b64url_uint(value: int) -> str:

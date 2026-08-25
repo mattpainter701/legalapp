@@ -1,7 +1,8 @@
 # LawHand workspace MCP adapter
 
-Status: OAuth connection implemented and production-published for a
-tenant-gated pilot; broader client interoperability remains under validation.
+Status: OAuth connection implemented and production-published as a native
+tenant capability administered per user; broader client interoperability
+remains under validation.
 
 ## Product boundary
 
@@ -98,13 +99,14 @@ https://getlawhand.com/.well-known/oauth-authorization-server
 
 LawHand can dynamically register supported public desktop clients when
 `WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED=true`. Registration does not
-bypass user consent, tenant allowlisting, license checks, scopes, or RBAC.
+bypass user consent, tenant-administered per-user access, license checks,
+scopes, or RBAC.
 
 The self-service commands below require dynamic registration. If it is
 disabled, stop: the client must first be provisioned through the approved
-LawHand pilot client-registration process and configured with its assigned
-client ID and redirect requirements. Never reuse another client's registration
-or enable dynamic registration ad hoc.
+LawHand client-registration process and configured with its assigned client ID
+and redirect requirements. Never reuse another client's registration or enable
+dynamic registration ad hoc.
 
 ### Codex CLI and ChatGPT desktop
 
@@ -247,10 +249,10 @@ production-capable OAuth and workflow foundation:
   approval, changed content, lost authority, duplicate execution, or disabled
   tenant automation.
 
-The transport and complete OAuth lifecycle are production-published for a
-tenant-gated pilot. This is not a broad customer release: the feature flag,
-tenant allowlist, license checks, consent grant, scopes, and RBAC continue to
-fail closed.
+The transport and complete OAuth lifecycle are production-published as a native
+tenant capability. The global feature flag, tenant-administered per-user
+permission, Privacy Mode, license checks, consent grant, scopes, and RBAC
+continue to fail closed.
 
 The current provider-operation records are useful accountability evidence for
 completed request transactions, but they are not yet a crash-safe outbox: a
@@ -358,19 +360,21 @@ WORKSPACE_MCP_SIGNING_PUBLIC_KEY_B64=
 WORKSPACE_MCP_SIGNING_KEY_ID=
 WORKSPACE_MCP_PREVIOUS_PUBLIC_KEYS_JSON=[]
 WORKSPACE_MCP_ACCESS_TOKEN_MAX_MINUTES=15
-WORKSPACE_MCP_ALLOWED_TENANT_IDS=<comma-separated-pilot-tenant-UUIDs>
 WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED=false
 ```
 
 Enabling it without the canonical resource, audience, issuer, asymmetric
-signing key pair, key ID, and a valid non-wildcard pilot allowlist fails closed.
+signing key pair, and key ID fails closed. Workspace MCP is a native tenant
+capability: tenant administrators control each user's access under Admin →
+Users, while users independently control Privacy Mode and OAuth consent. A
+deployment-time tenant pilot allowlist is not part of the authorization model.
 Production uses the dedicated asymmetric workspace key; the legacy symmetric
 `WORKSPACE_MCP_TOKEN_SIGNING_KEY` is for development compatibility only and
 must never equal the browser-session `SECRET_KEY`. Redis must also be
 available because revocation cannot safely fall back to per-process memory
 across API workers.
 
-## Remaining broader-rollout and automation-hardening gates
+## Remaining automation-hardening gates
 
 The OAuth connection and revocable consent lifecycle are complete. Before
 broad customer rollout or deeper autonomous side effects, LawHand still

@@ -130,10 +130,6 @@ def test_resource_and_tenant_helpers(monkeypatch):
     )
     monkeypatch.setattr(oauth.settings, "WORKSPACE_MCP_RESOURCE_ALIASES", "")
     monkeypatch.setattr(oauth.settings, "WORKSPACE_MCP_ISSUER", "https://lawhand.test/")
-    monkeypatch.setattr(
-        oauth.settings, "WORKSPACE_MCP_ALLOWED_TENANT_IDS", "tenant-a, tenant-b"
-    )
-
     assert oauth.workspace_resource_uri() == canonical
     assert oauth.workspace_resource_uris() == frozenset({canonical, legacy})
     assert oauth.workspace_resource_is_allowed(canonical)
@@ -147,7 +143,8 @@ def test_resource_and_tenant_helpers(monkeypatch):
     )
     assert oauth.workspace_issuer_uri() == "https://lawhand.test"
     assert oauth.workspace_tenant_allowed("tenant-a")
-    assert not oauth.workspace_tenant_allowed("tenant-c")
+    assert oauth.workspace_tenant_allowed("tenant-c")
+    assert oauth.require_workspace_tenant_allowed("tenant-c") is None
 
 
 @pytest.mark.asyncio

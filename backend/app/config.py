@@ -2,7 +2,6 @@ import base64
 from functools import lru_cache
 import json
 import re
-import uuid
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
@@ -253,8 +252,6 @@ class Settings(BaseSettings):
     # discovery, notifications, and tool calls. Nginx separately limits IPs.
     WORKSPACE_MCP_TOKEN_REQUESTS_PER_MINUTE: int = 120
     WORKSPACE_MCP_TENANT_REQUESTS_PER_MINUTE: int = 1200
-    # Comma-separated pilot tenant UUIDs. Empty or malformed denies everyone.
-    WORKSPACE_MCP_ALLOWED_TENANT_IDS: str = ""
     WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED: bool = False
 
     # Per-add-on entitlement enforcement for /api/plugins skills.
@@ -776,29 +773,6 @@ def validate_mcp_security_settings(settings: Settings) -> None:
                 )
         else:
             _validate_workspace_signing_keys(settings)
-
-        allowed = [
-            part.strip()
-            for part in settings.WORKSPACE_MCP_ALLOWED_TENANT_IDS.split(",")
-            if part.strip()
-        ]
-        if not allowed:
-            raise ValueError(
-                "WORKSPACE_MCP_ALLOWED_TENANT_IDS must contain pilot tenant UUIDs"
-            )
-        if "*" in allowed and not settings.DEV_MODE:
-            raise ValueError(
-                "WORKSPACE_MCP_ALLOWED_TENANT_IDS cannot enable every tenant "
-                "in production"
-            )
-        try:
-            for tenant_id in allowed:
-                if tenant_id != "*":
-                    uuid.UUID(tenant_id)
-        except ValueError as exc:
-            raise ValueError(
-                "WORKSPACE_MCP_ALLOWED_TENANT_IDS contains an invalid UUID"
-            ) from exc
 
         if not 5 <= settings.WORKSPACE_MCP_ACCESS_TOKEN_MAX_MINUTES <= 60:
             raise ValueError(

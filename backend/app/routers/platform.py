@@ -1318,15 +1318,7 @@ async def platform_workspace_mcp_diagnostics(
     """
     _require_platform_key(request)
 
-    configured_pilot_ids = {
-        value.strip()
-        for value in settings.WORKSPACE_MCP_ALLOWED_TENANT_IDS.split(",")
-        if value.strip() and value.strip() != "*"
-    }
     tenant_ids = await _platform_tenant_ids(db)
-    tenant_id_set = {str(value) for value in tenant_ids}
-    pilot_ids = configured_pilot_ids & tenant_id_set
-    missing_pilot_ids = configured_pilot_ids - tenant_id_set
 
     endpoint = workspace_resource_uri()
     checks = {
@@ -1354,14 +1346,14 @@ async def platform_workspace_mcp_diagnostics(
             ),
             "label": "Workspace token signing key configured",
         },
-        "pilot_allowlist": {
-            "ok": bool(configured_pilot_ids) and bool(pilot_ids),
-            "label": "At least one configured pilot tenant exists",
+        "native_tenant_access": {
+            "ok": True,
+            "label": "Tenant-administered native access enabled",
         },
     }
-    checks["ready_for_pilot"] = {
+    checks["ready"] = {
         "ok": all(item["ok"] for item in checks.values()),
-        "label": "Workspace MCP pilot readiness",
+        "label": "Workspace MCP readiness",
     }
 
     clients = list(
@@ -1463,8 +1455,6 @@ async def platform_workspace_mcp_diagnostics(
                     blocked_reasons.append("privacy_mode_enabled")
                 if not bool(settings.WORKSPACE_MCP_ENABLED):
                     blocked_reasons.append("workspace_mcp_disabled")
-                if str(tenant_id) not in pilot_ids:
-                    blocked_reasons.append("tenant_not_in_pilot_allowlist")
                 tenant = await db.scalar(select(Tenant).where(Tenant.id == tenant_id))
                 if tenant is not None and not tenant.is_active:
                     blocked_reasons.append("tenant_inactive")
@@ -1493,15 +1483,10 @@ async def platform_workspace_mcp_diagnostics(
         "product": "workspace",
         "enabled": bool(settings.WORKSPACE_MCP_ENABLED),
         "canonical_endpoint": endpoint or None,
-        "pilot_tenants": {
-            "configured_count": len(configured_pilot_ids),
-            "active_count": len(pilot_ids),
-            "missing_count": len(missing_pilot_ids),
-            "ids_masked": [f"…{value[-6:]}" for value in sorted(pilot_ids)],
-            "missing_ids_masked": [
-                f"…{value[-6:]}" for value in sorted(missing_pilot_ids)
-            ],
-            "wildcard_configured": "*" in settings.WORKSPACE_MCP_ALLOWED_TENANT_IDS,
+        "tenant_access": {
+            "mode": "native",
+            "tenant_count": len(tenant_ids),
+            "policy": "tenant_and_user_administered",
         },
         "policy_checks": checks,
         "user_policy": user_policy,

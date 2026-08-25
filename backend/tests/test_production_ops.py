@@ -299,7 +299,7 @@ def test_production_preflight_accepts_staged_keyring_and_dedicated_mcp_auth(
     assert "mcp-upstream-key-0123456789" not in output
 
 
-def test_production_preflight_accepts_restricted_workspace_mcp_oauth(
+def test_production_preflight_accepts_native_workspace_mcp_oauth(
     tmp_path: Path,
 ) -> None:
     private_key, public_key = _workspace_rsa_pair()
@@ -318,7 +318,6 @@ def test_production_preflight_accepts_restricted_workspace_mcp_oauth(
         "WORKSPACE_MCP_REFRESH_TOKEN_DAYS": "30",
         "WORKSPACE_MCP_GRANT_DAYS": "90",
         "WORKSPACE_MCP_CLIENT_REGISTRATION_DAYS": "30",
-        "WORKSPACE_MCP_ALLOWED_TENANT_IDS": ("00000000-0000-4000-8000-000000000222"),
         "WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED": "true",
     }
 
@@ -328,16 +327,6 @@ def test_production_preflight_accepts_restricted_workspace_mcp_oauth(
     assert result.returncode == 0, output
     assert private_key[:48] not in output
     assert public_key[:48] not in output
-
-    workspace_settings["WORKSPACE_MCP_ALLOWED_TENANT_IDS"] = "*"
-    global_rollout = _run_preflight(
-        tmp_path,
-        _production_env(**workspace_settings),
-    )
-    assert global_rollout.returncode != 0
-    assert "non-global comma-separated UUID list" in (
-        global_rollout.stdout + global_rollout.stderr
-    )
 
 
 def test_production_preflight_rejects_legacy_workspace_signing_secret(
@@ -374,7 +363,6 @@ def test_workspace_mcp_production_wiring_is_complete_and_fail_closed() -> None:
         "WORKSPACE_MCP_REFRESH_TOKEN_DAYS",
         "WORKSPACE_MCP_GRANT_DAYS",
         "WORKSPACE_MCP_CLIENT_REGISTRATION_DAYS",
-        "WORKSPACE_MCP_ALLOWED_TENANT_IDS",
         "WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED",
     }
     for compose_name in ("docker-compose.hypervisor.yml", "docker-compose.prod.yml"):

@@ -239,7 +239,7 @@ if [[ "$workspace_mcp_enabled" == "true" ]]; then
     WORKSPACE_MCP_SIGNING_KEY_ID WORKSPACE_MCP_PREVIOUS_PUBLIC_KEYS_JSON
     WORKSPACE_MCP_ACCESS_TOKEN_MAX_MINUTES WORKSPACE_MCP_AUTH_CODE_TTL_SECONDS
     WORKSPACE_MCP_REFRESH_TOKEN_DAYS WORKSPACE_MCP_GRANT_DAYS
-    WORKSPACE_MCP_CLIENT_REGISTRATION_DAYS WORKSPACE_MCP_ALLOWED_TENANT_IDS
+    WORKSPACE_MCP_CLIENT_REGISTRATION_DAYS
     WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED
   )
   for key in "${workspace_required[@]}"; do
@@ -268,26 +268,6 @@ if [[ "$workspace_mcp_enabled" == "true" ]]; then
   if [[ "$workspace_refresh_days" =~ ^[0-9]+$ && "$workspace_grant_days" =~ ^[0-9]+$ ]] \
     && (( workspace_grant_days < workspace_refresh_days )); then
     errors+=("WORKSPACE_MCP_GRANT_DAYS must cover the refresh-token lifetime")
-  fi
-
-  workspace_tenant_list="$(get_env WORKSPACE_MCP_ALLOWED_TENANT_IDS)"
-  if [[ "$workspace_tenant_list" == "*" || "$workspace_tenant_list" == ,* \
-        || "$workspace_tenant_list" == *, || "$workspace_tenant_list" == *,,* ]]; then
-    errors+=("WORKSPACE_MCP_ALLOWED_TENANT_IDS must be a non-global comma-separated UUID list")
-  else
-    IFS=',' read -r -a workspace_tenant_ids <<< "$workspace_tenant_list"
-    declare -A seen_workspace_tenant_ids=()
-    for workspace_tenant_id in "${workspace_tenant_ids[@]}"; do
-      workspace_tenant_id="${workspace_tenant_id//[[:space:]]/}"
-      if [[ ! "$workspace_tenant_id" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
-        errors+=("WORKSPACE_MCP_ALLOWED_TENANT_IDS contains an invalid UUID")
-        continue
-      fi
-      if [[ -n "${seen_workspace_tenant_ids[$workspace_tenant_id]+set}" ]]; then
-        errors+=("WORKSPACE_MCP_ALLOWED_TENANT_IDS must not contain duplicates")
-      fi
-      seen_workspace_tenant_ids["$workspace_tenant_id"]=1
-    done
   fi
 
   workspace_crypto_tools_available=true
@@ -385,7 +365,7 @@ workspace_mcp_guarded_vars=(
   WORKSPACE_MCP_PREVIOUS_PUBLIC_KEYS_JSON WORKSPACE_MCP_ACCESS_TOKEN_MAX_MINUTES
   WORKSPACE_MCP_AUTH_CODE_TTL_SECONDS WORKSPACE_MCP_REFRESH_TOKEN_DAYS
   WORKSPACE_MCP_GRANT_DAYS WORKSPACE_MCP_CLIENT_REGISTRATION_DAYS
-  WORKSPACE_MCP_ALLOWED_TENANT_IDS WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED
+  WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED
 )
 for key in "${required[@]}" "${workspace_mcp_guarded_vars[@]}" TOKEN_ENCRYPTION_KEY TOKEN_ENCRYPTION_KEYS MCP_SERVER_URL MCP_UPSTREAM_API_KEY ZOOM_REQUIRED_TENANT_ID ZOOM_REQUIRED_TENANT_PLAN OFFSITE_RESTORE_PUBLIC_KEY_FILE DISK_PATH DISK_MAX_PERCENT; do
   guarded_compose_vars["$key"]=1
