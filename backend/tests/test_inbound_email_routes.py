@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 
 from app.models.inbound_email import InboundEmail, InboundEmailAlias
@@ -157,10 +158,15 @@ async def test_read_raw_body_enforces_declared_and_streamed_limits():
 @pytest.mark.asyncio
 async def test_matter_and_queue_lookup_helpers_enforce_not_found_and_pending():
     user, matter = user_and_matter()
+    matter_db = FakeDB(FakeResult(matter))
     found = await routes._get_matter_or_404(
-        str(matter.id), user.tenant_id, FakeDB(FakeResult(matter)), for_update=True
+        str(matter.id), user.tenant_id, matter_db, for_update=True
     )
     assert found is matter
+    statement = matter_db.executed[0][0]
+    sql = str(statement.compile(dialect=postgresql.dialect()))
+    assert "LEFT OUTER JOIN users" in sql
+    assert "FOR UPDATE OF matters" in sql
 
     with pytest.raises(HTTPException) as exc:
         await routes._get_matter_or_404(

@@ -122,7 +122,10 @@ async def _get_matter_or_404(
         Matter.tenant_id == tenant_id,
     )
     if for_update:
-        query = query.with_for_update()
+        # Matter eagerly loads its optional partner attorney with a LEFT JOIN.
+        # PostgreSQL rejects a blanket FOR UPDATE when it reaches the nullable
+        # side of that join, so lock only the matter row we are serializing.
+        query = query.with_for_update(of=Matter)
     result = await db.execute(query)
     matter = result.scalar_one_or_none()
     if matter is None:

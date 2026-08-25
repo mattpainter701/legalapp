@@ -66,6 +66,12 @@
   last scan time, file count and failure reason instead of an empty cell.
 
 ### Fixed
+- **Creating a matter forwarding address no longer fails on matters without a
+  partner attorney:** `Matter.partner_attorney` is eagerly loaded with a left
+  join, and the alias endpoint's blanket `FOR UPDATE` made PostgreSQL try to
+  lock the nullable side of that join. The endpoint now emits `FOR UPDATE OF
+  matters`, preserving per-matter serialization without locking the joined
+  user table; a PostgreSQL-dialect query regression test covers the exact shape.
 - **Mobile task rows no longer collapse the task name underneath its due date
   and controls:** below the small-screen breakpoint, the completion control and
   task content occupy a two-column grid while due dates, state badges, and row
