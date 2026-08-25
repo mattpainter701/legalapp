@@ -39,7 +39,7 @@ from app.routers.chat import (
     _stream_token_event,
 )
 from app.schemas.chat import ChatAttachmentResponse, ConversationUpdate, MessageCreate
-from app.models.conversation import Conversation, Message
+from app.models.conversation import Conversation, Message, UsageRecord
 from app.models.document import Chunk, Document
 from app.models.error_log import ErrorLog
 from app.models.plugin import Matter
@@ -1294,6 +1294,58 @@ async def test_failed_llm_call_persists_retryable_assistant_chronology(
 
 
 @pytest.mark.asyncio
+async def test_nonstream_guardrail_retry_records_provider_model_and_elapsed_time(
+    client: AsyncClient, db_session, mock_llm, mock_embeddings
+):
+    """A successful validation retry must preserve the retry provider metadata."""
+    conv = (await client.post("/api/conversations", json={})).json()
+    complete_calls = 0
+
+    async def complete_with_usage(*_args, **kwargs):
+        nonlocal complete_calls
+        complete_calls += 1
+        kwargs["usage_sink"]["model"] = (
+            "initial-model" if complete_calls == 1 else "retry-model"
+        )
+        if complete_calls == 1:
+            return "Initial draft", 10, 10
+        return "Revised draft", 11, 12
+
+    mock_llm.side_effect = complete_with_usage
+
+    with (
+        patch("app.routers.chat.hybrid_rag_query", new_callable=AsyncMock) as rag,
+        patch(
+            "app.routers.chat.apply_guardrails",
+            side_effect=[
+                ("Initial draft", True, []),
+                ("Revised draft", False, []),
+            ],
+        ),
+    ):
+        rag.return_value = ("", [], [])
+        response = await client.post(
+            f"/api/conversations/{conv['id']}/messages",
+            json={"content": "Retry this answer after validation."},
+        )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["content"] == "Revised draft"
+    assert mock_llm.await_count == 2
+    usage = (
+        await db_session.execute(
+            select(UsageRecord).where(
+                UsageRecord.conversation_id == uuid.UUID(conv["id"]),
+                UsageRecord.operation_type == "chat",
+            )
+        )
+    ).scalar_one()
+    assert usage.model_used == "retry-model"
+    assert usage.latency_breakdown["validation_retry_count"] == 1
+    assert usage.latency_breakdown["provider_total_ms"] >= 0
+
+
+@pytest.mark.asyncio
 async def test_busy_generation_rejects_send_and_delete_without_writing(
     client: AsyncClient,
     db_session,
@@ -2108,6 +2160,75 @@ async def test_stream_message_persists_cloud_sources(
     assistant = [m for m in detail["messages"] if m["role"] == "assistant"][0]
     assert assistant["sources"][0]["case_name"] == "Client Closing Checklist"
     assert assistant["sources"][0]["citation"] == "https://drive.example/file/1"
+
+
+@pytest.mark.asyncio
+async def test_stream_guardrail_retry_exposes_retry_provider_timing(
+    client: AsyncClient, db_session, mock_embeddings
+):
+    """Streaming retries should persist combined provider timing and retry metadata."""
+    conv = (await client.post("/api/conversations", json={})).json()
+    calls = 0
+
+    async def stream_tokens(*_args, **kwargs):
+        nonlocal calls
+        calls += 1
+        usage_sink = kwargs["usage_sink"]
+        if calls == 1:
+            usage_sink.update(
+                model="initial-model",
+                tokens_in=3,
+                tokens_out=4,
+                provider_stream_ms=5,
+                provider_ttft_ms=2,
+            )
+            yield "Initial draft"
+        else:
+            usage_sink.update(
+                model="retry-model",
+                tokens_in=6,
+                tokens_out=7,
+                provider_stream_ms=9,
+                provider_ttft_ms=4,
+            )
+            yield "Revised draft"
+
+    with (
+        patch("app.routers.chat.hybrid_rag_query", new_callable=AsyncMock) as rag,
+        patch("app.services.llm.LLMService.stream_complete", stream_tokens),
+        patch(
+            "app.routers.chat.apply_guardrails",
+            side_effect=[
+                ("Initial draft", True, []),
+                ("Revised draft", False, []),
+            ],
+        ),
+    ):
+        rag.return_value = ("", [], [])
+        async with client.stream(
+            "POST",
+            f"/api/conversations/{conv['id']}/messages/stream",
+            json={"content": "Retry this streamed answer."},
+        ) as response:
+            body = "".join([part async for part in response.aiter_text()])
+
+    assert response.status_code == 200
+    assert calls == 2
+    assert "Revising the draft before release" in body
+    assert "Revised draft" in body
+    usage = (
+        await db_session.execute(
+            select(UsageRecord).where(
+                UsageRecord.conversation_id == uuid.UUID(conv["id"]),
+                UsageRecord.operation_type == "chat_stream",
+            )
+        )
+    ).scalar_one()
+    assert usage.model_used == "retry-model"
+    assert usage.latency_breakdown["validation_retry_count"] == 1
+    assert usage.latency_breakdown["provider_ttft_ms"] == 2
+    assert usage.latency_breakdown["provider_stream_ms"] == 14
+    assert usage.latency_breakdown["retry_provider_ttft_ms"] == 4
 
 
 @pytest.mark.asyncio
