@@ -20,11 +20,14 @@ DNS, Cloudflare Tunnel, isolation, validation, and rollback procedures are in
 
 ## Endpoint and shared capability layer
 
-The workspace endpoint is Streamable HTTP at:
+The official Workspace MCP transport URL is:
 
 ```text
 https://mcp.getlawhand.com/api/mcp/workspace
 ```
+
+The shorthand `https://mcp.getlawhand.com` is also supported. Nginx internally
+routes it to the full transport without returning a redirect.
 
 `backend/app/services/workspace_mcp_protocol.py` is only an adapter. It obtains
 its tool definitions from `automation_capabilities.py` and dispatches to the
@@ -49,6 +52,8 @@ workers act only after a human completes the required review workflow.
 Prerequisites:
 
 - the LawHand workspace MCP feature is enabled for the tenant;
+- the tenant administrator has enabled Workspace MCP for the individual user
+  under **Admin -> Users**;
 - the person signing in is an active, licensed LawHand user in that tenant;
 - Privacy Mode is off for that user; Privacy Mode deliberately blocks
   workspace MCP authorization; and
@@ -60,16 +65,29 @@ ChatGPT, or Codex); turning it off does not restore them. Reconnect and review
 scopes only when firm policy permits the external MCP connection. Native
 LawHand features remain available under their normal Privacy Mode safeguards.
 
-Use the workspace URL below. Never use a research MCP `clmcp_` product key for
-matter access.
+These are independent controls. The tenant administrator's per-user Workspace
+MCP permission determines whether that account may authorize an external
+assistant. Privacy Mode is the user's data-minimization setting and remains
+user-controlled under **Profile**. Admins can see when Privacy Mode is blocking
+a connection, but do not toggle it on the user's behalf.
+
+Tenant administrators can set **Enable Workspace MCP for new users** under
+**Admin -> Settings -> Connected assistants**. The default applies when a user
+is subsequently invited, created through tenant OAuth, or directory-synced; it
+does not silently change existing accounts. Every enabled user must still
+complete explicit OAuth consent. Disabling an existing user's permission
+immediately revokes active Workspace MCP grants; re-enabling permission does
+not restore them, so the user must reconnect and review scopes.
+
+Use the official full Workspace MCP URL below. Never use a research MCP
+`clmcp_` product key for matter access.
 
 ```text
 https://mcp.getlawhand.com/api/mcp/workspace
 ```
 
-`https://mcp.getlawhand.com/` is a convenience URL that redirects to this
-endpoint. Use the full URL when configuring an MCP client, since redirect
-handling is not guaranteed by every client.
+The shorthand `https://mcp.getlawhand.com` remains accepted for clients or
+manual entry, but generated configuration and documentation use the full URL.
 
 OAuth discovery is available at:
 

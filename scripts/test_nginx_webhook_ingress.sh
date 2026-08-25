@@ -392,7 +392,7 @@ assert_plain_redirect "$plain_http" "/api/version" "plain HTTP /api/version"
 for transport in edge tls; do
   if [ "$transport" = edge ]; then
     workspace_root="$(http_request "/" "https" "$MOCK_CONTAINER" "$PROD_CONTAINER" "mcp.getlawhand.com")"
-    research_root="$(http_request "/" "https" "$MOCK_CONTAINER" "$PROD_CONTAINER" "research.getlawhand.com")"
+    research_root="$(http_request "/" "https" "$MOCK_CONTAINER" "$PROD_CONTAINER" "research.getlawhand.com" "POST")"
     workspace_allowed="$(http_request "/api/mcp/workspace" "https" "$MOCK_CONTAINER" "$PROD_CONTAINER" "mcp.getlawhand.com")"
     research_allowed="$(http_request "/api/mcp/manifest" "https" "$MOCK_CONTAINER" "$PROD_CONTAINER" "research.getlawhand.com")"
     platform_portal="$(http_request "/api/version" "https" "$MOCK_CONTAINER" "$PROD_CONTAINER" "mcp.getlawhand.com")"
@@ -401,7 +401,7 @@ for transport in edge tls; do
     research_cross_product="$(http_request "/api/mcp/workspace" "https" "$MOCK_CONTAINER" "$PROD_CONTAINER" "research.getlawhand.com")"
   else
     workspace_root="$(tls_request "/" "mcp.getlawhand.com")"
-    research_root="$(tls_request "/" "research.getlawhand.com")"
+    research_root="$(tls_request "/" "research.getlawhand.com" "POST")"
     workspace_allowed="$(tls_request "/api/mcp/workspace" "mcp.getlawhand.com")"
     research_allowed="$(tls_request "/api/mcp/manifest" "research.getlawhand.com")"
     platform_portal="$(tls_request "/api/version" "mcp.getlawhand.com")"
@@ -410,14 +410,12 @@ for transport in edge tls; do
     research_cross_product="$(tls_request "/api/mcp/workspace" "research.getlawhand.com")"
   fi
 
-  assert_status "$workspace_root" "$transport workspace MCP shorthand root" 308
-  assert_header_exactly_once "$workspace_root" \
-    "$transport workspace MCP shorthand root" "Location" \
-    "https://mcp.getlawhand.com/api/mcp/workspace"
-  assert_status "$research_root" "$transport research MCP shorthand root" 308
-  assert_header_exactly_once "$research_root" \
-    "$transport research MCP shorthand root" "Location" \
-    "https://research.getlawhand.com/api/mcp"
+  assert_status "$workspace_root" "$transport workspace MCP shorthand root" 200
+  printf '%s' "$workspace_root" | grep -Fq 'workspace-mcp-proof'
+  # The disposable static upstream returns 501 for POST. Receiving that
+  # upstream response (instead of 308) proves the root was internally routed
+  # to the POST-capable research transport without losing the method/body.
+  assert_status "$research_root" "$transport research MCP shorthand root" 501
   assert_status "$workspace_allowed" "$transport workspace MCP allowlist" 200
   printf '%s' "$workspace_allowed" | grep -Fq 'workspace-mcp-proof'
   assert_status "$research_allowed" "$transport research MCP allowlist" 200

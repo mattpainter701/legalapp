@@ -147,6 +147,21 @@ def test_mcp_server_url_defaults_to_empty_for_local_fallback():
     assert settings.MCP_SERVER_URL == ""
 
 
+def test_research_mcp_shorthand_is_public_origin_only():
+    settings = Settings(
+        _env_file=None,
+        DATABASE_URL="postgresql://test",
+        SECRET_KEY="x" * 48,
+        TOKEN_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+        RESEARCH_MCP_PUBLIC_URL="https://research.getlawhand.com/api/mcp",
+    )
+
+    assert settings.research_mcp_endpoint == (
+        "https://research.getlawhand.com/api/mcp"
+    )
+    assert settings.research_mcp_shorthand == "https://research.getlawhand.com"
+
+
 def test_mcp_upstream_key_required_when_private_service_is_configured():
     settings = Settings(
         _env_file=None,

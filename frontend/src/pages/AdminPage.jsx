@@ -485,6 +485,7 @@ function UsersTab({ billingTier }) {
   const [deactivating, setDeactivating] = useState(null)
   const [reactivating, setReactivating] = useState(null)
   const [changingRole, setChangingRole] = useState(null)
+  const [changingAccess, setChangingAccess] = useState(null)
   const [availableRoles, setAvailableRoles] = useState([])
   const [showInvite, setShowInvite] = useState(false)
   const [showInactive, setShowInactive] = useState(false)
@@ -573,6 +574,30 @@ function UsersTab({ billingTier }) {
     }
   }
 
+  const handleAccessToggle = async (u, field, value) => {
+    const action = value ? 'enable' : 'disable'
+    const label = 'Workspace MCP access'
+    const consequence = !value
+      ? ' Active Claude, ChatGPT, and Codex grants for this user will be revoked.'
+      : ''
+    if (!await confirmAction({
+      title: `${value ? 'Enable' : 'Disable'} ${label}?`,
+      message: `${action[0].toUpperCase()}${action.slice(1)} ${label} for ${u.email}.${consequence}`,
+      confirmLabel: `${value ? 'Enable' : 'Disable'}`,
+      destructive: !value,
+    })) return
+    setChangingAccess(`${u.id}:${field}`)
+    try {
+      await updateUser(u.id, { [field]: value })
+      flash(`${label} ${value ? 'enabled' : 'disabled'} for ${u.email}.`)
+      await loadUsers()
+    } catch (e) {
+      setError(e?.response?.data?.detail || `Failed to update ${label}`)
+    } finally {
+      setChangingAccess(null)
+    }
+  }
+
   if (loading) return <Spinner />
   if (error) return <ErrorMsg msg={error} />
 
@@ -635,6 +660,7 @@ function UsersTab({ billingTier }) {
               {billingTier === 'payg' && (
                 <th className="text-left px-6 py-4 font-semibold text-brand-ink font-sans text-xs uppercase tracking-wider">Budget cap</th>
               )}
+              <th className="text-left px-6 py-4 font-semibold text-brand-ink font-sans text-xs uppercase tracking-wider">Connected assistants</th>
               <th className="text-left px-6 py-4 font-semibold text-brand-ink font-sans text-xs uppercase tracking-wider">Active</th>
             </tr>
           </thead>
@@ -686,6 +712,26 @@ function UsersTab({ billingTier }) {
                       onSaved={() => { flash('Budget updated.'); loadUsers() }}
                     />
                   )}
+                  <td className="px-6 py-4">
+                    <div className="grid gap-2 min-w-[190px]">
+                      <label className="flex items-center justify-between gap-3 text-xs font-sans text-brand-ink">
+                        <span>
+                          <span className="block font-medium">Workspace MCP</span>
+                          <span className="block text-[10px] text-brand-muted">Claude, ChatGPT, Codex</span>
+                        </span>
+                        <input
+                          type="checkbox"
+                          checked={u.workspace_mcp_enabled !== false}
+                          disabled={isInactive || changingAccess === `${u.id}:workspace_mcp_enabled`}
+                          onChange={(e) => handleAccessToggle(u, 'workspace_mcp_enabled', e.target.checked)}
+                          aria-label={`Workspace MCP access for ${u.email}`}
+                        />
+                      </label>
+                      <p className="text-[10px] text-brand-muted">
+                        Privacy Mode: {u.privacy_mode ? 'On — user must turn it off in Profile' : 'Off'}
+                      </p>
+                    </div>
+                  </td>
                   <td className="px-6 py-4">
                     <div className="inline-flex items-center gap-3">
                       <button
@@ -1113,6 +1159,7 @@ function SettingsTab() {
   const [loaded, setLoaded] = useState(false)
   const [existingConfig, setExistingConfig] = useState({})
   const [featureSettings, setFeatureSettings] = useState(null)
+  const [defaultWorkspaceMcpEnabled, setDefaultWorkspaceMcpEnabled] = useState(true)
 
   useEffect(() => {
     getAdminSettings()
@@ -1122,6 +1169,7 @@ function SettingsTab() {
         setExistingConfig(cfg)
         setIncludePublic(cfg.include_public_case_law !== false)
         setFeatureSettings(s)
+        setDefaultWorkspaceMcpEnabled(s.default_workspace_mcp_enabled !== false)
         setLoaded(true)
       })
       .catch(() => setLoaded(true))
@@ -1134,6 +1182,7 @@ function SettingsTab() {
         default_llm_provider: modelOverride ? 'litellm' : null,
         default_llm_model: modelOverride || null,
         custom_config: { ...existingConfig, include_public_case_law: includePublic },
+        default_workspace_mcp_enabled: defaultWorkspaceMcpEnabled,
       })
       setExistingConfig((prev) => ({ ...prev, include_public_case_law: includePublic }))
       setMsg({ type: 'success', text: 'Settings saved.' })
@@ -1148,6 +1197,20 @@ function SettingsTab() {
   return (
     <div className="max-w-3xl space-y-8">
       <ReleaseInfoPanel />
+
+      <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden">
+        <div className="px-8 py-6 border-b border-brand-line bg-brand-bg-soft/50">
+          <h3 className="font-serif font-bold text-xl text-brand-ink">Connected assistants</h3>
+          <p className="text-sm text-brand-ink-2 font-sans mt-1">Set the Workspace MCP policy applied when a new user is invited or directory-synced.</p>
+        </div>
+        <div className="flex items-center justify-between gap-6 px-8 py-5">
+          <div>
+            <p className="text-sm font-sans font-semibold text-brand-ink">Enable Workspace MCP for new users</p>
+            <p className="text-xs text-brand-ink-2 font-sans mt-1">Users still complete their own OAuth consent. Manage existing users individually in Admin → Users.</p>
+          </div>
+          <Toggle checked={defaultWorkspaceMcpEnabled} onChange={setDefaultWorkspaceMcpEnabled} label="Workspace MCP default" />
+        </div>
+      </div>
 
       {/* Case Law */}
       <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden">

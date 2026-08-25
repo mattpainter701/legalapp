@@ -353,6 +353,13 @@ class Settings(BaseSettings):
         return f"{self.BACKEND_URL.rstrip('/')}/api/mcp"
 
     @property
+    def research_mcp_shorthand(self) -> str:
+        parsed = urlsplit(self.research_mcp_endpoint)
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}"
+        return self.research_mcp_endpoint
+
+    @property
     def workspace_mcp_endpoint(self) -> str:
         configured = self.WORKSPACE_MCP_CANONICAL_RESOURCE.strip()
         return (configured or self.WORKSPACE_MCP_RESOURCE.strip()).rstrip("/")

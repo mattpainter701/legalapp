@@ -309,8 +309,8 @@ export function ResearchMcpReleaseControls({ platformKey, onAuthError }) {
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {[
-                ['Streamable HTTP', connection.streamable_http || 'https://research.getlawhand.com/api/mcp'],
-                ['Shorthand URL', connection.shorthand || 'https://research.getlawhand.com/'],
+                ['Official MCP URL', connection.streamable_http || 'https://research.getlawhand.com/api/mcp'],
+                ['Supported shorthand', connection.shorthand || 'https://research.getlawhand.com'],
                 ['Auth header', `${connection.auth_header || 'X-MCP-API-Key'}: clmcp_...`],
               ].map(([label, value]) => (
                 <div key={label} className="rounded-lg border border-brand-line bg-brand-bg px-3 py-2">
@@ -320,7 +320,7 @@ export function ResearchMcpReleaseControls({ platformKey, onAuthError }) {
               ))}
             </div>
             <p className="mt-3 text-xs text-brand-muted font-sans">
-              Standards-compliant clients connect to the Streamable HTTP endpoint. The REST endpoint is compatibility-only; a disabled release state still rejects customer traffic.
+              Documentation and generated configuration use the full transport URL. The bare shorthand remains supported without a redirect. The REST endpoint is compatibility-only; a disabled release state still rejects customer traffic.
             </p>
           </div>
 

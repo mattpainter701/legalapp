@@ -117,6 +117,18 @@ async def test_actor_loading_maps_grant_user_license_and_privacy_failures(monkey
             SimpleNamespace(
                 is_active=True,
                 license_active=True,
+                workspace_mcp_enabled=False,
+                privacy_mode=False,
+                tenant=object(),
+                id=identity.user_id,
+            ),
+            "tenant administrator",
+        ),
+        (
+            SimpleNamespace(
+                is_active=True,
+                license_active=True,
+                workspace_mcp_enabled=True,
                 privacy_mode=True,
                 tenant=object(),
                 id=identity.user_id,

@@ -697,6 +697,7 @@ async def list_mcp_product_keys(
         if settings.MCP_PRODUCT_ENABLED
         else [],
         "mcp_server_url": mcp_url if settings.MCP_PRODUCT_ENABLED else None,
+        "shorthand": settings.research_mcp_shorthand,
         "transports": (
             {
                 "streamable_http": mcp_url,

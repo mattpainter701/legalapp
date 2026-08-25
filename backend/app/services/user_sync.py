@@ -130,6 +130,10 @@ class UserSyncService:
                     user_row.is_active = True
                     updated += 1
                 else:
+                    from app.services.workspace_mcp_access import (
+                        tenant_workspace_mcp_default,
+                    )
+
                     new_user = User(
                         id=uuid.uuid4(),
                         tenant_id=uuid.UUID(tenant_id),
@@ -140,6 +144,9 @@ class UserSyncService:
                         oauth_subject=ms_user.get("id"),
                         is_active=True,
                         license_active=True,
+                        workspace_mcp_enabled=await tenant_workspace_mcp_default(
+                            db, tenant_id
+                        ),
                     )
                     db.add(new_user)
                     created += 1
@@ -264,6 +271,10 @@ class UserSyncService:
                     user_row.is_active = True
                     updated += 1
                 else:
+                    from app.services.workspace_mcp_access import (
+                        tenant_workspace_mcp_default,
+                    )
+
                     new_user = User(
                         id=uuid.uuid4(),
                         tenant_id=uuid.UUID(tenant_id),
@@ -274,6 +285,9 @@ class UserSyncService:
                         oauth_subject=g_user.get("id"),
                         is_active=True,
                         license_active=True,
+                        workspace_mcp_enabled=await tenant_workspace_mcp_default(
+                            db, tenant_id
+                        ),
                     )
                     db.add(new_user)
                     created += 1

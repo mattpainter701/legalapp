@@ -82,6 +82,11 @@ class User(Base):
     privacy_mode: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
     )
+    # Tenant-administered permission to authorize external Workspace MCP clients.
+    # Privacy Mode remains a separate, user-controlled data-minimization policy.
+    workspace_mcp_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
     # Verified, user-managed professional profile.  This is intentionally
     # separate from role (authorization) and from learned memory.
     professional_role: Mapped[str | None] = mapped_column(String(120), nullable=True)

@@ -75,6 +75,13 @@ Production rollout is still feature-flagged and tenant-allowlisted. Publishing
 the endpoint does not grant access to an unapproved tenant, inactive user, or
 unlicensed account.
 
+Within an approved tenant, administrators also control a per-user Workspace
+MCP permission and a new-user default. That permission is separate from the
+user-controlled Privacy Mode setting. Either an administrator-disabled MCP
+permission or enabled Privacy Mode blocks authorization and runtime access;
+both transitions revoke active grants rather than leaving a connected but
+unusable client.
+
 The production resource and discovery URLs are:
 
 ```text

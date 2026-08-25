@@ -98,6 +98,7 @@ class UserInfo(BaseModel):
     office_location: Optional[str] = None
     primary_jurisdictions: list[str] = Field(default_factory=list)
     privacy_mode: bool = False
+    workspace_mcp_enabled: bool = True
     demo: Optional[DemoInfo] = None
 
     model_config = {"from_attributes": True}
