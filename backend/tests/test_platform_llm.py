@@ -5,6 +5,7 @@ from httpx import AsyncClient
 
 from app.routers import platform_llm as platform_llm_router
 from app.models.llm_provider_key import LLMProviderKey
+from app.models.llm_routing_profile import LLMRoutingProfile
 from app.models.platform import PlatformSetting
 from tests.platform_auth_helpers import platform_headers
 
@@ -72,6 +73,82 @@ async def test_platform_llm_config_round_trip(client: AsyncClient):
     config = get_resp.json()["config"]
     assert config["standard_provider"] == "litellm"
     assert config["premium_provider"] == "litellm"
+
+
+@pytest.mark.asyncio
+async def test_routing_profiles_clone_expose_policies_and_can_become_default(
+    client: AsyncClient, db_session
+):
+    source = LLMRoutingProfile(
+        name="US confidential",
+        description="GPT/Gemini profile",
+        standard_route={"provider_id": "openrouter", "model": "openai/gpt"},
+        premium_route={"provider_id": "openrouter", "model": "google/gemini"},
+        standard_allow_matter_context=True,
+        premium_allow_matter_context=False,
+        is_default=False,
+        is_active=True,
+        activation={
+            "status": "active",
+            "aliases": {
+                "standard": "clarity-standard-rsource",
+                "premium": "clarity-premium-rsource",
+            },
+        },
+    )
+    db_session.add(source)
+    await db_session.commit()
+
+    created_response = await client.post(
+        "/api/platform/llm/profiles",
+        headers=platform_headers(),
+        json={"name": "Client profile", "clone_profile_id": str(source.id)},
+    )
+    assert created_response.status_code == 201
+    created = created_response.json()
+    assert created["assignable"] is True
+    assert created["standard_allow_matter_context"] is True
+    assert created["premium_allow_matter_context"] is False
+    assert created["standard"]["model"] == "openai/gpt"
+
+    routes_response = await client.get(
+        "/api/platform/llm/routes",
+        headers=platform_headers(),
+        params={"profile_id": created["id"]},
+    )
+    assert routes_response.status_code == 200
+    assert routes_response.json()["standard"]["allow_matter_context"] is True
+    assert routes_response.json()["premium"]["allow_matter_context"] is False
+
+    default_response = await client.patch(
+        f"/api/platform/llm/profiles/{created['id']}",
+        headers=platform_headers(),
+        json={"is_default": True},
+    )
+    assert default_response.status_code == 200
+    assert default_response.json()["is_default"] is True
+
+    inactive_response = await client.patch(
+        f"/api/platform/llm/profiles/{created['id']}",
+        headers=platform_headers(),
+        json={"is_active": False},
+    )
+    assert inactive_response.status_code == 400
+
+    blank_response = await client.post(
+        "/api/platform/llm/profiles",
+        headers=platform_headers(),
+        json={"name": "Blank profile"},
+    )
+    assert blank_response.status_code == 201
+    blank = blank_response.json()
+    assert blank["assignable"] is False
+    blank_default_response = await client.patch(
+        f"/api/platform/llm/profiles/{blank['id']}",
+        headers=platform_headers(),
+        json={"is_default": True},
+    )
+    assert blank_default_response.status_code == 400
 
 
 def test_provider_route_builder_litellm_model_prefixes():

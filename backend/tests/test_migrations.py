@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["125_workspace_mcp_user_access"]
+    assert heads == ["126_workspace_mcp_user_access"]
 
 
 def test_revision_ids_fit_the_alembic_version_column():

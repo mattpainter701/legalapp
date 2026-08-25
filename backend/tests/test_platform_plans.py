@@ -3,6 +3,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 
 from app.models.mcp_product import MCPProductKey, MCPUsageEvent
+from app.models.llm_routing_profile import LLMRoutingProfile
 from app.models.operator_audit import OperatorAuditLog
 from app.models.tenant import TenantSettings
 from app.services.mcp_product import hash_key
@@ -76,6 +77,90 @@ async def test_set_unknown_plan_rejected(client: AsyncClient, test_tenant):
         headers=headers,
     )
     assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_assign_and_clear_tenant_routing_profile(
+    client: AsyncClient, db_session, test_tenant
+):
+    profile = LLMRoutingProfile(
+        name="Tenant profile",
+        standard_route={"model": "standard"},
+        premium_route={"model": "premium"},
+        standard_allow_matter_context=True,
+        premium_allow_matter_context=False,
+        is_active=True,
+        activation={
+            "status": "active",
+            "aliases": {
+                "standard": "clarity-standard-rtenant",
+                "premium": "clarity-premium-rtenant",
+            },
+        },
+    )
+    db_session.add(profile)
+    await db_session.commit()
+
+    assigned = await client.put(
+        f"/api/platform/tenants/{test_tenant.id}",
+        json={"llm_routing_profile_id": str(profile.id)},
+        headers=platform_headers(),
+    )
+    assert assigned.status_code == 200
+
+    detail = await client.get(
+        f"/api/platform/tenants/{test_tenant.id}", headers=platform_headers()
+    )
+    assert detail.status_code == 200
+    assert detail.json()["llm_config"]["routing_profile"] == {
+        "id": str(profile.id),
+        "name": "Tenant profile",
+        "is_default": False,
+        "is_active": True,
+        "assignable": True,
+        "standard_allow_matter_context": True,
+        "premium_allow_matter_context": False,
+    }
+
+    cleared = await client.put(
+        f"/api/platform/tenants/{test_tenant.id}",
+        json={"llm_routing_profile_id": None},
+        headers=platform_headers(),
+    )
+    assert cleared.status_code == 200
+    settings = (
+        await db_session.execute(
+            select(TenantSettings).where(TenantSettings.tenant_id == test_tenant.id)
+        )
+    ).scalar_one()
+    assert settings.llm_routing_profile_id is None
+
+
+@pytest.mark.asyncio
+async def test_tenant_routing_profile_assignment_rejects_invalid_or_unactivated(
+    client: AsyncClient, db_session, test_tenant
+):
+    invalid = await client.put(
+        f"/api/platform/tenants/{test_tenant.id}",
+        json={"llm_routing_profile_id": "not-a-uuid"},
+        headers=platform_headers(),
+    )
+    assert invalid.status_code == 400
+
+    blank = LLMRoutingProfile(
+        name="Unactivated profile",
+        standard_route={},
+        premium_route={},
+        is_active=True,
+    )
+    db_session.add(blank)
+    await db_session.commit()
+    unactivated = await client.put(
+        f"/api/platform/tenants/{test_tenant.id}",
+        json={"llm_routing_profile_id": str(blank.id)},
+        headers=platform_headers(),
+    )
+    assert unactivated.status_code == 400
 
 
 @pytest.mark.asyncio

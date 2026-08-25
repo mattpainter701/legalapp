@@ -43,12 +43,14 @@ from app.models.conversation import Conversation, Message, UsageRecord
 from app.models.document import Chunk, Document
 from app.models.error_log import ErrorLog
 from app.models.plugin import Matter
+from app.models.platform import PlatformSetting
+from app.models.llm_routing_profile import LLMRoutingProfile
 from app.models.task import Task
 from app.models.tenant import TenantSettings
 from app.models.user import User
 from app.services.cloud_search import CloudHit
 from app.services.corpus_revision import advance_rag_corpus_revision
-from app.services.llm_routing import resolve_llm_route
+from app.services.llm_routing import resolve_llm_route, route_matter_context_allowed
 from app.services.matter_context import MatterContextService
 from app.services import rag as rag_service
 from app.services.rag import build_rag_context
@@ -60,15 +62,59 @@ from app.utils.guardrails import (
 )
 
 
-def test_standard_route_is_public_general_even_with_a_managed_alias():
-    assert _is_public_general_route(
-        SimpleNamespace(requested_route="standard", gateway_alias="cheap-managed-model")
+@pytest.mark.asyncio
+async def test_standard_route_matter_policy_is_platform_managed(db_session):
+    standard = SimpleNamespace(
+        requested_route="standard", gateway_alias="cheap-managed-model"
     )
-    assert _is_public_general_route(
-        SimpleNamespace(requested_route="tenant-standard", gateway_alias="firm-default")
+    tenant_standard = SimpleNamespace(
+        requested_route="tenant-standard", gateway_alias="firm-default"
     )
-    assert not _is_public_general_route(
-        SimpleNamespace(requested_route="premium", gateway_alias="premium-model")
+    premium = SimpleNamespace(requested_route="premium", gateway_alias="premium-model")
+    tenant_id = uuid.uuid4()
+    assert await _is_public_general_route(db_session, standard, tenant_id)
+    assert await _is_public_general_route(db_session, tenant_standard, tenant_id)
+    assert not await _is_public_general_route(db_session, premium, tenant_id)
+    db_session.add(
+        PlatformSetting(
+            key="llm_route_config_v2",
+            value={"standard": {"allow_matter_context": True}},
+        )
+    )
+    await db_session.commit()
+    assert not await _is_public_general_route(db_session, standard, tenant_id)
+    assert not await _is_public_general_route(db_session, tenant_standard, tenant_id)
+
+
+@pytest.mark.asyncio
+async def test_routing_profile_controls_standard_and_premium_matter_policy(db_session):
+    tenant_id = uuid.uuid4()
+    profile = LLMRoutingProfile(
+        name="Matter-policy test",
+        standard_route={},
+        premium_route={},
+        standard_allow_matter_context=True,
+        premium_allow_matter_context=False,
+        is_default=True,
+        is_active=True,
+        activation={
+            "status": "active",
+            "aliases": {
+                "standard": "clarity-standard-rpolicy",
+                "premium": "clarity-premium-rpolicy",
+            },
+        },
+    )
+    db_session.add(profile)
+    await db_session.commit()
+
+    standard = SimpleNamespace(requested_route="standard", gateway_alias="standard")
+    assert not await _is_public_general_route(db_session, standard, tenant_id)
+    assert await route_matter_context_allowed(
+        db_session, tenant_id, use_premium=False
+    )
+    assert not await route_matter_context_allowed(
+        db_session, tenant_id, use_premium=True
     )
 
 

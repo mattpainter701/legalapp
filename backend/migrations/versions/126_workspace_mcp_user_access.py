@@ -1,15 +1,15 @@
 """Add tenant-administered Workspace MCP user access.
 
-Revision ID: 125_workspace_mcp_user_access
-Revises: 124_inbound_email
+Revision ID: 126_workspace_mcp_user_access
+Revises: 125_llm_routing_profiles
 """
 
 from alembic import op
 import sqlalchemy as sa
 
 
-revision = "125_workspace_mcp_user_access"
-down_revision = "124_inbound_email"
+revision = "126_workspace_mcp_user_access"
+down_revision = "125_llm_routing_profiles"
 branch_labels = None
 depends_on = None
 

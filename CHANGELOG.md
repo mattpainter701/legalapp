@@ -3,6 +3,15 @@
 ## [Unreleased]
 
 ### Added
+- **Tenant AI routing profiles with per-tier matter-context policy** (migration
+  `125_llm_routing_profiles`): Platform operators can create and clone reusable
+  Standard/Premium route profiles, independently allow confidential matter
+  context for either tier, activate versioned LiteLLM aliases, select the
+  inherited default, and assign an active profile to a tenant. Chat enforces
+  the selected policy before loading linked matters or attachments in both
+  synchronous and streaming paths, while every route target and fallback still
+  passes the confidential-data eligibility gate. Platform profile and tenant
+  banners show the effective Standard/Premium policy.
 - **The client portal now tells the client what is waiting on them:** the
   overview opens on counters for unread messages, documents awaiting signature,
   shared documents and balance due, each linking to its tab, plus the next key
