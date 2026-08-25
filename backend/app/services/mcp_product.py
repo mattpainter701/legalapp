@@ -52,6 +52,9 @@ def generate_product_key() -> str:
 
 
 def hash_key(raw_key: str) -> str:
+    # Product keys are 256-bit CSPRNG bearer tokens, not user-chosen passwords;
+    # this deterministic digest is an indexed lookup value, never a password hash.
+    # codeql[py/weak-sensitive-data-hashing]
     return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
 
 
