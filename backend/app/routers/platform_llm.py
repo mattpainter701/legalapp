@@ -1417,6 +1417,7 @@ def _profile_payload(profile: LLMRoutingProfile) -> dict[str, Any]:
         "description": profile.description,
         "is_default": profile.is_default,
         "is_active": profile.is_active,
+        "assignable": profile.assignable,
         "standard_allow_matter_context": profile.standard_allow_matter_context,
         "premium_allow_matter_context": profile.premium_allow_matter_context,
         "standard": {
@@ -2577,6 +2578,7 @@ async def create_routing_profile(
         else True,
         is_default=False,
         is_active=True,
+        activation=dict(source.activation or {}) if source else None,
     )
     db.add(profile)
     await db.flush()
@@ -2630,6 +2632,11 @@ async def update_routing_profile(
             )
         profile.is_active = body.is_active
     if body.is_default:
+        if not profile.assignable:
+            raise HTTPException(
+                status_code=400,
+                detail="Activate both Standard and Premium routes before making this profile the default",
+            )
         for existing in (
             await db.scalars(
                 select(LLMRoutingProfile).where(LLMRoutingProfile.is_default.is_(True))

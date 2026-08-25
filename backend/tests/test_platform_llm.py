@@ -106,6 +106,7 @@ async def test_routing_profiles_clone_expose_policies_and_can_become_default(
     )
     assert created_response.status_code == 201
     created = created_response.json()
+    assert created["assignable"] is True
     assert created["standard_allow_matter_context"] is True
     assert created["premium_allow_matter_context"] is False
     assert created["standard"]["model"] == "openai/gpt"
@@ -133,6 +134,21 @@ async def test_routing_profiles_clone_expose_policies_and_can_become_default(
         json={"is_active": False},
     )
     assert inactive_response.status_code == 400
+
+    blank_response = await client.post(
+        "/api/platform/llm/profiles",
+        headers=platform_headers(),
+        json={"name": "Blank profile"},
+    )
+    assert blank_response.status_code == 201
+    blank = blank_response.json()
+    assert blank["assignable"] is False
+    blank_default_response = await client.patch(
+        f"/api/platform/llm/profiles/{blank['id']}",
+        headers=platform_headers(),
+        json={"is_default": True},
+    )
+    assert blank_default_response.status_code == 400
 
 
 def test_provider_route_builder_litellm_model_prefixes():

@@ -699,7 +699,7 @@ function TenantAliasOverride({ tenant, tenantDetail, platformKey, defaultAliases
         <label htmlFor={`tenant-${tenant.id}-routing-profile`} className="block text-xs text-brand-muted font-sans mb-1">AI routing profile</label>
         <select id={`tenant-${tenant.id}-routing-profile`} value={value} onChange={(e) => { setValue(e.target.value); setSaved(false) }} className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans bg-brand-surface">
           <option value="">Inherit default profile</option>
-          {profiles.filter((profile) => profile.is_active).map((profile) => <option key={profile.id} value={profile.id}>{profile.name}{profile.is_default ? ' (default)' : ''}</option>)}
+          {profiles.filter((profile) => profile.assignable).map((profile) => <option key={profile.id} value={profile.id}>{profile.name}{profile.is_default ? ' (default)' : ''}</option>)}
         </select>
       </div>
       {selected && <div className="rounded-lg border border-brand-line bg-brand-bg px-4 py-3 text-xs font-sans"><p className="font-medium text-brand-ink">{selected.name}{!value ? ' · inherited default' : ' · tenant assignment'}</p><p className="mt-1 text-brand-muted">Standard matter context: {selected.standard_allow_matter_context ? 'Allowed' : 'Blocked'} · Premium matter context: {selected.premium_allow_matter_context ? 'Allowed' : 'Blocked'} · {selected.is_active ? 'Active' : 'Inactive'}</p></div>}
@@ -2656,7 +2656,7 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
       }
       setProfiles((previous) => previous.map((profile) => (
         profile.id === selectedProfileId
-          ? { ...profile, standard_allow_matter_context: standard.allow_matter_context, premium_allow_matter_context: premium.allow_matter_context, activation: { status: 'active', aliases: data.app_aliases } }
+          ? { ...profile, assignable: true, standard_allow_matter_context: standard.allow_matter_context, premium_allow_matter_context: premium.allow_matter_context, activation: { status: 'active', aliases: data.app_aliases } }
           : profile
       )))
       setSaveResult({
@@ -2741,7 +2741,7 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
           </select>
           <input aria-label="New routing profile name" value={newProfileName} onChange={(event) => setNewProfileName(event.target.value)} placeholder="New profile name" className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans bg-brand-surface" />
           <button type="button" onClick={handleCreateProfile} disabled={creatingProfile || !newProfileName.trim()} className="px-3 py-2 border border-brand-line rounded-lg text-xs font-medium font-sans text-brand-ink hover:bg-brand-bg disabled:opacity-40">{creatingProfile ? 'Creating…' : 'Create profile'}</button>
-          {!profiles.find((profile) => profile.id === selectedProfileId)?.is_default && <button type="button" onClick={handleMakeDefaultProfile} className="px-3 py-2 border border-brand-line rounded-lg text-xs font-medium font-sans text-brand-ink hover:bg-brand-bg">Make default</button>}
+          {profiles.find((profile) => profile.id === selectedProfileId)?.assignable && !profiles.find((profile) => profile.id === selectedProfileId)?.is_default && <button type="button" onClick={handleMakeDefaultProfile} className="px-3 py-2 border border-brand-line rounded-lg text-xs font-medium font-sans text-brand-ink hover:bg-brand-bg">Make default</button>}
           {saveResult && (
             <span className={`text-xs font-sans ${saveResult.ok ? (saveResult.pending ? 'text-brand-amber' : 'text-brand-accent') : 'text-brand-rose'}`}>
               {saveResult.message || (saveResult.ok
@@ -2764,7 +2764,7 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
         <div className="mb-6 rounded-lg border border-brand-line bg-brand-bg px-4 py-3 text-xs font-sans text-brand-muted">
           <span className="font-medium text-brand-ink">Profile: {profiles.find((profile) => profile.id === selectedProfileId)?.name || 'Selected profile'}</span>
           {' · '}{profiles.find((profile) => profile.id === selectedProfileId)?.is_default ? 'Default' : 'Tenant-assignable'}
-          {' · '}{profiles.find((profile) => profile.id === selectedProfileId)?.is_active ? 'Active' : 'Inactive'}
+          {' · '}{profiles.find((profile) => profile.id === selectedProfileId)?.assignable ? 'Assignable' : 'Needs route activation'}
           {' · '}Standard matter context {standard.allow_matter_context ? 'allowed' : 'blocked'}
           {' · '}Premium matter context {premium.allow_matter_context ? 'allowed' : 'blocked'}
           {' · '}Tenants assigned to this profile inherit both route targets and these data policies.

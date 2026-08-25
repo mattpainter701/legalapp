@@ -56,6 +56,7 @@ const defaultProfile = {
   name: 'Default',
   is_default: true,
   is_active: true,
+  assignable: true,
   standard_allow_matter_context: false,
   premium_allow_matter_context: true,
 }

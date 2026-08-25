@@ -104,8 +104,9 @@ Platform operators manage reusable routing profiles from **Platform → AI
 Routing**. A profile owns both the Standard and Premium provider/key/model
 graphs, their versioned LiteLLM aliases, and an independent **Allow
 confidential matter context** policy for each tier. New profiles can clone an
-existing profile's route graph and policy, but must pass route validation before
-their aliases become active.
+existing profile's route graph, policy, and validated aliases. A blank profile,
+or a clone whose graph is changed, must pass route validation before the new
+aliases become active.
 
 Tenants either inherit the one active default profile or receive an explicit
 active profile assignment from the tenant detail panel. The profile banner on

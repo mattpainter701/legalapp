@@ -224,9 +224,9 @@ async def get_tenant_routing_profile(
                 LLMRoutingProfile.is_active.is_(True),
             )
         )
-        if assigned:
+        if assigned and assigned.assignable:
             return assigned
-    return await db.scalar(
+    default_profile = await db.scalar(
         select(LLMRoutingProfile)
         .where(
             LLMRoutingProfile.is_default.is_(True),
@@ -235,6 +235,7 @@ async def get_tenant_routing_profile(
         .order_by(LLMRoutingProfile.updated_at.desc())
         .limit(1)
     )
+    return default_profile if default_profile and default_profile.assignable else None
 
 
 async def standard_matter_context_allowed(db: AsyncSession, tenant_id: Any) -> bool:

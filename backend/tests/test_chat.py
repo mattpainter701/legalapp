@@ -97,6 +97,13 @@ async def test_routing_profile_controls_standard_and_premium_matter_policy(db_se
         premium_allow_matter_context=False,
         is_default=True,
         is_active=True,
+        activation={
+            "status": "active",
+            "aliases": {
+                "standard": "clarity-standard-rpolicy",
+                "premium": "clarity-premium-rpolicy",
+            },
+        },
     )
     db_session.add(profile)
     await db_session.commit()

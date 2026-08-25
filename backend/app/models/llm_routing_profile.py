@@ -53,3 +53,18 @@ class LLMRoutingProfile(Base):
         server_default="now()",
         onupdate=lambda: datetime.now(timezone.utc),
     )
+
+    @property
+    def assignable(self) -> bool:
+        activation = self.activation if isinstance(self.activation, dict) else {}
+        aliases = (
+            activation.get("aliases")
+            if isinstance(activation.get("aliases"), dict)
+            else {}
+        )
+        return bool(
+            self.is_active
+            and activation.get("status") == "active"
+            and aliases.get("standard")
+            and aliases.get("premium")
+        )

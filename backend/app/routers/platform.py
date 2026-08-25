@@ -785,6 +785,7 @@ async def get_tenant_detail(
                     "name": routing_profile.name,
                     "is_default": routing_profile.is_default,
                     "is_active": routing_profile.is_active,
+                    "assignable": routing_profile.assignable,
                     "standard_allow_matter_context": routing_profile.standard_allow_matter_context,
                     "premium_allow_matter_context": routing_profile.premium_allow_matter_context,
                 }
@@ -1033,9 +1034,10 @@ async def update_tenant(
                         status_code=400, detail="Invalid routing profile id"
                     )
                 profile = await db.get(LLMRoutingProfile, profile_id)
-                if profile is None or not profile.is_active:
+                if profile is None or not profile.assignable:
                     raise HTTPException(
-                        status_code=400, detail="Routing profile is missing or inactive"
+                        status_code=400,
+                        detail="Routing profile is missing or does not have active Standard and Premium routes",
                     )
             audit_changes["llm_routing_profile_id"] = {
                 "from": str(ts.llm_routing_profile_id)
