@@ -11,7 +11,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import List
+from typing import Any, List
 
 import aiofiles
 from fastapi import (
@@ -481,6 +481,29 @@ def _stream_source_counts(
     }
     counts["total"] = sum(counts.values())
     return counts
+
+
+def _source_utilization_metrics(
+    context: str, sources: list[dict[str, Any]] | None
+) -> dict[str, int]:
+    """Return the retrieval-to-citation funnel for one provider response."""
+    source_rows = sources or []
+    retrieved = len(source_rows)
+    cited = sum(1 for source in source_rows if source.get("cited"))
+    hyperlinkable = sum(
+        1
+        for source in source_rows
+        if source.get("cited") and _normalize_source_url(source.get("url"))
+    )
+    return {
+        "rag_context_chars": len(context),
+        "retrieved_source_count": retrieved,
+        "cited_source_count": cited,
+        "hyperlinkable_cited_source_count": hyperlinkable,
+        "source_utilization_percent": (
+            int(round(cited * 100 / retrieved)) if retrieved else 0
+        ),
+    }
 
 
 def _stream_progress_event(event: str, payload: dict | None = None) -> str:
@@ -2120,6 +2143,7 @@ async def _send_message_under_generation_lock(
     7. Record usage
     8. Return MessageResponse
     """
+    request_started_at = time.monotonic()
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
 
@@ -2377,6 +2401,14 @@ async def _send_message_under_generation_lock(
             await set_tenant_context(db, str(user.tenant_id))
             context_str, chunks = "", []
 
+    # Preserve the public-only retrieval payload before any context sections
+    # are joined.  The Standard prompt consumes this dedicated value so a
+    # future private-context loader cannot cross the provider boundary merely
+    # by making one of the normally-empty sections non-empty.
+    public_authority_context = (
+        prepare_provider_text(context_str, True) if public_general else ""
+    )
+
     # 4a. Combine attachment, matter, and RAG context
     context_str = _join_context_sections(
         attachment_context,
@@ -2409,6 +2441,7 @@ async def _send_message_under_generation_lock(
     cache_hit_llm = False
     tokens_in, tokens_out = 0, 0
     llm_usage: dict = {}
+    provider_started_at = time.monotonic()
     try:
         response_text, tokens_in, tokens_out = await llm_service.complete(
             messages=llm_messages,
@@ -2435,7 +2468,9 @@ async def _send_message_under_generation_lock(
                 premium=use_premium,
             ),
             system_prompt_override=(
-                llm_service.public_general_system_prompt() if public_general else None
+                llm_service.public_general_system_prompt(public_authority_context)
+                if public_general
+                else None
             ),
             usage_sink=llm_usage,
         )
@@ -2456,13 +2491,16 @@ async def _send_message_under_generation_lock(
         raise HTTPException(
             status_code=502, detail="LLM service temporarily unavailable"
         )
+    provider_total_ms = int((time.monotonic() - provider_started_at) * 1000)
 
     # 6. Apply guardrails (check for AI self-disclosure and PII in privacy mode)
     cleaned_response, needs_retry, response_pii = apply_guardrails(
         response_text, privacy_mode=privacy_mode
     )
 
+    validation_retry_count = 0
     if needs_retry:
+        validation_retry_count = 1
         # Retry once with an explicit instruction
         retry_messages = llm_messages + [
             {
@@ -2470,6 +2508,8 @@ async def _send_message_under_generation_lock(
                 "content": "I need to revise my response to focus on legal analysis.",
             },
         ]
+        retry_provider_started_at = time.monotonic()
+        retry_llm_usage: dict = {}
         response_text2, tokens_in2, tokens_out2 = await llm_service.complete(
             messages=retry_messages,
             tenant_name=tenant_name,
@@ -2495,10 +2535,15 @@ async def _send_message_under_generation_lock(
                 premium=use_premium,
             ),
             system_prompt_override=(
-                llm_service.public_general_system_prompt() if public_general else None
+                llm_service.public_general_system_prompt(public_authority_context)
+                if public_general
+                else None
             ),
-            usage_sink=llm_usage,
+            usage_sink=retry_llm_usage,
         )
+        provider_total_ms += int((time.monotonic() - retry_provider_started_at) * 1000)
+        if retry_llm_usage.get("model"):
+            llm_usage["model"] = retry_llm_usage["model"]
         cleaned_response, _, response_pii = apply_guardrails(
             response_text2, privacy_mode=privacy_mode
         )
@@ -2650,6 +2695,13 @@ async def _send_message_under_generation_lock(
     cloud_source_ids = [
         _cloud_hit_context_id(_cloud_hit_dict(hit)) for hit in cloud_hits
     ]
+    latency_breakdown = {
+        "stream_buffered": 0,
+        "provider_total_ms": provider_total_ms,
+        "validation_retry_count": validation_retry_count,
+        "response_ready_ms": int((time.monotonic() - request_started_at) * 1000),
+        **_source_utilization_metrics(context_str, source_dicts),
+    }
     usage = UsageRecord(
         id=uuid.uuid4(),
         tenant_id=user.tenant_id,
@@ -2673,6 +2725,7 @@ async def _send_message_under_generation_lock(
         cache_hit_rag=cache_hit_rag,
         cache_hit_llm=cache_hit_llm,
         cache_hit_matter=cache_hit_matter,
+        latency_breakdown=latency_breakdown,
     )
     db.add(usage)
 
@@ -3038,7 +3091,7 @@ async def _stream_message_under_generation_lock(
         terminal_failure_persisted = False
         try:
             stream_started_at = time.monotonic()
-            latency_breakdown: dict[str, int] = {}
+            latency_breakdown: dict[str, int] = {"stream_buffered": 1}
 
             yield _stream_activity_event(
                 "understanding",
@@ -3210,6 +3263,9 @@ async def _stream_message_under_generation_lock(
                     sources=authority_previews,
                 )
 
+            public_authority_context = (
+                prepare_provider_text(context_str, True) if public_general else ""
+            )
             context_str = _join_context_sections(
                 attachment_context,
                 matter_context_str,
@@ -3267,7 +3323,7 @@ async def _stream_message_under_generation_lock(
                     premium=use_premium,
                 ),
                 system_prompt_override=(
-                    llm_service.public_general_system_prompt()
+                    llm_service.public_general_system_prompt(public_authority_context)
                     if public_general
                     else None
                 ),
@@ -3286,9 +3342,18 @@ async def _stream_message_under_generation_lock(
                     )
                     last_generation_update = now
 
+            provider_finished_at = time.monotonic()
             latency_breakdown["generation_ms"] = int(
-                (time.monotonic() - generation_started_at) * 1000
+                (provider_finished_at - generation_started_at) * 1000
             )
+            latency_breakdown["provider_ttft_ms"] = int(
+                stream_usage.get("provider_ttft_ms") or 0
+            )
+            latency_breakdown["provider_stream_ms"] = int(
+                stream_usage.get("provider_stream_ms")
+                or latency_breakdown["generation_ms"]
+            )
+            latency_breakdown["validation_retry_count"] = 0
             yield _stream_activity_event(
                 "drafting",
                 "completed",
@@ -3310,6 +3375,7 @@ async def _stream_message_under_generation_lock(
             )
 
             if needs_retry:
+                latency_breakdown["validation_retry_count"] = 1
                 # Clear and retry with explicit instruction
                 yield _stream_activity_event(
                     "citation_check",
@@ -3353,7 +3419,9 @@ async def _stream_message_under_generation_lock(
                         premium=use_premium,
                     ),
                     system_prompt_override=(
-                        llm_service.public_general_system_prompt()
+                        llm_service.public_general_system_prompt(
+                            public_authority_context
+                        )
                         if public_general
                         else None
                     ),
@@ -3369,6 +3437,14 @@ async def _stream_message_under_generation_lock(
                 ) + int(retry_usage.get("tokens_out") or 0)
                 if retry_usage.get("model"):
                     stream_usage["model"] = retry_usage["model"]
+                retry_stream_ms = int(retry_usage.get("provider_stream_ms") or 0)
+                latency_breakdown["provider_stream_ms"] += retry_stream_ms
+                latency_breakdown["generation_ms"] += retry_stream_ms
+                if retry_usage.get("provider_ttft_ms") is not None:
+                    latency_breakdown["retry_provider_ttft_ms"] = int(
+                        retry_usage["provider_ttft_ms"]
+                    )
+                provider_finished_at = time.monotonic()
 
                 cleaned_response, _, response_pii = apply_guardrails(
                     accumulated_text, privacy_mode=privacy_mode
@@ -3435,11 +3511,11 @@ async def _stream_message_under_generation_lock(
                     conv.id,
                 )
             source_dicts = _mark_cited_sources(cleaned_response, source_dicts)
+            latency_breakdown.update(
+                _source_utilization_metrics(context_str, source_dicts)
+            )
             latency_breakdown["validation_ms"] = int(
                 (time.monotonic() - validation_started_at) * 1000
-            )
-            latency_breakdown["response_ready_ms"] = int(
-                (time.monotonic() - stream_started_at) * 1000
             )
             yield _stream_activity_event(
                 "citation_check",
@@ -3477,6 +3553,16 @@ async def _stream_message_under_generation_lock(
             # Do not expose unvalidated provider output.  Buffering preserves
             # the SSE contract while ensuring the client only receives the
             # privacy- and citation-checked answer.
+            answer_release_at = time.monotonic()
+            latency_breakdown["post_provider_release_delay_ms"] = int(
+                (answer_release_at - provider_finished_at) * 1000
+            )
+            latency_breakdown["answer_release_ms"] = int(
+                (answer_release_at - stream_started_at) * 1000
+            )
+            latency_breakdown["response_ready_ms"] = latency_breakdown[
+                "answer_release_ms"
+            ]
             for offset in range(0, len(stream_visible_response), 80):
                 safe_chunk = stream_visible_response[offset : offset + 80]
                 yield _stream_token_event(safe_chunk)

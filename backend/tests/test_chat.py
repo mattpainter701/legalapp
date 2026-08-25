@@ -30,6 +30,7 @@ from app.routers.chat import (
     _propose_followthrough_actions,
     _normalize_source_url,
     _source_dict_from_chunk,
+    _source_utilization_metrics,
     _stream_activity_event,
     _stream_error_event,
     _stream_progress_event,
@@ -69,6 +70,27 @@ def test_standard_route_is_public_general_even_with_a_managed_alias():
     assert not _is_public_general_route(
         SimpleNamespace(requested_route="premium", gateway_alias="premium-model")
     )
+
+
+def test_source_utilization_metrics_track_injected_cited_and_linkable_sources():
+    metrics = _source_utilization_metrics(
+        "Public and firm context",
+        [
+            {"source_id": "one", "cited": True, "url": "https://example.test/one"},
+            {"source_id": "two", "cited": True, "url": ""},
+            {"source_id": "three", "cited": False, "url": "https://example.test/three"},
+            {"source_id": "four", "cited": False, "url": ""},
+            {"source_id": "five", "cited": True, "url": "/api/admin/users"},
+        ],
+    )
+
+    assert metrics == {
+        "rag_context_chars": 23,
+        "retrieved_source_count": 5,
+        "cited_source_count": 3,
+        "hyperlinkable_cited_source_count": 1,
+        "source_utilization_percent": 60,
+    }
 
 
 def test_standard_rejects_matter_or_attachment_sources_before_loading_context():
@@ -1666,10 +1688,48 @@ async def test_standard_chat_excludes_verified_global_user_profile(
     call = mock_llm.call_args.kwargs
     assert call["global_user_context"] == ""
     assert call["tenant_name"] == "Legal"
-    assert (
-        call["system_prompt_override"]
-        == chat_router.llm_service.public_general_system_prompt()
+    assert call[
+        "system_prompt_override"
+    ] == chat_router.llm_service.public_general_system_prompt(call["context"])
+
+
+@pytest.mark.asyncio
+async def test_standard_chat_injects_only_public_rag_into_isolated_prompt(
+    client: AsyncClient, db_session, test_user, mock_llm, mock_embeddings
+):
+    test_user.professional_role = "Attorney"
+    test_user.office_location = "Private Chicago Office"
+    await db_session.commit()
+    conv = (await client.post("/api/conversations", json={})).json()
+    public_context = (
+        "[source: authority:nd-1] Citation: 2026 ND 1\n"
+        "URL: https://example.test/opinion\nExcerpt: Public holding"
     )
+    public_chunk = {
+        "id": "authority:nd-1",
+        "source": "courtlistener_mcp",
+        "case_name": "Public Authority",
+        "citation": "2026 ND 1",
+        "content": "Public holding",
+        "similarity": 0.9,
+        "source_url": "https://example.test/opinion",
+    }
+
+    with patch("app.routers.chat.hybrid_rag_query", new_callable=AsyncMock) as rag:
+        rag.return_value = (public_context, [public_chunk], [])
+        response = await client.post(
+            f"/api/conversations/{conv['id']}/messages",
+            json={"content": "What does North Dakota law say?", "include_public": True},
+        )
+
+    assert response.status_code == 201, response.text
+    assert rag.call_args.kwargs["include_private"] is False
+    call = mock_llm.call_args.kwargs
+    assert call["context"] == public_context
+    assert public_context in call["system_prompt_override"]
+    assert call["memory_context"] == ""
+    assert call["global_user_context"] == ""
+    assert "Private Chicago Office" not in call["system_prompt_override"]
 
 
 @pytest.mark.asyncio

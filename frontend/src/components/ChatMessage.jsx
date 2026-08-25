@@ -73,8 +73,15 @@ export function linkSourceReferences(text, sources, messageId, annotations = [])
     if (id && !sourceIndexes.has(id)) sourceIndexes.set(id, { source, index })
   })
 
+  const replacements = []
+  const addReplacement = (replacement) => {
+    const overlapsExisting = replacements.some((current) => (
+      replacement.start < current.end && replacement.end > current.start
+    ))
+    if (!overlapsExisting) replacements.push(replacement)
+  }
+
   if (Array.isArray(annotations) && annotations.length > 0) {
-    const replacements = []
     for (const annotation of annotations) {
       for (const marker of annotation?.source_markers || []) {
         const entry = sourceIndexes.get(String(marker?.source_id || '').trim().toLowerCase())
@@ -89,7 +96,7 @@ export function linkSourceReferences(text, sources, messageId, annotations = [])
           || end > sourceText.length
         ) continue
         const href = sourceHref(entry.source) || `#${sourceAnchor(messageId, entry.index)}`
-        replacements.push({ start, end, value: `[[${entry.index + 1}]](${href})` })
+        addReplacement({ start, end, value: `[[${entry.index + 1}]](${href})` })
       }
 
       const primaryId = annotation?.source_ids?.[0]
@@ -105,29 +112,37 @@ export function linkSourceReferences(text, sources, messageId, annotations = [])
         && tagEnd > tagStart
         && tagEnd <= sourceText.length
       ) {
-        replacements.push({
+        addReplacement({
           start: tagStart,
           end: tagEnd,
           value: `[${annotation.support}](#${sourceAnchor(messageId, primaryEntry.index)})`,
         })
       }
     }
-    if (replacements.length > 0) {
-      let rendered = sourceText
-      for (const replacement of replacements.sort((a, b) => b.start - a.start)) {
-        rendered = `${rendered.slice(0, replacement.start)}${replacement.value}${rendered.slice(replacement.end)}`
-      }
-      return rendered
-    }
   }
 
-  return sourceText.replace(/\[source:\s*([^\]]+)\]/gi, (match, rawId) => {
+  // Structured annotations are intentionally narrow. A mixed or legacy answer
+  // may still contain valid source markers that were not assigned to a claim;
+  // retain and link those markers instead of returning early and exposing raw
+  // ``[source: ...]`` text.
+  for (const match of sourceText.matchAll(/\[source:\s*([^\]]+)\]/gi)) {
+    const [rawMarker, rawId] = match
+    const start = match.index
+    const end = start + rawMarker.length
     const entry = sourceIndexes.get(String(rawId || '').trim().toLowerCase())
-    if (!entry) return '**[source]**'
-    const label = `[${entry.index + 1}]`
+    if (!entry) {
+      addReplacement({ start, end, value: '**[source]**' })
+      continue
+    }
     const href = sourceHref(entry.source) || `#${sourceAnchor(messageId, entry.index)}`
-    return `[${label}](${href})`
-  })
+    addReplacement({ start, end, value: `[[${entry.index + 1}]](${href})` })
+  }
+
+  let rendered = sourceText
+  for (const replacement of replacements.sort((a, b) => b.start - a.start)) {
+    rendered = `${rendered.slice(0, replacement.start)}${replacement.value}${rendered.slice(replacement.end)}`
+  }
+  return rendered
 }
 
 function sourceDisplayName(src) {
@@ -146,11 +161,10 @@ export function citedSources(text, sources, annotations = []) {
         if (id) citedIds.add(id)
       }
     }
-  } else {
-    for (const match of String(text || '').matchAll(/\[source:\s*([^\]]+)\]/gi)) {
-      const id = String(match[1] || '').trim().toLowerCase()
-      if (id) citedIds.add(id)
-    }
+  }
+  for (const match of String(text || '').matchAll(/\[source:\s*([^\]]+)\]/gi)) {
+    const id = String(match[1] || '').trim().toLowerCase()
+    if (id) citedIds.add(id)
   }
   const hasStructuredAnnotations = Array.isArray(annotations) && annotations.length > 0
   return sourceList.filter((source) => {
@@ -565,7 +579,7 @@ function AssistantWorkingState({ progress, compact = false }) {
           <p className="mt-1 truncate pl-4 text-[10px] text-brand-muted">{currentActivity.detail}</p>
         )}
       </div>
-      <div className="hidden border border-brand-line bg-brand-bg p-4">
+      <div className="mt-2 border border-brand-line bg-brand-bg p-4">
       <div className="flex items-center gap-3">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center border border-brand-line bg-brand-surface-2">
           <Scale className="h-4 w-4 text-brand-gold" strokeWidth={2} />

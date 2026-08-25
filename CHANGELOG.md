@@ -66,6 +66,16 @@
   last scan time, file count and failure reason instead of an empty cell.
 
 ### Fixed
+- **Chat retrieval and citation provenance now match what the user sees:** the
+  Standard route injects only its sanitized public-authority RAG context into a
+  dedicated public prompt while continuing to exclude matter, attachment,
+  memory, profile, and history data. The citation renderer combines structured
+  annotation offsets with remaining raw source markers instead of dropping the
+  latter, and the review-tag legend is sticky and responsive rather than hidden
+  on mobile or scrolled out of view. Premium's validated-response boundary is
+  preserved while live source previews remain visible, and usage telemetry now
+  records provider TTFT, provider duration, validation/release delay, retrieved
+  versus cited sources, hyperlink coverage, and source-utilization percentage.
 - **Creating a matter forwarding address no longer fails on matters without a
   partner attorney:** `Matter.partner_attorney` is eagerly loaded with a left
   join, and the alias endpoint's blanket `FOR UPDATE` made PostgreSQL try to

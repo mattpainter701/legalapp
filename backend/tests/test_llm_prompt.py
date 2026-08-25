@@ -60,7 +60,11 @@ def test_system_prompt_does_not_expose_firm_context_label():
 
 
 def test_public_general_prompt_has_no_confidential_context_contract():
-    prompt = LLMService.public_general_system_prompt()
+    public_context = (
+        "[source: authority:nd-1] Citation: 2026 ND 1\n"
+        "URL: https://example.test/opinion\nExcerpt: Public holding"
+    )
+    prompt = LLMService.public_general_system_prompt(public_context)
 
     assert "current user message" in prompt
     assert (
@@ -69,6 +73,32 @@ def test_public_general_prompt_has_no_confidential_context_contract():
     assert "{tenant_name}" not in prompt
     assert "{context}" not in prompt
     assert "SOURCE MATERIALS" not in prompt
+    assert "PUBLIC AUTHORITY MATERIALS" in prompt
+    assert public_context in prompt
+    assert "[source: <source_id>]" in prompt
+    assert "[cited]" in prompt
+    assert "[verify]" in prompt
+    assert "[model knowledge]" in prompt
+
+
+def test_public_general_prompt_has_no_private_interpolation_slots():
+    prompt = LLMService.public_general_system_prompt("Public authority only")
+
+    for private_slot in (
+        "{tenant_name}",
+        "{memory_context}",
+        "{global_user_context}",
+        "{user_name}",
+    ):
+        assert private_slot not in prompt
+    assert "Public authority only" in prompt
+
+
+def test_public_general_prompt_discloses_empty_public_retrieval():
+    prompt = LLMService.public_general_system_prompt()
+
+    assert "No public authority retrieved." in prompt
+    assert "This response uses general legal knowledge" in prompt
 
 
 def test_verified_profile_is_a_distinct_prompt_section_and_privacy_scrubbed():
@@ -236,6 +266,71 @@ async def test_stream_rejects_reasoning_only_token_exhaustion():
         ]
 
     assert usage["tokens_out"] == 4096
+
+
+@pytest.mark.asyncio
+async def test_stream_records_provider_first_token_and_total_time():
+    class FakeStream:
+        def __init__(self):
+            self._chunks = iter(
+                [
+                    SimpleNamespace(
+                        choices=[
+                            SimpleNamespace(
+                                delta=SimpleNamespace(content="Answer"),
+                                finish_reason=None,
+                            )
+                        ],
+                        usage=None,
+                        model="provider-model",
+                    ),
+                    SimpleNamespace(
+                        choices=[],
+                        usage=SimpleNamespace(
+                            prompt_tokens=12,
+                            completion_tokens=3,
+                        ),
+                        model="provider-model",
+                    ),
+                ]
+            )
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._chunks)
+            except StopIteration:
+                raise StopAsyncIteration
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            return FakeStream()
+
+    service = LLMService()
+    service.client = SimpleNamespace(
+        chat=SimpleNamespace(completions=FakeCompletions())
+    )
+    usage = {}
+
+    with patch("app.services.llm.time.monotonic", side_effect=[10.0, 10.125, 10.5]):
+        chunks = [
+            chunk
+            async for chunk in service.stream_complete(
+                [{"role": "user", "content": "Question"}],
+                tenant_name="Tenant",
+                context="Retrieved authority",
+                model="clarity-premium-rtest",
+                usage_sink=usage,
+            )
+        ]
+
+    assert chunks == ["Answer"]
+    assert usage["provider_ttft_ms"] == 125
+    assert usage["provider_stream_ms"] == 500
+    assert usage["tokens_in"] == 12
+    assert usage["tokens_out"] == 3
 
 
 @pytest.mark.asyncio

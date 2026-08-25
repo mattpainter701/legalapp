@@ -2,6 +2,27 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.24.5",
+      "version": "2026.08.24.5",
+      "title": "Research answers show and link the sources they use",
+      "published_at": "2026-08-24",
+      "summary": "Standard research now gives public authority to the assistant, mixed citations remain clickable, and the review-tag guide stays visible while an answer is prepared.",
+      "highlights": [
+        {
+          "title": "Standard answers can use retrieved public authority",
+          "description": "Standard answers can now use retrieved public cases, statutes, and rules with review tags. Matter and firm information remain excluded from Standard."
+        },
+        {
+          "title": "Every retained source marker stays clickable",
+          "description": "Answers that mix structured citation annotations with ordinary source markers now link both kinds to the authority or the in-answer source ledger."
+        },
+        {
+          "title": "Review tags and research progress stay in view",
+          "description": "The tag legend remains visible on phones and desktops, and retrieved-source previews and elapsed research phases remain visible while Premium prepares a validated answer."
+        }
+      ]
+    },
+    {
       "id": "2026.08.24.4",
       "version": "2026.08.24.4",
       "title": "Matter forwarding addresses can be created",
