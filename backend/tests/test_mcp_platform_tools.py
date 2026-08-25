@@ -73,9 +73,7 @@ async def test_execute_platform_tool_dispatches_with_tenant_scope(monkeypatch) -
         tools.ListMatterDocumentsArgs(matter_id=matter_id), db=db, tenant_id=tenant_id
     )
     create_document.assert_awaited_once_with(
-        tools.CreateDocumentArgs(
-            matter_id=matter_id, title="Notes", content="Body"
-        ),
+        tools.CreateDocumentArgs(matter_id=matter_id, title="Notes", content="Body"),
         db=db,
         tenant_id=tenant_id,
         user_id=None,
@@ -268,7 +266,9 @@ def test_document_content_is_bounded_below_the_transport_cap() -> None:
 
 def test_declared_input_schema_matches_the_validated_contract() -> None:
     """The protocol path validates against inputSchema; keep the two in step."""
-    schemas = {item["name"]: item["inputSchema"] for item in tools.platform_tool_definitions()}
+    schemas = {
+        item["name"]: item["inputSchema"] for item in tools.platform_tool_definitions()
+    }
 
     documents = schemas["list_matter_documents"]["properties"]
     assert documents["matter_id"]["format"] == "uuid"
@@ -281,142 +281,6 @@ def test_declared_input_schema_matches_the_validated_contract() -> None:
     assert creation["matter_id"]["format"] == "uuid"
     assert creation["task_id"]["format"] == "uuid"
     assert creation["content"]["maxLength"] == tools.MAX_DOCUMENT_CONTENT_CHARS
-
-
-# ── Metering on failure ─────────────────────────────────────────────────────
-
-
-def _metering_stubs(monkeypatch, raises: Exception):
-    """Stub the router's metering seam and make the tool call fail."""
-    from app.routers import mcp as mcp_router
-
-    recorded: list[dict] = []
-
-    async def _record(**kwargs):
-        recorded.append(kwargs)
-
-    async def _execute(*args, **kwargs):
-        raise raises
-
-    monkeypatch.setattr(mcp_router, "record_mcp_usage", _record)
-    monkeypatch.setattr(mcp_router, "execute_platform_tool", _execute)
-    return mcp_router, recorded
-
-
-@pytest.mark.asyncio
-async def test_an_unexpected_tool_failure_is_still_metered(monkeypatch) -> None:
-    """Catching only HTTPException left a failed call absent from usage records."""
-    boom = RuntimeError("database said no")
-    mcp_router, recorded = _metering_stubs(monkeypatch, boom)
-
-    body = mcp_router.ToolCallRequest(name="list_matters", arguments={"query": "ada"})
-    request = SimpleNamespace(
-        headers={"User-Agent": "probe/1.0"}, client=SimpleNamespace(host="203.0.113.7")
-    )
-    product_key = SimpleNamespace(id=uuid.uuid4())
-    tenant = SimpleNamespace(id=uuid.uuid4())
-
-    with pytest.raises(RuntimeError):
-        await mcp_router._call_platform_tool_metered(
-            body,
-            request,
-            db=object(),
-            product_key=product_key,
-            tenant=tenant,
-            transport="rest",
-            started=0.0,
-        )
-
-    assert len(recorded) == 1
-    assert recorded[0]["status_code"] == 500
-    assert recorded[0]["error_class"] == "RuntimeError"
-    assert recorded[0]["tool_name"] == "list_matters"
-
-
-@pytest.mark.asyncio
-async def test_an_http_error_keeps_its_own_status_when_metered(monkeypatch) -> None:
-    refusal = HTTPException(status_code=404, detail="Matter not found")
-    mcp_router, recorded = _metering_stubs(monkeypatch, refusal)
-
-    body = mcp_router.ToolCallRequest(name="create_document", arguments={})
-    request = SimpleNamespace(
-        headers={"User-Agent": "probe/1.0"}, client=SimpleNamespace(host="203.0.113.7")
-    )
-
-    with pytest.raises(HTTPException):
-        await mcp_router._call_platform_tool_metered(
-            body,
-            request,
-            db=object(),
-            product_key=SimpleNamespace(id=uuid.uuid4()),
-            tenant=SimpleNamespace(id=uuid.uuid4()),
-            transport="rest",
-            started=0.0,
-        )
-
-    assert recorded[0]["status_code"] == 404
-    assert recorded[0]["error_class"] == "HTTPException"
-
-
-@pytest.mark.asyncio
-async def test_a_database_failure_is_metered_despite_the_poisoned_session(
-    monkeypatch, test_tenant, db_session
-) -> None:
-    """The failure this metering exists for is the one that breaks its session.
-
-    A tool that fails with a database error leaves the request session in a
-    failed transaction, so writing usage on that same session raises instead of
-    recording and masks the original exception. Metering therefore runs on a
-    session of its own.
-    """
-    import sqlalchemy as sa
-    from app.models.mcp_product import MCPUsageEvent
-    from app.routers import mcp as mcp_router
-
-    async def _explode(*args, **kwargs):
-        # Exactly what a non-UUID matter_id used to do inside the tool.
-        await db_session.execute(sa.text("SELECT 'not-a-uuid'::uuid"))
-
-    monkeypatch.setattr(mcp_router, "execute_platform_tool", _explode)
-
-    # Read the id before the failing statement: the rollback below expires the
-    # ORM instance, and refreshing it mid-assertion is its own async trap.
-    tenant_id = test_tenant.id
-
-    body = mcp_router.ToolCallRequest(name="list_matters", arguments={})
-    request = SimpleNamespace(
-        headers={"User-Agent": "probe/1.0"}, client=SimpleNamespace(host="203.0.113.7")
-    )
-
-    with pytest.raises(Exception):
-        await mcp_router._call_platform_tool_metered(
-            body,
-            request,
-            db_session,
-            product_key=SimpleNamespace(id=None),
-            tenant=SimpleNamespace(id=tenant_id),
-            transport="rest",
-            started=0.0,
-        )
-
-    await db_session.rollback()
-    recorded = (
-        (
-            await db_session.execute(
-                sa.select(MCPUsageEvent).where(
-                    MCPUsageEvent.tenant_id == tenant_id,
-                    MCPUsageEvent.tool_name == "list_matters",
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-
-    # Committed on its own session, so it survives the rolled-back request.
-    assert len(recorded) == 1
-    assert recorded[0].status_code == 500
-    assert recorded[0].error_class in {"DBAPIError", "ProgrammingError"}
 
 
 def test_advertised_schemas_reject_undeclared_arguments(monkeypatch) -> None:

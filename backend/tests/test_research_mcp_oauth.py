@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -117,14 +118,19 @@ def test_research_access_token_requires_temporal_and_identity_claims(missing):
 
 
 @pytest.mark.parametrize(
-    "iat,exp",
+    "iat_offset,exp_offset",
     [
-        (int(__import__("time").time()) + 120, int(__import__("time").time()) + 600),
-        (int(__import__("time").time()) - 1, int(__import__("time").time()) - 1),
-        (int(__import__("time").time()) - 1, int(__import__("time").time()) + 901),
+        (120, 600),
+        (-1, -1),
+        (-1, 901),
     ],
 )
-def test_research_access_token_rejects_invalid_lifetime(iat, exp):
+def test_research_access_token_rejects_invalid_lifetime(iat_offset, exp_offset):
+    # Compute timestamps at test execution so a slow suite cannot turn the
+    # future-iat case into an otherwise-valid token before this assertion runs.
+    now = int(time.time())
+    iat = now + iat_offset
+    exp = now + exp_offset
     claims = {
         "iss": "https://research.getlawhand.com",
         "aud": "lawhand-research-mcp",
