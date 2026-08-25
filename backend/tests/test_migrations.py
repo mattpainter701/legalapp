@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["124_inbound_email"]
+    assert heads == ["125_llm_routing_profiles"]
 
 
 def test_revision_ids_fit_the_alembic_version_column():

@@ -98,12 +98,46 @@ Retention defaults:
 If a tenant-specific debug mode is added, it must be short-retention, explicit,
 audited, and visible in operator logs.
 
+## Routing Profiles and Matter Context
+
+Platform operators manage reusable routing profiles from **Platform → AI
+Routing**. A profile owns both the Standard and Premium provider/key/model
+graphs, their versioned LiteLLM aliases, and an independent **Allow
+confidential matter context** policy for each tier. New profiles can clone an
+existing profile's route graph, policy, and validated aliases. A blank profile,
+or a clone whose graph is changed, must pass route validation before the new
+aliases become active.
+
+Tenants either inherit the one active default profile or receive an explicit
+active profile assignment from the tenant detail panel. The profile banner on
+both screens shows whether it is default or tenant-assigned and whether matter
+context is allowed for Standard and Premium. The default profile cannot be
+deactivated. If an assigned profile is later inactive or unavailable, runtime
+routing fails over to the active default profile.
+
+Matter-context permission is evaluated before chat loads a linked matter or
+attachment. A blocked tier rejects those sources for both synchronous and
+streaming chat. Standard defaults to blocked; Premium defaults to allowed for
+backward compatibility. Enabling context does not bypass model eligibility:
+every primary, balanced, and fallback target must still pass the confidential
+data policy gate before a profile can be activated.
+
+Migration `125_llm_routing_profiles` converts the prior global route into the
+default profile and leaves the legacy route API available for older operator
+clients. Profile-aware clients pass `profile_id` to route read, activation, and
+reload endpoints.
+
 ## Operator Audit
 
 Operator LLM actions write metadata-only entries to `operator_audit_logs`.
 Current audited actions:
 
-- `llm.routes_saved`: global standard/premium route changes and LiteLLM reload result.
+- `llm.routing_profile_created`: profile identity, clone source, and tier data
+  policies.
+- `llm.routing_profile_updated`: profile status/default state and tier data
+  policies.
+- `llm.routes_saved`: global or profile Standard/Premium route changes,
+  matter-context policies, and LiteLLM reload result.
 - `llm.routes_activation_blocked`: rejected customer-route activation or reload,
   with policy reason and provider/model placement only.
 - `llm.provider_disabled`: provider key removal/disablement.

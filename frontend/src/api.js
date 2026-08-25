@@ -1307,20 +1307,29 @@ export const getLLMModelCatalog = (key) =>
 export const refreshLLMModelCatalog = (key) =>
   platformApi(key).post('/platform/llm/model-catalog/refresh').then((r) => r.data)
 
-export const getLLMRoutes = (key) =>
-  platformApi(key).get('/platform/llm/routes').then((r) => r.data)
+export const getLLMRoutingProfiles = (key) =>
+  platformApi(key).get('/platform/llm/profiles').then((r) => r.data)
+
+export const createLLMRoutingProfile = (key, data) =>
+  platformApi(key).post('/platform/llm/profiles', data).then((r) => r.data)
+
+export const updateLLMRoutingProfile = (key, profileId, data) =>
+  platformApi(key).patch(`/platform/llm/profiles/${profileId}`, data).then((r) => r.data)
+
+export const getLLMRoutes = (key, profileId = null) =>
+  platformApi(key).get('/platform/llm/routes', { params: profileId ? { profile_id: profileId } : {} }).then((r) => r.data)
 
 export const recommendLLMRoutes = (key, data) =>
   platformApi(key).post('/platform/llm/routes/recommend', data).then((r) => r.data)
 
-export const saveLLMRoutes = (key, data) =>
-  platformApi(key).put('/platform/llm/routes', data).then((r) => r.data)
+export const saveLLMRoutes = (key, data, profileId = null) =>
+  platformApi(key).put('/platform/llm/routes', data, { params: profileId ? { profile_id: profileId } : {} }).then((r) => r.data)
 
 export const getLLMGatewayStatus = (key) =>
   platformApi(key).get('/platform/llm/gateway/status').then((r) => r.data)
 
-export const reloadLLMRoutes = (key) =>
-  platformApi(key).post('/platform/llm/routes/reload').then((r) => r.data)
+export const reloadLLMRoutes = (key, profileId = null) =>
+  platformApi(key).post('/platform/llm/routes/reload', null, { params: profileId ? { profile_id: profileId } : {} }).then((r) => r.data)
 
 export const testLLMRoute = (key, data) =>
   platformApi(key).post('/platform/llm/routes/test', data).then((r) => r.data)
