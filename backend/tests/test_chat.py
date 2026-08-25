@@ -30,6 +30,7 @@ from app.routers.chat import (
     _propose_followthrough_actions,
     _normalize_source_url,
     _source_dict_from_chunk,
+    _source_utilization_metrics,
     _stream_activity_event,
     _stream_error_event,
     _stream_progress_event,
@@ -38,7 +39,7 @@ from app.routers.chat import (
     _stream_token_event,
 )
 from app.schemas.chat import ChatAttachmentResponse, ConversationUpdate, MessageCreate
-from app.models.conversation import Conversation, Message
+from app.models.conversation import Conversation, Message, UsageRecord
 from app.models.document import Chunk, Document
 from app.models.error_log import ErrorLog
 from app.models.plugin import Matter
@@ -69,6 +70,27 @@ def test_standard_route_is_public_general_even_with_a_managed_alias():
     assert not _is_public_general_route(
         SimpleNamespace(requested_route="premium", gateway_alias="premium-model")
     )
+
+
+def test_source_utilization_metrics_track_injected_cited_and_linkable_sources():
+    metrics = _source_utilization_metrics(
+        "Public and firm context",
+        [
+            {"source_id": "one", "cited": True, "url": "https://example.test/one"},
+            {"source_id": "two", "cited": True, "url": ""},
+            {"source_id": "three", "cited": False, "url": "https://example.test/three"},
+            {"source_id": "four", "cited": False, "url": ""},
+            {"source_id": "five", "cited": True, "url": "/api/admin/users"},
+        ],
+    )
+
+    assert metrics == {
+        "rag_context_chars": 23,
+        "retrieved_source_count": 5,
+        "cited_source_count": 3,
+        "hyperlinkable_cited_source_count": 1,
+        "source_utilization_percent": 60,
+    }
 
 
 def test_standard_rejects_matter_or_attachment_sources_before_loading_context():
@@ -1272,6 +1294,58 @@ async def test_failed_llm_call_persists_retryable_assistant_chronology(
 
 
 @pytest.mark.asyncio
+async def test_nonstream_guardrail_retry_records_provider_model_and_elapsed_time(
+    client: AsyncClient, db_session, mock_llm, mock_embeddings
+):
+    """A successful validation retry must preserve the retry provider metadata."""
+    conv = (await client.post("/api/conversations", json={})).json()
+    complete_calls = 0
+
+    async def complete_with_usage(*_args, **kwargs):
+        nonlocal complete_calls
+        complete_calls += 1
+        kwargs["usage_sink"]["model"] = (
+            "initial-model" if complete_calls == 1 else "retry-model"
+        )
+        if complete_calls == 1:
+            return "Initial draft", 10, 10
+        return "Revised draft", 11, 12
+
+    mock_llm.side_effect = complete_with_usage
+
+    with (
+        patch("app.routers.chat.hybrid_rag_query", new_callable=AsyncMock) as rag,
+        patch(
+            "app.routers.chat.apply_guardrails",
+            side_effect=[
+                ("Initial draft", True, []),
+                ("Revised draft", False, []),
+            ],
+        ),
+    ):
+        rag.return_value = ("", [], [])
+        response = await client.post(
+            f"/api/conversations/{conv['id']}/messages",
+            json={"content": "Retry this answer after validation."},
+        )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["content"] == "Revised draft"
+    assert mock_llm.await_count == 2
+    usage = (
+        await db_session.execute(
+            select(UsageRecord).where(
+                UsageRecord.conversation_id == uuid.UUID(conv["id"]),
+                UsageRecord.operation_type == "chat",
+            )
+        )
+    ).scalar_one()
+    assert usage.model_used == "retry-model"
+    assert usage.latency_breakdown["validation_retry_count"] == 1
+    assert usage.latency_breakdown["provider_total_ms"] >= 0
+
+
+@pytest.mark.asyncio
 async def test_busy_generation_rejects_send_and_delete_without_writing(
     client: AsyncClient,
     db_session,
@@ -1666,10 +1740,48 @@ async def test_standard_chat_excludes_verified_global_user_profile(
     call = mock_llm.call_args.kwargs
     assert call["global_user_context"] == ""
     assert call["tenant_name"] == "Legal"
-    assert (
-        call["system_prompt_override"]
-        == chat_router.llm_service.public_general_system_prompt()
+    assert call[
+        "system_prompt_override"
+    ] == chat_router.llm_service.public_general_system_prompt(call["context"])
+
+
+@pytest.mark.asyncio
+async def test_standard_chat_injects_only_public_rag_into_isolated_prompt(
+    client: AsyncClient, db_session, test_user, mock_llm, mock_embeddings
+):
+    test_user.professional_role = "Attorney"
+    test_user.office_location = "Private Chicago Office"
+    await db_session.commit()
+    conv = (await client.post("/api/conversations", json={})).json()
+    public_context = (
+        "[source: authority:nd-1] Citation: 2026 ND 1\n"
+        "URL: https://example.test/opinion\nExcerpt: Public holding"
     )
+    public_chunk = {
+        "id": "authority:nd-1",
+        "source": "courtlistener_mcp",
+        "case_name": "Public Authority",
+        "citation": "2026 ND 1",
+        "content": "Public holding",
+        "similarity": 0.9,
+        "source_url": "https://example.test/opinion",
+    }
+
+    with patch("app.routers.chat.hybrid_rag_query", new_callable=AsyncMock) as rag:
+        rag.return_value = (public_context, [public_chunk], [])
+        response = await client.post(
+            f"/api/conversations/{conv['id']}/messages",
+            json={"content": "What does North Dakota law say?", "include_public": True},
+        )
+
+    assert response.status_code == 201, response.text
+    assert rag.call_args.kwargs["include_private"] is False
+    call = mock_llm.call_args.kwargs
+    assert call["context"] == public_context
+    assert public_context in call["system_prompt_override"]
+    assert call["memory_context"] == ""
+    assert call["global_user_context"] == ""
+    assert "Private Chicago Office" not in call["system_prompt_override"]
 
 
 @pytest.mark.asyncio
@@ -2048,6 +2160,75 @@ async def test_stream_message_persists_cloud_sources(
     assistant = [m for m in detail["messages"] if m["role"] == "assistant"][0]
     assert assistant["sources"][0]["case_name"] == "Client Closing Checklist"
     assert assistant["sources"][0]["citation"] == "https://drive.example/file/1"
+
+
+@pytest.mark.asyncio
+async def test_stream_guardrail_retry_exposes_retry_provider_timing(
+    client: AsyncClient, db_session, mock_embeddings
+):
+    """Streaming retries should persist combined provider timing and retry metadata."""
+    conv = (await client.post("/api/conversations", json={})).json()
+    calls = 0
+
+    async def stream_tokens(*_args, **kwargs):
+        nonlocal calls
+        calls += 1
+        usage_sink = kwargs["usage_sink"]
+        if calls == 1:
+            usage_sink.update(
+                model="initial-model",
+                tokens_in=3,
+                tokens_out=4,
+                provider_stream_ms=5,
+                provider_ttft_ms=2,
+            )
+            yield "Initial draft"
+        else:
+            usage_sink.update(
+                model="retry-model",
+                tokens_in=6,
+                tokens_out=7,
+                provider_stream_ms=9,
+                provider_ttft_ms=4,
+            )
+            yield "Revised draft"
+
+    with (
+        patch("app.routers.chat.hybrid_rag_query", new_callable=AsyncMock) as rag,
+        patch("app.services.llm.LLMService.stream_complete", stream_tokens),
+        patch(
+            "app.routers.chat.apply_guardrails",
+            side_effect=[
+                ("Initial draft", True, []),
+                ("Revised draft", False, []),
+            ],
+        ),
+    ):
+        rag.return_value = ("", [], [])
+        async with client.stream(
+            "POST",
+            f"/api/conversations/{conv['id']}/messages/stream",
+            json={"content": "Retry this streamed answer."},
+        ) as response:
+            body = "".join([part async for part in response.aiter_text()])
+
+    assert response.status_code == 200
+    assert calls == 2
+    assert "Revising the draft before release" in body
+    assert "Revised draft" in body
+    usage = (
+        await db_session.execute(
+            select(UsageRecord).where(
+                UsageRecord.conversation_id == uuid.UUID(conv["id"]),
+                UsageRecord.operation_type == "chat_stream",
+            )
+        )
+    ).scalar_one()
+    assert usage.model_used == "retry-model"
+    assert usage.latency_breakdown["validation_retry_count"] == 1
+    assert usage.latency_breakdown["provider_ttft_ms"] == 2
+    assert usage.latency_breakdown["provider_stream_ms"] == 14
+    assert usage.latency_breakdown["retry_provider_ttft_ms"] == 4
 
 
 @pytest.mark.asyncio

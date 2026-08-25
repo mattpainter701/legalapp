@@ -65,9 +65,6 @@ function EmptyState({ onPromptSelect }) {
             </p>
           </div>
         </div>
-        <div className="mt-3 border-t border-brand-line pt-3">
-          <ReviewTagLegend compact />
-        </div>
       </div>
     </div>
   )
@@ -83,7 +80,7 @@ export default function Messages({
   const messagesEndRef = useRef(null)
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    messagesEndRef.current?.scrollIntoView?.({ behavior: 'smooth' })
   }, [messages, isSending])
 
   return (
@@ -92,6 +89,9 @@ export default function Messages({
       onScroll={onMessageScroll}
       aria-live={isSending ? 'polite' : 'off'}
     >
+      <div className="sticky top-0 z-20 -mx-1 bg-brand-bg/95 px-1 py-1 backdrop-blur" aria-label="Review tag legend">
+        <ReviewTagLegend compact />
+      </div>
       {!messages || messages.length === 0 ? (
         <EmptyState onPromptSelect={onPromptSelect} />
       ) : isLoading ? (
@@ -101,9 +101,6 @@ export default function Messages({
         </div>
       ) : (
         <div className="mx-auto w-full max-w-none">
-          <div className="hidden sm:block">
-            <ReviewTagLegend compact />
-          </div>
           {messages.map((message, index) => (
             <div
               key={message.id}

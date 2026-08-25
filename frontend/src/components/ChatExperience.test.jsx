@@ -155,6 +155,72 @@ describe('Chat assistant experience', () => {
     expect(screen.getByText(/official.*primary law.*91% match/i)).toBeInTheDocument()
   })
 
+  it('links annotated and remaining raw source markers in the same answer', () => {
+    const firstMarker = '[source: authority:nd-1]'
+    const secondMarker = '[source: authority:nd-2]'
+    const content = `First supported claim. ${firstMarker} [cited]\n\nSecond source. ${secondMarker} [verify]`
+    const firstStart = content.indexOf(firstMarker)
+    const citedStart = content.indexOf('[cited]')
+    const sources = [
+      {
+        source_id: 'authority:nd-1',
+        case_name: 'First authority',
+        url: 'https://example.test/authority/nd-1',
+        source_type: 'public_authority',
+      },
+      {
+        source_id: 'authority:nd-2',
+        case_name: 'Second authority',
+        url: 'https://example.test/authority/nd-2',
+        source_type: 'public_authority',
+      },
+    ]
+    const annotations = [{
+      claim_id: 'claim-1',
+      start: 0,
+      end: citedStart + '[cited]'.length,
+      text: 'First supported claim.',
+      support: 'cited',
+      source_ids: ['authority:nd-1'],
+      source_markers: [{
+        source_id: 'authority:nd-1',
+        start: firstStart,
+        end: firstStart + firstMarker.length,
+      }],
+      support_tag: { start: citedStart, end: citedStart + '[cited]'.length },
+    }]
+
+    const linked = linkSourceReferences(content, sources, 'answer-mixed', annotations)
+    expect(linked).toContain('[[1]](https://example.test/authority/nd-1)')
+    expect(linked).toContain('[[2]](https://example.test/authority/nd-2)')
+    expect(linked).not.toContain('[source:')
+    expect(linked.match(/https:\/\/example\.test\/authority\/nd-1/g)).toHaveLength(1)
+    expect(citedSources(content, sources, annotations)).toEqual(sources)
+
+    render(
+      <ChatMessage
+        message={{
+          id: 'answer-mixed',
+          role: 'assistant',
+          content,
+          sources,
+          citation_annotations: annotations,
+        }}
+      />,
+    )
+
+    expect(screen.getByRole('link', { name: '[1]' })).toHaveAttribute(
+      'href',
+      'https://example.test/authority/nd-1',
+    )
+    expect(screen.getByRole('link', { name: '[2]' })).toHaveAttribute(
+      'href',
+      'https://example.test/authority/nd-2',
+    )
+    expect(screen.getByText('First authority')).toBeInTheDocument()
+    expect(screen.getByText('Second authority')).toBeInTheDocument()
+  })
+
   it('keeps uncited retrieval out of the visible source ledger', () => {
     const sources = [
       {
@@ -497,6 +563,33 @@ describe('Chat assistant experience', () => {
     await user.click(screen.getByRole('button', { name: /Review a source/ }))
     expect(onPromptSelect).toHaveBeenCalledWith(expect.stringContaining('Summarize the key issues'))
     expect(screen.getByText('What do you want to move forward?')).toBeInTheDocument()
+  })
+
+  it('keeps the review-tag legend visible for populated and loading chats', () => {
+    const { rerender } = render(
+      <Messages
+        messages={[{ id: 'user-1', role: 'user', content: 'Question' }]}
+        isLoading={false}
+        isSending={false}
+      />,
+    )
+
+    const legend = screen.getByLabelText('Review tag legend')
+    expect(legend).toHaveClass('sticky')
+    expect(legend).not.toHaveClass('hidden')
+    expect(screen.getByText('Tag legend:')).toBeInTheDocument()
+    expect(screen.getByText('(Source-backed)')).toBeInTheDocument()
+    expect(screen.getByText('(Confirm before relying)')).toBeInTheDocument()
+    expect(screen.getByText('(General reasoning)')).toBeInTheDocument()
+
+    rerender(
+      <Messages
+        messages={[{ id: 'user-1', role: 'user', content: 'Question' }]}
+        isLoading
+        isSending={false}
+      />,
+    )
+    expect(screen.getByLabelText('Review tag legend')).toBeInTheDocument()
   })
 })
 
