@@ -1,3 +1,5 @@
+import ast
+import re
 from pathlib import Path
 
 
@@ -7,9 +9,10 @@ CONFIG = ROOT / "clarity_agent" / "config.py"
 LINUX_PACKAGING = ROOT / "packaging" / "linux"
 
 
-def test_pairing_code_is_hidden_from_msi_logs():
+def test_msi_does_not_accept_or_log_pairing_code():
     text = WXS.read_text(encoding="utf-8")
-    assert '<Property Id="PAIRING_CODE" Secure="yes" Hidden="yes"' in text
+    assert "PAIRING_CODE" not in text
+    assert "RegisterAgent" not in text
 
 
 def test_upgrade_preserves_state_and_does_not_repair():
@@ -17,7 +20,7 @@ def test_upgrade_preserves_state_and_does_not_repair():
     assert 'UpgradeCode="d3f674f5-b516-4ecc-b82d-b2495b4aa260"' in text
     assert 'Component Id="DataFolderComponent"' in text
     assert 'Directory="DATAFOLDER" Permanent="yes"' in text
-    assert "NOT WIX_UPGRADE_DETECTED" in text
+    assert "WIX_UPGRADE_DETECTED" not in text
     assert 'Stop="both"' in text
     assert 'Start="install"' in text
     assert 'Wait="yes"' in text
@@ -129,3 +132,25 @@ def test_linux_portal_updates_use_root_owned_systemd_handoff():
     assert "Refusing to downgrade" in helper
     assert "rollback" in helper
     assert "unsupported archive member" in helper
+    assert "OfficialRedirectHandler" in helper
+    assert "self.redirects > 5" in helper
+    python_blocks = re.findall(r"<<'PY'\r?\n(.*?)\r?\nPY", helper, flags=re.DOTALL)
+    download_tree = ast.parse(
+        next(block for block in python_blocks if "allowed_hosts" in block)
+    )
+    allowed_hosts = next(
+        ast.literal_eval(node.value)
+        for node in download_tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "allowed_hosts"
+            for target in node.targets
+        )
+    )
+    assert allowed_hosts == {
+        "github.com",
+        "objects.githubusercontent.com",
+        "release-assets.githubusercontent.com",
+        "github-releases.githubusercontent.com",
+    }
+    assert "context.minimum_version = ssl.TLSVersion.TLSv1_2" in helper

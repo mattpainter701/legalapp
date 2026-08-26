@@ -39,25 +39,14 @@ docker compose restart backend
 
 ## Step 3: Install the Agent
 
-On the Windows machine that has access to the approved shares, download the
-stable MSI and its checksums from the latest agent release:
-
-```powershell
-$base = 'https://github.com/mattpainter701/legalapp/releases/latest/download'
-Invoke-WebRequest "$base/lawhand-agent-x64.msi" -OutFile lawhand-agent-x64.msi
-Invoke-WebRequest "$base/SHA256SUMS.txt" -OutFile SHA256SUMS.txt
-$expected = ((Select-String SHA256SUMS.txt ' lawhand-agent-x64\.msi$').Line -split '\s+')[0]
-$actual = (Get-FileHash .\lawhand-agent-x64.msi -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($actual -ne $expected) { throw 'Installer checksum mismatch' }
-```
-
-Generate the pairing code in Step 4, then install it from an elevated prompt:
-
-```powershell
-msiexec /i lawhand-agent-x64.msi /qn `
-  PAIRING_CODE=<one-time-code> `
-  SAAS_URL=https://getlawhand.com
-```
+After generating the code in Step 4, use the **Copy command** action beside the
+Windows installer in **Administration → File Shares → Agents** and run the
+complete block on the Windows machine that can access the approved shares, from
+an elevated PowerShell window.
+The generated block permits only the LawHand GitHub release path and GitHub's
+release CDN hosts, limits redirects and response sizes, validates the manifest,
+downloads a version-pinned MSI, verifies SHA-256, and then installs or upgrades
+the service. The MSI never receives the one-time pairing code.
 
 For development, `cd agent && pip install -e .[dev]` installs the
 `lawhand-agent` CLI from source.
@@ -84,8 +73,25 @@ The pairing code expires in 10 minutes (configurable via `SMB_PAIRING_CODE_TTL_M
 
 ## Step 5: Register the Agent
 
-The MSI registers automatically when `PAIRING_CODE` is supplied. For a source
-install or an MSI installed without a code:
+Pairing is deliberately separate from MSI installation. This keeps a bad or
+expired code from rolling back an otherwise healthy service installation and
+keeps the code out of durable Windows Installer diagnostics. The portal's
+copied block performs this step automatically after a fresh install. If you
+downloaded and installed the MSI manually, use the generated code in the same
+elevated PowerShell window:
+
+```powershell
+$pairingCode = 'A7X3-K9M2-Q7RT-W4YZ'
+$agent = Join-Path $env:ProgramFiles 'LawHand\Agent\lawhand-agent.exe'
+& $agent register --code $pairingCode
+if ($LASTEXITCODE -ne 0) { throw "Registration failed with code $LASTEXITCODE" }
+Restart-Service 'LawHandAgent'
+Get-Service 'LawHandAgent'
+```
+
+The production URL is built into the packaged agent, so do not paste a
+Markdown-formatted URL or add `--url` for a normal production registration.
+For a source install or a local development server, the explicit form remains:
 
 ```bash
 lawhand-agent register \
@@ -110,7 +116,10 @@ password = ""
 domain = ""
 ```
 
-**Important:** The pairing code is one-time use. The API key is shown only once during registration.
+**Important:** The pairing code is one-time use. Unused reservations expire
+after 10 minutes and are removed from the operational agent view; registered
+agents remain as auditable records when revoked. The API key is shown only once
+during registration.
 
 ## Step 6: Configure SMB Credentials
 
@@ -227,29 +236,11 @@ upgrade before this portal button works.
 
 ### Windows overtop MSI
 
-Run from an elevated PowerShell prompt. Installing the MSI over the existing
-product preserves `C:\ProgramData\LawHand\Agent`; do not uninstall first.
-
-```powershell
-$base = 'https://github.com/mattpainter701/legalapp/releases/latest/download'
-$work = Join-Path $env:TEMP 'lawhand-agent-update'
-New-Item -ItemType Directory -Force $work | Out-Null
-Invoke-WebRequest "$base/agent-update.json" -OutFile "$work/agent-update.json"
-$manifest = Get-Content "$work/agent-update.json" -Raw | ConvertFrom-Json
-if ($manifest.schema_version -ne 1 -or $manifest.version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') { throw 'Invalid update manifest' }
-$asset = $manifest.assets.'windows-x86_64'
-if ($asset.name -ne 'lawhand-agent-x64.msi' -or $asset.sha256 -notmatch '^[0-9a-fA-F]{64}$') { throw 'Invalid Windows release entry' }
-$versioned = "https://github.com/mattpainter701/legalapp/releases/download/agent-v$($manifest.version)/$($asset.name)"
-Invoke-WebRequest $versioned -OutFile "$work\lawhand-agent-x64.msi"
-$expected = $asset.sha256.ToLowerInvariant()
-$actual = (Get-FileHash "$work/lawhand-agent-x64.msi" -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($actual -ne $expected) { throw 'Installer checksum mismatch' }
-$args = "/i `"$work\lawhand-agent-x64.msi`" /qn /norestart /l*v `"$work\upgrade.log`""
-$process = Start-Process msiexec.exe -ArgumentList $args -Wait -PassThru
-if ($process.ExitCode -notin @(0, 1641, 3010)) {
-  throw "Upgrade failed with exit code $($process.ExitCode); see $work\upgrade.log"
-}
-```
+Run the Windows **Copy command** block from the Agents tab in an elevated
+PowerShell prompt. Installing the MSI over the existing product preserves
+`C:\ProgramData\LawHand\Agent`; do not uninstall first. When that enrollment
+already exists, the block skips pairing and reports that the existing LawHand
+registration was preserved.
 
 Portal and CLI auto-updates are supported for the default LocalSystem service.
 If `SERVICE_ACCOUNT` was used, use the direct overtop MSI command above. The
@@ -296,8 +287,9 @@ test -n "$LAWHAND_INSTALLER"
 sudo "$LAWHAND_INSTALLER"
 ```
 
-The stable URLs return 404 until an `agent-v0.15.0` (or later) tag has completed
-the release workflow and been published.
+The stable URLs always point to the most recently verified published `agent-v*`
+tag. They advance to v0.15.1 only after both platform builds, tests, checksums,
+and public download probes pass.
 
 ## Monitoring
 
@@ -309,6 +301,22 @@ lawhand-agent status
 # On the SaaS
 curl http://localhost:8000/api/v1/smb/agents \
   -H "Authorization: Bearer <ADMIN_JWT_TOKEN>"
+```
+
+### Agent Logs
+
+The Windows package writes bounded rotating application logs under the
+protected machine data directory. Stream or inspect them from an elevated
+PowerShell window:
+
+```powershell
+Get-Content 'C:\ProgramData\LawHand\Agent\logs\agent.log' -Tail 200 -Wait
+```
+
+On Linux, use journald:
+
+```bash
+sudo journalctl -u lawhand-agent.service -n 200 -f
 ```
 
 ### SMB Stats (Admin Dashboard)
@@ -369,6 +377,7 @@ remain the next controls if a Tailscale-equivalent device identity is required.
 | "SMB feature is not enabled" | Set `SMB_ENABLED=true` in `.env` and restart backend |
 | Pairing code expired | Generate a new one (they expire in 10 min) |
 | Agent can't connect to SMB | Check `smb_credentials` in config.toml, verify network access |
+| Connection test succeeds but sync returns HTTP 422 | Upgrade the SaaS compatibility fix or agent to v0.15.1+, then retry **Scan now**; SMB credentials are already working |
 | No files in search results | Use **Scan now** in the share admin view, or run `lawhand-agent scan` on the agent |
 | Content fetch timeout | Increase `SMB_CONTENT_FETCH_TIMEOUT` in `.env` |
 | Agent shows as "paused" | Heartbeat missed for 15+ minutes; check agent is running |

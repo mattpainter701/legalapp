@@ -1450,7 +1450,7 @@ def test_litellm_release_contract_is_pinned_and_fail_closed() -> None:
         assert hypervisor[service]["restart"] == "no"
 
 
-def test_production_signup_flags_are_explicitly_mapped_and_rollback_images_remain() -> (
+def test_production_feature_flags_are_explicitly_mapped_and_rollback_images_remain() -> (
     None
 ):
     for compose_name in ("docker-compose.yml", "docker-compose.hypervisor.yml"):
@@ -1472,9 +1472,15 @@ def test_production_signup_flags_are_explicitly_mapped_and_rollback_images_remai
         assert prod_services[service]["environment"]["PUBLIC_SIGNUP_ENABLED"] == (
             "${PUBLIC_SIGNUP_ENABLED:-false}"
         )
+        assert prod_services[service]["environment"]["SMB_ENABLED"] == (
+            "${SMB_ENABLED:-true}"
+        )
     assert (
         prod_services["frontend"]["build"]["args"]["VITE_PUBLIC_SIGNUP_ENABLED"]
         == "${VITE_PUBLIC_SIGNUP_ENABLED:-false}"
+    )
+    assert "SMB_ENABLED=true" in (ROOT / ".env.prod.example").read_text(
+        encoding="utf-8"
     )
 
     deploy = (ROOT / "scripts" / "deploy_prod.sh").read_text(encoding="utf-8")

@@ -3,6 +3,15 @@
 ## [Unreleased]
 
 ### Added
+- **File share agents now have operator-grade local diagnostics:** Windows
+  services write bounded rotating logs under the protected ProgramData agent
+  directory, Linux continues to use journald, and the File Shares console
+  exposes copy-ready commands for reading the local log without uploading
+  tenant file data or credentials.
+- **The File Shares agent list refreshes while administrators are pairing and
+  troubleshooting:** registered agents and heartbeats refresh automatically,
+  with an explicit refresh control and a separate history view for revoked
+  registered devices.
 - **Disposable demos can be resumed without passwords** (migration
   `131_demo_resume_profile`): a visitor can choose **Resume demo** and enter the
   same normalized email plus the current demo access code to reopen an active,
@@ -17,6 +26,30 @@
   private-detail protection remains enforced.
 
 ### Fixed
+- **File-share operations now report the real tenant state:** production
+  explicitly enables SMB retrieval, while the Status tab always authenticates
+  and returns tenant-scoped agent, share, credential, heartbeat, scan, and
+  index counts even when retrieval is disabled. The Activity tab now combines
+  agent lifecycle and heartbeat, update, share scan/connection-test,
+  credential verification/delivery, and audited full-content access events so
+  administrators can diagnose a quiet or failing installation from one place.
+- **File-share connection tests and indexing now agree:** the API accepts the
+  empty timestamp sentinel emitted by installed v0.15.0 agents while v0.15.1
+  sends proper null values and reports bounded validation details. Admins can
+  edit a share's UNC path or assigned agent, and a move retires stale indexed
+  metadata before the new location is scanned into matter context.
+- **Abandoned file-share pairing attempts no longer look like installed
+  agents** (migration `132_smb_agent_lifecycle_indexes`): expired
+  never-registered reservations are removed by a tenant/RLS-
+  scoped retention job, revoking an unused reservation deletes it immediately,
+  and operational counts exclude pending and revoked placeholders while real
+  revoked devices retain their audit history. Indexed API-key and
+  tenant/status/expiry lookups keep heartbeat authentication and cleanup fast.
+- **Windows agent installation no longer couples MSI success to network
+  registration:** v0.15.1 installs and upgrades the service first, verifies the
+  published checksum, and performs pairing as an explicit second step. A bad or
+  expired code now produces a concise registration error instead of MSI 1603,
+  and the one-time code is no longer copied into Windows Installer events.
 - **Matter-context approval is bound to the route that Platform validated:** a
   Standard or Premium profile toggle no longer authorizes an unrelated tenant
   alias, explicit model, or customer BYOK destination. Chat now fails closed on

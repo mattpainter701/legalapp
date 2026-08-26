@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import getpass
 import logging
+import re
 import signal
 import time
 from datetime import datetime, timezone
@@ -22,6 +23,66 @@ from clarity_agent import updater
 from clarity_agent.utils import parse_smb_path, setup_logging
 
 logger = logging.getLogger("clarity_agent")
+
+
+def _safe_request_error(exc: Exception) -> str:
+    """Return bounded API validation detail without echoing request secrets."""
+    import httpx
+
+    if isinstance(exc, httpx.HTTPStatusError):
+        message = f"HTTP {exc.response.status_code}"
+        try:
+            detail = exc.response.json().get("detail")
+        except (ValueError, TypeError):
+            detail = None
+        if isinstance(detail, str):
+            detail_text = _safe_validation_message(detail)
+        elif isinstance(detail, list):
+            entries = []
+            for item in detail[:5]:
+                if not isinstance(item, dict):
+                    continue
+                loc = item.get("loc")
+                msg = item.get("msg")
+                field = next(
+                    (
+                        part
+                        for part in reversed(loc or [])
+                        if isinstance(part, str)
+                        and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", part)
+                    ),
+                    "request",
+                )
+                safe_msg = _safe_validation_message(msg)
+                if safe_msg:
+                    entries.append(f"{field}: {safe_msg}")
+            detail_text = "; ".join(entries)[:300]
+        else:
+            detail_text = ""
+        if detail_text:
+            message += f": {detail_text}"
+        return message
+    if isinstance(exc, httpx.RequestError):
+        return "network request failed"
+    # Unknown exceptions may interpolate a local path, identity, or library
+    # object into their string form. The exception type is sufficient for the
+    # portal status without copying arbitrary third-party detail.
+    return type(exc).__name__
+
+
+def _safe_validation_message(value: object) -> str:
+    """Keep only harmless, bounded validation prose from a server response."""
+    if not isinstance(value, str) or not value or len(value) > 200:
+        return ""
+    value = " ".join(value.split())
+    # Do not copy request values (paths, URLs, credentials, or arbitrary input)
+    # into a local log or scan-status field.
+    if any(
+        token in value for token in ("\\", "/", "://", "@", "input_value", "input=")
+    ):
+        return ""
+    return value
+
 
 # How often the daemon wakes to see which shares are due. Shares carry their
 # own cron schedule; this is only the resolution at which those are honoured.
@@ -161,7 +222,7 @@ async def _scan_share(
                 len(result.deleted_files),
             )
         except Exception as exc:
-            sync_error = f"Sync failed: {exc}"
+            sync_error = f"Sync failed: {_safe_request_error(exc)}"
             logger.error("%s", sync_error)
     else:
         logger.info("No changes detected for share %s", share_id)
@@ -391,21 +452,51 @@ async def _register_with_saas(
 
 
 def cmd_register(args) -> None:
-    config = AgentConfig(saas_url=args.url)
+    config = AgentConfig(saas_url=args.url or "https://getlawhand.com")
+    setup_logging(config.log_level)
     info = host_info()
 
-    result = asyncio.run(
-        _register_with_saas(
-            config,
-            args.code,
-            {
-                "agent_name": args.name or info["hostname"],
-                "agent_version": info["agent_version"],
-                "hostname": info["hostname"],
-                "os_info": info["os_info"],
-            },
+    try:
+        result = asyncio.run(
+            _register_with_saas(
+                config,
+                args.code,
+                {
+                    "agent_name": args.name or info["hostname"],
+                    "agent_version": info["agent_version"],
+                    "hostname": info["hostname"],
+                    "os_info": info["os_info"],
+                },
+            )
         )
-    )
+    except Exception as exc:
+        # Never print the request body or command line, which may contain the
+        # one-time pairing code. Keep the operator-facing failure actionable.
+        import httpx
+
+        if isinstance(exc, httpx.HTTPStatusError):
+            message = f"SaaS rejected registration (HTTP {exc.response.status_code})"
+            try:
+                detail = exc.response.json().get("detail")
+            except (ValueError, AttributeError):
+                detail = None
+            if (
+                isinstance(detail, str)
+                and 0 < len(detail) <= 200
+                and args.code not in detail
+                and not any(character in detail for character in "\r\n")
+            ):
+                message = f"{message}: {detail}"
+        elif isinstance(exc, httpx.RequestError):
+            message = "Could not reach the SaaS registration endpoint"
+        elif isinstance(exc, ValueError) and str(exc).startswith("CLARITY_SAAS_URL"):
+            message = str(exc)
+        else:
+            message = "Registration failed; check the agent log for details"
+            logging.getLogger(__name__).error(
+                "Registration failed (%s)", type(exc).__name__
+            )
+        raise SystemExit(message) from None
 
     config.api_key = result["api_key"]
     config.agent_id = result["agent_id"]

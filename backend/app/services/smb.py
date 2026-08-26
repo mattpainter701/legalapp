@@ -78,6 +78,12 @@ _manifest_cache: tuple[float, dict] | None = None
 _manifest_failure_until = 0.0
 AGENT_UPDATE_MANIFEST_FAILURE_BACKOFF_SECONDS = 30
 AGENT_MANIFEST_MAX_REDIRECTS = 5
+
+
+class SmbShareConflictError(ValueError):
+    """Raised when a tenant already has the requested agent/path share."""
+
+
 OFFICIAL_MANIFEST_REDIRECT_HOSTS = {
     "github.com",
     "objects.githubusercontent.com",
@@ -421,6 +427,28 @@ def _pairing_code() -> str:
     return "-".join(raw[i : i + 4] for i in range(0, PAIRING_CODE_SYMBOLS, 4))
 
 
+def _placeholder_has_no_related_state():
+    """SQL predicates proving a pairing reservation owns no durable state."""
+    return (
+        ~select(SmbShare.id)
+        .where(SmbShare.agent_id == SmbAgent.id)
+        .correlate(SmbAgent)
+        .exists(),
+        ~select(SmbCredential.id)
+        .where(SmbCredential.agent_id == SmbAgent.id)
+        .correlate(SmbAgent)
+        .exists(),
+        ~select(SmbFileIndex.id)
+        .where(SmbFileIndex.agent_id == SmbAgent.id)
+        .correlate(SmbAgent)
+        .exists(),
+        ~select(SmbAccessLog.id)
+        .where(SmbAccessLog.agent_id == SmbAgent.id)
+        .correlate(SmbAgent)
+        .exists(),
+    )
+
+
 async def _commit_audit_then_publish(
     db: AsyncSession,
     redis,
@@ -482,6 +510,64 @@ class SmbService:
         await db.flush()
 
         return code, expires_at
+
+    async def cleanup_expired_pairing_agents(
+        self,
+        db: AsyncSession,
+        tenant_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> int:
+        """Remove unregistered pairing placeholders after their reservation expires.
+
+        A placeholder has no API credential and cannot own useful agent state.
+        Restrict this cleanup to the sentinel hash written by
+        :meth:`generate_pairing_code`; registered agents (including revoked
+        ones) are never eligible. The caller supplies normal tenant RLS.
+        """
+        await set_tenant_context(db, tenant_id)
+        cutoff = now or datetime.now(timezone.utc)
+        result = await db.execute(
+            delete(SmbAgent).where(
+                SmbAgent.api_key_hash == "pending",
+                SmbAgent.tenant_id == _uuid(tenant_id),
+                sa_or(
+                    # A live pending reservation is retained until its code
+                    # expires; revoked placeholders are already unusable and
+                    # can be removed immediately (including legacy rows whose
+                    # expiry field was cleared or never populated).
+                    and_(
+                        SmbAgent.status == "pending",
+                        SmbAgent.pairing_expires_at.is_not(None),
+                        SmbAgent.pairing_expires_at <= cutoff,
+                    ),
+                    SmbAgent.status == "revoked",
+                ),
+                *_placeholder_has_no_related_state(),
+            )
+        )
+        await db.commit()
+        return int(result.rowcount or 0)
+
+    async def delete_pairing_placeholder_if_empty(
+        self,
+        db: AsyncSession,
+        agent_id: str,
+        tenant_id: str,
+    ) -> bool:
+        """Delete one never-registered reservation only when it owns no state."""
+        await set_tenant_context(db, tenant_id)
+        result = await db.execute(
+            delete(SmbAgent)
+            .where(
+                SmbAgent.id == _uuid(agent_id),
+                SmbAgent.tenant_id == _uuid(tenant_id),
+                SmbAgent.api_key_hash == "pending",
+                *_placeholder_has_no_related_state(),
+            )
+            .execution_options(synchronize_session=False)
+        )
+        return bool(result.rowcount)
 
     async def register_agent(
         self,
@@ -1297,6 +1383,11 @@ class SmbService:
         """
         await set_tenant_context(db, tenant_id)
 
+        # A short-lived pairing reservation must never own a share. This keeps
+        # lifecycle cleanup from cascading tenant configuration and also
+        # prevents credentials from being routed to an unregistered device.
+        await smb_credential_service.require_registered_agent(db, tenant_id, agent_id)
+
         credential_id = await self._resolve_share_credential(
             db, tenant_id, agent_id, data.credential_id, data.credential, user_id
         )
@@ -1337,6 +1428,43 @@ class SmbService:
         if share is None:
             raise ValueError("Share not found")
 
+        target_agent_id = str(data.agent_id or share.agent_id)
+        target_path = data.share_path or share.share_path
+        await smb_credential_service.require_registered_agent(
+            db, tenant_id, target_agent_id
+        )
+        duplicate = await db.execute(
+            select(SmbShare.id).where(
+                SmbShare.tenant_id == _uuid(tenant_id),
+                SmbShare.agent_id == _uuid(target_agent_id),
+                SmbShare.share_path == target_path,
+                SmbShare.id != _uuid(share_id),
+            )
+        )
+        if duplicate.scalar_one_or_none() is not None:
+            raise SmbShareConflictError(
+                "A share with this path already exists on the selected agent"
+            )
+
+        assignment_changed = (
+            str(share.agent_id) != target_agent_id or share.share_path != target_path
+        )
+        if (
+            assignment_changed
+            and data.credential is None
+            and data.credential_id is None
+            and share.credential_id is not None
+        ):
+            # Validate before mutating the ORM row so a pinned credential
+            # cannot leave a partially moved share in the transaction.
+            await self._resolve_share_credential(
+                db, tenant_id, target_agent_id, str(share.credential_id)
+            )
+        if data.share_path is not None:
+            share.share_path = target_path
+        if data.agent_id is not None:
+            share.agent_id = _uuid(target_agent_id)
+
         if data.display_name is not None:
             share.display_name = data.display_name
         if data.file_extensions is not None:
@@ -1367,6 +1495,28 @@ class SmbService:
             share.last_verify_status = None
             share.last_verify_error = None
 
+        if assignment_changed:
+            # A different path/agent has never been verified or scanned by
+            # this share row. Hide its old corpus entries immediately rather
+            # than leaving stale matter/context results until another scan.
+            await db.execute(
+                update(SmbFileIndex)
+                .where(
+                    SmbFileIndex.tenant_id == _uuid(tenant_id),
+                    SmbFileIndex.share_id == _uuid(share_id),
+                )
+                .values(is_deleted=True)
+            )
+            await advance_rag_corpus_revision(db, _uuid(tenant_id))
+
+            # Force the portal/agent to establish fresh operational state.
+            share.last_scan_at = None
+            share.last_scan_status = None
+            share.last_scan_file_count = None
+            share.last_scan_error = None
+            share.last_verified_at = None
+            share.last_verify_status = None
+            share.last_verify_error = None
         await db.flush()
         return share
 
@@ -1849,9 +1999,16 @@ class SmbService:
         await set_tenant_context(db, tenant_id)
         tid = _uuid(tenant_id)
 
+        # Pending reservations and unregistered revoked tombstones are not
+        # operational agents. Registered revoked rows remain auditable but are
+        # intentionally excluded from this dashboard count as well.
         agent_count = (
             await db.execute(
-                select(func.count(SmbAgent.id)).where(SmbAgent.tenant_id == tid)
+                select(func.count(SmbAgent.id)).where(
+                    SmbAgent.tenant_id == tid,
+                    SmbAgent.status.in_(("active", "paused")),
+                    SmbAgent.api_key_hash != "pending",
+                )
             )
         ).scalar_one()
 
@@ -1860,6 +2017,7 @@ class SmbService:
                 select(func.count(SmbAgent.id)).where(
                     SmbAgent.tenant_id == tid,
                     SmbAgent.status == "active",
+                    SmbAgent.api_key_hash != "pending",
                 )
             )
         ).scalar_one()
@@ -1928,6 +2086,24 @@ class SmbService:
             )
         ).scalar_one()
 
+        last_agent_heartbeat = (
+            await db.execute(
+                select(func.max(SmbAgent.last_heartbeat)).where(
+                    SmbAgent.tenant_id == tid,
+                    SmbAgent.status.in_(("active", "paused")),
+                    SmbAgent.api_key_hash != "pending",
+                )
+            )
+        ).scalar_one()
+
+        # Share scan completion is a better operational signal than the newest
+        # changed file: a successful no-change scan must still move this value.
+        last_file_sync = (
+            await db.execute(
+                select(func.max(SmbShare.last_scan_at)).where(SmbShare.tenant_id == tid)
+            )
+        ).scalar_one()
+
         return {
             "agent_count": agent_count,
             "active_agents": active_agents,
@@ -1938,6 +2114,8 @@ class SmbService:
             "credential_count": credential_count,
             "shares_failing": shares_failing,
             "shares_without_credential": shares_without_credential,
+            "last_agent_heartbeat": last_agent_heartbeat,
+            "last_file_sync": last_file_sync,
         }
 
     async def get_access_log(

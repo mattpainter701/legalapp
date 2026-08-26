@@ -142,6 +142,12 @@ AGENT_REGISTRY: List[Dict[str, Any]] = [
         "schedule": "Every 15 minutes",
     },
     {
+        "name": "smb-pairing-cleanup",
+        "display_name": "SMB Pairing Reservation Cleanup",
+        "description": "Deletes expired, never-registered file-share pairing reservations.",
+        "schedule": "Every 10 minutes",
+    },
+    {
         "name": "smb-update-reconciliation",
         "display_name": "SMB Agent Update Reconciliation",
         "description": "Restores durable file-share agent updates after cache loss and expires unconfirmed attempts.",
@@ -727,6 +733,17 @@ class LegalScheduler:
             name="SMB Agent Heartbeat",
             replace_existing=True,
         )
+        agent_count += 1
+        self.scheduler.add_job(
+            self._guarded("smb-pairing-cleanup", self._cleanup_smb_pairing_agents),
+            CronTrigger(minute="*/10"),
+            id="smb-pairing-cleanup",
+            name="SMB Pairing Reservation Cleanup",
+            replace_existing=True,
+            max_instances=1,
+            next_run_time=datetime.now(timezone.utc),
+        )
+        agent_count += 1
         # Redis is a cache, so restore durable portal update reservations on
         # startup and periodically.  The first run is immediate so a restart
         # does not require an administrator to reopen the portal.
@@ -1857,6 +1874,28 @@ class LegalScheduler:
                     await redis.aclose()
 
     @tenant_scoped_job
+    async def _cleanup_smb_pairing_agents(self) -> None:
+        """Delete expired, never-registered pairing placeholders per tenant."""
+        from app.services.smb import smb_service
+
+        async with async_session_maker() as session:
+            try:
+                tenant_id = _scheduler_tenant_id.get()
+                if tenant_id is None:
+                    raise RuntimeError("Scheduler job started without a tenant context")
+                deleted = await smb_service.cleanup_expired_pairing_agents(
+                    session, str(tenant_id)
+                )
+                if deleted:
+                    logger.info(
+                        "[smb-pairing-cleanup] Deleted %s expired placeholder(s)",
+                        deleted,
+                    )
+            except Exception:
+                await session.rollback()
+                logger.exception("[smb-pairing-cleanup] Cleanup failed")
+
+    @tenant_scoped_job
     async def _check_smb_agent_heartbeats(self) -> None:
         """Mark active SMB agents as paused when their last heartbeat is older than 15 minutes (or null)."""
         logger.info("[smb-heartbeat] Starting run")
@@ -1971,6 +2010,7 @@ class LegalScheduler:
             "estate-deadline-watcher": self.run_estate_deadline_watcher,
             "user-sync": self.run_user_sync,
             "smb-heartbeat": self._check_smb_agent_heartbeats,
+            "smb-pairing-cleanup": self._cleanup_smb_pairing_agents,
             "chat-attachment-cleanup": self.run_chat_attachment_cleanup,
         }
 

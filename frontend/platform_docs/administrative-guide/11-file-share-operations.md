@@ -13,7 +13,7 @@ icon: briefcase
 
 ## Install and register an agent
 
-Generate a pairing code on the **Agents** tab. The tab also shows the installer commands for the machine that will run the agent: a Windows MSI that registers an auto-starting service, and a Linux tarball with a systemd installer. The agent must run on a host that already has network access to the share; it needs no inbound firewall rule, only outbound HTTPS.
+Generate a pairing code on the **Agents** tab. The tab also shows copy-ready installer commands for the machine that will run the agent: on Windows, one verified PowerShell block installs or upgrades the auto-starting service and then registers it as a separate step; on Linux, the tarball installs a systemd service. The agent must run on a host that already has network access to the share; it needs no inbound firewall rule, only outbound HTTPS.
 
 Confirm the agent belongs to the intended environment and tenant before assigning shares to it. Pause or revoke an agent from the same tab when its host is decommissioned.
 
@@ -36,6 +36,8 @@ Add the narrowest approved path and a recognizable display name. Avoid drive roo
 
 Use **Test connection** immediately after adding the share. The agent mounts the path with the configured credential and reports back what identity it used and whether it could list the folder, so a wrong password or a missing permission surfaces at once instead of as an empty index hours later.
 
+Use **Edit** to correct the UNC path or move the share to another registered agent. A path or agent change clears the old scan/verification result and removes the prior file metadata from active search until the new location is scanned, preventing stale matter context from surviving a move.
+
 ## Index and search
 
 Start indexing during an approved window, using **Scan now** rather than waiting for the schedule. Record baseline file counts and monitor progress and failures — the share row shows the last scan time, its status, the file count, and the error text when a scan fails. After indexing, test a known allowed document and a known disallowed location.
@@ -44,6 +46,21 @@ File permissions can change after indexing. Establish a process for rescans, del
 
 ## Diagnose safely
 
-For an offline agent, check its registered identity, network path reachability, service status, and last heartbeat through the restricted operations procedure. For a share that stopped indexing, read the scan error on the share row and re-run **Test connection** to separate a credential problem from a path or permission problem. For file errors, preserve the relative path and error category without copying sensitive file contents into support notes.
+Start with **Status**. Its counts describe the tenant's registered agents,
+configured shares, stored credentials, and indexed files even if retrieval has
+been disabled by server configuration. The retrieval badge and warning are a
+separate signal: disabled retrieval prevents indexed file-share results from
+being used in search and matter context, but it does not erase the operational
+inventory.
+
+Use **Activity** as the tenant-scoped operational timeline. It combines agent
+registration and heartbeats, agent updates, share configuration, scans and
+connection tests, credential creation, delivery and verification, and audited
+full-document access. Passwords, API keys, and document contents are never
+included. A successful connection test followed by a failed scan usually
+means the server accepted the SMB identity but rejected or could not process
+the later metadata sync.
+
+For an offline agent, check its registered identity, network path reachability, service status, and last heartbeat through the restricted operations procedure. For a share that stopped indexing, read the scan error on the share row and re-run **Test connection** to separate a credential problem from a path or permission problem. If the connection test succeeds but sync reports HTTP 422, the share credentials are working and the file-metadata payload needs a compatible server or agent update. For file errors, preserve the relative path and error category without copying sensitive file contents into support notes.
 
 Disable or remove a share when its business owner, path, tenant, or data classification changes. Verify what indexed data and caches remain under retention policy.

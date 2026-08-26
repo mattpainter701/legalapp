@@ -6,12 +6,10 @@
   auto-starting Windows service, and creates the machine-wide data directory
   the agent keeps its config, key and ledger in.
 
-  Build:  wix build lawhand-agent.wxs -arch x64 -d AgentExe=..\..\dist\lawhand-agent.exe -d ProductVersion=0.15.0 -ext WixToolset.Util.wixext -o lawhand-agent.msi
+  Build:  wix build lawhand-agent.wxs -arch x64 -d AgentExe=..\..\dist\lawhand-agent.exe -d ProductVersion=0.15.1 -ext WixToolset.Util.wixext -o lawhand-agent.msi
 
-  Unattended install, pairing in one step:
-      msiexec /i lawhand-agent-0.15.0-x64.msi /qn ^
-              PAIRING_CODE=<code from Administration -> File Shares> ^
-              SAAS_URL=https://getlawhand.com
+  Install or over-top upgrade (pair separately with `lawhand-agent register`):
+      msiexec /i lawhand-agent-0.15.1-x64.msi /qn /norestart
 
   Run the service as a domain account instead of LocalSystem (only needed when
   shares are mounted with the machine's own identity rather than a credential
@@ -39,12 +37,6 @@
                   DowngradeErrorMessage="A newer version of the LawHand File Share Agent is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
-    <!-- Pairing details. Empty PAIRING_CODE simply skips registration, so the
-         MSI can be deployed by GPO and paired later from the command line. -->
-    <!-- Hidden prevents the one-time pairing code from being copied into
-         verbose MSI logs. It is still passed to the deferred action below. -->
-    <Property Id="PAIRING_CODE" Secure="yes" Hidden="yes" />
-    <Property Id="SAAS_URL" Secure="yes" Value="https://getlawhand.com" />
     <!-- Keep an explicit command-line SERVICE_ACCOUNT authoritative. When it
          is omitted, AppSearch discovers the existing SCM identity and the
          SetProperty actions below select it before costing; LocalSystem is
@@ -88,14 +80,6 @@
       <ComponentGroupRef Id="AgentComponents" />
     </Feature>
 
-    <InstallExecuteSequence>
-      <!-- Pair before StartServices so the service comes up already registered.
-           WIX_UPGRADE_DETECTED is set by FindRelatedProducts before this
-           sequence, so a major upgrade never consumes a new code or replaces
-           an existing enrollment. -->
-      <Custom Action="RegisterAgent" Before="StartServices"
-              Condition="PAIRING_CODE AND NOT Installed AND NOT WIX_UPGRADE_DETECTED" />
-    </InstallExecuteSequence>
   </Package>
 
   <Fragment>
@@ -167,13 +151,5 @@
       </Component>
     </ComponentGroup>
 
-    <!-- Deferred + no impersonation: registration writes into ProgramData and
-         must run with the installing service's privileges. -->
-    <CustomAction Id="RegisterAgent"
-                  FileRef="LawHandAgentExe"
-                  ExeCommand="register --code &quot;[PAIRING_CODE]&quot; --url &quot;[SAAS_URL]&quot;"
-                  Execute="deferred"
-                  Impersonate="no"
-                  Return="check" />
   </Fragment>
 </Wix>

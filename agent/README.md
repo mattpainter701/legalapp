@@ -25,28 +25,30 @@ Stable latest-release assets are:
 
 The release workflow publishes these aliases only after Windows and Linux
 builds/tests both pass, verifies their checksums exist, and then probes the
-public URLs. Until the repository has at least one `agent-v*` release, GitHub
-correctly returns 404 for the stable links.
+public URLs. The aliases resolve to the most recently verified `agent-v*`
+release.
 
 ### Windows (primary target)
 
 ```powershell
 msiexec /i lawhand-agent-<version>-x64.msi /qn `
-        PAIRING_CODE=<code from Administration → File Shares> `
-        SAAS_URL=https://getlawhand.com
+        /norestart
+
+# Run separately in an elevated PowerShell window after the MSI completes:
+& 'C:\Program Files\LawHand\Agent\lawhand-agent.exe' register --code '<pairing code>'
 ```
 
 The MSI installs `lawhand-agent.exe` into `C:\Program Files\LawHand\Agent`,
 registers the **LawHand File Share Agent** service (auto-start, restart on
-failure), creates `C:\ProgramData\LawHand\Agent` for config/key/ledger, and
-pairs the agent during install when `PAIRING_CODE` is supplied.
+failure), and creates `C:\ProgramData\LawHand\Agent` for config/key/ledger.
+Pairing is a separate command so the one-time code is never exposed to Windows
+Installer command lines or MSI event logs. Installing a newer MSI directly over
+the existing product preserves the enrollment and service configuration.
 
 Optional properties:
 
 | Property | Default | Purpose |
 | --- | --- | --- |
-| `PAIRING_CODE` | *(none)* | Pair during install. Omit to pair later with `lawhand-agent register`. |
-| `SAAS_URL` | `https://getlawhand.com` | API endpoint. |
 | `SERVICE_ACCOUNT` | `LocalSystem` | Run the service as a domain account instead. |
 | `SERVICE_PASSWORD` | *(none)* | Password for `SERVICE_ACCOUNT`. |
 
@@ -88,6 +90,24 @@ lawhand-agent update --apply                   # verify and launch update
 lawhand-agent service install|start|stop|restart|status|remove
 ```
 
+## Logs
+
+Windows services write bounded UTF-8 rotating logs (5 MiB, three backups) under
+the same protected ProgramData directory as their enrollment. From an elevated
+PowerShell window:
+
+```powershell
+Get-Content 'C:\ProgramData\LawHand\Agent\logs\agent.log' -Tail 200 -Wait
+```
+
+MSI diagnostics are separate; the portal install block writes those to
+`$env:TEMP\lawhand-agent-install.log`. On Linux, application output remains in
+journald:
+
+```bash
+sudo journalctl -u lawhand-agent.service -n 200 -f
+```
+
 Updates use only the fixed official `agent-update.json` release manifest from
 the LawHand GitHub repository. The platform asset name and SHA-256 are checked
 before staging. Portal-triggered `agent_update` tasks contain only the target
@@ -107,29 +127,15 @@ Shares → Agents → Update**. The portal polls queued/in-progress status and t
 next heartbeat confirms the running version. Agents older than 0.15.0 need one
 manual overtop upgrade before they understand portal update tasks.
 
-On Windows, install the new MSI directly over the existing product—do not
-uninstall first. This preserves `%ProgramData%\LawHand\Agent` and suppresses
-pairing during the upgrade:
+On Windows, use the **Copy command** block in **Administration → File Shares →
+Agents** from an elevated PowerShell prompt. It restricts downloads to the
+official GitHub release path/CDN hosts, validates the manifest, downloads a
+version-pinned MSI, verifies SHA-256, and installs the new MSI directly over the
+existing product. Do not uninstall first: the block preserves
+`%ProgramData%\LawHand\Agent` and skips pairing when an enrollment already
+exists.
 
-```powershell
-$base = 'https://github.com/mattpainter701/legalapp/releases/latest/download'
-$dir = Join-Path $env:TEMP 'lawhand-agent-update'
-New-Item -ItemType Directory -Force $dir | Out-Null
-Invoke-WebRequest "$base/agent-update.json" -OutFile "$dir/agent-update.json"
-$manifest = Get-Content "$dir/agent-update.json" -Raw | ConvertFrom-Json
-if ($manifest.schema_version -ne 1 -or $manifest.version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') { throw 'Invalid LawHand update manifest' }
-$asset = $manifest.assets.'windows-x86_64'
-if ($asset.name -ne 'lawhand-agent-x64.msi' -or $asset.sha256 -notmatch '^[0-9a-fA-F]{64}$') { throw 'Invalid LawHand Windows release entry' }
-$versioned = "https://github.com/mattpainter701/legalapp/releases/download/agent-v$($manifest.version)/$($asset.name)"
-Invoke-WebRequest $versioned -OutFile "$dir/lawhand-agent-x64.msi"
-$expected = $asset.sha256.ToLowerInvariant()
-$actual = (Get-FileHash "$dir/lawhand-agent-x64.msi" -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($actual -ne $expected) { throw 'LawHand agent MSI checksum mismatch' }
-$process = Start-Process msiexec.exe -ArgumentList "/i `"$dir\lawhand-agent-x64.msi`" /qn /norestart" -Wait -PassThru
-if ($process.ExitCode -notin @(0, 1641, 3010)) { throw "MSI upgrade failed: $($process.ExitCode)" }
-```
-
-For a Windows service using a custom account, use this direct overtop command.
+For a Windows service using a custom account, use that overtop install block.
 The late-upgrade schedule discovers and preserves the existing service identity
 without reading or resupplying its password. Provide `SERVICE_ACCOUNT` and
 `SERVICE_PASSWORD` only for a clean install or an intentional identity change. See
@@ -260,7 +266,7 @@ Both drive the shared PyInstaller spec at `packaging/lawhand-agent.spec`, so the
 two platforms ship the same code with the same entry point.
 
 To publish, merge the tested change to `main`, then tag the exact version from
-`clarity_agent/__init__.py` (currently `agent-v0.15.0`) and push that tag. The
+`clarity_agent/__init__.py` (currently `agent-v0.15.1`) and push that tag. The
 workflow rejects a mismatched tag and does not publish either platform unless
 both builds finish successfully.
 

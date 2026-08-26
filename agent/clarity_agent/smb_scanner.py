@@ -388,12 +388,12 @@ class _AsyncFileIterator:
                             stat.st_mtime, tz=timezone.utc
                         ).isoformat()
                         if hasattr(stat, "st_mtime") and stat.st_mtime
-                        else "",
+                        else None,
                         "created_time": datetime.fromtimestamp(
                             stat.st_ctime, tz=timezone.utc
                         ).isoformat()
                         if hasattr(stat, "st_ctime") and stat.st_ctime
-                        else "",
+                        else None,
                         "content_hash": content_hash,
                         "dir_mtime": dir_mtime or "",
                         "synced_at": datetime.now(tz=timezone.utc).isoformat(),

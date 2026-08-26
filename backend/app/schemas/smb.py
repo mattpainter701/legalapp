@@ -6,6 +6,27 @@ from datetime import datetime
 from pydantic import BaseModel, Field, field_validator
 
 
+def canonical_unc_path(value: str) -> str:
+    """Normalize and validate a share UNC path for storage and matching."""
+    normalized = (value or "").replace("/", "\\").strip()
+    if not normalized.startswith("\\\\"):
+        raise ValueError("Share path must be a UNC path like \\\\server\\share")
+    parts = [part for part in normalized[2:].split("\\") if part not in ("", ".")]
+    if len(parts) < 2:
+        raise ValueError("Share path must include a server and share")
+    if any(part == ".." for part in parts):
+        raise ValueError(
+            "Share path must include a server and share and cannot contain .."
+        )
+    if any(
+        part.endswith((" ", "."))
+        or any(ord(char) < 32 or char in '<>:"|?*' for char in part)
+        for part in parts
+    ):
+        raise ValueError("Share path contains characters Windows does not support")
+    return "\\\\" + "\\".join(parts)
+
+
 class UuidStringModel(BaseModel):
     """Base for response models that expose database UUIDs as strings.
 
@@ -65,6 +86,8 @@ class AgentInfo(UuidStringModel):
     os_info: str | None
     last_heartbeat: datetime | None
     created_at: datetime
+    updated_at: datetime | None = None
+    is_registered: bool = True
     update_status: str = "idle"
     update_target_version: str | None = None
     update_manifest_id: str | None = None
@@ -98,8 +121,15 @@ class ShareCreate(BaseModel):
     # admin never has to leave the "add share" flow.
     credential: "SmbCredentialCreate | None" = None
 
+    @field_validator("share_path")
+    @classmethod
+    def _canonical_share_path(cls, value):
+        return canonical_unc_path(value)
+
 
 class ShareUpdate(BaseModel):
+    share_path: str | None = Field(None, max_length=500)
+    agent_id: str | None = None
     display_name: str | None = Field(None, max_length=200)
     file_extensions: list[str] | None = None
     exclude_patterns: list[str] | None = None
@@ -109,6 +139,11 @@ class ShareUpdate(BaseModel):
     # Empty string detaches the credential; None leaves it unchanged.
     credential_id: str | None = None
     credential: "SmbCredentialCreate | None" = None
+
+    @field_validator("share_path")
+    @classmethod
+    def _canonical_share_path(cls, value):
+        return canonical_unc_path(value) if value is not None else value
 
 
 class ShareInfo(UuidStringModel):
@@ -132,6 +167,7 @@ class ShareInfo(UuidStringModel):
     last_verify_status: str | None = None
     last_verify_error: str | None = None
     created_at: datetime
+    updated_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -177,6 +213,7 @@ class SmbCredentialInfo(UuidStringModel):
     last_verify_error: str | None = None
     last_delivered_at: datetime | None = None
     created_at: datetime
+    updated_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -235,6 +272,12 @@ class FileSyncEntry(BaseModel):
     size_bytes: int | None = None
     modified_time: datetime | None = None
     created_time: datetime | None = None
+
+    @field_validator("modified_time", "created_time", mode="before")
+    @classmethod
+    def _empty_timestamp_is_null(cls, value):
+        """Accept older agents' empty-string timestamp sentinel."""
+        return None if value == "" else value
 
 
 class SyncRequest(BaseModel):

@@ -4,7 +4,7 @@
 # Produces the artifacts customers actually install on a file server:
 #
 #   lawhand-agent-<version>-x64.msi          Windows installer (registers the
-#                                            service, can pair during install)
+#                                            service; pairing is a separate step)
 #   lawhand-agent.exe                        standalone Windows binary
 #   lawhand-agent-<version>-linux-x86_64.tar.gz  Linux binary + systemd installer
 #
