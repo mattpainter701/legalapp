@@ -16,8 +16,14 @@ Set these in the deployment environment. Do not commit real values.
 - `LITELLM_DATABASE_URL`: synchronous Postgres URL for LiteLLM spend/log tables.
 - `STORE_MODEL_IN_DB=True`: required for operator-console route saves and
   reloads through LiteLLM `/config/update`.
-- `DEEPSEEK_API_KEY`: required provider key for the standard and premium
-  primary routes; production preflight rejects an absent or placeholder value.
+- `OPENCODE_GO_API_KEY`: canonical credential for OpenCode Go Premium and
+  Background routes.
+- `OPENCODE_ZEN_API_KEY`: canonical credential for OpenCode Zen Standard and
+  Background fallback routes.
+- `DEEPSEEK_API_KEY`: temporary compatibility alias for an existing shared
+  OpenCode credential. It is used only when the canonical Go/Zen variables and
+  the older Zen aliases are absent. Production preflight still rejects an
+  absent or placeholder provider credential.
 - `OPENROUTER_API_KEY`: optional fallback provider key. The current Premium
   availability chain can fall back through Standard even when OpenRouter is
   unavailable.
@@ -58,13 +64,17 @@ strict unknown-price qualification is tracked in BK24 `AIP-04`.
 `litellm_config.yaml` defines these operator-selectable aliases:
 
 - `clarity-standard`: primary standard profile, using OpenCode Zen with
-  `DEEPSEEK_API_KEY` for the OpenAI-compatible key. It fails over inside
-  LiteLLM to `clarity-standard-deepseek-flash-free`.
+  `OPENCODE_ZEN_API_KEY` for the OpenAI-compatible key. During credential-name
+  migration, the Compose configuration accepts `OPENCODE_API_KEY`,
+  `OPENCODE_KEY`, then `DEEPSEEK_API_KEY` as ordered fallbacks. It fails over
+  inside LiteLLM to `clarity-standard-deepseek-flash-free`.
 - `clarity-premium`: primary premium profile, using OpenCode Go through the
-  OpenAI-compatible base URL. If Premium capacity is unavailable, LiteLLM
-  falls back to the configured `clarity-standard` chain so the customer
-  request remains available. Operators should disclose that a fallback may
-  return standard-tier quality while the requested alias remains Premium.
+  OpenAI-compatible base URL and `OPENCODE_GO_API_KEY`, with
+  `DEEPSEEK_API_KEY` as its migration fallback. If Premium capacity is
+  unavailable, LiteLLM falls back to the configured `clarity-standard` chain
+  so the customer request remains available. Operators should disclose that a
+  fallback may return standard-tier quality while the requested alias remains
+  Premium.
 
 The operator console should point global standard and premium routes at these
 aliases by setting provider `litellm` and model `clarity-standard` /

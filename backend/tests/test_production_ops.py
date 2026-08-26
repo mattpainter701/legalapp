@@ -1364,6 +1364,8 @@ def test_production_preflight_rejects_missing_opencode_zen_key(
     result = _run_preflight(
         tmp_path,
         _production_env(
+            DEEPSEEK_API_KEY="",
+            OPENCODE_GO_API_KEY="opencode-go-provider-key-0123456789",
             OPENCODE_ZEN_API_KEY="",
             OPENCODE_API_KEY="",
             OPENCODE_KEY="",
@@ -1372,7 +1374,24 @@ def test_production_preflight_rejects_missing_opencode_zen_key(
     output = result.stdout + result.stderr
 
     assert result.returncode != 0
-    assert "OPENCODE_ZEN_API_KEY (or a legacy OpenCode Zen key)" in output
+    assert "OPENCODE_ZEN_API_KEY (or a supported legacy OpenCode key)" in output
+
+
+def test_production_preflight_accepts_legacy_shared_opencode_key(
+    tmp_path: Path,
+) -> None:
+    result = _run_preflight(
+        tmp_path,
+        _production_env(
+            OPENCODE_GO_API_KEY="",
+            OPENCODE_ZEN_API_KEY="",
+            OPENCODE_API_KEY="",
+            OPENCODE_KEY="",
+            DEEPSEEK_API_KEY="legacy-shared-opencode-key-0123456789",
+        ),
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_production_preflight_rejects_conflicting_inherited_compose_value(
@@ -1498,16 +1517,18 @@ def test_production_feature_flags_are_explicitly_mapped_and_rollback_images_rema
             == "${VITE_PUBLIC_SIGNUP_ENABLED:-false}"
         )
 
-    prod_services = yaml.safe_load(
-        (ROOT / "docker-compose.prod.yml").read_text(encoding="utf-8")
-    )["services"]
-    for service in ("backend", "scheduler"):
-        assert prod_services[service]["environment"]["PUBLIC_SIGNUP_ENABLED"] == (
-            "${PUBLIC_SIGNUP_ENABLED:-false}"
-        )
-        assert prod_services[service]["environment"]["SMB_ENABLED"] == (
-            "${SMB_ENABLED:-true}"
-        )
+    production_models = [
+        yaml.safe_load((ROOT / compose_name).read_text(encoding="utf-8"))["services"]
+        for compose_name in ("docker-compose.hypervisor.yml", "docker-compose.prod.yml")
+    ]
+    for prod_services in production_models:
+        for service in ("backend", "scheduler"):
+            assert prod_services[service]["environment"]["PUBLIC_SIGNUP_ENABLED"] == (
+                "${PUBLIC_SIGNUP_ENABLED:-false}"
+            )
+            # Production intentionally ignores stale host SMB_ENABLED=false values.
+            assert prod_services[service]["environment"]["SMB_ENABLED"] == "true"
+    prod_services = production_models[-1]
     assert (
         prod_services["frontend"]["build"]["args"]["VITE_PUBLIC_SIGNUP_ENABLED"]
         == "${VITE_PUBLIC_SIGNUP_ENABLED:-false}"

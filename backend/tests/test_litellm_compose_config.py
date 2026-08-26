@@ -23,6 +23,15 @@ def test_litellm_compose_enables_db_backed_model_updates():
         assert _litellm_env(compose_file)["STORE_MODEL_IN_DB"] == "True"
 
 
+def test_litellm_compose_keeps_legacy_shared_opencode_key_compatible():
+    expected = (
+        "${OPENCODE_ZEN_API_KEY:-${OPENCODE_API_KEY:-"
+        "${OPENCODE_KEY:-${DEEPSEEK_API_KEY:-}}}}"
+    )
+    for compose_file in ("docker-compose.yml", "docker-compose.hypervisor.yml"):
+        assert _litellm_env(compose_file)["OPENCODE_ZEN_API_KEY"] == expected
+
+
 def test_litellm_config_disables_raw_message_callbacks_by_default():
     config = yaml.safe_load((ROOT / "litellm_config.yaml").read_text())
     settings = config["litellm_settings"]

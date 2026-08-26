@@ -65,7 +65,8 @@ services:
       MCP_UPSTREAM_API_KEY: ${MCP_UPSTREAM_API_KEY:-}
       MCP_PRODUCT_ENABLED: ${MCP_PRODUCT_ENABLED:-false}
       PUBLIC_SIGNUP_ENABLED: ${PUBLIC_SIGNUP_ENABLED:-false}
-      SMB_ENABLED: ${SMB_ENABLED:-true}
+      # Production invariant: override stale SMB_ENABLED=false from env_file.
+      SMB_ENABLED: "true"
       EMAIL_ENABLED: ${EMAIL_ENABLED:?Set EMAIL_ENABLED in .env}
       EMAIL_HOST: ${EMAIL_HOST:-}
       EMAIL_PORT: ${EMAIL_PORT:-587}
@@ -143,7 +144,8 @@ services:
       MCP_UPSTREAM_API_KEY: ${MCP_UPSTREAM_API_KEY:-}
       MCP_PRODUCT_ENABLED: ${MCP_PRODUCT_ENABLED:-false}
       PUBLIC_SIGNUP_ENABLED: ${PUBLIC_SIGNUP_ENABLED:-false}
-      SMB_ENABLED: ${SMB_ENABLED:-true}
+      # Keep scheduler retrieval policy identical to the API process.
+      SMB_ENABLED: "true"
       EMAIL_ENABLED: ${EMAIL_ENABLED:?Set EMAIL_ENABLED in .env}
       EMAIL_HOST: ${EMAIL_HOST:-}
       EMAIL_PORT: ${EMAIL_PORT:-587}
