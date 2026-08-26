@@ -1755,7 +1755,8 @@ def test_private_origin_tls_contract_is_loopback_pinned() -> None:
     assert "--require-production-ownership" in preflight
     assert "noTLSVerify" in validator
     assert "https://127.0.0.1:443" in validator
-    assert "www.getlawhand.com" in validator
+    validator_lines = {line.strip() for line in validator.splitlines()}
+    assert "'  - hostname: www.getlawhand.com' \\" in validator_lines
     assert "http2Origin" in validator
     assert "minimum days must be between 1 and 3650" in validator
     assert "private origin trust directory must be root-owned" in validator
