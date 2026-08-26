@@ -266,9 +266,28 @@ Both drive the shared PyInstaller spec at `packaging/lawhand-agent.spec`, so the
 two platforms ship the same code with the same entry point.
 
 To publish, merge the tested change to `main`, then tag the exact version from
-`clarity_agent/__init__.py` (currently `agent-v0.15.1`) and push that tag. The
+`clarity_agent/__init__.py` (currently `agent-v0.15.2`) and push that tag. The
 workflow rejects a mismatched tag and does not publish either platform unless
 both builds finish successfully.
+
+Tagged releases use an Azure Artifact Signing **Public Trust** certificate
+profile with GitHub OIDC. The `agent-release` environment must provide the
+Azure client/tenant/subscription identifiers and the non-secret account,
+endpoint, and certificate-profile variables beginning with `WINDOWS_SIGNING_`,
+including `WINDOWS_SIGNING_EXPECTED_SUBJECT`; the federated identity needs the
+Artifact Signing Certificate Profile Signer role. CI builds
+the EXE, signs and timestamps it through the service, verifies it, builds the
+MSI around that signed EXE, signs and timestamps the final
+MSI, and verifies both Authenticode signatures before upload. Pull-request and
+ordinary `main` validation builds remain possible without release signing
+configuration. Local developer builds may continue using
+`-SignToolCertThumbprint`.
+
+The signing job is the only job granted `id-token: write`. It uses the protected
+`agent-release` environment with deployment creation disabled; restrict that
+environment to tags matching `agent-v*`. Its Azure federated credential must
+match this exact OIDC subject (with no wildcard):
+`repo:mattpainter701/legalapp:environment:agent-release`.
 
 ## Tests
 
