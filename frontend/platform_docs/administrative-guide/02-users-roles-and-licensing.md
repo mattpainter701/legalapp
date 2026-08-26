@@ -30,6 +30,14 @@ When changing a role:
 
 The legacy `admin`, `accountant`, and `user` roles still influence high-level navigation. Custom capabilities should be tested against the specific workflow they are intended to permit.
 
+## Control connected assistants
+
+The **Connected assistants** column in [Users](/admin?tab=users) governs Workspace MCP for each person: whether they may connect an external assistant such as Claude, ChatGPT, or Codex to their own workspace. Access is per user, so grant it to the people whose work needs it rather than tenant-wide by default. The column also shows whether the user has Privacy Mode on, which they must turn off themselves before a connection can be made.
+
+Set the policy applied to people who arrive later under [Settings](/admin?tab=settings): **Enable Workspace MCP for new users** decides the default for each invited or directory-synced account. Choose that default deliberately — it is the setting that decides whether a new hire can connect an outside assistant on their first day.
+
+Turning the toggle off ends the user's connected assistants. A user can also review and revoke their own connections from their profile, but an administrator's decision is the one that holds.
+
 ## Allocate licenses
 
 Open [Licensing](/admin?tab=licensing) to see seat availability and activation. A user may exist for record continuity without holding an active standard license. Premium AI is a separate entitlement and should be assigned to people whose work requires it.
@@ -40,6 +48,6 @@ Monitor inactive licensed users and avoid using shared accounts to conserve seat
 
 - **Joiner:** confirm identity, role, modules, license, integration prerequisites, and initial training.
 - **Mover:** remove old responsibilities before adding new ones; review matter access and approval authority.
-- **Leaver:** deactivate promptly, preserve authored records, transfer owned work, revoke connected access, and verify completion.
+- **Leaver:** deactivate promptly, preserve authored records, transfer owned work, revoke connected access — including Workspace MCP assistants — and verify completion.
 
 Never send temporary passwords, tokens, or recovery material through the invitation notes or guide content.

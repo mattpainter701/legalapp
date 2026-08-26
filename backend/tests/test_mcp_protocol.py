@@ -332,7 +332,11 @@ async def test_protocol_requires_product_key(monkeypatch, protocol_app):
         )
 
     assert response.status_code == 401
-    assert response.json() == {"detail": "MCP API key required"}
+    body = response.json()
+    assert body["detail"] == "MCP API key required"
+    # A browser that reaches the research hostname sees this body and nothing
+    # else, so it must name the public page that explains the endpoint.
+    assert body["documentation"].endswith("/product/mcp")
 
 
 @pytest.mark.asyncio

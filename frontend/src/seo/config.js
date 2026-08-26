@@ -18,7 +18,7 @@ export const PLATFORM_PRICE_USD = '89'
 export const MCP_TOOL_CALL_PRICE_USD = '0.45'
 
 // Bumped whenever public marketing copy changes; feeds sitemap <lastmod>.
-export const PUBLIC_CONTENT_LASTMOD = '2026-08-15'
+export const PUBLIC_CONTENT_LASTMOD = '2026-08-26'
 
 export const PRICING_FAQ = Object.freeze([
   Object.freeze([
@@ -58,7 +58,7 @@ export const PUBLIC_ROUTE_META = Object.freeze({
   '/product': {
     title: 'The LawHand Platform for Law Firm Operations',
     description:
-      'See how the LawHand platform connects intake, matters, documents, deadlines, billing, practice-area skills, matter-aware AI chat, and controlled MCP integrations.',
+      'See how the LawHand platform connects intake, matters, documents, matter email, deadlines, billing, practice-area skills, matter-aware AI chat, and controlled MCP integrations.',
     canonicalPath: '/product',
     indexable: true,
     priority: '0.9',
@@ -77,7 +77,7 @@ export const PUBLIC_ROUTE_META = Object.freeze({
   '/product/mcp': {
     title: 'LawHand MCP for Controlled Legal Integrations',
     description:
-      'Connect approved systems to LawHand through MCP with scoped keys, explicit tool access, bounded usage, and administrative visibility.',
+      'Connect to LawHand through MCP: scoped product keys with explicit tool access and bounded usage, or per-user assistant connections a firm administrator controls.',
     canonicalPath: '/product/mcp',
     indexable: true,
     priority: '0.8',

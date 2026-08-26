@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import {
-  Activity, ArrowRight, Braces, CheckCircle2, KeyRound, LockKeyhole,
+  Activity, ArrowRight, Bot, Braces, CheckCircle2, KeyRound, LockKeyhole,
   Network, SlidersHorizontal,
 } from 'lucide-react'
 import MarketingPageLayout from '../components/MarketingChrome'
@@ -9,6 +9,31 @@ const CONTROLS = [
   { icon: KeyRound, title: 'Scoped product keys', body: 'Issue named credentials for a tenant and revoke them without exposing a user session.' },
   { icon: SlidersHorizontal, title: 'Bounded access', body: 'Choose allowed tools and apply monthly and per-minute limits to each integration.' },
   { icon: Activity, title: 'Visible usage', body: 'Review calls, returned results, errors, and key activity from the administrative workspace.' },
+]
+
+const CONNECTION_TYPES = [
+  {
+    icon: Bot,
+    label: 'Restricted pilot',
+    title: 'Workspace MCP',
+    body: 'A user connects an approved assistant — Claude, ChatGPT, or Codex — to their own LawHand workspace through an explicit consent step. There is no shared credential: the assistant acts as that user, within that user’s permissions, for the scopes they approved.',
+    points: [
+      'A firm administrator decides who may connect at all',
+      'The user reviews and revokes their own connections',
+      'Grants expire and every call is audit logged',
+    ],
+  },
+  {
+    icon: KeyRound,
+    label: 'Private preview',
+    title: 'Scoped product keys',
+    body: 'A named system connects with a credential issued for the tenant, limited to an explicit tool allowlist and a usage boundary. Use this when the caller is an application rather than a person.',
+    points: [
+      'Issued and revoked without touching a user session',
+      'Allowed tools and monthly and per-minute limits',
+      'Calls, results, errors, and usage visible to administrators',
+    ],
+  },
 ]
 
 export default function McpProductPage() {
@@ -94,6 +119,36 @@ export default function McpProductPage() {
       </section>
 
       <section className="mx-auto max-w-6xl px-6 py-16 md:py-24">
+        <div className="max-w-2xl">
+          <span className="text-[12px] font-bold uppercase tracking-[0.16em] text-brand-accent-2">Two ways to connect</span>
+          <h2 className="mt-3 font-serif text-[34px] font-bold leading-tight">One person’s workspace, or one approved system.</h2>
+          <p className="mt-4 font-sans text-[15px] leading-relaxed text-brand-ink-2">
+            The two connection types authenticate differently and reach different work. Both are
+            enabled by the firm, and both are being released deliberately rather than opened by default.
+          </p>
+        </div>
+        <div className="mt-10 grid gap-5 md:grid-cols-2">
+          {CONNECTION_TYPES.map(({ icon: Icon, label, title, body, points }) => (
+            <article key={title} className="flex flex-col rounded-2xl border border-brand-line bg-brand-surface p-7">
+              <div className="flex items-center gap-3">
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-brand-line bg-brand-bg text-brand-accent-2"><Icon size={21} /></div>
+                <span className="rounded-full border border-brand-gold/30 bg-brand-gold/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.13em] text-brand-gold">{label}</span>
+              </div>
+              <h3 className="mt-5 font-serif text-[22px] font-bold">{title}</h3>
+              <p className="mt-3 text-[14px] leading-relaxed text-brand-ink-2">{body}</p>
+              <ul className="mt-5 grid gap-3 border-t border-brand-line pt-5">
+                {points.map((point) => (
+                  <li key={point} className="flex items-start gap-3 text-[14px] leading-relaxed text-brand-ink-2">
+                    <CheckCircle2 size={17} className="mt-0.5 shrink-0 text-brand-green" aria-hidden="true" />{point}
+                  </li>
+                ))}
+              </ul>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="mx-auto max-w-6xl px-6 pb-16 md:pb-24">
         <div className="grid gap-8 lg:grid-cols-[0.78fr_1.22fr]">
           <div className="rounded-3xl border border-brand-line bg-brand-surface p-8">
             <Network size={28} className="text-brand-accent-2" />

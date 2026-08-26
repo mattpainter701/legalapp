@@ -25,6 +25,16 @@ If you suspect unauthorized access, sign out and contact your administrator imme
 
 [Your profile](/profile) shows your account identity, role, license context, assigned matters, and recent time totals. Role and license changes are managed by an administrator. Module availability may also depend on your firm's plan.
 
+## Connected assistants
+
+If your firm enables Workspace MCP, you can connect an external assistant — Claude, ChatGPT, or a similar client — to your LawHand workspace. A connection is made through an explicit consent step, is limited to the scopes shown when you approve it, acts only as you, and is audit logged.
+
+**Workspace MCP assistants** in [your profile](/profile) lists every assistant currently connected to your account, with the scopes it holds and when it was created, when it expires, and when it was last used. Select **Revoke** for any connection you do not recognize or no longer use; the assistant loses access immediately and must be connected again from the start.
+
+Review the list when you change assistants, when a device or client is retired, and before you leave a matter or a role. Turning on **Protect private details** pauses connected assistants and revokes existing grants, and your administrator can disable Workspace MCP for your account entirely — in either case the panel explains why connections are blocked.
+
+An assistant reaches the workspace with your permissions, so treat what it can retrieve as though you retrieved it yourself. Verify anything it drafts or quotes before relying on it.
+
 ## Get useful help
 
 When reporting a problem, include:
