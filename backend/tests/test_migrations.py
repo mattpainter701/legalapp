@@ -24,6 +24,8 @@ def test_demo_resume_rls_is_hash_scoped_select_only_and_profile_is_unique():
     assert "FOR SELECT TO PUBLIC" in source
     assert "app.demo_resume_email_hash" in source
     assert "resume_email_hash = NULLIF" in source
+    assert "WHERE resume_email_hash IS NULL" in source
+    assert 'alter_column("demo_sessions", "resume_email_hash"' not in source
     assert "app.rls_bypass" not in source
     assert "uq_llm_routing_profiles_demo_default" in source
     assert 'postgresql_where=sa.text("is_demo_default")' in source

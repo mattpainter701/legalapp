@@ -1,7 +1,7 @@
 """Lifecycle and quota state for disposable sales-demo tenants."""
 
-import uuid
 import hashlib
+import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import (
@@ -58,8 +58,8 @@ class DemoSession(Base):
     fixture_version: Mapped[str] = mapped_column(String(80), nullable=False)
     prospect_name: Mapped[str] = mapped_column(String(255), nullable=False)
     prospect_email: Mapped[str] = mapped_column(String(255), nullable=False)
-    resume_email_hash: Mapped[str] = mapped_column(
-        String(64), nullable=False, index=True, default=_resume_email_hash_default
+    resume_email_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True, default=_resume_email_hash_default
     )
     status: Mapped[str] = mapped_column(
         String(24),

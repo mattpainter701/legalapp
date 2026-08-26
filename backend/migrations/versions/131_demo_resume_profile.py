@@ -26,9 +26,9 @@ def upgrade() -> None:
             digest(lower(btrim(prospect_email)), 'sha256'),
             'hex'
         )
+        WHERE resume_email_hash IS NULL
         """
     )
-    op.alter_column("demo_sessions", "resume_email_hash", nullable=False)
     op.create_index(
         "ix_demo_sessions_resume_email_hash",
         "demo_sessions",
