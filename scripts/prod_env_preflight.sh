@@ -84,6 +84,8 @@ fi
 opencode_zen_key="$(get_env OPENCODE_ZEN_API_KEY)"
 [[ -n "$opencode_zen_key" ]] || opencode_zen_key="$(get_env OPENCODE_API_KEY)"
 [[ -n "$opencode_zen_key" ]] || opencode_zen_key="$(get_env OPENCODE_KEY)"
+# The deployed credential authenticated both Zen and Go before their runtime
+# variable names were separated. Keep it last so canonical keys always win.
 [[ -n "$opencode_zen_key" ]] || opencode_zen_key="$(get_env DEEPSEEK_API_KEY)"
 opencode_zen_lowered="${opencode_zen_key,,}"
 if [[ -z "$opencode_zen_key" || "$opencode_zen_lowered" == *change_me* || "$opencode_zen_lowered" == *change-me* || "$opencode_zen_lowered" == *changeme* ||
