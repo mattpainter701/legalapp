@@ -85,7 +85,7 @@ the site. Set it up before anything else.
 ## 2. Google Analytics 4
 
 The GA4 property and the `getlawhand.com` web data stream already exist. The
-measurement id is `G-HG2C5FY17R`.
+measurement id is `G-XRFT19WYPH`.
 
 ### How it is wired
 
@@ -129,7 +129,7 @@ responses; workspace responses keep `script-src 'self'`.
 
 1. Set in production `.env`:
    ```
-   VITE_GA_MEASUREMENT_ID=G-HG2C5FY17R
+   VITE_GA_MEASUREMENT_ID=G-XRFT19WYPH
    ```
    Leaving it empty ships no analytics request at all.
 2. Rebuild and redeploy the frontend. The value is baked in at build time.
@@ -320,7 +320,7 @@ established vendors takes years and is not the goal; owning
 
 - [ ] Search Console property verified (DNS preferred)
 - [ ] `sitemap.xml` submitted, indexing requested for the top four pages
-- [ ] `VITE_GA_MEASUREMENT_ID=G-HG2C5FY17R` set in production `.env`, frontend rebuilt
+- [ ] `VITE_GA_MEASUREMENT_ID=G-XRFT19WYPH` set in production `.env`, frontend rebuilt
 - [ ] Realtime confirms marketing page views and **no** workspace page views
 - [ ] `demo_form_submitted` marked as a GA4 key event
 - [ ] Search Console linked to the GA4 property
