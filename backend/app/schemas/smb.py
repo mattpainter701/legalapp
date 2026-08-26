@@ -335,7 +335,7 @@ class MatterSmbShareInfo(UuidStringModel):
     folder_path: str | None
     display_label: str | None
     auto_scan: bool
-    share_path: str | None
+    share_path: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

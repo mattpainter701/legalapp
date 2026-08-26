@@ -128,10 +128,10 @@ async def test_content_result_is_bound_to_tenant_file_share_and_pending_task(
             select(SmbFileIndex).where(SmbFileIndex.share_id == uuid.UUID(share_id))
         )
     ).scalars()
-    files = {row.path: row for row in rows}
+    file_ids = {row.path: row.id for row in rows}
 
     queued = await client.post(
-        f"/api/v1/smb/files/{files[first_path].id}/fetch-content"
+        f"/api/v1/smb/files/{file_ids[first_path]}/fetch-content"
     )
     assert queued.status_code == 200, queued.text
     task_id = queued.json()["task_id"]
@@ -165,11 +165,11 @@ async def test_content_result_is_bound_to_tenant_file_share_and_pending_task(
     assert retried.status_code == 200, retried.text
 
     ready = await client.get(
-        f"/api/v1/smb/files/{files[first_path].id}/content-status",
+        f"/api/v1/smb/files/{file_ids[first_path]}/content-status",
         params={"task_id": task_id},
     )
     wrong_file = await client.get(
-        f"/api/v1/smb/files/{files[second_path].id}/content-status",
+        f"/api/v1/smb/files/{file_ids[second_path]}/content-status",
         params={"task_id": task_id},
     )
     assert ready.json() == {
