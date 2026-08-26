@@ -12,16 +12,13 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["132_smb_agent_lifecycle_indexes"]
+    assert heads == ["134_background_ai_quota"]
 
 
 def test_smb_agent_lifecycle_indexes_cover_auth_and_cleanup_paths():
     backend_dir = Path(__file__).resolve().parents[1]
     source = (
-        backend_dir
-        / "migrations"
-        / "versions"
-        / "132_smb_agent_lifecycle_indexes.py"
+        backend_dir / "migrations" / "versions" / "132_smb_agent_lifecycle_indexes.py"
     ).read_text(encoding="utf-8")
 
     assert 'down_revision = "131_demo_resume_profile"' in source

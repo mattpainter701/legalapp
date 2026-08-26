@@ -79,6 +79,37 @@ async def test_concurrent_final_background_pool_slot_has_one_winner(
 
 
 @pytest.mark.asyncio
+async def test_account_pool_limit_is_shared_across_tenants(test_engine, db_session):
+    """The account cap is a pool-wide ledger, not one cap per firm."""
+    tenant_a, tenant_b = uuid.uuid4(), uuid.uuid4()
+    db_session.add_all(
+        [_tenant(tenant_a, "pool-a.invalid"), _tenant(tenant_b, "pool-b.invalid")]
+    )
+    await db_session.flush()
+    await _configure(db_session, account=1, tenant=5)
+    ledger = BackgroundQuotaLedger(
+        session_factory=async_sessionmaker(test_engine, expire_on_commit=False)
+    )
+
+    first = await ledger.reserve(
+        tenant_id=tenant_a,
+        idempotency_key="pool-a-first",
+        request_id=str(uuid.uuid4()),
+        surface="background_test",
+        route_alias="clarity-background-test",
+    )
+    with pytest.raises(BackgroundQuotaExceeded, match="account five-hour"):
+        await ledger.reserve(
+            tenant_id=tenant_b,
+            idempotency_key="pool-b-first",
+            request_id=str(uuid.uuid4()),
+            surface="background_test",
+            route_alias="clarity-background-test",
+        )
+    assert first.tenant_id == tenant_a
+
+
+@pytest.mark.asyncio
 async def test_tenant_fairness_does_not_consume_another_firms_capacity(
     test_engine, db_session
 ):

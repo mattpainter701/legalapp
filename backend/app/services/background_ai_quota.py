@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -19,6 +20,49 @@ from app.models.platform import PlatformSetting
 settings = get_settings()
 BACKGROUND_ROUTE_CONFIG_KEY = "llm_background_route_v1"
 COUNTED_STATUSES = ("settled", "unknown")
+BACKGROUND_QUOTA_SCOPE_GUC = "app.background_ai_quota_scope"
+
+
+async def _enable_background_quota_scope(db: AsyncSession) -> None:
+    """Allow this transaction to read/write the shared quota ledger.
+
+    This is deliberately separate from ``app.rls_bypass``: the migration's
+    policy recognizes this selector only on the background quota table, and
+    ``is_local=true`` makes it transaction-local.
+    """
+
+    await db.execute(
+        text("SELECT set_config(:setting, 'on', true)"),
+        {"setting": BACKGROUND_QUOTA_SCOPE_GUC},
+    )
+
+
+@asynccontextmanager
+async def _background_quota_scope(db: AsyncSession):
+    """Keep the cross-tenant selector enabled only for snapshot ledger reads."""
+
+    await _enable_background_quota_scope(db)
+    try:
+        yield
+    except BaseException:
+        # A failed query may leave PostgreSQL's transaction aborted. Avoid
+        # masking the original failure; closing/rolling back the transaction
+        # clears this transaction-local selector.
+        try:
+            await db.execute(
+                text("SELECT set_config(:setting, 'off', true)"),
+                {"setting": BACKGROUND_QUOTA_SCOPE_GUC},
+            )
+        except Exception:
+            pass
+        raise
+    else:
+        # Snapshot callers may own a longer transaction, so explicitly turn
+        # the table-specific selector off as soon as its reads are complete.
+        await db.execute(
+            text("SELECT set_config(:setting, 'off', true)"),
+            {"setting": BACKGROUND_QUOTA_SCOPE_GUC},
+        )
 
 
 class BackgroundQuotaError(RuntimeError):
@@ -184,6 +228,10 @@ class BackgroundQuotaLedger:
                 {"key": f"background-ai-quota:{selected_pool}"},
             )
             limits = await get_background_quota_limits(db)
+            # The stale-row sweep, duplicate check, and account-wide counts
+            # intentionally cross tenant boundaries. RLS permits that access
+            # only through this transaction-local, table-specific selector.
+            await _enable_background_quota_scope(db)
             stale_cutoff = now - timedelta(minutes=limits.reservation_ttl_minutes)
             await db.execute(
                 update(BackgroundAIUsageReservation)
@@ -292,6 +340,10 @@ class BackgroundQuotaLedger:
         error_code: str | None = None,
     ) -> None:
         async with self.session_factory() as db:
+            # Settlement/release/unknown updates identify a reservation by ID
+            # and may run outside the originating tenant request context.
+            # Enable only the dedicated transaction-local quota selector.
+            await _enable_background_quota_scope(db)
             await db.execute(
                 update(BackgroundAIUsageReservation)
                 .where(
@@ -353,24 +405,58 @@ async def background_quota_snapshot(
     now = datetime.now(timezone.utc)
     limits = await get_background_quota_limits(db)
     counted = _counted_predicate(now, limits)
-    five_hour_used = await _usage_count(
-        db,
-        pool=selected_pool,
-        since=now - timedelta(hours=5),
-        counted_predicate=counted,
-    )
-    weekly_used = await _usage_count(
-        db,
-        pool=selected_pool,
-        since=now - timedelta(days=7),
-        counted_predicate=counted,
-    )
-    monthly_used = await _usage_count(
-        db,
-        pool=selected_pool,
-        since=_month_start(now),
-        counted_predicate=counted,
-    )
+    # Operator snapshots intentionally aggregate all tenants, but the scope
+    # is cleared immediately after the ledger reads for caller-owned sessions.
+    async with _background_quota_scope(db):
+        five_hour_used = await _usage_count(
+            db,
+            pool=selected_pool,
+            since=now - timedelta(hours=5),
+            counted_predicate=counted,
+        )
+        weekly_used = await _usage_count(
+            db,
+            pool=selected_pool,
+            since=now - timedelta(days=7),
+            counted_predicate=counted,
+        )
+        monthly_used = await _usage_count(
+            db,
+            pool=selected_pool,
+            since=_month_start(now),
+            counted_predicate=counted,
+        )
+        tenant_rows = (
+            await db.execute(
+                select(
+                    BackgroundAIUsageReservation.tenant_id,
+                    func.count(BackgroundAIUsageReservation.id).label("requests"),
+                )
+                .where(
+                    BackgroundAIUsageReservation.pool == selected_pool,
+                    BackgroundAIUsageReservation.created_at >= _month_start(now),
+                    counted,
+                )
+                .group_by(BackgroundAIUsageReservation.tenant_id)
+                .order_by(func.count(BackgroundAIUsageReservation.id).desc())
+                .limit(20)
+            )
+        ).all()
+        surface_rows = (
+            await db.execute(
+                select(
+                    BackgroundAIUsageReservation.surface,
+                    func.count(BackgroundAIUsageReservation.id).label("requests"),
+                )
+                .where(
+                    BackgroundAIUsageReservation.pool == selected_pool,
+                    BackgroundAIUsageReservation.created_at >= _month_start(now),
+                    counted,
+                )
+                .group_by(BackgroundAIUsageReservation.surface)
+                .order_by(func.count(BackgroundAIUsageReservation.id).desc())
+            )
+        ).all()
     days_in_month = (
         (_month_start(now) + timedelta(days=32)).replace(day=1) - _month_start(now)
     ).days
@@ -379,38 +465,6 @@ async def background_quota_snapshot(
         100.0,
         100.0 * elapsed.total_seconds() / (days_in_month * 86400),
     )
-
-    tenant_rows = (
-        await db.execute(
-            select(
-                BackgroundAIUsageReservation.tenant_id,
-                func.count(BackgroundAIUsageReservation.id).label("requests"),
-            )
-            .where(
-                BackgroundAIUsageReservation.pool == selected_pool,
-                BackgroundAIUsageReservation.created_at >= _month_start(now),
-                counted,
-            )
-            .group_by(BackgroundAIUsageReservation.tenant_id)
-            .order_by(func.count(BackgroundAIUsageReservation.id).desc())
-            .limit(20)
-        )
-    ).all()
-    surface_rows = (
-        await db.execute(
-            select(
-                BackgroundAIUsageReservation.surface,
-                func.count(BackgroundAIUsageReservation.id).label("requests"),
-            )
-            .where(
-                BackgroundAIUsageReservation.pool == selected_pool,
-                BackgroundAIUsageReservation.created_at >= _month_start(now),
-                counted,
-            )
-            .group_by(BackgroundAIUsageReservation.surface)
-            .order_by(func.count(BackgroundAIUsageReservation.id).desc())
-        )
-    ).all()
     return {
         "pool": selected_pool,
         "limits": limits.as_dict(),

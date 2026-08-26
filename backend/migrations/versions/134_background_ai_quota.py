@@ -1,7 +1,7 @@
 """Add the platform Background Automations request reservation ledger.
 
-Revision ID: 132_background_ai_quota
-Revises: 131_prospect_follow_through
+Revision ID: 134_background_ai_quota
+Revises: 133_prospect_follow_through
 """
 
 from alembic import op
@@ -9,8 +9,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 
 
-revision = "132_background_ai_quota"
-down_revision = "131_prospect_follow_through"
+revision = "134_background_ai_quota"
+down_revision = "133_prospect_follow_through"
 branch_labels = None
 depends_on = None
 
@@ -83,6 +83,25 @@ def upgrade() -> None:
         "ix_background_ai_usage_surface_created",
         "background_ai_usage_reservations",
         ["surface", "created_at"],
+    )
+    # RLS remains enabled even though this is a shared account-quota ledger.
+    # The application opts into a narrowly scoped, transaction-local selector
+    # only while the quota service performs its cross-tenant ledger operation.
+    op.execute("ALTER TABLE background_ai_usage_reservations ENABLE ROW LEVEL SECURITY")
+    op.execute("ALTER TABLE background_ai_usage_reservations FORCE ROW LEVEL SECURITY")
+    op.execute(
+        """
+        CREATE POLICY background_ai_usage_tenant_isolation
+        ON background_ai_usage_reservations
+        USING (
+            tenant_id::text = current_setting('app.current_tenant_id', true)
+            OR current_setting('app.background_ai_quota_scope', true) = 'on'
+        )
+        WITH CHECK (
+            tenant_id::text = current_setting('app.current_tenant_id', true)
+            OR current_setting('app.background_ai_quota_scope', true) = 'on'
+        )
+        """
     )
 
 

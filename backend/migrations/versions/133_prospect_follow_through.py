@@ -4,8 +4,8 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
-revision = "131_prospect_follow_through"
-down_revision = "130_smb_agent_bootstrap_rls"
+revision = "133_prospect_follow_through"
+down_revision = "132_smb_agent_lifecycle_indexes"
 branch_labels = None
 depends_on = None
 
