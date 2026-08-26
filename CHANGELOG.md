@@ -31,8 +31,9 @@
   on any registered agent loss, while the intentional cleanup of expired,
   never-registered `pending` reservations no longer produces a false data-loss
   alarm.
-- **File-share operations now report the real tenant state:** production
-  explicitly enables SMB retrieval, while the Status tab always authenticates
+- **File-share operations now report the real tenant state:** both production
+  Compose paths hard-pin SMB retrieval on so a stale host `.env` value cannot
+  silently disable it, while the Status tab always authenticates
   and returns tenant-scoped agent, share, credential, heartbeat, scan, and
   index counts even when retrieval is disabled. The Activity tab now combines
   agent lifecycle and heartbeat, update, share scan/connection-test,
