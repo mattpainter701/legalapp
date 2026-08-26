@@ -69,13 +69,38 @@ def test_transcription_canary_uses_multipart_audio_contract(monkeypatch, tmp_pat
     assert observed["file_path"] == fixture
 
 
+def test_opencode_go_canary_uses_responses_contract(monkeypatch):
+    observed = {}
+
+    def fake_post_json(url, key, payload, timeout):
+        observed.update(url=url, key=key, payload=payload, timeout=timeout)
+        return 200, {"output_text": "CANARY_OK"}, 9
+
+    monkeypatch.setattr(canary, "post_json", fake_post_json)
+
+    result = canary.responses_text_canary(
+        "opencode-go",
+        "https://opencode.ai/zen/go/v1/responses",
+        "secret-test-key",
+        "gpt-5.6-luna",
+        30,
+    )
+
+    assert result["passed"] is True
+    assert observed["url"].endswith("/v1/responses")
+    assert observed["payload"] == {
+        "model": "gpt-5.6-luna",
+        "input": "Synthetic API canary. Reply exactly CANARY_OK.",
+        "max_output_tokens": 20,
+    }
+
+
 def test_live_evidence_blocks_unconfigured_keys_without_calling_provider(
     monkeypatch, tmp_path
 ):
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "OPENROUTER_API_KEY=configured only on production host\n"
-        "DEEPSEEK_API_KEY=\n",
+        "OPENROUTER_API_KEY=configured only on production host\n" "DEEPSEEK_API_KEY=\n",
         encoding="utf-8",
     )
     args = canary.parse_args(["--live", "--env-file", str(env_file)])

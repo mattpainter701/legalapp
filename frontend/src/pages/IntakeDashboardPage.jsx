@@ -41,6 +41,9 @@ import { useConfirm } from '../components/dialog/ConfirmProvider'
 import { useCallFeedPolling } from '../hooks/useCallFeedPolling'
 import { useCallAlerts } from '../hooks/useCallAlerts'
 import useCallDrafts from '../hooks/useCallDrafts'
+import AfterCallConcierge from '../components/intake/AfterCallConcierge'
+
+const AFTER_CALL_ASSISTANT_ENABLED = import.meta.env.VITE_ENABLE_AFTER_CALL_ASSISTANT === 'true'
 
 const PRACTICE_AREAS = [
   'divorce',
@@ -464,6 +467,7 @@ export default function IntakeDashboardPage() {
   const [q, setQ] = useState('')
   const [phone, setPhone] = useState('')
   const [selectedRecentCaller, setSelectedRecentCaller] = useState(null)
+  const [followThroughLead, setFollowThroughLead] = useState(null)
   const [zoomPhoneSyncing, setZoomPhoneSyncing] = useState(false)
   const [zoomConnected, setZoomConnected] = useState(false)
   const [zoomStatus, setZoomStatus] = useState(null)
@@ -717,6 +721,18 @@ export default function IntakeDashboardPage() {
 
   const selectRecentCaller = useCallback(async (caller) => {
     setSelectedRecentCaller(caller)
+    if (caller?.lead_id) {
+      setFollowThroughLead({
+        id: caller.lead_id,
+        contact: { display_name: caller.caller_name || 'Recent caller' },
+        practice_area: caller.practice_area,
+        description: caller.notes || caller.purpose,
+        assigned_to_name: caller.assigned_to_name,
+        communication_id: caller.source === 'zoom_phone' ? caller.id : undefined,
+      })
+    } else {
+      setFollowThroughLead(null)
+    }
     const nextName = caller.caller_name || ''
     const nextPhone = caller.phone || ''
     setQ(nextName)
@@ -868,6 +884,16 @@ export default function IntakeDashboardPage() {
         return
       }
       const result = await createIntakeDashboardCall(payload)
+      if (AFTER_CALL_ASSISTANT_ENABLED && result.lead_id) {
+        setFollowThroughLead({
+          id: result.lead_id,
+          contact: { display_name: payload.caller_name || 'New lead' },
+          practice_area: payload.practice_area,
+          description: payload.notes || payload.purpose,
+          assigned_to_name: payload.task_mode === 'partner_rotation' ? searchData?.recommended_attorney_name : undefined,
+          communication_id: result.communication_id || payload.existing_communication_id,
+        })
+      }
       let assignedText = ''
       if (result.task_id) {
         assignedText = form.task_mode === 'specific_staff'
@@ -885,6 +911,9 @@ export default function IntakeDashboardPage() {
           try {
             const assignment = await assignNextPartner(result.lead_id)
             assignedText = ` Assigned to ${assignment.assigned_to_name || 'next partner'} and urgent task created.`
+            setFollowThroughLead((current) => current?.id === result.lead_id
+              ? { ...current, assigned_to_name: assignment.assigned_to_name || current.assigned_to_name }
+              : current)
           } catch (err) {
             assignedText = ` Assignment skipped: ${err?.response?.data?.detail || 'no matching rotation rule'}.`
           }
@@ -1025,6 +1054,13 @@ export default function IntakeDashboardPage() {
 
           <div className="space-y-5">
             {selectedRecentCaller && <CallFacts caller={selectedRecentCaller} />}
+            {followThroughLead && <AfterCallConcierge
+              key={followThroughLead.id}
+              lead={followThroughLead}
+              communicationId={followThroughLead.communication_id}
+              enabled={AFTER_CALL_ASSISTANT_ENABLED}
+              onLeadUpdated={refreshSearchSilently}
+            />}
 
             <section className="rounded-3xl border border-brand-line bg-white p-5 shadow-sm">
               <form onSubmit={runSearch} className="grid gap-3 md:grid-cols-[1fr_220px_auto]">

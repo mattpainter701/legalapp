@@ -353,6 +353,7 @@ class TenantUpdate(BaseModel):
     plan: Optional[str] = None
     mcp_entitlement_status: Optional[str] = None
     mcp_billing_status: Optional[str] = None
+    background_assistant_enabled: Optional[bool] = None
 
 
 class PlatformLLMConfigUpdate(BaseModel):
@@ -802,6 +803,13 @@ async def get_tenant_detail(
             else None,
             "plan": (ts.custom_config or {}).get("plan") if ts else None,
         },
+        "assistant_config": {
+            "background_assistant_enabled": bool(
+                (ts.custom_config or {}).get("background_assistant_enabled", False)
+            )
+            if ts
+            else False,
+        },
     }
 
 
@@ -964,6 +972,24 @@ async def update_tenant(
             custom_config.pop("plan", None)
         else:
             custom_config["plan"] = plan_value
+        ts.custom_config = custom_config
+
+    if _field_was_sent(body, "background_assistant_enabled"):
+        ts_result = await db.execute(
+            select(TenantSettings).where(TenantSettings.tenant_id == tenant.id)
+        )
+        ts = ts_result.scalar_one_or_none()
+        if ts is None:
+            ts = TenantSettings(tenant_id=tenant.id)
+            db.add(ts)
+            await db.flush()
+        custom_config = dict(ts.custom_config or {})
+        enabled = bool(body.background_assistant_enabled)
+        audit_changes["background_assistant_enabled"] = {
+            "from": bool(custom_config.get("background_assistant_enabled", False)),
+            "to": enabled,
+        }
+        custom_config["background_assistant_enabled"] = enabled
         ts.custom_config = custom_config
 
     standard_provider_sent = _field_was_sent(

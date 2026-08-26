@@ -287,6 +287,7 @@ def _production_env(**overrides: str) -> str:
         "LITELLM_DB_PASSWORD": "litellm-password-0123456789",
         "LITELLM_DATABASE_URL": "postgresql://litellm:litellm-password-0123456789@litellm-postgres:5432/litellm",
         "DEEPSEEK_API_KEY": "deepseek-provider-key-0123456789",
+        "OPENCODE_ZEN_API_KEY": "opencode-zen-provider-key-0123456789",
         "TOKEN_ENCRYPTION_KEY": OLD_FERNET_KEY,
         "TOKEN_ENCRYPTION_KEYS": f"{NEW_FERNET_KEY},{OLD_FERNET_KEY}",
         "MCP_SERVER_URL": "http://courtlistener-mcp:8000",
@@ -1330,16 +1331,48 @@ def test_production_preflight_rejects_missing_or_rotatable_litellm_salt(
 @pytest.mark.parametrize(
     "provider_key", ["", "change-me-provider-key", "provider-key@example.com"]
 )
-def test_production_preflight_rejects_missing_or_placeholder_deepseek_key(
+def test_production_preflight_rejects_missing_or_placeholder_opencode_go_key(
     tmp_path: Path, provider_key: str
 ) -> None:
     result = _run_preflight(tmp_path, _production_env(DEEPSEEK_API_KEY=provider_key))
     output = result.stdout + result.stderr
 
     assert result.returncode != 0
-    assert "DEEPSEEK_API_KEY must be configured with a non-placeholder value" in output
+    assert (
+        "OPENCODE_GO_API_KEY (or legacy DEEPSEEK_API_KEY) must be configured" in output
+    )
     if provider_key:
         assert provider_key not in output
+
+
+def test_production_preflight_accepts_canonical_opencode_go_key(
+    tmp_path: Path,
+) -> None:
+    result = _run_preflight(
+        tmp_path,
+        _production_env(
+            DEEPSEEK_API_KEY="",
+            OPENCODE_GO_API_KEY="opencode-go-provider-key-0123456789",
+        ),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_production_preflight_rejects_missing_opencode_zen_key(
+    tmp_path: Path,
+) -> None:
+    result = _run_preflight(
+        tmp_path,
+        _production_env(
+            OPENCODE_ZEN_API_KEY="",
+            OPENCODE_API_KEY="",
+            OPENCODE_KEY="",
+        ),
+    )
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0
+    assert "OPENCODE_ZEN_API_KEY (or a legacy OpenCode Zen key)" in output
 
 
 def test_production_preflight_rejects_conflicting_inherited_compose_value(

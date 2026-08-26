@@ -6,6 +6,9 @@ import { format, parseISO } from 'date-fns'
 import { useAuth } from '../App'
 import CreatableCombobox from '../components/CreatableCombobox'
 import useMatterFieldOptions from '../hooks/useMatterFieldOptions'
+import AfterCallConcierge from '../components/intake/AfterCallConcierge'
+
+const AFTER_CALL_ASSISTANT_ENABLED = import.meta.env.VITE_ENABLE_AFTER_CALL_ASSISTANT === 'true'
 
 const STAGES = [
   { key: 'new', label: 'New' },
@@ -218,6 +221,7 @@ export default function IntakePage() {
   const [showCreate, setShowCreate] = useState(false)
   const [convertingLead, setConvertingLead] = useState(null)
   const [filterStatus, setFilterStatus] = useState('')
+  const [expandedLeadId, setExpandedLeadId] = useState(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -290,8 +294,8 @@ export default function IntakePage() {
         ) : (
           <div className="space-y-3">
             {(filterStatus ? leads.filter(l => l.status === filterStatus) : activeLeads).map(lead => (
-              <div key={lead.id}
-                className="bg-white rounded-xl border border-brand-line p-4 flex items-center gap-4 hover:border-brand-accent/40 transition-colors">
+              <div key={lead.id} className="rounded-xl border border-brand-line bg-white p-4 hover:border-brand-accent/40 transition-colors">
+                <div className="flex items-center gap-4">
                 <div className="w-9 h-9 rounded-full bg-brand-bg-soft flex items-center justify-center shrink-0">
                   <User size={16} className="text-brand-muted" />
                 </div>
@@ -318,6 +322,10 @@ export default function IntakePage() {
                   )}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
+                  {AFTER_CALL_ASSISTANT_ENABLED && <button type="button" onClick={(e) => { e.stopPropagation(); setExpandedLeadId(expandedLeadId === lead.id ? null : lead.id) }} aria-expanded={expandedLeadId === lead.id}
+                    className="px-2 py-1 text-[11px] font-bold text-brand-accent border border-brand-accent/30 rounded hover:bg-brand-accent/5 transition-colors">
+                    {expandedLeadId === lead.id ? 'Close assistant' : 'After-call assistant'}
+                  </button>}
                   {!['engaged','matter_opened','declined'].includes(lead.status) && (
                     <button onClick={(e) => handleAdvance(lead, e)}
                       className="px-2 py-1 text-[11px] font-bold text-brand-muted border border-brand-line rounded hover:border-brand-ink hover:text-brand-ink transition-colors uppercase tracking-wider">
@@ -337,6 +345,8 @@ export default function IntakePage() {
                     </button>
                   )}
                 </div>
+                </div>
+                {expandedLeadId === lead.id && <AfterCallConcierge lead={lead} enabled={AFTER_CALL_ASSISTANT_ENABLED} onLeadUpdated={load} />}
               </div>
             ))}
 

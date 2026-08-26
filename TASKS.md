@@ -1,5 +1,43 @@
 # TASKS.md
 
+## BK26 — Virtual Assistant Product — 2026-08-26 (IMPLEMENTATION PR IN REVIEW)
+
+**Goal:** Make LawHand Assistant a legitimate, review-first virtual assistant
+that turns the receptionist's completed Zoom-call note and human attorney
+assignment into prospect follow-through, reviewable outreach, and a
+template-backed fee agreement, then adds globally routed background hand-holding.
+
+Canonical product and execution plan:
+docs/virtual-assistant-product-plan-2026-08-26.md.
+
+This PR implements the After-call Concierge, lead-scoped Fee Agreement Packet
+preview/approval boundary, and global Background Automations routing/quota
+control foundations. It does **not** implement the always-on signal scheduler,
+Ask/For review/Today unified shell, or the background signal feed.
+
+- [x] This PR's Sprint 0 foundation: RouteTier, a global Background
+      Automations profile, vault-backed multi-deployment routing, conservative
+      aggregate request reservations across five-hour/weekly/monthly windows,
+      data-class policy, tenant caps, and operator controls.
+- [ ] Sprint 0 completion: quota-owner-aware member admission, provider-value
+      units, reconciliation jobs, member health/canary lifecycle, policy
+      evidence, and the remaining release gates.
+- [x] This PR's Sprint 1 product wedge: After-call Concierge preserving the receptionist's assignment,
+      reusing the existing intake task, with an attorney pursue/needs-info/close
+      checkpoint, one durable next action, and an optional reviewable
+      brief/outreach package per saved-note fingerprint. Remaining end-to-end
+      evidence and release gates are still required.
+- [x] This PR's Sprint 2 product wedge: lead-scoped Fee Agreement Packet with the compact
+      template/fee/scope/people/preview and approval boundary. Ask, For review,
+      and Today are deferred and remain unchecked in the canonical plan.
+- [ ] Sprint 3: prospect-focused signal ledger, zero-token follow-up gates,
+      durable background drafts, fairness, degraded mode, and kill switches
+- [ ] Sprint 4: confidential matter-work expansion, generalized work artifacts,
+      commercial reconciliation, and release evidence
+
+**Launch cut line:** “virtual assistant functions” is supportable after Sprints
+0–2 pass. “Always-on” remains prohibited until Sprint 3 passes.
+
 ## Live Demo Mode — 2026-08-16 (IMPLEMENTED — PR #115)
 
 **Goal:** Give sales an immediate, isolated, populated `/demo` workspace with Standard

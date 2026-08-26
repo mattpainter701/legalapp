@@ -1,0 +1,99 @@
+"""Platform quota reservations for the global Background Automations route."""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timezone
+
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+)
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.database import Base
+
+
+class BackgroundAIUsageReservation(Base):
+    """One request-cap reservation against the shared provider subscription pool.
+
+    This table intentionally stores operational metadata only. Prompt and response
+    content never belongs in the platform-wide ledger.
+    """
+
+    __tablename__ = "background_ai_usage_reservations"
+    __table_args__ = (
+        UniqueConstraint(
+            "pool",
+            "idempotency_key",
+            name="uq_background_ai_usage_pool_idempotency",
+        ),
+        CheckConstraint(
+            "status IN ('reserved', 'settled', 'unknown', 'released')",
+            name="ck_background_ai_usage_status",
+        ),
+        CheckConstraint(
+            "tokens_in >= 0 AND tokens_out >= 0",
+            name="ck_background_ai_usage_tokens_nonnegative",
+        ),
+        Index(
+            "ix_background_ai_usage_pool_created",
+            "pool",
+            "created_at",
+        ),
+        Index(
+            "ix_background_ai_usage_tenant_created",
+            "tenant_id",
+            "created_at",
+        ),
+        Index(
+            "ix_background_ai_usage_surface_created",
+            "surface",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default="gen_random_uuid()",
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    pool: Mapped[str] = mapped_column(
+        String(80), nullable=False, default="background-default"
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    request_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    surface: Mapped[str] = mapped_column(String(80), nullable=False)
+    route_alias: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="reserved", server_default="reserved"
+    )
+    provider_request_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    tokens_in: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    tokens_out: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default="now()",
+    )
+    settled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )

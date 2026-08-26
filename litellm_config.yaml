@@ -7,7 +7,7 @@ model_list:
     litellm_params:
       model: openai/nemotron-3-ultra-free
       api_base: https://opencode.ai/zen/v1
-      api_key: os.environ/DEEPSEEK_API_KEY
+      api_key: os.environ/OPENCODE_ZEN_API_KEY
       timeout: 15  # fast failover to next model
 
   # Standard fallback: OpenCode zen Nemotron free.
@@ -15,7 +15,7 @@ model_list:
     litellm_params:
       model: openai/nemotron-3-ultra-free
       api_base: https://opencode.ai/zen/v1
-      api_key: os.environ/DEEPSEEK_API_KEY
+      api_key: os.environ/OPENCODE_ZEN_API_KEY
       timeout: 15
 
   # Standard fallback: OpenCode zen DeepSeek V4 Flash Free.
@@ -23,7 +23,7 @@ model_list:
     litellm_params:
       model: openai/deepseek-v4-flash-free
       api_base: https://opencode.ai/zen/v1
-      api_key: os.environ/DEEPSEEK_API_KEY
+      api_key: os.environ/OPENCODE_ZEN_API_KEY
       timeout: 15
 
   # Premium profile: highest-quality drafting/reasoning.
@@ -32,7 +32,7 @@ model_list:
     litellm_params:
       model: openai/deepseek-v4-pro
       api_base: https://opencode.ai/zen/go/v1
-      api_key: os.environ/DEEPSEEK_API_KEY
+      api_key: os.environ/OPENCODE_GO_API_KEY
       timeout: 30
 
   # Premium fallback: fast free model for availability if premium provider stalls.
@@ -41,6 +41,27 @@ model_list:
       model: openrouter/google/gemma-4-31b-it:free
       api_key: os.environ/OPENROUTER_API_KEY
       timeout: 20
+
+  # Platform-global Background Automations route. GPT 5.6 Luna uses the
+  # Responses API on OpenCode Go; the application broker caps output, enforces
+  # JSON schemas, and reserves shared request quota before this alias is called.
+  # Production key pools are registered dynamically by Platform Management as
+  # multiple deployments sharing the same versioned alias.
+  - model_name: clarity-background
+    litellm_params:
+      model: openai/gpt-5.6-luna
+      api_base: https://opencode.ai/zen/go/v1
+      api_key: os.environ/OPENCODE_GO_API_KEY
+      timeout: 30
+
+  # Metered Zen is the explicit low-cost escape hatch for Background. It never
+  # falls through to clarity-premium.
+  - model_name: clarity-background-zen
+    litellm_params:
+      model: openai/gpt-5.6-luna
+      api_base: https://opencode.ai/zen/v1
+      api_key: os.environ/OPENCODE_ZEN_API_KEY
+      timeout: 30
 
 litellm_settings:
   drop_params: true
@@ -51,7 +72,9 @@ litellm_settings:
   cooldown_time: 15
 
 router_settings:
-  routing_strategy: cost-based-routing
+  # Multiple deployments under one alias are shuffled according to their
+  # configured capacities; platform admission control owns the long windows.
+  routing_strategy: simple-shuffle
   # Fail over inside the gateway so every request keeps the app-selected route
   # and provider outages do not surface as a generic chat failure.
   fallbacks:
@@ -62,6 +85,8 @@ router_settings:
     # available through the configured standard chain when that happens.
     - clarity-premium:
         - clarity-standard
+    - clarity-background:
+        - clarity-background-zen
 
 general_settings:
   master_key: os.environ/LITELLM_API_KEY

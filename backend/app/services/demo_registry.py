@@ -81,6 +81,7 @@ _CLONE_TABLES = {
 # though fixture rows must never be copied into a disposable tenant.
 _PURGE_ONLY_TABLES = {
     "api_access_logs",
+    "background_ai_usage_reservations",
     "client_portal_invites",
     "cloud_metadata_index",
     "demo_sessions",
@@ -89,6 +90,7 @@ _PURGE_ONLY_TABLES = {
     "document_storage_operations",
     "document_template_previews",
     "durable_jobs",
+    "engagement_packets",
     "error_logs",
     "external_import_runs",
     "external_raw_rows",
@@ -109,6 +111,9 @@ _PURGE_ONLY_TABLES = {
     "partner_assignment_log",
     "partner_rotation_state",
     "plan_upgrade_requests",
+    "prospect_contact_events",
+    "prospect_follow_through",
+    "prospect_follow_through_events",
     "qbo_integrations",
     "qbo_item_mappings",
     "roles",

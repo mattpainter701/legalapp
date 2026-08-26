@@ -13,6 +13,8 @@ METADATA_FIELDS = (
     "plugin",
     "skill",
     "premium",
+    "route_tier",
+    "actor_type",
 )
 
 

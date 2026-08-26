@@ -111,6 +111,13 @@ from app.models.document_storage_operation import DocumentStorageOperation
 from app.models.document_integrity_event import DocumentIntegrityEvent
 from app.models.stripe_webhook_event import StripeWebhookEvent
 from app.models.inbound_email import InboundEmail, InboundEmailAlias
+from app.models.prospect_follow_through import (
+    ProspectFollowThrough,
+    EngagementPacket,
+    ProspectContactEvent,
+    ProspectFollowThroughEvent,
+)
+from app.models.background_ai_usage import BackgroundAIUsageReservation
 
 __all__ = [
     "Tenant",
@@ -224,4 +231,9 @@ __all__ = [
     "StripeWebhookEvent",
     "InboundEmail",
     "InboundEmailAlias",
+    "ProspectFollowThrough",
+    "EngagementPacket",
+    "ProspectContactEvent",
+    "ProspectFollowThroughEvent",
+    "BackgroundAIUsageReservation",
 ]

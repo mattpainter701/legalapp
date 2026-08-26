@@ -276,6 +276,10 @@ class LLMService:
         gateway_metadata: dict | None = None,
         system_prompt_override: str | None = None,
         usage_sink: dict[str, Any] | None = None,
+        max_output_tokens: int = 4096,
+        request_id: str | None = None,
+        disable_retries: bool = False,
+        temperature: float = 0.1,
     ) -> Tuple[str, int, int]:
         """Generate a completion through LiteLLM.
 
@@ -301,6 +305,8 @@ class LLMService:
         client = self._client_for(
             customer_api_key, customer_provider, customer_endpoint
         )
+        if disable_retries:
+            client = client.with_options(max_retries=0)
         candidates = self._gateway_candidates(
             gateway_model,
             use_premium=use_premium,
@@ -308,14 +314,21 @@ class LLMService:
         )
         last_error: APIError | APIConnectionError | RuntimeError | None = None
         for candidate in candidates:
-            request_id = str(uuid.uuid4())
-            logger.debug("LLM complete request_id=%s model=%s", request_id, candidate)
+            candidate_request_id = request_id or str(uuid.uuid4())
+            logger.debug(
+                "LLM complete request_id=%s model=%s",
+                candidate_request_id,
+                candidate,
+            )
             create_kwargs: dict = dict(
                 model=candidate,
                 messages=all_messages,
-                temperature=0.1,
-                max_tokens=4096,
-                extra_headers={"x-request-id": request_id},
+                temperature=temperature,
+                max_tokens=max(1, int(max_output_tokens)),
+                extra_headers={
+                    "x-request-id": candidate_request_id,
+                    "Idempotency-Key": candidate_request_id,
+                },
             )
             metadata = sanitized_gateway_metadata(**(gateway_metadata or {}))
             if metadata and not customer_api_key:
@@ -341,6 +354,11 @@ class LLMService:
                             "model": getattr(response, "model", None) or candidate,
                             "tokens_in": tokens_in,
                             "tokens_out": tokens_out,
+                            **(
+                                {"provider_request_id": response.id}
+                                if getattr(response, "id", None)
+                                else {}
+                            ),
                         }
                     )
                 if not response_text.strip():
@@ -400,6 +418,7 @@ class LLMService:
         gateway_metadata: dict | None = None,
         system_prompt_override: str | None = None,
         usage_sink: dict[str, Any] | None = None,
+        max_output_tokens: int = 4096,
     ) -> AsyncGenerator[str, None]:
         """Stream a completion through LiteLLM."""
         system_prompt = system_prompt_override or self._build_system_prompt(
@@ -434,7 +453,7 @@ class LLMService:
                     model=candidate,
                     messages=all_messages,
                     temperature=0.1,
-                    max_tokens=4096,
+                    max_tokens=max(1, int(max_output_tokens)),
                     stream=True,
                     extra_headers={"x-request-id": request_id},
                 )
