@@ -138,6 +138,10 @@ class TenantSettings(Base):
     default_workspace_mcp_enabled: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
     )
+    # Tenant-wide administrative kill switch for Workspace MCP.
+    workspace_mcp_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true", nullable=False
+    )
 
     # Feature flags
     enable_auto_memory: Mapped[bool] = mapped_column(

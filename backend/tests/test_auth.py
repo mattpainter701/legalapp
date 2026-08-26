@@ -152,7 +152,17 @@ class TestAuthMe:
             consent_sha256="a" * 64,
             expires_at=datetime.now(timezone.utc) + timedelta(days=30),
         )
-        db_session.add(grant)
+        research_grant = WorkspaceMCPGrant(
+            tenant_id=test_tenant.id,
+            user_id=test_user.id,
+            client_id="research.claude-desktop",
+            client_name="Claude Research",
+            scopes=["research:read"],
+            consent_version="research-mcp-v1",
+            consent_sha256="r" * 64,
+            expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+        )
+        db_session.add_all([grant, research_grant])
         await db_session.commit()
 
         response = await client.patch("/api/auth/me", json={"privacy_mode": True})
@@ -163,6 +173,9 @@ class TestAuthMe:
         assert grant.status == "revoked"
         assert grant.revoked_at is not None
         assert grant.revocation_reason == "Privacy Mode enabled"
+        await db_session.refresh(research_grant)
+        assert research_grant.status == "active"
+        assert research_grant.revoked_at is None
 
     async def test_me_profile_patch_restores_rls_context_after_commit(
         self, monkeypatch
@@ -286,6 +299,9 @@ class TestAuthMe:
         class FakeSession:
             async def scalars(self, _statement):
                 return Result()
+
+            async def execute(self, _statement, _parameters=None):
+                return None
 
             async def commit(self):
                 return None

@@ -56,6 +56,7 @@ from app.utils.oauth_security import (
     verify_microsoft_access_token,
 )
 from app.services.tenant_state import require_active_tenant
+from app.services.workspace_mcp_access import lock_tenant_workspace_mcp_policy
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -1889,15 +1890,17 @@ async def update_me(
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
     enabling_privacy_mode = body.privacy_mode is True and not user.privacy_mode
+    if enabling_privacy_mode:
+        await lock_tenant_workspace_mcp_policy(db, user.tenant_id)
     for field, value in body.model_dump(exclude_unset=True).items():
         setattr(user, field, value)
 
     revoked_workspace_grants: list[WorkspaceMCPGrant] = []
     if enabling_privacy_mode:
         # Privacy Mode must take effect immediately—not only on the next MCP
-        # request. Revoke every active external-assistant grant for this user;
-        # native LawHand features continue to use their normal privacy-safe
-        # processing path and have no Workspace MCP grant to revoke.
+        # request. Revoke every active Workspace MCP grant for this user;
+        # Research MCP only accesses public authority and remains a separate
+        # product with its own connection controls.
         revoked_workspace_grants = list(
             (
                 await db.scalars(
@@ -1905,6 +1908,7 @@ async def update_me(
                     .where(
                         WorkspaceMCPGrant.tenant_id == user.tenant_id,
                         WorkspaceMCPGrant.user_id == user.id,
+                        WorkspaceMCPGrant.client_id.not_like("research.%"),
                         WorkspaceMCPGrant.status == "active",
                         WorkspaceMCPGrant.revoked_at.is_(None),
                     )

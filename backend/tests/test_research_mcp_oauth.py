@@ -157,6 +157,12 @@ def test_research_scope_is_exact(scope):
         oauth.normalized_research_scopes(scope)
 
 
+def test_research_scope_accepts_offline_access_for_refresh_tokens():
+    assert oauth.normalized_research_scopes(
+        "research:read offline_access"
+    ) == frozenset({"research:read", "offline_access"})
+
+
 def test_research_metadata_advertises_dcr_pkce_and_form_endpoints(monkeypatch):
     monkeypatch.setattr(
         router.settings, "RESEARCH_MCP_DYNAMIC_REGISTRATION_ENABLED", True
@@ -173,7 +179,7 @@ def test_research_metadata_advertises_dcr_pkce_and_form_endpoints(monkeypatch):
         "resource": "https://research.getlawhand.com/api/mcp",
         "resource_name": "LawHand Research MCP",
         "authorization_servers": ["https://research.getlawhand.com"],
-        "scopes_supported": ["research:read"],
+        "scopes_supported": ["offline_access", "research:read"],
         "bearer_methods_supported": ["header"],
     }
 
@@ -571,9 +577,8 @@ async def test_research_authorization_start_and_consent_details(monkeypatch):
     monkeypatch.setattr(router.settings, "RESEARCH_MCP_OAUTH_ENABLED", True)
     c, u = _client(), _user()
     monkeypatch.setattr(router, "_active_client", AsyncMock(return_value=c))
-    monkeypatch.setattr(
-        router, "save_research_authorization_request", AsyncMock(return_value="req-1")
-    )
+    save_request = AsyncMock(return_value="req-1")
+    monkeypatch.setattr(router, "save_research_authorization_request", save_request)
     monkeypatch.setattr(router, "validate_pkce_challenge", lambda *_: None)
     monkeypatch.setattr(router, "ensure_mcp_product_access", lambda _: None)
     out = await router.begin_research_authorization(
@@ -581,7 +586,7 @@ async def test_research_authorization_start_and_consent_details(monkeypatch):
         "code",
         c.client_id,
         c.redirect_uris[0],
-        router.RESEARCH_SCOPE,
+        f"{router.RESEARCH_SCOPE} offline_access",
         "state",
         "a" * 43,
         "S256",
@@ -589,6 +594,10 @@ async def test_research_authorization_start_and_consent_details(monkeypatch):
         _DB(),
     )
     assert out.status_code == 302 and "request_id=req-1" in out.headers["location"]
+    assert save_request.await_args.args[1]["scopes"] == [
+        "offline_access",
+        router.RESEARCH_SCOPE,
+    ]
     monkeypatch.setattr(
         router, "load_research_authorization_request", AsyncMock(return_value=None)
     )
@@ -599,14 +608,18 @@ async def test_research_authorization_start_and_consent_details(monkeypatch):
         router,
         "load_research_authorization_request",
         AsyncMock(
-            return_value={"client_id": c.client_id, "scopes": [router.RESEARCH_SCOPE]}
+            return_value={
+                "client_id": c.client_id,
+                "scopes": [router.RESEARCH_SCOPE, "offline_access"],
+            }
         ),
     )
     details = await router.get_research_authorization_request("x", _request(), u, _DB())
-    assert (
-        details["client"]["id"] == c.client_id
-        and details["scopes"][0]["name"] == router.RESEARCH_SCOPE
-    )
+    assert details["client"]["id"] == c.client_id
+    assert {item["name"] for item in details["scopes"]} == {
+        router.RESEARCH_SCOPE,
+        "offline_access",
+    }
     monkeypatch.setattr(
         router,
         "load_research_authorization_request",
@@ -625,7 +638,7 @@ async def test_research_consent_deny_approve_and_restore(monkeypatch):
     pending = {
         "client_id": c.client_id,
         "redirect_uri": c.redirect_uris[0],
-        "scopes": [router.RESEARCH_SCOPE],
+        "scopes": [router.RESEARCH_SCOPE, "offline_access"],
         "state": "s",
         "code_challenge": "cc",
     }
@@ -643,13 +656,13 @@ async def test_research_consent_deny_approve_and_restore(monkeypatch):
     monkeypatch.setattr(
         router, "replace_active_research_grant", AsyncMock(return_value=g)
     )
-    monkeypatch.setattr(
-        router, "save_research_authorization_code", AsyncMock(return_value="code")
-    )
+    save_code = AsyncMock(return_value="code")
+    monkeypatch.setattr(router, "save_research_authorization_code", save_code)
     approved = await router.decide_research_authorization(
         "r", router.ConsentDecision(approved=True), _request(), u, _DB()
     )
     assert "code=code" in approved["redirect_to"]
+    assert save_code.await_args.args[1]["scopes"] == [router.RESEARCH_SCOPE]
     restore = AsyncMock()
     monkeypatch.setattr(
         router,

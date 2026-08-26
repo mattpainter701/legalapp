@@ -29,9 +29,14 @@ from app.services.workspace_mcp_grants import (
     WorkspaceMCPGrantError,
     require_active_workspace_grant,
 )
+from app.services.workspace_mcp_access import (
+    lock_tenant_workspace_mcp_policy,
+    tenant_workspace_mcp_enabled,
+)
 from app.services.workspace_mcp_oauth import (
     CONSENT_NOTICE,
-    WORKSPACE_SCOPE_LABELS,
+    OFFLINE_ACCESS_SCOPE,
+    WORKSPACE_OAUTH_SCOPE_LABELS,
     WorkspaceOAuthError,
     claim_authorization_request,
     append_workspace_mcp_audit,
@@ -108,7 +113,7 @@ def _append_redirect_query(url: str, **values: str | None) -> str:
 
 def _scope_items(scopes: frozenset[str]) -> list[dict[str, str]]:
     return [
-        {"name": scope, "label": WORKSPACE_SCOPE_LABELS[scope]}
+        {"name": scope, "label": WORKSPACE_OAUTH_SCOPE_LABELS[scope]}
         for scope in sorted(scopes)
     ]
 
@@ -153,6 +158,10 @@ async def _load_grant_actor(
 ) -> tuple[WorkspaceMCPGrant, User]:
     require_workspace_tenant_allowed(tenant_id)
     await set_tenant_context(db, str(tenant_id))
+    if not await tenant_workspace_mcp_enabled(db, tenant_id):
+        raise WorkspaceOAuthError(
+            "invalid_grant", "Workspace MCP is disabled for this tenant"
+        )
     try:
         grant = await require_active_workspace_grant(
             db,
@@ -206,7 +215,7 @@ async def protected_resource_metadata(request: Request = None):
         "resource": workspace_resource_uri(),
         "resource_name": "LawHand Workspace MCP",
         "authorization_servers": [workspace_issuer_uri()],
-        "scopes_supported": sorted(WORKSPACE_SCOPE_LABELS),
+        "scopes_supported": sorted(WORKSPACE_OAUTH_SCOPE_LABELS),
         "bearer_methods_supported": ["header"],
     }
 
@@ -235,7 +244,7 @@ async def authorization_server_metadata(request: Request = None):
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "token_endpoint_auth_methods_supported": ["none"],
         "code_challenge_methods_supported": ["S256"],
-        "scopes_supported": sorted(WORKSPACE_SCOPE_LABELS),
+        "scopes_supported": sorted(WORKSPACE_OAUTH_SCOPE_LABELS),
         "client_id_metadata_document_supported": False,
     }
     if settings.WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED:
@@ -400,13 +409,18 @@ async def get_workspace_authorization_request(
 ):
     _require_enabled()
     require_workspace_tenant_allowed(user.tenant_id)
+    if not await tenant_workspace_mcp_enabled(db, user.tenant_id):
+        raise HTTPException(
+            status_code=403, detail="Workspace MCP is disabled for this tenant"
+        )
     pending = await load_authorization_request(request, request_id)
     if pending is None:
         raise HTTPException(
             status_code=410, detail="Authorization request expired or was already used"
         )
     client = await _active_client(db, str(pending.get("client_id") or ""))
-    scopes = frozenset(str(value) for value in pending.get("scopes", []))
+    requested_scopes = frozenset(str(value) for value in pending.get("scopes", []))
+    scopes = requested_scopes - {OFFLINE_ACCESS_SCOPE}
     allowed = await _allowed_user_scopes(db, user)
     if not scopes or not scopes.issubset(allowed):
         raise HTTPException(
@@ -418,7 +432,7 @@ async def get_workspace_authorization_request(
         "client": {"id": client.client_id, "name": client.client_name},
         "organization": {"id": str(user.tenant_id), "name": user.tenant.name},
         "user": {"id": str(user.id), "email": user.email, "name": user.full_name},
-        "scopes": _scope_items(scopes),
+        "scopes": _scope_items(requested_scopes),
         "notice": CONSENT_NOTICE,
         "expires_in": settings.WORKSPACE_MCP_AUTH_CODE_TTL_SECONDS,
     }
@@ -434,6 +448,28 @@ async def decide_workspace_authorization(
 ):
     _require_enabled()
     require_workspace_tenant_allowed(user.tenant_id)
+    # Consent creation and every policy-driven revocation take the same
+    # tenant-scoped transaction lock. Whichever starts second observes the
+    # first transaction's final state, so re-enabling cannot resurrect a grant
+    # that raced with a disable or Privacy Mode change.
+    await lock_tenant_workspace_mcp_policy(db, user.tenant_id)
+    # Authentication loaded the user before the policy lock was acquired. A
+    # concurrent administrator or Privacy Mode transaction may have changed
+    # these fields while this request waited, so refresh the fail-closed flags
+    # before deciding whether consent can create a durable grant.
+    await db.refresh(
+        user,
+        attribute_names=[
+            "is_active",
+            "license_active",
+            "privacy_mode",
+            "workspace_mcp_enabled",
+        ],
+    )
+    if not await tenant_workspace_mcp_enabled(db, user.tenant_id):
+        raise HTTPException(
+            status_code=403, detail="Workspace MCP is disabled for this tenant"
+        )
     pending = await claim_authorization_request(request, request_id)
     if pending is None:
         raise HTTPException(
@@ -471,7 +507,8 @@ async def decide_workspace_authorization(
                     "disconnects external assistants; turn it off to reconnect."
                 ),
             )
-        scopes = frozenset(str(value) for value in pending.get("scopes", []))
+        requested_scopes = frozenset(str(value) for value in pending.get("scopes", []))
+        scopes = requested_scopes - {OFFLINE_ACCESS_SCOPE}
         if not scopes or not scopes.issubset(await _allowed_user_scopes(db, user)):
             raise HTTPException(
                 status_code=403, detail="Requested access is unavailable"
@@ -487,7 +524,7 @@ async def decide_workspace_authorization(
                 client_id=client.client_id,
                 event_type="consent_denied",
                 outcome="denied",
-                metadata={"scopes": sorted(scopes)},
+                metadata={"scopes": sorted(requested_scopes)},
             )
             await db.commit()
             committed = True
@@ -794,6 +831,9 @@ async def list_workspace_grants(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # Connection history and revocation remain available when a tenant turns
+    # Workspace MCP off.  The tenant gate blocks authorization, token issuance,
+    # and protocol execution; it must not hide evidence or prevent cleanup.
     _require_enabled()
     require_workspace_tenant_allowed(user.tenant_id)
     grants = list(
@@ -803,6 +843,9 @@ async def list_workspace_grants(
                 .where(
                     WorkspaceMCPGrant.tenant_id == user.tenant_id,
                     WorkspaceMCPGrant.user_id == user.id,
+                    # Research OAuth grants share this table but belong to a
+                    # separate product and have their own list/revoke routes.
+                    WorkspaceMCPGrant.client_id.not_like("research.%"),
                 )
                 .order_by(WorkspaceMCPGrant.created_at.desc())
             )
@@ -854,6 +897,7 @@ async def revoke_workspace_grant(
             WorkspaceMCPGrant.id == grant_id,
             WorkspaceMCPGrant.tenant_id == user.tenant_id,
             WorkspaceMCPGrant.user_id == user.id,
+            WorkspaceMCPGrant.client_id.not_like("research.%"),
         )
         .with_for_update()
     )

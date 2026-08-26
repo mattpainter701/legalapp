@@ -32,6 +32,8 @@ CONSENT_NOTICE = (
     "LawHand workspace access is limited to the scopes shown. Proposal tools "
     "create review work only; they cannot approve, file, send, or deliver it."
 )
+OFFLINE_ACCESS_SCOPE = "offline_access"
+OFFLINE_ACCESS_LABEL = "Keep this connection signed in with rotating refresh tokens"
 
 WORKSPACE_SCOPE_LABELS: dict[str, str] = {
     "matters:read": "Find matters and read bounded matter context",
@@ -42,6 +44,10 @@ WORKSPACE_SCOPE_LABELS: dict[str, str] = {
     "tasks:propose": "Create tasks that start in human review",
     "communications:propose": "Draft client email proposals without sending",
     "documents:propose": "Create cloud-backed DOCX drafts for staged review",
+}
+WORKSPACE_OAUTH_SCOPE_LABELS: dict[str, str] = {
+    **WORKSPACE_SCOPE_LABELS,
+    OFFLINE_ACCESS_SCOPE: OFFLINE_ACCESS_LABEL,
 }
 
 
@@ -275,7 +281,8 @@ def verify_pkce(verifier: str, challenge: str) -> bool:
 
 def normalized_scopes(raw: str) -> frozenset[str]:
     scopes = frozenset(value for value in raw.split() if value)
-    if not scopes or scopes - WORKSPACE_SCOPE_LABELS.keys():
+    resource_scopes = scopes.intersection(WORKSPACE_SCOPE_LABELS)
+    if not resource_scopes or scopes - WORKSPACE_OAUTH_SCOPE_LABELS.keys():
         raise WorkspaceOAuthError(
             "invalid_scope", "Requested workspace scope is invalid"
         )

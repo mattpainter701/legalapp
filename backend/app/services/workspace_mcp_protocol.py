@@ -57,6 +57,7 @@ from app.services.workspace_mcp_grants import (
     WorkspaceMCPGrantError,
     require_active_workspace_grant,
 )
+from app.services.workspace_mcp_access import tenant_workspace_mcp_enabled
 
 from app.services.workspace_mcp_oauth import (
     WorkspaceOAuthError,
@@ -260,6 +261,10 @@ async def _load_workspace_actor(
 
     await set_tenant_context(db, str(identity.tenant_id))
     require_workspace_tenant_allowed(identity.tenant_id)
+    if not await tenant_workspace_mcp_enabled(db, identity.tenant_id):
+        raise HTTPException(
+            status_code=403, detail="Workspace MCP is disabled for this tenant"
+        )
     try:
         await require_active_workspace_grant(
             db,

@@ -1159,7 +1159,6 @@ function SettingsTab() {
   const [loaded, setLoaded] = useState(false)
   const [existingConfig, setExistingConfig] = useState({})
   const [featureSettings, setFeatureSettings] = useState(null)
-  const [defaultWorkspaceMcpEnabled, setDefaultWorkspaceMcpEnabled] = useState(true)
 
   useEffect(() => {
     getAdminSettings()
@@ -1169,7 +1168,6 @@ function SettingsTab() {
         setExistingConfig(cfg)
         setIncludePublic(cfg.include_public_case_law !== false)
         setFeatureSettings(s)
-        setDefaultWorkspaceMcpEnabled(s.default_workspace_mcp_enabled !== false)
         setLoaded(true)
       })
       .catch(() => setLoaded(true))
@@ -1182,7 +1180,6 @@ function SettingsTab() {
         default_llm_provider: modelOverride ? 'litellm' : null,
         default_llm_model: modelOverride || null,
         custom_config: { ...existingConfig, include_public_case_law: includePublic },
-        default_workspace_mcp_enabled: defaultWorkspaceMcpEnabled,
       })
       setExistingConfig((prev) => ({ ...prev, include_public_case_law: includePublic }))
       setMsg({ type: 'success', text: 'Settings saved.' })
@@ -1197,20 +1194,6 @@ function SettingsTab() {
   return (
     <div className="max-w-3xl space-y-8">
       <ReleaseInfoPanel />
-
-      <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden">
-        <div className="px-8 py-6 border-b border-brand-line bg-brand-bg-soft/50">
-          <h3 className="font-serif font-bold text-xl text-brand-ink">Connected assistants</h3>
-          <p className="text-sm text-brand-ink-2 font-sans mt-1">Set the Workspace MCP policy applied when a new user is invited or directory-synced.</p>
-        </div>
-        <div className="flex items-center justify-between gap-6 px-8 py-5">
-          <div>
-            <p className="text-sm font-sans font-semibold text-brand-ink">Enable Workspace MCP for new users</p>
-            <p className="text-xs text-brand-ink-2 font-sans mt-1">Users still complete their own OAuth consent. Manage existing users individually in Admin → Users.</p>
-          </div>
-          <Toggle checked={defaultWorkspaceMcpEnabled} onChange={setDefaultWorkspaceMcpEnabled} label="Workspace MCP default" />
-        </div>
-      </div>
 
       {/* Case Law */}
       <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden">

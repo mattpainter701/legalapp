@@ -33,6 +33,12 @@ class _DB:
     async def scalars(self, _statement):
         return _Rows(self.rows)
 
+    async def execute(self, _statement, _parameters=None):
+        return None
+
+    async def refresh(self, _value, attribute_names=None):
+        return None
+
     def add(self, value):
         self.added.append(value)
 
@@ -156,7 +162,7 @@ async def test_begin_and_get_authorization_request(monkeypatch):
         response_type="code",
         client_id=client.client_id,
         redirect_uri="http://127.0.0.1:43123/callback",
-        scope="matters:read tasks:read",
+        scope="matters:read tasks:read offline_access",
         state="caller-state",
         code_challenge="a" * 43,
         code_challenge_method="S256",
@@ -165,7 +171,7 @@ async def test_begin_and_get_authorization_request(monkeypatch):
     )
     assert response.status_code == 302
     assert "request_id=pending-request" in response.headers["location"]
-    assert saved[0]["scopes"] == ["matters:read", "tasks:read"]
+    assert saved[0]["scopes"] == ["matters:read", "offline_access", "tasks:read"]
 
     bad = await oauth_router.begin_workspace_authorization(
         _Request(),
@@ -183,7 +189,10 @@ async def test_begin_and_get_authorization_request(monkeypatch):
     assert json.loads(bad.body)["error"] == "unsupported_response_type"
 
     user = _user()
-    pending = {"client_id": client.client_id, "scopes": ["matters:read"]}
+    pending = {
+        "client_id": client.client_id,
+        "scopes": ["matters:read", "offline_access"],
+    }
     monkeypatch.setattr(
         oauth_router, "load_authorization_request", lambda *_args: _value(pending)
     )
@@ -197,6 +206,10 @@ async def test_begin_and_get_authorization_request(monkeypatch):
     )
     assert details["organization"]["name"] == "Test Firm"
     assert details["client"]["name"] == "Desktop"
+    assert {item["name"] for item in details["scopes"]} == {
+        "matters:read",
+        "offline_access",
+    }
 
     monkeypatch.setattr(
         oauth_router, "load_authorization_request", lambda *_args: _value(None)
@@ -224,7 +237,7 @@ async def test_consent_denial_approval_and_restore_on_failure(monkeypatch):
     pending = {
         "client_id": "desktop-client",
         "redirect_uri": redirect_uri,
-        "scopes": ["matters:read"],
+        "scopes": ["matters:read", "offline_access"],
         "state": "caller-state",
         "code_challenge": "a" * 43,
     }
@@ -262,9 +275,13 @@ async def test_consent_denial_approval_and_restore_on_failure(monkeypatch):
 
     previous = SimpleNamespace(id=uuid.uuid4())
     grant = SimpleNamespace(id=uuid.uuid4())
-    monkeypatch.setattr(
-        oauth_router, "replace_active_grant", lambda *_args, **_kwargs: _value(grant)
-    )
+    replaced_scopes = []
+
+    async def replace_grant(*_args, **kwargs):
+        replaced_scopes.append(kwargs["scopes"])
+        return grant
+
+    monkeypatch.setattr(oauth_router, "replace_active_grant", replace_grant)
     monkeypatch.setattr(
         oauth_router, "save_authorization_code", lambda *_args: _value("one-use-code")
     )
@@ -274,7 +291,8 @@ async def test_consent_denial_approval_and_restore_on_failure(monkeypatch):
         revoked.append(grant_id)
 
     monkeypatch.setattr(oauth_router, "revoke_grant_refresh_tokens", revoke_old)
-    approval_db = _DB(scalar_values=[previous])
+    # The tenant-wide MCP gate is read before the previous grant lookup.
+    approval_db = _DB(scalar_values=[True, previous])
     approved = await oauth_router.decide_workspace_authorization(
         "request-approve",
         oauth_router.ConsentDecision(approved=True),
@@ -285,6 +303,7 @@ async def test_consent_denial_approval_and_restore_on_failure(monkeypatch):
     assert "code=one-use-code" in approved["redirect_to"]
     assert approval_db.commits == 1
     assert revoked == [previous.id]
+    assert replaced_scopes == [frozenset({"matters:read"})]
 
     restored = []
     bad_client = SimpleNamespace(

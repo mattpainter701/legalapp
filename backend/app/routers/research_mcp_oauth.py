@@ -26,6 +26,7 @@ from app.models.workspace_mcp_grant import WorkspaceMCPGrant
 from app.services.mcp_product import ensure_mcp_product_access
 from app.services.research_mcp_oauth import (
     CONSENT_NOTICE,
+    RESEARCH_OAUTH_SCOPE_LABELS,
     RESEARCH_SCOPE,
     RESEARCH_SCOPE_LABELS,
     WorkspaceOAuthError,
@@ -148,7 +149,7 @@ def protected_resource_metadata_payload() -> dict:
         "resource": research_resource_uri(),
         "resource_name": "LawHand Research MCP",
         "authorization_servers": [research_issuer_uri()],
-        "scopes_supported": [RESEARCH_SCOPE],
+        "scopes_supported": sorted(RESEARCH_OAUTH_SCOPE_LABELS),
         "bearer_methods_supported": ["header"],
     }
 
@@ -167,7 +168,7 @@ def authorization_server_metadata_payload() -> dict:
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "token_endpoint_auth_methods_supported": ["none"],
         "code_challenge_methods_supported": ["S256"],
-        "scopes_supported": [RESEARCH_SCOPE],
+        "scopes_supported": sorted(RESEARCH_OAUTH_SCOPE_LABELS),
         "client_id_metadata_document_supported": False,
     }
     if not settings.RESEARCH_MCP_DYNAMIC_REGISTRATION_ENABLED:
@@ -352,7 +353,7 @@ async def get_research_authorization_request(
         raise HTTPException(status_code=410, detail="Authorization request expired")
     client = await _active_client(db, str(pending.get("client_id") or ""))
     scopes = frozenset(str(value) for value in pending.get("scopes", []))
-    if scopes != frozenset({RESEARCH_SCOPE}):
+    if RESEARCH_SCOPE not in scopes or scopes - RESEARCH_OAUTH_SCOPE_LABELS.keys():
         raise HTTPException(status_code=403, detail="Requested access is unavailable")
     return {
         "request_id": request_id,
@@ -360,7 +361,8 @@ async def get_research_authorization_request(
         "organization": {"id": str(user.tenant_id), "name": user.tenant.name},
         "user": {"id": str(user.id), "email": user.email, "name": user.full_name},
         "scopes": [
-            {"name": RESEARCH_SCOPE, "label": RESEARCH_SCOPE_LABELS[RESEARCH_SCOPE]}
+            {"name": scope, "label": RESEARCH_OAUTH_SCOPE_LABELS[scope]}
+            for scope in sorted(scopes)
         ],
         "notice": CONSENT_NOTICE,
         "expires_in": settings.RESEARCH_MCP_AUTH_CODE_TTL_SECONDS,
@@ -399,7 +401,7 @@ async def decide_research_authorization(
                 )
             }
         scopes = frozenset(str(value) for value in pending.get("scopes", []))
-        if scopes != frozenset({RESEARCH_SCOPE}):
+        if RESEARCH_SCOPE not in scopes or scopes - RESEARCH_OAUTH_SCOPE_LABELS.keys():
             raise HTTPException(
                 status_code=403, detail="Requested access is unavailable"
             )

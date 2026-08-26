@@ -63,6 +63,11 @@ authentication is the compatibility flow for header-capable clients. Legacy
 unscoped `X-API-Key` credentials are invalidated by migration 087 and issuance
 returns HTTP 410.
 
+OAuth discovery advertises optional `offline_access` for hosted clients that
+require explicit refresh-token capability. The server strips it from the
+research resource scope while still issuing rotating, replay-detected refresh
+tokens; it never expands the Research tool catalog.
+
 Research access requires an active LawHand user/tenant plus Research
 entitlement and billing. It does not require a Workspace seat and is not
 disabled by Workspace Privacy Mode because the Research catalog cannot read

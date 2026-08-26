@@ -62,10 +62,12 @@ Prerequisites:
 - the client supports remote Streamable HTTP MCP and OAuth with PKCE.
 
 OAuth consent cannot bypass Privacy Mode. Enabling Privacy Mode immediately
-revokes that user's active external-assistant grants (for example Claude,
-ChatGPT, or Codex); turning it off does not restore them. Reconnect and review
-scopes only when firm policy permits the external MCP connection. Native
-LawHand features remain available under their normal Privacy Mode safeguards.
+revokes that user's active Workspace MCP grants (for example Claude, ChatGPT,
+or Codex workspace connections); turning it off does not restore them. Reconnect
+and review scopes only when firm policy permits the external MCP connection.
+Native LawHand features remain available under their normal Privacy Mode
+safeguards. Research MCP is separate and accesses public authority only, so a
+Workspace Privacy Mode change does not revoke Research OAuth grants.
 
 These are independent controls. The tenant administrator's per-user Workspace
 MCP permission determines whether that account may authorize an external
@@ -73,13 +75,24 @@ assistant. Privacy Mode is the user's data-minimization setting and remains
 user-controlled under **Profile**. Admins can see when Privacy Mode is blocking
 a connection, but do not toggle it on the user's behalf.
 
-Tenant administrators can set **Enable Workspace MCP for new users** under
-**Admin -> Settings -> Connected assistants**. The default applies when a user
-is subsequently invited, created through tenant OAuth, or directory-synced; it
-does not silently change existing accounts. Every enabled user must still
-complete explicit OAuth consent. Disabling an existing user's permission
-immediately revokes active Workspace MCP grants; re-enabling permission does
-not restore them, so the user must reconnect and review scopes.
+Tenant administrators administer Workspace MCP from the primary **Admin -> MCP
+Servers** page. That page exposes three independent controls: the tenant-wide
+**Enable Workspace MCP** master switch, **Enable Workspace MCP for new users**,
+and explicit per-user Workspace MCP access. The new-user default applies when a
+user is subsequently invited, created through tenant OAuth, or directory-synced;
+it does not silently change existing accounts. Every enabled user must still
+complete explicit OAuth consent.
+
+OAuth discovery advertises the standard optional `offline_access` scope. When
+a client requests it, the consent screen explains persistent sign-in and the
+server issues the same rotating, replay-detected refresh-token family used by
+other Workspace MCP clients. `offline_access` never adds a workspace tool scope.
+
+Disabling the tenant master switch or an existing user's permission immediately
+revokes active Workspace MCP grants. Re-enabling either control does not restore
+the grants, so the user must reconnect and review scopes. Privacy Mode remains
+user-controlled under Profile and is not an administrator substitute for these
+controls.
 
 Use the official full Workspace MCP URL below. Never use a Research MCP
 `lhrk_` product key for matter access.

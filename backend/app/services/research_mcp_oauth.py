@@ -25,6 +25,8 @@ from app.services.workspace_mcp_grants import (
     require_active_workspace_grant,
 )
 from app.services.workspace_mcp_oauth import (
+    OFFLINE_ACCESS_LABEL,
+    OFFLINE_ACCESS_SCOPE,
     WorkspaceOAuthError,
     claim_authorization_request,
     consume_authorization_code,
@@ -54,6 +56,10 @@ RESEARCH_SCOPE = "research:read"
 RESEARCH_SCOPE_LABELS = {
     RESEARCH_SCOPE: "Search and retrieve public legal research authorities",
 }
+RESEARCH_OAUTH_SCOPE_LABELS = {
+    **RESEARCH_SCOPE_LABELS,
+    OFFLINE_ACCESS_SCOPE: OFFLINE_ACCESS_LABEL,
+}
 CONSENT_VERSION = "research-mcp-v1"
 CONSENT_NOTICE = (
     "LawHand Research accesses public legal authorities and records metered "
@@ -81,7 +87,7 @@ def research_protected_resource_metadata_uri() -> str:
 
 def normalized_research_scopes(raw: str) -> frozenset[str]:
     scopes = frozenset(value for value in raw.split() if value)
-    if scopes != frozenset({RESEARCH_SCOPE}):
+    if RESEARCH_SCOPE not in scopes or scopes - RESEARCH_OAUTH_SCOPE_LABELS.keys():
         raise WorkspaceOAuthError("invalid_scope", "research:read is required")
     return scopes
 
@@ -355,6 +361,7 @@ async def require_active_research_grant(
 
 __all__ = [
     "CONSENT_NOTICE",
+    "RESEARCH_OAUTH_SCOPE_LABELS",
     "RESEARCH_SCOPE",
     "RESEARCH_SCOPE_LABELS",
     "WorkspaceOAuthError",

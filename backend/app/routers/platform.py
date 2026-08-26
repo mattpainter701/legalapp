@@ -1348,7 +1348,7 @@ async def platform_workspace_mcp_diagnostics(
         },
         "native_tenant_access": {
             "ok": True,
-            "label": "Tenant-administered native access enabled",
+            "label": "Tenant-administered native access supported",
         },
     }
     checks["ready"] = {
@@ -1438,6 +1438,15 @@ async def platform_workspace_mcp_diagnostics(
                 )
                 if user is None:
                     continue
+                tenant_settings = await db.scalar(
+                    select(TenantSettings).where(TenantSettings.tenant_id == tenant_id)
+                )
+                tenant_workspace_mcp_enabled = (
+                    True
+                    if tenant_settings is None
+                    or tenant_settings.workspace_mcp_enabled is None
+                    else bool(tenant_settings.workspace_mcp_enabled)
+                )
                 capabilities = set(await get_user_capabilities(db, user.id))
                 effective_scopes = sorted(
                     scope
@@ -1455,6 +1464,8 @@ async def platform_workspace_mcp_diagnostics(
                     blocked_reasons.append("privacy_mode_enabled")
                 if not bool(settings.WORKSPACE_MCP_ENABLED):
                     blocked_reasons.append("workspace_mcp_disabled")
+                if not tenant_workspace_mcp_enabled:
+                    blocked_reasons.append("tenant_workspace_mcp_disabled")
                 tenant = await db.scalar(select(Tenant).where(Tenant.id == tenant_id))
                 if tenant is not None and not tenant.is_active:
                     blocked_reasons.append("tenant_inactive")
@@ -1468,6 +1479,7 @@ async def platform_workspace_mcp_diagnostics(
                     "workspace_mcp_enabled": bool(
                         getattr(user, "workspace_mcp_enabled", True)
                     ),
+                    "tenant_workspace_mcp_enabled": tenant_workspace_mcp_enabled,
                     "effective_scopes": effective_scopes,
                     "blocked_reasons": blocked_reasons,
                     "ready": not blocked_reasons,

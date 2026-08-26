@@ -8,6 +8,7 @@ import pytest
 from starlette.requests import Request
 
 from app.services.workspace_mcp_oauth import (
+    OFFLINE_ACCESS_SCOPE,
     WorkspaceOAuthError,
     append_workspace_mcp_audit,
     normalized_scopes,
@@ -66,8 +67,19 @@ def test_pkce_requires_s256_and_verifier_binds_to_challenge():
 
 def test_scopes_are_canonicalized_and_unknown_scopes_fail_closed():
     assert normalized_scopes(
-        "tasks:read matters:read documents:read templates:read tasks:read"
-    ) == frozenset({"tasks:read", "matters:read", "documents:read", "templates:read"})
+        "tasks:read matters:read documents:read templates:read tasks:read offline_access"
+    ) == frozenset(
+        {
+            "tasks:read",
+            "matters:read",
+            "documents:read",
+            "templates:read",
+            OFFLINE_ACCESS_SCOPE,
+        }
+    )
+    assert OFFLINE_ACCESS_SCOPE in normalized_scopes("matters:read offline_access")
+    with pytest.raises(WorkspaceOAuthError, match="invalid"):
+        normalized_scopes("offline_access")
     with pytest.raises(WorkspaceOAuthError, match="invalid"):
         normalized_scopes("matters:read admin:all")
 

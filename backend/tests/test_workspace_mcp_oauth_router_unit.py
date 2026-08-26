@@ -10,7 +10,12 @@ import pytest
 from fastapi import HTTPException
 
 from app.routers import workspace_mcp_oauth as oauth
-from app.services.workspace_mcp_oauth import WORKSPACE_SCOPE_LABELS, WorkspaceOAuthError
+from app.services.workspace_mcp_oauth import (
+    OFFLINE_ACCESS_SCOPE,
+    WORKSPACE_OAUTH_SCOPE_LABELS,
+    WORKSPACE_SCOPE_LABELS,
+    WorkspaceOAuthError,
+)
 
 
 class Result:
@@ -36,6 +41,12 @@ class DB:
 
     async def scalars(self, _query):
         return Result(self.rows)
+
+    async def execute(self, _query, _parameters=None):
+        return Result()
+
+    async def refresh(self, _value, attribute_names=None):
+        return None
 
     def add(self, value):
         self.added.append(value)
@@ -172,9 +183,10 @@ async def test_metadata_and_jwks(monkeypatch):
     protected = await oauth.protected_resource_metadata()
     assert metadata["registration_endpoint"].endswith("/register")
     assert set(oauth._SCOPE_APP_CAPABILITIES) == set(WORKSPACE_SCOPE_LABELS)
-    assert set(metadata["scopes_supported"]) == set(WORKSPACE_SCOPE_LABELS)
+    assert set(metadata["scopes_supported"]) == set(WORKSPACE_OAUTH_SCOPE_LABELS)
     assert protected["scopes_supported"] == metadata["scopes_supported"]
     assert {"documents:read", "templates:read"}.issubset(metadata["scopes_supported"])
+    assert OFFLINE_ACCESS_SCOPE in metadata["scopes_supported"]
     assert "authorization_servers" in protected
     assert "keys" in await oauth.workspace_jwks_endpoint()
 
@@ -259,6 +271,10 @@ async def test_get_consent_success_expired_and_permission_denied(monkeypatch):
     with pytest.raises(HTTPException) as e:
         await oauth.get_workspace_authorization_request("x", req(), u, DB())
     assert e.value.status_code == 410
+    with pytest.raises(HTTPException) as tenant_disabled:
+        await oauth.get_workspace_authorization_request("x", req(), u, DB(False))
+    assert tenant_disabled.value.status_code == 403
+    assert "disabled for this tenant" in tenant_disabled.value.detail
     pending = {"client_id": c.client_id, "scopes": ["matters:read"]}
     monkeypatch.setattr(
         oauth, "load_authorization_request", AsyncMock(return_value=pending)

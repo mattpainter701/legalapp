@@ -698,6 +698,8 @@ export const getAdminSettings = () =>
   api.get('/admin/settings').then((r) => r.data)
 export const updateAdminSettings = (body) =>
   api.put('/admin/settings', body).then((r) => r.data)
+export const getAdminMcpOverview = () =>
+  api.get('/admin/mcp').then((r) => r.data)
 
 // Onboarding
 export const getOnboardingStatus = () =>
