@@ -1364,6 +1364,8 @@ def test_production_preflight_rejects_missing_opencode_zen_key(
     result = _run_preflight(
         tmp_path,
         _production_env(
+            DEEPSEEK_API_KEY="",
+            OPENCODE_GO_API_KEY="opencode-go-provider-key-0123456789",
             OPENCODE_ZEN_API_KEY="",
             OPENCODE_API_KEY="",
             OPENCODE_KEY="",
@@ -1372,7 +1374,24 @@ def test_production_preflight_rejects_missing_opencode_zen_key(
     output = result.stdout + result.stderr
 
     assert result.returncode != 0
-    assert "OPENCODE_ZEN_API_KEY (or a legacy OpenCode Zen key)" in output
+    assert "OPENCODE_ZEN_API_KEY (or a supported legacy OpenCode key)" in output
+
+
+def test_production_preflight_accepts_legacy_shared_opencode_key(
+    tmp_path: Path,
+) -> None:
+    result = _run_preflight(
+        tmp_path,
+        _production_env(
+            OPENCODE_GO_API_KEY="",
+            OPENCODE_ZEN_API_KEY="",
+            OPENCODE_API_KEY="",
+            OPENCODE_KEY="",
+            DEEPSEEK_API_KEY="legacy-shared-opencode-key-0123456789",
+        ),
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_production_preflight_rejects_conflicting_inherited_compose_value(
