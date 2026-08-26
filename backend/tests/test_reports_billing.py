@@ -6,7 +6,7 @@ from decimal import Decimal
 
 import pytest
 
-from app.models.billing import Invoice, Payment, TimeEntry
+from app.models.billing import Expense, Invoice, Payment, TimeEntry
 from app.models.plugin import Matter
 from app.models.tenant import Tenant
 from app.models.user import User
@@ -72,6 +72,15 @@ def _make_invoice(
         subtotal=total_dec,
         total=total_dec,
         created_by=created_by,
+    )
+
+
+def _make_expense(tenant_id, matter_id, user_id, amount, *, client_amount=None, billable=True, invoice_id=None, review_status="ready") -> Expense:
+    return Expense(
+        id=uuid.uuid4(), tenant_id=tenant_id, matter_id=matter_id, user_id=user_id,
+        description="Filing fee", amount=Decimal(amount), client_amount=(Decimal(client_amount) if client_amount is not None else None),
+        date=date.today(), category="filing_fee", is_billable=billable, invoice_id=invoice_id,
+        review_status=review_status,
     )
 
 
@@ -192,6 +201,53 @@ async def test_wip_excludes_invoiced(client, db_session, test_tenant, test_user)
     assert row["matter_name"] == "WIP Case"
     assert row["wip_hours"] == 3.0
     assert row["wip_value"] == 300.0
+
+
+@pytest.mark.asyncio
+async def test_budget_and_billing_reports_include_billable_expense_client_amount_only(
+    client, db_session, test_tenant, test_user
+):
+    matter = _make_matter(test_tenant.id, test_user.id, name="Expense Budget Case")
+    matter.budget_amount = Decimal("1000.00")
+    db_session.add(matter)
+    await db_session.commit()
+    db_session.add_all([
+        _make_expense(test_tenant.id, matter.id, test_user.id, "50.00", client_amount="75.00"),
+        _make_expense(test_tenant.id, matter.id, test_user.id, "40.00", billable=False),
+    ])
+    await db_session.commit()
+
+    budget = await client.get(f"/api/reports/matters/{matter.id}/budget")
+    assert budget.status_code == 200, budget.text
+    body = budget.json()
+    assert body["total_hours"] == 0.0
+    assert body["total_billed"] == 75.0
+    assert body["billable_expense_amount"] == 75.0
+    assert body["utilization_pct"] == 7.5
+
+    matter_budget = await client.get(f"/api/matters/{matter.id}/budget")
+    assert matter_budget.status_code == 200, matter_budget.text
+    matter_budget_body = matter_budget.json()
+    assert matter_budget_body["total_billed"] == "75.00"
+    assert matter_budget_body["billable_time_amount"] == "0"
+    assert matter_budget_body["billable_expense_amount"] == "75.00"
+    assert matter_budget_body["remaining"] == "925.00"
+
+    matter_stats = await client.get("/api/matters/stats")
+    assert matter_stats.status_code == 200, matter_stats.text
+    assert matter_stats.json()["total_billed"] == "75.00"
+    assert matter_stats.json()["total_unbilled"] == "75.00"
+
+    realization = await client.get("/api/reports/billing/realization")
+    row = next(item for item in realization.json() if item["matter_id"] == str(matter.id))
+    assert row["billable_hours"] == 0.0
+    assert row["billable_expense_amount"] == 75.0
+    assert row["billable_amount"] == 75.0
+
+    wip = await client.get("/api/reports/billing/wip")
+    row = next(item for item in wip.json() if item["matter_id"] == str(matter.id))
+    assert row["wip_hours"] == 0.0
+    assert row["wip_value"] == 75.0
 
 
 @pytest.mark.asyncio

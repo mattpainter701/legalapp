@@ -345,7 +345,23 @@ class QBOSyncService:
         def _item_ref(source_type: str, expense_category: str | None) -> dict | None:
             key = (source_type, expense_category)
             fallback_key = (source_type, None)
-            pair = item_mappings.get(key) or item_mappings.get(fallback_key)
+            legacy_category = {
+                "court filing": "filing_fee",
+                "travel/mileage/parking": "travel",
+                "lodging": "travel",
+                "postage/courier": "courier",
+                "certified mail": "courier",
+                "process service": "courier",
+            }.get(expense_category or "")
+            pair = (
+                item_mappings.get(key)
+                or (
+                    item_mappings.get((source_type, legacy_category))
+                    if legacy_category
+                    else None
+                )
+                or item_mappings.get(fallback_key)
+            )
             if pair:
                 return {"value": pair[0], "name": pair[1]}
             return None

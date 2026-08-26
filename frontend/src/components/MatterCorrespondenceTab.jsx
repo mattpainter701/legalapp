@@ -18,6 +18,7 @@ import {
   Inbox,
   ShieldCheck,
   FileCheck,
+  Receipt,
   Ban,
 } from 'lucide-react'
 import {
@@ -32,6 +33,7 @@ import {
   disableMatterInboundAlias,
   getMatterInboundEmail,
   acceptMatterInboundEmail,
+  createMatterInboundExpenseDraft,
   rejectMatterInboundEmail,
 } from '../api'
 import { useConfirm } from './dialog/ConfirmProvider'
@@ -341,6 +343,10 @@ function InboundEmailPanel({ matterId, onFiled }) {
         await acceptMatterInboundEmail(matterId, item.id)
         setMessage('Email filed to this matter.')
         onFiled()
+      } else if (action === 'expense') {
+        await createMatterInboundExpenseDraft(matterId, item.id)
+        setMessage('Expense draft created from the receipt. Review it under Billing before making it client-billable.')
+        onFiled()
       } else {
         await rejectMatterInboundEmail(matterId, item.id)
         setMessage('Email rejected and its quarantined message removed.')
@@ -437,6 +443,13 @@ function InboundEmailPanel({ matterId, onFiled }) {
                       )}
                     </div>
                     <div className="flex shrink-0 flex-wrap gap-2">
+                      <button
+                        onClick={() => review(item, 'expense')}
+                        disabled={busy === item.id}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-brand-amber/30 bg-brand-amber/10 px-3 py-2 text-xs font-medium text-brand-ink hover:bg-brand-amber/15 disabled:opacity-60"
+                      >
+                        <Receipt size={14} /> Extract receipt
+                      </button>
                       <button
                         onClick={() => review(item, 'accept')}
                         disabled={busy === item.id}

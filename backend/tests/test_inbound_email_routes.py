@@ -9,7 +9,9 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 
 from app.models.inbound_email import InboundEmail, InboundEmailAlias
+from app.models.billing import Expense
 from app.routers import matters_correspondence as routes
+from app.services.matter_file_store import StorageResult
 
 
 class FakeResult:
@@ -46,6 +48,10 @@ class FakeDB:
             raise AssertionError("Unexpected database execute")
         return self.results.pop(0)
 
+    async def scalar(self, statement, params=None):
+        result = await self.execute(statement, params)
+        return result.scalar_one_or_none()
+
     def add(self, item):
         self.added.append(item)
 
@@ -61,12 +67,22 @@ class FakeDB:
 
     async def flush(self):
         self.flushes += 1
+        now = datetime.now(timezone.utc)
+        for item in self.added:
+            if getattr(item, "id", None) is None:
+                item.id = uuid.uuid4()
+            if hasattr(item, "created_at") and getattr(item, "created_at", None) is None:
+                item.created_at = now
+            if hasattr(item, "updated_at") and getattr(item, "updated_at", None) is None:
+                item.updated_at = now
 
     async def refresh(self, item):
         if getattr(item, "id", None) is None:
             item.id = uuid.uuid4()
         if getattr(item, "created_at", None) is None:
             item.created_at = datetime.now(timezone.utc)
+        if hasattr(item, "updated_at") and getattr(item, "updated_at", None) is None:
+            item.updated_at = datetime.now(timezone.utc)
 
 
 class StreamRequest:
@@ -420,3 +436,87 @@ async def test_alias_lifecycle_and_queue_review_routes(monkeypatch):
     assert rejected.status == "rejected"
     assert item.raw_storage_path is None
     assert rejected_db.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_inbound_receipt_creates_internal_review_draft(monkeypatch):
+    user, matter = user_and_matter()
+    alias = alias_row(user, matter)
+    item = inbound_row(user, matter, alias)
+    request = object()
+
+    monkeypatch.setattr(routes, "get_current_user", AsyncMock(return_value=user))
+    monkeypatch.setattr(routes, "set_tenant_context", AsyncMock())
+    monkeypatch.setattr(routes, "_get_matter_or_404", AsyncMock(return_value=matter))
+    monkeypatch.setattr(
+        routes, "_pending_inbound_or_404", AsyncMock(return_value=item)
+    )
+    monkeypatch.setattr(routes, "read_quarantined_message", lambda _: b"raw")
+    monkeypatch.setattr(
+        routes,
+        "iter_supported_attachments",
+        lambda *_: [
+            {
+                "filename": "court-receipt.pdf",
+                "content_type": "application/pdf",
+                "content": b"receipt-bytes",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        routes,
+        "extract_attachment_text",
+        lambda _: (
+            "Vendor: County Clerk\nDate: 08/25/2026\nTotal: $85.00",
+            "extracted",
+            {"ocr_used": True, "ocr_confidence": 0.91},
+        ),
+    )
+    monkeypatch.setattr(
+        routes,
+        "extract_candidates",
+        lambda *_: {
+            "values": {
+                "vendor": "County Clerk",
+                "date": "2026-08-25",
+                "due_date": "2026-09-24",
+                "total": "85.00",
+                "tax_amount": "5.00",
+                "invoice_number": "R-42",
+                "category": "court filing",
+            },
+            "confidence": 1.0,
+        },
+    )
+    monkeypatch.setattr(
+        routes.matter_file_store,
+        "store_matter_file_result",
+        AsyncMock(
+            return_value=StorageResult(
+                provider="local",
+                backend="local",
+                storage_path="safe/receipt.pdf",
+            )
+        ),
+    )
+    monkeypatch.setattr(routes, "remove_quarantined_message", lambda _: None)
+
+    # advisory lock, duplicate lookup, tenant storage settings
+    db = FakeDB(FakeResult(None), FakeResult(None), FakeResult(None))
+    response = await routes.create_inbound_expense_draft(
+        matter.id, item.id, request, None, db
+    )
+
+    expense = next(value for value in db.added if isinstance(value, Expense))
+    assert expense.is_billable is False
+    assert expense.review_status == "needs_review"
+    assert expense.amount == 85
+    assert expense.category == "court filing"
+    assert expense.reference_number == "R-42"
+    assert expense.tax_amount == 5
+    assert str(expense.due_date) == "2026-09-24"
+    assert expense.receipt_document_id is not None
+    assert response.id == str(expense.id)
+    assert item.status == "accepted"
+    lock_sql = str(db.executed[0][0].compile(dialect=postgresql.dialect()))
+    assert "pg_advisory_xact_lock" in lock_sql

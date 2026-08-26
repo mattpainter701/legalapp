@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Clock, Play, Plus, Square, Trash2, X } from 'lucide-react'
+import { Clock, Pencil, Play, Plus, Square, Trash2, X } from 'lucide-react'
 import { useAuth } from '../App'
 import { useConfirm } from '../components/dialog/ConfirmProvider'
 import { useToast } from '../components/toast/useToast'
@@ -23,6 +23,7 @@ import {
   getTimeEntries,
   startTimer,
   stopTimer,
+  updateTimeEntry,
 } from '../api'
 
 const FILTERS = [
@@ -44,7 +45,10 @@ function formatElapsed(startedAt) {
   return `${hours}:${String(minutes).padStart(2, '0')}:${String(remainingSeconds).padStart(2, '0')}`
 }
 
-function EntryStatus({ status }) {
+function EntryStatus({ status, isBillable = true }) {
+  if (!isBillable) {
+    return <span className="inline-flex rounded-full border border-brand-line bg-brand-bg-soft px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-brand-muted">Non-billable</span>
+  }
   const invoiced = status === 'invoiced'
   return (
     <span className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${
@@ -69,6 +73,9 @@ export default function TimeTrackingPage() {
   const [loadError, setLoadError] = useState(null)
   const [showForm, setShowForm] = useState(Boolean(preselectedMatterId))
   const [filter, setFilter] = useState('all')
+  const [matterFilter, setMatterFilter] = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
   const [activeTimer, setActiveTimer] = useState(null)
   const [timerBusy, setTimerBusy] = useState(false)
   const [, setTick] = useState(0)
@@ -78,9 +85,14 @@ export default function TimeTrackingPage() {
     hours: '',
     hourly_rate: user?.default_billing_rate || '',
     date: new Date().toISOString().slice(0, 10),
+    is_billable: true,
   })
   const [formError, setFormError] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [editingEntry, setEditingEntry] = useState(null)
+  const [editForm, setEditForm] = useState(null)
+  const [editError, setEditError] = useState(null)
+  const [editSaving, setEditSaving] = useState(false)
 
   const matterNames = useMemo(
     () => Object.fromEntries(matters.map((matter) => [matter.id, matter.matter_name])),
@@ -91,7 +103,11 @@ export default function TimeTrackingPage() {
     setLoading(true)
     setLoadError(null)
     try {
-      const params = filter !== 'all' ? { status: filter } : {}
+      const params = {}
+      if (filter !== 'all') params.status = filter
+      if (matterFilter) params.matter_id = matterFilter
+      if (dateFrom) params.date_from = dateFrom
+      if (dateTo) params.date_to = dateTo
       const [entryData, matterData, timerData] = await Promise.all([
         getTimeEntries(params),
         getMattersV2({ page_size: 200, sort_by: 'updated_at', sort_dir: 'desc' }),
@@ -105,7 +121,7 @@ export default function TimeTrackingPage() {
     } finally {
       setLoading(false)
     }
-  }, [filter])
+  }, [filter, matterFilter, dateFrom, dateTo])
 
   useEffect(() => {
     loadData()
@@ -129,6 +145,8 @@ export default function TimeTrackingPage() {
       const timer = await startTimer({
         matter_id: form.matter_id,
         description: form.description.trim() || 'Timer session',
+        is_billable: form.is_billable,
+        ...(form.is_billable && form.hourly_rate ? { hourly_rate: Number.parseFloat(form.hourly_rate) } : {}),
       })
       setActiveTimer(timer)
       setForm((current) => ({ ...current, description: '' }))
@@ -186,7 +204,7 @@ export default function TimeTrackingPage() {
       return
     }
     const hours = Number.parseFloat(form.hours)
-    if (!form.hours || Number.isNaN(hours) || hours <= 0) {
+    if (!form.hours || Number.isNaN(hours) || hours < 0.25) {
       setFormError('Enter a valid number of hours (minimum 0.25).')
       return
     }
@@ -202,9 +220,9 @@ export default function TimeTrackingPage() {
         description: form.description.trim(),
         hours,
         date: form.date,
-        is_billable: true,
+        is_billable: form.is_billable,
       }
-      if (form.hourly_rate) {
+      if (form.is_billable && form.hourly_rate) {
         const hourlyRate = Number.parseFloat(form.hourly_rate)
         if (!Number.isNaN(hourlyRate) && hourlyRate > 0) payload.hourly_rate = hourlyRate
       }
@@ -216,6 +234,7 @@ export default function TimeTrackingPage() {
         hours: '',
         hourly_rate: user?.default_billing_rate || '',
         date: new Date().toISOString().slice(0, 10),
+        is_billable: true,
       })
       await loadData()
     } catch (error) {
@@ -227,6 +246,35 @@ export default function TimeTrackingPage() {
       )
     } finally {
       setSaving(false)
+    }
+  }
+
+  const handleEditSubmit = async (event) => {
+    event.preventDefault()
+    setEditError(null)
+    const hours = Number.parseFloat(editForm.hours)
+    if (!editForm.description.trim()) return setEditError('Enter a description.')
+    if (Number.isNaN(hours) || hours < 0.25) return setEditError('Enter a valid number of hours (minimum 0.25).')
+    const hourlyRate = Number.parseFloat(editForm.hourly_rate)
+    if (editForm.is_billable && (!Number.isFinite(hourlyRate) || hourlyRate <= 0)) {
+      return setEditError('Enter a billing rate greater than zero.')
+    }
+    setEditSaving(true)
+    try {
+      await updateTimeEntry(editingEntry.id, {
+        description: editForm.description.trim(),
+        hours,
+        date: editForm.date,
+        is_billable: editForm.is_billable,
+        ...(editForm.is_billable ? { hourly_rate: hourlyRate } : {}),
+      })
+      setEditingEntry(null)
+      setEditForm(null)
+      await loadData()
+    } catch (error) {
+      setEditError(error?.response?.data?.detail || 'The time entry could not be updated.')
+    } finally {
+      setEditSaving(false)
     }
   }
 
@@ -252,7 +300,7 @@ export default function TimeTrackingPage() {
   const totalHours = visibleEntries.reduce((sum, entry) => sum + Number(entry.hours || 0), 0)
   const totalAmount = visibleEntries.reduce((sum, entry) => sum + Number(entry.amount || 0), 0)
   const unbilledAmount = visibleEntries
-    .filter((entry) => entry.status === 'draft' || !entry.invoice_id)
+    .filter((entry) => entry.is_billable && (entry.status === 'draft' || !entry.invoice_id))
     .reduce((sum, entry) => sum + Number(entry.amount || 0), 0)
   const fieldClass = 'min-h-11 w-full rounded-xl border border-brand-line bg-brand-surface px-3 text-sm text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-accent'
 
@@ -419,6 +467,10 @@ export default function TimeTrackingPage() {
                 className={fieldClass}
               />
             </div>
+            <label className="flex min-h-11 items-center gap-2 text-sm text-brand-ink">
+              <input type="checkbox" checked={form.is_billable} onChange={(event) => setForm({ ...form, is_billable: event.target.checked })} />
+              Billable time
+            </label>
             <div className="flex items-end sm:col-span-2 lg:col-span-4">
               <button
                 type="submit"
@@ -439,7 +491,31 @@ export default function TimeTrackingPage() {
           onChange={setFilter}
           label="Filter time entries by billing status"
         />
+        <select aria-label="Filter by matter" value={matterFilter} onChange={(event) => setMatterFilter(event.target.value)} className="min-h-9 rounded-xl border border-brand-line bg-brand-surface px-3 text-xs text-brand-ink">
+          <option value="">All matters</option>
+          {matters.map((matter) => <option key={matter.id} value={matter.id}>{matter.matter_name}</option>)}
+        </select>
+        <input aria-label="Entries from" type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="min-h-9 rounded-xl border border-brand-line bg-brand-surface px-3 text-xs text-brand-ink" />
+        <input aria-label="Entries through" type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="min-h-9 rounded-xl border border-brand-line bg-brand-surface px-3 text-xs text-brand-ink" />
       </FilterToolbar>
+
+      {editingEntry && editForm && (
+        <form onSubmit={handleEditSubmit} className="mb-6 rounded-2xl border border-brand-accent/30 bg-brand-surface p-4 shadow-sm sm:p-5">
+          <div className="flex items-start justify-between gap-3">
+            <div><h2 className="text-lg font-semibold text-brand-ink">Edit time entry</h2><p className="mt-1 text-sm text-brand-muted">Only unbilled entries can be changed.</p></div>
+            <button type="button" aria-label="Close edit form" onClick={() => setEditingEntry(null)} className="tap-target rounded-xl text-brand-muted"><X size={16} /></button>
+          </div>
+          {editError && <AlertBanner type="error" title="Time was not updated" className="mt-4">{editError}</AlertBanner>}
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+            <div className="sm:col-span-2 lg:col-span-2"><label htmlFor="edit-time-description" className="mb-1.5 block text-xs font-semibold text-brand-ink">Description</label><input id="edit-time-description" className={fieldClass} value={editForm.description} onChange={(event) => setEditForm({ ...editForm, description: event.target.value })} /></div>
+            <div><label htmlFor="edit-time-hours" className="mb-1.5 block text-xs font-semibold text-brand-ink">Hours</label><input id="edit-time-hours" className={fieldClass} type="number" min="0.25" step="0.25" value={editForm.hours} onChange={(event) => setEditForm({ ...editForm, hours: event.target.value })} /></div>
+            <div><label htmlFor="edit-time-date" className="mb-1.5 block text-xs font-semibold text-brand-ink">Date</label><input id="edit-time-date" className={fieldClass} type="date" value={editForm.date} onChange={(event) => setEditForm({ ...editForm, date: event.target.value })} /></div>
+            <div><label htmlFor="edit-time-rate" className="mb-1.5 block text-xs font-semibold text-brand-ink">Rate</label><input id="edit-time-rate" className={fieldClass} type="number" min="0.01" step="0.01" value={editForm.hourly_rate} onChange={(event) => setEditForm({ ...editForm, hourly_rate: event.target.value })} disabled={!editForm.is_billable} /></div>
+            <label className="flex min-h-11 items-center gap-2 text-sm text-brand-ink"><input type="checkbox" checked={editForm.is_billable} onChange={(event) => setEditForm({ ...editForm, is_billable: event.target.checked })} /> Billable time</label>
+            <button type="submit" disabled={editSaving} className="btn-primary min-h-11">{editSaving ? 'Saving changes' : 'Save changes'}</button>
+          </div>
+        </form>
+      )}
 
       {loadError ? (
         <AlertBanner
@@ -475,7 +551,7 @@ export default function TimeTrackingPage() {
                     <p className="truncate text-sm font-semibold text-brand-ink">{entry.description}</p>
                     <p className="mt-1 truncate text-xs text-brand-muted">{matterNames[entry.matter_id] || 'Matter unavailable'}</p>
                   </div>
-                  <EntryStatus status={entry.status} />
+                  <EntryStatus status={entry.status} isBillable={entry.is_billable} />
                 </div>
                 <dl className="mt-4 grid grid-cols-3 gap-3 border-t border-brand-line pt-3">
                   <div>
@@ -492,13 +568,17 @@ export default function TimeTrackingPage() {
                   </div>
                 </dl>
                 {entry.status !== 'invoiced' && (
-                  <button
+                  <div className="mt-3 flex gap-2"><button
+                    type="button"
+                    onClick={() => { setEditingEntry(entry); setEditForm({ matter_id: entry.matter_id, description: entry.description || '', hours: String(entry.hours || ''), hourly_rate: String(entry.hourly_rate || ''), date: entry.date, is_billable: entry.is_billable !== false }); setEditError(null) }}
+                    className="inline-flex min-h-10 items-center gap-2 rounded-xl px-2 text-xs font-semibold text-brand-accent-2 hover:bg-brand-bg-soft"
+                  ><Pencil size={14} /> Edit entry</button><button
                     type="button"
                     onClick={() => handleDelete(entry.id)}
                     className="mt-3 inline-flex min-h-10 items-center gap-2 rounded-xl px-2 text-xs font-semibold text-brand-muted hover:bg-brand-rose/10 hover:text-brand-rose"
                   >
                     <Trash2 size={14} /> Delete entry
-                  </button>
+                  </button></div>
                 )}
               </article>
             ))}
@@ -530,17 +610,22 @@ export default function TimeTrackingPage() {
                       <td className="whitespace-nowrap px-4 py-3 font-semibold text-brand-ink">
                         {money.format(Number(entry.amount || 0))}
                       </td>
-                      <td className="px-4 py-3"><EntryStatus status={entry.status} /></td>
+                       <td className="px-4 py-3"><EntryStatus status={entry.status} isBillable={entry.is_billable} /></td>
                       <td className="px-4 py-3 text-right">
                         {entry.status !== 'invoiced' && (
-                          <button
+                          <div className="flex justify-end gap-1"><button
+                            type="button"
+                            onClick={() => { setEditingEntry(entry); setEditForm({ matter_id: entry.matter_id, description: entry.description || '', hours: String(entry.hours || ''), hourly_rate: String(entry.hourly_rate || ''), date: entry.date, is_billable: entry.is_billable !== false }); setEditError(null) }}
+                            className="tap-target rounded-xl text-brand-accent-2 hover:bg-brand-bg-soft"
+                            aria-label={`Edit ${entry.description}`}
+                          ><Pencil size={15} /></button><button
                             type="button"
                             onClick={() => handleDelete(entry.id)}
                             className="tap-target rounded-xl text-brand-muted hover:bg-brand-rose/10 hover:text-brand-rose"
                             aria-label={`Delete ${entry.description}`}
                           >
                             <Trash2 size={15} />
-                          </button>
+                          </button></div>
                         )}
                       </td>
                     </tr>
