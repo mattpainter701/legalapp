@@ -13,6 +13,8 @@ from io import BytesIO
 from dataclasses import dataclass
 from typing import Any
 
+from app.config import get_settings
+
 
 class TemplateOcrError(ValueError):
     """A customer-actionable OCR failure."""
@@ -48,6 +50,7 @@ class PdfOcrResult:
     pages_total: int
     average_confidence: float
     truncated: bool
+    provider: str = "local"
 
     def fragments(self) -> list[dict[str, Any]]:
         return [line.as_pdf_fragment() for line in self.lines]
@@ -60,6 +63,93 @@ class ImageOcrResult:
     text: str
     average_confidence: float
     lines_detected: int
+
+def _same_row(left: OcrLine, right: OcrLine) -> bool:
+    """Return whether two OCR boxes plausibly belong to one visual row."""
+    if left.page_index != right.page_index:
+        return False
+    l_bottom, l_top = left.rect[1], left.rect[3]
+    r_bottom, r_top = right.rect[1], right.rect[3]
+    overlap = max(0.0, min(l_top, r_top) - max(l_bottom, r_bottom))
+    height = max(1.0, min(l_top - l_bottom, r_top - r_bottom))
+    return overlap / height >= 0.35 or abs((l_bottom + l_top) - (r_bottom + r_top)) <= height * 0.75
+
+
+def _is_label_fragment(text: str) -> bool:
+    normalized = " ".join(str(text or "").split()).strip()
+    if not normalized:
+        return False
+    if normalized.endswith(":"):
+        return True
+    # OCR frequently drops the colon on printed labels. Keep this deliberately
+    # conservative so ordinary prose is not merged with its neighbour.
+    return normalized.lower() in {
+        "name", "full name", "full legal name", "legal name", "first name",
+        "middle name", "last name", "preferred name", "applicant",
+        "applicant name", "client", "client name", "address",
+        "mailing address", "street", "street address", "city", "state",
+        "zip", "zip code", "postal code", "country", "county",
+        "county of residence", "phone", "phone number", "telephone",
+        "mobile", "email", "email address", "date", "date of birth", "dob",
+        "date signed", "case", "case number", "case no", "file number",
+        "file no", "matter", "court", "judge", "plaintiff", "defendant",
+        "petitioner", "respondent", "opposing party", "spouse", "signature",
+        "amount", "fee", "fee amount", "employer", "occupation",
+    }
+
+
+def reconstruct_ocr_lines(lines: list[OcrLine] | tuple[OcrLine, ...]) -> tuple[OcrLine, ...]:
+    """Join adjacent same-row label/value OCR fragments.
+
+    OCR engines often return ``Applicant Name:`` and handwritten ``Ada`` as
+    separate detections. This joined representation is used for text
+    understanding only; ``PdfOcrResult.lines`` retains the original boxes for
+    coordinate-sensitive replacement and redaction.
+    """
+    ordered = sorted(lines, key=lambda line: (line.page_index, -line.rect[3], line.rect[0]))
+    output: list[OcrLine] = []
+    index = 0
+    while index < len(ordered):
+        current = ordered[index]
+        if index + 1 < len(ordered):
+            candidate = ordered[index + 1]
+            gap = candidate.rect[0] - current.rect[2]
+            height = max(1.0, current.rect[3] - current.rect[1])
+            if (
+                _is_label_fragment(current.text)
+                and not _is_label_fragment(candidate.text)
+                and candidate.rect[0] >= current.rect[2]
+                and gap <= max(36.0, height * 12.0)
+                and _same_row(current, candidate)
+            ):
+                text = f"{current.text.rstrip(':').strip()}: {candidate.text.strip()}"
+                output.append(
+                    OcrLine(
+                        page_index=current.page_index,
+                        text=text,
+                        score=min(current.score, candidate.score),
+                        rect=(
+                            min(current.rect[0], candidate.rect[0]),
+                            min(current.rect[1], candidate.rect[1]),
+                            max(current.rect[2], candidate.rect[2]),
+                            max(current.rect[3], candidate.rect[3]),
+                        ),
+                    )
+                )
+                index += 2
+                continue
+        output.append(current)
+        index += 1
+    return tuple(output)
+
+
+def reconstruct_ocr_text(lines: list[OcrLine] | tuple[OcrLine, ...]) -> str:
+    """Build reading-order text from OCR fragments, joining form rows."""
+    joined = reconstruct_ocr_lines(lines)
+    pages: dict[int, list[str]] = {}
+    for line in joined:
+        pages.setdefault(line.page_index, []).append(line.text)
+    return "\n\n".join("\n".join(values) for _, values in sorted(pages.items())).strip()
 
 
 _ENGINE = None
@@ -114,6 +204,11 @@ def _safe_scale(width: float, height: float, remaining_pixels: int) -> float:
 
 def ocr_pdf(content: bytes, *, max_pages: int = _MAX_OCR_PAGES) -> PdfOcrResult:
     """OCR a PDF into reading-order text and PDF-coordinate line boxes."""
+
+    # Cloud OCR is deliberately opt-in; local RapidOCR remains the default.
+    if get_settings().TEMPLATE_OCR_PROVIDER.strip().lower() == "azure":
+        from app.services.template_ocr_azure import ocr_pdf_azure
+        return ocr_pdf_azure(content, max_pages=max_pages)
 
     try:
         import pypdfium2 as pdfium
@@ -183,23 +278,27 @@ def ocr_pdf(content: bytes, *, max_pages: int = _MAX_OCR_PAGES) -> PdfOcrResult:
                         rect=(left, bottom, right, top),
                     )
                 )
-            page_lines.sort(key=lambda line: (-line.rect[3], line.rect[0]))
             lines.extend(page_lines)
     finally:
         document.close()
 
+    source_lines = tuple(sorted(lines, key=lambda line: (line.page_index, -line.rect[3], line.rect[0])))
+    reconstructed_lines = reconstruct_ocr_lines(source_lines)
     page_text: list[list[str]] = [[] for _ in range(page_limit)]
-    for line in lines:
+    for line in reconstructed_lines:
         page_text[line.page_index].append(line.text)
     text = "\n\n".join("\n".join(values) for values in page_text if values).strip()
-    confidence = sum(line.score for line in lines) / len(lines) if lines else 0.0
+    confidence = sum(line.score for line in source_lines) / len(source_lines) if source_lines else 0.0
     return PdfOcrResult(
         text=text,
-        lines=tuple(lines),
+        # Preserve exact OCR fragments for coordinate-sensitive overlays. The
+        # reconstructed text above is intentionally separate from these boxes.
+        lines=source_lines,
         pages_analyzed=page_limit,
         pages_total=total_pages,
         average_confidence=round(confidence, 4),
         truncated=total_pages > page_limit,
+        provider="local",
     )
 
 

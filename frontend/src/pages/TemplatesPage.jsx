@@ -1,4 +1,6 @@
 import { useState, useEffect, useCallback, useId, useMemo, useRef } from 'react'
+import { useDropzone } from 'react-dropzone'
+import PrepareFormWorkspace from '../components/templates/PrepareFormWorkspace'
 import {
   getTemplates,
   analyzeTemplateUpload,
@@ -59,8 +61,18 @@ const getErrorMessage = (err, fallback) => (
 
 const getTemplateVariables = (template) => {
   const matches = template?.body?.match(/\{\{(.+?)\}\}/g) || []
-  const bodyNames = matches.map((m) => m.slice(2, -2).trim()).filter(Boolean)
-  const schemaNames = (template?.variable_schema?.fields || []).map((field) => field?.name).filter(Boolean)
+  const schemaFields = template?.variable_schema?.fields || []
+  const excludedNames = new Set(schemaFields
+    .filter((field) => field?.included === false)
+    .map((field) => field?.name)
+    .filter(Boolean))
+  const bodyNames = matches
+    .map((m) => m.slice(2, -2).trim())
+    .filter((name) => name && !excludedNames.has(name))
+  const schemaNames = schemaFields
+    .filter((field) => field?.included !== false)
+    .map((field) => field?.name)
+    .filter(Boolean)
   return [...new Set([...bodyNames, ...schemaNames])]
 }
 
@@ -73,6 +85,11 @@ const formatMatterLabel = (matter) => {
   const name = matter.matter_name || matter.title || matter.name || 'Untitled matter'
   return [name, matter.client_name, matter.practice_area, matter.status].filter(Boolean).join(' - ')
 }
+
+const IMAGE_SAMPLE_PATTERN = /\.(png|jpe?g|tiff?|webp)$/i
+const isImageSample = (sample) => Boolean(
+  sample && (String(sample.type || '').startsWith('image/') || IMAGE_SAMPLE_PATTERN.test(sample.name || ''))
+)
 
 const DIALOG_FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
@@ -123,14 +140,14 @@ function useDialogKeyboard({ dialogRef, initialFocusRef, onDismiss }) {
   }, [dialogRef, initialFocusRef])
 }
 
-function Modal({ title, children, onClose }) {
+function Modal({ title, children, onClose, wide = false }) {
   const titleId = useId()
   const dialogRef = useRef(null)
   const bodyRef = useRef(null)
   useDialogKeyboard({ dialogRef, initialFocusRef: bodyRef, onDismiss: onClose })
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-12">
+    <div className={`fixed inset-0 z-50 flex items-start justify-center ${wide ? 'pt-3' : 'pt-12'}`}>
       <div className="absolute inset-0 bg-black/40" onClick={onClose} aria-hidden="true" />
       <div
         ref={dialogRef}
@@ -138,7 +155,7 @@ function Modal({ title, children, onClose }) {
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className="relative bg-brand-surface-2 border border-brand-line rounded-lg shadow-xl w-full max-w-3xl mx-4 max-h-[85vh] flex flex-col"
+        className={`relative bg-brand-surface-2 border border-brand-line rounded-lg shadow-xl w-full mx-4 flex flex-col ${wide ? 'max-w-[97vw] h-[96vh] max-h-[96vh]' : 'max-w-3xl max-h-[85vh]'}`}
       >
         <div className="flex items-center justify-between px-6 py-4 border-b border-brand-line">
           <h2 id={titleId} className="text-lg font-semibold text-brand-ink">{title}</h2>
@@ -326,6 +343,23 @@ export const normalizeVariableName = (value) => String(value || '')
   .replace(/[^a-z0-9]+/g, '_')
   .replace(/^_+|_+$/g, '')
 
+const fieldsRequireHumanReview = (fields, analysis) => (
+  String(analysis?.suggested_variable_schema?.detection?.method || '').toLowerCase().includes('ocr')
+  || fields.some((field) => (
+    field?.review_required === true
+    || (field?.confidence != null && Number(field.confidence) < 0.75)
+    || field?.pdf_overlay?.source_kind === 'ocr'
+    || field?.pdf_overlays?.some((overlay) => overlay?.source_kind === 'ocr')
+  ))
+)
+
+const workspaceFieldIdentity = (field, index = 0) => (
+  field?.pdf_source_key
+  || field?.pdf_field_name
+  || field?._bodyName
+  || `${field?.name || 'field'}:${index}`
+)
+
 export const downloadRenderedText = (rendered, title) => {
   const filename = `${String(title || 'generated-document').replace(/[^a-z0-9._-]+/gi, '_')}.md`
   triggerBlobDownload(new Blob([String(rendered || '')], { type: 'text/markdown;charset=utf-8' }), filename)
@@ -339,10 +373,14 @@ function UploadTemplateForm({ onCreated, onCancel }) {
   const [draftBody, setDraftBody] = useState('')
   const [mappedFields, setMappedFields] = useState([])
   const [sourcePreviewUrl, setSourcePreviewUrl] = useState('')
+  const [sourcePreviewKind, setSourcePreviewKind] = useState('')
   const [analyzing, setAnalyzing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
   const [analysisFileKey, setAnalysisFileKey] = useState('')
+  const [rejection, setRejection] = useState('')
+  const [reviewConfirmed, setReviewConfirmed] = useState(false)
+  const [sourceReviewReady, setSourceReviewReady] = useState(false)
   const analysisRequestRef = useRef(0)
 
   const fileKey = file ? `${file.name}:${file.size}:${file.lastModified}` : ''
@@ -368,13 +406,14 @@ function UploadTemplateForm({ onCreated, onCancel }) {
     if (includeReview) {
       if (draftBody.trim()) form.append('reviewed_body', draftBody)
       form.append('variable_schema', JSON.stringify(reviewedVariableSchema()))
+      if (analysis?.analysis_token) form.append('analysis_token', analysis.analysis_token)
     }
     return form
   }
 
   const handleAnalyze = async (selectedFile = file) => {
     if (!selectedFile) {
-      setError('Choose a DOCX, PDF, or TXT sample first.')
+      setError('Choose a DOCX, PDF, TXT, PNG, JPEG, TIFF, or WebP sample first.')
       return
     }
     const requestId = analysisRequestRef.current + 1
@@ -383,29 +422,86 @@ function UploadTemplateForm({ onCreated, onCancel }) {
     const shouldUseSuggestedTitle = selectedFile !== file || !title.trim()
     setAnalyzing(true)
     setError(null)
+    setSourceReviewReady(false)
     try {
       const form = buildFormData({ sourceFile: selectedFile })
       const result = await analyzeTemplateUpload(form)
       if (analysisRequestRef.current !== requestId) return
       setAnalysis(result)
+      setReviewConfirmed(false)
       setAnalysisFileKey(requestedFileKey)
       setDraftBody(result.body || result.extracted_text || '')
       setMappedFields((result.suggested_variable_schema?.fields || []).map((field) => ({ ...field, _bodyName: field.name })))
       setSourcePreviewUrl(
-        String(result.format || '').toLowerCase() === 'pdf'
+        ['pdf', 'image'].includes(String(result.format || '').toLowerCase()) || isImageSample(selectedFile)
           ? URL.createObjectURL(selectedFile)
           : '',
       )
+      setSourcePreviewKind(isImageSample(selectedFile) ? 'image' : selectedFile.type === 'application/pdf' || String(result.format || '').toLowerCase() === 'pdf' ? 'pdf' : '')
       if (shouldUseSuggestedTitle) setTitle(result.title || '')
     } catch (err) {
       if (analysisRequestRef.current !== requestId) return
       setSourcePreviewUrl('')
+      setSourcePreviewKind('')
       setAnalysisFileKey('')
+      setReviewConfirmed(false)
+      setSourceReviewReady(false)
       setError(getErrorMessage(err, 'Could not analyze that sample.'))
     } finally {
       if (analysisRequestRef.current === requestId) setAnalyzing(false)
     }
   }
+
+  const selectFile = (selectedFile) => {
+    analysisRequestRef.current += 1
+    setFile(selectedFile)
+    setTitle('')
+    setAnalysis(null)
+    setAnalysisFileKey('')
+    setDraftBody('')
+    setMappedFields([])
+    setSourcePreviewUrl('')
+    setSourcePreviewKind('')
+    setSourceReviewReady(false)
+    setAnalyzing(false)
+    setError(null)
+    setRejection('')
+    if (selectedFile) void handleAnalyze(selectedFile)
+  }
+
+  const onDrop = useCallback((acceptedFiles) => {
+    if (acceptedFiles[0]) selectFile(acceptedFiles[0])
+  }, [file, title, category, draftBody, analysis])
+
+  const onDropRejected = useCallback((rejections) => {
+    const rejection = rejections[0]
+    const reason = rejection?.errors?.[0]
+    const message = reason?.code === 'file-too-large'
+      ? 'That file is too large. Choose a file up to 50 MB.'
+      : reason?.code === 'file-invalid-type'
+        ? 'Use a PDF, DOCX, TXT, PNG, JPEG, TIFF, or WebP file.'
+        : reason?.message || 'Choose one supported document or image.'
+    setRejection(message)
+    setError(null)
+  }, [])
+
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
+    onDropRejected,
+    disabled: saving,
+    multiple: false,
+    maxFiles: 1,
+    maxSize: 50 * 1024 * 1024,
+    accept: {
+      'application/pdf': ['.pdf'],
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
+      'text/plain': ['.txt'],
+      'image/png': ['.png'],
+      'image/jpeg': ['.jpg', '.jpeg'],
+      'image/tiff': ['.tif', '.tiff'],
+      'image/webp': ['.webp'],
+    },
+  })
 
   const handleCreate = async () => {
     if (!file || !analysis || analysisFileKey !== fileKey) {
@@ -413,19 +509,35 @@ function UploadTemplateForm({ onCreated, onCancel }) {
       return
     }
     const isPdfUpload = String(analysis.format || '').toLowerCase() === 'pdf'
-    if (isPdfUpload && !mappedFields.some((field) => field?.pdf_field_name || field?.pdf_overlay || field?.pdf_overlays?.length)) {
-      setError('No reusable details were located confidently. Try a clearer source or add visible labels next to the values that should change.')
+    const requiresHumanReview = fieldsRequireHumanReview(mappedFields, analysis)
+    if (isPdfUpload && !sourceReviewReady) {
+      setError('Wait for the source preview to load, or open the original document from the review workspace before saving.')
+      return
+    }
+    if (requiresHumanReview && !reviewConfirmed) {
+      setError('Compare the detected values with the source document and confirm the review before creating the template.')
+      return
+    }
+    if (isPdfUpload && !mappedFields.some((field) => field?.included !== false && (field?.pdf_field_name || field?.pdf_overlay || field?.pdf_overlays?.length))) {
+      setError('Include at least one reusable field. Add a field on the page, or re-include a detected field before saving.')
       return
     }
     if (!title.trim() || (!isPdfUpload && !draftBody.trim())) {
       setError(isPdfUpload ? 'Template title is required.' : 'Template title and extracted body are required.')
       return
     }
-    if (mappedFields.some((field) => !normalizeVariableName(field.name))) {
-      setError('Every included field needs a valid variable name.')
+    if (mappedFields.some((field) => !/^[A-Za-z][A-Za-z0-9_.-]*$/.test(String(field.name || '')))) {
+      setError('Every field needs a valid automation key that starts with a letter.')
       return
     }
-    const reviewedNames = new Set(mappedFields.map((field) => field.name))
+    const fieldNames = mappedFields.map((field) => field.name)
+    if (new Set(fieldNames).size !== fieldNames.length) {
+      setError('Every field needs a unique automation key.')
+      return
+    }
+    const reviewedNames = new Set(mappedFields
+      .filter((field) => field?.included !== false)
+      .map((field) => field.name))
     const bodyNames = [...String(draftBody || '').matchAll(/\{\{\s*([a-zA-Z][a-zA-Z0-9_.-]*)\s*\}\}/g)].map((match) => match[1])
     const unmappedBodyNames = bodyNames.filter((name) => !reviewedNames.has(name))
     if (unmappedBodyNames.length > 0) {
@@ -454,13 +566,47 @@ function UploadTemplateForm({ onCreated, onCancel }) {
   const fields = mappedFields
   const branding = analysis?.detected_branding_profile || {}
   const detection = analysis?.suggested_variable_schema?.detection || {}
+  const detectionProviderLabel = detection.provider === 'azure'
+    ? 'Azure Document Intelligence'
+    : detection.provider === 'local'
+      ? 'private local OCR'
+      : ''
   const isPdfAnalysis = String(analysis?.format || '').toLowerCase() === 'pdf'
-  const hasPdfMappings = fields.some((field) => field?.pdf_field_name || field?.pdf_overlay || field?.pdf_overlays?.length)
+  const hasPdfMappings = fields.some((field) => field?.included !== false && (field?.pdf_field_name || field?.pdf_overlay || field?.pdf_overlays?.length))
+  const requiresHumanReview = fieldsRequireHumanReview(fields, analysis)
+  const handleWorkspaceFieldsChange = (nextFields) => {
+    const previousByIdentity = new Map(fields.map((field, index) => [workspaceFieldIdentity(field, index), field]))
+    setDraftBody((current) => {
+      let nextBody = current
+      nextFields.forEach((field, index) => {
+        const previous = previousByIdentity.get(workspaceFieldIdentity(field, index))
+        if (!previous) return
+        if (previous.name && previous.name !== field.name) {
+          nextBody = replaceTemplateVariable(nextBody, previous.name, field.name)
+        }
+        if (previous.included !== false && field.included === false && field.name) {
+          const escaped = field.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+          nextBody = String(nextBody || '').replace(
+            new RegExp(`\\{\\{\\s*${escaped}\\s*\\}\\}`, 'g'),
+            field.source_text || field.example || '',
+          )
+        }
+      })
+      return nextBody
+    })
+    setReviewConfirmed(false)
+    setMappedFields(nextFields)
+  }
+  const analysisReady = analysisFileKey === fileKey && Boolean(analysis)
+  const reviewComplete = analysisReady
+    && (!isPdfAnalysis || sourceReviewReady)
+    && (!requiresHumanReview || reviewConfirmed)
 
   const renameField = (index, rawName) => {
     const nextName = normalizeVariableName(rawName)
     const currentField = fields[index]
     const previousBodyName = currentField?._bodyName || currentField?.name
+    setReviewConfirmed(false)
     setMappedFields((current) => current.map((field, fieldIndex) => (
       fieldIndex === index
         ? { ...field, name: nextName, _bodyName: nextName || field._bodyName || field.name }
@@ -473,6 +619,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
     const existing = new Set(fields.map((field) => field.name))
     let suffix = fields.length + 1
     while (existing.has(`field_${suffix}`)) suffix += 1
+    setReviewConfirmed(false)
     setMappedFields((current) => [
       ...current,
       {
@@ -487,6 +634,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
   }
 
   const updateSourceText = (index, sourceText) => {
+    setReviewConfirmed(false)
     setMappedFields((current) => current.map((field, fieldIndex) => (
       fieldIndex === index ? { ...field, source_text: sourceText, example: sourceText } : field
     )))
@@ -500,6 +648,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
       setError(`“${sourceText}” was not found in the extracted document text.`)
       return
     }
+    setReviewConfirmed(false)
     setDraftBody((current) => current.split(sourceText).join(`{{${field.name}}}`))
     setError(null)
   }
@@ -514,6 +663,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
         sourceText,
       ))
     }
+    setReviewConfirmed(false)
     setMappedFields((current) => current.filter((_, fieldIndex) => fieldIndex !== index))
   }
 
@@ -524,12 +674,17 @@ function UploadTemplateForm({ onCreated, onCancel }) {
           {error}
         </div>
       )}
+      {rejection && (
+        <div role="alert" className="text-sm text-brand-rose bg-brand-rose/10 border border-brand-rose/30 px-3 py-2">
+          {rejection}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-3" aria-label="Template setup progress">
         {[
           ['1', 'Choose source', file ? 'Complete' : 'Current'],
-          ['2', 'Review fields', analysisFileKey === fileKey && analysis ? 'Complete' : file ? 'Current' : 'Next'],
-          ['3', 'Create draft', analysisFileKey === fileKey && analysis ? 'Current' : 'Next'],
+          ['2', 'Review fields', reviewComplete ? 'Complete' : file ? 'Current' : 'Next'],
+          ['3', 'Create draft', reviewComplete ? 'Current' : 'Next'],
         ].map(([step, label, state]) => (
           <div key={step} className={`rounded border px-3 py-2 ${state === 'Current' ? 'border-brand-accent bg-brand-accent/10' : 'border-brand-line bg-brand-bg'}`}>
             <p className="text-[10px] font-semibold uppercase tracking-wider text-brand-muted">Step {step} · {state}</p>
@@ -541,32 +696,25 @@ function UploadTemplateForm({ onCreated, onCancel }) {
       <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_220px] gap-4">
         <div>
           <label htmlFor="template-sample-file" className="block text-sm font-medium text-brand-ink mb-1">
-            Sample document
+            Sample document or filled scan
           </label>
-          <input
-            id="template-sample-file"
-            type="file"
-            aria-describedby="template-sample-guidance"
-            disabled={saving}
-            accept=".docx,.pdf,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
-            onChange={(e) => {
-              const selectedFile = e.target.files?.[0] || null
-              analysisRequestRef.current += 1
-              setFile(selectedFile)
-              setTitle('')
-              setAnalysis(null)
-              setAnalysisFileKey('')
-              setDraftBody('')
-              setMappedFields([])
-              setSourcePreviewUrl('')
-              setAnalyzing(false)
-              setError(null)
-              if (selectedFile) void handleAnalyze(selectedFile)
-            }}
-            className="block w-full text-sm text-brand-ink file:mr-3 file:px-3 file:py-2 file:rounded file:border file:border-brand-line file:bg-brand-bg file:text-brand-ink file:text-xs file:font-semibold"
-          />
+          <div
+            {...getRootProps({
+              role: 'button',
+              'aria-label': 'Choose sample document or filled scan',
+              'aria-describedby': 'template-sample-guidance',
+              className: `rounded-lg border-2 border-dashed p-5 text-center transition-colors ${isDragActive ? 'border-brand-accent bg-brand-accent/10' : 'border-brand-line bg-brand-bg hover:border-brand-accent/60'} ${saving ? 'pointer-events-none opacity-60' : 'cursor-pointer'}`,
+            })}
+          >
+            <input
+              {...getInputProps({ id: 'template-sample-file', disabled: saving, 'aria-label': 'Sample document' })}
+            />
+            <Upload size={22} className="mx-auto mb-2 text-brand-accent-2" />
+            <p className="text-sm font-semibold text-brand-ink">{isDragActive ? 'Drop the sample here' : 'Drop a sample here or browse'}</p>
+            <p className="mt-1 text-xs text-brand-muted">One PDF, DOCX, TXT, PNG, JPEG, TIFF, or WebP · up to 50 MB</p>
+          </div>
           <p id="template-sample-guidance" className="mt-2 text-xs text-brand-muted">
-            Upload the document your team already reuses. We automatically read Word files, ordinary PDFs, fillable PDFs, and image-only scans while preserving the original design.
+            Upload the document your team already reuses. We read Word files, PDFs, and image-only scans while preserving the original design. Filled or handwritten entries help locate reusable details; uncertain readings are flagged for review.
           </p>
           {file && (
             <p className="mt-2 text-xs font-medium text-brand-accent-2" role="status">
@@ -604,7 +752,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
         />
       </div>
 
-      <div className="flex flex-col sm:flex-row gap-3">
+      <div className="sticky bottom-0 z-10 -mx-2 flex flex-col gap-3 border-t border-brand-line bg-brand-surface-2/95 px-2 py-3 backdrop-blur sm:flex-row">
         <button
           type="button"
           onClick={() => handleAnalyze()}
@@ -617,11 +765,19 @@ function UploadTemplateForm({ onCreated, onCancel }) {
         <button
           type="button"
           onClick={handleCreate}
-          disabled={saving || !file || !analysis || (isPdfAnalysis && !hasPdfMappings)}
+          disabled={saving || !file || !analysis || (isPdfAnalysis && (!hasPdfMappings || !sourceReviewReady)) || (requiresHumanReview && !reviewConfirmed)}
           className="flex items-center justify-center gap-2 px-4 py-2 text-sm text-white bg-brand-ink hover:bg-brand-ink-2 rounded disabled:opacity-50"
         >
           <Upload size={16} />
-          {saving ? 'Creating...' : analysis ? 'Save reusable template' : 'Reading document first'}
+          {saving
+            ? 'Creating...'
+            : isPdfAnalysis && !sourceReviewReady
+              ? 'Waiting for source preview'
+              : requiresHumanReview && !reviewConfirmed
+                ? 'Confirm review below to save'
+                : analysis
+                  ? 'Save reusable template'
+                  : 'Reading document first'}
         </button>
         <button
           type="button"
@@ -642,7 +798,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
             </p>
             <p className="mt-1 text-sm text-brand-muted">
               {fields.length
-                ? `Read using ${detection.label || 'document structure'}. We’ll ask for these details whenever someone uses this template.`
+                ? `Read using ${detection.label || 'document structure'}${detectionProviderLabel ? ` (${detectionProviderLabel})` : ''}. We’ll ask for these details whenever someone uses this template.`
                 : 'Try a clearer copy, or add a replacement field below. Nothing has been saved yet.'}
             </p>
             {detection.pages_analyzed && (
@@ -653,8 +809,8 @@ function UploadTemplateForm({ onCreated, onCancel }) {
           </div>
           {isPdfAnalysis && (
             <div className="border border-brand-green/30 rounded bg-brand-green/10 p-4 text-sm text-brand-ink">
-              <p className="font-semibold">Original PDF design preserved</p>
-              <p className="mt-1 text-brand-muted">The source PDF remains the visual design. Existing controls, ordinary page text, and scanned pages all become reusable through reviewed field placements.</p>
+              <p className="font-semibold">{sourcePreviewKind === 'image' ? 'Original scan design preserved' : 'Original PDF design preserved'}</p>
+              <p className="mt-1 text-brand-muted">The source page remains the visual design. Existing controls, ordinary page text, and scanned pages become reusable through reviewed field placements.</p>
             </div>
           )}
           {isPdfAnalysis && !hasPdfMappings && (
@@ -669,33 +825,46 @@ function UploadTemplateForm({ onCreated, onCancel }) {
               <p className="mt-1 text-brand-muted">The generated file remains a DOCX with the source layout, tables, headers, and footers. Review the detected replacement values below.</p>
             </div>
           )}
-          {isPdfAnalysis && sourcePreviewUrl && (
+          {!isPdfAnalysis && sourcePreviewUrl && (
             <div className="border border-brand-line rounded bg-brand-bg p-4">
               <div className="mb-3">
                 <p className="text-sm font-semibold text-brand-ink">Original document preview</p>
-                <p className="mt-1 text-xs text-brand-muted">Compare the original page with the reusable details found below.</p>
+                <p className="mt-1 text-xs text-brand-muted">Compare the original source with the reusable details found below.</p>
               </div>
-              <object
-                title={`Source PDF preview: ${file?.name || analysis.title}`}
-                data={sourcePreviewUrl}
-                type="application/pdf"
-                className="h-[55vh] min-h-[420px] w-full rounded border border-brand-line bg-white"
-              >
-                <p className="p-4 text-sm text-brand-muted">This browser cannot display the validated source PDF inline. Review the detected page and field details below, or open the original file locally.</p>
-              </object>
+              {sourcePreviewKind === 'image' ? (
+                <img title={`Source image preview: ${file?.name || analysis.title}`} src={sourcePreviewUrl} alt={`Uploaded source ${file?.name || ''}`} className="max-h-[55vh] min-h-[240px] w-full rounded border border-brand-line bg-white object-contain" />
+              ) : (
+                <object
+                  title={`Source PDF preview: ${file?.name || analysis.title}`}
+                  data={sourcePreviewUrl}
+                  type="application/pdf"
+                  className="h-[55vh] min-h-[420px] w-full rounded border border-brand-line bg-white"
+                >
+                  <p className="p-4 text-sm text-brand-muted">This browser cannot display the validated source PDF inline. Review the detected page and field details below, or open the original file locally.</p>
+                </object>
+              )}
             </div>
           )}
+          {requiresHumanReview && !isPdfAnalysis && (
+            <label className="mb-3 flex items-start gap-2 rounded border border-brand-amber/40 bg-brand-amber/10 p-3 text-sm text-brand-ink">
+              <input type="checkbox" aria-label="Confirm source comparison" checked={reviewConfirmed} onChange={(event) => setReviewConfirmed(event.target.checked)} className="mt-0.5 h-4 w-4 accent-brand-accent" />
+              <span>I compared the detected values with the original source and corrected anything uncertain.</span>
+            </label>
+          )}
+          {isPdfAnalysis ? (
+            <PrepareFormWorkspace file={file} analysis={analysis} fields={fields} previewUrl={sourcePreviewUrl} reviewConfirmed={reviewConfirmed} onReviewConfirmed={setReviewConfirmed} onSourceReviewReadyChange={setSourceReviewReady} onFieldsChange={handleWorkspaceFieldsChange} />
+          ) : (
           <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px] gap-4">
           <div className="border border-brand-line rounded bg-brand-bg p-4">
             <div className="flex items-center justify-between gap-3 mb-3">
               <div>
                 <p className="text-sm font-semibold text-brand-ink">{analysis.title}</p>
-                <p className="text-xs text-brand-muted uppercase">{analysis.format}</p>
+                <p className="text-xs text-brand-muted uppercase">{sourcePreviewKind === 'image' ? 'Scanned image → PDF' : analysis.format}</p>
               </div>
               <span className="text-xs text-brand-muted">{fields.length} field{fields.length === 1 ? '' : 's'}</span>
             </div>
             <label htmlFor="reviewed-template-body" className="block text-xs font-semibold text-brand-muted mb-2">{isPdfAnalysis ? 'Text found in the document (the page design is unchanged)' : 'Extracted template body'}</label>
-            <textarea id="reviewed-template-body" value={draftBody} readOnly={isPdfAnalysis} onChange={(event) => setDraftBody(event.target.value)} rows={18} className="w-full rounded border border-brand-line bg-brand-surface-2 p-3 font-mono text-xs text-brand-ink read-only:opacity-75" />
+            <textarea id="reviewed-template-body" value={draftBody} readOnly={isPdfAnalysis} onChange={(event) => { setReviewConfirmed(false); setDraftBody(event.target.value) }} rows={18} className="w-full rounded border border-brand-line bg-brand-surface-2 p-3 font-mono text-xs text-brand-ink read-only:opacity-75" />
           </div>
 
           <div className="space-y-3">
@@ -780,6 +949,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
             )}
           </div>
           </div>
+          )}
         </div>
       )}
     </div>
@@ -885,7 +1055,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
   const names = useMemo(() => getTemplateVariables(template), [template])
   const fieldDefinitions = useMemo(() => Object.fromEntries(
     (template?.variable_schema?.fields || [])
-      .filter((field) => field?.name)
+      .filter((field) => field?.name && field?.included !== false)
       .map((field) => [field.name, field]),
   ), [template])
   const isPdfTemplate = String(template?.format || '').toLowerCase() === 'pdf'
@@ -1848,7 +2018,7 @@ export default function TemplatesPage() {
       )}
 
       {showUpload && (
-        <Modal title="Create Template From Sample" onClose={() => setShowUpload(false)}>
+          <Modal title="Create Template From Sample" wide onClose={() => setShowUpload(false)}>
           <UploadTemplateForm
             onCreated={handleUploadedTemplate}
             onCancel={() => setShowUpload(false)}

@@ -534,7 +534,31 @@ def _discover_pdf_overlay_fields(
             right = min(page_width - 18.0, left + max(8.0, source_width + 3.0))
         else:
             left += 4.0
-            right = min(page_width - 18.0, max(left + 72.0, page_width - 36.0))
+            if fragment.get("source_kind") == "ocr":
+                # A handwritten value may be completely unreadable even when
+                # its printed label is clear.  Reserve a bounded value box and
+                # stop before the next detected item on the row; never clear
+                # the rest of a scanned page merely because OCR missed ink.
+                right = min(page_width - 18.0, left + min(216.0, page_width * 0.35))
+                row_y = float(fragment["y"])
+                row_size = float(fragment["font_size"])
+                next_items = [
+                    float(item["x"])
+                    for item in located_fragments
+                    if item is not fragment
+                    and int(item["page_index"]) == page_index
+                    and float(item["x"]) > left + 8.0
+                    and abs(float(item["y"]) - row_y)
+                    <= max(row_size, float(item["font_size"])) * 0.9
+                ]
+                if next_items:
+                    right = min(right, min(next_items) - 4.0)
+                right = min(page_width - 18.0, max(left + 24.0, right))
+            else:
+                right = min(
+                    page_width - 18.0,
+                    max(left + 72.0, page_width - 36.0),
+                )
         bottom = float(fragment["y"]) - max(2.0, size * 0.2)
         top = bottom + max(12.0, size * 1.35)
         marker = (page_index, round(left), round(bottom))
@@ -544,6 +568,7 @@ def _discover_pdf_overlay_fields(
         overlay_spec = {
             "page": page_index + 1,
             "rect": rect,
+            "source_rect": list(rect),
             "font_size": size,
             "erase_source": erase_source,
             "source_text": source_text,
@@ -620,6 +645,25 @@ def _discover_pdf_overlay_fields(
         label = match.group(1).strip()
         normalized_label = _normalize_variable(label)
         name = _LABEL_BLANK_ALIASES.get(normalized_label, normalized_label)
+        existing = discovered_by_name.get(_normalize_variable(name))
+        if existing is not None and fragment.get("source_kind") == "ocr":
+            # Candidate matching already found the handwritten value on this
+            # row.  Do not add a second, broader label-only redaction there.
+            row_y = float(fragment["y"])
+            row_size = float(fragment["font_size"])
+            existing_on_row = any(
+                int((spec or {}).get("page") or 0) == int(fragment["page_index"]) + 1
+                and isinstance((spec or {}).get("rect"), list)
+                and len((spec or {}).get("rect")) == 4
+                and float((spec or {})["rect"][1]) - row_size
+                <= row_y
+                <= float((spec or {})["rect"][3]) + row_size
+                for spec in (
+                    existing.get("pdf_overlays") or [existing.get("pdf_overlay")]
+                )
+            )
+            if existing_on_row:
+                continue
         add_field(
             name=name,
             label=label,
@@ -669,6 +713,8 @@ def _schema_value_map(schema: dict | None, variables: dict[str, str]) -> dict[st
             continue
         variable = str(field.get("name") or "").strip()
         pdf_name = str(field.get("pdf_field_name") or "").strip()
+        if field.get("included", True) is False:
+            continue
         if variable and pdf_name and variable in variables:
             values[pdf_name] = str(variables[variable] or "")
     return values
@@ -682,7 +728,7 @@ def pdf_review_evidence(
     reviewed: list[str] = []
     nonblank = 0
     for field in (variable_schema or {}).get("fields") or []:
-        if not isinstance(field, dict) or field.get("field_type") == "signature":
+        if not isinstance(field, dict) or field.get("included", True) is False or field.get("field_type") == "signature":
             continue
         name = str(field.get("name") or "").strip()
         if not name or name not in variables:
@@ -709,7 +755,7 @@ def validate_representative_pdf_variables(
     blank: list[str] = []
     fields = (variable_schema or {}).get("fields") or []
     for field in fields:
-        if not isinstance(field, dict) or field.get("field_type") == "signature":
+        if not isinstance(field, dict) or field.get("included", True) is False or field.get("field_type") == "signature":
             continue
         name = str(field.get("name") or "").strip()
         if not name:
@@ -892,9 +938,18 @@ def _rasterize_ocr_source_pdf(
             drawing = ImageDraw.Draw(image)
             for field in fields_by_page.get(page_index, []):
                 spec = field.get("pdf_overlay") or {}
-                if not spec.get("erase_source", True):
+                # OCR can recognize a printed label while failing to read the
+                # handwritten value beside it.  Those label-only overlays use
+                # erase_source=False so text-native overlays retain their old
+                # semantics, but the scanned handwriting must still be baked
+                # out before a replacement is drawn.
+                source_text = str(spec.get("source_text") or "")
+                is_ocr_label_only = (
+                    spec.get("source_kind") == "ocr" and not source_text
+                )
+                if not spec.get("erase_source", True) and not is_ocr_label_only:
                     continue
-                rect = spec.get("rect")
+                rect = spec.get("source_rect") or spec.get("rect")
                 if not isinstance(rect, list) or len(rect) != 4:
                     raise TemplatePdfError("The stored OCR field rectangle is invalid.")
                 try:
@@ -1289,6 +1344,8 @@ def _flatten_with_overlays(
                 y -= leading
 
         for field in static_by_page.get(page_index, []):
+            if field.get("included", True) is False:
+                continue
             overlay_spec = field.get("pdf_overlay") or {}
             rect = overlay_spec.get("rect")
             if not isinstance(rect, list) or len(rect) != 4:
@@ -1317,6 +1374,20 @@ def _flatten_with_overlays(
             value = ensure_supported(
                 str((static_values or {}).get(variable) or ""), variable
             )
+            field_type = str(field.get("field_type") or "text")
+            if field_type == "checkbox":
+                overlay.setStrokeColorRGB(0, 0, 0)
+                overlay.rect(left, bottom, box_width, box_height, stroke=1, fill=0)
+                if _truthy(value):
+                    overlay.setFont("Helvetica-Bold", max(7, min(14, box_height * 0.7)))
+                    overlay.drawCentredString(left + box_width / 2, bottom + max(1, box_height * 0.15), "X")
+                continue
+            if field_type == "signature":
+                overlay.setStrokeColorRGB(0, 0, 0)
+                overlay.line(left, bottom + max(2, box_height * 0.2), left + box_width, bottom + max(2, box_height * 0.2))
+                overlay.setFont(font_name, max(7, min(12, box_height * 0.55)))
+                overlay.drawString(left + 1, bottom + box_height * 0.45, "Signature")
+                continue
             if not value:
                 continue
             preferred = float(overlay_spec.get("font_size") or 11)
@@ -1402,7 +1473,15 @@ def fill_pdf_template(
             raise TemplatePdfError(
                 "This ordinary PDF has no reviewed text-overlay fields. Re-upload it and review the detected locations before generating."
             )
-        names = [str(field.get("name") or "").strip() for field in overlay_fields]
+        active_input_fields = [
+            field
+            for field in overlay_fields
+            if field.get("included", True) is not False
+            and field.get("field_type") != "signature"
+        ]
+        names = [
+            str(field.get("name") or "").strip() for field in active_input_fields
+        ]
         source_keys = [
             str(field.get("pdf_source_key") or "").strip() for field in overlay_fields
         ]
@@ -1424,11 +1503,17 @@ def fill_pdf_template(
                 "Text-overlay PDF templates must be flattened because the source has no editable form controls."
             )
         if enforce_required:
-            missing_reviewed = sorted(name for name in names if name not in variables)
+            missing_reviewed = sorted(
+                str(field.get("name") or "").strip()
+                for field in active_input_fields
+                if str(field.get("name") or "").strip() not in variables
+            )
             missing_required = sorted(
-                name
-                for name, field in zip(names, overlay_fields)
-                if field.get("required") and not str(variables.get(name) or "").strip()
+                str(field.get("name") or "").strip()
+                for field in active_input_fields
+                if field.get("required")
+                and (not str(variables.get(str(field.get("name") or "").strip()) or "").strip()
+                     or (field.get("field_type") == "checkbox" and not _truthy(str(variables.get(str(field.get("name") or "").strip()) or ""))))
             )
             if missing_reviewed:
                 raise TemplatePdfError(
@@ -1454,11 +1539,61 @@ def fill_pdf_template(
         return output
     actual_fields = {field["pdf_field_name"]: field for field in discovered_fields}
     actual_pdf_names = set(actual_fields)
+    if any(not isinstance(field, dict) for field in schema_fields):
+        raise TemplatePdfError("The stored PDF field mapping is invalid.")
+    overlay_schema_fields = [
+        field for field in schema_fields
+        if isinstance(field, dict) and (field.get("pdf_overlay") or field.get("pdf_overlays"))
+    ]
+    acro_schema_fields = [
+        field for field in schema_fields
+        if isinstance(field, dict) and not (field.get("pdf_overlay") or field.get("pdf_overlays"))
+    ]
+    if overlay_schema_fields and not flatten:
+        raise TemplatePdfError(
+            "Mixed PDF templates with scanned text fields must be flattened."
+        )
+    overlay_names: set[str] = set()
+    active_overlay_names: set[str] = set()
+    overlay_keys: set[str] = set()
+    for field in overlay_schema_fields:
+        variable = str(field.get("name") or "").strip()
+        source_key = str(field.get("pdf_source_key") or "").strip()
+        if (
+            not variable
+            or not source_key
+            or field.get("pdf_field_name") is not None
+            or variable in overlay_names
+            or source_key in overlay_keys
+        ):
+            raise TemplatePdfError("The stored PDF overlay field mapping contains duplicates or is incomplete.")
+        overlay_names.add(variable)
+        if (
+            field.get("included", True) is not False
+            and field.get("field_type") != "signature"
+        ):
+            active_overlay_names.add(variable)
+        overlay_keys.add(source_key)
+        overlays = field.get("pdf_overlays") or [field.get("pdf_overlay")]
+        if not isinstance(overlays, list) or not overlays:
+            raise TemplatePdfError("The stored PDF overlay field map is invalid.")
+        for spec in overlays:
+            if not isinstance(spec, dict):
+                raise TemplatePdfError("The stored PDF overlay field map is invalid.")
+            try:
+                page = int(spec.get("page"))
+                rect = spec.get("rect")
+                if page < 1 or not isinstance(rect, list) or len(rect) != 4:
+                    raise ValueError
+                tuple(float(value) for value in rect)
+            except (TypeError, ValueError):
+                raise TemplatePdfError("The stored PDF overlay field map is invalid.")
     schema_pdf_names: set[str] = set()
-    known_variables: set[str] = set()
+    all_variable_names: set[str] = set(overlay_names)
+    known_variables: set[str] = set(active_overlay_names)
     required_variables: dict[str, str] = {}
     variable_fields: dict[str, dict[str, Any]] = {}
-    for field in schema_fields:
+    for field in acro_schema_fields:
         if not isinstance(field, dict):
             raise TemplatePdfError("The stored PDF field mapping is invalid.")
         variable = str(field.get("name") or "").strip()
@@ -1467,16 +1602,23 @@ def fill_pdf_template(
             raise TemplatePdfError(
                 "The stored PDF field mapping no longer matches the source PDF."
             )
-        if variable in known_variables or pdf_name in schema_pdf_names:
+        if variable in all_variable_names or pdf_name in schema_pdf_names:
             raise TemplatePdfError("The stored PDF field mapping contains duplicates.")
-        known_variables.add(variable)
+        all_variable_names.add(variable)
         schema_pdf_names.add(pdf_name)
         actual_field = actual_fields[pdf_name]
-        variable_fields[variable] = actual_field
-        if actual_field.get("field_type") != "signature" and (
-            actual_field.get("required") or field.get("required")
+        # Keep excluded source mappings for widget clearing/contract
+        # validation, but omit them from the public input contract.
+        if (
+            field.get("included", True) is not False
+            and actual_field.get("field_type") != "signature"
         ):
-            required_variables[variable] = str(actual_field.get("field_type") or "text")
+            known_variables.add(variable)
+            variable_fields[variable] = actual_field
+            if actual_field.get("field_type") != "signature" and (
+                actual_field.get("required") or field.get("required")
+            ):
+                required_variables[variable] = str(actual_field.get("field_type") or "text")
     if schema_pdf_names != actual_pdf_names:
         raise TemplatePdfError(
             "The stored PDF field mapping does not cover every source form field."
@@ -1485,15 +1627,16 @@ def fill_pdf_template(
     if unknown_variables:
         names = ", ".join(sorted(unknown_variables)[:5])
         raise TemplatePdfError(f"Unknown PDF template variable(s): {names}")
+    for variable, value in variables.items():
+        if len(str(value or "")) > _MAX_PDF_FIELD_VALUE_CHARS:
+            raise TemplatePdfError(
+                f"Value for PDF field {variable!r} exceeds the "
+                "10,000-character limit; shorten it before rendering."
+            )
     for variable, actual_field in variable_fields.items():
         if variable not in variables:
             continue
         raw_value = str(variables[variable] or "")
-        pdf_field_name = str(actual_field.get("pdf_field_name") or variable)
-        if len(raw_value) > _MAX_PDF_FIELD_VALUE_CHARS:
-            raise TemplatePdfError(
-                f"Value for PDF field {pdf_field_name!r} exceeds the 10,000-character limit; shorten it before rendering."
-            )
         value = raw_value.strip()
         field_type = str(actual_field.get("field_type") or "text")
         if field_type == "signature" and value:
@@ -1519,6 +1662,15 @@ def fill_pdf_template(
             if actual_field.get("field_type") != "signature"
             and variable not in variables
         )
+        missing_reviewed.extend(
+            sorted(
+                str(field.get("name") or "").strip()
+                for field in overlay_schema_fields
+                if field.get("included", True) is not False
+                and field.get("field_type") != "signature"
+                and str(field.get("name") or "").strip() not in variables
+            )
+        )
         if missing_reviewed:
             raise TemplatePdfError(
                 "Review every PDF field; send blank/false explicitly. Missing: "
@@ -1529,14 +1681,44 @@ def fill_pdf_template(
             value = str(variables.get(name) or "").strip()
             if not value or (field_type == "checkbox" and not _truthy(value)):
                 missing_required.append(name)
+        missing_required.extend(
+            str(field.get("name") or "").strip()
+            for field in overlay_schema_fields
+            if field.get("included", True) is not False
+            and field.get("field_type") != "signature"
+            and field.get("required")
+            and (not str(variables.get(str(field.get("name") or "").strip()) or "").strip()
+                 or (field.get("field_type") == "checkbox" and not _truthy(str(variables.get(str(field.get("name") or "").strip()) or ""))))
+        )
         if missing_required:
             raise TemplatePdfError(
                 "Required PDF field(s) are empty or unchecked: "
                 + ", ".join(sorted(missing_required))
             )
     values = _schema_value_map(variable_schema, variables)
+    # Excluded controls remain part of the source contract so flattening and
+    # editable output cannot leak the sample document's original values.
+    # They are intentionally not accepted as caller inputs.
+    for field in schema_fields:
+        if not isinstance(field, dict):
+            continue
+        pdf_name = str(field.get("pdf_field_name") or "").strip()
+        if (
+            pdf_name
+            and pdf_name in actual_fields
+            and (
+                field.get("included", True) is False
+                or actual_fields[pdf_name].get("field_type") == "signature"
+            )
+        ):
+            values[pdf_name] = ""
     if flatten:
-        output = _flatten_with_overlays(reader, values)
+        output = _flatten_with_overlays(
+            reader,
+            values,
+            static_fields=overlay_schema_fields,
+            static_values=variables,
+        )
     else:
         writer = PdfWriter()
         writer.clone_document_from_reader(reader)

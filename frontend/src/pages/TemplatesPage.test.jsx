@@ -153,6 +153,7 @@ describe('document template workflow', () => {
     expect(screen.getByText('Options:').closest('p')).toHaveTextContent('Options: State Court, Federal Court')
     const mappedField = screen.getByLabelText('Automation key')
     fireEvent.change(mappedField, { target: { value: 'party_name' } })
+    await user.click(await screen.findByRole('link', { name: 'Open original in a new tab' }))
     await user.click(screen.getByRole('button', { name: 'Save reusable template' }))
 
     await waitFor(() => expect({ upload: createTemplateFromUpload.mock.calls.length, json: createTemplate.mock.calls.length }).toEqual({ upload: 1, json: 0 }))
@@ -229,8 +230,8 @@ describe('document template workflow', () => {
 
     const second = new File(['second'], 'second.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
     fireEvent.change(input, { target: { files: [second] } })
-    expect(screen.queryByDisplayValue('First Letter')).not.toBeInTheDocument()
-    expect(screen.getByText(/Current source: second.docx/)).toHaveTextContent('reading now')
+    await waitFor(() => expect(screen.queryByDisplayValue('First Letter')).not.toBeInTheDocument())
+    expect(screen.getByText(/Current source: second.docx/)).toHaveTextContent('ready to review')
     expect(await screen.findByDisplayValue('Second Letter')).toBeInTheDocument()
     expect(analyzeTemplateUpload.mock.calls[1][0].get('title')).toBeNull()
     await user.click(screen.getByRole('button', { name: 'Save reusable template' }))
@@ -256,7 +257,9 @@ describe('document template workflow', () => {
     const first = new File(['first'], 'first.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
     const second = new File(['second'], 'second.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
     fireEvent.change(input, { target: { files: [first] } })
+    await waitFor(() => expect(resolveFirst).toEqual(expect.any(Function)))
     fireEvent.change(input, { target: { files: [second] } })
+    await waitFor(() => expect(resolveSecond).toEqual(expect.any(Function)))
 
     await act(async () => {
       resolveSecond({
@@ -303,6 +306,7 @@ describe('document template workflow', () => {
     fireEvent.change(screen.getByLabelText('Exact text in the source'), { target: { value: 'Ada Lovelace' } })
     await user.click(screen.getByRole('button', { name: 'Mark' }))
     expect(screen.getByLabelText('Extracted template body')).toHaveValue('Applicant: {{client_name}}')
+    await user.click(screen.getByRole('checkbox', { name: 'Confirm source comparison' }))
     await user.click(screen.getByRole('button', { name: 'Save reusable template' }))
 
     await waitFor(() => expect(createTemplateFromUpload).toHaveBeenCalledTimes(1))
@@ -647,10 +651,14 @@ describe('document template workflow', () => {
     }))
   })
 
-  it('prevents creating a PDF analysis with no reusable source mappings', async () => {
+  it('lets a reviewer repair a PDF with no automatic detections by placing a manual field', async () => {
     analyzeTemplateUpload.mockResolvedValue({
       title: 'Flat PDF', format: 'pdf', body: 'Extracted text',
-      suggested_variable_schema: { fields: [] }, detected_branding_profile: {}, warnings: [],
+      suggested_variable_schema: {
+        fields: [],
+        pages: [{ page: 1, width: 612, height: 792, rotation: 0 }],
+      },
+      detected_branding_profile: {}, warnings: [],
     })
     const user = userEvent.setup()
     render(<TemplatesPage />)
@@ -660,6 +668,76 @@ describe('document template workflow', () => {
       target: { files: [new File(['%PDF-1.7'], 'flat.pdf', { type: 'application/pdf' })] },
     })
     expect(await screen.findByText(/No reusable details located confidently/)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Save reusable template' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Waiting for source preview' })).toBeDisabled()
+    await user.click(await screen.findByRole('link', { name: 'Open original in a new tab' }))
+    await user.click(screen.getByRole('button', { name: 'text' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save reusable template' })).toBeEnabled())
+    await user.click(screen.getByRole('button', { name: 'Save reusable template' }))
+
+    await waitFor(() => expect(createTemplateFromUpload).toHaveBeenCalledTimes(1))
+    const schema = JSON.parse(createTemplateFromUpload.mock.calls[0][0].get('variable_schema'))
+    expect(schema.fields[0]).toEqual(expect.objectContaining({
+      name: 'field_1',
+      field_type: 'text',
+      included: true,
+      pdf_source_key: expect.stringMatching(/^manual:/),
+    }))
+    expect(schema.fields[0].pdf_overlay.rect).toHaveLength(4)
+  })
+
+  it('accepts a dropped image, previews it, and submits the analysis token', async () => {
+    analyzeTemplateUpload.mockResolvedValue({
+      title: 'Handwritten Application',
+      format: 'pdf',
+      analysis_token: 'analysis-123',
+      body: 'Applicant: {{client_name}}\nCase: {{case_number}}',
+      suggested_variable_schema: {
+        pages: [{ page: 1, width: 612, height: 792, rotation: 0 }],
+        fields: [
+          { name: 'client_name', label: 'Client name', pdf_source_key: 'overlay:client-name', pdf_overlay: { page: 1, rect: [100, 600, 220, 620], source_kind: 'ocr' }, source_text: 'Ada Lovelace', confidence: 0.61 },
+          { name: 'case_number', label: 'Case number', pdf_source_key: 'overlay:case-number', pdf_overlay: { page: 1, rect: [100, 550, 220, 570], source_kind: 'ocr' }, source_text: 'CV-OLD', confidence: 0.58 },
+        ],
+      },
+      detected_branding_profile: {},
+      warnings: ['Review handwriting carefully.'],
+    })
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:handwritten-source')
+    URL.revokeObjectURL = vi.fn()
+    const user = userEvent.setup()
+    render(<TemplatesPage />)
+
+    await user.click(await screen.findByRole('button', { name: 'Upload Sample' }))
+    const dropTarget = screen.getByRole('button', { name: 'Choose sample document or filled scan' })
+    const file = new File(['image bytes'], 'filled-form.webp', { type: 'image/webp' })
+    fireEvent.drop(dropTarget, { dataTransfer: { files: [file], types: ['Files'] } })
+
+    expect(await screen.findByTitle('Source image preview: filled-form.webp')).toHaveAttribute('src', 'blob:handwritten-source')
+    expect(screen.getByText(/Review handwriting carefully/)).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: 'Confirm source comparison' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Confirm review below to save' })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Select Case number' }))
+    await user.click(screen.getByRole('checkbox', { name: 'Include in template' }))
+    await user.click(screen.getByRole('checkbox', { name: 'Confirm source comparison' }))
+    await user.click(screen.getByRole('button', { name: 'Save reusable template' }))
+
+    await waitFor(() => expect(createTemplateFromUpload).toHaveBeenCalledTimes(1))
+    const submitted = createTemplateFromUpload.mock.calls[0][0]
+    expect(submitted.get('analysis_token')).toBe('analysis-123')
+    expect(submitted.get('reviewed_body')).toBe('Applicant: {{client_name}}\nCase: CV-OLD')
+    expect(JSON.parse(submitted.get('variable_schema')).fields[1].included).toBe(false)
+    expect(URL.createObjectURL).toHaveBeenCalledWith(file)
+  })
+
+  it('shows an inline rejection for an unsupported dropped file', async () => {
+    const user = userEvent.setup()
+    render(<TemplatesPage />)
+
+    await user.click(await screen.findByRole('button', { name: 'Upload Sample' }))
+    const dropTarget = screen.getByRole('button', { name: 'Choose sample document or filled scan' })
+    const file = new File(['binary'], 'template.exe', { type: 'application/octet-stream' })
+    fireEvent.drop(dropTarget, { dataTransfer: { files: [file], types: ['Files'] } })
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/PDF, DOCX, TXT, PNG, JPEG, TIFF, or WebP/i)
+    expect(analyzeTemplateUpload).not.toHaveBeenCalled()
   })
 })

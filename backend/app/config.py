@@ -139,6 +139,16 @@ class Settings(BaseSettings):
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com/v1"
     ANTHROPIC_API_KEY: str = ""
 
+    # Template OCR is local by default. Azure is an explicit opt-in because
+    # document bytes may contain privileged client information.
+    TEMPLATE_OCR_PROVIDER: str = "local"
+    AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT: str = ""
+    AZURE_DOCUMENT_INTELLIGENCE_KEY: str = ""
+    AZURE_DOCUMENT_INTELLIGENCE_API_VERSION: str = "2024-11-30"
+    TEMPLATE_OCR_AZURE_TIMEOUT_SECONDS: float = 30.0
+    TEMPLATE_OCR_AZURE_MAX_POLL_SECONDS: float = 75.0
+    TEMPLATE_OCR_AZURE_MAX_POLL_INTERVAL_SECONDS: float = 10.0
+
     # OpenRouter — free model access (OpenAI-compatible)
     OPENROUTER_API_KEY: str = ""
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
@@ -1001,6 +1011,46 @@ def validate_inbound_email_settings(settings: Settings) -> None:
         )
 
 
+def validate_template_ocr_settings(settings: Settings) -> None:
+    provider = settings.TEMPLATE_OCR_PROVIDER.strip().lower()
+    if provider not in {"local", "azure"}:
+        raise ValueError("TEMPLATE_OCR_PROVIDER must be 'local' or 'azure'")
+    if provider == "azure":
+        parsed = urlsplit(settings.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT.rstrip("/"))
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT must be an HTTPS URL"
+            )
+        if not settings.AZURE_DOCUMENT_INTELLIGENCE_KEY:
+            raise ValueError(
+                "AZURE_DOCUMENT_INTELLIGENCE_KEY is required for Azure OCR"
+            )
+        if not re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}(?:-preview)?",
+            settings.AZURE_DOCUMENT_INTELLIGENCE_API_VERSION,
+        ):
+            raise ValueError("AZURE_DOCUMENT_INTELLIGENCE_API_VERSION is invalid")
+    if not 5 <= settings.TEMPLATE_OCR_AZURE_TIMEOUT_SECONDS <= 120:
+        raise ValueError(
+            "TEMPLATE_OCR_AZURE_TIMEOUT_SECONDS must be between 5 and 120"
+        )
+    if not 10 <= settings.TEMPLATE_OCR_AZURE_MAX_POLL_SECONDS <= 180:
+        raise ValueError(
+            "TEMPLATE_OCR_AZURE_MAX_POLL_SECONDS must be between 10 and 180"
+        )
+    if not 1 <= settings.TEMPLATE_OCR_AZURE_MAX_POLL_INTERVAL_SECONDS <= 10:
+        raise ValueError(
+            "TEMPLATE_OCR_AZURE_MAX_POLL_INTERVAL_SECONDS must be between 1 and 10"
+        )
+
+
 @lru_cache()
 def get_settings() -> Settings:
     settings = Settings()
@@ -1012,5 +1062,6 @@ def get_settings() -> Settings:
     validate_platform_bootstrap_settings(settings)
     validate_mcp_security_settings(settings)
     validate_inbound_email_settings(settings)
+    validate_template_ocr_settings(settings)
     validate_dev_mode_urls(settings)
     return settings

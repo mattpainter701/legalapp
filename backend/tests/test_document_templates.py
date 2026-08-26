@@ -1,3 +1,4 @@
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
@@ -857,17 +858,16 @@ def test_reviewed_static_pdf_schema_keeps_server_discovered_placements():
     discovered = analysis.variable_schema
     reviewed = copy.deepcopy(discovered)
     reviewed["fields"][0]["name"] = "party_name"
-    reviewed["fields"][0]["pdf_overlays"][0]["rect"] = [0, 0, 500, 500]
+    reviewed["fields"][0]["pdf_overlays"][0]["rect"] = [72, 700, 220, 716]
+    assert discovered["pages"]
 
     validated = document_templates._reviewed_variable_schema(
         json.dumps(reviewed), discovered
     )
 
     assert validated["fields"][0]["name"] == "party_name"
-    assert (
-        validated["fields"][0]["pdf_overlays"]
-        == discovered["fields"][0]["pdf_overlays"]
-    )
+    assert validated["fields"][0]["pdf_overlays"][0]["rect"] == [72.0, 700.0, 220.0, 716.0]
+    assert validated["fields"][0]["pdf_overlays"][0]["source_rect"] == discovered["fields"][0]["pdf_overlays"][0]["source_rect"]
     assert len(validated["fields"][0]["pdf_overlays"]) == 2
 
 
@@ -2565,6 +2565,27 @@ async def test_pdf_creation_rejects_unmapped_reviewed_body_and_json_shortcut(
     assert phantom_body.status_code == 422
     assert "without source mappings" in phantom_body.json()["detail"]
 
+    analysis = await client.post(
+        "/api/templates/intake/analyze",
+        files={"file": ("excluded.pdf", _fillable_pdf(), "application/pdf")},
+    )
+    assert analysis.status_code == 200, analysis.text
+    analyzed = analysis.json()
+    reviewed_schema = analyzed["suggested_variable_schema"]
+    excluded_name = reviewed_schema["fields"][0]["name"]
+    reviewed_schema["fields"][0]["included"] = False
+    excluded_placeholder = await client.post(
+        "/api/templates/intake/create",
+        files={"file": ("excluded.pdf", _fillable_pdf(), "application/pdf")},
+        data={
+            "analysis_token": analyzed["analysis_token"],
+            "variable_schema": json.dumps(reviewed_schema),
+            "reviewed_body": f"Excluded: {{{{{excluded_name}}}}}",
+        },
+    )
+    assert excluded_placeholder.status_code == 422
+    assert "without source mappings" in excluded_placeholder.json()["detail"]
+
     shortcut = await client.post(
         "/api/templates",
         json={
@@ -2578,6 +2599,83 @@ async def test_pdf_creation_rejects_unmapped_reviewed_body_and_json_shortcut(
     )
     assert shortcut.status_code == 422
     assert "multipart" in shortcut.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_manual_only_pdf_can_be_previewed_and_activated(
+    client, db_session, test_tenant, test_user, tmp_path, monkeypatch
+):
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+
+    from app.services.template_intake import TemplateAnalysis
+
+    monkeypatch.setattr(document_templates.settings, "UPLOAD_DIR", str(tmp_path))
+    await _grant_manage_documents(db_session, test_tenant, test_user)
+    source_buffer = BytesIO()
+    pdf = canvas.Canvas(source_buffer, pagesize=letter)
+    pdf.showPage()
+    pdf.save()
+    source = source_buffer.getvalue()
+    discovered = TemplateAnalysis(
+        title="Manual only",
+        format="pdf",
+        body="",
+        body_preview="",
+        extracted_text="",
+        variable_schema={
+            "version": 1,
+            "source": "pdf_ocr_overlay",
+            "pages": [{"page": 1, "width": 612, "height": 792, "rotation": 0}],
+            "fields": [],
+            "detection": {"method": "none", "label": "Manual review"},
+        },
+        branding_profile={},
+        warnings=[],
+    )
+    monkeypatch.setattr(
+        document_templates,
+        "analyze_template_upload",
+        lambda **_kwargs: discovered,
+    )
+    manual_key = f"manual:{uuid.uuid4()}"
+    reviewed_schema = {
+        **discovered.variable_schema,
+        "fields": [{
+            "name": "manual_name",
+            "label": "Name",
+            "pdf_source_key": manual_key,
+            "pdf_overlay": {"page": 1, "rect": [72, 700, 260, 724]},
+            "field_type": "text",
+            "required": True,
+            "multiline": False,
+            "included": True,
+        }],
+    }
+    created = await client.post(
+        "/api/templates/intake/create",
+        files={"file": ("manual-only.pdf", source, "application/pdf")},
+        data={
+            "reviewed_body": "{{manual_name}}",
+            "variable_schema": json.dumps(reviewed_schema),
+        },
+    )
+    assert created.status_code == 201, created.text
+    template_id = created.json()["id"]
+
+    preview = await client.post(
+        f"/api/templates/{template_id}/render-file",
+        json={
+            "variables": {"manual_name": "Representative Name"},
+            "preview_purpose": "activation",
+        },
+    )
+    assert preview.status_code == 200, preview.text
+    activated = await client.patch(
+        f"/api/templates/{template_id}", json={"is_active": True}
+    )
+    assert activated.status_code == 200, activated.text
+    assert activated.json()["is_active"] is True
 
 
 @pytest.mark.asyncio
