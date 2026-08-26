@@ -258,10 +258,47 @@ async def standard_matter_context_allowed(db: AsyncSession, tenant_id: Any) -> b
 
 
 async def route_matter_context_allowed(
-    db: AsyncSession, tenant_id: Any, *, use_premium: bool
+    db: AsyncSession,
+    tenant_id: Any,
+    *,
+    use_premium: bool,
+    route: LLMRoute | None = None,
 ) -> bool:
+    """Return whether the resolved route may receive confidential matter data.
+
+    A profile policy approves only that profile's activated, validated alias. It
+    must not spill over to an explicit model, a legacy tenant override, or a
+    customer BYOK route that Platform did not validate as part of the profile.
+    Those routes remain fail-closed until they gain their own independently
+    reviewed confidential-data policy.
+    """
+
+    if route is not None:
+        expected_profile_route = (
+            "profile-premium" if use_premium else "profile-standard"
+        )
+        independently_unapproved_routes = {
+            "customer",
+            "explicit-standard",
+            "explicit-premium",
+            "tenant-standard",
+            "tenant-premium",
+        }
+        if route.resolved_route in independently_unapproved_routes:
+            return False
+
+        # A profile flag applies only to the matching activated profile tier.
+        if route.resolved_route.startswith("profile-") and (
+            route.resolved_route != expected_profile_route
+        ):
+            return False
+
     profile = await get_tenant_routing_profile(db, tenant_id)
-    if profile is not None:
+    if profile is not None and (
+        route is None
+        or route.resolved_route
+        == ("profile-premium" if use_premium else "profile-standard")
+    ):
         return bool(
             profile.premium_allow_matter_context
             if use_premium
@@ -326,7 +363,9 @@ async def resolve_llm_route(
             cache_key,
             LLMRoute(
                 requested_route=requested_route,
-                resolved_route=requested_route,
+                resolved_route=(
+                    "explicit-premium" if use_premium else "explicit-standard"
+                ),
                 gateway_alias=explicit_alias,
             ),
         )

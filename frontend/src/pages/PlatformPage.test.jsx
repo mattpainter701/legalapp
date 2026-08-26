@@ -14,6 +14,7 @@ import {
   recommendLLMRoutes,
   saveLLMRoutes,
   testLLMRoute,
+  updateLLMRoutingProfile,
 } from '../api'
 
 vi.mock('../api', async (importOriginal) => ({
@@ -28,6 +29,7 @@ vi.mock('../api', async (importOriginal) => ({
   recommendLLMRoutes: vi.fn(),
   saveLLMRoutes: vi.fn(),
   testLLMRoute: vi.fn(),
+  updateLLMRoutingProfile: vi.fn(),
 }))
 
 const activeAliases = {
@@ -55,6 +57,7 @@ const defaultProfile = {
   id: '00000000-0000-0000-0000-000000000001',
   name: 'Default',
   is_default: true,
+  is_demo_default: false,
   is_active: true,
   assignable: true,
   standard_allow_matter_context: false,
@@ -102,6 +105,11 @@ beforeEach(() => {
     credential_state: 'indeterminate_policy_block',
     provider_latency_ms: 123,
   })
+  updateLLMRoutingProfile.mockImplementation(async (_key, id, update) => ({
+    ...defaultProfile,
+    id,
+    ...update,
+  }))
 })
 
 afterEach(cleanup)
@@ -146,6 +154,33 @@ describe('platform AI routing', () => {
       }, defaultProfile.id)
     })
     expect(await screen.findByText(/Saved and reloaded LiteLLM/)).toBeInTheDocument()
+  })
+
+  it('assigns an approved matter-aware profile to new demo workspaces', async () => {
+    getLLMRoutingProfiles.mockResolvedValueOnce({
+      profiles: [{
+        ...defaultProfile,
+        standard_allow_matter_context: true,
+      }],
+    })
+    getLLMRoutes.mockResolvedValueOnce({
+      standard: { ...standard, allow_matter_context: true },
+      premium,
+      activation: { status: 'active', revision: 'abc123', aliases: activeAliases },
+    })
+    const user = userEvent.setup()
+    renderRouting()
+
+    await user.click(await screen.findByRole('button', { name: 'Use for demos' }))
+
+    await waitFor(() => {
+      expect(updateLLMRoutingProfile).toHaveBeenCalledWith(
+        'platform-token',
+        defaultProfile.id,
+        { is_demo_default: true },
+      )
+    })
+    expect(await screen.findByText(/will be assigned to new demo workspaces/i)).toBeInTheDocument()
   })
 
   it('shows the confidential-data policy message from a structured rejection', async () => {

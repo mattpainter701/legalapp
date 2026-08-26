@@ -362,7 +362,7 @@ export default function ChatPage() {
   }, [])
 
   const togglePrivacyMode = useCallback(async () => {
-    if (privacySaving || !usePremium) return
+    if (privacySaving || user?.demo) return
     const nextValue = !user?.privacy_mode
     if (nextValue && !window.confirm('Turn on Privacy Mode? This immediately revokes any connected Claude, ChatGPT, Codex, or other external MCP assistant. Native LawHand features remain available with Privacy Mode safeguards.')) return
     setPrivacySaving(true)
@@ -374,7 +374,7 @@ export default function ChatPage() {
     } finally {
       setPrivacySaving(false)
     }
-  }, [privacySaving, refreshUser, showErrorNotice, usePremium, user?.privacy_mode])
+  }, [privacySaving, refreshUser, showErrorNotice, user?.demo, user?.privacy_mode])
 
   const cancelActiveStream = useCallback(({ abort = false, conversationId = null } = {}) => {
     streamRequestRef.current += 1
@@ -1209,6 +1209,7 @@ export default function ChatPage() {
             usePremium={usePremium}
             setUsePremium={setUsePremium}
             demoMode={Boolean(user?.demo)}
+            standardMatterContextAllowed={Boolean(user?.standard_matter_context_allowed)}
             includePublic={includePublic}
             setIncludePublic={setIncludePublic}
             privacyMode={Boolean(user?.privacy_mode)}

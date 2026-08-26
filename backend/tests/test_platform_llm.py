@@ -128,6 +128,14 @@ async def test_routing_profiles_clone_expose_policies_and_can_become_default(
     assert default_response.status_code == 200
     assert default_response.json()["is_default"] is True
 
+    demo_response = await client.patch(
+        f"/api/platform/llm/profiles/{created['id']}",
+        headers=platform_headers(),
+        json={"is_demo_default": True},
+    )
+    assert demo_response.status_code == 200
+    assert demo_response.json()["is_demo_default"] is True
+
     inactive_response = await client.patch(
         f"/api/platform/llm/profiles/{created['id']}",
         headers=platform_headers(),
@@ -149,6 +157,12 @@ async def test_routing_profiles_clone_expose_policies_and_can_become_default(
         json={"is_default": True},
     )
     assert blank_default_response.status_code == 400
+    blank_demo_response = await client.patch(
+        f"/api/platform/llm/profiles/{blank['id']}",
+        headers=platform_headers(),
+        json={"is_demo_default": True},
+    )
+    assert blank_demo_response.status_code == 400
 
 
 def test_provider_route_builder_litellm_model_prefixes():

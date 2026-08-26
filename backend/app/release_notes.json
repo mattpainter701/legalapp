@@ -2,6 +2,27 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.26.2",
+      "version": "2026.08.26.2",
+      "title": "Demo workspaces reopen with approved matter-aware AI",
+      "published_at": "2026-08-26",
+      "summary": "Return to an active demo without a password, and demonstrate matter-aware Standard AI when Platform has approved the route.",
+      "highlights": [
+        {
+          "title": "Reopen an active demo",
+          "description": "Choose Resume demo and enter the same email plus the current demo access code; the original expiry and AI quota stay unchanged."
+        },
+        {
+          "title": "Show matters with approved Standard AI",
+          "description": "Standard can use matter and attachment context when its assigned Platform routing profile explicitly allows confidential context."
+        },
+        {
+          "title": "Control the demo route from Platform",
+          "description": "Platform can choose the approved Standard profile assigned to new demos while Premium remains unavailable for disposable tenants."
+        }
+      ]
+    },
+    {
       "id": "2026.08.26.1",
       "version": "2026.08.26.1",
       "title": "Guides now cover matter email and connected assistants",
