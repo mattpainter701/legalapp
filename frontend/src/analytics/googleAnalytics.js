@@ -3,9 +3,12 @@
  *
  * LawHand is a legal product: a signed-in URL can carry a matter, client, or
  * portal identifier, and a page_view sends the full path. So the tag is loaded
- * lazily and fires only on the public, indexable marketing routes. A visitor
- * who signs in stops being measured at the moment they leave the marketing
- * site, which is also the only place the measurement is useful.
+ * lazily and fires only on the public, indexable marketing routes.
+ *
+ * `GoogleAnalytics.jsx` adds the two gates that pathname alone cannot express:
+ * a signed-in session is never measured at all, and the tag is never injected
+ * into a document whose Content-Security-Policy was chosen for a workspace
+ * route. See that component for why each one is necessary.
  *
  * `config.js` is shared with the Node build, so this module is likewise free of
  * `import.meta.env` reads at module scope; callers pass the configured id.

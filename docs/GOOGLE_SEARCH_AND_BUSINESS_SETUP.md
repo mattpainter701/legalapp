@@ -103,6 +103,16 @@ Instead, `frontend/src/analytics/googleAnalytics.js` loads the same tag from
 
 - fires **only** on public marketing routes — `isMeasurablePath()` gates every
   page view on the route being indexable, so no workspace URL is ever sent;
+- never measures a signed-in session. `/` renders the public home page while
+  authentication resolves and only then redirects a signed-in user to their
+  workspace, so gating on the path alone would report a view for every
+  returning customer who opens the site root, and would put them in the
+  marketing funnel numbers;
+- never injects the tag into a document whose CSP would refuse it. A policy is
+  bound to the document, not the URL, so a visitor who entered on a workspace
+  route keeps `script-src 'self'` for that document's lifetime. Organic search
+  traffic lands on the marketing routes directly, which is the traffic that
+  matters here;
 - disables automatic `page_view` and sends one explicitly per client-side
   navigation, which a single-page app otherwise misses entirely;
 - sets `allow_google_signals: false` and
