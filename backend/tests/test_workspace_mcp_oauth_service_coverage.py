@@ -1,6 +1,7 @@
 import base64
 import json
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -33,6 +34,65 @@ def test_redirect_pkce_and_scopes_reject_bad_inputs():
         oauth.validate_pkce_challenge("!" * 43, "S256")
     with pytest.raises(oauth.WorkspaceOAuthError):
         oauth.normalized_scopes("")
+
+
+class _RegistrationForm:
+    def __init__(self, values):
+        self.values = values
+
+    def get(self, field, default=None):
+        values = self.values.get(field, [])
+        return values[-1] if values else default
+
+    def getlist(self, field):
+        return self.values.get(field, [])
+
+
+@pytest.mark.asyncio
+async def test_registration_payload_json_and_form_compatibility():
+    json_payload = {
+        "client_name": "Claude",
+        "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+    }
+    json_request = SimpleNamespace(json=AsyncMock(return_value=json_payload))
+    assert await oauth.parse_dynamic_client_registration_payload(json_request) == (
+        json_payload
+    )
+
+    non_object = SimpleNamespace(json=AsyncMock(return_value=[]))
+    with pytest.raises(oauth.WorkspaceOAuthError, match="must be an object"):
+        await oauth.parse_dynamic_client_registration_payload(non_object)
+
+    form = _RegistrationForm(
+        {
+            "client_name": ["Claude"],
+            "redirect_uris[]": ["https://claude.com/api/mcp/auth_callback"],
+            "grant_types": ['["authorization_code"]'],
+            "response_types": ["code"],
+            "token_endpoint_auth_method": ["none"],
+            "application_type": ["web"],
+        }
+    )
+    form_request = SimpleNamespace(
+        json=AsyncMock(side_effect=ValueError("not JSON")),
+        form=AsyncMock(return_value=form),
+    )
+    parsed = await oauth.parse_dynamic_client_registration_payload(form_request)
+    assert parsed == {
+        "client_name": "Claude",
+        "token_endpoint_auth_method": "none",
+        "application_type": "web",
+        "redirect_uris": ["https://claude.com/api/mcp/auth_callback"],
+        "grant_types": ["authorization_code"],
+        "response_types": ["code"],
+    }
+
+    invalid_form = SimpleNamespace(
+        json=AsyncMock(side_effect=ValueError("not JSON")),
+        form=AsyncMock(side_effect=ValueError("not form data")),
+    )
+    with pytest.raises(oauth.WorkspaceOAuthError, match="valid JSON or form data"):
+        await oauth.parse_dynamic_client_registration_payload(invalid_form)
 
 
 def test_pkce_verifier_ascii_and_length_fail_closed():
@@ -152,3 +212,70 @@ async def test_redis_required_for_authorization_state():
     request = _request()
     with pytest.raises(Exception):
         await oauth.save_authorization_request(request, {"state": "x"})
+
+
+class _RuntimeRedis:
+    def __init__(self):
+        self.eval_calls = []
+        self.events = []
+
+    async def eval(self, script, key_count, *args):
+        self.eval_calls.append((script, key_count, args))
+        self.events.append(("eval", key_count, args))
+        return 1
+
+    async def setex(self, key, ttl, value):
+        self.events.append(("setex", key, ttl, value))
+
+    async def smembers(self, key):
+        self.events.append(("smembers", key))
+        return set()
+
+    async def delete(self, key):
+        self.events.append(("delete", key))
+
+
+@pytest.mark.asyncio
+async def test_refresh_issuance_checks_grant_marker_and_runtime_cleanup_sets_it_first():
+    redis = _RuntimeRedis()
+    request = _request(redis=redis)
+    grant_id = uuid4()
+
+    refresh = await oauth.issue_refresh_token(
+        request,
+        user_id=uuid4(),
+        tenant_id=uuid4(),
+        client_id="desktop-client",
+        grant_id=grant_id,
+        scopes=frozenset({"matters:read"}),
+    )
+
+    assert refresh.startswith("wmr_")
+    _script, key_count, args = redis.eval_calls[0]
+    assert key_count == 5
+    assert f"workspace_mcp_grant:{grant_id}" in args
+
+    research_grant_id = uuid4()
+    await oauth.issue_refresh_token(
+        request,
+        user_id=uuid4(),
+        tenant_id=uuid4(),
+        client_id="research.desktop-client",
+        grant_id=research_grant_id,
+        scopes=frozenset({"research:read"}),
+        namespace="research_mcp",
+        resource="https://research.lawhand.test/api/mcp",
+    )
+    assert f"research_mcp:grant_revoked:{research_grant_id}" in redis.eval_calls[1][2]
+
+    redis.events.clear()
+    await oauth.revoke_workspace_grant_runtime(request, grant_id)
+
+    assert redis.events[0][0:2] == (
+        "setex",
+        f"workspace_mcp_grant:{grant_id}",
+    )
+    assert (
+        "smembers",
+        f"workspace_mcp:grant_refresh_families:{grant_id}",
+    ) in redis.events

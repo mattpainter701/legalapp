@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field, field_serializer
+from pydantic import BaseModel, Field, field_serializer, field_validator
 
 
 class UserDetailResponse(BaseModel):
@@ -52,6 +52,7 @@ class UserResponse(BaseModel):
     primary_jurisdictions: List[str] = Field(default_factory=list)
     privacy_mode: bool = False
     workspace_mcp_enabled: bool = True
+    workspace_mcp_active_grant_count: int = 0
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -140,6 +141,7 @@ class TenantSettingsResponse(BaseModel):
     default_practice_areas: List[str] = []
     default_privacy_mode: bool = False
     default_workspace_mcp_enabled: bool = True
+    workspace_mcp_enabled: bool = True
     # Feature flags
     enable_auto_memory: bool = True
     enable_pii_detection: bool = True
@@ -178,6 +180,7 @@ class TenantSettingsUpdate(BaseModel):
     default_practice_areas: Optional[List[str]] = None
     default_privacy_mode: Optional[bool] = None
     default_workspace_mcp_enabled: Optional[bool] = None
+    workspace_mcp_enabled: Optional[bool] = None
     enable_auto_memory: Optional[bool] = None
     enable_pii_detection: Optional[bool] = None
     enable_skill_routing: Optional[bool] = None
@@ -192,6 +195,13 @@ class TenantSettingsUpdate(BaseModel):
     primary_cloud_provider: Optional[str] = None
     custom_config: Optional[Dict[str, Any]] = None
     notes: Optional[str] = None
+
+    @field_validator("workspace_mcp_enabled")
+    @classmethod
+    def _workspace_mcp_enabled_cannot_be_null(cls, value: bool | None) -> bool:
+        if value is None:
+            raise ValueError("workspace_mcp_enabled must be true or false")
+        return value
 
 
 class TenantDetailResponse(BaseModel):

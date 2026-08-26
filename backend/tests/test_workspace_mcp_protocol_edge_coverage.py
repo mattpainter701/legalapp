@@ -83,6 +83,10 @@ async def test_actor_loading_maps_grant_user_license_and_privacy_failures(monkey
         raise WorkspaceMCPGrantError("revoked")
 
     monkeypatch.setattr(protocol, "require_active_workspace_grant", rejected_grant)
+    with pytest.raises(HTTPException, match="disabled for this tenant") as tenant_error:
+        await protocol._load_workspace_actor(_DB(False), identity)
+    assert tenant_error.value.status_code == 403
+
     with pytest.raises(HTTPException) as grant_error:
         await protocol._load_workspace_actor(_DB(), identity)
     assert grant_error.value.status_code == 401

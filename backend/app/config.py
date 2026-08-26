@@ -219,6 +219,18 @@ class Settings(BaseSettings):
     # and monthly product metering so discovery/initialize cannot evade limits.
     RESEARCH_MCP_KEY_REQUESTS_PER_MINUTE: int = 240
     RESEARCH_MCP_TENANT_REQUESTS_PER_MINUTE: int = 2400
+    # OAuth 2.1 for interactive Research MCP clients (ChatGPT/Claude).  The
+    # issuer and signing key-ring are shared with Workspace MCP, while the
+    # audience, token type, resource and durable grant are independently bound.
+    RESEARCH_MCP_OAUTH_ENABLED: bool = True
+    RESEARCH_MCP_AUDIENCE: str = "lawhand-research-mcp"
+    RESEARCH_MCP_ISSUER: str = ""
+    RESEARCH_MCP_ACCESS_TOKEN_MAX_MINUTES: int = 60
+    RESEARCH_MCP_AUTH_CODE_TTL_SECONDS: int = 300
+    RESEARCH_MCP_REFRESH_TOKEN_DAYS: int = 30
+    RESEARCH_MCP_GRANT_DAYS: int = 90
+    RESEARCH_MCP_CLIENT_REGISTRATION_DAYS: int = 30
+    RESEARCH_MCP_DYNAMIC_REGISTRATION_ENABLED: bool = True
     # Streamable HTTP requests are capped independently of reverse-proxy
     # settings so a direct/internal route cannot feed unbounded JSON to the
     # protocol SDK. Tool inputs are structured and should remain compact.
@@ -706,6 +718,71 @@ def validate_mcp_security_settings(settings: Settings) -> None:
             expected_path="/api/mcp",
             dev_mode=settings.DEV_MODE,
         )
+
+    if settings.MCP_PRODUCT_ENABLED and settings.RESEARCH_MCP_OAUTH_ENABLED:
+        if not settings.RESEARCH_MCP_AUDIENCE.strip():
+            raise ValueError(
+                "RESEARCH_MCP_AUDIENCE is required when Research MCP OAuth is enabled"
+            )
+        if not settings.RESEARCH_MCP_ISSUER.strip():
+            raise ValueError(
+                "RESEARCH_MCP_ISSUER is required when Research MCP OAuth is enabled"
+            )
+        issuer = urlsplit(settings.RESEARCH_MCP_ISSUER)
+        if (
+            not issuer.scheme
+            or not issuer.netloc
+            or issuer.path.rstrip("/")
+            or issuer.query
+            or issuer.fragment
+            or issuer.username
+            or issuer.password
+        ):
+            raise ValueError("RESEARCH_MCP_ISSUER must be an absolute origin URL")
+        if not settings.DEV_MODE and issuer.scheme != "https":
+            raise ValueError("RESEARCH_MCP_ISSUER must use HTTPS")
+        resource = urlsplit(settings.research_mcp_endpoint)
+        if (issuer.scheme, issuer.netloc) != (resource.scheme, resource.netloc):
+            raise ValueError(
+                "RESEARCH_MCP_ISSUER must match the canonical Research MCP origin"
+            )
+        if not 5 <= settings.RESEARCH_MCP_ACCESS_TOKEN_MAX_MINUTES <= 60:
+            raise ValueError(
+                "RESEARCH_MCP_ACCESS_TOKEN_MAX_MINUTES must be between 5 and 60"
+            )
+        if not 60 <= settings.RESEARCH_MCP_AUTH_CODE_TTL_SECONDS <= 600:
+            raise ValueError(
+                "RESEARCH_MCP_AUTH_CODE_TTL_SECONDS must be between 60 and 600"
+            )
+        if not 1 <= settings.RESEARCH_MCP_REFRESH_TOKEN_DAYS <= 90:
+            raise ValueError("RESEARCH_MCP_REFRESH_TOKEN_DAYS must be between 1 and 90")
+        if not (
+            settings.RESEARCH_MCP_REFRESH_TOKEN_DAYS
+            <= settings.RESEARCH_MCP_GRANT_DAYS
+            <= 365
+        ):
+            raise ValueError(
+                "RESEARCH_MCP_GRANT_DAYS must cover refresh lifetime and be at most 365"
+            )
+        if not 1 <= settings.RESEARCH_MCP_CLIENT_REGISTRATION_DAYS <= 90:
+            raise ValueError(
+                "RESEARCH_MCP_CLIENT_REGISTRATION_DAYS must be between 1 and 90"
+            )
+        # Both MCP resources deliberately share one rotating asymmetric
+        # signing key-ring. Validate it even when Workspace MCP itself is off.
+        if not settings.WORKSPACE_MCP_ENABLED:
+            if settings.DEV_MODE and not settings.WORKSPACE_MCP_SIGNING_PRIVATE_KEY_B64:
+                signing_key = settings.WORKSPACE_MCP_TOKEN_SIGNING_KEY
+                if len(signing_key) < 32 or _looks_like_placeholder(signing_key):
+                    raise ValueError(
+                        "WORKSPACE_MCP_TOKEN_SIGNING_KEY is required for MCP OAuth dev tests"
+                    )
+                if signing_key == settings.SECRET_KEY:
+                    raise ValueError(
+                        "WORKSPACE_MCP_TOKEN_SIGNING_KEY must not equal SECRET_KEY"
+                    )
+            else:
+                _validate_workspace_signing_keys(settings)
 
     if settings.WORKSPACE_MCP_ENABLED:
         if not settings.WORKSPACE_MCP_AUDIENCE.strip():

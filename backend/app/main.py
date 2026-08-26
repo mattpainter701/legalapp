@@ -28,6 +28,7 @@ from app.routers.admin import router as admin_router
 from app.routers.billing import router as billing_router
 from app.routers.mcp import router as mcp_router
 from app.routers.workspace_mcp_oauth import router as workspace_mcp_oauth_router
+from app.routers.research_mcp_oauth import router as research_mcp_oauth_router
 from app.routers.platform import router as platform_router
 from app.routers.plugins import router as plugins_router
 from app.routers.scheduler import router as scheduler_router
@@ -381,6 +382,7 @@ app.router.routes.append(
     )
 )
 app.include_router(workspace_mcp_oauth_router)
+app.include_router(research_mcp_oauth_router)
 app.include_router(auth_router, prefix="/api")
 app.include_router(demo_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")

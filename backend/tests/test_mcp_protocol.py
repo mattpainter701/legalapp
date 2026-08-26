@@ -162,9 +162,17 @@ def _complete_upstream_manifest() -> dict:
 
 def test_upstream_catalog_requires_complete_real_contract():
     manifest = _complete_upstream_manifest()
+    manifest["tools"].append(
+        {
+            "name": "list_matters",
+            "description": "Workspace-only tool that must not be public research.",
+            "inputSchema": {"type": "object", "properties": {}, "required": []},
+        }
+    )
     validated = mcp_protocol._validate_upstream_catalog(manifest)
 
     assert {tool.name for tool in validated} == set(mcp_protocol.DEFAULT_ALLOWED_TOOLS)
+    assert "list_matters" not in {tool.name for tool in validated}
     search = next(tool for tool in validated if tool.name == "search_caselaw")
     assert search.inputSchema["properties"]["top_k"]["maximum"] == 50
 

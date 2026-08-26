@@ -125,6 +125,65 @@ def test_research_mcp_public_url_is_exact_and_https():
         )
 
 
+def _research_settings(**overrides):
+    values = {
+        "MCP_PRODUCT_ENABLED": True,
+        "RESEARCH_MCP_OAUTH_ENABLED": True,
+        "RESEARCH_MCP_PUBLIC_URL": "https://research.getlawhand.com/api/mcp",
+        "RESEARCH_MCP_AUDIENCE": "lawhand-research-mcp",
+        "RESEARCH_MCP_ISSUER": "https://research.getlawhand.com",
+    }
+    values.update(overrides)
+    return _settings(**values)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"RESEARCH_MCP_AUDIENCE": ""}, "RESEARCH_MCP_AUDIENCE"),
+        ({"RESEARCH_MCP_ISSUER": ""}, "RESEARCH_MCP_ISSUER"),
+        (
+            {"RESEARCH_MCP_ISSUER": "https://research.getlawhand.com/issuer"},
+            "absolute origin",
+        ),
+        (
+            {
+                "RESEARCH_MCP_PUBLIC_URL": ("http://research.getlawhand.com/api/mcp"),
+                "RESEARCH_MCP_ISSUER": "http://research.getlawhand.com",
+            },
+            "HTTPS",
+        ),
+        (
+            {"RESEARCH_MCP_ISSUER": "https://auth.getlawhand.com"},
+            "match the canonical",
+        ),
+        ({"RESEARCH_MCP_ACCESS_TOKEN_MAX_MINUTES": 4}, "ACCESS_TOKEN_MAX_MINUTES"),
+        ({"RESEARCH_MCP_AUTH_CODE_TTL_SECONDS": 59}, "AUTH_CODE_TTL_SECONDS"),
+        ({"RESEARCH_MCP_REFRESH_TOKEN_DAYS": 0}, "REFRESH_TOKEN_DAYS"),
+        (
+            {"RESEARCH_MCP_REFRESH_TOKEN_DAYS": 31, "RESEARCH_MCP_GRANT_DAYS": 30},
+            "cover refresh lifetime",
+        ),
+        (
+            {"RESEARCH_MCP_CLIENT_REGISTRATION_DAYS": 91},
+            "CLIENT_REGISTRATION_DAYS",
+        ),
+    ],
+)
+def test_research_mcp_rejects_invalid_oauth_configuration(overrides, message):
+    with pytest.raises(ValueError, match=message):
+        validate_mcp_security_settings(_research_settings(**overrides))
+
+
+def test_research_mcp_accepts_dedicated_origin_and_shared_keyring():
+    settings = _research_settings()
+
+    validate_mcp_security_settings(settings)
+
+    assert settings.research_mcp_endpoint == ("https://research.getlawhand.com/api/mcp")
+    assert settings.research_mcp_shorthand == "https://research.getlawhand.com"
+
+
 @pytest.mark.parametrize(
     "previous",
     [

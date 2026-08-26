@@ -31,7 +31,7 @@
       "highlights": [
         {
           "title": "Firm access settings take effect directly",
-          "description": "The Workspace MCP switch under Admin → Users is now the organization-level access decision instead of an older pilot-only deployment list."
+          "description": "Admin → Users now separates firm permission, effective availability, and active OAuth connections, with a drawer to review or revoke each client."
         },
         {
           "title": "Your privacy choice remains independent",

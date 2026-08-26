@@ -39,6 +39,14 @@ def _platform_test_app(redis_client) -> FastAPI:
     async def list_tenants():
         return {"ok": True}
 
+    @app.post("/api/workspace-mcp/oauth/register")
+    async def register_workspace_mcp_client():
+        return {"ok": True}
+
+    @app.post("/api/research-mcp/oauth/register")
+    async def register_research_mcp_client():
+        return {"ok": True}
+
     return app
 
 
@@ -78,6 +86,8 @@ def test_tenant_daily_limit_counts_llm_and_tool_paths():
 
 def test_demo_has_explicit_public_and_daily_limits_without_changing_unknown_fallback():
     assert AUTH_LIMITS["/api/demo/session"] == (5, 900)
+    assert AUTH_LIMITS["/api/workspace-mcp/oauth/register"] == (300, 3600)
+    assert AUTH_LIMITS["/api/research-mcp/oauth/register"] == (300, 3600)
     assert TENANT_DAILY_LIMITS["demo"] == 200
     assert TENANT_DAILY_LIMITS["payg"] == 10_000
 
@@ -132,6 +142,32 @@ async def test_platform_bearer_traffic_is_limited_per_session_token(monkeypatch)
     digest_b = hashlib.sha256(b"Bearer session-b").hexdigest()[:32]
     assert redis_client.counts[f"rate:platform:token:{digest_a}"] == 2
     assert redis_client.counts[f"rate:platform:token:{digest_b}"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/workspace-mcp/oauth/register",
+        "/api/research-mcp/oauth/register",
+    ],
+)
+async def test_mcp_dynamic_registration_is_bounded_per_source_ip(monkeypatch, path):
+    redis_client = _FakeRedis()
+    app = _platform_test_app(redis_client)
+    monkeypatch.setitem(AUTH_LIMITS, path, (1, 3600))
+
+    transport = ASGITransport(app=app, client=("198.51.100.45", 41234))
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        accepted = await client.post(path)
+        limited = await client.post(path)
+
+    assert accepted.status_code == 200
+    assert limited.status_code == 429
+    assert limited.headers["Retry-After"] == "3600"
+    key = f"rate:auth:{path}:198.51.100.45"
+    assert redis_client.counts[key] == 2
+    assert redis_client.expirations[key] == 3600
 
 
 @pytest.mark.asyncio

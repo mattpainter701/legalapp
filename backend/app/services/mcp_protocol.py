@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -30,8 +31,23 @@ from starlette.responses import JSONResponse
 from starlette.types import Receive, Scope, Send
 
 from app.config import get_settings
-from app.database import async_session_maker
-from app.services.mcp_product import DEFAULT_ALLOWED_TOOLS, resolve_product_key
+from app.database import async_session_maker, set_tenant_context
+from app.models.user import User
+from app.models.tenant import Tenant
+from app.services.mcp_product import (
+    DEFAULT_ALLOWED_TOOLS,
+    effective_allowed_tools,
+    resolve_product_key,
+    ensure_mcp_product_access,
+)
+from app.services.research_mcp_oauth import (
+    RESEARCH_SCOPE,
+    WorkspaceOAuthError,
+    decode_research_access_token,
+    research_protected_resource_metadata_uri,
+    require_active_research_grant,
+)
+from sqlalchemy import select
 from app.services.mcp_transport_security import (
     MCPRequestBodyTooLarge,
     buffer_bounded_request,
@@ -53,9 +69,18 @@ _tool_catalog_lock = asyncio.Lock()
 class MCPProductIdentity:
     """Minimum authenticated identity carried through one protocol request."""
 
-    product_key_id: str
+    product_key_id: str | None
     tenant_id: str
     allowed_tools: frozenset[str]
+    auth_type: str = "product_key"
+    user_id: str | None = None
+    oauth_grant_id: str | None = None
+    client_id: str | None = None
+    token_id: str | None = None
+
+    @property
+    def principal_id(self) -> str:
+        return self.product_key_id or self.oauth_grant_id or self.token_id or "unknown"
 
 
 def _origin_and_host(raw_url: str) -> tuple[str | None, str | None]:
@@ -377,22 +402,117 @@ protocol_session_manager = StreamableHTTPSessionManager(
 )
 
 
+def research_bearer_challenge(*, invalid_token: bool = False) -> str:
+    challenge = (
+        f'Bearer resource_metadata="{research_protected_resource_metadata_uri()}", '
+        f'scope="{RESEARCH_SCOPE}"'
+    )
+    if invalid_token:
+        challenge += ', error="invalid_token"'
+    return challenge
+
+
+async def _authenticate_research_bearer(
+    request: Request, token: str
+) -> MCPProductIdentity:
+    try:
+        claims = decode_research_access_token(token)
+        tenant_id = uuid.UUID(str(claims["tenant_id"]))
+        user_id = uuid.UUID(str(claims["sub"]))
+        grant_id = str(claims["grant_id"])
+        client_id = str(claims["client_id"])
+        token_id = str(claims["jti"])
+        scopes = frozenset(str(claims["scope"]).split())
+    except (WorkspaceOAuthError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=401,
+            detail="Research OAuth bearer token is invalid",
+            headers={"WWW-Authenticate": research_bearer_challenge(invalid_token=True)},
+        ) from exc
+
+    redis = getattr(request.app.state, "redis", None)
+    if redis is None:
+        raise HTTPException(
+            status_code=503, detail="Research token revocation service is unavailable"
+        )
+    if await redis.exists(f"research_mcp:jti:{token_id}"):
+        raise HTTPException(
+            status_code=401,
+            detail="Research OAuth bearer token has been revoked",
+            headers={"WWW-Authenticate": research_bearer_challenge(invalid_token=True)},
+        )
+
+    async with async_session_maker() as db:
+        await set_tenant_context(db, str(tenant_id))
+        try:
+            await require_active_research_grant(
+                db,
+                grant_id=grant_id,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                client_id=client_id,
+                scopes=scopes,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=401,
+                detail="Research consent grant is unavailable",
+                headers={
+                    "WWW-Authenticate": research_bearer_challenge(invalid_token=True)
+                },
+            ) from exc
+        user = await db.scalar(
+            select(User).where(User.id == user_id, User.tenant_id == tenant_id)
+        )
+        tenant = await db.scalar(select(Tenant).where(Tenant.id == tenant_id))
+        if user is None or not user.is_active or tenant is None:
+            raise HTTPException(
+                status_code=401,
+                detail="Research OAuth user is unavailable",
+                headers={
+                    "WWW-Authenticate": research_bearer_challenge(invalid_token=True)
+                },
+            )
+        ensure_mcp_product_access(tenant)
+        await db.commit()
+
+    return MCPProductIdentity(
+        product_key_id=None,
+        tenant_id=str(tenant_id),
+        allowed_tools=frozenset(DEFAULT_ALLOWED_TOOLS),
+        auth_type="research_oauth",
+        user_id=str(user_id),
+        oauth_grant_id=grant_id,
+        client_id=client_id,
+        token_id=token_id,
+    )
+
+
 async def authenticate_product_request(scope: Scope) -> MCPProductIdentity:
-    """Resolve the product key before any MCP protocol message is processed."""
+    """Resolve an API token or Research OAuth principal before protocol work."""
 
     request = Request(scope)
     raw_key = request.headers.get("X-MCP-API-Key", "")
-    if not raw_key:
-        raise HTTPException(status_code=401, detail="MCP API key required")
-
-    async with async_session_maker() as db:
-        product_key, tenant = await resolve_product_key(db, raw_key)
-    allowed_tools = frozenset(product_key.allowed_tools or DEFAULT_ALLOWED_TOOLS)
-    identity = MCPProductIdentity(
-        product_key_id=str(product_key.id),
-        tenant_id=str(tenant.id),
-        allowed_tools=allowed_tools,
-    )
+    authorization = request.headers.get("Authorization", "")
+    scheme, _, bearer_value = authorization.partition(" ")
+    if raw_key and authorization:
+        raise HTTPException(status_code=400, detail="Multiple MCP credentials supplied")
+    if raw_key:
+        async with async_session_maker() as db:
+            product_key, tenant = await resolve_product_key(db, raw_key)
+        identity = MCPProductIdentity(
+            product_key_id=str(product_key.id),
+            tenant_id=str(tenant.id),
+            allowed_tools=frozenset(effective_allowed_tools(product_key)),
+        )
+    elif scheme.casefold() == "bearer" and bearer_value.strip():
+        identity = await _authenticate_research_bearer(request, bearer_value.strip())
+    else:
+        raise HTTPException(
+            status_code=401,
+            detail="MCP API key required",
+            headers={"WWW-Authenticate": research_bearer_challenge()},
+        )
     await enforce_research_request_limit(request, identity)
     return identity
 

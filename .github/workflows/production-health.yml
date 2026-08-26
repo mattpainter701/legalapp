@@ -65,7 +65,13 @@ jobs:
             --arg issuer "$PRODUCTION_ORIGIN" \
             '.resource == $resource and .authorization_servers == [$issuer]' >/dev/null
 
-          for disabled_research_path in /api/mcp /api/mcp/manifest; do
+          for disabled_research_path in \
+            /api/mcp \
+            /api/mcp/manifest \
+            /.well-known/oauth-protected-resource \
+            /.well-known/oauth-protected-resource/api/mcp \
+            /.well-known/oauth-authorization-server \
+            /api/research-mcp/oauth/jwks; do
             research_status="$(curl --silent --show-error --max-time 20 \
               --output /dev/null --write-out '%{http_code}' \
               "$RESEARCH_MCP_ORIGIN$disabled_research_path")"

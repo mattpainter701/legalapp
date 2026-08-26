@@ -4,6 +4,7 @@ import pytest
 from httpx import AsyncClient
 from starlette.requests import Request
 
+from app.models.tenant import TenantSettings
 from app.models.workspace_mcp_audit import WorkspaceMCPAuditEvent
 from app.models.workspace_mcp_client import WorkspaceMCPClient
 from app.routers import platform
@@ -127,3 +128,36 @@ async def test_platform_workspace_mcp_diagnostics_reports_user_policy_and_oauth_
         audit_before=now + timedelta(seconds=1),
     )
     assert paged_payload["recent_audit_events"][0]["event_type"] == "token_issued"
+
+
+@pytest.mark.asyncio
+async def test_platform_workspace_mcp_user_diagnostic_honors_tenant_master_gate(
+    client: AsyncClient, db_session, test_tenant, test_user, monkeypatch
+):
+    test_user.license_active = True
+    test_user.workspace_mcp_enabled = True
+    test_user.privacy_mode = False
+    db_session.add(
+        TenantSettings(
+            tenant_id=test_tenant.id,
+            workspace_mcp_enabled=False,
+        )
+    )
+    await db_session.commit()
+
+    monkeypatch.setattr(platform.settings, "WORKSPACE_MCP_ENABLED", True)
+
+    response = await client.get(
+        "/api/platform/mcp/workspace",
+        params={"email": test_user.email},
+        headers=platform_headers(),
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    # Deployment health stays green when a tenant intentionally opts out, but
+    # the selected user's effective policy must be blocked by that tenant gate.
+    assert payload["enabled"] is True
+    assert payload["user_policy"]["tenant_workspace_mcp_enabled"] is False
+    assert "tenant_workspace_mcp_disabled" in payload["user_policy"]["blocked_reasons"]
+    assert payload["user_policy"]["ready"] is False

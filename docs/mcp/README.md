@@ -22,7 +22,7 @@ Keep the detailed source documents in the repository so behavior, security bound
 | Product | Intended use | Identity and tenant boundary | Canonical source |
 | --- | --- | --- | --- |
 | Workspace MCP | Matter, task, document, artifact, review, and other tenant-workspace operations exposed to approved desktop and coding clients. | User OAuth identity, tenant membership, granted scopes, RBAC, RLS, capability policy, and audit controls. | [Workspace adapter](../workspace_mcp_adapter.md) and [matter automation architecture](../matter_automation_workspace_mcp.md). |
-| Research MCP | Legal-research and RAG operations over approved authority corpora. | Separately released product identity, entitlement, quotas, billing, upstream credentials, and corpus controls. | [MCP product gateway](../mcp_product_gateway.md) and [CourtListener operations](../courtlistener_mcp_operations.md). |
+| Research MCP | Research-only retrieval and RAG operations over approved authority corpora; workspace tools are excluded. | OAuth 2.1 for hosted ChatGPT/Claude clients or a LawHand Research API token for header-capable clients; separate entitlement, quotas, billing, upstream credentials, and corpus controls. | [MCP product gateway](../mcp_product_gateway.md) and [CourtListener operations](../courtlistener_mcp_operations.md). |
 
 The two products may share internal capability or retrieval components, but they must not share public identity, hostname, authorization, billing, or release-state assumptions.
 

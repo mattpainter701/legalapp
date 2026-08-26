@@ -698,6 +698,8 @@ export const getAdminSettings = () =>
   api.get('/admin/settings').then((r) => r.data)
 export const updateAdminSettings = (body) =>
   api.put('/admin/settings', body).then((r) => r.data)
+export const getAdminMcpOverview = () =>
+  api.get('/admin/mcp').then((r) => r.data)
 
 // Onboarding
 export const getOnboardingStatus = () =>
@@ -735,6 +737,18 @@ export const getWorkspaceMcpGrants = () =>
   api.get('/workspace-mcp/grants').then((r) => r.data)
 export const revokeWorkspaceMcpGrant = (grantId) =>
   api.post(`/workspace-mcp/grants/${encodeURIComponent(grantId)}/revoke`, { reason: 'Disconnected by user' }).then((r) => r.data)
+export const getAdminWorkspaceMcpGrants = (userId) =>
+  api.get(`/admin/users/${encodeURIComponent(userId)}/workspace-mcp/grants`).then((r) => r.data)
+export const revokeAdminWorkspaceMcpGrant = (userId, grantId) =>
+  api.post(
+    `/admin/users/${encodeURIComponent(userId)}/workspace-mcp/grants/${encodeURIComponent(grantId)}/revoke`,
+    { reason: 'Disconnected by tenant administrator' }
+  ).then((r) => r.data)
+// Research MCP OAuth consent and decision endpoints
+export const getResearchMcpAuthorizationRequest = (requestId) =>
+  api.get(`/research-mcp/oauth/requests/${encodeURIComponent(requestId)}`).then((r) => r.data)
+export const decideResearchMcpAuthorizationRequest = (requestId, approved) =>
+  api.post(`/research-mcp/oauth/requests/${encodeURIComponent(requestId)}/decision`, { approved }).then((r) => r.data)
 export const triggerUserSync = () =>
   api.post('/scheduler/agents/user-sync/run').then((r) => r.data)
 export const retryCloudInit = () =>

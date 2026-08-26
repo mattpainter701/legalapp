@@ -4,9 +4,11 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
+from redis.exceptions import RedisError
 
 from app.routers import workspace_mcp_oauth as oauth_router
 
@@ -32,6 +34,12 @@ class _DB:
 
     async def scalars(self, _statement):
         return _Rows(self.rows)
+
+    async def execute(self, _statement, _parameters=None):
+        return None
+
+    async def refresh(self, _value, attribute_names=None):
+        return None
 
     def add(self, value):
         self.added.append(value)
@@ -111,6 +119,43 @@ async def test_registration_success_and_invalid_metadata(monkeypatch):
     assert content["redirect_uris"] == payload["redirect_uris"]
     assert db.commits == 1 and len(db.added) == 1
 
+    claude_payload = {
+        "client_name": "Claude",
+        "client_uri": "https://claude.ai",
+        "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+        "grant_types": ["authorization_code"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "none",
+        "application_type": "web",
+    }
+    claude_db = _DB()
+    claude = await oauth_router.register_workspace_client(
+        _Request(json_data=claude_payload), claude_db
+    )
+    claude_content = json.loads(claude.body)
+    assert claude.status_code == 201
+    assert claude_content["client_name"] == "Claude"
+    assert claude_content["redirect_uris"] == claude_payload["redirect_uris"]
+    assert claude_content["grant_types"] == ["authorization_code"]
+
+    form_request = _Request(
+        form_data={
+            "client_name": "Claude",
+            "redirect_uris": '["https://claude.com/api/mcp/auth_callback"]',
+            "grant_types": '["authorization_code"]',
+            "response_types": '["code"]',
+            "token_endpoint_auth_method": "none",
+            "application_type": "web",
+        }
+    )
+    form_request.json = AsyncMock(side_effect=ValueError("not JSON"))
+    form_db = _DB()
+    form_encoded = await oauth_router.register_workspace_client(form_request, form_db)
+    assert form_encoded.status_code == 201
+    assert json.loads(form_encoded.body)["redirect_uris"] == [
+        "https://claude.com/api/mcp/auth_callback"
+    ]
+
     duplicate = {**payload, "redirect_uris": [payload["redirect_uris"][0]] * 2}
     invalid_db = _DB()
     invalid = await oauth_router.register_workspace_client(
@@ -119,6 +164,22 @@ async def test_registration_success_and_invalid_metadata(monkeypatch):
     assert invalid.status_code == 400
     assert json.loads(invalid.body)["error"] == "invalid_client_metadata"
     assert invalid_db.rollbacks == 1
+
+    malformed_db = _DB()
+    malformed = await oauth_router.register_workspace_client(
+        _Request(
+            json_data={
+                "client_name": "Claude",
+                "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+                "grant_types": [{}],
+                "response_types": ["code"],
+            }
+        ),
+        malformed_db,
+    )
+    assert malformed.status_code == 400
+    assert json.loads(malformed.body)["error"] == "invalid_client_metadata"
+    assert malformed_db.rollbacks == 1
 
 
 @pytest.mark.asyncio
@@ -156,7 +217,7 @@ async def test_begin_and_get_authorization_request(monkeypatch):
         response_type="code",
         client_id=client.client_id,
         redirect_uri="http://127.0.0.1:43123/callback",
-        scope="matters:read tasks:read",
+        scope="matters:read tasks:read offline_access",
         state="caller-state",
         code_challenge="a" * 43,
         code_challenge_method="S256",
@@ -165,7 +226,7 @@ async def test_begin_and_get_authorization_request(monkeypatch):
     )
     assert response.status_code == 302
     assert "request_id=pending-request" in response.headers["location"]
-    assert saved[0]["scopes"] == ["matters:read", "tasks:read"]
+    assert saved[0]["scopes"] == ["matters:read", "offline_access", "tasks:read"]
 
     bad = await oauth_router.begin_workspace_authorization(
         _Request(),
@@ -183,7 +244,10 @@ async def test_begin_and_get_authorization_request(monkeypatch):
     assert json.loads(bad.body)["error"] == "unsupported_response_type"
 
     user = _user()
-    pending = {"client_id": client.client_id, "scopes": ["matters:read"]}
+    pending = {
+        "client_id": client.client_id,
+        "scopes": ["matters:read", "offline_access"],
+    }
     monkeypatch.setattr(
         oauth_router, "load_authorization_request", lambda *_args: _value(pending)
     )
@@ -197,6 +261,10 @@ async def test_begin_and_get_authorization_request(monkeypatch):
     )
     assert details["organization"]["name"] == "Test Firm"
     assert details["client"]["name"] == "Desktop"
+    assert {item["name"] for item in details["scopes"]} == {
+        "matters:read",
+        "offline_access",
+    }
 
     monkeypatch.setattr(
         oauth_router, "load_authorization_request", lambda *_args: _value(None)
@@ -206,6 +274,42 @@ async def test_begin_and_get_authorization_request(monkeypatch):
             "expired", _Request(), user, _DB()
         )
     assert expired.value.status_code == 410
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("privacy_mode", "workspace_enabled", "message"),
+    [
+        (True, True, "Privacy Mode"),
+        (False, False, "disabled for your account"),
+    ],
+)
+async def test_user_policy_consumes_stale_authorization_request(
+    monkeypatch, privacy_mode, workspace_enabled, message
+):
+    monkeypatch.setattr(oauth_router.settings, "WORKSPACE_MCP_ENABLED", True)
+    monkeypatch.setattr(
+        oauth_router, "require_workspace_tenant_allowed", lambda *_: None
+    )
+    pending = {"client_id": "desktop-client", "scopes": ["matters:read"]}
+    loads = []
+
+    async def load(_request, request_id, *, consume=False):
+        loads.append((request_id, consume))
+        return pending
+
+    monkeypatch.setattr(oauth_router, "load_authorization_request", load)
+    user = _user()
+    user.privacy_mode = privacy_mode
+    user.workspace_mcp_enabled = workspace_enabled
+
+    with pytest.raises(HTTPException, match=message) as blocked:
+        await oauth_router.get_workspace_authorization_request(
+            "stale-request", _Request(), user, _DB()
+        )
+
+    assert blocked.value.status_code == 403
+    assert loads == [("stale-request", False), ("stale-request", True)]
 
 
 @pytest.mark.asyncio
@@ -224,7 +328,7 @@ async def test_consent_denial_approval_and_restore_on_failure(monkeypatch):
     pending = {
         "client_id": "desktop-client",
         "redirect_uri": redirect_uri,
-        "scopes": ["matters:read"],
+        "scopes": ["matters:read", "offline_access"],
         "state": "caller-state",
         "code_challenge": "a" * 43,
     }
@@ -262,9 +366,13 @@ async def test_consent_denial_approval_and_restore_on_failure(monkeypatch):
 
     previous = SimpleNamespace(id=uuid.uuid4())
     grant = SimpleNamespace(id=uuid.uuid4())
-    monkeypatch.setattr(
-        oauth_router, "replace_active_grant", lambda *_args, **_kwargs: _value(grant)
-    )
+    replaced_scopes = []
+
+    async def replace_grant(*_args, **kwargs):
+        replaced_scopes.append(kwargs["scopes"])
+        return grant
+
+    monkeypatch.setattr(oauth_router, "replace_active_grant", replace_grant)
     monkeypatch.setattr(
         oauth_router, "save_authorization_code", lambda *_args: _value("one-use-code")
     )
@@ -273,8 +381,9 @@ async def test_consent_denial_approval_and_restore_on_failure(monkeypatch):
     async def revoke_old(_request, grant_id):
         revoked.append(grant_id)
 
-    monkeypatch.setattr(oauth_router, "revoke_grant_refresh_tokens", revoke_old)
-    approval_db = _DB(scalar_values=[previous])
+    monkeypatch.setattr(oauth_router, "revoke_workspace_grant_runtime", revoke_old)
+    # The tenant-wide MCP gate is read before the previous grant lookup.
+    approval_db = _DB(scalar_values=[True, previous])
     approved = await oauth_router.decide_workspace_authorization(
         "request-approve",
         oauth_router.ConsentDecision(approved=True),
@@ -285,6 +394,7 @@ async def test_consent_denial_approval_and_restore_on_failure(monkeypatch):
     assert "code=one-use-code" in approved["redirect_to"]
     assert approval_db.commits == 1
     assert revoked == [previous.id]
+    assert replaced_scopes == [frozenset({"matters:read"})]
 
     restored = []
     bad_client = SimpleNamespace(
@@ -456,7 +566,7 @@ async def test_revocation_grant_listing_and_audit_serialization(monkeypatch):
     )
     grants_db = _DB(rows=[expired])
     listed = await oauth_router.list_workspace_grants(user, grants_db)
-    assert listed["items"][0]["status"] == "expired"
+    assert listed["items"] == []
     assert grants_db.commits == 1
 
     redis = _Redis()
@@ -472,7 +582,7 @@ async def test_revocation_grant_listing_and_audit_serialization(monkeypatch):
     refreshed = []
     monkeypatch.setattr(
         oauth_router,
-        "revoke_grant_refresh_tokens",
+        "revoke_workspace_grant_runtime",
         lambda _request, grant_id: _record(refreshed, grant_id),
     )
     revoke_db = _DB(scalar_values=[active])
@@ -486,7 +596,6 @@ async def test_revocation_grant_listing_and_audit_serialization(monkeypatch):
     assert revoked == {"id": str(active.id), "status": "revoked"}
     assert active.revocation_reason == "Finished"
     assert revoke_db.commits == 1 and refreshed == [active.id]
-    assert f"workspace_mcp_grant:{active.id}" in redis.values
 
     event = SimpleNamespace(
         id=uuid.uuid4(),
@@ -510,9 +619,8 @@ async def test_revocation_grant_listing_and_audit_serialization(monkeypatch):
 async def test_rfc7009_revokes_refresh_replay_and_matching_access_token(monkeypatch):
     from app.services import workspace_mcp_protocol as protocol
 
-    monkeypatch.setattr(oauth_router.settings, "WORKSPACE_MCP_ENABLED", True)
+    monkeypatch.setattr(oauth_router.settings, "WORKSPACE_MCP_ENABLED", False)
     client = SimpleNamespace(client_id="desktop-client")
-    monkeypatch.setattr(oauth_router, "_active_client", lambda *_args: _value(client))
 
     unavailable = await oauth_router.revoke_workspace_token(
         _Request(form_data={"token": "wmr_missing", "client_id": client.client_id}),
@@ -522,17 +630,30 @@ async def test_rfc7009_revokes_refresh_replay_and_matching_access_token(monkeypa
 
     redis = _Redis()
     revoked_families = []
-    consumed = {"client_id": client.client_id, "family_id": "family-consumed"}
+    tenant_id, user_id, grant_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    consumed = {
+        "client_id": client.client_id,
+        "family_id": "family-consumed",
+        "tenant_id": str(tenant_id),
+        "user_id": str(user_id),
+        "grant_id": str(grant_id),
+    }
     monkeypatch.setattr(
         oauth_router,
         "consume_refresh_token",
-        lambda *_args: _value(("consumed", consumed)),
+        lambda *_args, **_kwargs: _value(("consumed", consumed)),
     )
     monkeypatch.setattr(
         oauth_router,
         "revoke_refresh_family",
         lambda _request, family: _record(revoked_families, family),
     )
+    cascaded = []
+
+    async def cascade(_db, _request, **identity):
+        cascaded.append(identity)
+
+    monkeypatch.setattr(oauth_router, "_revoke_grant_from_oauth_token", cascade)
     refresh_result = await oauth_router.revoke_workspace_token(
         _Request(
             form_data={"token": "wmr_refresh", "client_id": client.client_id},
@@ -541,12 +662,20 @@ async def test_rfc7009_revokes_refresh_replay_and_matching_access_token(monkeypa
         _DB(),
     )
     assert refresh_result.status_code == 200
-    assert revoked_families == ["family-consumed"]
+    assert revoked_families == []
+    assert cascaded == [
+        {
+            "tenant_id": tenant_id,
+            "user_id": user_id,
+            "grant_id": grant_id,
+            "client_id": client.client_id,
+        }
+    ]
 
     monkeypatch.setattr(
         oauth_router,
         "consume_refresh_token",
-        lambda *_args: _value(("replay", "family-replayed")),
+        lambda *_args, **_kwargs: _value(("replay", "family-replayed")),
     )
     await oauth_router.revoke_workspace_token(
         _Request(
@@ -555,9 +684,16 @@ async def test_rfc7009_revokes_refresh_replay_and_matching_access_token(monkeypa
         ),
         _DB(),
     )
-    assert revoked_families == ["family-consumed", "family-replayed"]
+    assert revoked_families == ["family-replayed"]
 
-    identity = SimpleNamespace(client_id=client.client_id, token_id="access-token-jti")
+    access_grant_id = uuid.uuid4()
+    identity = SimpleNamespace(
+        client_id=client.client_id,
+        token_id="access-token-jti",
+        tenant_id=tenant_id,
+        user_id=user_id,
+        grant_id=str(access_grant_id),
+    )
     monkeypatch.setattr(
         protocol, "decode_workspace_access_token", lambda _token: identity
     )
@@ -569,4 +705,87 @@ async def test_rfc7009_revokes_refresh_replay_and_matching_access_token(monkeypa
         _DB(),
     )
     assert access_result.status_code == 200
-    assert "jti:access-token-jti" in redis.values
+    assert cascaded[-1] == {
+        "tenant_id": tenant_id,
+        "user_id": user_id,
+        "grant_id": access_grant_id,
+        "client_id": client.client_id,
+    }
+
+    async def storage_down(*_args, **_kwargs):
+        raise RedisError("unavailable")
+
+    monkeypatch.setattr(oauth_router, "consume_refresh_token", storage_down)
+    storage_db = _DB()
+    storage_error = await oauth_router.revoke_workspace_token(
+        _Request(
+            form_data={"token": "wmr_storage", "client_id": client.client_id},
+            redis=redis,
+        ),
+        storage_db,
+    )
+    assert storage_error.status_code == 503
+    assert storage_db.rollbacks == 1
+
+    def invalid_access_token(_token):
+        raise ValueError("invalid token")
+
+    monkeypatch.setattr(protocol, "decode_workspace_access_token", invalid_access_token)
+    invalid_db = _DB()
+    invalid_result = await oauth_router.revoke_workspace_token(
+        _Request(
+            form_data={"token": "invalid-access", "client_id": client.client_id},
+            redis=redis,
+        ),
+        invalid_db,
+    )
+    assert invalid_result.status_code == 200
+    assert invalid_db.rollbacks == 1
+
+
+@pytest.mark.asyncio
+async def test_oauth_disconnect_revokes_durable_grant_once_and_retries_runtime_cleanup(
+    monkeypatch,
+):
+    user = _user()
+    grant = SimpleNamespace(
+        id=uuid.uuid4(),
+        tenant_id=user.tenant_id,
+        user_id=user.id,
+        client_id="desktop-client",
+        status="active",
+        revoked_at=None,
+        revoked_by_user_id=None,
+        revocation_reason=None,
+    )
+    db = _DB(scalar_values=[grant, grant])
+    audit_events = []
+    runtime_cleanup = []
+    monkeypatch.setattr(oauth_router, "set_tenant_context", _none)
+    monkeypatch.setattr(
+        oauth_router,
+        "append_workspace_mcp_audit",
+        lambda *_args, **kwargs: _record(audit_events, kwargs),
+    )
+    monkeypatch.setattr(
+        oauth_router,
+        "revoke_workspace_grant_runtime",
+        lambda _request, current_grant_id: _record(runtime_cleanup, current_grant_id),
+    )
+
+    for _ in range(2):
+        await oauth_router._revoke_grant_from_oauth_token(
+            db,
+            _Request(redis=_Redis()),
+            tenant_id=user.tenant_id,
+            user_id=user.id,
+            grant_id=grant.id,
+            client_id=grant.client_id,
+        )
+
+    assert grant.status == "revoked"
+    assert grant.revoked_by_user_id == user.id
+    assert grant.revocation_reason == "Disconnected by OAuth client"
+    assert db.commits == 1
+    assert len(audit_events) == 1
+    assert runtime_cleanup == [grant.id, grant.id]

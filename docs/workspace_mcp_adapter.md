@@ -8,7 +8,8 @@ remains under validation.
 
 LawHand has two separate MCP products:
 
-1. The research MCP uses tenant product keys and exposes legal-research tools.
+1. The research MCP uses individual OAuth grants or tenant Research API tokens
+   and exposes legal-research tools.
 2. The workspace MCP uses an individual user's OAuth grant and exposes bounded
    matter-workspace capabilities.
 
@@ -61,10 +62,12 @@ Prerequisites:
 - the client supports remote Streamable HTTP MCP and OAuth with PKCE.
 
 OAuth consent cannot bypass Privacy Mode. Enabling Privacy Mode immediately
-revokes that user's active external-assistant grants (for example Claude,
-ChatGPT, or Codex); turning it off does not restore them. Reconnect and review
-scopes only when firm policy permits the external MCP connection. Native
-LawHand features remain available under their normal Privacy Mode safeguards.
+revokes that user's active Workspace MCP grants (for example Claude, ChatGPT,
+or Codex workspace connections); turning it off does not restore them. Reconnect
+and review scopes only when firm policy permits the external MCP connection.
+Native LawHand features remain available under their normal Privacy Mode
+safeguards. Research MCP is separate and accesses public authority only, so a
+Workspace Privacy Mode change does not revoke Research OAuth grants.
 
 These are independent controls. The tenant administrator's per-user Workspace
 MCP permission determines whether that account may authorize an external
@@ -72,16 +75,27 @@ assistant. Privacy Mode is the user's data-minimization setting and remains
 user-controlled under **Profile**. Admins can see when Privacy Mode is blocking
 a connection, but do not toggle it on the user's behalf.
 
-Tenant administrators can set **Enable Workspace MCP for new users** under
-**Admin -> Settings -> Connected assistants**. The default applies when a user
-is subsequently invited, created through tenant OAuth, or directory-synced; it
-does not silently change existing accounts. Every enabled user must still
-complete explicit OAuth consent. Disabling an existing user's permission
-immediately revokes active Workspace MCP grants; re-enabling permission does
-not restore them, so the user must reconnect and review scopes.
+Tenant administrators administer Workspace MCP from the primary **Admin -> MCP
+Servers** page. That page exposes three independent controls: the tenant-wide
+**Enable Workspace MCP** master switch, **Enable Workspace MCP for new users**,
+and explicit per-user Workspace MCP access. The new-user default applies when a
+user is subsequently invited, created through tenant OAuth, or directory-synced;
+it does not silently change existing accounts. Every enabled user must still
+complete explicit OAuth consent.
 
-Use the official full Workspace MCP URL below. Never use a research MCP
-`clmcp_` product key for matter access.
+OAuth discovery advertises the standard optional `offline_access` scope. When
+a client requests it, the consent screen explains persistent sign-in and the
+server issues the same rotating, replay-detected refresh-token family used by
+other Workspace MCP clients. `offline_access` never adds a workspace tool scope.
+
+Disabling the tenant master switch or an existing user's permission immediately
+revokes active Workspace MCP grants. Re-enabling either control does not restore
+the grants, so the user must reconnect and review scopes. Privacy Mode remains
+user-controlled under Profile and is not an administrator substitute for these
+controls.
+
+Use the official full Workspace MCP URL below. Never use a Research MCP
+`lhrk_` product key for matter access.
 
 ```text
 https://mcp.getlawhand.com/api/mcp/workspace
@@ -101,6 +115,16 @@ LawHand can dynamically register supported public desktop clients when
 `WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED=true`. Registration does not
 bypass user consent, tenant-administered per-user access, license checks,
 scopes, or RBAC.
+
+Registration happens before LawHand knows which user will sign in. Therefore a
+Claude message such as "Couldn't register with the sign-in service" is a
+discovery or dynamic-client-registration failure, not a Privacy Mode or
+per-user permission decision. The registration service accepts RFC 7591 JSON
+and a bounded form-encoded compatibility shape, including Claude's current
+`https://claude.ai/api/mcp/auth_callback` callback and the forward-compatible
+`https://claude.com/api/mcp/auth_callback` spelling. Its source-IP ceiling is
+sized for hosted clients that share cloud egress while retaining an nginx and
+application-layer abuse bound.
 
 The self-service commands below require dynamic registration. If it is
 disabled, stop: the client must first be provisioned through the approved
@@ -152,6 +176,14 @@ Then run `/mcp` inside Claude Code, choose `lawhand`, and authenticate in the
 browser. Claude Code can use dynamic client registration, so no client secret
 belongs in the project configuration.
 
+If Claude reports that it could not register the connector, verify that the
+protected-resource document names `https://getlawhand.com` as its authorization
+server and that the authorization-server document advertises
+`https://getlawhand.com/api/workspace-mcp/oauth/register`. After a failed or
+cached connector setup, remove that custom connector and add the official full
+URL again. Do not change Privacy Mode or paste a Research MCP key to repair a
+registration-stage error.
+
 ### OpenCode
 
 Run `opencode mcp add`, choose a remote server, name it `lawhand`, and enter
@@ -185,6 +217,14 @@ The production metadata advertises these bounded scopes:
 The consent screen identifies the user, tenant, client, and requested scopes.
 Access and refresh tokens are revocable; disconnecting the grant invalidates
 future workspace access.
+
+An RFC 7009 disconnect presented by a correctly bound client cascades to the
+entire durable Workspace grant: LawHand records one revocation audit event,
+blocks every unexpired access token for that grant, and removes all renewable
+refresh-token families. The user-facing connection list shows active grants
+only; revoked and expired rows remain retained as security/audit evidence.
+Listing and disconnect cleanup remain available when rollout gates are closed,
+so disabling MCP cannot strand a grant that later becomes active again.
 
 ### Safe connection validation
 

@@ -32,6 +32,8 @@ CONSENT_NOTICE = (
     "LawHand workspace access is limited to the scopes shown. Proposal tools "
     "create review work only; they cannot approve, file, send, or deliver it."
 )
+OFFLINE_ACCESS_SCOPE = "offline_access"
+OFFLINE_ACCESS_LABEL = "Keep this connection signed in with rotating refresh tokens"
 
 WORKSPACE_SCOPE_LABELS: dict[str, str] = {
     "matters:read": "Find matters and read bounded matter context",
@@ -42,6 +44,10 @@ WORKSPACE_SCOPE_LABELS: dict[str, str] = {
     "tasks:propose": "Create tasks that start in human review",
     "communications:propose": "Draft client email proposals without sending",
     "documents:propose": "Create cloud-backed DOCX drafts for staged review",
+}
+WORKSPACE_OAUTH_SCOPE_LABELS: dict[str, str] = {
+    **WORKSPACE_SCOPE_LABELS,
+    OFFLINE_ACCESS_SCOPE: OFFLINE_ACCESS_LABEL,
 }
 
 
@@ -180,6 +186,25 @@ def workspace_verification_key(token: str) -> tuple[bytes | str, str]:
     raise WorkspaceOAuthError("invalid_token", "Access token signing key is unknown")
 
 
+def sign_mcp_access_token(claims: dict[str, Any]) -> str:
+    """Sign an MCP access-token claim set with the shared rotating key-ring.
+
+    Research and Workspace are distinct OAuth resources and token types, but
+    intentionally use the same operator-managed signing key-ring. Resource
+    servers still verify their own issuer, audience, type and durable grant.
+    """
+
+    headers = None
+    if workspace_signing_algorithm() == "RS256":
+        headers = {"kid": settings.WORKSPACE_MCP_SIGNING_KEY_ID, "typ": "at+jwt"}
+    return jwt.encode(
+        claims,
+        _current_private_key(),
+        algorithm=workspace_signing_algorithm(),
+        headers=headers,
+    )
+
+
 def mint_workspace_access_token(
     *,
     user_id: uuid.UUID,
@@ -205,15 +230,7 @@ def mint_workspace_access_token(
         "iat": now,
         "exp": now + timedelta(seconds=expires_in),
     }
-    headers = None
-    if workspace_signing_algorithm() == "RS256":
-        headers = {"kid": settings.WORKSPACE_MCP_SIGNING_KEY_ID, "typ": "at+jwt"}
-    encoded = jwt.encode(
-        claims,
-        _current_private_key(),
-        algorithm=workspace_signing_algorithm(),
-        headers=headers,
-    )
+    encoded = sign_mcp_access_token(claims)
     return encoded, token_id, expires_in
 
 
@@ -244,6 +261,70 @@ def validate_redirect_uri(value: str) -> str:
     return value
 
 
+def _registration_form_values(form: Any, field: str) -> list[Any]:
+    """Read repeated or JSON-array form values from a compatibility request."""
+
+    getlist = getattr(form, "getlist", None)
+    if callable(getlist):
+        values = [*getlist(field), *getlist(f"{field}[]")]
+    else:
+        value = form.get(field) if hasattr(form, "get") else None
+        values = (
+            value if isinstance(value, list) else ([] if value is None else [value])
+        )
+
+    if len(values) == 1 and isinstance(values[0], str):
+        try:
+            decoded = json.loads(values[0])
+        except (TypeError, ValueError):
+            decoded = None
+        if isinstance(decoded, list):
+            return decoded
+    return values
+
+
+async def parse_dynamic_client_registration_payload(request: Request) -> dict[str, Any]:
+    """Parse RFC 7591 JSON and a conservative form-encoded compatibility shape.
+
+    Dynamic client registration is specified as JSON, but some hosted connector
+    brokers have emitted URL-encoded metadata during migrations. Supporting the
+    same bounded fields keeps that interoperability fallback from becoming an
+    unhandled 500 while all normal metadata validation remains unchanged.
+    """
+
+    try:
+        payload = await request.json()
+    except (TypeError, ValueError):
+        try:
+            form = await request.form()
+        except (TypeError, ValueError) as exc:
+            raise WorkspaceOAuthError(
+                "invalid_client_metadata",
+                "Registration metadata must be valid JSON or form data",
+            ) from exc
+        payload = {}
+        for field in (
+            "client_name",
+            "token_endpoint_auth_method",
+            "software_id",
+            "software_version",
+            "application_type",
+        ):
+            value = form.get(field) if hasattr(form, "get") else None
+            if value is not None:
+                payload[field] = value
+        for field in ("redirect_uris", "grant_types", "response_types"):
+            values = _registration_form_values(form, field)
+            if values:
+                payload[field] = values
+
+    if not isinstance(payload, dict):
+        raise WorkspaceOAuthError(
+            "invalid_client_metadata", "Registration metadata must be an object"
+        )
+    return payload
+
+
 def validate_pkce_challenge(challenge: str, method: str) -> None:
     if method != "S256":
         raise WorkspaceOAuthError("invalid_request", "S256 PKCE is required")
@@ -264,7 +345,8 @@ def verify_pkce(verifier: str, challenge: str) -> bool:
 
 def normalized_scopes(raw: str) -> frozenset[str]:
     scopes = frozenset(value for value in raw.split() if value)
-    if not scopes or scopes - WORKSPACE_SCOPE_LABELS.keys():
+    resource_scopes = scopes.intersection(WORKSPACE_SCOPE_LABELS)
+    if not resource_scopes or scopes - WORKSPACE_OAUTH_SCOPE_LABELS.keys():
         raise WorkspaceOAuthError(
             "invalid_scope", "Requested workspace scope is invalid"
         )
@@ -294,20 +376,30 @@ def _decode_json(value: bytes | str | None) -> dict[str, Any] | None:
     return loaded if isinstance(loaded, dict) else None
 
 
-async def save_authorization_request(request: Request, payload: dict[str, Any]) -> str:
+async def save_authorization_request(
+    request: Request,
+    payload: dict[str, Any],
+    *,
+    namespace: str = "workspace_mcp",
+    ttl_seconds: int | None = None,
+) -> str:
     request_id = secrets.token_urlsafe(32)
     await _redis(request).setex(
-        f"workspace_mcp:auth_request:{request_id}",
-        settings.WORKSPACE_MCP_AUTH_CODE_TTL_SECONDS,
+        f"{namespace}:auth_request:{request_id}",
+        ttl_seconds or settings.WORKSPACE_MCP_AUTH_CODE_TTL_SECONDS,
         _json_bytes(payload),
     )
     return request_id
 
 
 async def load_authorization_request(
-    request: Request, request_id: str, *, consume: bool = False
+    request: Request,
+    request_id: str,
+    *,
+    consume: bool = False,
+    namespace: str = "workspace_mcp",
 ) -> dict[str, Any] | None:
-    key = f"workspace_mcp:auth_request:{request_id}"
+    key = f"{namespace}:auth_request:{request_id}"
     redis = _redis(request)
     raw = await redis.getdel(key) if consume else await redis.get(key)
     return _decode_json(raw)
@@ -338,51 +430,65 @@ return 1
 
 
 async def claim_authorization_request(
-    request: Request, request_id: str
+    request: Request, request_id: str, *, namespace: str = "workspace_mcp"
 ) -> dict[str, Any] | None:
     redis = _redis(request)
     raw = await redis.eval(
         _CLAIM_AUTHORIZATION_REQUEST_SCRIPT,
         2,
-        f"workspace_mcp:auth_request:{request_id}",
-        f"workspace_mcp:auth_request_claim:{request_id}",
+        f"{namespace}:auth_request:{request_id}",
+        f"{namespace}:auth_request_claim:{request_id}",
     )
     return _decode_json(raw)
 
 
-async def restore_authorization_request(request: Request, request_id: str) -> None:
+async def restore_authorization_request(
+    request: Request, request_id: str, *, namespace: str = "workspace_mcp"
+) -> None:
     redis = _redis(request)
     await redis.eval(
         _RESTORE_AUTHORIZATION_REQUEST_SCRIPT,
         2,
-        f"workspace_mcp:auth_request:{request_id}",
-        f"workspace_mcp:auth_request_claim:{request_id}",
+        f"{namespace}:auth_request:{request_id}",
+        f"{namespace}:auth_request_claim:{request_id}",
     )
 
 
-async def finalize_authorization_request(request: Request, request_id: str) -> None:
-    await _redis(request).delete(f"workspace_mcp:auth_request_claim:{request_id}")
+async def finalize_authorization_request(
+    request: Request, request_id: str, *, namespace: str = "workspace_mcp"
+) -> None:
+    await _redis(request).delete(f"{namespace}:auth_request_claim:{request_id}")
 
 
-async def save_authorization_code(request: Request, payload: dict[str, Any]) -> str:
+async def save_authorization_code(
+    request: Request,
+    payload: dict[str, Any],
+    *,
+    namespace: str = "workspace_mcp",
+    ttl_seconds: int | None = None,
+) -> str:
     code = secrets.token_urlsafe(48)
     digest = hashlib.sha256(code.encode("ascii")).hexdigest()
     await _redis(request).setex(
-        f"workspace_mcp:auth_code:{digest}",
-        settings.WORKSPACE_MCP_AUTH_CODE_TTL_SECONDS,
+        f"{namespace}:auth_code:{digest}",
+        ttl_seconds or settings.WORKSPACE_MCP_AUTH_CODE_TTL_SECONDS,
         _json_bytes(payload),
     )
     return code
 
 
-async def delete_authorization_code(request: Request, code: str) -> None:
+async def delete_authorization_code(
+    request: Request, code: str, *, namespace: str = "workspace_mcp"
+) -> None:
     digest = hashlib.sha256(code.encode("utf-8")).hexdigest()
-    await _redis(request).delete(f"workspace_mcp:auth_code:{digest}")
+    await _redis(request).delete(f"{namespace}:auth_code:{digest}")
 
 
-async def load_authorization_code(request: Request, code: str) -> dict[str, Any] | None:
+async def load_authorization_code(
+    request: Request, code: str, *, namespace: str = "workspace_mcp"
+) -> dict[str, Any] | None:
     digest = hashlib.sha256(code.encode("utf-8")).hexdigest()
-    raw = await _redis(request).get(f"workspace_mcp:auth_code:{digest}")
+    raw = await _redis(request).get(f"{namespace}:auth_code:{digest}")
     return _decode_json(raw)
 
 
@@ -395,13 +501,17 @@ return 1
 
 
 async def consume_authorization_code(
-    request: Request, code: str, payload: dict[str, Any]
+    request: Request,
+    code: str,
+    payload: dict[str, Any],
+    *,
+    namespace: str = "workspace_mcp",
 ) -> bool:
     digest = hashlib.sha256(code.encode("utf-8")).hexdigest()
     consumed = await _redis(request).eval(
         _CONSUME_AUTHORIZATION_CODE_SCRIPT,
         1,
-        f"workspace_mcp:auth_code:{digest}",
+        f"{namespace}:auth_code:{digest}",
         _json_bytes(payload),
     )
     return bool(consumed)
@@ -417,6 +527,12 @@ if raw then
   local ttl = redis.call('TTL', KEYS[1])
   local payload = cjson.decode(raw)
   local family = payload['family_id']
+  if ARGV[2] ~= '' and payload['client_id'] ~= ARGV[2] then
+    return {'mismatch', ''}
+  end
+  if ARGV[3] ~= '' and payload['resource'] ~= ARGV[3] then
+    return {'mismatch', ''}
+  end
   if redis.call('EXISTS', KEYS[4]) == 1 then
     redis.call('DEL', KEYS[1])
     redis.call('SREM', KEYS[3], ARGV[1])
@@ -435,7 +551,7 @@ return {'missing', ''}
 
 
 _ISSUE_REFRESH_SCRIPT = """
-if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
+if redis.call('EXISTS', KEYS[1]) == 1 or redis.call('EXISTS', KEYS[5]) == 1 then return 0 end
 redis.call('SETEX', KEYS[2], ARGV[1], ARGV[2])
 redis.call('SADD', KEYS[3], ARGV[3])
 redis.call('EXPIRE', KEYS[3], ARGV[1])
@@ -465,12 +581,16 @@ async def issue_refresh_token(
     grant_id: uuid.UUID,
     scopes: frozenset[str],
     family_id: str | None = None,
+    namespace: str = "workspace_mcp",
+    token_prefix: str = "wmr_",
+    resource: str | None = None,
+    ttl_days: int | None = None,
 ) -> str:
     redis = _redis(request)
     family = family_id or str(uuid.uuid4())
-    token = "wmr_" + secrets.token_urlsafe(64)
+    token = token_prefix + secrets.token_urlsafe(64)
     token_hash = _refresh_hash(token)
-    ttl = settings.WORKSPACE_MCP_REFRESH_TOKEN_DAYS * 86400
+    ttl = (ttl_days or settings.WORKSPACE_MCP_REFRESH_TOKEN_DAYS) * 86400
     payload = {
         "family_id": family,
         "user_id": str(user_id),
@@ -478,16 +598,21 @@ async def issue_refresh_token(
         "client_id": client_id,
         "grant_id": str(grant_id),
         "scopes": sorted(scopes),
-        "resource": workspace_resource_uri(),
+        "resource": resource or workspace_resource_uri(),
         "expires_at": int(time.time()) + ttl,
     }
     issued = await redis.eval(
         _ISSUE_REFRESH_SCRIPT,
-        4,
-        f"workspace_mcp:refresh_family_revoked:{family}",
-        f"workspace_mcp:refresh:{token_hash}",
-        f"workspace_mcp:refresh_family:{family}",
-        f"workspace_mcp:grant_refresh_families:{grant_id}",
+        5,
+        f"{namespace}:refresh_family_revoked:{family}",
+        f"{namespace}:refresh:{token_hash}",
+        f"{namespace}:refresh_family:{family}",
+        f"{namespace}:grant_refresh_families:{grant_id}",
+        (
+            f"workspace_mcp_grant:{grant_id}"
+            if namespace == "workspace_mcp"
+            else f"{namespace}:grant_revoked:{grant_id}"
+        ),
         ttl,
         _json_bytes(payload),
         token_hash,
@@ -499,23 +624,30 @@ async def issue_refresh_token(
 
 
 async def consume_refresh_token(
-    request: Request, token: str
+    request: Request,
+    token: str,
+    *,
+    namespace: str = "workspace_mcp",
+    expected_client_id: str | None = None,
+    expected_resource: str | None = None,
 ) -> tuple[str, dict[str, Any] | str | None]:
     token_hash = _refresh_hash(token)
     redis = _redis(request)
     # The family set key is resolved after a bounded read; the Lua script still
     # makes token consumption, revoked-family rejection, and replay tombstoning
     # atomic.
-    existing = _decode_json(await redis.get(f"workspace_mcp:refresh:{token_hash}"))
+    existing = _decode_json(await redis.get(f"{namespace}:refresh:{token_hash}"))
     family = str((existing or {}).get("family_id") or "unknown")
     result = await redis.eval(
         _CONSUME_REFRESH_SCRIPT,
         4,
-        f"workspace_mcp:refresh:{token_hash}",
-        f"workspace_mcp:refresh_used:{token_hash}",
-        f"workspace_mcp:refresh_family:{family}",
-        f"workspace_mcp:refresh_family_revoked:{family}",
+        f"{namespace}:refresh:{token_hash}",
+        f"{namespace}:refresh_used:{token_hash}",
+        f"{namespace}:refresh_family:{family}",
+        f"{namespace}:refresh_family_revoked:{family}",
         token_hash,
+        expected_client_id or "",
+        expected_resource or "",
     )
     status = result[0].decode() if isinstance(result[0], bytes) else str(result[0])
     raw = result[1]
@@ -525,29 +657,62 @@ async def consume_refresh_token(
     return status, value or None
 
 
-async def revoke_refresh_family(request: Request, family_id: str) -> None:
+async def revoke_refresh_family(
+    request: Request,
+    family_id: str,
+    *,
+    namespace: str = "workspace_mcp",
+    ttl_days: int | None = None,
+) -> None:
     redis = _redis(request)
-    ttl = settings.WORKSPACE_MCP_REFRESH_TOKEN_DAYS * 86400
+    ttl = (ttl_days or settings.WORKSPACE_MCP_REFRESH_TOKEN_DAYS) * 86400
     await redis.eval(
         _REVOKE_REFRESH_FAMILY_SCRIPT,
         2,
-        f"workspace_mcp:refresh_family_revoked:{family_id}",
-        f"workspace_mcp:refresh_family:{family_id}",
+        f"{namespace}:refresh_family_revoked:{family_id}",
+        f"{namespace}:refresh_family:{family_id}",
         ttl,
-        "workspace_mcp:refresh:",
+        f"{namespace}:refresh:",
     )
 
 
 async def revoke_grant_refresh_tokens(
-    request: Request, grant_id: uuid.UUID | str
+    request: Request,
+    grant_id: uuid.UUID | str,
+    *,
+    namespace: str = "workspace_mcp",
+    ttl_days: int | None = None,
 ) -> None:
     redis = _redis(request)
-    key = f"workspace_mcp:grant_refresh_families:{grant_id}"
+    key = f"{namespace}:grant_refresh_families:{grant_id}"
     families = await redis.smembers(key)
     for value in families:
         family = value.decode() if isinstance(value, bytes) else str(value)
-        await revoke_refresh_family(request, family)
+        await revoke_refresh_family(
+            request, family, namespace=namespace, ttl_days=ttl_days
+        )
     await redis.delete(key)
+
+
+async def revoke_workspace_grant_runtime(
+    request: Request, grant_id: uuid.UUID | str
+) -> None:
+    """Immediately invalidate every runtime credential for a Workspace grant.
+
+    The durable grant row remains the authoritative audit record.  The Redis
+    marker rejects every still-live access JWT, while refresh-family cleanup
+    removes renewable credentials.  Setting the marker first also prevents a
+    concurrent refresh exchange from creating a new family after cleanup has
+    started.
+    """
+
+    redis = _redis(request)
+    await redis.setex(
+        f"workspace_mcp_grant:{grant_id}",
+        settings.WORKSPACE_MCP_ACCESS_TOKEN_MAX_MINUTES * 60,
+        b"1",
+    )
+    await revoke_grant_refresh_tokens(request, grant_id)
 
 
 def consent_sha256(*, client_id: str, scopes: frozenset[str]) -> str:
@@ -567,6 +732,9 @@ async def replace_active_grant(
     user_id: uuid.UUID,
     client: WorkspaceMCPClient,
     scopes: frozenset[str],
+    consent_version: str = CONSENT_VERSION,
+    consent_notice: str = CONSENT_NOTICE,
+    grant_days: int | None = None,
 ) -> WorkspaceMCPGrant:
     now = datetime.now(timezone.utc)
     await db.execute(
@@ -595,9 +763,19 @@ async def replace_active_grant(
         client_id=client.client_id,
         client_name=client.client_name,
         scopes=sorted(scopes),
-        consent_version=CONSENT_VERSION,
-        consent_sha256=consent_sha256(client_id=client.client_id, scopes=scopes),
-        expires_at=now + timedelta(days=settings.WORKSPACE_MCP_GRANT_DAYS),
+        consent_version=consent_version,
+        consent_sha256=hashlib.sha256(
+            _json_bytes(
+                {
+                    "client_id": client.client_id,
+                    "consent_version": consent_version,
+                    "notice": consent_notice,
+                    "scopes": sorted(scopes),
+                }
+            )
+        ).hexdigest(),
+        expires_at=now
+        + timedelta(days=grant_days or settings.WORKSPACE_MCP_GRANT_DAYS),
     )
     db.add(grant)
     await db.flush()

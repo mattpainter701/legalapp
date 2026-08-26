@@ -571,8 +571,9 @@ Uses the opinion's first chunk embedding as the query vector.
 > Streamable HTTP endpoint at `/api/mcp` and negotiates protocol version
 > `2025-06-18`. The private CourtListener process is a REST tool engine bound to
 > the app network and accepts only `X-Clarity-Internal-Key`. It does not expose
-> public SSE. Product clients use scoped `X-MCP-API-Key` credentials; the
-> unscoped legacy `X-API-Key` and `/api/mcp/api-key` issuance routes are retired.
+> public SSE. Hosted ChatGPT and Claude clients use OAuth 2.1; header-capable
+> product clients use a scoped LawHand Research API token. The unscoped legacy
+> `X-API-Key` and `/api/mcp/api-key` issuance routes are retired.
 > Treat the remaining Sprint 11 text in this section as proposal history.
 
 **Design doc reference:** TASKS 1106
@@ -615,7 +616,9 @@ mcp-server/
 
 ### 6.4 Authentication
 
-- Product clients send a scoped `X-MCP-API-Key` to LegalApp.
+- Hosted ChatGPT and Claude clients authenticate with OAuth 2.1. Header-capable
+  product clients send a scoped LawHand Research API token (currently carried
+  as `X-MCP-API-Key`) to the research endpoint.
 - Application users may use their normal JWT only on the internal compatibility
   path; their JWT is never forwarded upstream.
 - The private CourtListener service accepts only `X-Clarity-Internal-Key`, whose

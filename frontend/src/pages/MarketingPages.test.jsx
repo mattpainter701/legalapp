@@ -37,7 +37,11 @@ describe('public LawHand product marketing', () => {
   it('markets MCP truthfully as a metered private preview', () => {
     renderPage(McpProductPage)
 
-    expect(screen.getByRole('heading', { level: 1, name: /Bring LawHand context/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 1, name: /Bring approved public legal authority/i })).toBeInTheDocument()
+    expect(screen.getByText(/OAuth 2.1 or lhrk_ token/i)).toBeInTheDocument()
+    expect(screen.getByText(/Research-only scope/i)).toBeInTheDocument()
+    expect(screen.getByText(/workspace matters, documents, or client files/i)).toBeInTheDocument()
+    expect(screen.getAllByText(/research\.getlawhand\.com\/api\/mcp/i)).not.toHaveLength(0)
     expect(screen.getAllByText('Private preview')).not.toHaveLength(0)
     expect(screen.getByText('$0.45')).toBeInTheDocument()
     expect(screen.getByText(/Public key issuance remains gated/i)).toBeInTheDocument()

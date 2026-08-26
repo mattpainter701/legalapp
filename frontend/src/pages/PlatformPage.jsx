@@ -311,7 +311,7 @@ export function ResearchMcpReleaseControls({ platformKey, onAuthError }) {
               {[
                 ['Official MCP URL', connection.streamable_http || 'https://research.getlawhand.com/api/mcp'],
                 ['Supported shorthand', connection.shorthand || 'https://research.getlawhand.com'],
-                ['Auth header', `${connection.auth_header || 'X-MCP-API-Key'}: clmcp_...`],
+                ['Auth header', `${connection.auth_header || 'X-MCP-API-Key'}: lhrk_...`],
               ].map(([label, value]) => (
                 <div key={label} className="rounded-lg border border-brand-line bg-brand-bg px-3 py-2">
                   <p className="text-[10px] font-bold uppercase tracking-wider text-brand-muted">{label}</p>

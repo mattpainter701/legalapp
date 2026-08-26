@@ -10,7 +10,12 @@ import pytest
 from fastapi import HTTPException
 
 from app.routers import workspace_mcp_oauth as oauth
-from app.services.workspace_mcp_oauth import WORKSPACE_SCOPE_LABELS, WorkspaceOAuthError
+from app.services.workspace_mcp_oauth import (
+    OFFLINE_ACCESS_SCOPE,
+    WORKSPACE_OAUTH_SCOPE_LABELS,
+    WORKSPACE_SCOPE_LABELS,
+    WorkspaceOAuthError,
+)
 
 
 class Result:
@@ -36,6 +41,12 @@ class DB:
 
     async def scalars(self, _query):
         return Result(self.rows)
+
+    async def execute(self, _query, _parameters=None):
+        return Result()
+
+    async def refresh(self, _value, attribute_names=None):
+        return None
 
     def add(self, value):
         self.added.append(value)
@@ -172,9 +183,10 @@ async def test_metadata_and_jwks(monkeypatch):
     protected = await oauth.protected_resource_metadata()
     assert metadata["registration_endpoint"].endswith("/register")
     assert set(oauth._SCOPE_APP_CAPABILITIES) == set(WORKSPACE_SCOPE_LABELS)
-    assert set(metadata["scopes_supported"]) == set(WORKSPACE_SCOPE_LABELS)
+    assert set(metadata["scopes_supported"]) == set(WORKSPACE_OAUTH_SCOPE_LABELS)
     assert protected["scopes_supported"] == metadata["scopes_supported"]
     assert {"documents:read", "templates:read"}.issubset(metadata["scopes_supported"])
+    assert OFFLINE_ACCESS_SCOPE in metadata["scopes_supported"]
     assert "authorization_servers" in protected
     assert "keys" in await oauth.workspace_jwks_endpoint()
 
@@ -253,12 +265,16 @@ async def test_get_consent_success_expired_and_permission_denied(monkeypatch):
     u = user()
     c = client()
     monkeypatch.setattr(oauth, "require_workspace_tenant_allowed", lambda *_: None)
-    monkeypatch.setattr(
-        oauth, "load_authorization_request", AsyncMock(return_value=None)
-    )
+    load_request = AsyncMock(return_value=None)
+    monkeypatch.setattr(oauth, "load_authorization_request", load_request)
     with pytest.raises(HTTPException) as e:
         await oauth.get_workspace_authorization_request("x", req(), u, DB())
     assert e.value.status_code == 410
+    with pytest.raises(HTTPException) as tenant_disabled:
+        await oauth.get_workspace_authorization_request("x", req(), u, DB(False))
+    assert tenant_disabled.value.status_code == 403
+    assert "disabled for this tenant" in tenant_disabled.value.detail
+    assert load_request.await_args.kwargs == {"consume": True}
     pending = {"client_id": c.client_id, "scopes": ["matters:read"]}
     monkeypatch.setattr(
         oauth, "load_authorization_request", AsyncMock(return_value=pending)
@@ -490,10 +506,12 @@ async def test_revocation_grants_expiry_idempotence_and_audit(monkeypatch):
     db = DB(rows=[g])
     monkeypatch.setattr(oauth, "require_workspace_tenant_allowed", lambda *_: None)
     out = await oauth.list_workspace_grants(u, db)
-    assert out["items"][0]["status"] == "expired" and db.commit.await_count == 1
+    assert out["items"] == [] and db.commit.await_count == 1
     g = grant(u)
     db = DB(g)
     monkeypatch.setattr(oauth, "append_workspace_mcp_audit", AsyncMock())
+    cleanup = AsyncMock()
+    monkeypatch.setattr(oauth, "revoke_workspace_grant_runtime", cleanup)
     out = await oauth.revoke_workspace_grant(
         g.id, oauth.RevokeGrantRequest(reason="bye"), req(), u, db
     )
@@ -502,6 +520,7 @@ async def test_revocation_grants_expiry_idempotence_and_audit(monkeypatch):
         g.id, oauth.RevokeGrantRequest(), req(), u, db
     )
     assert out["status"] == "revoked"
+    assert cleanup.await_count == 2
     event = SimpleNamespace(
         id=uuid4(),
         event_type="x",
@@ -518,3 +537,29 @@ async def test_revocation_grants_expiry_idempotence_and_audit(monkeypatch):
     db = DB(rows=[event])
     audit = await oauth.list_workspace_audit(50, u, db)
     assert audit["items"][0]["metadata"] == {"a": 1}
+
+
+@pytest.mark.asyncio
+async def test_connection_cleanup_remains_available_when_rollout_gate_is_closed(
+    monkeypatch,
+):
+    monkeypatch.setattr(oauth.settings, "WORKSPACE_MCP_ENABLED", False)
+    current_user = user()
+    current_grant = grant(current_user)
+
+    listed = await oauth.list_workspace_grants(current_user, DB(rows=[current_grant]))
+    assert [item["id"] for item in listed["items"]] == [str(current_grant.id)]
+
+    cleanup = AsyncMock()
+    monkeypatch.setattr(oauth, "append_workspace_mcp_audit", AsyncMock())
+    monkeypatch.setattr(oauth, "revoke_workspace_grant_runtime", cleanup)
+    revoked = await oauth.revoke_workspace_grant(
+        current_grant.id,
+        oauth.RevokeGrantRequest(),
+        req(),
+        current_user,
+        DB(current_grant),
+    )
+
+    assert revoked["status"] == "revoked"
+    cleanup.assert_awaited_once()

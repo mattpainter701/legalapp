@@ -153,6 +153,43 @@ PUBLIC_ROUTES: dict[tuple[frozenset[str], str], str] = {
         frozenset({"POST"}),
         "/api/workspace-mcp/oauth/revoke",
     ): "RFC 7009 endpoint; token and client binding enforced",
+    # Research MCP OAuth discovery and protocol endpoints. These are public
+    # protocol surfaces by design: metadata/JWKS disclose no tenant data,
+    # registration validates public-client metadata, authorization enforces
+    # exact redirects + S256 PKCE, and token/revoke require bound OAuth
+    # artifacts before issuing or invalidating credentials.
+    (
+        frozenset({"GET"}),
+        "/.well-known/oauth-protected-resource/api/mcp",
+    ): "public Research MCP protected-resource metadata; no tenant data",
+    (
+        frozenset({"GET"}),
+        "/api/research-mcp/oauth/protected-resource-metadata",
+    ): "public Research MCP protected-resource metadata; no tenant data",
+    (
+        frozenset({"GET"}),
+        "/api/research-mcp/oauth/authorization-server-metadata",
+    ): "public Research OAuth metadata; no tenant data",
+    (
+        frozenset({"GET"}),
+        "/api/research-mcp/oauth/jwks",
+    ): "public Research OAuth signing-key discovery; no tenant data",
+    (
+        frozenset({"POST"}),
+        "/api/research-mcp/oauth/register",
+    ): "public DCR with validated Research client metadata",
+    (
+        frozenset({"GET"}),
+        "/api/research-mcp/oauth/authorize",
+    ): "public Research OAuth entry point; exact redirect and S256 PKCE validated",
+    (
+        frozenset({"POST"}),
+        "/api/research-mcp/oauth/token",
+    ): "one-use Research authorization code or bound refresh token required",
+    (
+        frozenset({"POST"}),
+        "/api/research-mcp/oauth/revoke",
+    ): "Research RFC 7009 endpoint; token and client binding enforced",
     # OAuth integration callbacks — all validate the CSRF state token minted
     # by the corresponding /login redirect before doing anything tenant-scoped.
     (

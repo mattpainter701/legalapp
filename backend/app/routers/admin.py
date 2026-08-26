@@ -2,6 +2,7 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from urllib.parse import urlsplit
 
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -19,6 +20,7 @@ from app.models.rbac import Role, UserRole
 from app.models.tenant import Tenant, TenantSettings
 from app.models.tenant_credential import TenantCredential
 from app.models.user import User
+from app.models.workspace_mcp_grant import WorkspaceMCPGrant
 from app.schemas.admin import (
     AuditLog,
     AuditRecord,
@@ -45,6 +47,11 @@ from app.schemas.admin import (
 from app.services.access_control import normalize_role
 from app.services.llm_routing import VALID_LLM_PROVIDERS
 from app.services.rbac_service import get_user_capabilities
+from app.services.automation_capabilities import capability_catalog
+from app.services.workspace_mcp_access import (
+    lock_tenant_workspace_mcp_policy,
+    tenant_workspace_mcp_default,
+)
 
 settings = get_settings()
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -86,7 +93,11 @@ async def _user_role_assignments(db: AsyncSession, user_ids: list[uuid.UUID]) ->
     return assignments
 
 
-def _user_response(user: User, assignments: dict | None = None) -> UserResponse:
+def _user_response(
+    user: User,
+    assignments: dict | None = None,
+    workspace_mcp_active_grant_count: int = 0,
+) -> UserResponse:
     assigned = (assignments or {}).get(user.id, {})
     return UserResponse(
         id=str(user.id),
@@ -113,8 +124,39 @@ def _user_response(user: User, assignments: dict | None = None) -> UserResponse:
         primary_jurisdictions=user.primary_jurisdictions or [],
         privacy_mode=user.privacy_mode,
         workspace_mcp_enabled=user.workspace_mcp_enabled,
+        workspace_mcp_active_grant_count=workspace_mcp_active_grant_count,
         created_at=user.created_at,
     )
+
+
+async def _workspace_mcp_active_grant_counts(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    user_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, int]:
+    """Count active Workspace MCP connections for each admin user row."""
+    counts = dict.fromkeys(user_ids, 0)
+    now = datetime.now(timezone.utc)
+    rows = (
+        await db.execute(
+            select(
+                WorkspaceMCPGrant.user_id,
+                func.count(WorkspaceMCPGrant.id),
+            )
+            .where(
+                WorkspaceMCPGrant.tenant_id == tenant_id,
+                WorkspaceMCPGrant.user_id.in_(user_ids),
+                WorkspaceMCPGrant.client_id.not_like("research.%"),
+                WorkspaceMCPGrant.status == "active",
+                WorkspaceMCPGrant.revoked_at.is_(None),
+                WorkspaceMCPGrant.expires_at > now,
+            )
+            .group_by(WorkspaceMCPGrant.user_id)
+        )
+    ).all()
+    for user_id, active_grant_count in rows:
+        counts[user_id] = active_grant_count
+    return counts
 
 
 async def _is_admin_settings_holder(db: AsyncSession, user: User) -> bool:
@@ -165,9 +207,15 @@ async def list_users(
     )
     users = result.scalars().all()
     assignments = await _user_role_assignments(db, [u.id for u in users])
+    workspace_mcp_counts = await _workspace_mcp_active_grant_counts(
+        db, admin.tenant_id, [u.id for u in users]
+    )
 
     return UserList(
-        users=[_user_response(u, assignments) for u in users],
+        users=[
+            _user_response(u, assignments, workspace_mcp_counts.get(u.id, 0))
+            for u in users
+        ],
         total=len(users),
     )
 
@@ -671,6 +719,8 @@ async def update_tenant_settings(
     """Update tenant-level settings and configuration."""
     admin = await _require_admin(request, db)
     await set_tenant_context(db, str(admin.tenant_id))
+    if "workspace_mcp_enabled" in body.model_fields_set:
+        await lock_tenant_workspace_mcp_policy(db, admin.tenant_id)
 
     result = await db.execute(
         select(TenantSettings).where(TenantSettings.tenant_id == admin.tenant_id)
@@ -684,6 +734,11 @@ async def update_tenant_settings(
         )
         db.add(settings_record)
 
+    previous_workspace_enabled = (
+        True
+        if settings_record.workspace_mcp_enabled is None
+        else settings_record.workspace_mcp_enabled
+    )
     # Update only provided fields
     update_data = body.model_dump(exclude_unset=True)
     for provider_field in ("default_llm_provider", "premium_llm_provider"):
@@ -697,10 +752,169 @@ async def update_tenant_settings(
         if hasattr(settings_record, field):
             setattr(settings_record, field, value)
 
+    disabling_workspace = (
+        "workspace_mcp_enabled" in update_data
+        and previous_workspace_enabled
+        and update_data["workspace_mcp_enabled"] is False
+    )
+    grants_to_revoke = []
+    if disabling_workspace:
+        from app.services.workspace_mcp_oauth import append_workspace_mcp_audit
+
+        grants_to_revoke = list(
+            (
+                await db.scalars(
+                    select(WorkspaceMCPGrant)
+                    .where(
+                        WorkspaceMCPGrant.tenant_id == admin.tenant_id,
+                        # Research OAuth reuses the durable grant table but is
+                        # a separate product.  The Workspace tenant switch must
+                        # never revoke a research-only connection.
+                        WorkspaceMCPGrant.client_id.not_like("research.%"),
+                        WorkspaceMCPGrant.status == "active",
+                        WorkspaceMCPGrant.revoked_at.is_(None),
+                    )
+                    .with_for_update()
+                )
+            ).all()
+        )
+        reason = "Workspace MCP disabled for tenant by administrator"
+        now = datetime.now(timezone.utc)
+        for grant in grants_to_revoke:
+            grant.status = "revoked"
+            grant.revoked_at = now
+            grant.revoked_by_user_id = admin.id
+            grant.revocation_reason = reason
+            await append_workspace_mcp_audit(
+                db,
+                request,
+                tenant_id=admin.tenant_id,
+                user_id=admin.id,
+                grant_id=grant.id,
+                client_id=grant.client_id,
+                event_type="grant_revoked",
+                outcome="success",
+                metadata={"reason": reason},
+            )
     await db.commit()
     await db.refresh(settings_record)
 
+    if disabling_workspace:
+        from app.services.workspace_mcp_oauth import revoke_workspace_grant_runtime
+
+        for grant in grants_to_revoke:
+            try:
+                await revoke_workspace_grant_runtime(request, grant.id)
+            except Exception:
+                logger.exception(
+                    "Workspace MCP runtime credential cleanup failed",
+                    extra={"grant_id": str(grant.id)},
+                )
+
     return TenantSettingsResponse.model_validate(settings_record, from_attributes=True)
+
+
+@router.get("/mcp")
+async def get_mcp_admin_overview(request: Request, db: AsyncSession = Depends(get_db)):
+    """Return the tenant's complete Workspace/Research MCP administration surface."""
+    admin = await _require_admin(request, db)
+    await set_tenant_context(db, str(admin.tenant_id))
+    tenant_enabled = True
+    settings_record = await db.scalar(
+        select(TenantSettings).where(TenantSettings.tenant_id == admin.tenant_id)
+    )
+    if (
+        settings_record is not None
+        and settings_record.workspace_mcp_enabled is not None
+    ):
+        tenant_enabled = bool(settings_record.workspace_mcp_enabled)
+    endpoint = settings.workspace_mcp_endpoint
+    parts = urlsplit(endpoint)
+    origin = (
+        f"{parts.scheme}://{parts.netloc}"
+        if parts.scheme and parts.netloc
+        else endpoint
+    )
+    active_grants = await db.scalar(
+        select(func.count())
+        .select_from(WorkspaceMCPGrant)
+        .where(
+            WorkspaceMCPGrant.tenant_id == admin.tenant_id,
+            WorkspaceMCPGrant.client_id.not_like("research.%"),
+            WorkspaceMCPGrant.status == "active",
+            WorkspaceMCPGrant.revoked_at.is_(None),
+            WorkspaceMCPGrant.expires_at > datetime.now(timezone.utc),
+        )
+    )
+    base_users = [
+        User.tenant_id == admin.tenant_id,
+        User.is_active.is_(True),
+        User.license_active.is_(True),
+    ]
+    enabled = await db.scalar(
+        select(func.count())
+        .select_from(User)
+        .where(*base_users, User.workspace_mcp_enabled.is_(True))
+    )
+    configured_enabled = enabled or 0
+    blocked = await db.scalar(
+        select(func.count())
+        .select_from(User)
+        .where(
+            *base_users,
+            User.workspace_mcp_enabled.is_(True),
+            User.privacy_mode.is_(True),
+        )
+    )
+    return {
+        "workspace": {
+            "deployment_enabled": bool(settings.WORKSPACE_MCP_ENABLED),
+            "tenant_enabled": tenant_enabled,
+            "default_user_enabled": await tenant_workspace_mcp_default(
+                db, admin.tenant_id
+            ),
+            "official_url": endpoint,
+            "shorthand": origin,
+            "auth": {
+                "issuer": settings.WORKSPACE_MCP_ISSUER,
+                "authorization": f"{settings.WORKSPACE_MCP_ISSUER.rstrip('/')}/api/workspace-mcp/oauth/authorize",
+                "token": f"{settings.WORKSPACE_MCP_ISSUER.rstrip('/')}/api/workspace-mcp/oauth/token",
+            },
+            "tools": [
+                {
+                    k: item[k]
+                    for k in (
+                        "name",
+                        "description",
+                        "effect",
+                        "approval_policy",
+                        "required_scopes",
+                    )
+                }
+                for item in capability_catalog(audience="workspace_mcp")
+            ],
+            "users": {
+                "active": await db.scalar(
+                    select(func.count())
+                    .select_from(User)
+                    .where(User.tenant_id == admin.tenant_id, User.is_active.is_(True))
+                ),
+                "licensed": await db.scalar(
+                    select(func.count()).select_from(User).where(*base_users)
+                ),
+                # This is the effective count: tenant-disabled MCP users are
+                # not connectable even when their individual preference is on.
+                "enabled": (
+                    max(configured_enabled - (blocked or 0), 0)
+                    if tenant_enabled and settings.WORKSPACE_MCP_ENABLED
+                    else 0
+                ),
+                "configured_enabled": configured_enabled,
+                "privacy_mode_blocked": blocked or 0,
+            },
+            "active_grants": active_grants or 0,
+        }
+    }
 
 
 # ─────────────────────────────────────────────────────
@@ -1545,6 +1759,10 @@ class InviteUserResponse(_PydanticBase):
     email: str
 
 
+class AdminRevokeWorkspaceMCPGrantRequest(_PydanticBase):
+    reason: str = Field(default="Disconnected by tenant administrator", max_length=500)
+
+
 @router.patch("/users/{user_id}", response_model=UserResponse)
 async def patch_user(
     user_id: str,
@@ -1618,6 +1836,7 @@ async def patch_user(
     revoke_workspace_access = False
     revocation_reason = None
     if body.workspace_mcp_enabled is not None:
+        await lock_tenant_workspace_mcp_policy(db, user.tenant_id)
         disabling_workspace_mcp = (
             not body.workspace_mcp_enabled and user.workspace_mcp_enabled
         )
@@ -1638,6 +1857,9 @@ async def patch_user(
                     .where(
                         WorkspaceMCPGrant.tenant_id == user.tenant_id,
                         WorkspaceMCPGrant.user_id == user.id,
+                        # Per-user Workspace policy is independent of the
+                        # Research PAYG product and its OAuth grants.
+                        WorkspaceMCPGrant.client_id.not_like("research.%"),
                         WorkspaceMCPGrant.status == "active",
                         WorkspaceMCPGrant.revoked_at.is_(None),
                     )
@@ -1665,19 +1887,138 @@ async def patch_user(
 
     await db.commit()
     if revoked_workspace_grants:
-        try:
-            from app.services.workspace_mcp_oauth import revoke_grant_refresh_tokens
+        from app.services.workspace_mcp_oauth import (
+            revoke_workspace_grant_runtime,
+        )
 
-            for grant in revoked_workspace_grants:
-                await revoke_grant_refresh_tokens(request, grant.id)
-        except Exception:
-            logger.exception(
-                "Workspace MCP refresh-token cleanup failed after admin policy change"
-            )
+        for grant in revoked_workspace_grants:
+            try:
+                await revoke_workspace_grant_runtime(request, grant.id)
+            except Exception:
+                logger.exception(
+                    "Workspace MCP runtime credential cleanup failed after admin policy change",
+                    extra={"grant_id": str(grant.id)},
+                )
         await set_tenant_context(db, str(admin.tenant_id))
     await db.refresh(user)
     assignments = await _user_role_assignments(db, [user.id])
-    return _user_response(user, assignments)
+    workspace_mcp_counts = await _workspace_mcp_active_grant_counts(
+        db, admin.tenant_id, [user.id]
+    )
+    return _user_response(user, assignments, workspace_mcp_counts.get(user.id, 0))
+
+
+@router.get("/users/{user_id}/workspace-mcp/grants")
+async def admin_list_workspace_mcp_grants(
+    user_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """List one user's active Workspace MCP connections for the admin drawer."""
+    admin = await _require_admin(request, db)
+    await set_tenant_context(db, str(admin.tenant_id))
+    target_user = await db.scalar(
+        select(User).where(User.id == user_id, User.tenant_id == admin.tenant_id)
+    )
+    if target_user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    grants = (
+        await db.scalars(
+            select(WorkspaceMCPGrant)
+            .where(
+                WorkspaceMCPGrant.tenant_id == admin.tenant_id,
+                WorkspaceMCPGrant.user_id == target_user.id,
+                WorkspaceMCPGrant.client_id.not_like("research.%"),
+                WorkspaceMCPGrant.status == "active",
+                WorkspaceMCPGrant.revoked_at.is_(None),
+                WorkspaceMCPGrant.expires_at > datetime.now(timezone.utc),
+            )
+            .order_by(WorkspaceMCPGrant.created_at.desc())
+        )
+    ).all()
+    return {
+        "items": [
+            {
+                "id": str(grant.id),
+                "client_id": grant.client_id,
+                "client_name": grant.client_name,
+                "scopes": sorted(grant.scope_set),
+                "status": grant.status,
+                "created_at": grant.created_at.isoformat(),
+                "expires_at": grant.expires_at.isoformat(),
+                "last_used_at": grant.last_used_at.isoformat()
+                if grant.last_used_at
+                else None,
+            }
+            for grant in grants
+        ]
+    }
+
+
+@router.post("/users/{user_id}/workspace-mcp/grants/{grant_id}/revoke")
+async def admin_revoke_workspace_mcp_grant(
+    user_id: uuid.UUID,
+    grant_id: uuid.UUID,
+    body: AdminRevokeWorkspaceMCPGrantRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Revoke one user's Workspace MCP connection as a tenant administrator."""
+    admin = await _require_admin(request, db)
+    await set_tenant_context(db, str(admin.tenant_id))
+
+    target_user = await db.scalar(
+        select(User).where(User.id == user_id, User.tenant_id == admin.tenant_id)
+    )
+    if target_user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    grant = await db.scalar(
+        select(WorkspaceMCPGrant)
+        .where(
+            WorkspaceMCPGrant.id == grant_id,
+            WorkspaceMCPGrant.tenant_id == admin.tenant_id,
+            WorkspaceMCPGrant.user_id == target_user.id,
+            WorkspaceMCPGrant.client_id.not_like("research.%"),
+        )
+        .with_for_update()
+    )
+    if grant is None:
+        raise HTTPException(status_code=404, detail="Workspace connection not found")
+
+    if grant.status == "active":
+        reason = body.reason.strip() or "Disconnected by tenant administrator"
+        grant.status = "revoked"
+        grant.revoked_at = datetime.now(timezone.utc)
+        grant.revoked_by_user_id = admin.id
+        grant.revocation_reason = reason[:500]
+        from app.services.workspace_mcp_oauth import append_workspace_mcp_audit
+
+        await append_workspace_mcp_audit(
+            db,
+            request,
+            tenant_id=admin.tenant_id,
+            user_id=target_user.id,
+            grant_id=grant.id,
+            client_id=grant.client_id,
+            event_type="grant_revoked",
+            outcome="success",
+            metadata={"reason": grant.revocation_reason, "actor": "tenant_admin"},
+        )
+        await db.commit()
+
+    # Runtime cleanup is intentionally best effort: the committed database
+    # state is authoritative for token and tool authorization.
+    from app.services.workspace_mcp_oauth import revoke_workspace_grant_runtime
+
+    try:
+        await revoke_workspace_grant_runtime(request, grant.id)
+    except Exception:
+        logger.exception(
+            "Workspace MCP runtime credential cleanup failed after admin revocation",
+            extra={"grant_id": str(grant.id)},
+        )
+    return {"id": str(grant.id), "status": grant.status}
 
 
 @router.post("/users/{user_id}/reactivate", status_code=200)

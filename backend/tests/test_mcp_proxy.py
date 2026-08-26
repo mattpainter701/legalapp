@@ -93,6 +93,7 @@ async def test_proxied_tool_names_uses_live_manifest(monkeypatch):
             "tools": [
                 {"name": "search_caselaw"},
                 {"name": "get_case_details"},
+                {"name": "list_matters"},
                 {"missing": "ignored"},
             ]
         }
@@ -111,14 +112,18 @@ async def test_manifest_fails_closed_when_upstream_unavailable(monkeypatch):
     async def proxy_unavailable(path, request):
         raise RuntimeError("dns unavailable")
 
+    async def authenticated(_scope):
+        return SimpleNamespace(allowed_tools=frozenset(mcp.DEFAULT_ALLOWED_TOOLS))
+
     monkeypatch.setattr(mcp.settings, "MCP_SERVER_URL", "http://courtlistener-mcp:8021")
     monkeypatch.setattr(mcp.settings, "BACKEND_URL", "https://legalapp.example")
     monkeypatch.setattr(mcp.settings, "MCP_PRODUCT_ENABLED", True)
     monkeypatch.setattr(mcp, "_proxy_get", proxy_unavailable)
+    monkeypatch.setattr(mcp_protocol, "authenticate_product_request", authenticated)
     mcp_protocol.clear_tool_catalog_cache()
     try:
         with pytest.raises(HTTPException) as exc:
-            await mcp.mcp_manifest(SimpleNamespace(headers={}))
+            await mcp.mcp_manifest(SimpleNamespace(headers={}, scope={}))
     finally:
         mcp_protocol.clear_tool_catalog_cache()
 
@@ -128,6 +133,9 @@ async def test_manifest_fails_closed_when_upstream_unavailable(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_public_manifest_never_leaks_private_protocol_claim(monkeypatch):
+    async def authenticated(_scope):
+        return SimpleNamespace(allowed_tools=frozenset(mcp.DEFAULT_ALLOWED_TOOLS))
+
     async def private_manifest(path, request):
         assert path == "/api/mcp"
         return {
@@ -156,9 +164,10 @@ async def test_public_manifest_never_leaks_private_protocol_claim(monkeypatch):
     )
     monkeypatch.setattr(mcp.settings, "MCP_PRODUCT_ENABLED", True)
     monkeypatch.setattr(mcp, "_proxy_get", private_manifest)
+    monkeypatch.setattr(mcp_protocol, "authenticate_product_request", authenticated)
     mcp_protocol.clear_tool_catalog_cache()
     try:
-        manifest = await mcp.mcp_manifest(SimpleNamespace(headers={}))
+        manifest = await mcp.mcp_manifest(SimpleNamespace(headers={}, scope={}))
     finally:
         mcp_protocol.clear_tool_catalog_cache()
 
