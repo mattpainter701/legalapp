@@ -110,6 +110,56 @@ class TestTimer:
 
 
 class TestInvoiceWorkflow:
+    async def test_preview_and_selected_sources(self, client, test_matter):
+        first = await _log_time(client, test_matter.id, hours="1.0")
+        second = await _log_time(client, test_matter.id, hours="2.0")
+        preview = await client.get(
+            "/api/billing/invoices/preview", params={"matter_id": str(test_matter.id)}
+        )
+        assert preview.status_code == 200, preview.text
+        assert {x["id"] for x in preview.json()["time_entries"]} == {
+            first["id"],
+            second["id"],
+        }
+        generated = await client.post(
+            "/api/billing/invoices/generate",
+            json={
+                "matter_id": str(test_matter.id),
+                "time_entry_ids": [first["id"]],
+                "expense_ids": [],
+            },
+        )
+        assert generated.status_code == 201, generated.text
+        assert len(generated.json()["line_items"]) == 1
+
+    async def test_overpayment_and_direct_paid_are_rejected(self, client, test_matter):
+        await _log_time(client, test_matter.id, hours="1.0")
+        inv = (
+            await client.post(
+                "/api/billing/invoices/generate",
+                json={"matter_id": str(test_matter.id)},
+            )
+        ).json()
+        assert (
+            await client.patch(
+                f"/api/billing/invoices/{inv['id']}", json={"status": "paid"}
+            )
+        ).status_code == 400
+        assert (
+            await client.patch(
+                f"/api/billing/invoices/{inv['id']}", json={"status": "sent"}
+            )
+        ).status_code == 200
+        over = await client.post(
+            "/api/billing/payments",
+            json={
+                "invoice_id": inv["id"],
+                "amount": str(Decimal(inv["total"]) + Decimal("0.01")),
+                "payment_date": "2026-07-02",
+            },
+        )
+        assert over.status_code == 400
+
     async def test_generate_creates_draft_with_sequential_number(
         self, client, test_matter
     ):
@@ -249,6 +299,24 @@ class TestInvoiceWorkflow:
 
 
 class TestTimeEntryFilters:
+    async def test_nonbillable_entry_records_zero_even_when_matter_has_a_rate(
+        self, client, test_matter
+    ):
+        response = await client.post(
+            "/api/billing/time-entries",
+            json={
+                "matter_id": str(test_matter.id),
+                "description": "Internal team meeting",
+                "hours": "0.5",
+                "date": "2026-07-01",
+                "is_billable": False,
+            },
+        )
+
+        assert response.status_code == 201, response.text
+        assert response.json()["hourly_rate"] == "0.00"
+        assert response.json()["amount"] == "0.00"
+
     async def test_date_filters_and_pagination_totals(self, client, test_matter):
         for day, hours in (("2026-06-01", "1.0"), ("2026-07-01", "2.0")):
             resp = await client.post(
@@ -275,6 +343,133 @@ class TestTimeEntryFilters:
         assert len(pdata["items"]) == 1
         assert pdata["total"] == 2
         assert Decimal(pdata["total_hours"]) == Decimal("3.0")
+
+
+class TestMatterExpenses:
+    async def test_internal_expense_is_recorded_but_never_enters_prebill(
+        self, client, test_matter
+    ):
+        created = await client.post(
+            "/api/billing/expenses",
+            json={
+                "matter_id": str(test_matter.id),
+                "description": "Team lunch to discuss case strategy",
+                "amount": "74.50",
+                "date": "2026-08-25",
+                "category": "meals",
+                "vendor": "Main Street Cafe",
+                "reference_number": "RCPT-8821",
+                # The server enforces the internal-only category even if a
+                # caller mistakenly asks to pass it through to the client.
+                "is_billable": True,
+                "payment_method": "firm_card",
+                "payment_account": "Firm Amex",
+                "expense_account": "Meals and entertainment",
+                "tax_amount": "5.25",
+                "notes": "Internal strategy meeting; never show on client invoice.",
+            },
+        )
+        assert created.status_code == 201, created.text
+        body = created.json()
+        assert body["is_billable"] is False
+        assert body["review_status"] == "ready"
+        assert body["reference_number"] == "RCPT-8821"
+        assert body["qbo_payment_account_name"] == "Firm Amex"
+        assert body["qbo_expense_account_name"] == "Meals and entertainment"
+
+        preview = await client.get(
+            "/api/billing/invoices/preview",
+            params={"matter_id": str(test_matter.id)},
+        )
+        assert preview.status_code == 200, preview.text
+        assert preview.json()["expenses"] == []
+
+        ledger = await client.get(
+            "/api/billing/expenses", params={"matter_id": str(test_matter.id)}
+        )
+        assert ledger.status_code == 200, ledger.text
+        assert ledger.json()["total"] == 1
+        assert Decimal(ledger.json()["total_amount"]) == Decimal("74.50")
+
+    async def test_client_amount_is_distinct_from_cost_and_drives_invoice(
+        self, client, test_matter
+    ):
+        created = await client.post(
+            "/api/billing/expenses",
+            json={
+                "matter_id": str(test_matter.id),
+                "description": "Service of process",
+                "amount": "100.00",
+                "client_amount": "125.00",
+                "date": "2026-08-25",
+                "category": "process service",
+                "vendor": "County Process LLC",
+                "is_billable": True,
+            },
+        )
+        assert created.status_code == 201, created.text
+        expense = created.json()
+
+        preview = await client.get(
+            "/api/billing/invoices/preview",
+            params={"matter_id": str(test_matter.id)},
+        )
+        assert preview.status_code == 200, preview.text
+        row = preview.json()["expenses"][0]
+        assert Decimal(row["cost_amount"]) == Decimal("100.00")
+        assert Decimal(row["amount"]) == Decimal("125.00")
+        assert Decimal(preview.json()["expense_amount"]) == Decimal("125.00")
+
+        invoice = await client.post(
+            "/api/billing/invoices/generate",
+            json={
+                "matter_id": str(test_matter.id),
+                "time_entry_ids": [],
+                "expense_ids": [expense["id"]],
+            },
+        )
+        assert invoice.status_code == 201, invoice.text
+        assert Decimal(invoice.json()["subtotal"]) == Decimal("125.00")
+        assert Decimal(invoice.json()["line_items"][0]["amount"]) == Decimal(
+            "125.00"
+        )
+
+    async def test_receipt_review_state_gates_prebill(self, client, test_matter):
+        created = (
+            await client.post(
+                "/api/billing/expenses",
+                json={
+                    "matter_id": str(test_matter.id),
+                    "description": "Court filing fee",
+                    "amount": "85.00",
+                    "date": "2026-08-25",
+                    "category": "court filing",
+                    "is_billable": True,
+                },
+            )
+        ).json()
+        pending = await client.patch(
+            f"/api/billing/expenses/{created['id']}",
+            json={"review_status": "needs_review"},
+        )
+        assert pending.status_code == 200, pending.text
+
+        preview = await client.get(
+            "/api/billing/invoices/preview",
+            params={"matter_id": str(test_matter.id)},
+        )
+        assert preview.json()["expenses"] == []
+
+        approved = await client.patch(
+            f"/api/billing/expenses/{created['id']}",
+            json={"review_status": "approved"},
+        )
+        assert approved.status_code == 200, approved.text
+        preview = await client.get(
+            "/api/billing/invoices/preview",
+            params={"matter_id": str(test_matter.id)},
+        )
+        assert [item["id"] for item in preview.json()["expenses"]] == [created["id"]]
 
 
 class TestBillingSettings:

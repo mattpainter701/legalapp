@@ -13,7 +13,7 @@ from sqlalchemy.orm import selectinload
 
 from app.database import async_session_maker, get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
-from app.models.billing import TimeEntry, Invoice, Payment
+from app.models.billing import TimeEntry, Expense, Invoice, Payment
 from app.models.communication_log import CommunicationLog
 from app.models.contact import Contact
 from app.models.matter_assignment import MatterAssignment
@@ -64,6 +64,10 @@ from app.models.tenant_credential import TenantCredential
 from app.services.cloud_search import CloudSearchService
 from app.services.cloud_sync import CloudSyncService
 from app.services.cache import ExpertiseCacheManager
+from app.services.matter_budget import (
+    expense_client_amount_expression,
+    load_matter_billable_totals,
+)
 
 _cloud_search = CloudSearchService()
 _cloud_sync = CloudSyncService()
@@ -317,19 +321,7 @@ async def _compute_budget_utilization(
     db: AsyncSession, matter_id: uuid.UUID, tenant_id: uuid.UUID
 ) -> BudgetUtilization:
     """Compute budget utilization for a matter."""
-    billed_result = await db.execute(
-        select(
-            func.coalesce(func.sum(TimeEntry.hours), 0),
-            func.coalesce(func.sum(TimeEntry.amount), 0),
-        ).where(
-            TimeEntry.matter_id == matter_id,
-            TimeEntry.tenant_id == tenant_id,
-            TimeEntry.is_billable.is_(True),
-        )
-    )
-    total_hours, total_billed = billed_result.one()
-    total_hours = float(total_hours or 0)
-    total_billed = Decimal(str(total_billed or 0))
+    totals = await load_matter_billable_totals(db, matter_id, tenant_id)
 
     paid_result = await db.execute(
         select(func.coalesce(func.sum(Payment.amount), 0)).where(
@@ -344,27 +336,17 @@ async def _compute_budget_utilization(
     )
     total_paid = Decimal(str(paid_result.scalar() or 0))
 
-    unbilled_result = await db.execute(
-        select(
-            func.coalesce(func.sum(TimeEntry.amount), 0),
-        ).where(
-            TimeEntry.matter_id == matter_id,
-            TimeEntry.tenant_id == tenant_id,
-            TimeEntry.is_billable.is_(True),
-            TimeEntry.invoice_id.is_(None),
-        )
-    )
-    total_unbilled = Decimal(str(unbilled_result.scalar() or 0))
-
     return BudgetUtilization(
         budget_amount=None,
         budget_currency="USD",
-        total_hours=total_hours,
-        total_billed=total_billed,
+        total_hours=totals.total_hours,
+        total_billed=totals.total_amount,
         total_paid=total_paid,
-        total_unbilled=total_unbilled,
+        total_unbilled=totals.total_unbilled,
         utilization_pct=None,
         remaining=None,
+        billable_time_amount=totals.time_amount,
+        billable_expense_amount=totals.expense_amount,
     )
 
 
@@ -559,6 +541,24 @@ async def list_matters(
             )
         ).all()
         billed_map = {row[0]: Decimal(str(row[1])) for row in billed_rows}
+        expense_rows = (
+            await db.execute(
+                select(
+                    Expense.matter_id,
+                    func.coalesce(func.sum(expense_client_amount_expression()), 0),
+                )
+                .where(
+                    Expense.matter_id.in_(matter_ids),
+                    Expense.tenant_id == tenant_id,
+                    Expense.is_billable.is_(True),
+                )
+                .group_by(Expense.matter_id)
+            )
+        ).all()
+        for matter_id, amount in expense_rows:
+            billed_map[matter_id] = billed_map.get(matter_id, Decimal("0")) + Decimal(
+                str(amount or 0)
+            )
 
     items = []
     for m in matters:
@@ -892,6 +892,42 @@ async def get_my_matters(
     result = await db.execute(q)
     matters = result.unique().scalars().all()
 
+    my_matter_ids = [matter.id for matter in matters]
+    my_billed_map: dict[uuid.UUID, Decimal] = {}
+    if my_matter_ids:
+        my_time_rows = (
+            await db.execute(
+                select(
+                    TimeEntry.matter_id, func.coalesce(func.sum(TimeEntry.amount), 0)
+                )
+                .where(
+                    TimeEntry.tenant_id == tenant_id,
+                    TimeEntry.matter_id.in_(my_matter_ids),
+                    TimeEntry.is_billable.is_(True),
+                )
+                .group_by(TimeEntry.matter_id)
+            )
+        ).all()
+        my_billed_map = {row[0]: Decimal(str(row[1] or 0)) for row in my_time_rows}
+        my_expense_rows = (
+            await db.execute(
+                select(
+                    Expense.matter_id,
+                    func.coalesce(func.sum(expense_client_amount_expression()), 0),
+                )
+                .where(
+                    Expense.tenant_id == tenant_id,
+                    Expense.matter_id.in_(my_matter_ids),
+                    Expense.is_billable.is_(True),
+                )
+                .group_by(Expense.matter_id)
+            )
+        ).all()
+        for matter_id, amount in my_expense_rows:
+            my_billed_map[matter_id] = my_billed_map.get(
+                matter_id, Decimal("0")
+            ) + Decimal(str(amount or 0))
+
     from datetime import date as date_type
 
     today = date_type.today()
@@ -966,8 +1002,19 @@ async def get_my_matters(
                 attorney_of_record_name=attorney_name,
                 assigned_to=assigned_to,
                 budget_amount=m.budget_amount,
-                total_billed=Decimal("0"),
-                budget_utilization_pct=None,
+                total_billed=my_billed_map.get(m.id, Decimal("0")),
+                budget_utilization_pct=(
+                    round(
+                        float(
+                            my_billed_map.get(m.id, Decimal("0"))
+                            / m.budget_amount
+                            * 100
+                        ),
+                        1,
+                    )
+                    if m.budget_amount and m.budget_amount > 0
+                    else None
+                ),
                 is_overdue=overdue_label is not None and "overdue" in overdue_label,
                 next_deadline=next_deadline,
                 cloud_folder=m.cloud_folder,
@@ -1062,6 +1109,12 @@ async def get_matter_stats(
         )
     )
     total_billed = Decimal(str(billed_q.scalar() or 0))
+    billed_expense_q = await db.execute(
+        select(func.coalesce(func.sum(expense_client_amount_expression()), 0)).where(
+            Expense.tenant_id == tenant_id, Expense.is_billable.is_(True)
+        )
+    )
+    total_billed += Decimal(str(billed_expense_q.scalar() or 0))
 
     unbilled_q = await db.execute(
         select(func.coalesce(func.sum(TimeEntry.amount), 0)).where(
@@ -1071,6 +1124,14 @@ async def get_matter_stats(
         )
     )
     total_unbilled = Decimal(str(unbilled_q.scalar() or 0))
+    unbilled_expense_q = await db.execute(
+        select(func.coalesce(func.sum(expense_client_amount_expression()), 0)).where(
+            Expense.tenant_id == tenant_id,
+            Expense.is_billable.is_(True),
+            Expense.invoice_id.is_(None),
+        )
+    )
+    total_unbilled += Decimal(str(unbilled_expense_q.scalar() or 0))
 
     return MatterStats(
         total=total,

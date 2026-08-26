@@ -132,6 +132,8 @@ class BudgetUtilization(BaseModel):
     total_unbilled: Decimal
     utilization_pct: float | None
     remaining: Decimal | None
+    billable_time_amount: Decimal = Decimal("0")
+    billable_expense_amount: Decimal = Decimal("0")
 
 
 class MatterResponse(BaseModel):

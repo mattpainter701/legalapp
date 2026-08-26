@@ -33,6 +33,7 @@ vi.mock('../api', () => ({
       qbo_sync_status: 'pending',
     }],
   }),
+  getInvoicePreview: vi.fn().mockResolvedValue({ time_entries: [], expenses: [] }),
   getMyMatters: vi.fn().mockResolvedValue([
     { id: 'profile-matter-1', matter_name: 'Acme advisory', matter_type: 'commercial', status: 'active' },
   ]),

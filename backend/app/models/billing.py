@@ -6,10 +6,12 @@ from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
     Integer,
+    JSON,
     Numeric,
     String,
     Text,
@@ -102,6 +104,36 @@ class Expense(Base):
         Index("idx_expenses_tenant_id", "tenant_id"),
         Index("idx_expenses_matter_id", "matter_id"),
         Index("idx_expenses_invoice_id", "invoice_id"),
+        Index("idx_expenses_source_inbound_email", "source_inbound_email_id"),
+        UniqueConstraint(
+            "tenant_id",
+            "source_hash",
+            name="uq_expenses_tenant_source_hash",
+        ),
+        CheckConstraint(
+            "currency = upper(currency) AND char_length(currency) = 3",
+            name="ck_expenses_currency",
+        ),
+        CheckConstraint(
+            "amount >= 0 AND (client_amount IS NULL OR client_amount >= 0) AND (tax_amount IS NULL OR tax_amount >= 0)",
+            name="ck_expenses_nonnegative_amounts",
+        ),
+        CheckConstraint(
+            "extraction_confidence IS NULL OR (extraction_confidence >= 0 AND extraction_confidence <= 1)",
+            name="ck_expenses_extraction_confidence",
+        ),
+        CheckConstraint(
+            "source_type IN ('manual', 'email', 'graph', 'import', 'receipt', 'other')",
+            name="ck_expenses_source_type",
+        ),
+        CheckConstraint(
+            "review_status IN ('ready', 'needs_review', 'pending', 'approved', 'rejected')",
+            name="ck_expenses_review_status",
+        ),
+        CheckConstraint(
+            "qbo_sync_status IS NULL OR qbo_sync_status IN ('pending', 'synced', 'error', 'skipped')",
+            name="ck_expenses_qbo_sync_status",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -126,11 +158,17 @@ class Expense(Base):
     )
     description: Mapped[str] = mapped_column(Text, nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    client_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    currency: Mapped[str] = mapped_column(
+        String(3), nullable=False, default="USD", server_default="USD"
+    )
     date: Mapped[datetime] = mapped_column(Date, nullable=False)
+    due_date: Mapped[datetime | None] = mapped_column(Date, nullable=True)
     category: Mapped[str] = mapped_column(
         String(100), default="other", server_default="other"
     )
     vendor: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    reference_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
     is_billable: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
     )
@@ -138,6 +176,54 @@ class Expense(Base):
         UUID(as_uuid=True),
         ForeignKey("invoices.id", ondelete="SET NULL"),
         nullable=True,
+    )
+    payment_method: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    payment_account: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    expense_account: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    tax_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    tax_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_type: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="manual", server_default="manual"
+    )
+    review_status: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="ready", server_default="ready"
+    )
+    receipt_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("matter_documents.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source_inbound_email_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("inbound_emails.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    extracted_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    extraction_confidence: Mapped[Decimal | None] = mapped_column(
+        Numeric(5, 4), nullable=True
+    )
+    qbo_vendor_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    qbo_vendor_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    qbo_expense_account_id: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )
+    qbo_expense_account_name: Mapped[str | None] = mapped_column(
+        String(300), nullable=True
+    )
+    qbo_payment_account_id: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )
+    qbo_payment_account_name: Mapped[str | None] = mapped_column(
+        String(300), nullable=True
+    )
+    qbo_transaction_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    qbo_transaction_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    qbo_sync_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    qbo_sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    qbo_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
