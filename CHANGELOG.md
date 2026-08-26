@@ -26,6 +26,11 @@
   private-detail protection remains enforced.
 
 ### Fixed
+- **Production deploy checks now distinguish disposable file-share pairing
+  reservations from registered agents:** pre/post data protection still fails
+  on any registered agent loss, while the intentional cleanup of expired,
+  never-registered `pending` reservations no longer produces a false data-loss
+  alarm.
 - **File-share operations now report the real tenant state:** production
   explicitly enables SMB retrieval, while the Status tab always authenticates
   and returns tenant-scoped agent, share, credential, heartbeat, scan, and

@@ -1582,7 +1582,16 @@ def test_production_guards_cover_litellm_data_and_schema() -> None:
     # Nullable tenant_id columns are legitimate for global rows. Their count
     # metric must remain named so clean restores can compare it exactly.
     nullable_tenant_metric = "COALESCE(tenant_id::text, ''<null>'')"
-    assert data_guard.count(nullable_tenant_metric) == 2
+    assert data_guard.count(nullable_tenant_metric) == 4
+    # Expired, never-registered SMB pairing reservations are intentionally
+    # cleaned up by the scheduler. Registered active/paused/revoked rows must
+    # remain protected by the production count guard.
+    assert data_guard.count("table_name = 'smb_agents'") == 4
+    assert data_guard.count("api_key_hash IS DISTINCT FROM ''pending''") == 4
+    tenant_registered_agent_filter = (
+        "WHERE api_key_hash IS DISTINCT FROM ''pending'' GROUP BY tenant_id;"
+    )
+    assert data_guard.count(tenant_registered_agent_filter) == 2
     assert "prisma migrate diff --exit-code" in production_check
     assert "for service in postgres redis litellm-postgres litellm backend" in (
         production_check
