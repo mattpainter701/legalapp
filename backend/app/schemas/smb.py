@@ -86,6 +86,7 @@ class AgentInfo(UuidStringModel):
     os_info: str | None
     last_heartbeat: datetime | None
     created_at: datetime
+    updated_at: datetime | None = None
     is_registered: bool = True
     update_status: str = "idle"
     update_target_version: str | None = None
@@ -166,6 +167,7 @@ class ShareInfo(UuidStringModel):
     last_verify_status: str | None = None
     last_verify_error: str | None = None
     created_at: datetime
+    updated_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -211,6 +213,7 @@ class SmbCredentialInfo(UuidStringModel):
     last_verify_error: str | None = None
     last_delivered_at: datetime | None = None
     created_at: datetime
+    updated_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 

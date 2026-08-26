@@ -30,4 +30,15 @@ describe('buildSmbOperationalActivity', () => {
     expect(serialized).not.toContain('agent-key-value')
     expect(serialized).not.toContain('stored-password-value')
   })
+
+  it('shows pending credential and share operations at their update time', () => {
+    const result = buildSmbOperationalActivity({
+      shares: [{ id: 's1', display_name: 'Documents', created_at: '2026-08-26T09:00:00Z', updated_at: '2026-08-26T10:01:00Z', last_scan_at: '2026-08-25T08:00:00Z', last_scan_status: 'queued' }],
+      credentials: [{ id: 'c1', name: 'Home user', auth_method: 'ntlm', created_at: '2026-08-26T09:00:00Z', updated_at: '2026-08-26T10:02:00Z', last_verified_at: '2026-08-25T08:00:00Z', last_verify_status: 'pending' }],
+    })
+
+    expect(result[0].title).toBe('Home user verification')
+    expect(result[0].state).toBe('warning')
+    expect(result.find((item) => item.title === 'Documents scan')?.occurredAt.toISOString()).toBe('2026-08-26T10:01:00.000Z')
+  })
 })

@@ -8,6 +8,7 @@ from sqlalchemy.dialects import postgresql
 
 import app.routers.cloud_admin as cloud_admin
 import app.config as config_module
+from app.schemas.smb import AgentInfo, ShareInfo, SmbCredentialInfo
 from app.services import smb as smb_module
 from app.services.smb import SmbService
 
@@ -18,6 +19,11 @@ class _ScalarResult:
 
     def scalar_one(self):
         return self.value
+
+
+def test_admin_activity_resources_expose_operational_update_timestamps():
+    for schema in (AgentInfo, ShareInfo, SmbCredentialInfo):
+        assert "updated_at" in schema.model_fields
 
 
 @pytest.mark.asyncio
