@@ -26,6 +26,14 @@
   private-detail protection remains enforced.
 
 ### Fixed
+- **Windows agent releases now fail closed on platform trust and stop cleanly
+  for overtop upgrades:** tagged builds use Microsoft Public Trust Artifact
+  Signing for the EXE before it is embedded and for the final MSI, verify both
+  Authenticode signatures before publication, and refuse to release when the
+  OIDC signing configuration is absent. The Windows service now latches early
+  stop requests, cancels its async workers, closes local resources, and uses a
+  bounded last-resort exit so a blocked SMB call cannot outlive the MSI service
+  stop window or start an overlapping agent process.
 - **Production accepts the previously deployed shared OpenCode credential while
   canonical provider names are migrated:** `OPENCODE_ZEN_API_KEY` remains the
   preferred Zen credential, but the verified legacy `DEEPSEEK_API_KEY` is a

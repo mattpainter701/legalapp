@@ -37,8 +37,10 @@ on:
 
 jobs:
   windows:
-    name: Windows — exe and MSI
+    name: Windows — unsigned validation
     runs-on: windows-latest
+    permissions:
+      contents: read
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -55,23 +57,135 @@ jobs:
       - name: Run agent tests on Windows
         run: python -m pytest agent/tests -q
 
-      - name: Build agent installers
+      - name: Build unsigned validation installers
         shell: pwsh
         run: ./agent/packaging/windows/build.ps1
 
-      - name: Smoke-test password-backed MSI overtop upgrade
+      - name: Smoke-test unsigned validation MSI overtop upgrade
         shell: pwsh
         run: ./agent/packaging/windows/test-upgrade.ps1 -Run
 
-      - name: Upload Windows artifacts
+      - name: Upload unsigned executable handoff
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node.js 24)
+        with:
+          name: lawhand-agent-windows-unsigned
+          path: agent/dist/lawhand-agent.exe
+          compression-level: 0
+          retention-days: 14
+          if-no-files-found: error
+
+  windows-sign:
+    name: Windows — sign and package release
+    if: startsWith(github.ref, 'refs/tags/agent-v')
+    needs: windows
+    runs-on: windows-latest
+    environment:
+      name: agent-release
+      deployment: false
+      # Federated credential subject (exact; no preview wildcard):
+      # repo:mattpainter701/legalapp:environment:agent-release
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (Node.js 24)
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3 (Node.js 24)
+        with:
+          python-version: "3.11"
+
+      - name: Download unsigned executable handoff
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: lawhand-agent-windows-unsigned
+          path: agent/dist
+
+      - name: Require Azure release signing configuration
+        env:
+          WINDOWS_SIGNING_AZURE_CLIENT_ID: ${{ vars.WINDOWS_SIGNING_AZURE_CLIENT_ID }}
+          WINDOWS_SIGNING_AZURE_TENANT_ID: ${{ vars.WINDOWS_SIGNING_AZURE_TENANT_ID }}
+          WINDOWS_SIGNING_AZURE_SUBSCRIPTION_ID: ${{ vars.WINDOWS_SIGNING_AZURE_SUBSCRIPTION_ID }}
+          WINDOWS_SIGNING_ENDPOINT: ${{ vars.WINDOWS_SIGNING_ENDPOINT }}
+          WINDOWS_SIGNING_ACCOUNT_NAME: ${{ vars.WINDOWS_SIGNING_ACCOUNT_NAME }}
+          WINDOWS_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ vars.WINDOWS_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          WINDOWS_SIGNING_EXPECTED_SUBJECT: ${{ vars.WINDOWS_SIGNING_EXPECTED_SUBJECT }}
+        shell: pwsh
+        run: |
+          $required = @('WINDOWS_SIGNING_AZURE_CLIENT_ID','WINDOWS_SIGNING_AZURE_TENANT_ID','WINDOWS_SIGNING_AZURE_SUBSCRIPTION_ID','WINDOWS_SIGNING_ENDPOINT','WINDOWS_SIGNING_ACCOUNT_NAME','WINDOWS_SIGNING_CERTIFICATE_PROFILE_NAME','WINDOWS_SIGNING_EXPECTED_SUBJECT')
+          foreach ($name in $required) { if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) { throw "Release signing configuration variable $name is missing." } }
+
+      - name: Azure OIDC login for release signing
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
+        with:
+          client-id: ${{ vars.WINDOWS_SIGNING_AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.WINDOWS_SIGNING_AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.WINDOWS_SIGNING_AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign Windows executable with Artifact Signing
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.WINDOWS_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.WINDOWS_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ vars.WINDOWS_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          files: ${{ github.workspace }}\agent\dist\lawhand-agent.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Verify signed executable and build MSI
+        env:
+          WINDOWS_SIGNING_EXPECTED_SUBJECT: ${{ vars.WINDOWS_SIGNING_EXPECTED_SUBJECT }}
+        shell: pwsh
+        run: |
+          $exe = Join-Path $PWD 'agent/dist/lawhand-agent.exe'
+          $signature = Get-AuthenticodeSignature -LiteralPath $exe
+          if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or -not $signature.TimeStamperCertificate -or $signature.SignerCertificate.Subject -ne $env:WINDOWS_SIGNING_EXPECTED_SUBJECT) { throw 'Authenticode verification failed for signed executable.' }
+          & signtool verify /pa /all /tw $exe
+          if ($LASTEXITCODE -ne 0) { throw 'signtool verification failed for signed executable.' }
+          ./agent/packaging/windows/build.ps1 -SkipExe
+
+      - name: Sign Windows MSI with Artifact Signing
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.WINDOWS_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.WINDOWS_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ vars.WINDOWS_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          files-folder: ${{ github.workspace }}\agent\dist
+          files-folder-filter: msi
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Verify signed Windows artifacts
+        env:
+          WINDOWS_SIGNING_EXPECTED_SUBJECT: ${{ vars.WINDOWS_SIGNING_EXPECTED_SUBJECT }}
+        shell: pwsh
+        run: |
+          $artifacts = @((Join-Path $PWD 'agent/dist/lawhand-agent.exe'), (Get-ChildItem -LiteralPath (Join-Path $PWD 'agent/dist') -Filter '*.msi' -File | Select-Object -ExpandProperty FullName))
+          foreach ($artifact in $artifacts) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $artifact
+            if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or -not $signature.TimeStamperCertificate -or $signature.SignerCertificate.Subject -ne $env:WINDOWS_SIGNING_EXPECTED_SUBJECT) { throw "Unexpected or invalid Windows signer for $artifact." }
+            & signtool verify /pa /all /tw $artifact
+            if ($LASTEXITCODE -ne 0) { throw "signtool verification failed for $artifact" }
+          }
+
+      - name: Smoke-test signed MSI overtop upgrade
+        env:
+          WINDOWS_SIGNING_EXPECTED_SUBJECT: ${{ vars.WINDOWS_SIGNING_EXPECTED_SUBJECT }}
+        shell: pwsh
+        run: ./agent/packaging/windows/test-upgrade.ps1 -Run -ExpectedSignerSubject $env:WINDOWS_SIGNING_EXPECTED_SUBJECT
+
+      - name: Upload signed Windows artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node.js 24)
         with:
           name: lawhand-agent-windows
           path: |
             agent/dist/lawhand-agent.exe
             agent/dist/*.msi
-          # PyInstaller and the embedded MSI cabinet are already compressed;
-          # recompressing them made the Windows upload take several minutes.
           compression-level: 0
           retention-days: 14
           if-no-files-found: error
@@ -113,7 +227,7 @@ jobs:
 
   publish-release:
     name: Publish verified release
-    needs: [windows, linux]
+    needs: [windows-sign, linux]
     if: startsWith(github.ref, 'refs/tags/agent-v')
     runs-on: ubuntu-latest
     timeout-minutes: 10

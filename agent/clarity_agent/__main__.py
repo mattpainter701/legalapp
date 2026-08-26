@@ -426,13 +426,35 @@ async def run_daemon(
                 pass
 
     logger.info("Entering main loop")
-    await asyncio.gather(
-        scan_loop(), task_loop(), heartbeat_loop(), return_exceptions=True
-    )
-
-    await ledger.close()
-    await client.close()
-    logger.info("Agent shut down")
+    workers = [
+        asyncio.create_task(scan_loop(), name="lawhand-scan"),
+        asyncio.create_task(task_loop(), name="lawhand-task"),
+        asyncio.create_task(heartbeat_loop(), name="lawhand-heartbeat"),
+    ]
+    stop_waiter = asyncio.create_task(stop_event.wait(), name="lawhand-stop")
+    try:
+        await asyncio.wait(
+            [*workers, stop_waiter],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+    finally:
+        # A service stop must actively cancel workers rather than waiting for
+        # a long-poll or blocking share operation to return on its own.  This
+        # also gives the Windows service host a bounded path to process exit.
+        # A loop that exits unexpectedly must not leave the other loops running
+        # in a partially healthy process either. Keep cancellation in finally
+        # so an outside cancellation of run_daemon cannot strand worker tasks.
+        for worker in workers:
+            if not worker.done():
+                worker.cancel()
+        stop_waiter.cancel()
+        await asyncio.gather(*workers, stop_waiter, return_exceptions=True)
+        # Keep resource cleanup in finally: an unexpected worker completion or
+        # cancellation must not strand the ledger or HTTP connection pool.
+        await asyncio.gather(
+            ledger.close(), client.close(), return_exceptions=True
+        )
+        logger.info("Agent shut down")
 
 
 async def _register_with_saas(

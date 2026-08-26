@@ -13,7 +13,10 @@
         .\test-upgrade.ps1 -Run
 #>
 [CmdletBinding()]
-param([switch]$Run)
+param(
+    [switch]$Run,
+    [string]$ExpectedSignerSubject = ""
+)
 
 $ErrorActionPreference = "Stop"
 if (-not $Run) {
@@ -28,7 +31,9 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 $agentRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $dist = Join-Path $agentRoot "dist"
 $exe = Join-Path $dist "lawhand-agent.exe"
-$currentMsi = Get-ChildItem (Join-Path $dist "lawhand-agent-*-x64.msi") |
+$installedExe = Join-Path ([Environment]::GetFolderPath("ProgramFiles")) "LawHand\Agent\lawhand-agent.exe"
+$currentMsi = $null
+$currentMsi = Get-ChildItem (Join-Path $dist "lawhand-agent-*-x64.msi") -ErrorAction SilentlyContinue |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
 $wix = (Get-Command wix -ErrorAction Stop).Source
 if (-not (Test-Path $exe) -or -not $currentMsi) { throw "Build artifacts are missing; run build.ps1 first." }
@@ -96,6 +101,19 @@ function Service-StartName {
     if (-not $line) { throw "Could not read LawHandAgent service account." }
     return (($line -split ":", 2)[1]).Trim()
 }
+function Service-ProcessId {
+    $service = Get-CimInstance Win32_Service -Filter "Name='LawHandAgent'"
+    if (-not $service) { throw "LawHandAgent service is not installed." }
+    $processId = [int]$service.ProcessId
+    if ($processId -le 0) { throw "LawHandAgent service has no running process." }
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$processId"
+    if (-not $process) { throw "LawHandAgent service process disappeared during inspection." }
+    return [pscustomobject]@{
+        ProcessId = $processId
+        CreationDate = [string]$process.CreationDate
+        ExecutablePath = [string]$process.ExecutablePath
+    }
+}
 function Set-ServiceLogonRight([string]$sid) {
     & secedit.exe /export /cfg $policyBefore /areas USER_RIGHTS | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Could not export local security policy." }
@@ -107,6 +125,15 @@ function Set-ServiceLogonRight([string]$sid) {
     & secedit.exe /configure /db $policyDb /cfg $policyTest /areas USER_RIGHTS | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Could not grant temporary SeServiceLogonRight." }
     $script:policyChanged = $true
+}
+function Wait-ServiceStopped {
+    param([int]$TimeoutSeconds = 45)
+    $service = Get-Service -Name LawHandAgent -ErrorAction SilentlyContinue
+    if (-not $service) { return }
+    if ($service.Status -ne "Stopped") {
+        Stop-Service -Name LawHandAgent -Force -ErrorAction SilentlyContinue
+        $service.WaitForStatus("Stopped", [TimeSpan]::FromSeconds($TimeoutSeconds))
+    }
 }
 
 try {
@@ -125,6 +152,7 @@ try {
     )
     $before = Service-StartName
     if ($before -notlike "*$user") { throw "Predecessor service account was not installed as the test user." }
+    $predecessor = Service-ProcessId
 
     Invoke-Msi -Operation "Overtop upgrade" -LogPath $upgradeLog -Arguments @(
         "/i", $currentMsi.FullName, "/qn", "/norestart", "/l*v", $upgradeLog
@@ -132,18 +160,40 @@ try {
     $after = Service-StartName
     if ($after -ne $before) { throw "Overtop upgrade changed service account." }
     $service = Get-Service -Name LawHandAgent
-    if ($service.Status -ne "Stopped") {
-        Stop-Service -Name LawHandAgent -Force
-        $service.WaitForStatus("Stopped", [TimeSpan]::FromSeconds(30))
+    if ($service.Status -ne "Running") {
+        throw "MSI did not leave LawHandAgent running after the overtop upgrade; SCM rejected the retained service credential."
     }
-    & sc.exe start LawHandAgent | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "SCM rejected the retained service credential during service start." }
+    $replacement = Service-ProcessId
+    if (-not $replacement.ExecutablePath.Equals(
+            $installedExe, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Replacement service process is not the expected LawHand executable."
+    }
+    if ($ExpectedSignerSubject) {
+        $installedSignature = Get-AuthenticodeSignature -LiteralPath $replacement.ExecutablePath
+        if ($installedSignature.Status -ne "Valid" -or
+            -not $installedSignature.SignerCertificate -or
+            -not $installedSignature.TimeStamperCertificate -or
+            $installedSignature.SignerCertificate.Subject -ne $ExpectedSignerSubject) {
+            throw "MSI did not install the expected timestamped Authenticode-signed executable."
+        }
+    }
+    $oldProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$($predecessor.ProcessId)"
+    if ($oldProcess -and
+        [string]$oldProcess.CreationDate -eq $predecessor.CreationDate -and
+        [string]$oldProcess.ExecutablePath -eq $predecessor.ExecutablePath) {
+        throw "Predecessor service process identity is still alive after the overtop upgrade."
+    }
     Write-Host "MSI overtop upgrade retained the password-backed service account and SCM accepted it."
 }
 finally {
-    & sc.exe stop LawHandAgent 2>$null | Out-Null
-    & msiexec.exe /x $currentMsi.FullName /qn /norestart 2>$null | Out-Null
-    & msiexec.exe /x $oldMsi /qn /norestart 2>$null | Out-Null
+    try { Wait-ServiceStopped }
+    catch { Write-Warning "Could not confirm LawHandAgent stopped during cleanup: $($_.Exception.Message)" }
+    if ($currentMsi -and (Test-Path -LiteralPath $currentMsi.FullName)) {
+        & msiexec.exe /x $currentMsi.FullName /qn /norestart 2>$null | Out-Null
+    }
+    if ($oldMsi -and (Test-Path -LiteralPath $oldMsi)) {
+        & msiexec.exe /x $oldMsi /qn /norestart 2>$null | Out-Null
+    }
     if ($policyChanged) { & secedit.exe /configure /db $policyDb /cfg $policyBefore /areas USER_RIGHTS | Out-Null }
     Remove-LocalUser -Name $user -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $testData) { Remove-Item -LiteralPath $testData -Recurse -Force -ErrorAction SilentlyContinue }
