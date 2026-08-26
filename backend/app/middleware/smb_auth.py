@@ -7,7 +7,12 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db, set_tenant_context
+from app.database import (
+    clear_smb_agent_bootstrap_lookup,
+    get_db,
+    set_smb_agent_bootstrap_lookup,
+    set_tenant_context,
+)
 from app.models.smb_agent import SmbAgent
 
 logger = logging.getLogger(__name__)
@@ -24,18 +29,22 @@ async def _check_smb_rate_limit(request: Request) -> None:
 
     client_ip = request.client.host if request.client else "unknown"
     key = f"rate_smb_auth:{client_ip}"
-    current = await redis.get(key)
+    try:
+        # INCR is atomic, unlike a GET-then-INCR sequence under concurrent
+        # invalid-key traffic. Redis is a protective layer here; an outage
+        # must not turn every agent request into a 500 response.
+        count = int(await redis.incr(key))
+        if count == 1:
+            await redis.expire(key, _SMB_RATE_LIMIT_WINDOW)
+    except Exception:
+        logger.warning("SMB authentication rate limiter unavailable", exc_info=True)
+        return
 
-    if current:
-        count = int(current)
-        if count >= _SMB_RATE_LIMIT_MAX:
-            raise HTTPException(
-                status_code=429,
-                detail="Too many authentication attempts. Try again later.",
-            )
-        await redis.incr(key)
-    else:
-        await redis.set(key, 1, ex=_SMB_RATE_LIMIT_WINDOW)
+    if count > _SMB_RATE_LIMIT_MAX:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many authentication attempts. Try again later.",
+        )
 
 
 async def get_smb_agent(
@@ -57,10 +66,17 @@ async def get_smb_agent(
 
     key_hash = hashlib.sha256(api_key.encode()).hexdigest()
 
-    result = await db.execute(select(SmbAgent).where(SmbAgent.api_key_hash == key_hash))
+    await set_smb_agent_bootstrap_lookup(db, api_key_hash=key_hash)
+    try:
+        result = await db.execute(
+            select(SmbAgent).where(SmbAgent.api_key_hash == key_hash)
+        )
+    finally:
+        await clear_smb_agent_bootstrap_lookup(db)
     agent = result.scalar_one_or_none()
 
     if agent is None:
+        await _check_smb_rate_limit(request)
         raise HTTPException(status_code=401, detail="Invalid API key")
 
     if agent.status != "active":

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import uuid
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,6 +10,153 @@ from app.models.document import Chunk, Document
 from app.models.conversation import Conversation
 from app.models.plugin import Matter
 from app.services.cache import ExpertiseCacheManager
+
+
+@pytest.mark.asyncio
+async def test_smb_rag_fetch_is_bounded_and_uses_primary_task_binding(monkeypatch):
+    import app.services.smb as smb_module
+
+    calls = []
+    commits = []
+
+    class FakeSmbService:
+        async def request_content_fetch(
+            self, db, tenant_id, user_id, file_id, conversation_id, reason, redis
+        ):
+            calls.append(
+                (db, tenant_id, user_id, file_id, conversation_id, reason, redis)
+            )
+            await db.commit()
+            return f"task-{file_id}", "agent"
+
+        async def get_task_result(self, task_id, tenant_id, **kwargs):
+            assert len(commits) == 3
+            return {"ok": True, "content": f"body-{task_id}"}
+
+    class FakeTaskSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        async def commit(self):
+            commits.append(True)
+
+    monkeypatch.setattr(smb_module, "smb_service", FakeSmbService())
+    hits = [SimpleNamespace(id=str(i)) for i in range(5)]
+    content, reasons = await rag._fetch_smb_rag_content(
+        redis=object(),
+        results=hits,
+        tenant_id="tenant",
+        user_id="user",
+        conversation_id="conversation",
+        session_factory=FakeTaskSession,
+    )
+
+    assert set(content) == {"0", "1", "2"}
+    assert reasons == ()
+    assert len(calls) == 3
+    assert len(commits) == 3
+    assert all(call[5] == "rag_context" for call in calls)
+
+
+@pytest.mark.asyncio
+async def test_smb_rag_fetch_falls_back_when_relay_is_unavailable(monkeypatch):
+    import app.services.smb as smb_module
+
+    class UnavailableSmbService:
+        async def request_content_fetch(self, *args, **kwargs):
+            raise AssertionError("should not queue without Redis")
+
+    monkeypatch.setattr(smb_module, "smb_service", UnavailableSmbService())
+    content, reasons = await rag._fetch_smb_rag_content(
+        redis=None,
+        results=[SimpleNamespace(id="1")],
+        tenant_id="tenant",
+        user_id="user",
+        conversation_id="conversation",
+    )
+
+    assert content == {}
+    assert reasons == ("smb_content_fetch_unavailable",)
+
+
+@pytest.mark.asyncio
+async def test_smb_rag_fetch_timeout_includes_task_queueing(monkeypatch):
+    import app.services.smb as smb_module
+
+    class SlowSmbService:
+        async def request_content_fetch(self, *args, **kwargs):
+            await asyncio.sleep(1)
+
+    class FakeTaskSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        async def commit(self):
+            return None
+
+    monkeypatch.setattr(smb_module, "smb_service", SlowSmbService())
+    monkeypatch.setattr(rag, "SMB_RAG_FETCH_TIMEOUT_SECONDS", 0.02)
+    started = asyncio.get_running_loop().time()
+    content, reasons = await rag._fetch_smb_rag_content(
+        redis=object(),
+        results=[SimpleNamespace(id="1")],
+        tenant_id="tenant",
+        user_id="user",
+        conversation_id="conversation",
+        session_factory=FakeTaskSession,
+    )
+
+    assert asyncio.get_running_loop().time() - started < 0.2
+    assert content == {}
+    assert reasons == ("smb_content_fetch_timeout",)
+
+
+@pytest.mark.asyncio
+async def test_smb_rag_fetch_never_publishes_when_audit_commit_fails(monkeypatch):
+    import app.services.smb as smb_module
+
+    class FakeSmbService:
+        async def request_content_fetch(self, db, *args, **kwargs):
+            await db.commit()
+            return "task-1", "agent-1"
+
+    class FailingTaskSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        async def commit(self):
+            raise RuntimeError("database commit failed")
+
+    class FakeRedis:
+        def __init__(self):
+            self.deleted = []
+
+        async def delete(self, key):
+            self.deleted.append(key)
+
+    redis = FakeRedis()
+    monkeypatch.setattr(smb_module, "smb_service", FakeSmbService())
+    content, reasons = await rag._fetch_smb_rag_content(
+        redis=redis,
+        results=[SimpleNamespace(id="1")],
+        tenant_id="tenant",
+        user_id="user",
+        conversation_id="conversation",
+        session_factory=FailingTaskSession,
+    )
+
+    assert content == {}
+    assert reasons == ("smb_content_fetch_failed",)
+    assert redis.deleted == []
 
 
 @pytest.mark.asyncio
@@ -284,7 +432,9 @@ def test_public_search_default_prefers_matter_then_verified_user_profile():
         == "ND"
     )
     assert rag.select_public_jurisdiction_default(None, ["California"]) == "CA"
-    assert rag.select_public_jurisdiction_default("Unknown forum", ["Minnesota"]) == "MN"
+    assert (
+        rag.select_public_jurisdiction_default("Unknown forum", ["Minnesota"]) == "MN"
+    )
 
 
 @pytest.mark.asyncio

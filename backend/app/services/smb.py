@@ -1,20 +1,26 @@
 """SMB file share service — agent pairing, sync, search, content fetch."""
 
 import asyncio
+import re
 import hashlib
 import json
 import logging
 import secrets
 import time
 import uuid
+from urllib.parse import urljoin, urlparse
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, func, or_ as sa_or, select, update
+from sqlalchemy import and_, delete, func, or_ as sa_or, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.database import set_tenant_context
+from app.database import (
+    clear_smb_agent_bootstrap_lookup,
+    set_smb_agent_bootstrap_lookup,
+    set_tenant_context,
+)
 from app.models.matter_smb_share import MatterSmbShare
 from app.models.plugin import Matter
 from app.models.smb_access_log import SmbAccessLog
@@ -23,6 +29,7 @@ from app.models.smb_credential import SmbCredential
 from app.models.smb_file_index import SmbFileIndex
 from app.models.smb_share import SmbShare
 from app.services.cloud_init import MATTER_SUBFOLDERS, matter_relative_path
+from app.services.corpus_revision import advance_rag_corpus_revision
 from app.schemas.smb import (
     AgentRegisterRequest,
     AgentRegisterResponse,
@@ -61,6 +68,288 @@ PAIRING_CODE_SYMBOLS = 16
 # fetch because an agent polls on its own cadence and a scan is not instant.
 REDIS_ADMIN_TASK_TTL = 900  # 15 minutes
 ADMIN_TASK_KINDS = ("verify_share", "scan_now")
+AGENT_UPDATE_TASK_KIND = "agent_update"
+AGENT_OFFLINE_AFTER_SECONDS = 900
+AGENT_PORTAL_UPDATE_MIN_VERSION = (0, 15, 0)
+AGENT_UPDATE_TIMEOUT_SECONDS = 30 * 60
+OFFICIAL_AGENT_MANIFEST_URL = "https://github.com/mattpainter701/legalapp/releases/latest/download/agent-update.json"
+AGENT_UPDATE_MANIFEST_MAX_BYTES = 16 * 1024
+_manifest_cache: tuple[float, dict] | None = None
+_manifest_failure_until = 0.0
+AGENT_UPDATE_MANIFEST_FAILURE_BACKOFF_SECONDS = 30
+AGENT_MANIFEST_MAX_REDIRECTS = 5
+OFFICIAL_MANIFEST_REDIRECT_HOSTS = {
+    "github.com",
+    "objects.githubusercontent.com",
+    "release-assets.githubusercontent.com",
+    "github-releases.githubusercontent.com",
+}
+_GITHUB_MANIFEST_REDIRECT_PATH = re.compile(
+    r"^/mattpainter701/legalapp/releases/(?:latest/download/agent-update\.json|"
+    r"download/agent-v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)/"
+    r"(?:agent-update\.json|lawhand-agent-x64\.msi|"
+    r"lawhand-agent-linux-x86_64\.tar\.gz))$"
+)
+
+
+def _is_official_manifest_redirect(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        parsed.port
+    except ValueError:
+        return False
+    return bool(
+        parsed.scheme == "https"
+        and hostname
+        and hostname.casefold() in OFFICIAL_MANIFEST_REDIRECT_HOSTS
+        and not parsed.username
+        and not parsed.password
+        and not parsed.fragment
+        and (
+            hostname.casefold() != "github.com"
+            or (
+                not parsed.query
+                and _GITHUB_MANIFEST_REDIRECT_PATH.fullmatch(parsed.path)
+            )
+        )
+    )
+
+
+def _version_key(value: str) -> tuple[int, ...]:
+    match = re.fullmatch(
+        r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)",
+        (value or "").strip(),
+    )
+    if not match:
+        raise ValueError("Invalid agent version")
+    return tuple(int(part or 0) for part in match.groups())
+
+
+def expire_stale_agent_update(agent: SmbAgent, *, now: datetime | None = None) -> bool:
+    """Fail a portal request that never produced a confirming heartbeat."""
+    if agent.update_status not in {"queued", "in_progress"}:
+        return False
+    if not agent.update_requested_at or not agent.update_target_version:
+        return False
+    now = now or datetime.now(timezone.utc)
+    if (
+        now - agent.update_requested_at
+    ).total_seconds() <= AGENT_UPDATE_TIMEOUT_SECONDS:
+        return False
+    try:
+        if agent.agent_version and _version_key(agent.agent_version) >= _version_key(
+            agent.update_target_version
+        ):
+            return False
+    except ValueError:
+        pass
+    agent.update_status = "failed"
+    agent.update_error = (
+        "The agent did not confirm the update within 30 minutes; check its service logs"
+    )
+    return True
+
+
+async def restore_queued_agent_update(
+    agent: SmbAgent, tenant_id: str, redis, *, manifest: dict
+) -> bool:
+    """Re-publish a durable reservation only for the current official release."""
+    if not redis or agent.update_status != "queued":
+        return False
+    if not (
+        agent.update_task_id
+        and agent.update_target_version
+        and agent.update_manifest_id
+    ):
+        return False
+    if (
+        agent.update_target_version != manifest["target_version"]
+        or agent.update_manifest_id != manifest["manifest_id"]
+    ):
+        agent.update_status = "failed"
+        agent.update_error = (
+            "The queued release is no longer the official release; "
+            "request the update again"
+        )
+        return False
+    pending_key = f"smb_task_pending:{agent.id}:{agent.update_task_id}"
+    if await redis.exists(pending_key):
+        return False
+    task = ContentFetchTask(
+        task_id=agent.update_task_id,
+        kind=AGENT_UPDATE_TASK_KIND,
+        target_version=agent.update_target_version,
+        manifest_id=agent.update_manifest_id,
+    )
+    await redis.set(
+        pending_key,
+        json.dumps(
+            {
+                **task.model_dump(),
+                "tenant_id": tenant_id,
+                "agent_id": str(agent.id),
+            }
+        ),
+        ex=REDIS_ADMIN_TASK_TTL,
+    )
+    return True
+
+
+async def reconcile_queued_agent_updates(db: AsyncSession, redis) -> int:
+    """Re-publish durable update reservations that Redis no longer has.
+
+    The reservation in ``smb_agents`` is authoritative.  Before restoring it,
+    compare its pinned release identity with the currently published official
+    manifest; an old task must never be replayed against a newer release. This
+    function owns its short database transaction so no row lock spans Redis I/O.
+    """
+    manifest = None
+    try:
+        manifest = await fetch_agent_manifest()
+    except Exception:
+        logger.warning(
+            "SMB update reconciliation could not read the official manifest",
+            exc_info=True,
+        )
+
+    result = await db.execute(
+        select(SmbAgent)
+        .where(SmbAgent.update_status.in_(("queued", "in_progress")))
+        .with_for_update(skip_locked=True)
+    )
+    restore_candidates: list[SmbAgent] = []
+    for agent in result.scalars().all():
+        if expire_stale_agent_update(agent):
+            continue
+        if agent.update_status != "queued" or manifest is None:
+            continue
+        if not agent.update_task_id:
+            continue
+        if (
+            agent.update_target_version != manifest["target_version"]
+            or agent.update_manifest_id != manifest["manifest_id"]
+        ):
+            agent.update_status = "failed"
+            agent.update_error = (
+                "The queued release is no longer the official release; "
+                "request the update again"
+            )
+            continue
+        restore_candidates.append(agent)
+
+    await db.flush()
+    await db.commit()
+
+    if not redis or manifest is None:
+        return 0
+    restored = 0
+    for agent in restore_candidates:
+        try:
+            if await restore_queued_agent_update(
+                agent, str(agent.tenant_id), redis, manifest=manifest
+            ):
+                restored += 1
+        except Exception:
+            # Leave the durable reservation queued.  The next reconciliation
+            # tick can retry after a transient Redis failure.
+            logger.warning(
+                "Could not restore SMB update task %s",
+                agent.update_task_id,
+                exc_info=True,
+            )
+    return restored
+
+
+async def fetch_agent_manifest() -> dict:
+    """Fetch and validate the fixed manifest with success/failure caching."""
+    global _manifest_cache, _manifest_failure_until
+    now = time.monotonic()
+    if (
+        _manifest_cache
+        and now - _manifest_cache[0] < settings.SMB_AGENT_MANIFEST_CACHE_SECONDS
+    ):
+        return _manifest_cache[1]
+    if now < _manifest_failure_until:
+        raise RuntimeError("Official agent manifest is temporarily unavailable")
+    try:
+        manifest = await _fetch_agent_manifest_uncached()
+    except Exception:
+        _manifest_failure_until = now + AGENT_UPDATE_MANIFEST_FAILURE_BACKOFF_SECONDS
+        raise
+    _manifest_cache = (now, manifest)
+    _manifest_failure_until = 0.0
+    return manifest
+
+
+async def _fetch_agent_manifest_uncached() -> dict:
+    """Download and strictly validate the official GitHub release manifest."""
+    import httpx
+
+    current_url = OFFICIAL_AGENT_MANIFEST_URL
+    async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
+        for hop in range(AGENT_MANIFEST_MAX_REDIRECTS + 1):
+            async with client.stream(
+                "GET",
+                current_url,
+                headers={"Accept": "application/vnd.github+json"},
+            ) as response:
+                status = getattr(response, "status_code", 200)
+                if status in {301, 302, 303, 307, 308}:
+                    location = response.headers.get("location")
+                    if hop >= AGENT_MANIFEST_MAX_REDIRECTS or not location:
+                        raise ValueError(
+                            "Official agent manifest redirect limit exceeded"
+                        )
+                    current_url = urljoin(current_url, location)
+                    if not _is_official_manifest_redirect(current_url):
+                        raise ValueError(
+                            "Official agent manifest redirected to an untrusted host"
+                        )
+                    continue
+                response.raise_for_status()
+                content = bytearray()
+                async for chunk in response.aiter_bytes():
+                    content.extend(chunk)
+                    if len(content) > AGENT_UPDATE_MANIFEST_MAX_BYTES:
+                        raise ValueError("Agent release manifest is too large")
+                break
+        else:
+            raise ValueError("Official agent manifest redirect limit exceeded")
+    payload = json.loads(content)
+    if not isinstance(payload, dict):
+        raise ValueError("Agent release manifest is not an object")
+    if set(payload) != {"schema_version", "version", "assets"}:
+        raise ValueError("Agent release manifest contains unexpected fields")
+    if payload.get("schema_version") != 1:
+        raise ValueError("Unsupported agent release manifest schema")
+    version = str(payload.get("version") or "")
+    _version_key(version)
+    assets = payload.get("assets")
+    if not isinstance(assets, dict):
+        raise ValueError("Official release has no assets")
+    normalized = {}
+    for platform, name in {
+        "windows-x86_64": "lawhand-agent-x64.msi",
+        "linux-x86_64": "lawhand-agent-linux-x86_64.tar.gz",
+    }.items():
+        asset = assets.get(platform)
+        if not isinstance(asset, dict):
+            raise ValueError(f"Official release is missing {platform} asset")
+        digest = str(asset.get("sha256") or "")
+        if asset.get("name") != name:
+            raise ValueError("Official release contains an invalid asset name")
+        if set(asset) != {"name", "sha256"}:
+            raise ValueError("Official release contains unexpected asset fields")
+        if not re.fullmatch(r"[0-9a-fA-F]{64}", digest):
+            raise ValueError("Official release contains an invalid checksum")
+        normalized[platform] = {"name": name, "sha256": digest.lower()}
+    manifest_id = f"agent-v{version}"
+    return {
+        "manifest_id": manifest_id,
+        "target_version": version,
+        "assets": normalized,
+    }
 
 
 def _uuid(val: str | uuid.UUID | None) -> uuid.UUID | None:
@@ -105,12 +394,61 @@ def _parse_unc(share_path: str) -> tuple[str | None, str | None, str | None]:
     return server, share, root
 
 
+def _normalize_folder_path(folder_path: str | None) -> str | None:
+    """Return a safe share-relative folder path, or ``None`` for the root."""
+    raw = (folder_path or "").strip().replace("\\", "/")
+    parts = [part for part in raw.split("/") if part and part != "."]
+    if any(part == ".." for part in parts):
+        raise ValueError("Folder path must stay within the assigned share")
+    normalized = "/".join(parts)
+    return normalized or None
+
+
+def _escape_like(value: str, escape: str = "!") -> str:
+    """Escape user-controlled path text for a SQL LIKE/ILIKE pattern."""
+    return (
+        value.replace(escape, escape + escape)
+        .replace("%", escape + "%")
+        .replace("_", escape + "_")
+    )
+
+
 def _pairing_code() -> str:
     """Return a 19-character grouped pairing code (fits smb_agents.pairing_code)."""
     raw = "".join(
         secrets.choice(PAIRING_CODE_ALPHABET) for _ in range(PAIRING_CODE_SYMBOLS)
     )
     return "-".join(raw[i : i + 4] for i in range(0, PAIRING_CODE_SYMBOLS, 4))
+
+
+async def _commit_audit_then_publish(
+    db: AsyncSession,
+    redis,
+    pending_key: str,
+    task_payload: dict,
+) -> None:
+    """Make the audit row durable before an agent can observe the task."""
+    serialized = json.dumps(task_payload)
+    await db.commit()
+    await redis.set(
+        pending_key,
+        serialized,
+        ex=REDIS_TASK_TTL,
+    )
+
+
+async def _commit_result_then_publish(
+    db: AsyncSession,
+    redis,
+    result_key: str,
+    pending_key: str,
+    payload: str,
+    ttl: int,
+) -> None:
+    """Make result-side audit updates durable before exposing content."""
+    await db.commit()
+    await redis.set(result_key, payload, ex=ttl)
+    await redis.delete(pending_key)
 
 
 class SmbService:
@@ -160,9 +498,32 @@ class SmbService:
         stmt = select(SmbAgent).where(SmbAgent.pairing_code == pairing_code)
         if tenant_id:
             stmt = stmt.where(SmbAgent.tenant_id == _uuid(tenant_id))
-        result = await db.execute(stmt)
+        await set_smb_agent_bootstrap_lookup(db, pairing_code=pairing_code)
+        try:
+            result = await db.execute(stmt)
+        finally:
+            await clear_smb_agent_bootstrap_lookup(db)
         agent = result.scalar_one_or_none()
 
+        if agent is None:
+            raise ValueError("Invalid pairing code")
+
+        # A SELECT ... FOR UPDATE also requires the table's UPDATE/ALL RLS
+        # policy, so it cannot be part of the pre-tenant bootstrap lookup.
+        # Bind the discovered tenant first, then take the lock under ordinary
+        # tenant RLS before changing the row. This closes the registration
+        # race without granting a bootstrap write policy.
+        await set_tenant_context(db, str(agent.tenant_id))
+        locked_result = await db.execute(
+            select(SmbAgent)
+            .where(
+                SmbAgent.id == agent.id,
+                SmbAgent.tenant_id == agent.tenant_id,
+                SmbAgent.pairing_code == pairing_code,
+            )
+            .with_for_update()
+        )
+        agent = locked_result.scalar_one_or_none()
         if agent is None:
             raise ValueError("Invalid pairing code")
         if agent.status != "pending":
@@ -186,9 +547,6 @@ class SmbService:
 
         await db.flush()
 
-        # Set tenant context so subsequent RLS-aware queries work
-        await set_tenant_context(db, str(agent.tenant_id))
-
         return AgentRegisterResponse(
             agent_id=str(agent.id),
             api_key=raw_api_key,
@@ -210,7 +568,151 @@ class SmbService:
         await db.execute(
             update(SmbAgent).where(SmbAgent.id == _uuid(agent_id)).values(**values)
         )
+        result = await db.execute(
+            select(SmbAgent).where(SmbAgent.id == _uuid(agent_id))
+        )
+        agent = result.scalar_one_or_none()
+        if agent and agent.update_target_version and agent.agent_version:
+            reported_target = data.get("update_target_version")
+            reported_status = data.get("update_status")
+            explicit_failure = (
+                reported_target == agent.update_target_version
+                and reported_status == "failed"
+            )
+            if reported_target == agent.update_target_version:
+                if explicit_failure:
+                    agent.update_status = "failed"
+                    agent.update_error = (
+                        data.get("update_error") or "The managed agent update failed"
+                    )[:2000]
+                elif (
+                    reported_status == "in_progress" and agent.update_status == "queued"
+                ):
+                    agent.update_status = "in_progress"
+            # A failed heartbeat is authoritative for this attempt.  Do not
+            # let a simultaneously reported/raced version erase that failure.
+            if not explicit_failure and agent.update_status != "failed":
+                try:
+                    if _version_key(agent.agent_version) >= _version_key(
+                        agent.update_target_version
+                    ):
+                        agent.update_status = "completed"
+                        agent.update_completed_at = datetime.now(timezone.utc)
+                        agent.update_error = None
+                except ValueError:
+                    pass
         await db.flush()
+
+    async def enqueue_agent_update(
+        self, db: AsyncSession, tenant_id: str, agent_id: str, redis=None
+    ) -> tuple[str, str, dict]:
+        """Queue a tenant-bound update using only the official cached manifest."""
+        if not redis:
+            raise ValueError("Task queue unavailable; cannot reach the agent")
+        await set_tenant_context(db, tenant_id)
+        try:
+            manifest = await fetch_agent_manifest()
+        except Exception as exc:
+            raise ValueError("Official agent manifest unavailable") from exc
+        result = await db.execute(
+            select(SmbAgent)
+            .where(
+                SmbAgent.id == _uuid(agent_id),
+                SmbAgent.tenant_id == _uuid(tenant_id),
+            )
+            .with_for_update()
+        )
+        agent = result.scalar_one_or_none()
+        if agent is None:
+            raise ValueError("Agent not found")
+        if agent.status != "active":
+            raise ValueError(f"Agent is {agent.status}")
+        if (
+            not agent.last_heartbeat
+            or (datetime.now(timezone.utc) - agent.last_heartbeat).total_seconds()
+            > AGENT_OFFLINE_AFTER_SECONDS
+        ):
+            raise ValueError("Agent is offline")
+        target = manifest["target_version"]
+        if not agent.agent_version:
+            raise ValueError(
+                "Agent requires one manual upgrade to 0.15.0 before portal updates"
+            )
+        try:
+            current_version = _version_key(agent.agent_version)
+            if current_version < AGENT_PORTAL_UPDATE_MIN_VERSION:
+                raise ValueError(
+                    "Agent requires one manual upgrade to 0.15.0 before portal updates"
+                )
+            if _version_key(target) <= current_version:
+                raise ValueError("Agent is already at the latest version")
+        except ValueError as exc:
+            if str(exc) in {
+                "Agent is already at the latest version",
+                "Agent requires one manual upgrade to 0.15.0 before portal updates",
+            }:
+                raise
+            raise ValueError("Agent has an invalid current version") from exc
+        expire_stale_agent_update(agent)
+        if (
+            agent.update_status == "in_progress"
+            and agent.update_target_version == target
+            and agent.update_task_id
+        ):
+            return agent.update_task_id, str(agent.id), manifest
+        if (
+            agent.update_status == "queued"
+            and agent.update_target_version == target
+            and agent.update_task_id
+        ):
+            # Release the row lock before consulting Redis. The durable row is
+            # authoritative, so a cache outage remains retryable by the
+            # reconciliation job instead of holding heartbeat/admin writes.
+            await db.commit()
+            try:
+                await restore_queued_agent_update(
+                    agent, tenant_id, redis, manifest=manifest
+                )
+            except Exception as exc:
+                raise ValueError(
+                    "Task queue unavailable; cannot reach the agent"
+                ) from exc
+            return agent.update_task_id, str(agent.id), manifest
+
+        task_id = secrets.token_urlsafe(16)
+        task = ContentFetchTask(
+            task_id=task_id,
+            kind=AGENT_UPDATE_TASK_KIND,
+            target_version=target,
+            manifest_id=manifest["manifest_id"],
+        )
+        agent.update_status = "queued"
+        agent.update_target_version = target
+        agent.update_manifest_id = manifest["manifest_id"]
+        agent.update_task_id = task_id
+        agent.update_requested_at = datetime.now(timezone.utc)
+        agent.update_completed_at = None
+        agent.update_error = None
+        await db.flush()
+        await db.commit()
+        try:
+            await redis.set(
+                f"smb_task_pending:{agent.id}:{task_id}",
+                json.dumps(
+                    {
+                        **task.model_dump(),
+                        "tenant_id": tenant_id,
+                        "agent_id": str(agent.id),
+                    }
+                ),
+                ex=REDIS_ADMIN_TASK_TTL,
+            )
+        except Exception as exc:
+            agent.update_status = "failed"
+            agent.update_error = "Task queue unavailable"
+            await db.commit()
+            raise ValueError("Task queue unavailable; cannot reach the agent") from exc
+        return task_id, str(agent.id), manifest
 
     async def sync_files(
         self,
@@ -239,17 +741,45 @@ class SmbService:
 
         count_result = await db.execute(
             select(func.count(SmbFileIndex.id)).where(
+                SmbFileIndex.tenant_id == tenant_uuid,
                 SmbFileIndex.share_id == share_uuid,
                 SmbFileIndex.is_deleted.is_(False),
             )
         )
         current_count = count_result.scalar_one()
 
+        # The cap is a guardrail on active rows, not a reason to reject updates
+        # to files already in the index.  The previous implementation bumped
+        # ``current_count`` for every upsert, so a normal change-only batch
+        # could hit the cap even when it added no rows (and, once at the cap,
+        # existing files could never be refreshed).
+        incoming_paths = list(dict.fromkeys(entry.path for entry in sync_data.files))
+        existing_states: dict[str, bool] = {}
+        if incoming_paths:
+            existing_result = await db.execute(
+                select(SmbFileIndex.path, SmbFileIndex.is_deleted).where(
+                    SmbFileIndex.tenant_id == tenant_uuid,
+                    SmbFileIndex.share_id == share_uuid,
+                    SmbFileIndex.path.in_(incoming_paths),
+                )
+            )
+            existing_states = {
+                str(path): bool(is_deleted)
+                for path, is_deleted in existing_result.all()
+            }
+        activated_paths: set[str] = set()
+
         snippet_cap = SMB_SNIPPET_MAX_CHARS
 
         for entry in sync_data.files:
             try:
-                if current_count >= SMB_MAX_FILE_INDEX_PER_SHARE:
+                existing_is_deleted = existing_states.get(entry.path)
+                activates_row = entry.path not in existing_states or existing_is_deleted
+                if (
+                    activates_row
+                    and entry.path not in activated_paths
+                    and current_count >= SMB_MAX_FILE_INDEX_PER_SHARE
+                ):
                     errors.append(
                         {
                             "path": entry.path,
@@ -298,7 +828,9 @@ class SmbService:
                 )
                 await db.execute(stmt)
                 synced += 1
-                current_count += 1
+                if activates_row and entry.path not in activated_paths:
+                    activated_paths.add(entry.path)
+                    current_count += 1
             except Exception as exc:
                 errors.append({"path": entry.path, "error": str(exc)})
 
@@ -309,6 +841,8 @@ class SmbService:
                     update(SmbFileIndex)
                     .where(
                         SmbFileIndex.tenant_id == tenant_uuid,
+                        SmbFileIndex.share_id == share_uuid,
+                        SmbFileIndex.agent_id == agent_uuid,
                         SmbFileIndex.path == path,
                     )
                     .values(is_deleted=True)
@@ -316,6 +850,12 @@ class SmbService:
                 deleted += result.rowcount
             except Exception as exc:
                 errors.append({"path": path, "error": str(exc)})
+
+        if synced or deleted:
+            # Chat RAG results are cached by this tenant generation. Without
+            # advancing it, newly indexed/changed/deleted share files can leave
+            # stale matter answers in cache until TTL expiry.
+            await advance_rag_corpus_revision(db, tenant_uuid)
 
         await db.flush()
         return SyncResponse(synced=synced, deleted=deleted, errors=errors)
@@ -326,22 +866,35 @@ class SmbService:
         agent_id: str,
         redis=None,
         limit: int = 10,
+        wait_seconds: int = 0,
     ) -> list[ContentFetchTask]:
-        """Return pending content fetch tasks for this agent.
+        """Return pending tasks, optionally waiting briefly for new work.
 
         Tasks are stored in Redis under key ``smb_task_pending:<agent_id>:<task_id>``.
+        Long polling keeps the connector responsive without opening inbound
+        access to the customer network or hammering the API with empty polls.
         """
         if not redis:
             return []
 
-        tasks: list[ContentFetchTask] = []
-        keys = await redis.keys(f"smb_task_pending:{agent_id}:*")
-        for key in keys[:limit]:
-            raw = await redis.get(key)
-            if raw:
-                data = json.loads(raw if isinstance(raw, str) else raw.decode())
-                tasks.append(ContentFetchTask(**data))
-        return tasks
+        deadline = time.monotonic() + max(0, wait_seconds)
+        while True:
+            tasks: list[ContentFetchTask] = []
+            # KEYS blocks Redis while it walks the entire keyspace. Agent
+            # polling is continuous, so incrementally SCAN and stop as soon as
+            # this poll has enough work.
+            async for key in redis.scan_iter(
+                match=f"smb_task_pending:{agent_id}:*", count=max(100, limit * 4)
+            ):
+                raw = await redis.get(key)
+                if raw:
+                    data = json.loads(raw if isinstance(raw, str) else raw.decode())
+                    tasks.append(ContentFetchTask(**data))
+                    if len(tasks) >= limit:
+                        break
+            if tasks or time.monotonic() >= deadline:
+                return tasks
+            await asyncio.sleep(min(0.5, max(0.0, deadline - time.monotonic())))
 
     async def submit_task_result(
         self,
@@ -358,12 +911,33 @@ class SmbService:
         update the share (and its credential) so the admin console can show why
         a share is or is not reachable.
         """
-        if not redis:
-            logger.warning("Redis not available, cannot store task result")
-            return
+        if redis is None:
+            raise RuntimeError("SMB relay is temporarily unavailable")
 
         pending_key = f"smb_task_pending:{agent_id}:{task_id}"
         raw_meta = await redis.get(pending_key)
+        if raw_meta is None:
+            # A network timeout can hide a successful first submission from
+            # the agent. Treat an exact retry as idempotent, while still
+            # rejecting arbitrary result injection for unknown task ids.
+            completed = None
+            if tenant_id:
+                completed = await redis.get(f"smb_task:{tenant_id}:{task_id}")
+            if completed:
+                try:
+                    completed_payload = json.loads(
+                        completed if isinstance(completed, str) else completed.decode()
+                    )
+                except (ValueError, UnicodeDecodeError):
+                    completed_payload = {}
+                if str(completed_payload.get("agent_id")) == str(agent_id) and str(
+                    completed_payload.get("task_id")
+                ) == str(task_id):
+                    return
+            # Do not allow an authenticated agent to inject arbitrary results
+            # under an unknown/expired task id.  The pending key also binds
+            # the result to the agent encoded in the Redis namespace.
+            raise ValueError("Task not found, expired, or already completed")
         task_meta: dict = {}
         if raw_meta:
             try:
@@ -373,8 +947,19 @@ class SmbService:
             except (ValueError, UnicodeDecodeError):
                 task_meta = {}
 
+        task_tenant_id = str(task_meta.get("tenant_id") or tenant_id or "")
+        if not task_tenant_id:
+            raise ValueError("Task is missing its tenant binding")
+        if tenant_id and task_tenant_id != str(tenant_id):
+            raise ValueError("Task tenant mismatch")
+
         payload = json.dumps(
             {
+                "task_id": task_id,
+                "tenant_id": task_tenant_id,
+                "agent_id": agent_id,
+                "file_id": task_meta.get("file_id"),
+                "share_id": task_meta.get("share_id"),
                 "content": result.content,
                 "truncated": result.truncated,
                 "error": result.error,
@@ -383,11 +968,41 @@ class SmbService:
                 "kind": task_meta.get("kind", "content_fetch"),
             }
         )
-        await redis.set(f"smb_task:{task_id}", payload, ex=REDIS_TASK_TTL)
-        await redis.delete(pending_key)
+        access_log_id = task_meta.get("access_log_id")
+        if access_log_id:
+            update_result = await db.execute(
+                update(SmbAccessLog)
+                .where(
+                    SmbAccessLog.id == _uuid(access_log_id),
+                    SmbAccessLog.tenant_id == _uuid(task_tenant_id),
+                    SmbAccessLog.agent_id == _uuid(agent_id),
+                )
+                .values(bytes_sent=len((result.content or "").encode("utf-8")))
+            )
+            if update_result.rowcount != 1:
+                raise ValueError("Task access log binding is invalid")
+        elif task_meta.get("kind", "content_fetch") == "content_fetch":
+            raise ValueError("Content task is missing its access log binding")
 
-        if tenant_id and task_meta.get("kind") in ADMIN_TASK_KINDS:
+        if tenant_id and task_meta.get("kind") in (
+            *ADMIN_TASK_KINDS,
+            AGENT_UPDATE_TASK_KIND,
+        ):
             await self.record_task_outcome(db, tenant_id, task_meta, result)
+
+        result_ttl = (
+            REDIS_ADMIN_TASK_TTL
+            if task_meta.get("kind") in (*ADMIN_TASK_KINDS, AGENT_UPDATE_TASK_KIND)
+            else REDIS_TASK_TTL
+        )
+        await _commit_result_then_publish(
+            db,
+            redis,
+            f"smb_task:{task_tenant_id}:{task_id}",
+            pending_key,
+            payload,
+            result_ttl,
+        )
 
     async def request_content_fetch(
         self,
@@ -401,8 +1016,13 @@ class SmbService:
     ) -> tuple[str, str]:
         """Create a content fetch task, log access, return (task_id, agent_id).
 
-        Pushes task into Redis for the agent to pick up.
+        This method owns the transaction boundary: the access log is committed
+        before the Redis task becomes visible to an agent. Callers must not
+        place unrelated uncommitted work on ``db`` before invoking it.
         """
+        if redis is None:
+            raise RuntimeError("SMB relay is temporarily unavailable")
+
         await set_tenant_context(db, tenant_id)
 
         tenant_uuid = _uuid(tenant_id)
@@ -419,8 +1039,27 @@ class SmbService:
             raise ValueError("File not found")
 
         agent_id = str(file_entry.agent_id) if file_entry.agent_id else None
-        if not agent_id:
+        share_id = str(file_entry.share_id) if file_entry.share_id else None
+        if not agent_id or not share_id:
             raise ValueError("No agent assigned to file")
+
+        assignment = (
+            await db.execute(
+                select(SmbAgent.id)
+                .join(SmbShare, SmbShare.agent_id == SmbAgent.id)
+                .where(
+                    SmbAgent.id == _uuid(agent_id),
+                    SmbAgent.tenant_id == tenant_uuid,
+                    SmbAgent.status == "active",
+                    SmbShare.id == _uuid(share_id),
+                    SmbShare.tenant_id == tenant_uuid,
+                    SmbShare.agent_id == _uuid(agent_id),
+                    SmbShare.is_enabled.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+        if assignment is None:
+            raise ValueError("File share agent is unavailable")
 
         task_id = secrets.token_urlsafe(16)
 
@@ -439,45 +1078,84 @@ class SmbService:
         task = ContentFetchTask(
             task_id=task_id,
             file_path=file_entry.path,
+            share_id=share_id,
             reason=reason,
         )
 
-        if redis:
-            pending_key = f"smb_task_pending:{agent_id}:{task_id}"
-            await redis.set(
-                pending_key,
-                task.model_dump_json(),
-                ex=REDIS_TASK_TTL,
-            )
+        pending_key = f"smb_task_pending:{agent_id}:{task_id}"
+        task_payload = task.model_dump()
+        task_payload.update(
+            {
+                "tenant_id": tenant_id,
+                "file_id": file_id,
+                "access_log_id": str(access_log.id),
+            }
+        )
+
+        # Never expose a read task before its audit row is durable. Otherwise
+        # a fast agent can return content while the log is still invisible—or
+        # after its transaction ultimately rolls back.
+        await _commit_audit_then_publish(
+            db,
+            redis,
+            pending_key,
+            task_payload,
+        )
 
         return task_id, agent_id
 
-    async def get_task_result(self, task_id: str, redis=None) -> dict | None:
+    async def get_task_result(
+        self,
+        task_id: str,
+        tenant_id: str,
+        redis=None,
+        *,
+        file_id: str | None = None,
+        share_id: str | None = None,
+        kind: str | None = None,
+    ) -> dict | None:
         """Return the full stored result payload for a task, or None if pending."""
         if not redis:
             return None
-        raw = await redis.get(f"smb_task:{task_id}")
+        raw = await redis.get(f"smb_task:{tenant_id}:{task_id}")
         if not raw:
             return None
         try:
-            return json.loads(raw if isinstance(raw, str) else raw.decode())
+            payload = json.loads(raw if isinstance(raw, str) else raw.decode())
         except (ValueError, UnicodeDecodeError):
             return None
+        if str(payload.get("tenant_id")) != str(tenant_id):
+            raise ValueError("Task tenant mismatch")
+        if file_id and str(payload.get("file_id")) != str(file_id):
+            raise ValueError("Task is not bound to this file")
+        if share_id and str(payload.get("share_id")) != str(share_id):
+            raise ValueError("Task is not bound to this share")
+        if kind and payload.get("kind") != kind:
+            raise ValueError("Task kind mismatch")
+        return payload
 
-    async def get_content_result(self, task_id: str, redis=None) -> str | None:
+    async def get_content_result(
+        self,
+        task_id: str,
+        tenant_id: str,
+        file_id: str,
+        redis=None,
+    ) -> str | None:
         """Poll Redis for content fetch result. Return content if available, None if pending."""
-        if not redis:
-            return None
-
-        raw = await redis.get(f"smb_task:{task_id}")
-        if raw:
-            data = json.loads(raw if isinstance(raw, str) else raw.decode())
-            return data.get("content")
-        return None
+        payload = await self.get_task_result(
+            task_id,
+            tenant_id,
+            redis=redis,
+            file_id=file_id,
+            kind="content_fetch",
+        )
+        return payload.get("content") if payload else None
 
     async def poll_content_result(
         self,
         task_id: str,
+        tenant_id: str,
+        file_id: str,
         redis=None,
         timeout_seconds: int = 120,
     ) -> str | None:
@@ -494,7 +1172,9 @@ class SmbService:
 
         while time.monotonic() < deadline:
             await asyncio.sleep(delay)
-            content = await self.get_content_result(task_id, redis=redis)
+            content = await self.get_content_result(
+                task_id, tenant_id, file_id, redis=redis
+            )
             if content is not None:
                 return content
             delay = min(delay * 1.5, 8.0)
@@ -531,41 +1211,44 @@ class SmbService:
         )
 
         if matter_id:
-            bindings = (
-                (
-                    await db.execute(
-                        select(MatterSmbShare).where(
-                            MatterSmbShare.matter_id == _uuid(matter_id),
-                            MatterSmbShare.tenant_id == tenant_uuid,
-                        )
+            binding_rows = (
+                await db.execute(
+                    select(MatterSmbShare, SmbShare)
+                    .join(SmbShare, SmbShare.id == MatterSmbShare.share_id)
+                    .where(
+                        MatterSmbShare.matter_id == _uuid(matter_id),
+                        MatterSmbShare.tenant_id == tenant_uuid,
+                        SmbShare.tenant_id == tenant_uuid,
                     )
                 )
-                .scalars()
-                .all()
-            )
-            if not bindings:
+            ).all()
+            if not binding_rows:
                 return []
 
-            share_ids = [binding.share_id for binding in bindings]
-            stmt = stmt.where(SmbFileIndex.share_id.in_(share_ids))
-
-            folder_filters = []
-            for binding in bindings:
-                prefix = (binding.folder_path or "").strip().replace("\\", "/")
-                if prefix:
-                    normalized_prefix = prefix.rstrip("/")
-                    windows_prefix = normalized_prefix.replace("/", "\\")
-                    folder_filters.append(
-                        SmbFileIndex.path.ilike(f"%{normalized_prefix}%")
+            # Keep each folder predicate paired with its own share. A global
+            # ``share_id IN (...) AND path contains any folder`` lets a folder
+            # from share A widen the scope of share B and substring matching
+            # also admits siblings such as ``Client-10`` for ``Client-1``.
+            binding_filters = []
+            for binding, share in binding_rows:
+                condition = SmbFileIndex.share_id == binding.share_id
+                folder = _normalize_folder_path(binding.folder_path)
+                if folder:
+                    absolute = (
+                        share.share_path.rstrip("\\/")
+                        + "\\"
+                        + folder.replace("/", "\\")
                     )
-                    if windows_prefix != normalized_prefix:
-                        folder_filters.append(
-                            SmbFileIndex.path.ilike(f"%{windows_prefix}%")
-                        )
-            if folder_filters:
-                from sqlalchemy import or_
-
-                stmt = stmt.where(or_(*folder_filters))
+                    escaped = _escape_like(absolute)
+                    condition = and_(
+                        condition,
+                        sa_or(
+                            SmbFileIndex.path.ilike(escaped, escape="!"),
+                            SmbFileIndex.path.ilike(escaped + "!\\%", escape="!"),
+                        ),
+                    )
+                binding_filters.append(condition)
+            stmt = stmt.where(sa_or(*binding_filters))
 
         if file_extensions:
             stmt = stmt.where(SmbFileIndex.ext.in_(file_extensions))
@@ -699,7 +1382,10 @@ class SmbService:
         share_uuid = _uuid(share_id)
         tenant_uuid = _uuid(tenant_id)
         await db.execute(
-            delete(SmbFileIndex).where(SmbFileIndex.share_id == share_uuid)
+            delete(SmbFileIndex).where(
+                SmbFileIndex.share_id == share_uuid,
+                SmbFileIndex.tenant_id == tenant_uuid,
+            )
         )
         await db.execute(
             delete(SmbShare).where(
@@ -970,6 +1656,28 @@ class SmbService:
         """Apply a verify/scan task result to the share it belongs to."""
         share_id = task_meta.get("share_id")
         kind = task_meta.get("kind", "content_fetch")
+        if kind == AGENT_UPDATE_TASK_KIND:
+            agent_id = task_meta.get("agent_id")
+            if not agent_id:
+                return
+            await set_tenant_context(db, tenant_id)
+            agent_result = await db.execute(
+                select(SmbAgent).where(
+                    SmbAgent.id == _uuid(agent_id),
+                    SmbAgent.tenant_id == _uuid(tenant_id),
+                )
+            )
+            agent = agent_result.scalar_one_or_none()
+            if agent and agent.update_task_id == task_meta.get("task_id"):
+                agent.update_status = (
+                    "in_progress" if result.ok and not result.error else "failed"
+                )
+                if agent.update_status == "failed":
+                    agent.update_error = (
+                        result.error or "The agent rejected the update request"
+                    )[:2000]
+                await db.flush()
+            return
         if not share_id or kind not in ADMIN_TASK_KINDS:
             return
 
@@ -1039,7 +1747,11 @@ class SmbService:
         if share is None:
             raise ValueError("Share not found")
 
-        folder_path = data.folder_path or matter_relative_path(matter.slug)
+        folder_path = _normalize_folder_path(
+            data.folder_path
+            if data.folder_path is not None
+            else matter_relative_path(matter.slug)
+        )
         display_label = data.display_label or matter.matter_name
 
         binding = MatterSmbShare(
@@ -1062,7 +1774,8 @@ class SmbService:
             "path": folder_path,
             "subfolder_names": MATTER_SUBFOLDERS.copy(),
             "subfolder_paths": {
-                sub: f"{folder_path.rstrip('/')}/{sub}" for sub in MATTER_SUBFOLDERS
+                sub: f"{folder_path.rstrip('/')}/{sub}" if folder_path else sub
+                for sub in MATTER_SUBFOLDERS
             },
             "auto_scan": data.auto_scan,
         }

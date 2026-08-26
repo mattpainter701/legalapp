@@ -49,6 +49,11 @@ class AgentHeartbeatRequest(BaseModel):
     agent_version: str | None = Field(None, max_length=50)
     hostname: str | None = Field(None, max_length=200)
     active_scans: int | None = None
+    update_status: str | None = Field(None, pattern="^(in_progress|completed|failed)$")
+    update_target_version: str | None = Field(
+        None, pattern=r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$"
+    )
+    update_error: str | None = Field(None, max_length=2000)
 
 
 class AgentInfo(UuidStringModel):
@@ -60,6 +65,13 @@ class AgentInfo(UuidStringModel):
     os_info: str | None
     last_heartbeat: datetime | None
     created_at: datetime
+    update_status: str = "idle"
+    update_target_version: str | None = None
+    update_manifest_id: str | None = None
+    update_task_id: str | None = None
+    update_requested_at: datetime | None = None
+    update_completed_at: datetime | None = None
+    update_error: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -214,11 +226,11 @@ class ShareScanStatus(BaseModel):
 
 
 class FileSyncEntry(BaseModel):
-    path: str
+    path: str = Field(..., min_length=5, max_length=32768)
     filename: str = Field(..., max_length=500)
     ext: str | None = Field(None, max_length=20)
     mime_type: str | None = Field(None, max_length=200)
-    snippet: str | None = None
+    snippet: str | None = Field(None, max_length=10000)
     owner: str | None = Field(None, max_length=300)
     size_bytes: int | None = None
     modified_time: datetime | None = None
@@ -226,14 +238,14 @@ class FileSyncEntry(BaseModel):
 
 
 class SyncRequest(BaseModel):
-    files: list[FileSyncEntry]
-    deletions: list[str] = []
+    files: list[FileSyncEntry] = Field(default_factory=list, max_length=500)
+    deletions: list[str] = Field(default_factory=list, max_length=500)
 
 
 class SyncResponse(BaseModel):
     synced: int
     deleted: int
-    errors: list[dict] = []
+    errors: list[dict] = Field(default_factory=list)
 
 
 # ── Task schemas ────────────────────────────────────────────────────────────
@@ -253,13 +265,21 @@ class ContentFetchTask(BaseModel):
     share_id: str | None = None
     share_path: str | None = None
     reason: str = "search_result"
+    target_version: str | None = Field(
+        None, pattern=r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$"
+    )
+    manifest_id: str | None = Field(
+        None, pattern=r"^agent-v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$"
+    )
 
 
 class ContentFetchResult(BaseModel):
-    task_id: str
-    content: str = ""
+    task_id: str = Field(..., min_length=1, max_length=128)
+    # The shipped agent returns at most 512 KiB of extracted text. Leave room
+    # for Unicode/format variance while bounding an authenticated bad device.
+    content: str = Field("", max_length=1_000_000)
     truncated: bool = False
-    error: str | None = None
+    error: str | None = Field(None, max_length=2000)
     # Set by verify/scan tasks; content fetches leave it at the default.
     ok: bool = True
     detail: dict | None = None

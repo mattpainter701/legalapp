@@ -35,9 +35,11 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from app import database
 from app.database import (
+    clear_smb_agent_bootstrap_lookup,
     clear_tenant_context,
     enable_rls_bypass,
     NO_TENANT_CONTEXT,
+    set_smb_agent_bootstrap_lookup,
     set_tenant_context,
 )
 
@@ -95,7 +97,9 @@ async def rls_session():
                     CREATE TABLE {_TABLE} (
                         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                         tenant_id UUID NOT NULL,
-                        label TEXT NOT NULL
+                        label TEXT NOT NULL,
+                        api_key_hash TEXT,
+                        pairing_code TEXT
                     )
                     """
                 )
@@ -123,6 +127,26 @@ async def rls_session():
                     CREATE POLICY rls_bypass_{_TABLE} ON {_TABLE}
                     FOR ALL TO PUBLIC
                     USING (current_setting('app.rls_bypass', true) = 'on')
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    f"""
+                    CREATE POLICY smb_agent_bootstrap_{_TABLE} ON {_TABLE}
+                    FOR SELECT TO PUBLIC
+                    USING (
+                        (
+                            NULLIF(current_setting('app.smb_agent_api_key_hash', true), '')
+                            IS NOT NULL
+                            AND api_key_hash = current_setting('app.smb_agent_api_key_hash', true)
+                        )
+                        OR (
+                            NULLIF(current_setting('app.smb_agent_pairing_code', true), '')
+                            IS NOT NULL
+                            AND pairing_code = current_setting('app.smb_agent_pairing_code', true)
+                        )
+                    )
                     """
                 )
             )
@@ -158,8 +182,17 @@ async def rls_session():
                 (TENANT_B, "b1"),
             ):
                 await conn.execute(
-                    text(f"INSERT INTO {_TABLE} (tenant_id, label) VALUES (:t, :l)"),
-                    {"t": tenant, "l": label},
+                    text(
+                        f"INSERT INTO {_TABLE} "
+                        "(tenant_id, label, api_key_hash, pairing_code) "
+                        "VALUES (:t, :l, :k, :p)"
+                    ),
+                    {
+                        "t": tenant,
+                        "l": label,
+                        "k": f"key-{label}",
+                        "p": f"pair-{label}",
+                    },
                 )
     except (OperationalError, InterfaceError, ConnectionError, OSError) as exc:
         await admin_engine.dispose()
@@ -245,6 +278,24 @@ async def test_no_context_is_fail_closed(rls_session):
     assert current == NO_TENANT_CONTEXT
     assert legacy == NO_TENANT_CONTEXT
     assert await _count(rls_session) == 0
+
+
+async def test_smb_bootstrap_lookup_is_exact_then_tenant_scoped(rls_session):
+    """The credential selector finds one row, then tenant RLS wins again."""
+    await clear_tenant_context(rls_session)
+    await set_smb_agent_bootstrap_lookup(rls_session, api_key_hash="key-a1")
+    assert await _count(rls_session) == 1
+    assert await _count(rls_session, "b") == 0
+
+    await clear_smb_agent_bootstrap_lookup(rls_session)
+    await set_smb_agent_bootstrap_lookup(rls_session, pairing_code="pair-b1")
+    assert await _count(rls_session) == 1
+    assert await _count(rls_session, "a") == 0
+
+    await clear_smb_agent_bootstrap_lookup(rls_session)
+    await set_tenant_context(rls_session, TENANT_B)
+    assert await _count(rls_session) == 1
+    assert await _count(rls_session, "a") == 0
 
 
 async def test_rls_bypass_reveals_all_rows(rls_session):

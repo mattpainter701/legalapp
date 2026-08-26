@@ -18,6 +18,7 @@ from clarity_agent.smb_auth import ShareCredential
 from clarity_agent.smb_reader import SmbReader
 from clarity_agent.smb_scanner import SmbScanner
 from clarity_agent.task_worker import TaskWorker
+from clarity_agent import updater
 from clarity_agent.utils import parse_smb_path, setup_logging
 
 logger = logging.getLogger("clarity_agent")
@@ -28,6 +29,9 @@ SCAN_TICK_SECONDS = 60
 # How long a fetched share list (with its credentials) is reused before the
 # agent asks the SaaS again.
 SHARE_CACHE_TTL_SECONDS = 300
+# Keep individual sync requests bounded so a large first scan does not exceed
+# reverse-proxy/body limits or hold one HTTP request open for minutes.
+SYNC_BATCH_SIZE = 100
 
 
 def normalize_share(share: dict) -> dict:
@@ -93,10 +97,6 @@ async def _scan_share(
     sync_error: str | None = None
 
     if new_and_changed or result.deleted_files:
-        for finfo in new_and_changed:
-            finfo["share_id"] = share_id
-            await ledger.upsert_file(finfo)
-
         sync_files = [
             {
                 "path": f["path"],
@@ -111,8 +111,50 @@ async def _scan_share(
             for f in new_and_changed
         ]
         try:
-            await client.sync(sync_files, result.deleted_files, share_id)
-            synced_count = len(sync_files)
+            for offset in range(0, len(sync_files) or 1, SYNC_BATCH_SIZE):
+                batch = sync_files[offset : offset + SYNC_BATCH_SIZE]
+                # Deletions are sent once, alongside the first batch. If there
+                # are no files, still send a deletion-only request.
+                batch_deletions = result.deleted_files if offset == 0 else []
+                response = await client.sync(batch, batch_deletions, share_id)
+                if not isinstance(response, dict):
+                    raise RuntimeError("Sync returned an invalid response")
+                response_errors = response.get("errors") or []
+                error_paths = {
+                    str(item.get("path"))
+                    for item in response_errors
+                    if isinstance(item, dict) and item.get("path")
+                }
+                has_unscoped_error = any(
+                    not isinstance(item, dict) or not item.get("path")
+                    for item in response_errors
+                )
+                ledger_batch = new_and_changed[offset : offset + SYNC_BATCH_SIZE]
+                accepted_batch = [
+                    finfo
+                    for finfo in ledger_batch
+                    if not has_unscoped_error and str(finfo["path"]) not in error_paths
+                ]
+                for finfo in accepted_batch:
+                    finfo["share_id"] = share_id
+                await ledger.upsert_files(accepted_batch)
+                accepted_deletions = [
+                    path
+                    for path in batch_deletions
+                    if not has_unscoped_error and str(path) not in error_paths
+                ]
+                await ledger.mark_deleted_paths(accepted_deletions)
+                synced_count += len(accepted_batch)
+                if response_errors:
+                    details = "; ".join(
+                        str(item.get("error", item))
+                        if isinstance(item, dict)
+                        else str(item)
+                        for item in response_errors[:3]
+                    )
+                    sync_error = (
+                        f"Sync rejected {len(response_errors)} item(s): {details}"
+                    )
             logger.info(
                 "Synced %d new/changed, %d deleted",
                 synced_count,
@@ -127,7 +169,7 @@ async def _scan_share(
     for err in result.errors:
         logger.error("Scan error: %s", err)
 
-    indexed = len(new_and_changed) + len(result.unchanged_files)
+    indexed = synced_count + len(result.unchanged_files)
     error = sync_error or (result.errors[0] if result.errors else None)
     status = (
         "failed" if (error and not indexed) else ("partial" if error else "success")
@@ -226,6 +268,18 @@ async def run_daemon(
     async def scan_one(share: dict) -> dict:
         return await _scan_share(share, ledger, client, smb_scanner)
 
+    async def update_agent(target_version: str, manifest_id: str) -> dict:
+        info = await updater.check_async()
+        if target_version != info.version:
+            raise updater.UpdateError(
+                "Requested update version is not the current official release"
+            )
+        if manifest_id != f"agent-v{info.version}":
+            raise updater.UpdateError(
+                "Requested update manifest identity does not match"
+            )
+        return await updater.apply_async(info)
+
     task_worker = TaskWorker(
         config,
         client,
@@ -233,6 +287,7 @@ async def run_daemon(
         share_provider=shares.get,
         scan_callback=scan_one,
         share_refresher=shares.refresh,
+        update_callback=update_agent,
     )
     heartbeat = HeartbeatService(config, client)
 
@@ -279,10 +334,16 @@ async def run_daemon(
 
     async def task_loop():
         while not stop_event.is_set():
+            poll_result = -1
             try:
-                await task_worker.poll_and_execute()
+                poll_result = await task_worker.poll_and_execute()
             except Exception as exc:
                 logger.error("Task poll failed: %s", exc)
+            # Successful calls long-poll on the server, so reconnect
+            # immediately and keep an outbound near-real-time channel. Only a
+            # transport failure uses the configured retry backoff.
+            if poll_result >= 0:
+                continue
             try:
                 await asyncio.wait_for(
                     stop_event.wait(), timeout=config.task_poll_interval_seconds
@@ -313,15 +374,31 @@ async def run_daemon(
     logger.info("Agent shut down")
 
 
+async def _register_with_saas(
+    config: AgentConfig,
+    pairing_code: str,
+    agent_info: dict,
+) -> dict:
+    """Register and close HTTP resources on the same event loop."""
+    client = SaaSClient(config)
+    try:
+        return await client.register(
+            pairing_code=pairing_code,
+            agent_info=agent_info,
+        )
+    finally:
+        await client.close()
+
+
 def cmd_register(args) -> None:
     config = AgentConfig(saas_url=args.url)
-    client = SaaSClient(config)
     info = host_info()
 
     result = asyncio.run(
-        client.register(
-            pairing_code=args.code,
-            agent_info={
+        _register_with_saas(
+            config,
+            args.code,
+            {
                 "agent_name": args.name or info["hostname"],
                 "agent_version": info["agent_version"],
                 "hostname": info["hostname"],
@@ -344,7 +421,6 @@ def cmd_register(args) -> None:
         )
 
     config.save_config()
-    asyncio.run(client.close())
     print(f"Agent registered. ID: {config.agent_id}")
     print(f"Config saved to {config.config_path}")
     print("Add shares and credentials in Administration → File Shares.")
@@ -431,6 +507,26 @@ def cmd_service(args) -> None:
     service.dispatch(args.action)
 
 
+def cmd_update(args) -> None:
+    """Check or apply the verified latest official agent release."""
+
+    async def _run():
+        info = await updater.check_async()
+        if args.check:
+            current = updater._version_tuple(__version__)
+            available = updater._version_tuple(info.version) > current
+            print(
+                f"Current: {__version__}\nLatest:  {info.version}\nUpdate:  {'available' if available else 'not needed'}"
+            )
+            return
+        print(await updater.apply_async(info))
+
+    try:
+        asyncio.run(_run())
+    except updater.UpdateError as exc:
+        raise SystemExit(f"Update failed: {exc}") from exc
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="lawhand-agent", description="LawHand File Share Relay Agent"
@@ -480,6 +576,19 @@ def main():
         help="Service action (Windows service / systemd unit)",
     )
     svc.set_defaults(func=cmd_service)
+
+    update = sub.add_parser("update", help="Check or apply the official latest update")
+    mode = update.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--check", dest="check", action="store_true", help="Check without applying"
+    )
+    mode.add_argument(
+        "--apply",
+        dest="check",
+        action="store_false",
+        help="Download, verify, and apply",
+    )
+    update.set_defaults(func=cmd_update, check=True)
 
     args = parser.parse_args()
     args.func(args)

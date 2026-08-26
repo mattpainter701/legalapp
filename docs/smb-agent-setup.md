@@ -1,11 +1,13 @@
-# SMB File Share Relay Agent — Setup & Testing Guide
+# LawHand File Share Agent — Setup & Testing Guide
 
 ## Prerequisites
 
 - Docker Compose stack running (postgres, redis, backend, frontend)
-- Python 3.11+ on the machine that will run the agent
+- Windows Server 2019+ for the MSI, or Python 3.11+ for a source install
 - Network access to an SMB/CIFS file share (Windows file server, NAS, Samba)
-- Admin account on Clarity Legal SaaS
+- Outbound TCP 443 from the agent to the LawHand URL and TCP 445 from the
+  agent to each approved file server. No inbound firewall rule is required.
+- Admin account on LawHand
 
 ## Step 1: Run the Migration
 
@@ -23,7 +25,7 @@ Ensure these are set in your `.env`:
 ```env
 SMB_ENABLED=true
 SMB_PAIRING_CODE_TTL_MIN=10
-SMB_MAX_FILE_INDEX_PER_SHARE=500
+SMB_MAX_FILE_INDEX_PER_SHARE=250000
 SMB_SNIPPET_MAX_CHARS=500
 SMB_TASK_POLL_INTERVAL=30
 SMB_CONTENT_FETCH_TIMEOUT=120
@@ -37,18 +39,33 @@ docker compose restart backend
 
 ## Step 3: Install the Agent
 
-On the machine that has access to your SMB file shares:
+On the Windows machine that has access to the approved shares, download the
+stable MSI and its checksums from the latest agent release:
 
-```bash
-cd agent
-pip install -e .
+```powershell
+$base = 'https://github.com/mattpainter701/legalapp/releases/latest/download'
+Invoke-WebRequest "$base/lawhand-agent-x64.msi" -OutFile lawhand-agent-x64.msi
+Invoke-WebRequest "$base/SHA256SUMS.txt" -OutFile SHA256SUMS.txt
+$expected = ((Select-String SHA256SUMS.txt ' lawhand-agent-x64\.msi$').Line -split '\s+')[0]
+$actual = (Get-FileHash .\lawhand-agent-x64.msi -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw 'Installer checksum mismatch' }
 ```
 
-This installs `clarity-agent` as a CLI command with its dependencies (smbprotocol, httpx, pypdf, python-docx, aiosqlite, cryptography).
+Generate the pairing code in Step 4, then install it from an elevated prompt:
+
+```powershell
+msiexec /i lawhand-agent-x64.msi /qn `
+  PAIRING_CODE=<one-time-code> `
+  SAAS_URL=https://getlawhand.com
+```
+
+For development, `cd agent && pip install -e .[dev]` installs the
+`lawhand-agent` CLI from source.
 
 ## Step 4: Generate a Pairing Code
 
-As an admin user, call the pairing code endpoint:
+As an admin user, call the pairing code endpoint (or use **Administration →
+File Shares → Generate Pairing Code**):
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/smb/pairing-code \
@@ -65,20 +82,22 @@ Response:
 
 The pairing code expires in 10 minutes (configurable via `SMB_PAIRING_CODE_TTL_MIN`).
 
-Alternatively, use the admin UI **File Shares** tab in **Admin → File Shares → Generate Pairing Code**.
-
 ## Step 5: Register the Agent
 
-On the agent machine:
+The MSI registers automatically when `PAIRING_CODE` is supplied. For a source
+install or an MSI installed without a code:
 
 ```bash
-clarity-agent register \
-  --code A7X3K9M2 \
+lawhand-agent register \
+  --code A7X3-K9M2-Q7RT-W4YZ \
   --name "Office File Server" \
-  --url http://localhost:8000
+  --url https://getlawhand.com
 ```
 
-This exchanges the pairing code for an API key and saves it to `~/.clarity-agent/config.toml`:
+This exchanges the pairing code for a tenant-bound agent ID and API key. The
+MSI protects them under `%ProgramData%\LawHand\Agent`; a per-user source install
+uses `~/.clarity-agent/config.toml`. Plain HTTP is rejected except for local
+development on `localhost`, `127.0.0.1`, or `::1`.
 
 ```toml
 saas_url = "http://localhost:8000"
@@ -95,7 +114,12 @@ domain = ""
 
 ## Step 6: Configure SMB Credentials
 
-Edit `~/.clarity-agent/config.toml` to add your SMB credentials:
+Create the credential in **Administration → File Shares → Credentials**, then
+attach it to a share. It is encrypted in the tenant credential vault, delivered
+only to that tenant's assigned agent over authenticated HTTPS, and kept in the
+agent process memory. Prefer a least-privilege read-only domain account.
+
+The local config credential remains an optional fallback for source installs:
 
 ```toml
 [smb_credentials]
@@ -103,22 +127,17 @@ username = "DOMAIN\\smb_service_account"
 password = "your-password"
 domain = "DOMAIN"
 
-[[shares]]
-server = "FILESERVER"
-share = "LegalDocs"
-display_name = "Legal Documents"
-file_extensions = [".pdf", ".docx", ".doc", ".rtf", ".txt"]
-max_depth = 10
 ```
 
-The agent encrypts SMB credentials with Fernet (a machine-specific key stored in `~/.clarity-agent/.key`).
+Local fallback credentials are encrypted with a machine-local Fernet key. The
+normal MSI setup does not write tenant-vault share passwords to disk.
 
 ## Step 7: Add Share via Admin API
 
 Create a share record on the SaaS side:
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/smb/shares \
+curl -X POST 'http://localhost:8000/api/v1/smb/shares?agent_id=<agent_uuid>' \
   -H "Authorization: Bearer <ADMIN_JWT_TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{
@@ -134,7 +153,7 @@ Or use the **File Shares** tab in the admin dashboard.
 ## Step 8: Start the Agent
 
 ```bash
-clarity-agent start
+lawhand-agent start
 ```
 
 The agent will:
@@ -142,26 +161,30 @@ The agent will:
 2. Download the list of configured shares
 3. Scan each share (3-tier change detection: dir mtime → file mtime → first-4KB hash)
 4. Sync file metadata (path, filename, extension, size, owner, snippet) to the SaaS
-5. Poll for content fetch tasks every 30 seconds
+5. Maintain a 20-second outbound long poll for near-real-time content tasks
 6. Repeat scan every 6 hours (configurable)
 
 ## Step 9: Test File Search
 
-In the Clarity Legal chat, ask a question about on-prem files:
+In the LawHand chat, ask a question about on-prem files:
 
 > "Find the Acme Corp acquisition agreement on our file server"
 
-The RetrievalPlanner will detect "file server" and include "smb" as a source. The system will search `smb_file_index` using tsvector full-text search and return matching files with snippets.
+The RetrievalPlanner can include `smb` as a source. LawHand searches the
+tenant/matter-scoped metadata index first, then asks the agent for full text for
+at most the top three hits. That on-demand phase has a 12-second aggregate wait
+and a 12,000-character context budget; unavailable files fall back to snippets
+and the degraded result is not cached.
 
 ## Step 10: Test Content Fetch
 
 When the LLM needs the full content of a file:
 
-1. SaaS creates a content fetch task in Redis
+1. SaaS creates a tenant/file/share/agent-bound content fetch task in Redis
 2. Agent polls and picks up the task
 3. Agent reads the file from the SMB share
 4. Agent posts the content back to the SaaS
-5. SaaS injects the content into the LLM context
+5. SaaS validates the exact task binding and injects bounded text into context
 
 You can also manually request content:
 
@@ -182,24 +205,106 @@ curl "http://localhost:8000/api/v1/smb/files/<file_id>/content-status?task_id=<t
 To scope file searches to a specific matter:
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/matters/<matter_id>/smb-shares \
+curl -X POST http://localhost:8000/api/v1/smb/matters/<matter_id>/smb-shares \
   -H "Authorization: Bearer <USER_JWT_TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{
     "share_id": "<share_uuid>",
-    "display_label": "Acme Litigation Docs",
-    "auto_scan": true
+    "folder_path": "Acme Litigation Docs"
   }'
 ```
 
 In the UI: **Matter Detail → File Shares tab → Add Share**
+
+## Upgrade Agents
+
+From version 0.15.0 onward, a tenant admin can use **Administration → File
+Shares → Agents → Update**. The API queues only a target version and fixed
+manifest identity. The agent independently fetches the official manifest and a
+version-pinned GitHub release asset; no portal request can provide an installer
+URL or executable path. Agents older than 0.15.0 require one manual bootstrap
+upgrade before this portal button works.
+
+### Windows overtop MSI
+
+Run from an elevated PowerShell prompt. Installing the MSI over the existing
+product preserves `C:\ProgramData\LawHand\Agent`; do not uninstall first.
+
+```powershell
+$base = 'https://github.com/mattpainter701/legalapp/releases/latest/download'
+$work = Join-Path $env:TEMP 'lawhand-agent-update'
+New-Item -ItemType Directory -Force $work | Out-Null
+Invoke-WebRequest "$base/agent-update.json" -OutFile "$work/agent-update.json"
+$manifest = Get-Content "$work/agent-update.json" -Raw | ConvertFrom-Json
+if ($manifest.schema_version -ne 1 -or $manifest.version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') { throw 'Invalid update manifest' }
+$asset = $manifest.assets.'windows-x86_64'
+if ($asset.name -ne 'lawhand-agent-x64.msi' -or $asset.sha256 -notmatch '^[0-9a-fA-F]{64}$') { throw 'Invalid Windows release entry' }
+$versioned = "https://github.com/mattpainter701/legalapp/releases/download/agent-v$($manifest.version)/$($asset.name)"
+Invoke-WebRequest $versioned -OutFile "$work\lawhand-agent-x64.msi"
+$expected = $asset.sha256.ToLowerInvariant()
+$actual = (Get-FileHash "$work/lawhand-agent-x64.msi" -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw 'Installer checksum mismatch' }
+$args = "/i `"$work\lawhand-agent-x64.msi`" /qn /norestart /l*v `"$work\upgrade.log`""
+$process = Start-Process msiexec.exe -ArgumentList $args -Wait -PassThru
+if ($process.ExitCode -notin @(0, 1641, 3010)) {
+  throw "Upgrade failed with exit code $($process.ExitCode); see $work\upgrade.log"
+}
+```
+
+Portal and CLI auto-updates are supported for the default LocalSystem service.
+If `SERVICE_ACCOUNT` was used, use the direct overtop MSI command above. The
+late-upgrade schedule reads the existing service identity and leaves its
+password in the Service Control Manager; it neither recovers nor logs that
+password. Supply both account properties only for a clean install or an
+intentional service-identity change.
+
+### Linux command
+
+Version 0.15.0 installs a root-owned systemd path/oneshot updater. The normal
+relay process can request only a semantic version; the root helper re-downloads
+and verifies the fixed official manifest and versioned tarball, validates every
+archive member, performs an atomic replacement, checks service health, and
+rolls back on failure.
+
+```bash
+lawhand-agent update --check
+sudo lawhand-agent update --apply
+sudo systemctl status lawhand-agent-update.service
+sudo journalctl -u lawhand-agent-update.service --since today
+```
+
+For a pre-0.15 packaged Linux agent, download the latest tarball and
+`SHA256SUMS.txt`, verify it, extract it, and run `sudo ./install.sh` without
+`--code`. That overwrites the binary/units while preserving the existing
+`/etc/lawhand-agent` enrollment, encryption key, and ledger. After this one
+manual bootstrap, portal updates are available.
+
+```bash
+set -euo pipefail
+LAWHAND_UPDATE_DIR="$(mktemp -d)"
+LAWHAND_RELEASE_BASE="https://github.com/mattpainter701/legalapp/releases/latest/download"
+curl --fail --location "$LAWHAND_RELEASE_BASE/lawhand-agent-linux-x86_64.tar.gz" \
+  --output "$LAWHAND_UPDATE_DIR/lawhand-agent-linux-x86_64.tar.gz"
+curl --fail --location "$LAWHAND_RELEASE_BASE/SHA256SUMS.txt" \
+  --output "$LAWHAND_UPDATE_DIR/SHA256SUMS.txt"
+(cd "$LAWHAND_UPDATE_DIR" && sha256sum --ignore-missing --check SHA256SUMS.txt)
+tar -xzf "$LAWHAND_UPDATE_DIR/lawhand-agent-linux-x86_64.tar.gz" \
+  -C "$LAWHAND_UPDATE_DIR"
+LAWHAND_INSTALLER="$(find "$LAWHAND_UPDATE_DIR" -mindepth 2 -maxdepth 2 \
+  -type f -name install.sh -print -quit)"
+test -n "$LAWHAND_INSTALLER"
+sudo "$LAWHAND_INSTALLER"
+```
+
+The stable URLs return 404 until an `agent-v0.15.0` (or later) tag has completed
+the release workflow and been published.
 
 ## Monitoring
 
 ### Agent Status
 ```bash
 # On the agent machine
-clarity-agent status
+lawhand-agent status
 
 # On the SaaS
 curl http://localhost:8000/api/v1/smb/agents \
@@ -222,7 +327,7 @@ curl http://localhost:8000/api/admin/smb/activity?limit=20 \
 
 ```
 ┌─────────────────┐     HTTPS      ┌──────────────────┐
-│  Clarity Agent  │◄──────────────►│  Clarity Legal   │
+│  LawHand Agent  │◄──────────────►│  LawHand SaaS    │
 │  (on-prem)      │                │  SaaS (cloud)    │
 │                 │                │                  │
 │  - SMB Scanner  │   POST /sync   │  - smb_agents    │
@@ -240,12 +345,22 @@ curl http://localhost:8000/api/admin/smb/activity?limit=20 \
 ```
 
 **Key security properties:**
-- SMB credentials NEVER leave the agent machine (stored encrypted locally)
-- File content is ephemeral in RAM only — never persisted in the SaaS database
+- Each agent API key is bound to one tenant and stored as a SHA-256 digest.
+- Share credentials are encrypted in the tenant vault, sent only to the
+  assigned agent over TLS, and retained in agent memory; local fallback secrets
+  are encrypted on the agent.
+- Full content is never written to `smb_file_index`. It is held briefly in the
+  Redis task handoff and request context, then expires; metadata and snippets
+  are the persistent cache.
 - Full audit trail in `smb_access_log`
-- Agent API key hashed with SHA-256 (like password hashing)
 - Tenant-scoped RLS on all SMB tables
 - Agent can be paused/revoked from admin dashboard
+
+This is an application-layer, outbound-only relay, not a general network mesh:
+the SaaS cannot open arbitrary sockets into the tenant network, and the agent
+can read only configured share roots. The logical isolation now approaches a
+per-tenant private link; mTLS device certificates and signed public installers
+remain the next controls if a Tailscale-equivalent device identity is required.
 
 ## Troubleshooting
 
@@ -254,6 +369,6 @@ curl http://localhost:8000/api/admin/smb/activity?limit=20 \
 | "SMB feature is not enabled" | Set `SMB_ENABLED=true` in `.env` and restart backend |
 | Pairing code expired | Generate a new one (they expire in 10 min) |
 | Agent can't connect to SMB | Check `smb_credentials` in config.toml, verify network access |
-| No files in search results | Run `clarity-agent scan --share-path "\\\\server\\share"` first |
+| No files in search results | Use **Scan now** in the share admin view, or run `lawhand-agent scan` on the agent |
 | Content fetch timeout | Increase `SMB_CONTENT_FETCH_TIMEOUT` in `.env` |
 | Agent shows as "paused" | Heartbeat missed for 15+ minutes; check agent is running |

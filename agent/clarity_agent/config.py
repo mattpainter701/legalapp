@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
 import stat
 import sys
 import tomllib
@@ -71,14 +72,76 @@ _INT_FIELDS = (
 def _restrict(path: Path) -> None:
     """Make a file readable only by its owner where the OS supports it."""
     try:
-        if os.name != "nt":
-            path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+        if os.name == "nt":
+            # chmod is largely ignored by Windows.  Do not leave the API key
+            # readable through the inherited ProgramData\Everyone ACL. The
+            # data directory receives explicit SYSTEM/Administrators/service
+            # account ACEs from the MSI. Directories have inheritance removed;
+            # files reset to inherit that protected directory ACL. This keeps
+            # the service-account ACE instead of stripping it from each file.
+            # ``icacls`` is built into Windows and list arguments avoid shell
+            # interpolation of paths.
+            if path.is_dir():
+                identity_result = subprocess.run(
+                    ["whoami"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                identity = identity_result.stdout.strip()
+                if identity_result.returncode != 0 or not identity:
+                    _logger.warning(
+                        "Could not resolve the current Windows identity; "
+                        "leaving ACL inheritance unchanged on %s",
+                        path,
+                    )
+                    return
+                # Preserve any explicit MSI service-account ACE while adding
+                # language-neutral SYSTEM/Administrators SIDs and the current
+                # identity. This also makes a source-created per-user config
+                # directory usable after inherited broad ACLs are removed.
+                command = [
+                    "icacls",
+                    str(path),
+                    "/inheritance:r",
+                    "/grant:r",
+                    "*S-1-5-18:(OI)(CI)F",
+                    "*S-1-5-32-544:(OI)(CI)F",
+                    f"{identity}:(OI)(CI)F",
+                ]
+            else:
+                # PermissionEx entries on the MSI data folder are inheritable;
+                # resetting a child picks up SYSTEM, Administrators, and a
+                # custom SERVICE_ACCOUNT without guessing that account here.
+                command = ["icacls", str(path), "/reset"]
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                _logger.warning(
+                    "Could not restrict permissions on %s: %s",
+                    path,
+                    result.stderr.strip(),
+                )
+        else:
+            # Directories need execute permission for traversal; applying a
+            # file's 0600 mode to CONFIG_DIR would make the service unable to
+            # open its own key/config on Linux.
+            path.chmod(
+                (stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+                if path.is_dir()
+                else (stat.S_IRUSR | stat.S_IWUSR)
+            )
     except OSError as exc:  # pragma: no cover - depends on the filesystem
         _logger.warning("Could not restrict permissions on %s: %s", path, exc)
 
 
 def _load_or_create_key() -> bytes:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    _restrict(CONFIG_DIR)
     if KEY_FILE.exists():
         return KEY_FILE.read_bytes()
     key = Fernet.generate_key()
@@ -165,6 +228,7 @@ class AgentConfig:
 
     def save_config(self) -> None:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        _restrict(CONFIG_DIR)
         enc_pw = _encrypt(self.smb_password) if self.smb_password else ""
         data = {
             "agent": {
@@ -181,6 +245,7 @@ class AgentConfig:
                 "heartbeat_interval_seconds": self.heartbeat_interval_seconds,
             }
         }
+        temp_path = CONFIG_FILE.with_suffix(".tmp")
         if tomli_w is None:
             _logger.warning(
                 "tomli_w not installed — saving config as JSON fallback. "
@@ -188,9 +253,16 @@ class AgentConfig:
             )
             import json
 
-            with open(CONFIG_FILE, "w") as f:
+            with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
         else:
-            with open(CONFIG_FILE, "wb") as f:
+            # Write-and-replace prevents a power loss during pairing from
+            # leaving a truncated config which makes the service fail at boot.
+            with open(temp_path, "wb") as f:
                 tomli_w.dump(data, f)
+                f.flush()
+                os.fsync(f.fileno())
+        os.replace(temp_path, CONFIG_FILE)
         _restrict(CONFIG_FILE)

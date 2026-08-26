@@ -1479,6 +1479,149 @@ async def build_cloud_context(cloud_hits_with_content: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
+# On-prem content is fetched through the already authenticated relay task
+# path. Keep this deliberately small: a chat turn should not turn into a bulk
+# file download, and snippets remain useful when the agent is offline.
+SMB_RAG_MAX_FETCHES = 3
+SMB_RAG_MAX_CONTENT_CHARS = 12_000
+SMB_RAG_FETCH_TIMEOUT_SECONDS = 12
+
+
+async def _fetch_smb_rag_content(
+    *,
+    redis,
+    results: list,
+    tenant_id: str,
+    user_id: str | None,
+    conversation_id: str | None,
+    session_factory=None,
+) -> tuple[dict[str, str], tuple[str, ...]]:
+    """Fetch a bounded set of SMB hits, returning content and health reasons."""
+    if not results:
+        return {}, ()
+    if redis is None or not user_id:
+        return {}, ("smb_content_fetch_unavailable",)
+
+    from app.services.smb import smb_service
+
+    session_factory = session_factory or async_session_maker
+    selected = results[:SMB_RAG_MAX_FETCHES]
+    content_by_id: dict[str, str] = {}
+    reasons: list[str] = []
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + SMB_RAG_FETCH_TIMEOUT_SECONDS
+
+    def remaining_seconds() -> float:
+        return max(0.0, deadline - loop.time())
+
+    queued: list[tuple[str, str]] = []
+    for hit in selected:
+        file_id = str(hit.id)
+        timeout = remaining_seconds()
+        if timeout <= 0:
+            reasons.append("smb_content_fetch_timeout")
+            break
+        try:
+            # Use a short independent session for each audit row/task. The SMB
+            # service commits the audit row before publishing to Redis, so the
+            # caller's chat transaction is not pinned and a fast result handler
+            # can always see the row when it records bytes sent.
+            async with session_factory() as task_db:
+                task_id, _agent_id = await asyncio.wait_for(
+                    smb_service.request_content_fetch(
+                        task_db,
+                        tenant_id,
+                        user_id,
+                        file_id,
+                        conversation_id,
+                        reason="rag_context",
+                        redis=redis,
+                    ),
+                    timeout=timeout,
+                )
+            queued.append((file_id, task_id))
+        except asyncio.TimeoutError:
+            reasons.append("smb_content_fetch_timeout")
+            break
+        except Exception:
+            logger.exception(
+                "SMB RAG content fetch queueing failed for file %s", file_id
+            )
+            reasons.append("smb_content_fetch_failed")
+
+    async def fetch_one(item: tuple[str, str]) -> tuple[str, str | None, str | None]:
+        file_id, task_id = item
+        try:
+            payload = await smb_service.get_task_result(
+                task_id,
+                tenant_id,
+                redis=redis,
+                file_id=file_id,
+                kind="content_fetch",
+            )
+            while payload is None and remaining_seconds() > 0:
+                await asyncio.sleep(min(1.0, max(0.01, remaining_seconds())))
+                payload = await smb_service.get_task_result(
+                    task_id,
+                    tenant_id,
+                    redis=redis,
+                    file_id=file_id,
+                    kind="content_fetch",
+                )
+            if payload is None:
+                return file_id, None, "smb_content_fetch_timeout"
+            if payload.get("error") or not payload.get("ok", True):
+                return file_id, None, "smb_content_fetch_failed"
+            return file_id, (payload.get("content") or ""), None
+        except Exception:
+            logger.exception("SMB RAG content fetch failed for file %s", file_id)
+            return file_id, None, "smb_content_fetch_failed"
+
+    tasks = [asyncio.create_task(fetch_one(item)) for item in queued]
+    outcomes = []
+    if tasks:
+        done, pending = await asyncio.wait(tasks, timeout=remaining_seconds())
+        for task in tasks:
+            if task in done:
+                outcomes.append(task.result())
+        if pending:
+            reasons.append("smb_content_fetch_timeout")
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    remaining = SMB_RAG_MAX_CONTENT_CHARS
+    for file_id, content, reason in outcomes:
+        if reason:
+            reasons.append(reason)
+        if content and remaining > 0:
+            content_by_id[file_id] = content[:remaining]
+            remaining -= len(content_by_id[file_id])
+    return content_by_id, tuple(dict.fromkeys(reasons))
+
+
+def _build_smb_rag_context(results: list, content_by_id: dict[str, str]) -> str:
+    """Format SMB metadata with fetched body text where available."""
+    parts = []
+    for i, hit in enumerate(results, start=1):
+        header = f"[S{i}] On-prem: {hit.filename}"
+        if hit.ext:
+            header += f" ({hit.ext})"
+        if hit.owner:
+            header += f"\n    Owner: {hit.owner}"
+        if hit.size_bytes:
+            header += f"\n    Size: {hit.size_bytes:,} bytes"
+        if hit.modified_time:
+            header += f"\n    Modified: {hit.modified_time.isoformat()}"
+        if hit.path:
+            header += f"\n    Path: {hit.path}"
+        body = content_by_id.get(str(hit.id)) or hit.snippet or ""
+        if body:
+            header += f"\nContent:\n{body}"
+        parts.append(f"{header}\n" + "-" * 60)
+    return "\n\n".join(parts)
+
+
 def cloud_context_source_id(hit_dict: dict) -> str:
     """Stable id shared by provider context, validation, and API citations."""
     return (
@@ -1513,6 +1656,8 @@ async def _connected_source_query(
     matter_context_str: str | None,
     matter_id: str | None,
     matter_cloud_folder: dict | None,
+    redis=None,
+    conversation_id: str | None = None,
     db: AsyncSession | None = None,
 ) -> tuple[str, list[dict], str]:
     """Search connected cloud/SMB sources using one supplied or helper session.
@@ -1521,7 +1666,7 @@ async def _connected_source_query(
     retrieval when no provider is connected, the planner times out, or an
     upstream provider is unavailable.
     """
-    if not cloud_search_service or not retrieval_planner:
+    if not retrieval_planner:
         return ConnectedSourceResults()
 
     cloud_hits: list[dict] = []
@@ -1573,7 +1718,7 @@ async def _connected_source_query(
             return ConnectedSourceResults()
         sources = plan.get("sources", [])
 
-        if settings.CLOUD_SEARCH_ENABLED:
+        if settings.CLOUD_SEARCH_ENABLED and cloud_search_service:
             cloud_sources = [source for source in sources if source != "smb"]
             if cloud_sources and connected:
                 try:
@@ -1620,7 +1765,15 @@ async def _connected_source_query(
                     limit=min(int(plan.get("max_hits", 10)), 10),
                 )
                 if smb_results:
-                    smb_context = await smb_service.build_smb_context(smb_results)
+                    fetched, fetch_reasons = await _fetch_smb_rag_content(
+                        redis=redis,
+                        results=smb_results,
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                    )
+                    smb_context = _build_smb_rag_context(smb_results, fetched)
+                    degradation_reasons.extend(fetch_reasons)
             except Exception:
                 logger.exception("SMB search failed")
                 degradation_reasons.append("smb_search_failed")
@@ -1648,6 +1801,8 @@ async def hybrid_rag_query(
     matter_id: str | None = None,
     matter_cloud_folder: dict | None = None,
     default_public_jurisdiction: str | None = None,
+    redis=None,
+    conversation_id: str | None = None,
 ) -> tuple[str, list[dict], list[dict]]:
     """
     Hybrid RAG pipeline: optional tenant pgvector/cloud/SMB search plus public
@@ -1690,6 +1845,8 @@ async def hybrid_rag_query(
                 matter_context_str=matter_context_str,
                 matter_id=matter_id,
                 matter_cloud_folder=matter_cloud_folder,
+                redis=redis,
+                conversation_id=conversation_id,
                 db=db,
             )
         except asyncio.CancelledError:

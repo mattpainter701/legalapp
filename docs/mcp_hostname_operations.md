@@ -68,11 +68,35 @@ rules before the catch-all rule and preserve all existing entries:
 
 ```yaml
 - hostname: mcp.getlawhand.com
-  service: http://localhost:80
+  service: https://127.0.0.1:443
+  originRequest:
+    originServerName: origin.getlawhand.internal
+    caPool: /etc/cloudflared/lawhand-origin-ca.pem
+    http2Origin: true
 - hostname: research.getlawhand.com
-  service: http://localhost:80
+  service: https://127.0.0.1:443
+  originRequest:
+    originServerName: origin.getlawhand.internal
+    caPool: /etc/cloudflared/lawhand-origin-ca.pem
+    http2Origin: true
 - service: http_status:404
 ```
+
+The apex and `www` rules use the same HTTPS origin settings. Provision the
+private CA and matching nginx certificate on the production VM with
+`scripts/provision_private_origin_tls.sh`, then validate the complete chain
+with `scripts/validate_private_origin_tls.sh`. This private CA is only for the
+Cloudflare Tunnel-to-VM hop. Installed file-share agents should continue to
+connect to `https://getlawhand.com` and use normal operating-system public CA
+validation; do not distribute this CA to customer machines.
+
+Never set `noTLSVerify: true`, use a plain `http://` Tunnel service, or enable
+Cloudflare Flexible mode. Keep `originServerName` aligned with the certificate
+SAN and `caPool` pinned to the VM's private CA.
+Hypervisor nginx publishes 127.0.0.1:80/443 only, so cloudflared must run on
+the VM host. Stage and validate the certificate before changing ingress to
+HTTPS; never run the legacy Let's Encrypt initializer/renewal cron afterward
+because it can replace the pinned leaf.
 
 Cloudflare documents the effect of proxied records in
 [Proxy status](https://developers.cloudflare.com/dns/proxy-status/). Keep the

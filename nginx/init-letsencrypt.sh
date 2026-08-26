@@ -32,6 +32,17 @@ SSL_DIR="$SCRIPT_DIR/ssl"           # mounted as /etc/nginx/ssl in nginx contain
 LE_DIR="$SCRIPT_DIR/letsencrypt"   # full Let's Encrypt data dir (renewal config etc.)
 WEBROOT_DIR="$SCRIPT_DIR/webroot"  # served by nginx for ACME http-01 challenge
 
+PRIVATE_ORIGIN_MARKER="$SSL_DIR/.private-origin-managed"
+if [[ -L "$PRIVATE_ORIGIN_MARKER" || -e "$PRIVATE_ORIGIN_MARKER" ]]; then
+    [[ -f "$PRIVATE_ORIGIN_MARKER" && ! -L "$PRIVATE_ORIGIN_MARKER" ]] || {
+        echo "ERROR: refusing to use an invalid private-origin TLS marker at $PRIVATE_ORIGIN_MARKER." >&2
+        exit 1
+    }
+    echo "ERROR: private-origin TLS owns $SSL_DIR; refusing to overwrite its certificate." >&2
+    echo "Use scripts/provision_private_origin_tls.sh for renewal or an explicit CA rotation." >&2
+    exit 1
+fi
+
 ENV_FILE="${ENV_FILE:-$REPO_ROOT/.env}"
 [[ "$ENV_FILE" == /* ]] || ENV_FILE="$REPO_ROOT/$ENV_FILE"
 COMPOSE_FILES="${COMPOSE_FILES:-${COMPOSE_FILE:-$REPO_ROOT/docker-compose.hypervisor.yml}}"

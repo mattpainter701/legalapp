@@ -54,3 +54,16 @@ class SmbAgent(Base):
         server_default="now()",
         onupdate=lambda: datetime.now(timezone.utc),
     )
+    update_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="idle", server_default="idle"
+    )
+    update_target_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    update_manifest_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    update_task_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    update_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    update_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    update_error: Mapped[str | None] = mapped_column(String(2000), nullable=True)

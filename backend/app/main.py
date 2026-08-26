@@ -223,6 +223,7 @@ async def lifespan(app: FastAPI):
     if settings.RUN_SCHEDULER:
         try:
             scheduler = LegalScheduler()
+            scheduler.redis = redis_client
             scheduler.start()
             app.state.scheduler = scheduler
             logger.info("Scheduler started (RUN_SCHEDULER=true)")

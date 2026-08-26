@@ -24,11 +24,12 @@ class FakeSmbClient(types.ModuleType):
     def __init__(self):
         super().__init__("smbclient")
         self.sessions = []
+        self.scandir_calls = []
         self.scandir_result = [FakeEntry("a.pdf"), FakeEntry("b.docx")]
         self.scandir_error = None
         self.connect_error = None
 
-    def reset_connection_cache(self):
+    def reset_connection_cache(self, **kwargs):
         pass
 
     def register_session(self, server, **kwargs):
@@ -37,7 +38,8 @@ class FakeSmbClient(types.ModuleType):
         self.sessions.append((server, kwargs))
         return f"session:{server}"
 
-    def scandir(self, path):
+    def scandir(self, path, **kwargs):
+        self.scandir_calls.append((path, kwargs))
         if self.scandir_error:
             raise self.scandir_error
         return list(self.scandir_result)
@@ -99,7 +101,7 @@ SHARE = {
 }
 
 
-def _worker(smb, client, scan_callback=None):
+def _worker(smb, client, scan_callback=None, update_callback=None):
     from clarity_agent.smb_reader import SmbReader
     from clarity_agent.task_worker import TaskWorker
 
@@ -112,6 +114,7 @@ def _worker(smb, client, scan_callback=None):
         SmbReader(),
         share_provider=shares,
         scan_callback=scan_callback,
+        update_callback=update_callback,
     )
 
 
@@ -129,6 +132,8 @@ async def test_verify_share_reports_the_identity_it_connected_with(smb):
     assert result["detail"]["entries_sampled"] == 2
     # The share's own credential is what got used, not the local config.
     assert smb.sessions[0][1]["username"] == "CORP\\svc-lawhand"
+    assert smb.scandir_calls[0][1]["username"] == "CORP\\svc-lawhand"
+    assert smb.scandir_calls[0][1]["connection_cache"] is not None
 
 
 @pytest.mark.asyncio
@@ -200,7 +205,7 @@ async def test_content_fetch_uses_the_credential_of_the_owning_share(smb, monkey
 
     from clarity_agent.smb_reader import ContentResult
 
-    async def fake_read(self, session, path, max_bytes=512000):
+    async def fake_read(self, session, path, max_bytes=512000, connection_kwargs=None):
         return ContentResult(content="brief text")
 
     monkeypatch.setattr(type(worker.reader), "read_content", fake_read)
@@ -222,14 +227,53 @@ async def test_content_fetch_without_a_path_is_reported_not_crashed(smb):
 
 
 @pytest.mark.asyncio
-async def test_unknown_task_kind_is_treated_as_a_content_fetch(smb):
-    client = FakeClient([{"task_id": "t8", "share_id": "share-1"}])
+async def test_unknown_task_kind_is_rejected(smb):
+    client = FakeClient(
+        [{"task_id": "t8", "kind": "delete_everything", "share_id": "share-1"}]
+    )
 
     await _worker(smb, client).poll_and_execute()
 
-    # No file_path on the task, so it reports the content-fetch error rather
-    # than silently doing nothing.
     assert client.results[0]["ok"] is False
+    assert "Unsupported task kind" in client.results[0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_content_fetch_fails_closed_when_path_has_no_assigned_share(smb):
+    client = FakeClient(
+        [
+            {
+                "task_id": "t13",
+                "kind": "content_fetch",
+                "file_path": "\\\\FS01\\Other\\brief.txt",
+            }
+        ]
+    )
+
+    await _worker(smb, client).poll_and_execute()
+
+    assert client.results[0]["ok"] is False
+    assert "assigned share" in client.results[0]["error"]
+    assert smb.sessions == []
+
+
+@pytest.mark.asyncio
+async def test_content_fetch_share_id_cannot_bypass_path_boundary(smb):
+    client = FakeClient(
+        [
+            {
+                "task_id": "t14",
+                "kind": "content_fetch",
+                "share_id": "share-1",
+                "file_path": "\\\\FS01\\Legal-old\\brief.txt",
+            }
+        ]
+    )
+
+    await _worker(smb, client).poll_and_execute()
+
+    assert client.results[0]["ok"] is False
+    assert smb.sessions == []
 
 
 @pytest.mark.asyncio
@@ -303,3 +347,62 @@ async def test_a_share_added_moments_ago_is_found_after_one_refresh(smb):
 
     assert refreshed == [True]
     assert client.results[0]["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_agent_update_always_applies_version_only_task(smb):
+    calls = []
+
+    async def update(target_version, manifest_id):
+        calls.append((target_version, manifest_id))
+        return {"status": "started", "version": target_version}
+
+    client = FakeClient(
+        [
+            {
+                "task_id": "update-1",
+                "kind": "agent_update",
+                "target_version": "0.15.1",
+                "manifest_id": "agent-v0.15.1",
+            }
+        ]
+    )
+    await _worker(smb, client, update_callback=update).poll_and_execute()
+
+    assert calls == [("0.15.1", "agent-v0.15.1")]
+    assert client.results[0]["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_agent_update_rejects_missing_target(smb):
+    client = FakeClient([{"task_id": "update-2", "kind": "agent_update"}])
+
+    await _worker(
+        smb, client, update_callback=lambda _target, _manifest: None
+    ).poll_and_execute()
+
+    assert client.results[0]["ok"] is False
+    assert "target_version" in client.results[0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_agent_update_rejects_mismatched_manifest_identity(smb):
+    client = FakeClient(
+        [
+            {
+                "task_id": "update-3",
+                "kind": "agent_update",
+                "target_version": "0.15.1",
+                "manifest_id": "agent-v9.9.9",
+            }
+        ]
+    )
+
+    await _worker(
+        smb,
+        client,
+        update_callback=lambda _target, _manifest: None,
+    ).poll_and_execute()
+
+    assert client.results[0]["ok"] is False
+    assert "manifest_id" in client.results[0]["error"]

@@ -2372,6 +2372,8 @@ async def _send_message_under_generation_lock(
                 matter_id=context_matter_id,
                 matter_cloud_folder=matter_cloud_folder,
                 default_public_jurisdiction=default_public_jurisdiction,
+                redis=getattr(request.app.state, "redis", None),
+                conversation_id=str(conv.id),
             )
             await set_tenant_context(db, str(user.tenant_id))
             if not public_general and rag_result_is_cacheable(
@@ -3202,6 +3204,8 @@ async def _stream_message_under_generation_lock(
                         matter_id=context_matter_id,
                         matter_cloud_folder=matter_cloud_folder,
                         default_public_jurisdiction=default_public_jurisdiction,
+                        redis=getattr(request.app.state, "redis", None),
+                        conversation_id=str(conv.id),
                     )
                 except Exception:
                     logger.exception(

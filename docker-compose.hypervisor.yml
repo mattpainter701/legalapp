@@ -310,9 +310,12 @@ services:
     volumes:
       - ./nginx/ssl:/etc/nginx/ssl:ro
       - ./nginx/webroot:/var/www/certbot:ro
+    # cloudflared runs on the VM and reaches this loopback-only origin. Keep
+    # the origin unreachable from the public network; the Tunnel is the sole
+    # ingress path and verifies nginx with the pinned private CA.
     ports:
-      - "80:80"
-      - "443:443"
+      - "127.0.0.1:80:80"
+      - "127.0.0.1:443:443"
     restart: unless-stopped
 
 volumes:

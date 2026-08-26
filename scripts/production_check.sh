@@ -8,7 +8,7 @@ case "$ZOOM_REQUIRED" in
   *) echo "FAIL: ZOOM_REQUIRED must be true or false" >&2; exit 2 ;;
 esac
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env}"
 COMPOSE_FILES="${COMPOSE_FILES:-${COMPOSE_FILE:-$ROOT_DIR/docker-compose.hypervisor.yml}}"
@@ -21,7 +21,8 @@ else
   STATE_FILE="$STATE_DIR/production-check.state"
 fi
 
-[[ -f "$ENV_FILE" ]] || { echo "FAIL: missing $ENV_FILE" >&2; exit 1; }
+[[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || { echo "FAIL: production env must be a regular non-symlink file: $ENV_FILE" >&2; exit 1; }
+ENV_FILE="$(cd "$(dirname -- "$ENV_FILE")" && pwd -P)/$(basename -- "$ENV_FILE")"
 get_env() {
   local key="$1" line
   line="$(grep -E "^${key}=" "$ENV_FILE" | tail -n 1 || true)"
@@ -42,6 +43,18 @@ DISK_MAX_PERCENT="${DISK_MAX_PERCENT:-$(get_env DISK_MAX_PERCENT)}"
 SCHEDULER_MAX_AGE_MINUTES="${SCHEDULER_MAX_AGE_MINUTES:-$(get_env SCHEDULER_MAX_AGE_MINUTES)}"
 QUEUE_MAX_AGE_MINUTES="${QUEUE_MAX_AGE_MINUTES:-$(get_env QUEUE_MAX_AGE_MINUTES)}"
 TLS_MIN_VALID_DAYS="${TLS_MIN_VALID_DAYS:-$(get_env TLS_MIN_VALID_DAYS)}"
+origin_tls_server_name_inherited="${ORIGIN_TLS_SERVER_NAME+x}"
+origin_tls_server_name_value="${ORIGIN_TLS_SERVER_NAME-}"
+origin_tls_ca_file_inherited="${ORIGIN_TLS_CA_FILE+x}"
+origin_tls_ca_file_value="${ORIGIN_TLS_CA_FILE-}"
+cloudflared_config_file_inherited="${CLOUDFLARED_CONFIG_FILE+x}"
+cloudflared_config_file_value="${CLOUDFLARED_CONFIG_FILE-}"
+cloudflared_bin_inherited="${CLOUDFLARED_BIN+x}"
+cloudflared_bin_value="${CLOUDFLARED_BIN-}"
+ORIGIN_TLS_SERVER_NAME="${ORIGIN_TLS_SERVER_NAME:-$(get_env ORIGIN_TLS_SERVER_NAME)}"
+ORIGIN_TLS_CA_FILE="${ORIGIN_TLS_CA_FILE:-$(get_env ORIGIN_TLS_CA_FILE)}"
+CLOUDFLARED_CONFIG_FILE="${CLOUDFLARED_CONFIG_FILE:-$(get_env CLOUDFLARED_CONFIG_FILE)}"
+CLOUDFLARED_BIN="${CLOUDFLARED_BIN:-$(get_env CLOUDFLARED_BIN)}"
 ALERT_WEBHOOK_URL="${ALERT_WEBHOOK_URL:-$(get_env ALERT_WEBHOOK_URL)}"
 mcp_product_from_file="$(get_env MCP_PRODUCT_ENABLED)"
 if [[ -n "${MCP_PRODUCT_ENABLED+x}" && "$MCP_PRODUCT_ENABLED" != "$mcp_product_from_file" ]]; then
@@ -78,6 +91,23 @@ EMAIL_ENABLED="$email_enabled_from_file"
 : "${SCHEDULER_MAX_AGE_MINUTES:=5}"
 : "${QUEUE_MAX_AGE_MINUTES:=15}"
 : "${TLS_MIN_VALID_DAYS:=14}"
+: "${ORIGIN_TLS_SERVER_NAME:?ORIGIN_TLS_SERVER_NAME is required}"
+: "${ORIGIN_TLS_CA_FILE:?ORIGIN_TLS_CA_FILE is required}"
+: "${CLOUDFLARED_CONFIG_FILE:?CLOUDFLARED_CONFIG_FILE is required}"
+: "${CLOUDFLARED_BIN:?CLOUDFLARED_BIN is required}"
+
+if [[ -n "$origin_tls_server_name_inherited" && "$origin_tls_server_name_value" != "$(get_env ORIGIN_TLS_SERVER_NAME)" ]]; then
+  echo "FAIL: inherited ORIGIN_TLS_SERVER_NAME conflicts with the deployed production environment" >&2; exit 1
+fi
+if [[ -n "$origin_tls_ca_file_inherited" && "$origin_tls_ca_file_value" != "$(get_env ORIGIN_TLS_CA_FILE)" ]]; then
+  echo "FAIL: inherited ORIGIN_TLS_CA_FILE conflicts with the deployed production environment" >&2; exit 1
+fi
+if [[ -n "$cloudflared_config_file_inherited" && "$cloudflared_config_file_value" != "$(get_env CLOUDFLARED_CONFIG_FILE)" ]]; then
+  echo "FAIL: inherited CLOUDFLARED_CONFIG_FILE conflicts with the deployed production environment" >&2; exit 1
+fi
+if [[ -n "$cloudflared_bin_inherited" && "$cloudflared_bin_value" != "$(get_env CLOUDFLARED_BIN)" ]]; then
+  echo "FAIL: inherited CLOUDFLARED_BIN conflicts with the deployed production environment" >&2; exit 1
+fi
 
 for numeric_name in DISK_MAX_PERCENT SCHEDULER_MAX_AGE_MINUTES QUEUE_MAX_AGE_MINUTES TLS_MIN_VALID_DAYS; do
   numeric_value="${!numeric_name}"
@@ -87,6 +117,7 @@ for numeric_name in DISK_MAX_PERCENT SCHEDULER_MAX_AGE_MINUTES QUEUE_MAX_AGE_MIN
   }
 done
 (( DISK_MAX_PERCENT <= 100 )) || { echo "FAIL: DISK_MAX_PERCENT must be at most 100" >&2; exit 1; }
+(( TLS_MIN_VALID_DAYS <= 3650 )) || { echo "FAIL: TLS_MIN_VALID_DAYS must be at most 3650" >&2; exit 1; }
 [[ "$MCP_PRODUCT_ENABLED" == "false" ]] || { echo "FAIL: MCP_PRODUCT_ENABLED must remain false" >&2; exit 1; }
 [[ "$WORKSPACE_MCP_ENABLED" == "true" || "$WORKSPACE_MCP_ENABLED" == "false" ]] || { echo "FAIL: WORKSPACE_MCP_ENABLED must be true or false" >&2; exit 1; }
 [[ "$PLATFORM_LEGACY_BOOTSTRAP_ENABLED" == "false" ]] || { echo "FAIL: PLATFORM_LEGACY_BOOTSTRAP_ENABLED must be explicitly false" >&2; exit 1; }
@@ -499,6 +530,88 @@ require_exact_http_redirect \
 if ! timeout 15 openssl s_client -connect "${DOMAIN}:443" -servername "$DOMAIN" </dev/null 2>/dev/null \
   | openssl x509 -checkend "$((TLS_MIN_VALID_DAYS * 86400))" -noout >/dev/null 2>&1; then
   fail "TLS certificate expires within ${TLS_MIN_VALID_DAYS} days or could not be verified"
+fi
+
+# The Tunnel's origin hop is independently encrypted and pinned to the
+# production VM's private CA. SNI is deliberate: it verifies the certificate
+# identity used by cloudflared, while --resolve keeps this check on loopback.
+if [[ ! -r "$ORIGIN_TLS_CA_FILE" ]]; then
+  fail "private origin CA is missing or unreadable: $ORIGIN_TLS_CA_FILE"
+else
+  # A syntactically valid config is not enough for the recurring monitor: a
+  # stopped tunnel (or a service started with a different config) would leave
+  # the origin TLS probes green while public traffic is unavailable. Verify
+  # the actual systemd process and its argv, failing closed on any ambiguity.
+  cloudflared_service="cloudflared"
+  expected_cloudflared_exe="$(readlink -f -- "$CLOUDFLARED_BIN" 2>/dev/null || true)"
+  if [[ -z "$expected_cloudflared_exe" || ! -f "$expected_cloudflared_exe" || ! -x "$expected_cloudflared_exe" ]]; then
+    fail "configured cloudflared executable is missing or not executable"
+  fi
+  if ! command -v systemctl >/dev/null 2>&1; then
+    fail "systemctl is unavailable; cannot verify the cloudflared tunnel service"
+  elif ! systemctl is-active --quiet "$cloudflared_service"; then
+    fail "cloudflared service is not active"
+  else
+    cloudflared_pid="$(systemctl show "$cloudflared_service" --property=MainPID --value 2>/dev/null || true)"
+    if [[ ! "$cloudflared_pid" =~ ^[1-9][0-9]*$ || ! -r "/proc/$cloudflared_pid/cmdline" || ! -e "/proc/$cloudflared_pid/exe" ]]; then
+      fail "cloudflared MainPID is missing or not inspectable"
+    else
+      cloudflared_exe="$(readlink -f "/proc/$cloudflared_pid/exe" 2>/dev/null || true)"
+      if [[ -z "$expected_cloudflared_exe" || "$cloudflared_exe" != "$expected_cloudflared_exe" ]]; then
+        fail "cloudflared MainPID does not point to CLOUDFLARED_BIN"
+      fi
+      cloudflared_cmdline=()
+      if ! mapfile -d '' -t cloudflared_cmdline < "/proc/$cloudflared_pid/cmdline" || ((${#cloudflared_cmdline[@]} == 0)); then
+        fail "cloudflared command line is missing or unreadable"
+      else
+        cloudflared_config_match=false
+        cloudflared_config_count=0
+        cloudflared_no_verify=false
+        for ((arg_index = 0; arg_index < ${#cloudflared_cmdline[@]}; arg_index++)); do
+          arg="${cloudflared_cmdline[arg_index]}"
+          if [[ "$arg" == "--no-tls-verify" || "$arg" == --no-tls-verify=* ]]; then
+            cloudflared_no_verify=true
+          fi
+          if [[ "$arg" == "--config=$CLOUDFLARED_CONFIG_FILE" ]]; then
+            ((cloudflared_config_count += 1))
+            cloudflared_config_match=true
+          elif [[ "$arg" == "--config" && "${cloudflared_cmdline[arg_index + 1]:-}" == "$CLOUDFLARED_CONFIG_FILE" ]]; then
+            ((cloudflared_config_count += 1))
+            cloudflared_config_match=true
+          elif [[ "$arg" == "--config" || "$arg" == --config=* ]]; then
+            ((cloudflared_config_count += 1))
+          fi
+        done
+        [[ "$cloudflared_config_match" == true && "$cloudflared_config_count" == 1 ]] \
+          || fail "cloudflared must run with exactly one CLOUDFLARED_CONFIG_FILE argument"
+        [[ "$cloudflared_no_verify" == false ]] || fail "cloudflared must not use --no-tls-verify"
+      fi
+    fi
+  fi
+  validator_output=""
+  if ! validator_output="$(ORIGIN_TLS_SERVER_NAME="$ORIGIN_TLS_SERVER_NAME" \
+    ORIGIN_TLS_CA_FILE="$ORIGIN_TLS_CA_FILE" \
+    CLOUDFLARED_CONFIG_FILE="$CLOUDFLARED_CONFIG_FILE" \
+    CLOUDFLARED_BIN="$CLOUDFLARED_BIN" \
+    ORIGIN_TLS_CERT_FILE="$ROOT_DIR/nginx/ssl/fullchain.pem" \
+    ORIGIN_TLS_KEY_FILE="$ROOT_DIR/nginx/ssl/privkey.pem" \
+    bash "$SCRIPT_DIR/validate_private_origin_tls.sh" --require-production-ownership 2>&1)"; then
+    validator_output="$(printf '%s' "$validator_output" | tr '\r\n' '  ' | cut -c1-300)"
+    fail "private origin TLS validator rejected deployed state: ${validator_output:-no diagnostic}"
+  fi
+  for tls_version in 1.2 1.3; do
+    if ! curl -fsS --noproxy '*' --max-time 15 --cacert "$ORIGIN_TLS_CA_FILE" \
+      --resolve "${ORIGIN_TLS_SERVER_NAME}:443:127.0.0.1" \
+      --tlsv"$tls_version" --tls-max "$tls_version" \
+      "https://${ORIGIN_TLS_SERVER_NAME}/health" >/dev/null; then
+      fail "private origin HTTPS health check failed for TLS ${tls_version}"
+    fi
+  done
+  if curl -fsS --noproxy '*' --max-time 10 --cacert "$ORIGIN_TLS_CA_FILE" \
+    --resolve "${ORIGIN_TLS_SERVER_NAME}:443:127.0.0.1" \
+    --tlsv1.1 --tls-max 1.1 "https://${ORIGIN_TLS_SERVER_NAME}/health" >/dev/null 2>&1; then
+    fail "private origin accepts TLS older than 1.2"
+  fi
 fi
 
 if ((${#failures[@]})); then

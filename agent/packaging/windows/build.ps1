@@ -41,6 +41,12 @@ if (-not $Version) {
 }
 # MSI ProductVersion must be numeric (x.y.z); strip any suffix such as -rc1.
 $MsiVersion = ($Version -split '[-+]')[0]
+if ($MsiVersion -notmatch '^\d+\.\d+\.\d+$') {
+    throw "MSI ProductVersion must be exactly numeric x.y.z; got '$MsiVersion'"
+}
+foreach ($part in ($MsiVersion -split '\.')) {
+    if ([int64]$part -gt 65535) { throw "MSI ProductVersion components must be <= 65535" }
+}
 Write-Host "Version: $Version (MSI $MsiVersion)"
 
 # ── Python build environment ────────────────────────────────────────────────

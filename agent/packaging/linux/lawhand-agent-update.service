@@ -1,0 +1,24 @@
+[Unit]
+Description=Verify and apply a LawHand File Share Agent update
+Documentation=https://getlawhand.com/docs/file-shares
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/lawhand-agent/update.request
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/libexec/lawhand-agent-update
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=@PREFIX@ /etc/lawhand-agent /etc/lawhand-agent-updater /etc/systemd/system /usr/local/libexec
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true

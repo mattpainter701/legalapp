@@ -8,9 +8,13 @@ import shlex
 import stat
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from cryptography.hazmat.primitives import serialization
+
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 import yaml
 import pytest
@@ -40,6 +44,222 @@ def _workspace_rsa_pair() -> tuple[str, str]:
         base64.b64encode(private_pem).decode("ascii"),
         base64.b64encode(public_pem).decode("ascii"),
     )
+
+
+def _origin_tls_fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
+    """Create the pinned origin material used by shell preflight tests."""
+    ca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test Origin CA")])
+    ca_cert = (
+        x509.CertificateBuilder()
+        .subject_name(ca_name)
+        .issuer_name(ca_name)
+        .public_key(ca_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.now(timezone.utc) - timedelta(minutes=1))
+        .not_valid_after(datetime.now(timezone.utc) + timedelta(days=30))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=1), critical=True)
+        .sign(ca_key, hashes.SHA256())
+    )
+    leaf_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    leaf_name = x509.Name(
+        [x509.NameAttribute(NameOID.COMMON_NAME, "origin.getlawhand.internal")]
+    )
+    leaf_cert = (
+        x509.CertificateBuilder()
+        .subject_name(leaf_name)
+        .issuer_name(ca_name)
+        .public_key(leaf_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.now(timezone.utc) - timedelta(minutes=1))
+        .not_valid_after(datetime.now(timezone.utc) + timedelta(days=30))
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(
+            x509.SubjectAlternativeName([x509.DNSName("origin.getlawhand.internal")]),
+            critical=False,
+        )
+        .add_extension(
+            x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]),
+            critical=False,
+        )
+        .sign(ca_key, hashes.SHA256())
+    )
+    ca_file = tmp_path / "origin-ca.pem"
+    cert_file = tmp_path / "origin-fullchain.pem"
+    key_file = tmp_path / "origin-key.pem"
+    config_file = tmp_path / "cloudflared.yml"
+    ca_file.write_bytes(ca_cert.public_bytes(serialization.Encoding.PEM))
+    cert_file.write_bytes(
+        leaf_cert.public_bytes(serialization.Encoding.PEM) + ca_file.read_bytes()
+    )
+    key_file.write_bytes(
+        leaf_key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.TraditionalOpenSSL,
+            serialization.NoEncryption(),
+        )
+    )
+    key_file.chmod(0o600)
+    (tmp_path / ".private-origin-managed").write_text(
+        "managed by test fixture\n", encoding="utf-8"
+    )
+    ca_path = ca_file.as_posix()
+    config_file.write_text(
+        "ingress:\n"
+        "  - hostname: getlawhand.com\n"
+        "    service: https://127.0.0.1:443\n"
+        "    originRequest:\n"
+        "      originServerName: origin.getlawhand.internal\n"
+        f"      caPool: {ca_path}\n"
+        "      http2Origin: true\n"
+        "  - hostname: www.getlawhand.com\n"
+        "    service: https://127.0.0.1:443\n"
+        "    originRequest:\n"
+        "      originServerName: origin.getlawhand.internal\n"
+        f"      caPool: {ca_path}\n"
+        "      http2Origin: true\n"
+        "  - hostname: mcp.getlawhand.com\n"
+        "    service: https://127.0.0.1:443\n"
+        "    originRequest:\n"
+        "      originServerName: origin.getlawhand.internal\n"
+        f"      caPool: {ca_path}\n"
+        "      http2Origin: true\n"
+        "  - hostname: research.getlawhand.com\n"
+        "    service: https://127.0.0.1:443\n"
+        "    originRequest:\n"
+        "      originServerName: origin.getlawhand.internal\n"
+        f"      caPool: {ca_path}\n"
+        "      http2Origin: true\n"
+        "  - service: http_status:404\n",
+        encoding="utf-8",
+    )
+    return ca_file, cert_file, key_file, config_file
+
+
+def _run_origin_tls_validator(
+    ca_file: Path,
+    cert_file: Path,
+    key_file: Path,
+    config_file: Path,
+    *,
+    extra_env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env.update(
+        {
+            "ORIGIN_TLS_SERVER_NAME": "origin.getlawhand.internal",
+            "ORIGIN_TLS_CA_FILE": str(ca_file),
+            "ORIGIN_TLS_CERT_FILE": str(cert_file),
+            "ORIGIN_TLS_KEY_FILE": str(key_file),
+            "CLOUDFLARED_CONFIG_FILE": str(config_file),
+        }
+    )
+    env.update(extra_env or {})
+    return subprocess.run(
+        [BASH_BIN, str(ROOT / "scripts" / "validate_private_origin_tls.sh")],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission semantics required")
+def test_private_origin_validator_accepts_pinned_https_routes(tmp_path: Path) -> None:
+    material = _origin_tls_fixture(tmp_path)
+
+    result = _run_origin_tls_validator(*material)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission semantics required")
+def test_private_origin_validator_rejects_disabled_verification(
+    tmp_path: Path,
+) -> None:
+    ca_file, cert_file, key_file, config_file = _origin_tls_fixture(tmp_path)
+    config = config_file.read_text(encoding="utf-8")
+    config_file.write_text(
+        config.replace(
+            "      http2Origin: true\n",
+            "      noTLSVerify: true\n      http2Origin: true\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run_origin_tls_validator(ca_file, cert_file, key_file, config_file)
+
+    assert result.returncode != 0
+    assert "TLS verification is disabled" in result.stderr
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX ownership semantics required")
+def test_private_origin_validator_enforces_production_ownership(
+    tmp_path: Path,
+) -> None:
+    material = _origin_tls_fixture(tmp_path)
+
+    result = _run_origin_tls_validator(
+        *material,
+        extra_env={
+            "ORIGIN_TLS_REQUIRE_PRODUCTION_OWNERSHIP": "true",
+            "CLOUDFLARED_BIN": "/bin/true",
+        },
+    )
+
+    assert result.returncode != 0
+    assert "must be root-owned" in result.stderr
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shell semantics required")
+def test_private_origin_validator_requires_pinned_binary_in_production(
+    tmp_path: Path,
+) -> None:
+    material = _origin_tls_fixture(tmp_path)
+
+    result = _run_origin_tls_validator(
+        *material,
+        extra_env={"ORIGIN_TLS_REQUIRE_PRODUCTION_OWNERSHIP": "true"},
+    )
+
+    assert result.returncode == 2
+    assert "CLOUDFLARED_BIN is required" in result.stderr
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shell semantics required")
+def test_private_origin_validator_rejects_noncanonical_ingress_yaml(
+    tmp_path: Path,
+) -> None:
+    ca_file, cert_file, key_file, config_file = _origin_tls_fixture(tmp_path)
+    config_file.write_text(
+        config_file.read_text(encoding="utf-8").replace(
+            "    originRequest:\n",
+            "    originRequest:  # an alias/comment cannot replace the reviewed contract\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run_origin_tls_validator(ca_file, cert_file, key_file, config_file)
+
+    assert result.returncode != 0
+    assert "canonical pinned HTTPS route contract" in result.stderr
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shell semantics required")
+def test_private_origin_validator_bounds_validity_window(tmp_path: Path) -> None:
+    material = _origin_tls_fixture(tmp_path)
+
+    result = _run_origin_tls_validator(
+        *material,
+        extra_env={"TLS_MIN_VALID_DAYS": "9999"},
+    )
+
+    assert result.returncode == 2
+    assert "between 1 and 3650" in result.stderr
 
 
 def _production_env(**overrides: str) -> str:
@@ -87,6 +307,10 @@ def _production_env(**overrides: str) -> str:
         "EMAIL_USER": "",
         "EMAIL_PASS": "",
         "EMAIL_FROM": "matt@cybersafeadvisor.com",
+        "ORIGIN_TLS_SERVER_NAME": "origin.getlawhand.internal",
+        "ORIGIN_TLS_CA_FILE": "__TEST_ORIGIN_CA__",
+        "CLOUDFLARED_CONFIG_FILE": "__TEST_CLOUDFLARED_CONFIG__",
+        "CLOUDFLARED_BIN": "/bin/true",
         "ZOOM_REQUIRED_TENANT_ID": "00000000-0000-4000-8000-000000000111",
         "ZOOM_REQUIRED_TENANT_PLAN": "intake-only",
     }
@@ -104,6 +328,9 @@ def _run_preflight(
     env_file = tmp_path / ".env"
     restore_public_key = tmp_path / "offsite-restore-public.pem"
     restore_public_key.write_text("test public key placeholder\n", encoding="utf-8")
+    ca_file, cert_file, key_file, config_file = _origin_tls_fixture(tmp_path)
+    env_text = env_text.replace("__TEST_ORIGIN_CA__", str(ca_file))
+    env_text = env_text.replace("__TEST_CLOUDFLARED_CONFIG__", str(config_file))
     env_text = env_text.replace("__TEST_OFFSITE_PUBLIC_KEY__", str(restore_public_key))
     env_file.write_text(env_text, encoding="utf-8")
     fake_bin = tmp_path / "bin"
@@ -187,6 +414,8 @@ def _run_preflight(
     env["FAKE_BIND_SOURCES"] = (
         "/data/legalapp/postgres\n/data/legalapp/litellm-postgres\n"
     )
+    env["ORIGIN_TLS_CERT_FILE"] = str(cert_file)
+    env["ORIGIN_TLS_KEY_FILE"] = str(key_file)
     env.update(process_overrides or {})
     return subprocess.run(
         [BASH_BIN, str(PREFLIGHT)],
@@ -1474,3 +1703,98 @@ def test_fresh_host_refreshes_host_disk_status_after_image_build() -> None:
         'urllib.request.urlopen("http://127.0.0.1:8000/health/readiness"'
         not in rehearsal
     )
+
+
+def test_private_origin_tls_contract_is_loopback_pinned() -> None:
+    hypervisor = (ROOT / "docker-compose.hypervisor.yml").read_text(encoding="utf-8")
+    preflight = PREFLIGHT.read_text(encoding="utf-8")
+    production_check = PRODUCTION_CHECK.read_text(encoding="utf-8")
+    validator = (ROOT / "scripts" / "validate_private_origin_tls.sh").read_text(
+        encoding="utf-8"
+    )
+    provisioner = (ROOT / "scripts" / "provision_private_origin_tls.sh").read_text(
+        encoding="utf-8"
+    )
+    finalizer = (ROOT / "scripts" / "finalize_private_origin_ca_rotation.sh").read_text(
+        encoding="utf-8"
+    )
+    nginx = (ROOT / "nginx" / "nginx.conf").read_text(encoding="utf-8")
+    assert '"127.0.0.1:80:80"' in hypervisor
+    assert '"127.0.0.1:443:443"' in hypervisor
+    assert "validate_private_origin_tls.sh" in preflight
+    assert 'origin_tls_cert_file="$ROOT_DIR/nginx/ssl/fullchain.pem"' in preflight
+    assert 'ORIGIN_TLS_CERT_FILE="$origin_tls_cert_file"' in preflight
+    assert 'ORIGIN_TLS_KEY_FILE="$ROOT_DIR/nginx/ssl/privkey.pem"' in production_check
+    assert '--tlsv"$tls_version" --tls-max "$tls_version"' in production_check
+    assert "--tlsv1.1 --tls-max 1.1" in production_check
+    assert "--noproxy '*'" in production_check
+    assert 'cloudflared_service="cloudflared"' in production_check
+    assert 'systemctl is-active --quiet "$cloudflared_service"' in production_check
+    assert (
+        'systemctl show "$cloudflared_service" --property=MainPID --value'
+        in production_check
+    )
+    assert '"/proc/$cloudflared_pid/cmdline"' in production_check
+    assert '"/proc/$cloudflared_pid/exe"' in production_check
+    assert (
+        'expected_cloudflared_exe="$(readlink -f -- "$CLOUDFLARED_BIN"'
+        in production_check
+    )
+    assert '"$cloudflared_exe" != "$expected_cloudflared_exe"' in production_check
+    assert "mapfile -d '' -t cloudflared_cmdline" in production_check
+    assert '"--config=$CLOUDFLARED_CONFIG_FILE"' in production_check
+    assert (
+        '"--config" && "${cloudflared_cmdline[arg_index + 1]:-}" == "$CLOUDFLARED_CONFIG_FILE"'
+        in production_check
+    )
+    assert "cloudflared_config_count" in production_check
+    assert "exactly one CLOUDFLARED_CONFIG_FILE argument" in production_check
+    assert '"--no-tls-verify"' in production_check
+    assert 'fail "cloudflared service is not active"' in production_check
+    assert "--require-production-ownership" in production_check
+    assert "--require-production-ownership" in preflight
+    assert "noTLSVerify" in validator
+    assert "https://127.0.0.1:443" in validator
+    assert "www.getlawhand.com" in validator
+    assert "http2Origin" in validator
+    assert "minimum days must be between 1 and 3650" in validator
+    assert "private origin trust directory must be root-owned" in validator
+    assert "cloudflared config directory must be root-owned" in validator
+    assert "cloudflared binary must be root-owned" in validator
+    assert "canonical pinned HTTPS route contract" in validator
+    assert '"$cloudflared_bin_resolved" --config "$config"' in validator
+    assert "managed nginx TLS file owner differs from its directory" in validator
+    assert ".private-origin-managed" in provisioner
+    assert "if (( rotate_ca ))" in provisioner
+    assert "force=1" in provisioner
+    assert "transaction_dirty" in provisioner and "rollback_snapshots" in provisioner
+    assert "flock -n 9" in provisioner
+    assert "dual-ca-bundle.pem" in provisioner
+    assert "deployed origin certificate and key do not match" in provisioner
+    assert "dual-trust CA export must contain exactly two certificates" in finalizer
+    assert "finalized CA export does not contain exactly one certificate" in finalizer
+    assert "transaction_dirty" in finalizer and "rollback_failed" in finalizer
+    assert "flock -n 9" in finalizer
+    for legacy_script in ("init-letsencrypt.sh", "renew-cert.sh"):
+        content = (ROOT / "nginx" / legacy_script).read_text(encoding="utf-8")
+        assert ".private-origin-managed" in content
+        assert (
+            '[[ -L "$PRIVATE_ORIGIN_MARKER" || -e "$PRIVATE_ORIGIN_MARKER" ]]'
+            in content
+        )
+        assert (
+            '[[ -f "$PRIVATE_ORIGIN_MARKER" && ! -L "$PRIVATE_ORIGIN_MARKER" ]]'
+            in content
+        )
+    renew = (ROOT / "nginx" / "renew-cert.sh").read_text(encoding="utf-8")
+    assert '[[ ! -f "$CERT_FILE" || ! -f "$KEY_FILE" ]]' in renew
+    assert "CERT_PUBKEY" in renew and "KEY_PUBKEY" in renew
+    assert 'STAGED_CERT="$SSL_DIR/.fullchain.pem.new.$$"' in renew
+    assert 'STAGED_KEY="$SSL_DIR/.privkey.pem.new.$$"' in renew
+    assert "rollback" in renew
+    assert 'if ! "${COMPOSE[@]}" exec -T nginx nginx -s reload; then' in renew
+    assert "provision_private_origin_tls.sh" in nginx
+    runbook = (ROOT / "docs" / "FIRST_CUSTOMER_PRODUCTION_RUNBOOK.md").read_text(
+        encoding="utf-8"
+    )
+    assert "init-letsencrypt.sh" in runbook

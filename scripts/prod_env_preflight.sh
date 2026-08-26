@@ -2,12 +2,13 @@
 # Validate production configuration without printing secret values.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env}"
 COMPOSE_FILES="${COMPOSE_FILES:-${COMPOSE_FILE:-$ROOT_DIR/docker-compose.hypervisor.yml}}"
 
-[[ -f "$ENV_FILE" ]] || { echo "FAIL: production env file not found: $ENV_FILE" >&2; exit 1; }
+[[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || { echo "FAIL: production env file must be a regular non-symlink file: $ENV_FILE" >&2; exit 1; }
+ENV_FILE="$(cd "$(dirname -- "$ENV_FILE")" && pwd -P)/$(basename -- "$ENV_FILE")"
 
 get_env() {
   local key="$1" line
@@ -28,7 +29,7 @@ required=(
   POSTGRES_PASSWORD CLARITY_APP_PASSWORD REDIS_PASSWORD REDIS_URL
   MIGRATOR_DATABASE_URL APP_DATABASE_URL LITELLM_API_KEY LITELLM_SALT_KEY LITELLM_DB_PASSWORD WORKSPACE_MCP_ENABLED
   LITELLM_DATABASE_URL UPLOADS_HOST_DIR HOST_STATUS_HOST_DIR HOST_DISK_STATUS_FILE HEALTH_HOST_DISK_MAX_AGE_SECONDS BACKUP_STATUS_FILE HEALTH_BACKUP_MAX_AGE_SECONDS OFFSITE_BACKUP_REQUIRED
-  EMAIL_ENABLED EMAIL_FROM
+  EMAIL_ENABLED EMAIL_FROM ORIGIN_TLS_SERVER_NAME ORIGIN_TLS_CA_FILE CLOUDFLARED_CONFIG_FILE CLOUDFLARED_BIN
 )
 
 for key in "${required[@]}"; do
@@ -112,6 +113,68 @@ operator_email="matt@cybersafeadvisor.com"
 [[ "$(get_env APP_DATABASE_URL)" == *://clarity_app:* ]] || errors+=("APP_DATABASE_URL must use the clarity_app runtime role")
 [[ "$(get_env MIGRATOR_DATABASE_URL)" != *://clarity_app:* ]] || errors+=("MIGRATOR_DATABASE_URL must use the owner/migrator role")
 [[ "$(get_env REDIS_URL)" == redis://:*@redis:* || "$(get_env REDIS_URL)" == rediss://:*@* ]] || errors+=("REDIS_URL must authenticate to Redis")
+
+# Cloudflare Tunnel must use a pinned private origin CA for the nginx hop. The
+# public agent endpoint remains the normal HTTPS hostname and must continue to
+# use the operating system trust store; this CA is never shipped to agents.
+origin_tls_server_name="$(get_env ORIGIN_TLS_SERVER_NAME)"
+origin_tls_ca_file="$(get_env ORIGIN_TLS_CA_FILE)"
+cloudflared_config_file="$(get_env CLOUDFLARED_CONFIG_FILE)"
+cloudflared_bin="$(get_env CLOUDFLARED_BIN)"
+[[ "$origin_tls_server_name" =~ ^[A-Za-z0-9.-]+$ && "$origin_tls_server_name" != .* && "$origin_tls_server_name" != *..* ]] \
+  || errors+=("ORIGIN_TLS_SERVER_NAME must be a valid internal DNS name")
+[[ "$origin_tls_ca_file" == /* && "$origin_tls_ca_file" != *$'\n'* && "$origin_tls_ca_file" != *$'\r'* ]] \
+  || errors+=("ORIGIN_TLS_CA_FILE must be an absolute single-line path")
+[[ "$cloudflared_config_file" == /* && "$cloudflared_config_file" != *$'\n'* && "$cloudflared_config_file" != *$'\r'* ]] \
+  || errors+=("CLOUDFLARED_CONFIG_FILE must be an absolute single-line path")
+[[ "$cloudflared_bin" == /* && "$cloudflared_bin" != *$'\n'* && "$cloudflared_bin" != *$'\r'* ]] \
+  || errors+=("CLOUDFLARED_BIN must be an absolute single-line path")
+if [[ -f "$SCRIPT_DIR/validate_private_origin_tls.sh" ]]; then
+  origin_tls_cert_file="$ROOT_DIR/nginx/ssl/fullchain.pem"
+  origin_tls_key_file="$ROOT_DIR/nginx/ssl/privkey.pem"
+  origin_tls_validation_args=()
+  # Isolated tests may point at temporary material, but the canonical
+  # production environment is always pinned to the reviewed nginx mount.
+  if [[ "$ENV_FILE" != "$ROOT_DIR/.env" ]]; then
+    origin_tls_cert_file="${ORIGIN_TLS_CERT_FILE:-$origin_tls_cert_file}"
+    origin_tls_key_file="${ORIGIN_TLS_KEY_FILE:-$origin_tls_key_file}"
+  else
+    origin_tls_validation_args+=(--require-production-ownership)
+    for root_owned_file in "$origin_tls_ca_file" "$cloudflared_config_file"; do
+      if [[ -e "$root_owned_file" ]] && [[ "$(stat -c '%u' "$root_owned_file" 2>/dev/null || echo invalid)" != 0 ]]; then
+        errors+=("private origin trust/config file must be root-owned: $root_owned_file")
+      fi
+    done
+    if [[ -f "$cloudflared_config_file" ]]; then
+      cloudflared_config_mode="$(stat -c '%a' "$cloudflared_config_file" 2>/dev/null || echo invalid)"
+      if [[ ! "$cloudflared_config_mode" =~ ^[0-7]+$ ]] \
+        || (( 8#$cloudflared_config_mode & 8#022 )); then
+        errors+=("CLOUDFLARED_CONFIG_FILE must not be group/world writable")
+      fi
+    fi
+    if [[ -d "$ROOT_DIR/nginx/ssl" ]]; then
+      nginx_ssl_owner="$(stat -c '%u' "$ROOT_DIR/nginx/ssl")"
+      for nginx_tls_file in "$origin_tls_cert_file" "$origin_tls_key_file" "$ROOT_DIR/nginx/ssl/.private-origin-managed"; do
+        if [[ -e "$nginx_tls_file" ]] && [[ "$(stat -c '%u' "$nginx_tls_file" 2>/dev/null || echo invalid)" != "$nginx_ssl_owner" ]]; then
+          errors+=("nginx private-origin TLS file owner differs from nginx/ssl: $nginx_tls_file")
+        fi
+      done
+    fi
+  fi
+  validation_output=""
+  if ! validation_output="$(ORIGIN_TLS_SERVER_NAME="$origin_tls_server_name" \
+    ORIGIN_TLS_CA_FILE="$origin_tls_ca_file" \
+    CLOUDFLARED_CONFIG_FILE="$cloudflared_config_file" \
+    CLOUDFLARED_BIN="$cloudflared_bin" \
+    ORIGIN_TLS_CERT_FILE="$origin_tls_cert_file" \
+    ORIGIN_TLS_KEY_FILE="$origin_tls_key_file" \
+    bash "$SCRIPT_DIR/validate_private_origin_tls.sh" "${origin_tls_validation_args[@]}" 2>&1)"; then
+    validation_output="$(printf '%s' "$validation_output" | tr '\r\n' '  ' | cut -c1-300)"
+    errors+=("private origin TLS validation failed: ${validation_output:-validator returned no diagnostic}")
+  fi
+else
+  errors+=("private origin TLS validator is missing: scripts/validate_private_origin_tls.sh")
+fi
 
 uploads_host_dir="$(get_env UPLOADS_HOST_DIR)"
 [[ "$uploads_host_dir" == /* && "$uploads_host_dir" != "/" ]] || errors+=("UPLOADS_HOST_DIR must be an absolute non-root host path")

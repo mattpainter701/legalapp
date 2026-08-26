@@ -171,3 +171,47 @@ async def set_inbound_email_route_lookup(
         text("SELECT set_config('app.inbound_email_route_lookup', :value, true)"),
         {"value": "on" if enabled else "off"},
     )
+
+
+async def set_smb_agent_bootstrap_lookup(
+    session: AsyncSession,
+    *,
+    api_key_hash: str | None = None,
+    pairing_code: str | None = None,
+) -> None:
+    """Allow exactly one pre-tenant SMB agent lookup for this transaction.
+
+    SMB authentication and pairing necessarily discover the tenant from the
+    credential itself.  The migration-129 SELECT policy permits only the row
+    whose hash/code equals one of these transaction-local values; it does not
+    bypass RLS or grant access to any other SMB table.  Callers must bind the
+    returned agent's tenant immediately and then clear the lookup values.
+    """
+    if (api_key_hash is None) == (pairing_code is None):
+        raise ValueError("exactly one SMB bootstrap lookup value is required")
+    await session.execute(
+        text(
+            """
+            SELECT
+              set_config('app.smb_agent_api_key_hash', :api_key_hash, true),
+              set_config('app.smb_agent_pairing_code', :pairing_code, true)
+            """
+        ),
+        {
+            "api_key_hash": api_key_hash or "",
+            "pairing_code": pairing_code or "",
+        },
+    )
+
+
+async def clear_smb_agent_bootstrap_lookup(session: AsyncSession) -> None:
+    """Remove the transaction-local SMB bootstrap selectors."""
+    await session.execute(
+        text(
+            """
+            SELECT
+              set_config('app.smb_agent_api_key_hash', '', true),
+              set_config('app.smb_agent_pairing_code', '', true)
+            """
+        )
+    )

@@ -134,6 +134,17 @@ jobs:
       - name: Render and verify host disk systemd units
         run: bash scripts/test_host_disk_systemd_units.sh
 
+      - name: Validate production TLS and certificate scripts
+        run: >-
+          bash -n
+          scripts/validate_private_origin_tls.sh
+          scripts/provision_private_origin_tls.sh
+          scripts/finalize_private_origin_ca_rotation.sh
+          scripts/prod_env_preflight.sh
+          scripts/production_check.sh
+          nginx/init-letsencrypt.sh
+          nginx/renew-cert.sh
+
   # ─── Backend: Tests ─────────────────────────────────────────────────────────
   test-backend:
     name: Backend — Tests (pytest)
