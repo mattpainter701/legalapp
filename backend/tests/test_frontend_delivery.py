@@ -176,6 +176,17 @@ def test_production_topologies_require_explicit_public_site_origin() -> None:
         ), f"{filename} must not default SEO canonicals to a deployment-specific host"
 
 
+def test_hypervisor_origin_ports_are_loopback_only() -> None:
+    config = yaml.safe_load(
+        (ROOT / "docker-compose.hypervisor.yml").read_text(encoding="utf-8")
+    )
+
+    assert set(config["services"]["nginx"]["ports"]) == {
+        "127.0.0.1:80:80",
+        "127.0.0.1:443:443",
+    }
+
+
 @pytest.mark.skipif(shutil.which("docker") is None, reason="Docker CLI unavailable")
 def test_resolved_compose_variants_ship_image_baked_frontend() -> None:
     for label, files in COMPOSE_VARIANTS.items():

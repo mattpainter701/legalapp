@@ -1,0 +1,107 @@
+from types import SimpleNamespace
+
+import pytest
+
+pytest.importorskip("smbclient")
+
+from clarity_agent import __main__ as agent_main  # noqa: E402
+
+
+class _Ledger:
+    def __init__(self):
+        self.upserts = []
+        self.deleted = []
+
+    async def upsert_files(self, files):
+        self.upserts.extend(files)
+
+    async def mark_deleted_paths(self, paths):
+        self.deleted.extend(paths)
+
+
+class _Scanner:
+    def __init__(self, result):
+        self.result = result
+
+    async def scan_share(self, share, file_extensions=None):
+        return self.result
+
+
+class _Client:
+    def __init__(self, response=None, error=None):
+        self.response = response
+        self.error = error
+
+    async def sync(self, files, deletions, share_id):
+        if self.error:
+            raise self.error
+        return self.response
+
+    async def report_scan_status(self, *args, **kwargs):
+        return {}
+
+
+def _file(path):
+    return {
+        "path": path,
+        "filename": path.rsplit("\\", 1)[-1],
+        "ext": ".txt",
+        "mime_type": "text/plain",
+        "snippet": "text",
+        "size_bytes": 4,
+        "modified_time": "2026-08-25T00:00:00+00:00",
+        "content_hash": path,
+    }
+
+
+@pytest.mark.asyncio
+async def test_rejected_file_is_not_ledger_acknowledged(monkeypatch):
+    monkeypatch.setattr(agent_main, "SYNC_BATCH_SIZE", 100)
+    ledger = _Ledger()
+    result = SimpleNamespace(
+        new_files=[_file(r"\\FS\Legal\ok.txt"), _file(r"\\FS\Legal\bad.txt")],
+        changed_files=[],
+        deleted_files=[],
+        unchanged_files=[],
+        errors=[],
+    )
+    client = _Client(
+        response={
+            "synced": 1,
+            "deleted": 0,
+            "errors": [{"path": r"\\FS\Legal\bad.txt", "error": "cap"}],
+        }
+    )
+
+    outcome = await agent_main._scan_share(
+        {"share_id": "share-1", "server": "FS", "share": "Legal"},
+        ledger,
+        client,
+        _Scanner(result),
+    )
+
+    assert [f["path"] for f in ledger.upserts] == [r"\\FS\Legal\ok.txt"]
+    assert outcome["status"] == "partial"
+
+
+@pytest.mark.asyncio
+async def test_failed_deletion_sync_does_not_mark_local_ledger(monkeypatch):
+    monkeypatch.setattr(agent_main, "SYNC_BATCH_SIZE", 100)
+    ledger = _Ledger()
+    result = SimpleNamespace(
+        new_files=[],
+        changed_files=[],
+        deleted_files=[r"\\FS\Legal\gone.txt"],
+        unchanged_files=[],
+        errors=[],
+    )
+
+    outcome = await agent_main._scan_share(
+        {"share_id": "share-1", "server": "FS", "share": "Legal"},
+        ledger,
+        _Client(error=RuntimeError("offline")),
+        _Scanner(result),
+    )
+
+    assert ledger.deleted == []
+    assert outcome["status"] == "failed"

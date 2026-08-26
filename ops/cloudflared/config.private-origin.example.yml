@@ -1,0 +1,29 @@
+# Example Cloudflare Tunnel config for the VM-local encrypted origin hop.
+tunnel: REPLACE_WITH_TUNNEL_UUID
+credentials-file: /etc/cloudflared/REPLACE_WITH_TUNNEL_UUID.json
+ingress:
+  - hostname: getlawhand.com
+    service: https://127.0.0.1:443
+    originRequest:
+      originServerName: origin.getlawhand.internal
+      caPool: /etc/cloudflared/lawhand-origin-ca.pem
+      http2Origin: true
+  - hostname: www.getlawhand.com
+    service: https://127.0.0.1:443
+    originRequest:
+      originServerName: origin.getlawhand.internal
+      caPool: /etc/cloudflared/lawhand-origin-ca.pem
+      http2Origin: true
+  - hostname: mcp.getlawhand.com
+    service: https://127.0.0.1:443
+    originRequest:
+      originServerName: origin.getlawhand.internal
+      caPool: /etc/cloudflared/lawhand-origin-ca.pem
+      http2Origin: true
+  - hostname: research.getlawhand.com
+    service: https://127.0.0.1:443
+    originRequest:
+      originServerName: origin.getlawhand.internal
+      caPool: /etc/cloudflared/lawhand-origin-ca.pem
+      http2Origin: true
+  - service: http_status:404

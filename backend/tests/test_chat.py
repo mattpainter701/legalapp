@@ -12,6 +12,7 @@ from fastapi import BackgroundTasks, HTTPException
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.orm import selectinload
 from starlette.requests import Request
 
 from app.routers import chat as chat_router
@@ -2648,10 +2649,28 @@ async def test_active_stream_blocks_concurrent_semantic_work_without_drift(
                 "scheme": "http",
                 "server": ("testserver", 80),
                 "client": ("127.0.0.1", 12345),
+                "app": SimpleNamespace(state=SimpleNamespace(redis=None)),
             }
         )
 
-    current_user = AsyncMock(return_value=test_user)
+    # The first dependency call happens before the generation lease is
+    # acquired; later calls run on the lease/session connection.  Returning
+    # the same ORM instance from every call leaves that later request holding
+    # an expired object after the first session rollback, which masks the
+    # lease assertion with a DetachedInstanceError in CI.
+    test_user_id = test_user.id
+    test_tenant_id = test_tenant.id
+
+    async def current_user_for_session(_request, session):
+        await chat_router.set_tenant_context(session, str(test_tenant_id))
+        result = await session.execute(
+            select(User)
+            .options(selectinload(User.tenant))
+            .where(User.id == test_user_id)
+        )
+        return result.scalar_one()
+
+    current_user = AsyncMock(side_effect=current_user_for_session)
     cached_rag = AsyncMock(return_value=None)
     cached_matter = AsyncMock(return_value=None)
     cache_matter = AsyncMock()

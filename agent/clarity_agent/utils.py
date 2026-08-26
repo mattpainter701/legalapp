@@ -20,10 +20,26 @@ def format_smb_path(server: str, share: str, path: str) -> str:
 
 
 def parse_smb_path(path: str) -> tuple[str, str, str]:
-    m = re.match(r"^\\\\([^\\]+)\\([^\\]+)(?:\\(.*))?$", path.replace("/", "\\"))
+    normalized = normalize_unc_path(path)
+    m = re.match(r"^\\\\([^\\]+)\\([^\\]+)(?:\\(.*))?$", normalized)
     if not m:
         raise ValueError(f"Invalid UNC path: {path}")
     return m.group(1), m.group(2), (m.group(3) or "").strip("\\")
+
+
+def normalize_unc_path(path: str) -> str:
+    """Normalize a UNC path without allowing traversal components.
+
+    SMB share matching is security-sensitive: string-prefix checks must not
+    make ``\\\\FS\\Legal-old`` look like a child of ``\\\\FS\\Legal``.
+    """
+    value = (path or "").replace("/", "\\").strip()
+    if not value.startswith("\\\\"):
+        raise ValueError(f"Invalid UNC path: {path}")
+    parts = [part for part in value[2:].split("\\") if part not in ("", ".")]
+    if len(parts) < 2 or any(part == ".." for part in parts):
+        raise ValueError(f"Invalid UNC path: {path}")
+    return "\\\\" + "\\".join(parts)
 
 
 def truncate_snippet(text: str, max_chars: int = 500) -> str:

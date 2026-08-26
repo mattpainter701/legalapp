@@ -89,7 +89,7 @@ fi
 
 if [[ ! -r nginx/ssl/fullchain.pem || ! -r nginx/ssl/privkey.pem ]]; then
   echo "ERROR: nginx TLS certificate files are missing." >&2
-  echo "Provision them after DNS is live: bash nginx/init-letsencrypt.sh <domain> <email>" >&2
+  echo "Provision the pinned private origin certificate on this VM: bash scripts/provision_private_origin_tls.sh --server-name \"$(get_env ORIGIN_TLS_SERVER_NAME)\" --nginx-ssl-dir \"$ROOT_DIR/nginx/ssl\" --ca-export \"$(get_env ORIGIN_TLS_CA_FILE)\"" >&2
   exit 3
 fi
 

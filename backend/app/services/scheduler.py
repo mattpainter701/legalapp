@@ -142,6 +142,12 @@ AGENT_REGISTRY: List[Dict[str, Any]] = [
         "schedule": "Every 15 minutes",
     },
     {
+        "name": "smb-update-reconciliation",
+        "display_name": "SMB Agent Update Reconciliation",
+        "description": "Restores durable file-share agent updates after cache loss and expires unconfirmed attempts.",
+        "schedule": "Every minute",
+    },
+    {
         "name": "chat-attachment-cleanup",
         "display_name": "Chat Attachment Cleanup",
         "description": "Deletes expired misc-chat session attachments (rolling temp storage) and their files.",
@@ -721,6 +727,22 @@ class LegalScheduler:
             name="SMB Agent Heartbeat",
             replace_existing=True,
         )
+        # Redis is a cache, so restore durable portal update reservations on
+        # startup and periodically.  The first run is immediate so a restart
+        # does not require an administrator to reopen the portal.
+        self.scheduler.add_job(
+            self._guarded(
+                "smb-update-reconciliation", self._reconcile_smb_agent_updates
+            ),
+            "interval",
+            minutes=1,
+            id="smb-update-reconciliation",
+            name="SMB Agent Update Reconciliation",
+            replace_existing=True,
+            max_instances=1,
+            next_run_time=datetime.now(timezone.utc),
+        )
+        agent_count += 1
 
         # chat-attachment-cleanup: daily 3:10 AM ET
         self.scheduler.add_job(
@@ -1799,6 +1821,40 @@ class LegalScheduler:
                 await _log_failed(session, log, error_msg)
 
     # ─── Agent: smb-heartbeat ──────────────────────────────────────────────────
+
+    @tenant_scoped_job
+    async def _reconcile_smb_agent_updates(self) -> None:
+        """Restore queued SMB update tasks after Redis loss or a restart."""
+        from app.services.smb import reconcile_queued_agent_updates
+
+        async with async_session_maker() as session:
+            owns_redis = False
+            redis = None
+            try:
+                await _apply_scheduler_tenant_context(session)
+                redis = getattr(self, "redis", None)
+                if redis is None:
+                    # Scheduler instances normally receive Redis through the
+                    # app wrapper; retain a lazy connection for the dedicated
+                    # scheduler process as well.
+                    import redis.asyncio as aioredis
+
+                    redis = aioredis.from_url(
+                        settings.REDIS_URL, decode_responses=False
+                    )
+                    owns_redis = True
+                restored = await reconcile_queued_agent_updates(session, redis)
+                if restored:
+                    logger.info(
+                        "[smb-update-reconciliation] Restored %s queued update(s)",
+                        restored,
+                    )
+            except Exception:
+                await session.rollback()
+                logger.exception("[smb-update-reconciliation] Reconciliation failed")
+            finally:
+                if owns_redis and redis is not None:
+                    await redis.aclose()
 
     @tenant_scoped_job
     async def _check_smb_agent_heartbeats(self) -> None:

@@ -1,6 +1,6 @@
 """Executes the work the SaaS queues for this agent.
 
-Three task kinds arrive on the same poll:
+Four task kinds arrive on the same poll:
 
 * ``content_fetch`` — read one file and return its text (on-demand retrieval
   for chat/RAG context; the SaaS only ever stores snippets otherwise);
@@ -8,19 +8,21 @@ Three task kinds arrive on the same poll:
   whether it worked, which is what the admin console's "Test connection"
   button waits on;
 * ``scan_now`` — run an immediate scan instead of waiting for the schedule.
+* ``agent_update`` — check/apply the fixed official release (never a task URL).
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import smbclient
 
 from clarity_agent.api_client import SaaSClient
 from clarity_agent.config import AgentConfig
-from clarity_agent.smb_auth import ShareCredential, connect
+from clarity_agent.smb_auth import ShareCredential, connect, session_kwargs
 from clarity_agent.smb_reader import SmbReader
-from clarity_agent.utils import parse_smb_path
+from clarity_agent.utils import normalize_unc_path, parse_smb_path
 
 logger = logging.getLogger("clarity_agent.tasks")
 
@@ -38,6 +40,7 @@ class TaskWorker:
         share_provider=None,
         scan_callback=None,
         share_refresher=None,
+        update_callback=None,
     ):
         self.config = config
         self.client = client
@@ -48,13 +51,14 @@ class TaskWorker:
         self.scan_callback = scan_callback
         # Forces a re-fetch of that list, for a share added moments ago.
         self.share_refresher = share_refresher
+        self.update_callback = update_callback
 
     async def poll_and_execute(self) -> int:
         try:
             tasks = await self.client.get_tasks()
         except Exception as exc:
             logger.error("Failed to fetch tasks: %s", exc)
-            return 0
+            return -1
 
         if not tasks:
             return 0
@@ -75,14 +79,47 @@ class TaskWorker:
             await self._verify_share(task)
         elif kind == "scan_now":
             await self._scan_now(task)
-        else:
+        elif kind == "content_fetch":
             await self._fetch_content(task)
+        elif kind == "agent_update":
+            await self._update_agent(task)
+        else:
+            await self.client.submit_task_result(
+                task["task_id"], ok=False, error=f"Unsupported task kind: {kind}"
+            )
+
+    async def _update_agent(self, task: dict) -> None:
+        task_id = task["task_id"]
+        if self.update_callback is None:
+            await self.client.submit_task_result(
+                task_id, ok=False, error="Agent update support is unavailable"
+            )
+            return
+        # Portal updates are apply-only. URLs, asset names, and a caller-
+        # controlled dry-run flag are intentionally not accepted from tasks.
+        target_version = task.get("target_version")
+        if not target_version:
+            await self.client.submit_task_result(
+                task_id, ok=False, error="Missing target_version in agent_update task"
+            )
+            return
+        manifest_id = task.get("manifest_id")
+        if manifest_id != f"agent-v{target_version}":
+            await self.client.submit_task_result(
+                task_id, ok=False, error="Invalid manifest_id in agent_update task"
+            )
+            return
+        try:
+            result = await self.update_callback(target_version, manifest_id)
+            await self.client.submit_task_result(task_id, ok=True, detail=result)
+        except Exception as exc:
+            await self.client.submit_task_result(task_id, ok=False, error=str(exc))
 
     # ── content fetch ───────────────────────────────────────────────────────
 
     async def _fetch_content(self, task: dict) -> None:
         task_id = task["task_id"]
-        file_path = task.get("file_path", "")
+        file_path = (task.get("file_path") or "").strip()
 
         if not file_path:
             await self.client.submit_task_result(
@@ -92,12 +129,26 @@ class TaskWorker:
 
         try:
             share = await self._share_for_path(file_path, task.get("share_id"))
-            credential = ShareCredential.from_share(share or {}, self.config)
+            if share is None:
+                raise ValueError("File path is not under an assigned share")
+            credential = ShareCredential.from_share(share, self.config)
             server, _, _ = parse_smb_path(file_path)
-            smbclient.reset_connection_cache()
-            connect(server, credential, smbclient_module=smbclient)
+            connection_cache: dict = {}
+            connection_kwargs = {
+                **session_kwargs(credential),
+                "connection_cache": connection_cache,
+            }
+            await asyncio.to_thread(
+                connect,
+                server,
+                credential,
+                smbclient_module=smbclient,
+                connection_cache=connection_cache,
+            )
 
-            result = await self.reader.read_content(None, file_path)
+            result = await self.reader.read_content(
+                None, file_path, connection_kwargs=connection_kwargs
+            )
             if result.error:
                 await self.client.submit_task_result(task_id, error=result.error)
             else:
@@ -107,6 +158,13 @@ class TaskWorker:
         except Exception as exc:
             logger.error("Content fetch for %s failed: %s", file_path, exc)
             await self.client.submit_task_result(task_id, error=str(exc))
+        finally:
+            if "connection_cache" in locals():
+                await asyncio.to_thread(
+                    smbclient.reset_connection_cache,
+                    connection_cache=connection_cache,
+                    fail_on_error=False,
+                )
 
     # ── connection test ─────────────────────────────────────────────────────
 
@@ -129,15 +187,27 @@ class TaskWorker:
             await self.client.submit_task_result(task_id, ok=False, error=str(exc))
             return
 
+        connection_cache: dict = {}
         try:
-            smbclient.reset_connection_cache()
-            connect(server, credential, smbclient_module=smbclient)
+            await asyncio.to_thread(
+                connect,
+                server,
+                credential,
+                smbclient_module=smbclient,
+                connection_cache=connection_cache,
+            )
+            connection_kwargs = {
+                **session_kwargs(credential),
+                "connection_cache": connection_cache,
+            }
             probe = share_path.rstrip("\\")
-            names = []
-            for entry in smbclient.scandir(probe):
-                names.append(entry.name)
-                if len(names) >= VERIFY_SAMPLE_LIMIT:
-                    break
+            names = await asyncio.to_thread(
+                _sample_share_entries,
+                smbclient,
+                probe,
+                VERIFY_SAMPLE_LIMIT,
+                connection_kwargs,
+            )
             await self.client.submit_task_result(
                 task_id,
                 ok=True,
@@ -158,6 +228,12 @@ class TaskWorker:
                 ok=False,
                 error=message,
                 detail={"identity": credential.describe, "server": server},
+            )
+        finally:
+            await asyncio.to_thread(
+                smbclient.reset_connection_cache,
+                connection_cache=connection_cache,
+                fail_on_error=False,
             )
 
     # ── scan now ────────────────────────────────────────────────────────────
@@ -236,14 +312,43 @@ class TaskWorker:
         """Find the share a file lives under, so the right credential is used."""
         if share_id:
             found = await self._share_by_id(share_id)
-            if found:
+            if found and self._path_is_under_share(file_path, found.get("share_path")):
                 return found
-        target = file_path.replace("/", "\\").lower()
+            if found:
+                return None
+        try:
+            target = normalize_unc_path(file_path).casefold()
+        except ValueError:
+            return None
         best = None
         for share in await self._shares():
-            prefix = (share.get("share_path") or "").replace("/", "\\").lower()
-            if prefix and target.startswith(prefix.rstrip("\\")):
+            try:
+                prefix = normalize_unc_path(share.get("share_path") or "").casefold()
+            except ValueError:
+                continue
+            if target == prefix or target.startswith(prefix + "\\"):
                 # Longest matching prefix wins when shares are nested.
                 if best is None or len(prefix) > len(best.get("share_path") or ""):
                     best = share
         return best
+
+    @staticmethod
+    def _path_is_under_share(file_path: str, share_path: str | None) -> bool:
+        try:
+            target = normalize_unc_path(file_path).casefold()
+            prefix = normalize_unc_path(share_path or "").casefold()
+        except ValueError:
+            return False
+        return target == prefix or target.startswith(prefix + "\\")
+
+
+def _sample_share_entries(
+    smbclient_module, path: str, limit: int, connection_kwargs: dict
+) -> list[str]:
+    """List only a bounded sample while SMB I/O remains off the event loop."""
+    names = []
+    for entry in smbclient_module.scandir(path, **connection_kwargs):
+        names.append(entry.name)
+        if len(names) >= limit:
+            break
+    return names

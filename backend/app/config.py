@@ -349,10 +349,13 @@ class Settings(BaseSettings):
     # ── SMB File Share Relay Agent ──────────────────────────────────────────
     SMB_ENABLED: bool = False  # Master feature flag
     SMB_PAIRING_CODE_TTL_MIN: int = 10  # Pairing code expiry in minutes
-    SMB_MAX_FILE_INDEX_PER_SHARE: int = 500  # Cap files per share
+    # Metadata-only rows are small; 500 made ordinary legal shares silently
+    # partial. Keep a configurable safety ceiling high enough for real firms.
+    SMB_MAX_FILE_INDEX_PER_SHARE: int = 250_000
     SMB_SNIPPET_MAX_CHARS: int = 500  # Max chars in snippet column
     SMB_TASK_POLL_INTERVAL: int = 30  # Seconds between agent task polls
     SMB_CONTENT_FETCH_TIMEOUT: int = 120  # Seconds to wait for content fetch
+    SMB_AGENT_MANIFEST_CACHE_SECONDS: int = 300
 
     @property
     def research_mcp_endpoint(self) -> str:

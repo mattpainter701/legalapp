@@ -7,6 +7,7 @@ import socket
 from clarity_agent import __version__
 from clarity_agent.api_client import SaaSClient
 from clarity_agent.config import AgentConfig
+from clarity_agent.updater import read_update_status
 
 logger = logging.getLogger("clarity_agent.heartbeat")
 
@@ -34,6 +35,12 @@ class HeartbeatService:
             "hostname": info["hostname"],
             "active_scans": active_scans,
         }
+        update_status = read_update_status()
+        if update_status:
+            payload["update_status"] = update_status["status"]
+            payload["update_target_version"] = update_status["target_version"]
+            if update_status.get("error"):
+                payload["update_error"] = update_status["error"]
         try:
             await self.client.heartbeat(payload)
             logger.debug("Heartbeat sent")

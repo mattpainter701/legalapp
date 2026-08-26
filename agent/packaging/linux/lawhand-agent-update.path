@@ -1,0 +1,10 @@
+[Unit]
+Description=Watch for LawHand File Share Agent update requests
+Documentation=https://getlawhand.com/docs/file-shares
+
+[Path]
+PathExists=/etc/lawhand-agent/update.request
+Unit=lawhand-agent-update.service
+
+[Install]
+WantedBy=multi-user.target

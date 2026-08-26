@@ -160,6 +160,32 @@ ENV_FILE=.env COMPOSE_FILE=docker-compose.hypervisor.yml \
   bash scripts/prod_env_preflight.sh
 ```
 
+Production preflight also requires the private-origin TLS contract:
+`ORIGIN_TLS_SERVER_NAME`, `ORIGIN_TLS_CA_FILE`, `CLOUDFLARED_CONFIG_FILE`, and
+the absolute `CLOUDFLARED_BIN=/usr/bin/cloudflared`. It invokes
+`scripts/validate_private_origin_tls.sh`
+and fails closed if nginx's certificate/key or the Tunnel `caPool` and
+`originServerName` pin is missing. The Tunnel-to-VM hop is TLS 1.2/1.3 only;
+customer file-share agents use public HTTPS system trust and never receive the
+private origin CA. Flexible mode, plain-HTTP origin services, and
+`noTLSVerify` are prohibited.
+
+Private-origin root rotation uses an overlap window to avoid a trust gap. Run
+`scripts/provision_private_origin_tls.sh --rotate-ca` to install the new leaf
+and export a new-plus-old CA bundle. Validate it, restart `cloudflared` to load
+the dual bundle, reload nginx to serve the new leaf, then run
+`scripts/finalize_private_origin_ca_rotation.sh`. Finally restart
+`cloudflared` once more to load the current-only bundle and run the full
+validator. Neither script restarts services; the pending root-only marker
+blocks another provisioning run until finalization succeeds. Both scripts
+rollback their managed files if a deployment step fails.
+
+Routine leaf renewal uses `provision_private_origin_tls.sh --force`, which
+reuses the private root. Validate the staged identity, reload nginx, then run
+the full validator and public health probe. The recurring production check
+alerts before the leaf or root reaches `TLS_MIN_VALID_DAYS`; do not wait for
+that floor to schedule renewal.
+
 ## 7. Production verification and deployment authority
 
 Pushes to `main` do not automatically mutate production. The GitHub **Deploy to

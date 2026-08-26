@@ -6,10 +6,10 @@
   auto-starting Windows service, and creates the machine-wide data directory
   the agent keeps its config, key and ledger in.
 
-  Build:  wix build lawhand-agent.wxs -arch x64 -d AgentExe=..\..\dist\lawhand-agent.exe -d ProductVersion=0.13.0 -ext WixToolset.Util.wixext -o lawhand-agent.msi
+  Build:  wix build lawhand-agent.wxs -arch x64 -d AgentExe=..\..\dist\lawhand-agent.exe -d ProductVersion=0.15.0 -ext WixToolset.Util.wixext -o lawhand-agent.msi
 
   Unattended install, pairing in one step:
-      msiexec /i lawhand-agent-0.13.0-x64.msi /qn ^
+      msiexec /i lawhand-agent-0.15.0-x64.msi /qn ^
               PAIRING_CODE=<code from Administration -> File Shares> ^
               SAAS_URL=https://getlawhand.com
 
@@ -30,15 +30,47 @@
 
     <SummaryInformation Description="On-premise file share indexing agent for LawHand" />
 
-    <MajorUpgrade DowngradeErrorMessage="A newer version of the LawHand File Share Agent is already installed." />
+    <!-- Keep RemoveExistingProducts late: the old service must remain present
+         until the replacement product has installed.  This is required for a
+         password-backed custom service account because Windows Installer and
+         SCM do not expose the old password after the service is deleted.
+         Do not move this earlier without a password reacquisition flow. -->
+    <MajorUpgrade Schedule="afterInstallExecute"
+                  DowngradeErrorMessage="A newer version of the LawHand File Share Agent is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <!-- Pairing details. Empty PAIRING_CODE simply skips registration, so the
          MSI can be deployed by GPO and paired later from the command line. -->
-    <Property Id="PAIRING_CODE" Secure="yes" />
+    <!-- Hidden prevents the one-time pairing code from being copied into
+         verbose MSI logs. It is still passed to the deferred action below. -->
+    <Property Id="PAIRING_CODE" Secure="yes" Hidden="yes" />
     <Property Id="SAAS_URL" Secure="yes" Value="https://getlawhand.com" />
-    <Property Id="SERVICE_ACCOUNT" Secure="yes" Value="LocalSystem" />
+    <!-- Keep an explicit command-line SERVICE_ACCOUNT authoritative. When it
+         is omitted, AppSearch discovers the existing SCM identity and the
+         SetProperty actions below select it before costing; LocalSystem is
+         only the clean-install fallback. No password is read or persisted. -->
+    <Property Id="SERVICE_ACCOUNT" Secure="yes" />
+    <Property Id="EXISTING_SERVICE_ACCOUNT">
+      <RegistrySearch Id="ExistingLawHandServiceAccount"
+                      Root="HKLM"
+                      Key="SYSTEM\CurrentControlSet\Services\LawHandAgent"
+                      Name="ObjectName"
+                      Type="raw" />
+    </Property>
     <Property Id="SERVICE_PASSWORD" Secure="yes" Hidden="yes" />
+
+    <SetProperty Id="SERVICE_ACCOUNT"
+                 Action="SetServiceAccountFromExisting"
+                 Value="[EXISTING_SERVICE_ACCOUNT]"
+                 After="AppSearch"
+                 Sequence="both"
+                 Condition="NOT SERVICE_ACCOUNT AND EXISTING_SERVICE_ACCOUNT" />
+    <SetProperty Id="SERVICE_ACCOUNT"
+                 Action="SetServiceAccountDefault"
+                 Value="LocalSystem"
+                 Before="CostInitialize"
+                 Sequence="both"
+                 Condition="NOT SERVICE_ACCOUNT" />
 
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="COMPANYFOLDER" Name="LawHand">
@@ -57,13 +89,22 @@
     </Feature>
 
     <InstallExecuteSequence>
-      <!-- Pair before StartServices so the service comes up already registered. -->
-      <Custom Action="RegisterAgent" Before="StartServices" Condition="PAIRING_CODE AND NOT Installed" />
+      <!-- Pair before StartServices so the service comes up already registered.
+           WIX_UPGRADE_DETECTED is set by FindRelatedProducts before this
+           sequence, so a major upgrade never consumes a new code or replaces
+           an existing enrollment. -->
+      <Custom Action="RegisterAgent" Before="StartServices"
+              Condition="PAIRING_CODE AND NOT Installed AND NOT WIX_UPGRADE_DETECTED" />
     </InstallExecuteSequence>
   </Package>
 
   <Fragment>
     <ComponentGroup Id="AgentComponents">
+      <!-- Keep these component identities stable across releases. A late
+           major upgrade updates the still-present service component, while
+           the data component is deliberately permanent. -->
+      <!-- Guid is intentionally omitted. WiX derives a stable component GUID
+           from the key path; changing it would strand existing installs. -->
       <Component Id="AgentExeComponent" Directory="INSTALLFOLDER">
         <File Id="LawHandAgentExe"
               Name="lawhand-agent.exe"
@@ -81,12 +122,20 @@
                         Account="[SERVICE_ACCOUNT]"
                         Password="[SERVICE_PASSWORD]"
                         Vital="yes">
+          <!-- Use the stable service SID for local file access. This remains
+               present in the process token even when the service logs on as a
+               domain or local account, and avoids persisting that account's
+               password merely to re-apply ACLs during an upgrade. -->
+          <ServiceConfig ServiceSid="unrestricted"
+                         OnInstall="yes"
+                         OnReinstall="yes" />
           <!-- A file server reboot or a transient network outage should not
                leave the share un-indexed until someone notices. -->
           <util:ServiceConfig FirstFailureActionType="restart"
                               SecondFailureActionType="restart"
                               ThirdFailureActionType="restart"
-                              RestartServiceDelayInSeconds="60" />
+                              RestartServiceDelayInSeconds="60"
+                              ResetPeriodInDays="1" />
         </ServiceInstall>
 
         <ServiceControl Id="LawHandAgentServiceControl"
@@ -97,9 +146,18 @@
                         Wait="yes" />
       </Component>
 
-      <Component Id="DataFolderComponent" Directory="DATAFOLDER">
-        <CreateFolder />
-        <RemoveFolder Id="RemoveDataFolder" On="uninstall" />
+      <Component Id="DataFolderComponent" Directory="DATAFOLDER" Permanent="yes">
+        <CreateFolder>
+          <!-- Config contains the API key. Grant only the stable service SID,
+               LocalSystem and local administrators; do not inherit the broad
+               ProgramData ACL. -->
+          <util:PermissionEx User="SYSTEM" GenericAll="yes" Inheritable="yes" />
+          <util:PermissionEx User="Administrators" GenericAll="yes" Inheritable="yes" />
+          <util:PermissionEx Domain="NT SERVICE"
+                             User="LawHandAgent"
+                             GenericAll="yes"
+                             Inheritable="yes" />
+        </CreateFolder>
         <RegistryValue Root="HKLM"
                        Key="Software\LawHand\Agent"
                        Name="DataFolder"

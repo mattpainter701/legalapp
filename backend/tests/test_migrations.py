@@ -12,7 +12,35 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["128_workspace_mcp_tenant_gate"]
+    assert heads == ["130_smb_agent_bootstrap_rls"]
+
+
+def test_smb_agent_bootstrap_rls_is_exact_select_only_and_not_a_bypass():
+    backend_dir = Path(__file__).resolve().parents[1]
+    source = (
+        backend_dir / "migrations" / "versions" / "130_smb_agent_bootstrap_rls.py"
+    ).read_text(encoding="utf-8")
+
+    assert "FOR SELECT TO PUBLIC" in source
+    assert "app.smb_agent_api_key_hash" in source
+    assert "app.smb_agent_pairing_code" in source
+    assert "app.rls_bypass" not in source
+    assert "smb_shares" not in source
+
+    registration = (
+        (backend_dir / "app" / "services" / "smb.py")
+        .read_text(encoding="utf-8")
+        .split("async def register_agent", 1)[1]
+        .split("async def record_heartbeat", 1)[0]
+    )
+    clear_selector = registration.index("clear_smb_agent_bootstrap_lookup")
+    bind_tenant = registration.index("await set_tenant_context", clear_selector)
+    lock_row = registration.index(".with_for_update()", bind_tenant)
+    assert clear_selector < bind_tenant < lock_row
+    assert (
+        registration.index("SmbAgent.pairing_code == pairing_code", bind_tenant)
+        < lock_row
+    )
 
 
 def test_revision_ids_fit_the_alembic_version_column():

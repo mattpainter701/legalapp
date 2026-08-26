@@ -40,6 +40,7 @@ uploads/
 # SSL certs and Let's Encrypt data — never commit private keys
 nginx/ssl/*.pem
 nginx/ssl/*.key
+nginx/ssl/.private-origin-managed
 nginx/letsencrypt/
 nginx/webroot/
 

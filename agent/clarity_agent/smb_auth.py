@@ -97,7 +97,12 @@ def session_kwargs(credential: ShareCredential) -> dict:
     return kwargs
 
 
-def connect(server: str, credential: ShareCredential, smbclient_module=None):
+def connect(
+    server: str,
+    credential: ShareCredential,
+    smbclient_module=None,
+    connection_cache=None,
+):
     """Register an SMB session for ``server`` using ``credential``.
 
     Returns the session on success and raises the underlying error on failure,
@@ -108,5 +113,7 @@ def connect(server: str, credential: ShareCredential, smbclient_module=None):
         import smbclient as smbclient_module
 
     kwargs = session_kwargs(credential)
+    if connection_cache is not None:
+        kwargs["connection_cache"] = connection_cache
     logger.info("Connecting to %s as %s", server, credential.describe)
     return smbclient_module.register_session(server, **kwargs)

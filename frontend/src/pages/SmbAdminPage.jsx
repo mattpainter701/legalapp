@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import {
   getSmbStatus,
   getSmbAgents,
+  getSmbAgentUpdate,
+  requestSmbAgentUpdate,
   generateSmbPairingCode,
   updateSmbAgent,
   deleteSmbAgent,
@@ -34,6 +36,28 @@ const AUTH_METHODS = [
 ]
 
 const DEFAULT_EXTENSIONS = '.pdf, .docx, .doc, .rtf, .txt'
+const PORTAL_UPDATE_MIN_VERSION = [0, 15, 0]
+
+function numericVersion(version) {
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(version || '')
+  return match ? match.slice(1).map(Number) : null
+}
+
+function compareVersions(left, right) {
+  const leftParts = numericVersion(left)
+  const rightParts = Array.isArray(right) ? right : numericVersion(right)
+  if (!leftParts || !rightParts) return null
+  for (let index = 0; index < leftParts.length; index += 1) {
+    if (leftParts[index] > rightParts[index]) return 1
+    if (leftParts[index] < rightParts[index]) return -1
+  }
+  return 0
+}
+
+function supportsPortalUpdate(version) {
+  const comparison = compareVersions(version, PORTAL_UPDATE_MIN_VERSION)
+  return comparison !== null && comparison >= 0
+}
 
 function Badge({ label, variant = 'neutral' }) {
   const colors = {
@@ -186,7 +210,7 @@ function CredentialFields({ draft, onChange, idPrefix, requirePassword = true })
             <Field
               id={`${idPrefix}-cred-password`}
               label="Password"
-              hint="Encrypted with the tenant key before storage. It is never shown again and never returned by the API."
+              hint="Encrypted with the tenant key before storage. It is never shown in the browser again; only the assigned tenant agent can retrieve it over authenticated HTTPS."
             >
               <input
                 id={`${idPrefix}-cred-password`}
@@ -284,7 +308,7 @@ function InstallInstructions({ pairingCode }) {
   const windowsCommand =
     `msiexec /i lawhand-agent-x64.msi /qn PAIRING_CODE=${code} SAAS_URL=${window.location.origin}`
   const linuxCommand =
-    `tar xzf lawhand-agent-linux-x86_64.tar.gz && cd lawhand-agent-* && sudo ./install.sh --code ${code} --url ${window.location.origin}`
+    `work="$(mktemp -d)" && tar xzf lawhand-agent-linux-x86_64.tar.gz -C "$work" --strip-components=1 && cd "$work" && sudo ./install.sh --code ${code} --url ${window.location.origin}`
 
   return (
     <div className="bg-brand-surface border border-brand-line rounded-xl p-5 shadow-sm space-y-4">
@@ -334,7 +358,14 @@ function InstallInstructions({ pairingCode }) {
 
       <p className="text-xs text-brand-muted font-sans">
         The installer registers a service that starts at boot. Share credentials are configured here, in the
-        console — the installer never needs them.
+        console — the installer never needs them. Verify downloads against the{' '}
+        <a
+          href={`${AGENT_DOWNLOAD_BASE}/SHA256SUMS.txt`}
+          className="text-brand-accent font-medium hover:underline"
+          rel="noreferrer"
+        >
+          published SHA-256 checksums
+        </a>.
       </p>
     </div>
   )
@@ -349,13 +380,19 @@ function AgentsPanel() {
   const [pairingCode, setPairingCode] = useState(null)
   const [generating, setGenerating] = useState(false)
   const [updating, setUpdating] = useState(null)
+  const [agentUpdates, setAgentUpdates] = useState({})
 
   const load = async () => {
     setLoading(true)
     setError(null)
     try {
       const data = await getSmbAgents()
-      setAgents(asList(data, 'agents', 'items'))
+      const nextAgents = asList(data, 'agents', 'items')
+      setAgents(nextAgents)
+      const updates = await Promise.all(nextAgents.map(async (agent) => {
+        try { return [agent.id, await getSmbAgentUpdate(agent.id)] } catch { return [agent.id, null] }
+      }))
+      setAgentUpdates(Object.fromEntries(updates))
     } catch (e) {
       setError(errText(e, 'Failed to load agents'))
     } finally {
@@ -364,6 +401,36 @@ function AgentsPanel() {
   }
 
   useEffect(() => { load() }, [])
+
+  const pendingUpdateIds = Object.entries(agentUpdates)
+    .filter(([, update]) => ['queued', 'in_progress'].includes(update?.update_status))
+    .map(([agentId]) => agentId)
+    .sort()
+    .join(',')
+
+  useEffect(() => {
+    if (!pendingUpdateIds) return undefined
+    let cancelled = false
+    const ids = pendingUpdateIds.split(',')
+    const poll = async () => {
+      const updates = await Promise.all(ids.map(async (agentId) => {
+        try { return [agentId, await getSmbAgentUpdate(agentId)] } catch { return null }
+      }))
+      if (cancelled) return
+      const available = updates.filter(Boolean)
+      if (!available.length) return
+      setAgentUpdates((current) => ({ ...current, ...Object.fromEntries(available) }))
+      const versions = Object.fromEntries(available.map(([agentId, update]) => [agentId, update.current_version]))
+      setAgents((current) => current.map((agent) => (
+        versions[agent.id] ? { ...agent, agent_version: versions[agent.id] } : agent
+      )))
+    }
+    const timer = window.setInterval(poll, 5000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [pendingUpdateIds])
 
   const handleGenerateCode = async () => {
     setGenerating(true)
@@ -388,6 +455,22 @@ function AgentsPanel() {
     } finally {
       setUpdating(null)
     }
+  }
+
+  const handleRequestAgentUpdate = async (agentId, targetVersion) => {
+    if (!await confirmAction({
+      title: `Update agent to ${targetVersion}?`,
+      message: 'The agent service will restart briefly. Assigned shares remain configured and resume automatically.',
+      confirmLabel: 'Update agent',
+    })) return
+    setUpdating(agentId)
+    try {
+      await requestSmbAgentUpdate(agentId)
+      toast.success('Agent update queued')
+      await load()
+    } catch (e) {
+      toast.error('Agent update was not queued', { message: errText(e, 'Unknown error') })
+    } finally { setUpdating(null) }
   }
 
   const handleDeleteAgent = async (agentId) => {
@@ -439,6 +522,7 @@ function AgentsPanel() {
               <th className="text-left px-4 py-3 font-semibold text-brand-ink uppercase tracking-wider text-xs">Name</th>
               <th className="text-left px-4 py-3 font-semibold text-brand-ink uppercase tracking-wider text-xs">Status</th>
               <th className="text-left px-4 py-3 font-semibold text-brand-ink uppercase tracking-wider text-xs">Version</th>
+              <th className="text-left px-4 py-3 font-semibold text-brand-ink uppercase tracking-wider text-xs">Updates</th>
               <th className="text-left px-4 py-3 font-semibold text-brand-ink uppercase tracking-wider text-xs">Hostname</th>
               <th className="text-left px-4 py-3 font-semibold text-brand-ink uppercase tracking-wider text-xs">Last Heartbeat</th>
               <th className="px-4 py-3" />
@@ -450,6 +534,29 @@ function AgentsPanel() {
                 <td className="px-4 py-3 text-brand-ink font-sans font-medium">{agent.agent_name || '-'}</td>
                 <td className="px-4 py-3"><Badge label={agent.status} variant={statusVariant(agent.status)} /></td>
                 <td className="px-4 py-3 text-brand-ink-2 font-sans font-mono">{agent.agent_version || '-'}</td>
+                <td className="px-4 py-3 text-brand-ink-2 font-sans">
+                  {(() => {
+                    const update = agentUpdates[agent.id]
+                    if (!update) return <span className="text-brand-muted">Unavailable</span>
+                    const pending = ['queued', 'in_progress'].includes(update.update_status)
+                    const current = update.current_version || 'unknown'
+                    const canUsePortal = supportsPortalUpdate(update.current_version)
+                    const updateAvailable = compareVersions(update.latest_version, update.current_version) === 1
+                    return <div className="space-y-1" aria-live="polite" aria-label={`Update status for ${agent.agent_name || agent.hostname || 'agent'}`}>
+                      <div className="text-xs">{current} → {update.latest_version}</div>
+                      <div className="flex items-center gap-2">
+                        <Badge label={update.update_status || 'idle'} variant={update.update_status === 'failed' ? 'error' : update.update_status === 'completed' ? 'success' : pending ? 'warning' : 'neutral'} />
+                        {!pending && canUsePortal && agent.status === 'active' && updateAvailable && (
+                          <button type="button" aria-label={`Update ${agent.agent_name || agent.hostname || 'agent'} to ${update.latest_version}`} onClick={() => handleRequestAgentUpdate(agent.id, update.latest_version)} disabled={updating === agent.id} className="text-xs text-brand-accent font-medium hover:underline disabled:opacity-40">Update</button>
+                        )}
+                        {!pending && !canUsePortal && updateAvailable && (
+                          <span className="text-xs text-brand-amber" title="Install version 0.15.0 or later over the existing installation once; portal updates work after that.">Manual bootstrap required</span>
+                        )}
+                      </div>
+                      {update.update_error && <p className="text-xs text-brand-rose">{update.update_error}</p>}
+                    </div>
+                  })()}
+                </td>
                 <td className="px-4 py-3 text-brand-ink-2 font-sans">{agent.hostname || '-'}</td>
                 <td className="px-4 py-3 text-brand-muted font-sans font-mono">
                   {agent.last_heartbeat ? format(new Date(agent.last_heartbeat), 'MMM d, HH:mm') : '-'}
@@ -486,7 +593,7 @@ function AgentsPanel() {
             ))}
             {agents.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-4 py-12 text-center text-brand-muted font-sans">
+                <td colSpan={7} className="px-4 py-12 text-center text-brand-muted font-sans">
                   No agents registered. Generate a pairing code, then run the installer above on the file server.
                 </td>
               </tr>

@@ -1,0 +1,280 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+if [[ $EUID -ne 0 || $# -ne 0 ]]; then
+    echo "usage: lawhand-agent-update" >&2
+    exit 2
+fi
+
+MANIFEST_URL="https://github.com/mattpainter701/legalapp/releases/latest/download/agent-update.json"
+ASSET_NAME="lawhand-agent-linux-x86_64.tar.gz"
+CONFIG_DIR="/etc/lawhand-agent"
+UPDATER_CONFIG_DIR="/etc/lawhand-agent-updater"
+PREFIX_FILE="${UPDATER_CONFIG_DIR}/prefix"
+REQUEST_FILE="${CONFIG_DIR}/update.request"
+PROCESSING_FILE="${UPDATER_CONFIG_DIR}/update.request.processing"
+STATUS_FILE="${UPDATER_CONFIG_DIR}/update.status"
+HELPER_PATH="/usr/local/libexec/lawhand-agent-update"
+MAIN_UNIT="/etc/systemd/system/lawhand-agent.service"
+PATH_UNIT="/etc/systemd/system/lawhand-agent-update.path"
+SERVICE_UNIT="/etc/systemd/system/lawhand-agent-update.service"
+TMP="$(mktemp -d /tmp/lawhand-agent-update.XXXXXX)"
+TARGET=""
+UPDATE_ERROR="The managed update failed; inspect journalctl -u lawhand-agent-update.service"
+NEW_BINARY_INSTALLED=0
+INFRASTRUCTURE_INSTALLED=0
+SERVICE_STOPPED=0
+SUCCESS=0
+
+write_status() {
+    local state="$1"
+    local error="${2:-}"
+    local status_tmp
+    status_tmp="$(mktemp "${UPDATER_CONFIG_DIR}/update.status.XXXXXX")"
+    python3 - "$status_tmp" "$state" "$TARGET" "$error" <<'PY'
+import json, pathlib, sys
+pathlib.Path(sys.argv[1]).write_text(json.dumps({
+    "status": sys.argv[2],
+    "target_version": sys.argv[3],
+    **({"error": sys.argv[4][:2000]} if sys.argv[4] else {}),
+}, separators=(",", ":")) + "\n", encoding="utf-8")
+PY
+    chmod 0644 "$status_tmp"
+    mv -fT "$status_tmp" "$STATUS_FILE"
+}
+
+rollback() {
+    local rollback_failed=0
+    local restart_main=0
+    if (( NEW_BINARY_INSTALLED )); then
+        systemctl stop lawhand-agent.service >/dev/null 2>&1 || true
+        install -m 0755 "$TMP/lawhand-agent.previous" "${PREFIX}/.lawhand-agent.rollback" || rollback_failed=1
+        if (( ! rollback_failed )); then
+            mv -f "${PREFIX}/.lawhand-agent.rollback" "${PREFIX}/lawhand-agent" || rollback_failed=1
+        fi
+        restart_main=1
+    elif (( SERVICE_STOPPED )); then
+        restart_main=1
+    fi
+    if (( INFRASTRUCTURE_INSTALLED )); then
+        install -m 0755 "$TMP/lawhand-agent-update.previous" "$HELPER_PATH" || rollback_failed=1
+        install -m 0644 "$TMP/lawhand-agent.service.previous" "$MAIN_UNIT" || rollback_failed=1
+        install -m 0644 "$TMP/lawhand-agent-update.path.previous" "$PATH_UNIT" || rollback_failed=1
+        install -m 0644 "$TMP/lawhand-agent-update.service.previous" "$SERVICE_UNIT" || rollback_failed=1
+        systemctl daemon-reload >/dev/null 2>&1 || rollback_failed=1
+    fi
+    if (( restart_main )); then
+        systemctl start lawhand-agent.service >/dev/null 2>&1 || rollback_failed=1
+    fi
+    if (( rollback_failed )); then
+        UPDATE_ERROR="${UPDATE_ERROR}; automatic rollback needs administrator attention"
+    fi
+}
+
+on_error() {
+    UPDATE_ERROR="${UPDATE_ERROR} (line $1)"
+}
+
+on_exit() {
+    local rc=$?
+    trap - ERR EXIT
+    rm -f "$PROCESSING_FILE"
+    if (( rc != 0 || ! SUCCESS )); then
+        rollback
+        if [[ -n "$TARGET" ]]; then
+            write_status "failed" "$UPDATE_ERROR" || true
+        fi
+    fi
+    if [[ -n "${PREFIX:-}" ]]; then
+        rm -f "${PREFIX}/.lawhand-agent.new" "${PREFIX}/.lawhand-agent.rollback"
+    fi
+    rm -rf "$TMP"
+    exit "$rc"
+}
+
+trap 'on_error $LINENO' ERR
+trap on_exit EXIT
+
+rm -f "$PROCESSING_FILE"
+mv -fT "$REQUEST_FILE" "$PROCESSING_FILE"
+
+TARGET="$(python3 - "$PROCESSING_FILE" "$CONFIG_DIR" <<'PY'
+import os, stat, sys
+request, config_dir = sys.argv[1:]
+try:
+    descriptor = os.open(request, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+except OSError as exc:
+    raise SystemExit(f"invalid update request: {exc}")
+try:
+    metadata = os.fstat(descriptor)
+    owner = os.stat(config_dir, follow_symlinks=False).st_uid
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+        raise SystemExit("update request is not a single regular file")
+    if metadata.st_uid not in {0, owner} or stat.S_IMODE(metadata.st_mode) & 0o077:
+        raise SystemExit("update request has unsafe ownership or permissions")
+    value = os.read(descriptor, 65)
+    if len(value) > 64:
+        raise SystemExit("update request exceeds 64 bytes")
+finally:
+    os.close(descriptor)
+try:
+    print(value.decode("ascii").strip())
+except UnicodeDecodeError as exc:
+    raise SystemExit("update request is not ASCII") from exc
+PY
+)"
+[[ "$TARGET" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+    echo "Invalid update target" >&2
+    exit 1
+}
+write_status "in_progress"
+
+[[ -f "$PREFIX_FILE" ]] || { UPDATE_ERROR="The root-owned install prefix is missing"; exit 1; }
+PREFIX="$(tr -d '\r\n' < "$PREFIX_FILE")"
+[[ "$PREFIX" =~ ^/[A-Za-z0-9._/-]+$ && "$PREFIX" != *"//"* && \
+   "$PREFIX" != *"/../"* && "$PREFIX" != *"/./"* && \
+   "$PREFIX" != */.. && "$PREFIX" != */. ]] || {
+    UPDATE_ERROR="The root-owned install prefix is invalid"
+    exit 1
+}
+[[ -x "${PREFIX}/lawhand-agent" ]] || { UPDATE_ERROR="The installed agent binary is missing"; exit 1; }
+RUN_USER="$(systemctl show -p User --value lawhand-agent.service)"
+[[ "$RUN_USER" =~ ^[A-Za-z_][A-Za-z0-9_.-]*$ ]] && getent passwd "$RUN_USER" >/dev/null || {
+    UPDATE_ERROR="The installed agent service identity is invalid"
+    exit 1
+}
+
+CURRENT_OUTPUT="$("${PREFIX}/lawhand-agent" --version)"
+CURRENT="${CURRENT_OUTPUT##* }"
+[[ "$CURRENT" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+    UPDATE_ERROR="The installed agent version is invalid"
+    exit 1
+}
+COMPARISON="$(python3 - "$CURRENT" "$TARGET" <<'PY'
+import sys
+current = tuple(map(int, sys.argv[1].split(".")))
+target = tuple(map(int, sys.argv[2].split(".")))
+print("upgrade" if target > current else "same" if target == current else "downgrade")
+PY
+)"
+if [[ "$COMPARISON" == "same" ]]; then
+    write_status "completed"
+    SUCCESS=1
+    exit 0
+fi
+[[ "$COMPARISON" == "upgrade" ]] || { UPDATE_ERROR="Refusing to downgrade the installed agent"; exit 1; }
+
+curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+    --retry 3 --retry-connrefused --max-time 120 --max-filesize 16384 \
+    "$MANIFEST_URL" -o "$TMP/manifest.json"
+[[ $(stat -c '%s' "$TMP/manifest.json") -le 16384 ]] || { UPDATE_ERROR="Update manifest exceeds 16 KiB"; exit 1; }
+DIGEST="$(python3 - "$TMP/manifest.json" "$TARGET" <<'PY'
+import json, pathlib, re, sys
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+entry = (payload.get("assets") or {}).get("linux-x86_64") or {}
+version = payload.get("version")
+if set(payload) != {"schema_version", "version", "assets"}:
+    raise SystemExit("unexpected update manifest fields")
+if payload.get("schema_version") != 1 or version != sys.argv[2]:
+    raise SystemExit("official manifest no longer matches the requested target")
+if not re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", str(version)):
+    raise SystemExit("invalid update manifest version")
+if entry.get("name") != "lawhand-agent-linux-x86_64.tar.gz":
+    raise SystemExit("invalid Linux asset name")
+if set(entry) != {"name", "sha256"}:
+    raise SystemExit("unexpected Linux asset fields")
+digest = str(entry.get("sha256", ""))
+if not re.fullmatch(r"[0-9a-f]{64}", digest):
+    raise SystemExit("invalid Linux asset digest")
+print(digest)
+PY
+)"
+
+ARCHIVE="$TMP/$ASSET_NAME"
+ASSET_URL="https://github.com/mattpainter701/legalapp/releases/download/agent-v${TARGET}/${ASSET_NAME}"
+curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+    --retry 3 --retry-connrefused --max-time 300 --max-filesize $((512 * 1024 * 1024)) \
+    "$ASSET_URL" -o "$ARCHIVE"
+[[ $(stat -c '%s' "$ARCHIVE") -le $((512 * 1024 * 1024)) ]] || { UPDATE_ERROR="Update archive exceeds 512 MiB"; exit 1; }
+echo "$DIGEST  $ARCHIVE" | sha256sum --check --status
+
+python3 - "$ARCHIVE" "$TARGET" <<'PY'
+import pathlib, sys, tarfile
+archive, version = sys.argv[1:]
+root = f"lawhand-agent-{version}"
+required = {
+    f"{root}/lawhand-agent",
+    f"{root}/lawhand-agent.service",
+    f"{root}/lawhand-agent-update",
+    f"{root}/lawhand-agent-update.path",
+    f"{root}/lawhand-agent-update.service",
+}
+seen = set()
+total_size = 0
+with tarfile.open(archive, "r:gz") as bundle:
+    for index, member in enumerate(bundle):
+        if index >= 64:
+            raise SystemExit("update archive contains too many members")
+        name = member.name.rstrip("/")
+        path = pathlib.PurePosixPath(name)
+        if not name or path.is_absolute() or ".." in path.parts or path.parts[0] != root:
+            raise SystemExit(f"unsafe archive member: {member.name}")
+        if name in seen or not (member.isdir() or member.isfile()):
+            raise SystemExit(f"unsupported archive member: {member.name}")
+        if member.isfile():
+            total_size += member.size
+            if member.size > 512 * 1024 * 1024 or total_size > 1024 * 1024 * 1024:
+                raise SystemExit("update archive expands beyond its safety limit")
+        seen.add(name)
+if not required.issubset(seen):
+    raise SystemExit("update archive is missing required files")
+PY
+
+mkdir "$TMP/extract"
+tar -xzf "$ARCHIVE" -C "$TMP/extract" --no-same-owner --no-same-permissions
+ROOT="$TMP/extract/lawhand-agent-${TARGET}"
+[[ -x "$ROOT/lawhand-agent" && -x "$ROOT/lawhand-agent-update" ]] || {
+    UPDATE_ERROR="Update archive has invalid executable permissions"
+    exit 1
+}
+
+install -m 0755 "$ROOT/lawhand-agent" "${PREFIX}/.lawhand-agent.new"
+NEW_OUTPUT="$("${PREFIX}/.lawhand-agent.new" --version)"
+[[ "$NEW_OUTPUT" == "lawhand-agent $TARGET" ]] || { UPDATE_ERROR="Staged binary reports the wrong version"; exit 1; }
+cp -a "${PREFIX}/lawhand-agent" "$TMP/lawhand-agent.previous"
+cp -a "$HELPER_PATH" "$TMP/lawhand-agent-update.previous"
+cp -a "$MAIN_UNIT" "$TMP/lawhand-agent.service.previous"
+cp -a "$PATH_UNIT" "$TMP/lawhand-agent-update.path.previous"
+cp -a "$SERVICE_UNIT" "$TMP/lawhand-agent-update.service.previous"
+
+install -m 0755 "$ROOT/lawhand-agent-update" "${HELPER_PATH}.new"
+sed -e "s|@EXEC_START@|${PREFIX}/lawhand-agent service run|" \
+    -e "s|@USER@|${RUN_USER}|" \
+    -e "s|@CONFIG_DIR@|${CONFIG_DIR}|" \
+    "$ROOT/lawhand-agent.service" > "${MAIN_UNIT}.new"
+chmod 0644 "${MAIN_UNIT}.new"
+install -m 0644 "$ROOT/lawhand-agent-update.path" "${PATH_UNIT}.new"
+sed "s|@PREFIX@|${PREFIX}|g" "$ROOT/lawhand-agent-update.service" > "${SERVICE_UNIT}.new"
+chmod 0644 "${SERVICE_UNIT}.new"
+mv -f "${HELPER_PATH}.new" "$HELPER_PATH"
+INFRASTRUCTURE_INSTALLED=1
+mv -f "${MAIN_UNIT}.new" "$MAIN_UNIT"
+mv -f "${PATH_UNIT}.new" "$PATH_UNIT"
+mv -f "${SERVICE_UNIT}.new" "$SERVICE_UNIT"
+systemctl daemon-reload
+
+systemctl stop lawhand-agent.service
+SERVICE_STOPPED=1
+mv -f "${PREFIX}/.lawhand-agent.new" "${PREFIX}/lawhand-agent"
+NEW_BINARY_INSTALLED=1
+systemctl start lawhand-agent.service
+SERVICE_STOPPED=0
+sleep 3
+systemctl is-active --quiet lawhand-agent.service || {
+    UPDATE_ERROR="The updated agent did not become healthy"
+    exit 1
+}
+
+write_status "completed"
+SUCCESS=1

@@ -124,16 +124,125 @@ Never persist either override variable in `.env`. Resolve the undersizing or
 record/load-test the nonstandard host before using the same process variables
 with `deploy_prod.sh`.
 
-On a new public host, point DNS at the instance, open inbound TCP 80/443 only, and provision the first certificate before deployment:
+On a new hypervisor host, do not open public inbound 80/443. Nginx publishes
+only loopback ports and cloudflared uses egress-only Tunnel connections. First
+provision the private origin CA/certificate on the VM:
 
 ```bash
-bash nginx/init-letsencrypt.sh "$DOMAIN" matt@cybersafeadvisor.com
+sudo bash scripts/provision_private_origin_tls.sh \
+  --server-name origin.getlawhand.internal \
+  --nginx-ssl-dir "$PWD/nginx/ssl" \
+  --ca-export /etc/cloudflared/lawhand-origin-ca.pem
+ORIGIN_TLS_SERVER_NAME=origin.getlawhand.internal \
+ORIGIN_TLS_CA_FILE=/etc/cloudflared/lawhand-origin-ca.pem \
+CLOUDFLARED_CONFIG_FILE=/etc/cloudflared/config.yml \
+CLOUDFLARED_BIN=/usr/bin/cloudflared \
+bash scripts/validate_private_origin_tls.sh --cert-only --require-production-ownership
+
+# Make nginx serve the new leaf, then edit /etc/cloudflared/config.yml using
+# ops/cloudflared/config.private-origin.example.yml as the reviewed pattern.
+# Keep config.yml root-owned and non-writable by group/others (0644 is safe
+# because tunnel credentials remain in the separate root-only JSON file).
+docker compose -p legalapp --env-file .env -f docker-compose.hypervisor.yml \
+  exec -T nginx nginx -s reload
+sudo chown root:root /etc/cloudflared/config.yml
+sudo chmod 0644 /etc/cloudflared/config.yml
+sudo /usr/bin/cloudflared --config /etc/cloudflared/config.yml tunnel ingress validate
+# On a new VM, install the service with the explicit reviewed config path. The
+# recurring production check verifies this exact executable and --config argv.
+sudo /usr/bin/cloudflared --config /etc/cloudflared/config.yml service install
+sudo systemctl restart cloudflared
+sudo systemctl is-active cloudflared
+sudo systemctl show cloudflared --property=ExecStart --no-pager
+
+ORIGIN_TLS_SERVER_NAME=origin.getlawhand.internal \
+ORIGIN_TLS_CA_FILE=/etc/cloudflared/lawhand-origin-ca.pem \
+CLOUDFLARED_CONFIG_FILE=/etc/cloudflared/config.yml \
+CLOUDFLARED_BIN=/usr/bin/cloudflared \
+bash scripts/validate_private_origin_tls.sh --require-production-ownership
 ```
 
-The certificate initializer and renewal cron accept the same `ENV_FILE` and
-space-separated `COMPOSE_FILES` as deployment. For Lightsail, export
-`COMPOSE_FILES="docker-compose.yml docker-compose.prod.yml"` before initializing;
-the installed renewal cron records the resolved files.
+The validator confirms the nginx certificate/key, SAN, validity floor, and
+Cloudflare Tunnel `caPool`/`originServerName` pin. Keep the private CA on the
+production VM only. The installed file-share agent calls the public
+`https://getlawhand.com` endpoint and uses the operating system public CA store;
+it must not be configured with this origin CA. Cloudflare Flexible mode,
+plain-HTTP Tunnel services, and `noTLSVerify` are forbidden. Do not run
+`nginx/init-letsencrypt.sh` or leave its `nginx/renew-cert.sh` cron installed:
+either can overwrite the pinned private-origin leaf. The hypervisor Compose
+ports are loopback-only (`127.0.0.1:80/443`); cloudflared must run on the VM
+host and connect to that loopback listener.
+
+Stage and validate the certificate before switching Tunnel ingress from HTTP to
+HTTPS, then reload nginx, edit and validate cloudflared, and restart cloudflared
+in a controlled window. Keep the catch-all `http_status:404` rule in place
+during the switch. The safe order is: provision -> `--cert-only` validation ->
+nginx reload -> edit/validate/restart cloudflared -> full validator.
+Back up `/etc/lawhand/origin-tls` through a separately encrypted, root-only
+recovery process; the root CA private key must never enter Git, GitHub Actions,
+the cloudflared trust bundle, or an agent installer.
+
+For routine leaf renewal, run the provisioner with `--force` before the
+397-day leaf reaches the monitored validity floor. It reuses the existing root
+CA, stages and validates the replacement transactionally, and keeps rollback
+copies. Run `--cert-only`, reload nginx, then run the full validator and public
+`/health` check. A routine leaf renewal does not require restarting
+`cloudflared` because its pinned root does not change.
+
+To rotate the private root CA without a trust gap, use the pending overlap
+protocol. `--rotate-ca` writes the new nginx leaf and a dual-trust export
+(new CA followed by old CA), then leaves a root-only pending marker. It does
+not restart services:
+
+```bash
+sudo bash scripts/provision_private_origin_tls.sh --rotate-ca \
+  --server-name origin.getlawhand.internal \
+  --nginx-ssl-dir "$PWD/nginx/ssl" \
+  --ca-export /etc/cloudflared/lawhand-origin-ca.pem
+
+ORIGIN_TLS_SERVER_NAME=origin.getlawhand.internal \
+ORIGIN_TLS_CA_FILE=/etc/cloudflared/lawhand-origin-ca.pem \
+CLOUDFLARED_CONFIG_FILE=/etc/cloudflared/config.yml \
+CLOUDFLARED_BIN=/usr/bin/cloudflared \
+bash scripts/validate_private_origin_tls.sh --cert-only --require-production-ownership
+
+# Load the dual bundle while nginx still serves the old in-memory leaf.
+sudo systemctl restart cloudflared
+sudo systemctl is-active cloudflared
+
+# Load the newly provisioned leaf; the running Tunnel already trusts both roots.
+docker compose -p legalapp --env-file .env -f docker-compose.hypervisor.yml \
+  exec -T nginx nginx -s reload
+
+# Prove the new leaf and the exact live dual-trust configuration before
+# discarding the previous root.
+ORIGIN_TLS_SERVER_NAME=origin.getlawhand.internal \
+ORIGIN_TLS_CA_FILE=/etc/cloudflared/lawhand-origin-ca.pem \
+CLOUDFLARED_CONFIG_FILE=/etc/cloudflared/config.yml \
+CLOUDFLARED_BIN=/usr/bin/cloudflared \
+bash scripts/validate_private_origin_tls.sh --require-production-ownership
+curl --fail --silent --show-error https://getlawhand.com/health >/dev/null
+
+sudo bash scripts/finalize_private_origin_ca_rotation.sh \
+  --state-dir /etc/lawhand/origin-tls \
+  --ca-export /etc/cloudflared/lawhand-origin-ca.pem
+
+# Load the reduced current-only bundle after nginx serves the new leaf.
+sudo systemctl restart cloudflared
+sudo systemctl is-active cloudflared
+ORIGIN_TLS_SERVER_NAME=origin.getlawhand.internal \
+ORIGIN_TLS_CA_FILE=/etc/cloudflared/lawhand-origin-ca.pem \
+CLOUDFLARED_CONFIG_FILE=/etc/cloudflared/config.yml \
+CLOUDFLARED_BIN=/usr/bin/cloudflared \
+bash scripts/validate_private_origin_tls.sh --require-production-ownership
+curl --fail --silent --show-error https://getlawhand.com/health >/dev/null
+```
+
+The provisioner refuses another provisioning run while the pending marker is
+present. The finalizer checks that the export contains exactly the recorded
+old and new CA fingerprints, atomically reduces it to the current CA, and
+performs no service restart. If any write fails, the export and marker are
+restored.
 
 ## 2. Prove a fresh host
 
@@ -149,7 +258,7 @@ It must prove all of the following:
 - first-boot creation of the `clarity_app` role;
 - migration to the current Alembic head;
 - API and frontend container health;
-- nginx configuration validation plus internal and loopback-host HTTP/self-signed TLS routing to the API and frontend;
+- nginx configuration validation plus internal and loopback-host TLS routing to the API and frontend;
 - `clarity_app` is not superuser and cannot bypass RLS;
 - the dedicated scheduler writes exactly one reusable heartbeat row for a seeded active tenant;
 - `/health/readiness` reports disk, database, Redis, scheduler, and durable queue healthy.

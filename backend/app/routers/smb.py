@@ -1,8 +1,15 @@
 """SMB file share relay agent API endpoints."""
 
+import asyncio
+import hashlib
+import json
 import logging
+import secrets
 
+from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from pydantic import ValidationError
+from redis.exceptions import RedisError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,15 +43,112 @@ from app.schemas.smb import (
     SyncResponse,
     TaskAck,
 )
-from app.services.smb import smb_service
+from app.services.smb import fetch_agent_manifest, smb_service
 from app.services.smb_credentials import (
     SmbCredentialError,
     smb_credential_service,
 )
+from app.services.token_vault import decrypt_token, encrypt_token
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/smb", tags=["smb"])
+
+_REGISTRATION_RECEIPT_PREFIX = "smb_registration_receipt:v1:"
+_REGISTRATION_RECEIPT_TTL_SECONDS = 120
+
+
+def _registration_receipt_key(pairing_code: str) -> str:
+    """Return a non-reversible Redis key for a sensitive pairing code."""
+    digest = hashlib.sha256(pairing_code.encode()).hexdigest()
+    return f"{_REGISTRATION_RECEIPT_PREFIX}{digest}"
+
+
+def _registration_fingerprint(body: AgentRegisterRequest) -> str:
+    """Bind a retry receipt to the exact connector identity fields."""
+    canonical = json.dumps(
+        body.model_dump(exclude={"pairing_code"}, mode="json"),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+async def _load_registration_receipt(
+    redis,
+    body: AgentRegisterRequest,
+) -> AgentRegisterResponse | None:
+    if redis is None:
+        return None
+    key = _registration_receipt_key(body.pairing_code)
+    try:
+        ciphertext = await redis.get(key)
+        if not ciphertext:
+            return None
+        if isinstance(ciphertext, bytes):
+            ciphertext = ciphertext.decode()
+        envelope = json.loads(decrypt_token(ciphertext))
+        expected = _registration_fingerprint(body)
+        if not secrets.compare_digest(str(envelope.get("fingerprint", "")), expected):
+            return None
+        return AgentRegisterResponse.model_validate(envelope["response"])
+    except (
+        RedisError,
+        InvalidToken,
+        RuntimeError,
+        ValueError,
+        TypeError,
+        KeyError,
+        ValidationError,
+    ):
+        # Registration still works when Redis is unavailable. A malformed or
+        # undecryptable receipt is never trusted as an API credential.
+        logger.warning("Unable to read SMB registration retry receipt", exc_info=True)
+        return None
+
+
+async def _store_registration_receipt(
+    redis,
+    body: AgentRegisterRequest,
+    response: AgentRegisterResponse,
+) -> None:
+    if redis is None:
+        return
+    try:
+        envelope = json.dumps(
+            {
+                "fingerprint": _registration_fingerprint(body),
+                "response": response.model_dump(mode="json"),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        ciphertext = encrypt_token(envelope)
+        await redis.set(
+            _registration_receipt_key(body.pairing_code),
+            ciphertext,
+            ex=_REGISTRATION_RECEIPT_TTL_SECONDS,
+        )
+    except (RedisError, RuntimeError, ValueError, TypeError):
+        # The durable registration has already committed. Do not turn a Redis
+        # outage into a false failure that encourages unsafe manual recovery.
+        logger.warning("Unable to store SMB registration retry receipt", exc_info=True)
+
+
+async def _wait_for_registration_receipt(
+    redis,
+    body: AgentRegisterRequest,
+) -> AgentRegisterResponse | None:
+    """Bridge the small commit-to-Redis window between concurrent retries."""
+    if redis is None:
+        return None
+    for attempt in range(4):
+        cached = await _load_registration_receipt(redis, body)
+        if cached is not None:
+            return cached
+        if attempt < 3:
+            await asyncio.sleep(0.05)
+    return None
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -59,12 +163,23 @@ async def register_agent(
     db: AsyncSession = Depends(get_db),
 ):
     """Validate pairing code and register a new agent. Returns API key (one time)."""
+    redis = getattr(request.app.state, "redis", None)
+    cached = await _load_registration_receipt(redis, body)
+    if cached is not None:
+        return cached
+
     try:
         result = await smb_service.register_agent(db, body.pairing_code, body)
     except ValueError as exc:
+        # A concurrent retry can miss Redis before the first request commits,
+        # then wait on the database row lock. Check once more after that wait.
+        cached = await _wait_for_registration_receipt(redis, body)
+        if cached is not None:
+            return cached
         raise HTTPException(status_code=400, detail=str(exc))
 
     await db.commit()
+    await _store_registration_receipt(redis, body, result)
     return result
 
 
@@ -104,6 +219,7 @@ async def agent_sync(
         select(SmbShare).where(
             SmbShare.id == share_id,
             SmbShare.tenant_id == agent.tenant_id,
+            SmbShare.agent_id == agent.id,
         )
     )
     if share_result.scalar_one_or_none() is None:
@@ -121,13 +237,24 @@ async def get_agent_tasks(
     db: AsyncSession = Depends(get_db),
     agent: SmbAgent = Depends(get_smb_agent),
     limit: int = Query(10, ge=1, le=50),
+    wait_seconds: int = Query(0, ge=0, le=20),
 ):
     """Get pending content fetch tasks for this agent."""
     if str(agent.id) != agent_id:
         raise HTTPException(status_code=403, detail="Agent ID mismatch")
 
+    # Authentication has already loaded the device and tenant. Release that
+    # transaction/connection before a long poll so idle connectors cannot
+    # exhaust the database pool.
+    await db.rollback()
     redis = getattr(request.app.state, "redis", None)
-    tasks = await smb_service.get_pending_tasks(db, agent_id, redis=redis, limit=limit)
+    tasks = await smb_service.get_pending_tasks(
+        db,
+        agent_id,
+        redis=redis,
+        limit=limit,
+        wait_seconds=wait_seconds,
+    )
     return tasks
 
 
@@ -143,17 +270,26 @@ async def submit_task_result(
     """Submit content fetch result from agent."""
     if str(agent.id) != agent_id:
         raise HTTPException(status_code=403, detail="Agent ID mismatch")
+    if body.task_id != task_id:
+        raise HTTPException(status_code=400, detail="Task ID mismatch")
 
     redis = getattr(request.app.state, "redis", None)
-    await smb_service.submit_task_result(
-        db,
-        agent_id,
-        task_id,
-        body,
-        redis=redis,
-        tenant_id=str(agent.tenant_id),
-    )
-    await db.commit()
+    try:
+        await smb_service.submit_task_result(
+            db,
+            agent_id,
+            task_id,
+            body,
+            redis=redis,
+            tenant_id=str(agent.tenant_id),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except (RedisError, RuntimeError) as exc:
+        logger.warning("SMB task result publication failed", exc_info=True)
+        raise HTTPException(
+            status_code=503, detail="SMB relay is temporarily unavailable"
+        ) from exc
     return {"status": "ok"}
 
 
@@ -254,8 +390,12 @@ async def request_content_fetch(
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except (RedisError, RuntimeError) as exc:
+        logger.warning("SMB content task publication failed", exc_info=True)
+        raise HTTPException(
+            status_code=503, detail="SMB relay is temporarily unavailable"
+        ) from exc
 
-    await db.commit()
     return {"task_id": task_id, "agent_id": agent_id}
 
 
@@ -275,14 +415,33 @@ async def get_content_status(
             SmbFileIndex.is_deleted.is_(False),
         )
     )
-    if _result.scalar_one_or_none() is None:
+    file_entry = _result.scalar_one_or_none()
+    if file_entry is None:
         raise HTTPException(status_code=404, detail="File not found")
 
     redis = getattr(request.app.state, "redis", None) if request else None
-    content = await smb_service.get_content_result(task_id, redis=redis)
-    if content is None:
+    try:
+        payload = await smb_service.get_task_result(
+            task_id,
+            str(user.tenant_id),
+            redis=redis,
+            file_id=file_id,
+            kind="content_fetch",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    if payload is None:
         return {"status": "pending"}
-    return {"status": "ready", "content": content}
+    if payload.get("error") or not payload.get("ok", True):
+        return {
+            "status": "failed",
+            "error": payload.get("error") or "Agent could not read the file",
+        }
+    return {
+        "status": "ready",
+        "content": payload.get("content", ""),
+        "truncated": bool(payload.get("truncated")),
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -318,6 +477,72 @@ async def list_agents(
     )
     agents = result.scalars().all()
     return [AgentInfo.model_validate(a) for a in agents]
+
+
+@router.get("/agents/{agent_id}/update")
+async def get_agent_update(
+    agent_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(require_admin),
+):
+    """Return official latest version and this tenant agent's update state."""
+    try:
+        manifest = await fetch_agent_manifest()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503, detail="Official agent manifest unavailable"
+        ) from exc
+    await set_tenant_context(db, str(admin.tenant_id))
+    result = await db.execute(
+        select(SmbAgent).where(
+            SmbAgent.id == agent_id, SmbAgent.tenant_id == admin.tenant_id
+        )
+    )
+    agent = result.scalar_one_or_none()
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return {
+        "agent_id": str(agent.id),
+        "current_version": agent.agent_version,
+        "latest_version": manifest["target_version"],
+        "manifest_id": manifest["manifest_id"],
+        "update_status": agent.update_status,
+        "update_target_version": agent.update_target_version,
+        "update_task_id": agent.update_task_id,
+        "update_requested_at": agent.update_requested_at,
+        "update_completed_at": agent.update_completed_at,
+        "update_error": agent.update_error,
+    }
+
+
+@router.post("/agents/{agent_id}/update", response_model=TaskAck)
+async def request_agent_update(
+    agent_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(require_admin),
+):
+    """Queue the fixed official agent update; the portal supplies no URL."""
+    redis = getattr(request.app.state, "redis", None)
+    try:
+        task_id, target_agent_id, _manifest = await smb_service.enqueue_agent_update(
+            db, str(admin.tenant_id), agent_id, redis=redis
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "Agent not found":
+            status = 404
+        elif (
+            detail == "Agent is offline"
+            or detail.startswith("Agent is ")
+            or detail.startswith("Agent requires ")
+            or "latest" in detail
+        ):
+            status = 409
+        else:
+            status = 503
+        raise HTTPException(status_code=status, detail=detail)
+    return TaskAck(task_id=task_id, agent_id=target_agent_id, kind="agent_update")
 
 
 @router.patch("/agents/{agent_id}", response_model=AgentInfo)
@@ -560,7 +785,15 @@ async def get_share_task_result(
         raise HTTPException(status_code=404, detail="Share not found")
 
     redis = getattr(request.app.state, "redis", None) if request else None
-    payload = await smb_service.get_task_result(task_id, redis=redis)
+    try:
+        payload = await smb_service.get_task_result(
+            task_id,
+            str(admin.tenant_id),
+            redis=redis,
+            share_id=share_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
     if payload is None:
         return {"status": "pending"}
     return {

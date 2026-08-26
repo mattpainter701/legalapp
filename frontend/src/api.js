@@ -2206,6 +2206,12 @@ export const getSmbActivity = (params) =>
 export const getSmbAgents = () =>
   api.get('/v1/smb/agents').then(r => r.data)
 
+export const getSmbAgentUpdate = (agentId) =>
+  api.get(`/v1/smb/agents/${agentId}/update`).then(r => r.data)
+
+export const requestSmbAgentUpdate = (agentId) =>
+  api.post(`/v1/smb/agents/${agentId}/update`).then(r => r.data)
+
 export const generateSmbPairingCode = () =>
   api.post('/v1/smb/pairing-code').then(r => r.data)
 

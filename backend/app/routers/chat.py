@@ -108,6 +108,12 @@ _STREAM_INTERRUPTED_MESSAGE = (
 _INTERNAL_DOCUMENT_URL_RE = re.compile(r"^/api/documents/[0-9a-fA-F-]{36}/download$")
 
 
+def _request_redis(request: Request):
+    """Return the application Redis client when an ASGI app is attached."""
+    app = request.scope.get("app")
+    return getattr(getattr(app, "state", None), "redis", None)
+
+
 def _clean_source_text(value, max_length: int | None = None) -> str:
     """Normalize CourtListener/html source fragments for API display."""
     if value is None:
@@ -2372,6 +2378,8 @@ async def _send_message_under_generation_lock(
                 matter_id=context_matter_id,
                 matter_cloud_folder=matter_cloud_folder,
                 default_public_jurisdiction=default_public_jurisdiction,
+                redis=_request_redis(request),
+                conversation_id=str(conv.id),
             )
             await set_tenant_context(db, str(user.tenant_id))
             if not public_general and rag_result_is_cacheable(
@@ -3202,6 +3210,8 @@ async def _stream_message_under_generation_lock(
                         matter_id=context_matter_id,
                         matter_cloud_folder=matter_cloud_folder,
                         default_public_jurisdiction=default_public_jurisdiction,
+                        redis=_request_redis(request),
+                        conversation_id=str(conv.id),
                     )
                 except Exception:
                     logger.exception(

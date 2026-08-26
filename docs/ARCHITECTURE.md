@@ -32,7 +32,9 @@ flowchart TB
 
 The production Compose invariants are:
 
-- Only nginx publishes host ports 80 and 443.
+- Only nginx publishes host ports 80 and 443, and the hypervisor topology
+  binds both to VM loopback so only the local Cloudflare Tunnel can reach the
+  origin listeners.
 - PostgreSQL, Redis, backend, frontend, LiteLLM, scheduler, and optional
   CourtListener services have no public listener.
 - `migrator` must finish successfully before API or scheduler startup.
