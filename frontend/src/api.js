@@ -737,6 +737,13 @@ export const getWorkspaceMcpGrants = () =>
   api.get('/workspace-mcp/grants').then((r) => r.data)
 export const revokeWorkspaceMcpGrant = (grantId) =>
   api.post(`/workspace-mcp/grants/${encodeURIComponent(grantId)}/revoke`, { reason: 'Disconnected by user' }).then((r) => r.data)
+export const getAdminWorkspaceMcpGrants = (userId) =>
+  api.get(`/admin/users/${encodeURIComponent(userId)}/workspace-mcp/grants`).then((r) => r.data)
+export const revokeAdminWorkspaceMcpGrant = (userId, grantId) =>
+  api.post(
+    `/admin/users/${encodeURIComponent(userId)}/workspace-mcp/grants/${encodeURIComponent(grantId)}/revoke`,
+    { reason: 'Disconnected by tenant administrator' }
+  ).then((r) => r.data)
 // Research MCP OAuth consent and decision endpoints
 export const getResearchMcpAuthorizationRequest = (requestId) =>
   api.get(`/research-mcp/oauth/requests/${encodeURIComponent(requestId)}`).then((r) => r.data)

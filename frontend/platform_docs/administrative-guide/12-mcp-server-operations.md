@@ -25,6 +25,13 @@ tenant administrator controls three independent gates:
    existing user. The user must still be active, licensed, and complete OAuth
    consent in the external client.
 
+Under **Admin -> Users**, the **MCP access** column shows the user's effective
+state rather than presenting firm permission as if it were a connection. Use
+**Manage** to review active OAuth clients, last-used and expiry information,
+and revoke an individual connection. A Privacy Mode warning identifies a user
+action requirement; it is not an administrator-controlled switch. Endpoint,
+tool-catalog, and client-setup instructions remain on this MCP Servers page.
+
 Disabling the tenant master switch or a user's access revokes active Workspace
 MCP grants. Re-enabling either control does not restore a grant; the user must
 reconnect and review consent. Privacy Mode remains user-controlled under

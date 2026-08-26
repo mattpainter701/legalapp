@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useCallback, useState, useEffect, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '../App'
 import {
@@ -12,6 +12,7 @@ import {
   getAdminTenant,
   getAdminSettings,
   updateAdminSettings,
+  getAdminMcpOverview,
   getAlertConfig,
   updateAlertConfig,
   listRoles,
@@ -23,6 +24,7 @@ import PromptAdminPage from './PromptAdminPage'
 import CloudSearchAdmin from './CloudSearchAdmin'
 import MCPPage from './MCPPage'
 import RolesTab from './admin/RolesTab'
+import { UserMcpAccessCell, UserMcpAccessDrawer } from './admin/UserMcpAccess'
 import SmbAdminPage from './SmbAdminPage'
 import LicensingPanel from '../components/LicensingPanel'
 import IntegrationsPanel from '../components/IntegrationsPanel'
@@ -476,7 +478,7 @@ function RoleAssignCell({ user, roles, saving, disabled, onAssign }) {
 
 // ── Tab: Users ───────────────────────────────────────────────────────────────
 
-function UsersTab({ billingTier }) {
+function UsersTab({ billingTier, onNavigateMcp }) {
   const confirmAction = useConfirm()
   const [users, setUsers] = useState([])
   const [usageByUser, setUsageByUser] = useState({})
@@ -490,11 +492,21 @@ function UsersTab({ billingTier }) {
   const [showInvite, setShowInvite] = useState(false)
   const [showInactive, setShowInactive] = useState(false)
   const [successMsg, setSuccessMsg] = useState(null)
+  const [workspaceOverview, setWorkspaceOverview] = useState(null)
+  const [managingMcpUserId, setManagingMcpUserId] = useState(null)
+  const closeMcpDrawer = useCallback(() => setManagingMcpUserId(null), [])
 
-  const loadUsers = async () => {
+  const loadUsers = useCallback(async () => {
     try {
-      const [u, usage] = await Promise.all([getAdminUsers(), getUsageByUser(30)])
+      const [u, usage, mcpOverview] = await Promise.all([
+        getAdminUsers(),
+        getUsageByUser(30),
+        getAdminMcpOverview().catch(() => null),
+      ])
       setUsers(u)
+      setWorkspaceOverview((current) => mcpOverview || current || {
+        workspace: { status_available: false },
+      })
       const map = {}
       for (const row of usage.users) {
         map[row.user_id] = row
@@ -505,9 +517,9 @@ function UsersTab({ billingTier }) {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
-  useEffect(() => { loadUsers() }, [])
+  useEffect(() => { loadUsers() }, [loadUsers])
   useEffect(() => {
     listRoles().then(setAvailableRoles).catch(() => {})
   }, [])
@@ -585,14 +597,16 @@ function UsersTab({ billingTier }) {
       message: `${action[0].toUpperCase()}${action.slice(1)} ${label} for ${u.email}.${consequence}`,
       confirmLabel: `${value ? 'Enable' : 'Disable'}`,
       destructive: !value,
-    })) return
+    })) return false
     setChangingAccess(`${u.id}:${field}`)
     try {
       await updateUser(u.id, { [field]: value })
       flash(`${label} ${value ? 'enabled' : 'disabled'} for ${u.email}.`)
       await loadUsers()
+      return true
     } catch (e) {
       setError(e?.response?.data?.detail || `Failed to update ${label}`)
+      return false
     } finally {
       setChangingAccess(null)
     }
@@ -604,6 +618,8 @@ function UsersTab({ billingTier }) {
   const activeUsers = users.filter((u) => u.is_active !== false)
   const inactiveUsers = users.filter((u) => u.is_active === false)
   const displayUsers = showInactive ? users : activeUsers
+  const workspacePolicy = workspaceOverview?.workspace || { status_available: false }
+  const managedMcpUser = users.find((u) => u.id === managingMcpUserId) || null
 
   return (
     <div className="space-y-4">
@@ -660,7 +676,7 @@ function UsersTab({ billingTier }) {
               {billingTier === 'payg' && (
                 <th className="text-left px-6 py-4 font-semibold text-brand-ink font-sans text-xs uppercase tracking-wider">Budget cap</th>
               )}
-              <th className="text-left px-6 py-4 font-semibold text-brand-ink font-sans text-xs uppercase tracking-wider">Connected assistants</th>
+              <th className="text-left px-6 py-4 font-semibold text-brand-ink font-sans text-xs uppercase tracking-wider">MCP access</th>
               <th className="text-left px-6 py-4 font-semibold text-brand-ink font-sans text-xs uppercase tracking-wider">Active</th>
             </tr>
           </thead>
@@ -713,24 +729,13 @@ function UsersTab({ billingTier }) {
                     />
                   )}
                   <td className="px-6 py-4">
-                    <div className="grid gap-2 min-w-[190px]">
-                      <label className="flex items-center justify-between gap-3 text-xs font-sans text-brand-ink">
-                        <span>
-                          <span className="block font-medium">Workspace MCP</span>
-                          <span className="block text-[10px] text-brand-muted">Claude, ChatGPT, Codex</span>
-                        </span>
-                        <input
-                          type="checkbox"
-                          checked={u.workspace_mcp_enabled !== false}
-                          disabled={isInactive || changingAccess === `${u.id}:workspace_mcp_enabled`}
-                          onChange={(e) => handleAccessToggle(u, 'workspace_mcp_enabled', e.target.checked)}
-                          aria-label={`Workspace MCP access for ${u.email}`}
-                        />
-                      </label>
-                      <p className="text-[10px] text-brand-muted">
-                        Privacy Mode: {u.privacy_mode ? 'On — user must turn it off in Profile' : 'Off'}
-                      </p>
-                    </div>
+                    <UserMcpAccessCell
+                      user={u}
+                      workspace={workspacePolicy}
+                      saving={changingAccess === `${u.id}:workspace_mcp_enabled`}
+                      onToggle={(user, value) => handleAccessToggle(user, 'workspace_mcp_enabled', value)}
+                      onManage={(user) => setManagingMcpUserId(user.id)}
+                    />
                   </td>
                   <td className="px-6 py-4">
                     <div className="inline-flex items-center gap-3">
@@ -762,7 +767,7 @@ function UsersTab({ billingTier }) {
             })}
             {displayUsers.length === 0 && (
               <tr>
-                <td colSpan={billingTier === 'payg' ? 7 : 6} className="px-6 py-12 text-center text-brand-muted font-sans text-sm">
+                <td colSpan={billingTier === 'payg' ? 8 : 7} className="px-6 py-12 text-center text-brand-muted font-sans text-sm">
                   No users found.
                 </td>
               </tr>
@@ -770,6 +775,21 @@ function UsersTab({ billingTier }) {
           </tbody>
         </table>
       </div>
+      {managedMcpUser && (
+        <UserMcpAccessDrawer
+          key={managedMcpUser.id}
+          user={managedMcpUser}
+          workspace={workspacePolicy}
+          saving={changingAccess === `${managedMcpUser.id}:workspace_mcp_enabled`}
+          onToggle={(user, value) => handleAccessToggle(user, 'workspace_mcp_enabled', value)}
+          onClose={closeMcpDrawer}
+          onConnectionsChanged={loadUsers}
+          onNavigateMcp={() => {
+            closeMcpDrawer()
+            onNavigateMcp()
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -1366,7 +1386,7 @@ export default function AdminPage() {
 
         {/* Tab content */}
         <div className="animate-in fade-in duration-300">
-          {activeTab === 'users' && <UsersTab billingTier={billingTier} />}
+          {activeTab === 'users' && <UsersTab billingTier={billingTier} onNavigateMcp={() => selectTab('mcp')} />}
           {activeTab === 'roles' && <RolesTab />}
           {activeTab === 'licensing' && <LicensingPanel />}
           {activeTab === 'billing' && <BillingPage embedded />}

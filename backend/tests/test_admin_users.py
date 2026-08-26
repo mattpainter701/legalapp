@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import ValidationError
@@ -8,7 +9,7 @@ from sqlalchemy import func, select
 
 from app.models.rbac import Role, UserRole
 from app.models.user import User
-from app.models.tenant import TenantSettings
+from app.models.tenant import Tenant, TenantSettings
 from app.models.workspace_mcp_grant import WorkspaceMCPGrant
 from app.models.workspace_mcp_audit import WorkspaceMCPAuditEvent
 from app.routers import admin as admin_router
@@ -86,6 +87,156 @@ async def test_admin_users_returns_billing_and_role_assignment_fields(
     assert row["roles"] == [{"id": str(role.id), "name": "Billing Manager"}]
     assert row["workspace_mcp_enabled"] is True
     assert row["privacy_mode"] is False
+
+
+@pytest.mark.asyncio
+async def test_admin_users_include_active_workspace_mcp_summary_and_detail_route(
+    client, db_session, test_tenant, test_user
+):
+    active = WorkspaceMCPGrant(
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        client_id="claude-desktop",
+        client_name="Claude",
+        scopes=["tasks:read", "matters:read"],
+        consent_version="v1",
+        consent_sha256="a" * 64,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+        last_used_at=datetime.now(timezone.utc),
+    )
+    research = WorkspaceMCPGrant(
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        client_id="research.claude-desktop",
+        client_name="Claude Research",
+        scopes=["research:read"],
+        consent_version="research-v1",
+        consent_sha256="r" * 64,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+    )
+    expired = WorkspaceMCPGrant(
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        client_id="old-codex",
+        client_name="Old Codex",
+        scopes=["matters:read"],
+        consent_version="v1",
+        consent_sha256="e" * 64,
+        expires_at=datetime.now(timezone.utc) - timedelta(days=1),
+    )
+    db_session.add_all([active, research, expired])
+    await db_session.commit()
+
+    listed = await client.get("/api/admin/users")
+    assert listed.status_code == 200, listed.text
+    row = next(item for item in listed.json()["users"] if item["id"] == str(test_user.id))
+    assert row["workspace_mcp_active_grant_count"] == 1
+
+    detail = await client.get(f"/api/admin/users/{test_user.id}/workspace-mcp/grants")
+    assert detail.status_code == 200, detail.text
+    assert [item["id"] for item in detail.json()["items"]] == [str(active.id)]
+
+
+@pytest.mark.asyncio
+async def test_admin_can_revoke_user_workspace_mcp_grant_with_audit_and_scope(
+    client, db_session, test_tenant, test_user, monkeypatch
+):
+    runtime_cleanup = AsyncMock()
+    monkeypatch.setattr(
+        "app.services.workspace_mcp_oauth.revoke_workspace_grant_runtime",
+        runtime_cleanup,
+    )
+    grant = WorkspaceMCPGrant(
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        client_id="chatgpt",
+        client_name="ChatGPT",
+        scopes=["matters:read"],
+        consent_version="v1",
+        consent_sha256="b" * 64,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+    )
+    research = WorkspaceMCPGrant(
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        client_id="research.chatgpt",
+        client_name="ChatGPT Research",
+        scopes=["research:read"],
+        consent_version="research-v1",
+        consent_sha256="s" * 64,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+    )
+    db_session.add_all([grant, research])
+    await db_session.commit()
+
+    response = await client.post(
+        f"/api/admin/users/{test_user.id}/workspace-mcp/grants/{grant.id}/revoke",
+        json={"reason": "Offboarding"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json() == {"id": str(grant.id), "status": "revoked"}
+    retry = await client.post(
+        f"/api/admin/users/{test_user.id}/workspace-mcp/grants/{grant.id}/revoke",
+        json={"reason": "Retry runtime cleanup"},
+    )
+    assert retry.status_code == 200, retry.text
+    assert runtime_cleanup.await_count == 2
+    await db_session.refresh(grant)
+    assert grant.revocation_reason == "Offboarding"
+    assert grant.revoked_by_user_id == test_user.id
+    assert await db_session.scalar(
+        select(func.count()).select_from(WorkspaceMCPAuditEvent).where(
+            WorkspaceMCPAuditEvent.grant_id == grant.id,
+            WorkspaceMCPAuditEvent.event_type == "grant_revoked",
+        )
+    ) == 1
+    await db_session.refresh(research)
+    assert research.status == "active"
+
+
+@pytest.mark.asyncio
+async def test_admin_workspace_mcp_grant_routes_fail_closed_across_tenants(
+    client, db_session, test_tenant, test_user
+):
+    other_tenant = Tenant(
+        id=uuid.uuid4(),
+        name="Other MCP Firm",
+        domain="other-mcp-firm.example",
+        billing_tier="payg",
+        is_active=True,
+    )
+    other_user = User(
+        id=uuid.uuid4(),
+        tenant_id=other_tenant.id,
+        email="other-mcp-user@example.test",
+        role="user",
+        is_active=True,
+    )
+    foreign_grant = WorkspaceMCPGrant(
+        tenant_id=other_tenant.id,
+        user_id=other_user.id,
+        client_id="claude-other-tenant",
+        client_name="Claude Other Tenant",
+        scopes=["matters:read"],
+        consent_version="v1",
+        consent_sha256="c" * 64,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+    )
+    db_session.add_all([other_tenant, other_user, foreign_grant])
+    await db_session.commit()
+
+    detail = await client.get(
+        f"/api/admin/users/{other_user.id}/workspace-mcp/grants"
+    )
+    assert detail.status_code == 404
+
+    revoke = await client.post(
+        f"/api/admin/users/{test_user.id}/workspace-mcp/grants/{foreign_grant.id}/revoke",
+        json={"reason": "Must stay isolated"},
+    )
+    assert revoke.status_code == 404
+    await db_session.refresh(foreign_grant)
+    assert foreign_grant.status == "active"
 
 
 @pytest.mark.asyncio
