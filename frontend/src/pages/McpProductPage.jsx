@@ -37,7 +37,7 @@ const CONNECTION_TYPES = [
 ]
 
 export default function McpProductPage() {
-  const contactUrl = import.meta.env.VITE_CONTACT_URL || 'mailto:matt@cybersafeadvisor.com'
+  const contactUrl = import.meta.env.VITE_CONTACT_URL || 'mailto:support@getlawhand.com'
 
   return (
     <MarketingPageLayout>

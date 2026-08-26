@@ -107,7 +107,7 @@ normalized_public_site_url="${public_site_url%/}"
 expected_public_site_url="https://$(get_env DOMAIN)"
 [[ "$normalized_public_site_url" == "$expected_public_site_url" ]] \
   || errors+=("VITE_PUBLIC_SITE_URL must exactly match https://DOMAIN (an optional trailing slash is normalized)")
-operator_email="matt@cybersafeadvisor.com"
+operator_email="support@getlawhand.com"
 [[ "$(get_env VITE_CONTACT_URL)" == "mailto:$operator_email" ]] || errors+=("VITE_CONTACT_URL must be mailto:$operator_email")
 [[ "$(get_env DOMAIN)" != *yourdomain* && "$(get_env DOMAIN)" != *localhost* ]] || errors+=("DOMAIN is a placeholder")
 [[ "$(get_env APP_DATABASE_URL)" == *://clarity_app:* ]] || errors+=("APP_DATABASE_URL must use the clarity_app runtime role")

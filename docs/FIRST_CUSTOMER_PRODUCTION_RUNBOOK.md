@@ -34,7 +34,7 @@ Set these non-secret relationships in `.env`:
 - `PUBLIC_SIGNUP_ENABLED=false` and `VITE_PUBLIC_SIGNUP_ENABLED=false`. New
   tenants are operator/invite-provisioned until paid conversion and expiry
   enforcement are implemented and proven; marketing CTAs use `VITE_CONTACT_URL`.
-- `VITE_CONTACT_URL=mailto:matt@cybersafeadvisor.com` is the canonical sales,
+- `VITE_CONTACT_URL=mailto:support@getlawhand.com` is the canonical sales,
   legal, privacy, and support destination used by the public site.
 - `VITE_PUBLIC_SITE_URL=https://<DOMAIN>` is required and must match `DOMAIN`
   exactly (apart from one optional trailing slash). It is baked into legal-page
@@ -65,7 +65,7 @@ Set these non-secret relationships in `.env`:
 - `EMAIL_ENABLED=false` is the intentional production policy. LawHand does not
   operate an SMTP sender. Assignment alerts are logged as unavailable and
   explicit reminder requests return a clear service-unavailable error; tasks
-  and intake records remain durable. Keep `EMAIL_FROM=matt@cybersafeadvisor.com`
+  and intake records remain durable. Keep `EMAIL_FROM=support@getlawhand.com`
   as the canonical identity. Operator incidents are delivered by GitHub's
   scheduled production-health issues.
 - Zoom Phone requires the tenant-owned app stored through Admin > Zoom. Save its client ID, client secret, and webhook secret; do not copy the numeric Account Number from Zoom Account Profile. OAuth plus an account call-history probe establishes API readiness immediately. A correctly signed completion event and exact provider fetch then learn or confirm Zoom's opaque `payload.account_id` for real-time delivery without blocking Test Connection or history sync. Shared platform/S2S Phone credentials are prohibited. The production check requires an active tenant app secret, refresh token, healthy API grant, required read scopes, public CRC, and live webhook/provider proof. Remove unused scopes in the Zoom Marketplace app and reauthorize only when the grant or scopes are invalid; the application cannot revoke provider-side grants.

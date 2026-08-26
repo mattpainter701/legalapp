@@ -310,7 +310,7 @@ class Settings(BaseSettings):
     EMAIL_PORT: int = 587
     EMAIL_USER: str = ""
     EMAIL_PASS: str = ""
-    EMAIL_FROM: str = "matt@cybersafeadvisor.com"
+    EMAIL_FROM: str = "support@getlawhand.com"
     MARKETING_LEAD_EMAIL: str = "support@getlawhand.com"
     SLACK_WEBHOOK_URL: str = ""  # Optional: Slack incoming webhook URL
 

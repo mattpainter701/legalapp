@@ -285,7 +285,7 @@ describe('SEO configuration', () => {
     expect(html).toContain('<time datetime="2026-07-27">July 27, 2026</time>')
     expect(html.match(/<section id=/g)).toHaveLength(8)
     expect(html).toContain(`>${otherPolicy}</a>`)
-    expect(html).toContain('mailto:matt@cybersafeadvisor.com')
+    expect(html).toContain('mailto:support@getlawhand.com')
     // The marketing hero must not survive into a policy page. The slogan may
     // still appear inside the Organization structured data, which describes the
     // publisher rather than this page, so assert on the rendered body.
@@ -321,6 +321,6 @@ describe('SEO configuration', () => {
     expect(html).toContain(`<h1>${heading}</h1>`)
     expect(html).toContain(claim)
     expect(html).toContain('aria-label="LawHand product pages"')
-    expect(html).toContain('mailto:matt@cybersafeadvisor.com')
+    expect(html).toContain('mailto:support@getlawhand.com')
   })
 })

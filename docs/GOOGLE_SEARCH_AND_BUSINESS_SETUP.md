@@ -273,9 +273,11 @@ real structured data. The remaining gaps, in priority order:
 - **An About page with real people.** A software company with no named humans,
   no location, and no history reads as a shell. Name the team, say where the
   company is, say when it started.
-- **A real contact route beyond `mailto:`.** A `mailto:` link to a domain that
-  does not match the site (`cybersafeadvisor.com` on `getlawhand.com`) actively
-  undercuts legitimacy. Move public contact to a `@getlawhand.com` address.
+- **A contact route beyond `mailto:`.** Public contact is now
+  `support@getlawhand.com`, which matches the domain — a mismatched address
+  undercuts legitimacy with both Google and a firm's IT reviewer. A hosted
+  contact form would be stronger still, since a bare `mailto:` gives a visitor
+  no confirmation that the message was received.
 - **A security and data-handling page.** The buyer is a law firm with
   confidentiality obligations. Tenant isolation, encryption at rest, subprocessor
   list, and incident contact are what a firm's IT reviewer looks for, and it is
@@ -319,5 +321,5 @@ established vendors takes years and is not the goal; owning
 - [ ] Free vendor profiles claimed: G2, Capterra, GetApp, TrustRadius
 - [ ] Submitted to MCP server directories
 - [ ] LinkedIn company page and Crunchbase profile, matching the site's copy
-- [ ] Public contact moved to an `@getlawhand.com` address
+- [x] Public contact moved to an `@getlawhand.com` address
 - [ ] About page naming real people and a real location

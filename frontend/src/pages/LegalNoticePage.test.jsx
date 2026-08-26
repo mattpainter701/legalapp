@@ -3,7 +3,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it } from 'vitest'
 import LegalNoticePage from './LegalNoticePage'
 
-const EMAIL = 'matt@cybersafeadvisor.com'
+const EMAIL = 'support@getlawhand.com'
 
 function renderNotice(type) {
   return render(

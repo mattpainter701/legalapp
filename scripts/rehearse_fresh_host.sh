@@ -84,7 +84,7 @@ DOMAIN=rehearsal.invalid
 BACKEND_URL=https://rehearsal.invalid
 FRONTEND_URL=https://rehearsal.invalid
 VITE_PUBLIC_SITE_URL=https://rehearsal.invalid
-VITE_CONTACT_URL=mailto:matt@cybersafeadvisor.com
+VITE_CONTACT_URL=mailto:support@getlawhand.com
 UPLOAD_DIR=/app/uploads
 UPLOADS_HOST_DIR=$APP_DIR/uploads
 HOST_STATUS_HOST_DIR=$APP_DIR/host-status
@@ -99,7 +99,7 @@ OFFSITE_RESTORE_PUBLIC_KEY_FILE=$APP_DIR/offsite-restore-public.pem
 EMAIL_ENABLED=false
 EMAIL_HOST=smtp.rehearsal.invalid
 EMAIL_PORT=587
-EMAIL_FROM=matt@cybersafeadvisor.com
+EMAIL_FROM=support@getlawhand.com
 APP_COMMIT=$PROJECT
 APP_VERSION=fresh-host
 # The disposable GitHub runner proves boot and behavior, not production

@@ -17,7 +17,7 @@ import {
   normalizeVerificationToken,
 } from './src/analytics/googleAnalytics.js'
 
-const DEFAULT_CONTACT_URL = 'mailto:matt@cybersafeadvisor.com'
+const DEFAULT_CONTACT_URL = 'mailto:support@getlawhand.com'
 
 /**
  * The no-JavaScript shell inside index.html is what a crawler and a visitor on
