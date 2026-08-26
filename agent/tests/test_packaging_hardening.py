@@ -1,3 +1,5 @@
+import ast
+import re
 from pathlib import Path
 
 
@@ -132,5 +134,23 @@ def test_linux_portal_updates_use_root_owned_systemd_handoff():
     assert "unsupported archive member" in helper
     assert "OfficialRedirectHandler" in helper
     assert "self.redirects > 5" in helper
-    assert "release-assets.githubusercontent.com" in helper
+    python_blocks = re.findall(r"<<'PY'\r?\n(.*?)\r?\nPY", helper, flags=re.DOTALL)
+    download_tree = ast.parse(
+        next(block for block in python_blocks if "allowed_hosts" in block)
+    )
+    allowed_hosts = next(
+        ast.literal_eval(node.value)
+        for node in download_tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "allowed_hosts"
+            for target in node.targets
+        )
+    )
+    assert allowed_hosts == {
+        "github.com",
+        "objects.githubusercontent.com",
+        "release-assets.githubusercontent.com",
+        "github-releases.githubusercontent.com",
+    }
     assert "context.minimum_version = ssl.TLSVersion.TLSv1_2" in helper
