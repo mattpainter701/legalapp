@@ -26,6 +26,10 @@
   private-detail protection remains enforced.
 
 ### Fixed
+- **Production accepts the previously deployed shared OpenCode credential while
+  canonical provider names are migrated:** `OPENCODE_ZEN_API_KEY` remains the
+  preferred Zen credential, but the verified legacy `DEEPSEEK_API_KEY` is a
+  final compatibility fallback for both preflight and the LiteLLM container.
 - **Production deploy checks now distinguish disposable file-share pairing
   reservations from registered agents:** pre/post data protection still fails
   on any registered agent loss, while the intentional cleanup of expired,
