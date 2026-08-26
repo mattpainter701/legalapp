@@ -3,9 +3,9 @@ import { Link, useLocation } from 'react-router-dom'
 import {
   ShieldCheck, BadgeCheck, Files, Lock, Landmark, Building2, UserCircle,
   Rocket, Lightbulb, Bot, ClipboardList, Vault, Handshake, Users, Home, Scale,
-  ArrowRight, Search, FileText, Plug, FolderInput, MonitorSmartphone, Sparkles,
+  ArrowRight, Search, FileText, Plug, Sparkles,
   PhoneIncoming, ListChecks, CheckCircle2, Clock3, ChevronDown,
-  MessageSquareText, KeyRound, Braces, AlertTriangle, Layers3,
+  MessageSquareText, KeyRound, Braces, AlertTriangle, Layers3, Receipt,
 } from 'lucide-react'
 import balancedAccessImg from '../assets/home/lawhand-controlled-handoff-editorial-v2-1280.webp'
 import balancedAccessSmallImg from '../assets/home/lawhand-controlled-handoff-editorial-v2-720.webp'
@@ -14,11 +14,23 @@ import secureArchiveSmallImg from '../assets/home/secure-source-archive-cta-v1-7
 import { MarketingFooter, MarketingHeader } from '../components/MarketingChrome'
 import MarketingChatWorkspace from '../components/MarketingChatWorkspace'
 import { PRACTICE_SKILLS, WORKSPACE_MODULES } from '../marketing/catalog'
+import { CORE_CAPABILITIES } from '../marketing/capabilities'
+import { HOME_FAQ, SITE_CATEGORY } from '../seo/config'
 
 const CATALOG_ICONS = {
   Files, Lock, Landmark, Building2, UserCircle, Rocket, Lightbulb, Bot,
   ClipboardList, Home, Scale, Vault, Users, Handshake,
 }
+
+const CAPABILITY_ICONS = {
+  Users, PhoneIncoming, ListChecks, FileText, Receipt, Search,
+  MessageSquareText, Layers3, Plug, Braces, ShieldCheck,
+}
+
+const CAPABILITIES = CORE_CAPABILITIES.map((capability) => ({
+  ...capability,
+  icon: CAPABILITY_ICONS[capability.icon],
+}))
 
 const SKILLS = PRACTICE_SKILLS.map((skill) => ({ ...skill, icon: CATALOG_ICONS[skill.icon] }))
 const ADDONS = WORKSPACE_MODULES.map((module) => ({ ...module, icon: CATALOG_ICONS[module.icon] }))
@@ -41,38 +53,6 @@ const HOW = [
   },
 ]
 
-const FEATURES = [
-  {
-    icon: Search,
-    title: 'Source-linked legal research',
-    body: 'When public-law sources are configured, research can include citations and confidence labels for attorney verification.',
-  },
-  {
-    icon: Plug,
-    title: 'Microsoft 365 & Google Drive sources',
-    body: 'Connect supported Microsoft and Google cloud sources so authorized users can bring documents into matter workflows.',
-  },
-  {
-    icon: FolderInput,
-    title: 'Drag, drop & file-share access',
-    body: 'Drag files in, or connect enterprise file shares so LawHand reads from the documents your firm already keeps.',
-  },
-  {
-    icon: ClipboardList,
-    title: 'Call Intake & Zoom Phone',
-    body: 'Capture caller details, history, outcomes, and assigned follow-up tasks. Configured Zoom Phone webhooks can add call records to the intake queue.',
-  },
-  {
-    icon: MonitorSmartphone,
-    title: 'Responsive secure web workspace',
-    body: 'A responsive web workspace keeps your matters available across modern desktop and mobile browsers.',
-  },
-  {
-    icon: Lock,
-    title: 'Tenant-isolated document storage',
-    body: 'Firm workspaces are isolated by tenant. Storage encryption and model-provider data handling depend on your configured infrastructure, provider, and tenant policy.',
-  },
-]
 
 function PracticeSkillCard({ skill, isOpen, onToggle }) {
   const { id, icon: Icon, name, description, signal } = skill
@@ -439,30 +419,34 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* ── Platform features ─────────────────────────────────────── */}
+      {/* ── Platform capabilities ──────────────────────────────────
+          The visible source of the SoftwareApplication featureList. Structured
+          data may never advertise a capability this section does not show, so
+          both read from CORE_CAPABILITIES. */}
       <section id="features" className="bg-brand-bg-soft/40 border-y border-brand-line scroll-mt-20">
         <div className="max-w-6xl mx-auto px-6 py-16 md:py-24">
           <div className="max-w-2xl mb-10">
             <span className="text-[12px] font-sans font-bold uppercase tracking-[0.16em] text-brand-accent-2">One calm workspace</span>
             <h2 className="font-serif font-bold text-[34px] leading-tight mt-3">
-              The operating context your team should not have to reconstruct.
+              A {SITE_CATEGORY}.
             </h2>
             <p className="text-brand-ink-2 font-sans text-[17px] leading-relaxed mt-4">
-              Move from intake through documents, deadlines, billing, and source-linked research
-              while keeping the work tied to the right people and matter.
+              Client and matter CRM, caller intake, tasks and deadlines, document preparation,
+              time tracking and invoicing, practice-area workflows, and source-linked legal
+              research — in one tenant-isolated workspace instead of six disconnected tools.
             </p>
           </div>
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
-            {FEATURES.map(({ icon: Icon, title, body }) => (
-              <div key={title} className="bg-brand-surface border border-brand-line rounded-2xl p-6 hover:shadow-md hover:border-brand-line-2 transition-all">
+          <ul className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
+            {CAPABILITIES.map(({ id, icon: Icon, name, summary }) => (
+              <li key={id} className="bg-brand-surface border border-brand-line rounded-2xl p-6 hover:shadow-md hover:border-brand-line-2 transition-all">
                 <div className="w-11 h-11 rounded-xl bg-brand-bg-soft border border-brand-line flex items-center justify-center text-brand-ink mb-4">
-                  <Icon size={22} strokeWidth={1.5} />
+                  <Icon size={22} strokeWidth={1.5} aria-hidden="true" />
                 </div>
-                <h3 className="font-serif font-bold text-[17px] mb-1.5">{title}</h3>
-                <p className="text-brand-ink-2 font-sans text-[13.5px] leading-relaxed">{body}</p>
-              </div>
+                <h3 className="font-serif font-bold text-[17px] mb-1.5">{name}</h3>
+                <p className="text-brand-ink-2 font-sans text-[13.5px] leading-relaxed">{summary}</p>
+              </li>
             ))}
-          </div>
+          </ul>
         </div>
       </section>
 
@@ -753,6 +737,27 @@ export default function HomePage() {
       </section>
 
       {/* ── Security strip ────────────────────────────────────────── */}
+      {/* ── Questions ─────────────────────────────────────────────
+          Published verbatim as FAQPage structured data from the same HOME_FAQ
+          list, so the answers a search or answer engine may quote are exactly
+          the answers a visitor reads here. */}
+      <section id="faq" className="max-w-6xl mx-auto px-6 py-16 md:py-24 scroll-mt-20">
+        <div className="max-w-2xl">
+          <span className="text-[12px] font-sans font-bold uppercase tracking-[0.16em] text-brand-accent-2">Common questions</span>
+          <h2 className="font-serif font-bold text-[34px] leading-tight mt-3">
+            What firms ask before the first call.
+          </h2>
+        </div>
+        <dl className="grid lg:grid-cols-2 gap-x-10 gap-y-8 mt-10">
+          {HOME_FAQ.map(([question, answer]) => (
+            <div key={question}>
+              <dt className="font-serif font-bold text-[18px] leading-snug">{question}</dt>
+              <dd className="text-brand-ink-2 font-sans text-[14.5px] leading-relaxed mt-2.5">{answer}</dd>
+            </div>
+          ))}
+        </dl>
+      </section>
+
       <section id="security" className="max-w-6xl mx-auto px-6 py-20 md:py-24 scroll-mt-20">
         <div className="bg-brand-ink rounded-3xl px-8 py-14 md:px-16 text-center relative overflow-hidden">
           <img src={secureArchiveImg} srcSet={`${secureArchiveSmallImg} 720w, ${secureArchiveImg} 1280w`} sizes="(max-width: 768px) 100vw, 1152px" alt="" aria-hidden loading="lazy" className="absolute inset-0 w-full h-full object-cover opacity-30" />

@@ -259,11 +259,49 @@ def test_nginx_operator_routes_and_pdf_csp_are_consistent() -> None:
     assert csp_lines[0] == csp_lines[1]
     assert "object-src 'self' blob:" in csp_lines[0]
     assert "frame-src 'self' blob:" in csp_lines[0]
-    assert "script-src 'self';" in csp_lines[0]
     assert "'unsafe-eval'" not in csp_lines[0]
-    public_routes = "privacy|terms|pricing|product(?:/(?:chat|mcp))?"
+    # Google Analytics runs only on the public marketing pages, so its hosts
+    # enter the policy through a request-scoped variable rather than being
+    # granted to every response. An inline snippet is never allowed.
+    assert "script-src 'self'$csp_analytics_script;" in csp_lines[0]
+    assert "'unsafe-inline'" not in csp_lines[0].split("style-src")[0]
+    public_routes = "privacy|terms|pricing|request-demo|product(?:/(?:chat|mcp))?"
     assert nginx.count(f"location ~ ^/({public_routes})/?$ {{") == 2
     assert nginx.count(f"rewrite ^/({public_routes})/?$ /$1/index.html break;") == 2
+
+
+def test_nginx_allows_analytics_hosts_only_on_public_marketing_pages() -> None:
+    """A signed-in URL can carry a matter, client, or portal identifier.
+
+    The analytics tag must therefore never be permitted to load on a workspace
+    response, where a page_view would send that path to Google. The CSP grants
+    Google's hosts through request-scoped variables that resolve to an empty
+    string for every path outside the public marketing routes.
+    """
+    nginx = (ROOT / "nginx" / "nginx.conf").read_text(encoding="utf-8")
+
+    for name in ("$csp_analytics_script", "$csp_analytics_endpoints"):
+        start = nginx.index(f"map $request_uri {name} {{")
+        block = nginx[start : nginx.index("}", start)]
+        # Anything not matched by an explicit public-route pattern gets nothing.
+        assert re.search(r'default\s+"";', block), (
+            f"{name} must deny the analytics hosts by default"
+        )
+        for route in ("privacy|terms|pricing|request-demo", "product"):
+            assert route in block, f"{name} must cover the {route} pages"
+
+    # Every route the SEO config publishes must be able to load the tag, or the
+    # property silently under-reports the pages that matter most.
+    start = nginx.index("map $request_uri $csp_analytics_script {")
+    script_map = nginx[start : nginx.index("}", start)]
+    patterns = [
+        re.compile(match.group(1))
+        for match in re.finditer(r"~(\S+)\s+\"", script_map)
+    ]
+    for path in _indexable_public_paths():
+        assert any(pattern.search(path) for pattern in patterns), (
+            f"{path} is indexable but nginx blocks the analytics tag there"
+        )
 
 
 def _indexable_public_paths() -> list[str]:

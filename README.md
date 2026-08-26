@@ -16,7 +16,7 @@ Public MCP access is release-gated and must remain disabled.
 | PDF templates | Source-backed AcroForm filling, review preview, flattening, integrity checks, and matter-file output are implemented. See [PDF template operations](docs/PDF_TEMPLATE_OPERATIONS.md) for supported inputs and customer recovery steps. |
 | Full legal platform | Available for controlled tenants; modules are enforced in both navigation and API middleware. |
 | Public MCP product | **Disabled.** `MCP_PRODUCT_ENABLED=false` is a launch invariant. Do not market, issue, or accept customer MCP keys yet. |
-| Marketing / SEO | Public landing, original artwork, social card, canonical metadata, structured data, sitemap, and private-route `noindex` controls are included. Marketing claims and prices still require commercial-owner approval before publication. |
+| Marketing / SEO | Public landing, original artwork, social card, canonical metadata, structured data (organization, software, capability list, breadcrumbs, FAQ, site navigation), sitemap, and private-route `noindex` controls are included. Google Search Console, Analytics 4, and Business Profile setup is in [docs/GOOGLE_SEARCH_AND_BUSINESS_SETUP.md](docs/GOOGLE_SEARCH_AND_BUSINESS_SETUP.md). Marketing claims and prices still require commercial-owner approval before publication. |
 
 ## What is in the product
 

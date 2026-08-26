@@ -56,6 +56,18 @@ function runtimeSiteOrigin() {
   return configured || window.location.origin
 }
 
+/**
+ * The deployment's public identity, used to reconcile this site with the
+ * firm's Google Business Profile and other authoritative profiles.
+ */
+function runtimeOrganizationProfile() {
+  return {
+    contactUrl: import.meta.env.VITE_CONTACT_URL,
+    telephone: import.meta.env.VITE_ORG_TELEPHONE,
+    sameAs: import.meta.env.VITE_ORG_SAME_AS,
+  }
+}
+
 export default function SeoHead() {
   const { pathname } = useLocation()
 
@@ -93,7 +105,7 @@ export default function SeoHead() {
     setMeta('name', 'twitter:image', `${siteOrigin}${SOCIAL_IMAGE_PATH}`)
     setMeta('name', 'twitter:image:alt', 'LawHand law firm operations and legal AI workspace')
 
-    setStructuredData(buildStructuredData(siteOrigin, pathname))
+    setStructuredData(buildStructuredData(siteOrigin, pathname, runtimeOrganizationProfile()))
   }, [pathname])
 
   return null

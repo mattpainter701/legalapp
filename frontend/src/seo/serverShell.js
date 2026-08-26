@@ -1,4 +1,12 @@
-import { buildStructuredData, getRouteMeta } from './config.js'
+import {
+  CORE_CAPABILITIES,
+} from '../marketing/capabilities.js'
+import {
+  PRIMARY_NAVIGATION,
+  PUBLIC_ROUTE_META,
+  buildStructuredData,
+  getRouteMeta,
+} from './config.js'
 
 const LEGAL_SHELLS = Object.freeze({
   '/privacy': {
@@ -39,9 +47,10 @@ const LEGAL_SHELLS = Object.freeze({
 
 const MARKETING_SHELLS = Object.freeze({
   '/product': {
-    heading: 'One workspace for the whole matter.',
-    lead: 'LawHand holds intake, matters, documents, deadlines, billing, and source-aware research in a single tenant-isolated workspace for law firms and legal teams.',
+    heading: 'The legal automation platform for law firms.',
+    lead: 'LawHand holds client and matter CRM, caller intake, tasks and deadlines, document preparation, time and invoicing, and source-linked legal research in a single tenant-isolated workspace.',
     sections: [
+      { heading: 'Core capabilities', body: CORE_CAPABILITIES.map((capability) => capability.name).join(' \u00b7 ') },
       { heading: 'The core workspace', body: 'Intake and tasks, matters and contacts, calendar and deadlines, documents and automation, time, billing, trust accounting, reporting, client portal, and signature routing.' },
       { heading: 'Practice-area library', body: 'Skill libraries add the document patterns, checks, and terminology of a practice area to the shared matter record. Trust and estate, family and domestic relations, and mediation add dedicated workspaces with their own records and roles.' },
       { heading: 'Connected sources', body: 'Supported Microsoft 365, Google Workspace, Microsoft Teams, Zoom Phone, QuickBooks Online, and enterprise file-share connections are enabled by a firm administrator and can be disconnected at any time.' },
@@ -64,6 +73,15 @@ const MARKETING_SHELLS = Object.freeze({
       { heading: 'Research-only boundary', body: 'Search approved public legal authority without exposing workspace matters, documents, tasks, or client files.' },
       { heading: 'OAuth or API token', body: 'Hosted ChatGPT and Claude clients use OAuth 2.1. Header-capable API clients use a scoped LawHand Research token.' },
       { heading: 'Private preview', body: 'Public access remains gated while production release checks are completed. The intended public price is $0.45 per tool call.' },
+    ],
+  },
+  '/request-demo': {
+    heading: 'Book a LawHand demo.',
+    lead: 'See the legal automation platform against your firm\u2019s own intake, matters, documents, billing, and review controls rather than a generic script.',
+    sections: [
+      { heading: 'What the demo covers', body: 'A walkthrough of client and matter CRM, caller intake, document preparation, time and invoicing, and source-linked legal research, using workflows that match how your firm already works.' },
+      { heading: 'Bring your questions', body: 'Tenant isolation, integrations with Microsoft 365, Google Workspace, Zoom Phone, and QuickBooks Online, attorney review controls, and rollout scope are all fair game.' },
+      { heading: 'No obligation', body: 'Pricing, onboarding scope, and any specialized service commitments are confirmed in writing before a firm commits.' },
     ],
   },
   '/pricing': {
@@ -158,6 +176,18 @@ ${sections}
       </main>`
 }
 
+/**
+ * The same short menu the app header renders. Repeating one consistent set of
+ * internal links across every public page is what actually makes a page a
+ * sitelink candidate; the structured data only describes the intent.
+ */
+function navigationLinks(currentPath) {
+  return PRIMARY_NAVIGATION
+    .filter(({ path }) => path !== currentPath)
+    .map(({ path, label }) => `              <li><a href="${escapeHtml(PUBLIC_ROUTE_META[path]?.canonicalPath || path)}">${escapeHtml(label)}</a></li>`)
+    .join('\n')
+}
+
 function marketingShellMarkup(pathname, contactUrl) {
   const route = MARKETING_SHELLS[pathname]
   const sections = route.sections
@@ -176,10 +206,7 @@ function marketingShellMarkup(pathname, contactUrl) {
           <nav class="server-legal__contents" aria-label="LawHand product pages">
             <h2>Explore LawHand</h2>
             <ol>
-              <li><a href="/product">Platform</a></li>
-              <li><a href="/product/chat">AI Chat</a></li>
-              <li><a href="/product/mcp">MCP</a></li>
-              <li><a href="/pricing">Pricing</a></li>
+${navigationLinks(pathname)}
             </ol>
           </nav>
 ${sections}
@@ -196,9 +223,9 @@ ${sections}
  * home page; removing it outright would leave the crawler-visible copy of the
  * page with no structured data at all.
  */
-function replaceStructuredData(html, siteOrigin, pathname) {
+function replaceStructuredData(html, siteOrigin, pathname, organizationProfile) {
   const pattern = /<script[^>]*data-seo-structured-data[^>]*>[\s\S]*?<\/script>\s*/gi
-  const data = buildStructuredData(siteOrigin, pathname)
+  const data = buildStructuredData(siteOrigin, pathname, organizationProfile)
   if (!data) return html.replace(pattern, '')
 
   const payload = JSON.stringify(data).replace(/</g, '\\u003c')
@@ -211,7 +238,13 @@ function replaceStructuredData(html, siteOrigin, pathname) {
 }
 
 /** Derive a crawl-correct, no-JavaScript shell from Vite's final SPA index. */
-export function buildPublicRouteHtml(baseHtml, pathname, siteOrigin = '', contactUrl = FALLBACK_CONTACT_URL) {
+export function buildPublicRouteHtml(
+  baseHtml,
+  pathname,
+  siteOrigin = '',
+  contactUrl = FALLBACK_CONTACT_URL,
+  organizationProfile = {},
+) {
   if (!Object.hasOwn(PUBLIC_SHELLS, pathname)) {
     throw new Error(`No public server shell is defined for ${pathname}`)
   }
@@ -224,7 +257,7 @@ export function buildPublicRouteHtml(baseHtml, pathname, siteOrigin = '', contac
       `<link rel="canonical" href="${escapeHtml(canonical)}" />`,
     )
 
-  html = replaceStructuredData(html, siteOrigin, pathname)
+  html = replaceStructuredData(html, siteOrigin, pathname, organizationProfile)
 
   html = replaceMeta(html, 'name', 'description', meta.description)
   html = replaceMeta(html, 'name', 'robots', 'index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1')
