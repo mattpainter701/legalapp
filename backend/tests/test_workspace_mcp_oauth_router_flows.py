@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from redis.exceptions import RedisError
 
 from app.routers import workspace_mcp_oauth as oauth_router
 
@@ -222,6 +223,42 @@ async def test_begin_and_get_authorization_request(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("privacy_mode", "workspace_enabled", "message"),
+    [
+        (True, True, "Privacy Mode"),
+        (False, False, "disabled for your account"),
+    ],
+)
+async def test_user_policy_consumes_stale_authorization_request(
+    monkeypatch, privacy_mode, workspace_enabled, message
+):
+    monkeypatch.setattr(oauth_router.settings, "WORKSPACE_MCP_ENABLED", True)
+    monkeypatch.setattr(
+        oauth_router, "require_workspace_tenant_allowed", lambda *_: None
+    )
+    pending = {"client_id": "desktop-client", "scopes": ["matters:read"]}
+    loads = []
+
+    async def load(_request, request_id, *, consume=False):
+        loads.append((request_id, consume))
+        return pending
+
+    monkeypatch.setattr(oauth_router, "load_authorization_request", load)
+    user = _user()
+    user.privacy_mode = privacy_mode
+    user.workspace_mcp_enabled = workspace_enabled
+
+    with pytest.raises(HTTPException, match=message) as blocked:
+        await oauth_router.get_workspace_authorization_request(
+            "stale-request", _Request(), user, _DB()
+        )
+
+    assert blocked.value.status_code == 403
+    assert loads == [("stale-request", False), ("stale-request", True)]
+
+
+@pytest.mark.asyncio
 async def test_consent_denial_approval_and_restore_on_failure(monkeypatch):
     monkeypatch.setattr(oauth_router.settings, "WORKSPACE_MCP_ENABLED", True)
     monkeypatch.setattr(
@@ -290,7 +327,7 @@ async def test_consent_denial_approval_and_restore_on_failure(monkeypatch):
     async def revoke_old(_request, grant_id):
         revoked.append(grant_id)
 
-    monkeypatch.setattr(oauth_router, "revoke_grant_refresh_tokens", revoke_old)
+    monkeypatch.setattr(oauth_router, "revoke_workspace_grant_runtime", revoke_old)
     # The tenant-wide MCP gate is read before the previous grant lookup.
     approval_db = _DB(scalar_values=[True, previous])
     approved = await oauth_router.decide_workspace_authorization(
@@ -475,7 +512,7 @@ async def test_revocation_grant_listing_and_audit_serialization(monkeypatch):
     )
     grants_db = _DB(rows=[expired])
     listed = await oauth_router.list_workspace_grants(user, grants_db)
-    assert listed["items"][0]["status"] == "expired"
+    assert listed["items"] == []
     assert grants_db.commits == 1
 
     redis = _Redis()
@@ -491,7 +528,7 @@ async def test_revocation_grant_listing_and_audit_serialization(monkeypatch):
     refreshed = []
     monkeypatch.setattr(
         oauth_router,
-        "revoke_grant_refresh_tokens",
+        "revoke_workspace_grant_runtime",
         lambda _request, grant_id: _record(refreshed, grant_id),
     )
     revoke_db = _DB(scalar_values=[active])
@@ -505,7 +542,6 @@ async def test_revocation_grant_listing_and_audit_serialization(monkeypatch):
     assert revoked == {"id": str(active.id), "status": "revoked"}
     assert active.revocation_reason == "Finished"
     assert revoke_db.commits == 1 and refreshed == [active.id]
-    assert f"workspace_mcp_grant:{active.id}" in redis.values
 
     event = SimpleNamespace(
         id=uuid.uuid4(),
@@ -529,9 +565,8 @@ async def test_revocation_grant_listing_and_audit_serialization(monkeypatch):
 async def test_rfc7009_revokes_refresh_replay_and_matching_access_token(monkeypatch):
     from app.services import workspace_mcp_protocol as protocol
 
-    monkeypatch.setattr(oauth_router.settings, "WORKSPACE_MCP_ENABLED", True)
+    monkeypatch.setattr(oauth_router.settings, "WORKSPACE_MCP_ENABLED", False)
     client = SimpleNamespace(client_id="desktop-client")
-    monkeypatch.setattr(oauth_router, "_active_client", lambda *_args: _value(client))
 
     unavailable = await oauth_router.revoke_workspace_token(
         _Request(form_data={"token": "wmr_missing", "client_id": client.client_id}),
@@ -541,17 +576,30 @@ async def test_rfc7009_revokes_refresh_replay_and_matching_access_token(monkeypa
 
     redis = _Redis()
     revoked_families = []
-    consumed = {"client_id": client.client_id, "family_id": "family-consumed"}
+    tenant_id, user_id, grant_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    consumed = {
+        "client_id": client.client_id,
+        "family_id": "family-consumed",
+        "tenant_id": str(tenant_id),
+        "user_id": str(user_id),
+        "grant_id": str(grant_id),
+    }
     monkeypatch.setattr(
         oauth_router,
         "consume_refresh_token",
-        lambda *_args: _value(("consumed", consumed)),
+        lambda *_args, **_kwargs: _value(("consumed", consumed)),
     )
     monkeypatch.setattr(
         oauth_router,
         "revoke_refresh_family",
         lambda _request, family: _record(revoked_families, family),
     )
+    cascaded = []
+
+    async def cascade(_db, _request, **identity):
+        cascaded.append(identity)
+
+    monkeypatch.setattr(oauth_router, "_revoke_grant_from_oauth_token", cascade)
     refresh_result = await oauth_router.revoke_workspace_token(
         _Request(
             form_data={"token": "wmr_refresh", "client_id": client.client_id},
@@ -560,12 +608,20 @@ async def test_rfc7009_revokes_refresh_replay_and_matching_access_token(monkeypa
         _DB(),
     )
     assert refresh_result.status_code == 200
-    assert revoked_families == ["family-consumed"]
+    assert revoked_families == []
+    assert cascaded == [
+        {
+            "tenant_id": tenant_id,
+            "user_id": user_id,
+            "grant_id": grant_id,
+            "client_id": client.client_id,
+        }
+    ]
 
     monkeypatch.setattr(
         oauth_router,
         "consume_refresh_token",
-        lambda *_args: _value(("replay", "family-replayed")),
+        lambda *_args, **_kwargs: _value(("replay", "family-replayed")),
     )
     await oauth_router.revoke_workspace_token(
         _Request(
@@ -574,9 +630,16 @@ async def test_rfc7009_revokes_refresh_replay_and_matching_access_token(monkeypa
         ),
         _DB(),
     )
-    assert revoked_families == ["family-consumed", "family-replayed"]
+    assert revoked_families == ["family-replayed"]
 
-    identity = SimpleNamespace(client_id=client.client_id, token_id="access-token-jti")
+    access_grant_id = uuid.uuid4()
+    identity = SimpleNamespace(
+        client_id=client.client_id,
+        token_id="access-token-jti",
+        tenant_id=tenant_id,
+        user_id=user_id,
+        grant_id=str(access_grant_id),
+    )
     monkeypatch.setattr(
         protocol, "decode_workspace_access_token", lambda _token: identity
     )
@@ -588,4 +651,87 @@ async def test_rfc7009_revokes_refresh_replay_and_matching_access_token(monkeypa
         _DB(),
     )
     assert access_result.status_code == 200
-    assert "jti:access-token-jti" in redis.values
+    assert cascaded[-1] == {
+        "tenant_id": tenant_id,
+        "user_id": user_id,
+        "grant_id": access_grant_id,
+        "client_id": client.client_id,
+    }
+
+    async def storage_down(*_args, **_kwargs):
+        raise RedisError("unavailable")
+
+    monkeypatch.setattr(oauth_router, "consume_refresh_token", storage_down)
+    storage_db = _DB()
+    storage_error = await oauth_router.revoke_workspace_token(
+        _Request(
+            form_data={"token": "wmr_storage", "client_id": client.client_id},
+            redis=redis,
+        ),
+        storage_db,
+    )
+    assert storage_error.status_code == 503
+    assert storage_db.rollbacks == 1
+
+    def invalid_access_token(_token):
+        raise ValueError("invalid token")
+
+    monkeypatch.setattr(protocol, "decode_workspace_access_token", invalid_access_token)
+    invalid_db = _DB()
+    invalid_result = await oauth_router.revoke_workspace_token(
+        _Request(
+            form_data={"token": "invalid-access", "client_id": client.client_id},
+            redis=redis,
+        ),
+        invalid_db,
+    )
+    assert invalid_result.status_code == 200
+    assert invalid_db.rollbacks == 1
+
+
+@pytest.mark.asyncio
+async def test_oauth_disconnect_revokes_durable_grant_once_and_retries_runtime_cleanup(
+    monkeypatch,
+):
+    user = _user()
+    grant = SimpleNamespace(
+        id=uuid.uuid4(),
+        tenant_id=user.tenant_id,
+        user_id=user.id,
+        client_id="desktop-client",
+        status="active",
+        revoked_at=None,
+        revoked_by_user_id=None,
+        revocation_reason=None,
+    )
+    db = _DB(scalar_values=[grant, grant])
+    audit_events = []
+    runtime_cleanup = []
+    monkeypatch.setattr(oauth_router, "set_tenant_context", _none)
+    monkeypatch.setattr(
+        oauth_router,
+        "append_workspace_mcp_audit",
+        lambda *_args, **kwargs: _record(audit_events, kwargs),
+    )
+    monkeypatch.setattr(
+        oauth_router,
+        "revoke_workspace_grant_runtime",
+        lambda _request, current_grant_id: _record(runtime_cleanup, current_grant_id),
+    )
+
+    for _ in range(2):
+        await oauth_router._revoke_grant_from_oauth_token(
+            db,
+            _Request(redis=_Redis()),
+            tenant_id=user.tenant_id,
+            user_id=user.id,
+            grant_id=grant.id,
+            client_id=grant.client_id,
+        )
+
+    assert grant.status == "revoked"
+    assert grant.revoked_by_user_id == user.id
+    assert grant.revocation_reason == "Disconnected by OAuth client"
+    assert db.commits == 1
+    assert len(audit_events) == 1
+    assert runtime_cleanup == [grant.id, grant.id]

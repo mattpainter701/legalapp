@@ -759,14 +759,14 @@ async def update_tenant_settings(
     await db.refresh(settings_record)
 
     if disabling_workspace:
-        from app.services.workspace_mcp_oauth import revoke_grant_refresh_tokens
+        from app.services.workspace_mcp_oauth import revoke_workspace_grant_runtime
 
         for grant in grants_to_revoke:
             try:
-                await revoke_grant_refresh_tokens(request, grant.id)
+                await revoke_workspace_grant_runtime(request, grant.id)
             except Exception:
                 logger.exception(
-                    "Workspace MCP refresh token revocation failed",
+                    "Workspace MCP runtime credential cleanup failed",
                     extra={"grant_id": str(grant.id)},
                 )
 
@@ -802,6 +802,7 @@ async def get_mcp_admin_overview(request: Request, db: AsyncSession = Depends(ge
             WorkspaceMCPGrant.client_id.not_like("research.%"),
             WorkspaceMCPGrant.status == "active",
             WorkspaceMCPGrant.revoked_at.is_(None),
+            WorkspaceMCPGrant.expires_at > datetime.now(timezone.utc),
         )
     )
     base_users = [
@@ -1841,15 +1842,18 @@ async def patch_user(
 
     await db.commit()
     if revoked_workspace_grants:
-        try:
-            from app.services.workspace_mcp_oauth import revoke_grant_refresh_tokens
+        from app.services.workspace_mcp_oauth import (
+            revoke_workspace_grant_runtime,
+        )
 
-            for grant in revoked_workspace_grants:
-                await revoke_grant_refresh_tokens(request, grant.id)
-        except Exception:
-            logger.exception(
-                "Workspace MCP refresh-token cleanup failed after admin policy change"
-            )
+        for grant in revoked_workspace_grants:
+            try:
+                await revoke_workspace_grant_runtime(request, grant.id)
+            except Exception:
+                logger.exception(
+                    "Workspace MCP runtime credential cleanup failed after admin policy change",
+                    extra={"grant_id": str(grant.id)},
+                )
         await set_tenant_context(db, str(admin.tenant_id))
     await db.refresh(user)
     assignments = await _user_role_assignments(db, [user.id])

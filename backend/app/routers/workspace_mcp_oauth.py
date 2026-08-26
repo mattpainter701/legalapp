@@ -51,7 +51,7 @@ from app.services.workspace_mcp_oauth import (
     normalized_scopes,
     replace_active_grant,
     require_workspace_tenant_allowed,
-    revoke_grant_refresh_tokens,
+    revoke_workspace_grant_runtime,
     revoke_refresh_family,
     save_authorization_code,
     restore_authorization_request,
@@ -127,6 +127,55 @@ async def _cleanup_failed_refresh_exchange(
         await revoke_refresh_family(request, family_id)
     except Exception:
         logger.exception("Workspace MCP failed-exchange cleanup was incomplete")
+
+
+async def _revoke_grant_from_oauth_token(
+    db: AsyncSession,
+    request: Request,
+    *,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    grant_id: uuid.UUID,
+    client_id: str,
+) -> None:
+    """Cascade RFC 7009 token revocation to the durable assistant grant."""
+
+    await set_tenant_context(db, str(tenant_id))
+    grant = await db.scalar(
+        select(WorkspaceMCPGrant)
+        .where(
+            WorkspaceMCPGrant.id == grant_id,
+            WorkspaceMCPGrant.tenant_id == tenant_id,
+            WorkspaceMCPGrant.user_id == user_id,
+            WorkspaceMCPGrant.client_id == client_id,
+            WorkspaceMCPGrant.client_id.not_like("research.%"),
+        )
+        .with_for_update()
+    )
+    if grant is None:
+        return
+
+    if grant.status == "active" and grant.revoked_at is None:
+        grant.status = "revoked"
+        grant.revoked_at = datetime.now(timezone.utc)
+        grant.revoked_by_user_id = user_id
+        grant.revocation_reason = "Disconnected by OAuth client"
+        await append_workspace_mcp_audit(
+            db,
+            request,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            grant_id=grant.id,
+            client_id=client_id,
+            event_type="grant_revoked",
+            outcome="success",
+            metadata={"reason": grant.revocation_reason},
+        )
+        await db.commit()
+
+    # Run even for an already-revoked row so a repeated disconnect can heal a
+    # previous best-effort Redis cleanup failure without duplicating audit.
+    await revoke_workspace_grant_runtime(request, grant.id)
 
 
 async def _allowed_user_scopes(db: AsyncSession, user: User) -> frozenset[str]:
@@ -410,6 +459,7 @@ async def get_workspace_authorization_request(
     _require_enabled()
     require_workspace_tenant_allowed(user.tenant_id)
     if not await tenant_workspace_mcp_enabled(db, user.tenant_id):
+        await load_authorization_request(request, request_id, consume=True)
         raise HTTPException(
             status_code=403, detail="Workspace MCP is disabled for this tenant"
         )
@@ -418,6 +468,17 @@ async def get_workspace_authorization_request(
         raise HTTPException(
             status_code=410, detail="Authorization request expired or was already used"
         )
+    if not getattr(user, "workspace_mcp_enabled", True) or user.privacy_mode:
+        # A request created before a per-user policy change is no longer
+        # actionable. Remove it now instead of leaving a stale consent screen
+        # around until the authorization-state TTL expires.
+        await load_authorization_request(request, request_id, consume=True)
+        detail = (
+            "Workspace MCP is unavailable in Privacy Mode"
+            if user.privacy_mode
+            else "Workspace MCP access is disabled for your account"
+        )
+        raise HTTPException(status_code=403, detail=detail)
     client = await _active_client(db, str(pending.get("client_id") or ""))
     requested_scopes = frozenset(str(value) for value in pending.get("scopes", []))
     scopes = requested_scopes - {OFFLINE_ACCESS_SCOPE}
@@ -589,7 +650,7 @@ async def decide_workspace_authorization(
         try:
             await finalize_authorization_request(request, request_id)
             if previous is not None:
-                await revoke_grant_refresh_tokens(request, previous.id)
+                await revoke_workspace_grant_runtime(request, previous.id)
         except Exception:
             # The database grant is authoritative, so any older grant is
             # rejected even if its Redis refresh-family cleanup is delayed.
@@ -779,7 +840,8 @@ async def workspace_token(request: Request, db: AsyncSession = Depends(get_db)):
 
 @router.post("/api/workspace-mcp/oauth/revoke")
 async def revoke_workspace_token(request: Request, db: AsyncSession = Depends(get_db)):
-    _require_enabled()
+    # Revocation remains available while issuance/protocol gates are closed so
+    # disabling a rollout can never strand a connection that later revives.
     form = await request.form()
     token = str(form.get("token") or "")
     client_id = str(form.get("client_id") or "")
@@ -791,14 +853,23 @@ async def revoke_workspace_token(request: Request, db: AsyncSession = Depends(ge
             headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
         )
     try:
-        await _active_client(db, client_id)
         if token.startswith("wmr_"):
-            status, consumed = await consume_refresh_token(request, token)
+            status, consumed = await consume_refresh_token(
+                request,
+                token,
+                expected_client_id=client_id,
+                expected_resource=workspace_resource_uri(),
+            )
             if status == "consumed" and isinstance(consumed, dict):
                 if consumed.get("client_id") == client_id:
-                    family_id = str(consumed.get("family_id") or "")
-                    if family_id:
-                        await revoke_refresh_family(request, family_id)
+                    await _revoke_grant_from_oauth_token(
+                        db,
+                        request,
+                        tenant_id=uuid.UUID(str(consumed.get("tenant_id") or "")),
+                        user_id=uuid.UUID(str(consumed.get("user_id") or "")),
+                        grant_id=uuid.UUID(str(consumed.get("grant_id") or "")),
+                        client_id=client_id,
+                    )
             elif status == "replay" and isinstance(consumed, str):
                 await revoke_refresh_family(request, consumed)
         else:
@@ -808,12 +879,16 @@ async def revoke_workspace_token(request: Request, db: AsyncSession = Depends(ge
 
             identity = decode_workspace_access_token(token)
             if identity.client_id == client_id:
-                await redis.setex(
-                    f"jti:{identity.token_id}",
-                    settings.WORKSPACE_MCP_ACCESS_TOKEN_MAX_MINUTES * 60,
-                    b"1",
+                await _revoke_grant_from_oauth_token(
+                    db,
+                    request,
+                    tenant_id=identity.tenant_id,
+                    user_id=identity.user_id,
+                    grant_id=uuid.UUID(identity.grant_id),
+                    client_id=client_id,
                 )
     except RedisError:
+        await db.rollback()
         logger.exception("Workspace MCP token revocation storage failed")
         return JSONResponse(
             status_code=503,
@@ -822,7 +897,7 @@ async def revoke_workspace_token(request: Request, db: AsyncSession = Depends(ge
         )
     except Exception:
         # RFC 7009 deliberately does not reveal whether a token was valid.
-        pass
+        await db.rollback()
     return JSONResponse({}, headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
 
 
@@ -831,11 +906,11 @@ async def list_workspace_grants(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # Connection history and revocation remain available when a tenant turns
-    # Workspace MCP off.  The tenant gate blocks authorization, token issuance,
-    # and protocol execution; it must not hide evidence or prevent cleanup.
-    _require_enabled()
-    require_workspace_tenant_allowed(user.tenant_id)
+    # This self-service surface is an active-connections view. Revoked and
+    # expired grants remain durable for the tamper-evident audit history, but
+    # they must not linger as apparently connected assistants in the UI.
+    # Listing active connections remains available while rollout gates are
+    # closed so users can verify that cleanup completed.
     grants = list(
         (
             await db.scalars(
@@ -846,6 +921,8 @@ async def list_workspace_grants(
                     # Research OAuth grants share this table but belong to a
                     # separate product and have their own list/revoke routes.
                     WorkspaceMCPGrant.client_id.not_like("research.%"),
+                    WorkspaceMCPGrant.status == "active",
+                    WorkspaceMCPGrant.revoked_at.is_(None),
                 )
                 .order_by(WorkspaceMCPGrant.created_at.desc())
             )
@@ -877,6 +954,7 @@ async def list_workspace_grants(
                 else None,
             }
             for grant in grants
+            if grant.status == "active" and grant.revoked_at is None
         ]
     }
 
@@ -889,8 +967,8 @@ async def revoke_workspace_grant(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    _require_enabled()
-    require_workspace_tenant_allowed(user.tenant_id)
+    # Disconnect must remain available even when deployment or tenant rollout
+    # gates no longer admit this user.
     grant = await db.scalar(
         select(WorkspaceMCPGrant)
         .where(
@@ -920,18 +998,13 @@ async def revoke_workspace_grant(
             metadata={"reason": grant.revocation_reason},
         )
         await db.commit()
-        try:
-            redis = getattr(request.app.state, "redis", None)
-            if redis is not None:
-                await redis.setex(
-                    f"workspace_mcp_grant:{grant.id}",
-                    settings.WORKSPACE_MCP_ACCESS_TOKEN_MAX_MINUTES * 60,
-                    b"1",
-                )
-                await revoke_grant_refresh_tokens(request, grant.id)
-        except Exception:
-            # The committed grant is authoritative for every tool/token check.
-            logger.exception("Workspace MCP post-revocation cache cleanup failed")
+    try:
+        # Retrying an already-revoked grant repairs any earlier best-effort
+        # runtime cleanup failure without creating a duplicate audit event.
+        await revoke_workspace_grant_runtime(request, grant.id)
+    except Exception:
+        # The committed grant is authoritative for every tool/token check.
+        logger.exception("Workspace MCP post-revocation cache cleanup failed")
     return {"id": str(grant.id), "status": grant.status}
 
 

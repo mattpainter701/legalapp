@@ -328,7 +328,9 @@ class TestAuthMe:
         monkeypatch.setattr(auth, "resolve_enabled_modules", enabled_modules)
         monkeypatch.setattr(auth, "resolve_plan_meta", plan_meta)
         monkeypatch.setattr(workspace_mcp_oauth, "append_workspace_mcp_audit", audit)
-        monkeypatch.setattr(workspace_mcp_oauth, "revoke_grant_refresh_tokens", cleanup)
+        monkeypatch.setattr(
+            workspace_mcp_oauth, "revoke_workspace_grant_runtime", cleanup
+        )
 
         response = await auth.update_me(
             UserProfileUpdate(privacy_mode=True), SimpleNamespace(), FakeSession()

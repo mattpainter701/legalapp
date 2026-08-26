@@ -487,7 +487,7 @@ return {'missing', ''}
 
 
 _ISSUE_REFRESH_SCRIPT = """
-if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
+if redis.call('EXISTS', KEYS[1]) == 1 or redis.call('EXISTS', KEYS[5]) == 1 then return 0 end
 redis.call('SETEX', KEYS[2], ARGV[1], ARGV[2])
 redis.call('SADD', KEYS[3], ARGV[3])
 redis.call('EXPIRE', KEYS[3], ARGV[1])
@@ -539,11 +539,16 @@ async def issue_refresh_token(
     }
     issued = await redis.eval(
         _ISSUE_REFRESH_SCRIPT,
-        4,
+        5,
         f"{namespace}:refresh_family_revoked:{family}",
         f"{namespace}:refresh:{token_hash}",
         f"{namespace}:refresh_family:{family}",
         f"{namespace}:grant_refresh_families:{grant_id}",
+        (
+            f"workspace_mcp_grant:{grant_id}"
+            if namespace == "workspace_mcp"
+            else f"{namespace}:grant_revoked:{grant_id}"
+        ),
         ttl,
         _json_bytes(payload),
         token_hash,
@@ -623,6 +628,27 @@ async def revoke_grant_refresh_tokens(
             request, family, namespace=namespace, ttl_days=ttl_days
         )
     await redis.delete(key)
+
+
+async def revoke_workspace_grant_runtime(
+    request: Request, grant_id: uuid.UUID | str
+) -> None:
+    """Immediately invalidate every runtime credential for a Workspace grant.
+
+    The durable grant row remains the authoritative audit record.  The Redis
+    marker rejects every still-live access JWT, while refresh-family cleanup
+    removes renewable credentials.  Setting the marker first also prevents a
+    concurrent refresh exchange from creating a new family after cleanup has
+    started.
+    """
+
+    redis = _redis(request)
+    await redis.setex(
+        f"workspace_mcp_grant:{grant_id}",
+        settings.WORKSPACE_MCP_ACCESS_TOKEN_MAX_MINUTES * 60,
+        b"1",
+    )
+    await revoke_grant_refresh_tokens(request, grant_id)
 
 
 def consent_sha256(*, client_id: str, scopes: frozenset[str]) -> str:

@@ -9,6 +9,11 @@ function date(value) {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString()
 }
 
+function isActiveGrant(grant) {
+  if (grant?.status && grant.status !== 'active') return false
+  return !grant?.revoked_at
+}
+
 export default function WorkspaceMcpGrantsPanel({ blockedReason = '' }) {
   return <ConfirmProvider><WorkspaceMcpGrantsPanelContent blockedReason={blockedReason} /></ConfirmProvider>
 }
@@ -26,7 +31,10 @@ function WorkspaceMcpGrantsPanelContent({ blockedReason = '' }) {
     setAvailable(true)
     setError(null)
     getWorkspaceMcpGrants()
-      .then((result) => setGrants(result?.items || result?.grants || (Array.isArray(result) ? result : [])))
+      .then((result) => {
+        const items = result?.items || result?.grants || (Array.isArray(result) ? result : [])
+        setGrants(Array.isArray(items) ? items.filter(isActiveGrant) : [])
+      })
       .catch((err) => {
         const status = err?.response?.status
         if (status === 403 || status === 404) {
@@ -51,7 +59,7 @@ function WorkspaceMcpGrantsPanelContent({ blockedReason = '' }) {
     setRevoking(grant.id); setError(null)
     try {
       await revokeWorkspaceMcpGrant(grant.id)
-      setGrants((current) => current.map((item) => item.id === grant.id ? { ...item, status: 'revoked', revoked_at: new Date().toISOString() } : item))
+      setGrants((current) => current.filter((item) => item.id !== grant.id))
     } catch (err) {
       setError(err?.response?.data?.detail || 'Could not revoke this connection.')
     } finally { setRevoking(null) }
@@ -67,7 +75,7 @@ function WorkspaceMcpGrantsPanelContent({ blockedReason = '' }) {
     {blockedReason && <div role="status" className="mt-4 px-3 py-2 bg-amber-50 border border-amber-300 rounded-lg text-amber-950 text-xs font-semibold leading-5">Connected assistants are currently blocked. {blockedReason}</div>}
     {error && <div role="alert" className="mt-4 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-red-700 text-xs font-medium">{error}</div>}
     {loading ? <div className="py-8 text-center text-sm text-brand-muted">Loading connected assistants.</div> :
-      grants.length === 0 ? <div className="mt-5 rounded-lg bg-brand-bg px-4 py-5 text-sm text-brand-ink-2">No Workspace MCP assistants are connected.</div> :
+      grants.length === 0 ? <div className="mt-5 rounded-lg bg-brand-bg px-4 py-5 text-sm text-brand-ink-2">No active Workspace MCP assistants are connected.</div> :
       <div className="mt-5 space-y-3">{grants.map((grant) => {
         const status = grant.status || (grant.revoked_at ? 'revoked' : 'active')
         const scopes = normalizeWorkspaceMcpScopes(grant.scopes || grant.scope || [])

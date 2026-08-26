@@ -152,3 +152,70 @@ async def test_redis_required_for_authorization_state():
     request = _request()
     with pytest.raises(Exception):
         await oauth.save_authorization_request(request, {"state": "x"})
+
+
+class _RuntimeRedis:
+    def __init__(self):
+        self.eval_calls = []
+        self.events = []
+
+    async def eval(self, script, key_count, *args):
+        self.eval_calls.append((script, key_count, args))
+        self.events.append(("eval", key_count, args))
+        return 1
+
+    async def setex(self, key, ttl, value):
+        self.events.append(("setex", key, ttl, value))
+
+    async def smembers(self, key):
+        self.events.append(("smembers", key))
+        return set()
+
+    async def delete(self, key):
+        self.events.append(("delete", key))
+
+
+@pytest.mark.asyncio
+async def test_refresh_issuance_checks_grant_marker_and_runtime_cleanup_sets_it_first():
+    redis = _RuntimeRedis()
+    request = _request(redis=redis)
+    grant_id = uuid4()
+
+    refresh = await oauth.issue_refresh_token(
+        request,
+        user_id=uuid4(),
+        tenant_id=uuid4(),
+        client_id="desktop-client",
+        grant_id=grant_id,
+        scopes=frozenset({"matters:read"}),
+    )
+
+    assert refresh.startswith("wmr_")
+    _script, key_count, args = redis.eval_calls[0]
+    assert key_count == 5
+    assert f"workspace_mcp_grant:{grant_id}" in args
+
+    research_grant_id = uuid4()
+    await oauth.issue_refresh_token(
+        request,
+        user_id=uuid4(),
+        tenant_id=uuid4(),
+        client_id="research.desktop-client",
+        grant_id=research_grant_id,
+        scopes=frozenset({"research:read"}),
+        namespace="research_mcp",
+        resource="https://research.lawhand.test/api/mcp",
+    )
+    assert f"research_mcp:grant_revoked:{research_grant_id}" in redis.eval_calls[1][2]
+
+    redis.events.clear()
+    await oauth.revoke_workspace_grant_runtime(request, grant_id)
+
+    assert redis.events[0][0:2] == (
+        "setex",
+        f"workspace_mcp_grant:{grant_id}",
+    )
+    assert (
+        "smembers",
+        f"workspace_mcp:grant_refresh_families:{grant_id}",
+    ) in redis.events

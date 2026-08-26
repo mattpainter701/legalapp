@@ -1940,15 +1940,18 @@ async def update_me(
     if revoked_workspace_grants:
         # The database grant is authoritative. Redis cleanup is best effort so
         # an unavailable cache cannot prevent the privacy-policy change.
-        try:
-            from app.services.workspace_mcp_oauth import revoke_grant_refresh_tokens
+        from app.services.workspace_mcp_oauth import (
+            revoke_workspace_grant_runtime,
+        )
 
-            for grant in revoked_workspace_grants:
-                await revoke_grant_refresh_tokens(request, grant.id)
-        except Exception:
-            logger.exception(
-                "Workspace MCP refresh-token cleanup failed after Privacy Mode enable"
-            )
+        for grant in revoked_workspace_grants:
+            try:
+                await revoke_workspace_grant_runtime(request, grant.id)
+            except Exception:
+                logger.exception(
+                    "Workspace MCP runtime credential cleanup failed after Privacy Mode enable",
+                    extra={"grant_id": str(grant.id)},
+                )
     # SET LOCAL tenant context ends at commit. Restore it before the refresh
     # and every subsequent RLS-protected query in this transaction.
     await set_tenant_context(db, str(user.tenant_id))
