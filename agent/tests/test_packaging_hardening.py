@@ -69,6 +69,59 @@ def test_release_workflow_publishes_update_manifest():
     assert "agent-update.json" in workflow
 
 
+def test_release_workflow_requires_and_verifies_windows_signatures():
+    workflow = (ROOT.parent / ".github" / "workflows" / "agent-release.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "WINDOWS_SIGNING_AZURE_CLIENT_ID" in workflow
+    assert "WINDOWS_SIGNING_AZURE_TENANT_ID" in workflow
+    assert "WINDOWS_SIGNING_AZURE_SUBSCRIPTION_ID" in workflow
+    assert "WINDOWS_SIGNING_ENDPOINT" in workflow
+    assert "WINDOWS_SIGNING_ACCOUNT_NAME" in workflow
+    assert "WINDOWS_SIGNING_CERTIFICATE_PROFILE_NAME" in workflow
+    assert "WINDOWS_SIGNING_EXPECTED_SUBJECT" in workflow
+    assert "azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82" in workflow
+    assert "azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c" in workflow
+    assert "timestamp-rfc3161: http://timestamp.acs.microsoft.com" in workflow
+    assert "timestamp-digest: SHA256" in workflow
+    assert "Get-AuthenticodeSignature" in workflow
+    assert "signtool verify /pa /all /tw" in workflow
+    assert workflow.count("TimeStamperCertificate") == 2
+    assert "Unexpected or invalid Windows signer" in workflow
+    assert "id-token: write" in workflow
+    assert "-SkipExe" in workflow
+    assert "environment:" in workflow and "name: agent-release" in workflow
+    assert "deployment: false" in workflow
+    assert "repo:mattpainter701/legalapp:environment:agent-release" in workflow
+    assert "needs: [windows-sign, linux]" in workflow
+    assert "lawhand-agent-windows-unsigned" in workflow
+    assert "Upload unsigned executable handoff" in workflow
+    assert workflow.index("Windows — unsigned validation") < workflow.index(
+        "Windows — sign and package release"
+    )
+    assert workflow.index("Build unsigned validation installers") < workflow.index(
+        "Smoke-test unsigned validation MSI overtop upgrade"
+    )
+    assert workflow.index("Smoke-test unsigned validation MSI overtop upgrade") < workflow.index(
+        "Sign Windows executable"
+    )
+    assert workflow.index("Sign Windows executable") < workflow.index("-SkipExe")
+    assert workflow.index("-SkipExe") < workflow.index("Sign Windows MSI")
+    assert workflow.count("timestamp-rfc3161: http://timestamp.acs.microsoft.com") == 2
+    assert workflow.count("timestamp-digest: SHA256") == 2
+    assert workflow.count("SignerCertificate.Subject -ne") == 2
+    assert workflow.index("Get-AuthenticodeSignature") < workflow.index(
+        "Upload signed Windows artifacts"
+    )
+
+
+def test_windows_packaging_can_reuse_signed_executable_for_msi():
+    script = (ROOT / "packaging" / "windows" / "build.ps1").read_text(encoding="utf-8")
+    assert "[switch]$SkipExe" in script
+    assert "-SkipExe requires an existing signed executable" in script
+    assert script.index("$SkipExe") < script.index("wix build")
+
+
 def test_windows_upgrade_smoke_is_opt_in_and_runs_after_build():
     script = (ROOT / "packaging" / "windows" / "test-upgrade.ps1").read_text(
         encoding="utf-8"
@@ -81,8 +134,21 @@ def test_windows_upgrade_smoke_is_opt_in_and_runs_after_build():
     assert "SeServiceLogonRight" in script
     assert "SERVICE_PASSWORD" in script
     assert "SCM rejected the retained service credential" in script
+    assert "Win32_Service" in script
+    assert "$predecessor" in script
+    assert "$replacement" in script
+    assert "CreationDate" in script
+    assert "ExecutablePath" in script
+    assert "$installedExe" in script
+    assert "[StringComparison]::OrdinalIgnoreCase" in script
+    assert "Predecessor service process identity is still alive" in script
+    assert "if ($currentMsi -and" in script
+    assert "ExpectedSignerSubject" in script
+    assert "TimeStamperCertificate" in script
+    assert "MSI did not install the expected timestamped Authenticode-signed executable" in script
+    assert "-ExpectedSignerSubject $env:WINDOWS_SIGNING_EXPECTED_SUBJECT" in workflow
     assert "test-upgrade.ps1 -Run" in workflow
-    assert workflow.index("Build agent installers") < workflow.index(
+    assert workflow.index("Build unsigned validation installers") < workflow.index(
         "test-upgrade.ps1 -Run"
     )
 

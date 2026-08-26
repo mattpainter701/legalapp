@@ -9,17 +9,24 @@
         cd agent\packaging\windows
         .\build.ps1                 # exe + MSI into agent\dist
         .\build.ps1 -SkipMsi        # exe only (no WiX needed)
+        .\build.ps1 -SkipExe        # reuse a signed dist exe and build MSI
 
     The MSI step needs the WiX Toolset v5 CLI. The script installs it as a
     dotnet tool when it is missing and dotnet is available.
 
 .PARAMETER Version
     Version stamped into the MSI. Defaults to clarity_agent.__version__.
+
+.PARAMETER SkipExe
+    Reuse agent\dist\lawhand-agent.exe instead of rebuilding it. Release CI
+    uses this only after validating the Artifact Signing signature so WiX
+    embeds the signed executable rather than replacing it.
 #>
 [CmdletBinding()]
 param(
     [string]$Version = "",
     [switch]$SkipMsi,
+    [switch]$SkipExe,
     [string]$SignToolCertThumbprint = ""
 )
 
@@ -54,30 +61,29 @@ python -m pip install --upgrade pip | Out-Null
 python -m pip install --upgrade pyinstaller pywin32 | Out-Null
 python -m pip install "$AgentRoot" | Out-Null
 
-# ── Build the exe ───────────────────────────────────────────────────────────
-Push-Location $AgentRoot
-try {
-    python -m PyInstaller --noconfirm --clean `
-        --distpath $DistDir --workpath $BuildDir `
-        (Join-Path $PackagingDir "..\lawhand-agent.spec")
-} finally {
-    Pop-Location
-}
-
-if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCODE" }
-
 $ExePath = Join-Path $DistDir "lawhand-agent.exe"
-if (-not (Test-Path $ExePath)) { throw "Build did not produce $ExePath" }
-Write-Host "Built $ExePath" -ForegroundColor Green
-
-# Smoke test: the binary must at least report its version.
-& $ExePath --version
-if ($LASTEXITCODE -ne 0) { throw "The built agent failed to run (exit code $LASTEXITCODE)" }
-
-if ($SignToolCertThumbprint) {
-    Write-Host "Signing $ExePath"
-    & signtool sign /sha1 $SignToolCertThumbprint /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $ExePath
-    if ($LASTEXITCODE -ne 0) { throw "signtool failed with exit code $LASTEXITCODE" }
+if (-not $SkipExe) {
+    # ── Build the exe ────────────────────────────────────────────────────────
+    Push-Location $AgentRoot
+    try {
+        python -m PyInstaller --noconfirm --clean `
+            --distpath $DistDir --workpath $BuildDir `
+            (Join-Path $PackagingDir "..\lawhand-agent.spec")
+    } finally {
+        Pop-Location
+    }
+    if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCODE" }
+    if (-not (Test-Path $ExePath)) { throw "Build did not produce $ExePath" }
+    Write-Host "Built $ExePath" -ForegroundColor Green
+    & $ExePath --version
+    if ($LASTEXITCODE -ne 0) { throw "The built agent failed to run (exit code $LASTEXITCODE)" }
+    if ($SignToolCertThumbprint) {
+        Write-Host "Signing $ExePath"
+        & signtool sign /sha1 $SignToolCertThumbprint /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $ExePath
+        if ($LASTEXITCODE -ne 0) { throw "signtool failed with exit code $LASTEXITCODE" }
+    }
+} elseif (-not (Test-Path $ExePath)) {
+    throw "-SkipExe requires an existing signed executable at $ExePath"
 }
 
 if ($SkipMsi) {
