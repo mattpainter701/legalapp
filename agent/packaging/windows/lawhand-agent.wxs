@@ -122,6 +122,13 @@
                         Account="[SERVICE_ACCOUNT]"
                         Password="[SERVICE_PASSWORD]"
                         Vital="yes">
+          <!-- Use the stable service SID for local file access. This remains
+               present in the process token even when the service logs on as a
+               domain or local account, and avoids persisting that account's
+               password merely to re-apply ACLs during an upgrade. -->
+          <ServiceConfig ServiceSid="unrestricted"
+                         OnInstall="yes"
+                         OnReinstall="yes" />
           <!-- A file server reboot or a transient network outage should not
                leave the share un-indexed until someone notices. -->
           <util:ServiceConfig FirstFailureActionType="restart"
@@ -141,12 +148,15 @@
 
       <Component Id="DataFolderComponent" Directory="DATAFOLDER" Permanent="yes">
         <CreateFolder>
-          <!-- Config contains the API key.  Grant only the service identity,
+          <!-- Config contains the API key. Grant only the stable service SID,
                LocalSystem and local administrators; do not inherit the broad
-               ProgramData ACL.  SERVICE_ACCOUNT is LocalSystem by default. -->
+               ProgramData ACL. -->
           <util:PermissionEx User="SYSTEM" GenericAll="yes" Inheritable="yes" />
           <util:PermissionEx User="Administrators" GenericAll="yes" Inheritable="yes" />
-          <util:PermissionEx User="[SERVICE_ACCOUNT]" GenericAll="yes" Inheritable="yes" />
+          <util:PermissionEx Domain="NT SERVICE"
+                             User="LawHandAgent"
+                             GenericAll="yes"
+                             Inheritable="yes" />
         </CreateFolder>
         <RegistryValue Root="HKLM"
                        Key="Software\LawHand\Agent"

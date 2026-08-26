@@ -86,6 +86,9 @@ def test_windows_upgrade_smoke_is_opt_in_and_runs_after_build():
 
 def test_msi_grants_data_directory_to_service_identity():
     text = WXS.read_text(encoding="utf-8")
+    assert 'ServiceSid="unrestricted"' in text
+    assert 'OnInstall="yes"' in text
+    assert 'OnReinstall="yes"' in text
     assert (
         '<util:PermissionEx User="SYSTEM" GenericAll="yes" Inheritable="yes" />' in text
     )
@@ -94,9 +97,10 @@ def test_msi_grants_data_directory_to_service_identity():
         in text
     )
     assert (
-        '<util:PermissionEx User="[SERVICE_ACCOUNT]" GenericAll="yes" '
-        'Inheritable="yes" />' in text
+        '<util:PermissionEx Domain="NT SERVICE"' in text
+        and 'User="LawHandAgent"' in text
     )
+    assert '<util:PermissionEx User="[SERVICE_ACCOUNT]"' not in text
 
 
 def test_windows_acl_preserves_service_account_on_secret_files():
