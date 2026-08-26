@@ -21,7 +21,7 @@ Released August 25, 2026.
 
 Claude, ChatGPT, Codex, and other compatible assistants can connect when your firm administrator enables Workspace MCP for your account and Privacy Mode is off.
 
-- **Firm access settings take effect directly.** The Workspace MCP switch under Admin → Users is now the organization-level access decision instead of an older pilot-only deployment list.
+- **Firm access settings take effect directly.** Admin → Users now separates firm permission, effective availability, and active OAuth connections, with a drawer to review or revoke each client.
 - **Your privacy choice remains independent.** Privacy Mode continues to pause external assistants, and turning it off allows a new explicit OAuth connection when firm access is enabled.
 - **Security boundaries remain enforced.** Active account, license, consent scope, role capability, token revocation, and tenant isolation checks still apply to every request.
 

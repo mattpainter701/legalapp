@@ -31,7 +31,7 @@
       "highlights": [
         {
           "title": "Firm access settings take effect directly",
-          "description": "Admin → Users now separates the firm’s access decision from effective availability and actual OAuth connections, with a per-user drawer for reviewing and revoking connected clients."
+          "description": "Admin → Users now separates firm permission, effective availability, and active OAuth connections, with a drawer to review or revoke each client."
         },
         {
           "title": "Your privacy choice remains independent",
