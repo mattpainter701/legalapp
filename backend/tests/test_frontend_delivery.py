@@ -296,6 +296,32 @@ def test_nginx_never_noindexes_a_route_the_sitemap_publishes() -> None:
         )
 
 
+def test_nginx_never_advertises_the_mcp_hostnames_as_indexable() -> None:
+    """The MCP hostnames publish protocol endpoints, not pages.
+
+    ``$x_robots_tag`` keys on the request path, and "/" is indexable there
+    because the marketing home page lives at "/". The dedicated MCP hostnames
+    answer their root with a JSON protocol error, so the header must be chosen
+    per host or a crawler is invited to index that error.
+    """
+    nginx = (ROOT / "nginx" / "nginx.conf").read_text(encoding="utf-8")
+    start = nginx.index("map $host $robots_tag {")
+    host_map = nginx[start : nginx.index("}", start)]
+
+    assert "default" in host_map and "$x_robots_tag" in host_map, (
+        "the host-keyed robots map must fall back to the path-keyed value"
+    )
+    for host in ("mcp.getlawhand.com", "research.getlawhand.com"):
+        assert re.search(
+            rf'"{re.escape(host)}"\s+"noindex, nofollow, noarchive";', host_map
+        ), f"{host} must be served with a noindex X-Robots-Tag header"
+
+    # Both server blocks must emit the host-aware variable; a block left on
+    # $x_robots_tag would publish the endpoint as indexable on that listener.
+    assert nginx.count("add_header X-Robots-Tag $robots_tag always;") == 2
+    assert "add_header X-Robots-Tag $x_robots_tag always;" not in nginx
+
+
 def test_nginx_collapses_the_www_hostname_onto_the_apex() -> None:
     """Serving both hostnames publishes every page at two addresses.
 

@@ -11,6 +11,8 @@ icon: network
 
 [MCP Servers](/admin?tab=mcp) governs external tool access through LawHand's MCP product surface. The page may show product keys, allowlisted tools, usage, and legal-source health.
 
+This chapter covers the keyed product surface only. Workspace MCP — an individual connecting an assistant to their own workspace by consent — is governed per user in [Users](/admin?tab=users) and has no shared key to issue, rotate, or revoke here.
+
 ## Define the use case first
 
 Identify the owner, client application, environment, required tools, expected volume, data classification, and approval model before creating access. Separate development, testing, and production identities.

@@ -29,7 +29,11 @@ Use [File Shares](/admin?tab=smb) to configure approved sources and agents. Conf
 
 ## MCP servers
 
-[MCP Servers](/admin?tab=mcp) connects external tools through scoped keys, allowlisted capabilities, and bounded usage. Grant only tools required by the use case. Review key activity, returned results, errors, and consumption. Rotate or revoke a key when its owner, scope, or environment changes.
+LawHand exposes two separate MCP surfaces. Keep them distinct when you approve access, because they authenticate differently and reach different data.
+
+**Product keys** for the research surface are managed in [MCP Servers](/admin?tab=mcp): a named system connects through a scoped key with allowlisted capabilities and bounded usage. Grant only tools required by the use case. Review key activity, returned results, errors, and consumption. Rotate or revoke a key when its owner, scope, or environment changes.
+
+**Workspace MCP** lets an individual connect an external assistant to their own workspace after an explicit consent step. There is no shared key: the assistant acts as that user, within that user's permissions, for the scopes they approved. Decide who may do this in the **Connected assistants** column of [Users](/admin?tab=users), and set the default for new accounts under [Settings](/admin?tab=settings). Users see and revoke their own connections from their profile; you can end them by turning the user's access off.
 
 MCP access is not a blanket authorization to act. Destructive, external, or high-impact operations still require the product and organizational approvals that apply to the underlying task.
 
