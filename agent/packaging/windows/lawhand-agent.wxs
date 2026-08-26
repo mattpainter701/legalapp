@@ -60,11 +60,13 @@
     <Property Id="SERVICE_PASSWORD" Secure="yes" Hidden="yes" />
 
     <SetProperty Id="SERVICE_ACCOUNT"
+                 Action="SetServiceAccountFromExisting"
                  Value="[EXISTING_SERVICE_ACCOUNT]"
                  After="AppSearch"
                  Sequence="both"
                  Condition="NOT SERVICE_ACCOUNT AND EXISTING_SERVICE_ACCOUNT" />
     <SetProperty Id="SERVICE_ACCOUNT"
+                 Action="SetServiceAccountDefault"
                  Value="LocalSystem"
                  Before="CostInitialize"
                  Sequence="both"

@@ -43,8 +43,10 @@ def test_overtop_upgrade_discovers_existing_service_account_without_password():
     assert 'Name="ObjectName"' in text
     assert 'Type="raw"' in text
     assert 'Value="[EXISTING_SERVICE_ACCOUNT]"' in text
+    assert 'Action="SetServiceAccountFromExisting"' in text
     assert 'Condition="NOT SERVICE_ACCOUNT AND EXISTING_SERVICE_ACCOUNT"' in text
     assert 'Value="LocalSystem"' in text
+    assert 'Action="SetServiceAccountDefault"' in text
     assert 'Condition="NOT SERVICE_ACCOUNT"' in text
     # Password must remain an input for clean custom-account installs, but an
     # omitted value on an overtop upgrade must not be replaced by a persisted
