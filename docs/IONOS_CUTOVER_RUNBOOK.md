@@ -87,7 +87,13 @@ Do not move DNS when any item below is true:
    host transfer, and change host paths to `/srv/lawhand/uploads` and
    `/srv/lawhand/host-status`. Set
    `APP_ENV_FILE=/etc/lawhand/core.env` so container `env_file` mounts resolve
-   outside the checkout. Keep `MCP_PRODUCT_ENABLED=false`.
+   outside the checkout. Keep `MCP_PRODUCT_ENABLED=false`. Point Restic at an
+   actual second host or object store. The first-customer topology uses a
+   key-only, chrooted SFTP account on Skynet over Tailscale; its private key is
+   dedicated to IONOS backups and the authorized key is source-restricted to
+   the tailnet. A repository such as `/srv/legalapp-backups` on Skynet's own
+   root disk is not off-host evidence for a Skynet deployment and must not be
+   counted as the pre-cut recovery copy.
 9. Provision the private origin CA/leaf with
    `scripts/provision_private_origin_tls.sh`. Create a new, separately
    credentialed IONOS Tunnel whose ingress has the four canonical hostnames,
@@ -129,7 +135,10 @@ Use a scheduled maintenance window even before the first paying tenant.
 3. Run the existing encrypted off-host backup and isolated restore rehearsal.
    Export the final LegalApp and LiteLLM databases from one stopped-writer
    window, archive uploads with its manifest, transfer over authenticated SSH,
-   and verify checksums on IONOS before import.
+   and verify checksums on IONOS before import. For the first cut, the encrypted
+   Skynet recovery bundle copied to IONOS is the off-host source evidence; after
+   IONOS becomes primary, its scheduled Restic repository is the restricted
+   Skynet SFTP target.
 4. Stop all IONOS application writers, take a target-side safety snapshot, then
    restore the two final dumps and uploads. Start the IONOS Cube profile and
    rerun `ionos_stage_check.sh`. Abort on a count decrease or checksum mismatch.
