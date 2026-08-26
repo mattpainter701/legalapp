@@ -17,6 +17,12 @@ class LLMRoutingProfile(Base):
             unique=True,
             postgresql_where=text("is_default"),
         ),
+        Index(
+            "uq_llm_routing_profiles_demo_default",
+            "is_demo_default",
+            unique=True,
+            postgresql_where=text("is_demo_default"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -36,6 +42,9 @@ class LLMRoutingProfile(Base):
         Boolean, nullable=False, default=True, server_default="true"
     )
     is_default: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    is_demo_default: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
     is_active: Mapped[bool] = mapped_column(

@@ -67,6 +67,24 @@ describe('DemoLoginPage', () => {
     expect(await screen.findByText('Redirected to the workspace')).toBeInTheDocument()
   })
 
+  it('resumes an active workspace with email and access code only', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(screen.getByRole('button', { name: 'Resume demo' }))
+    expect(screen.queryByLabelText(/your name/i)).not.toBeInTheDocument()
+    await user.type(screen.getByLabelText(/work email/i), 'alex@example.com')
+    await user.type(screen.getByLabelText(/demo access code/i), 'demo-secret')
+    await user.click(screen.getByRole('button', { name: /resume demo workspace/i }))
+
+    expect(mocks.createDemoSession).toHaveBeenCalledWith({
+      email: 'alex@example.com',
+      access_code: 'demo-secret',
+    })
+    expect(mocks.login).toHaveBeenCalledOnce()
+    expect(await screen.findByText('Redirected to the workspace')).toBeInTheDocument()
+  })
+
   it.each([
     ['invalid access code', 'Invalid demo access code'],
     ['capacity exhaustion', 'All demo workspaces are in use'],

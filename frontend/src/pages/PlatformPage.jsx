@@ -2708,6 +2708,31 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
     }
   }
 
+  const handleToggleDemoProfile = async () => {
+    if (!selectedProfileId) return
+    const selected = profiles.find((profile) => profile.id === selectedProfileId)
+    if (!selected) return
+    setSaveResult(null)
+    try {
+      const updated = await updateLLMRoutingProfile(platformKey, selectedProfileId, {
+        is_demo_default: !selected.is_demo_default,
+      })
+      setProfiles((previous) => previous.map((profile) => (
+        profile.id === updated.id
+          ? updated
+          : { ...profile, is_demo_default: updated.is_demo_default ? false : profile.is_demo_default }
+      )))
+      setSaveResult({
+        ok: true,
+        message: updated.is_demo_default
+          ? `${updated.name} will be assigned to new demo workspaces.`
+          : `${updated.name} is no longer assigned to new demo workspaces.`,
+      })
+    } catch (error) {
+      setSaveResult({ ok: false, error: apiErrorMessage(error, 'Demo profile update failed') })
+    }
+  }
+
   if (loading) {
     return <div className="flex justify-center py-16"><div className="w-8 h-8 border-2 border-brand-accent border-t-transparent rounded-full animate-spin" /></div>
   }
@@ -2737,11 +2762,22 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
         </div>
         <div className="flex flex-col sm:flex-row sm:items-center gap-3">
           <select aria-label="Routing profile" value={selectedProfileId} onChange={(e) => { setSelectedProfileId(e.target.value); load(e.target.value) }} className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans bg-brand-surface">
-            {profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}{profile.is_default ? ' (default)' : ''}</option>)}
+            {profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}{profile.is_default ? ' (default)' : ''}{profile.is_demo_default ? ' (demo)' : ''}</option>)}
           </select>
           <input aria-label="New routing profile name" value={newProfileName} onChange={(event) => setNewProfileName(event.target.value)} placeholder="New profile name" className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans bg-brand-surface" />
           <button type="button" onClick={handleCreateProfile} disabled={creatingProfile || !newProfileName.trim()} className="px-3 py-2 border border-brand-line rounded-lg text-xs font-medium font-sans text-brand-ink hover:bg-brand-bg disabled:opacity-40">{creatingProfile ? 'Creating…' : 'Create profile'}</button>
           {profiles.find((profile) => profile.id === selectedProfileId)?.assignable && !profiles.find((profile) => profile.id === selectedProfileId)?.is_default && <button type="button" onClick={handleMakeDefaultProfile} className="px-3 py-2 border border-brand-line rounded-lg text-xs font-medium font-sans text-brand-ink hover:bg-brand-bg">Make default</button>}
+          {profiles.find((profile) => profile.id === selectedProfileId)?.assignable && (
+            <button
+              type="button"
+              onClick={handleToggleDemoProfile}
+              disabled={!profiles.find((profile) => profile.id === selectedProfileId)?.is_demo_default && !standard.allow_matter_context}
+              title={!standard.allow_matter_context ? 'Allow Standard matter context and activate the profile before assigning it to demos.' : undefined}
+              className="px-3 py-2 border border-brand-line rounded-lg text-xs font-medium font-sans text-brand-ink hover:bg-brand-bg disabled:opacity-40"
+            >
+              {profiles.find((profile) => profile.id === selectedProfileId)?.is_demo_default ? 'Remove from demos' : 'Use for demos'}
+            </button>
+          )}
           {saveResult && (
             <span className={`text-xs font-sans ${saveResult.ok ? (saveResult.pending ? 'text-brand-amber' : 'text-brand-accent') : 'text-brand-rose'}`}>
               {saveResult.message || (saveResult.ok
@@ -2764,6 +2800,7 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
         <div className="mb-6 rounded-lg border border-brand-line bg-brand-bg px-4 py-3 text-xs font-sans text-brand-muted">
           <span className="font-medium text-brand-ink">Profile: {profiles.find((profile) => profile.id === selectedProfileId)?.name || 'Selected profile'}</span>
           {' · '}{profiles.find((profile) => profile.id === selectedProfileId)?.is_default ? 'Default' : 'Tenant-assignable'}
+          {' · '}{profiles.find((profile) => profile.id === selectedProfileId)?.is_demo_default ? 'New demo workspace profile' : 'Not assigned to new demos'}
           {' · '}{profiles.find((profile) => profile.id === selectedProfileId)?.assignable ? 'Assignable' : 'Needs route activation'}
           {' · '}Standard matter context {standard.allow_matter_context ? 'allowed' : 'blocked'}
           {' · '}Premium matter context {premium.allow_matter_context ? 'allowed' : 'blocked'}

@@ -1,5 +1,6 @@
 """Lifecycle and quota state for disposable sales-demo tenants."""
 
+import hashlib
 import uuid
 from datetime import datetime, timezone
 
@@ -16,6 +17,11 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
+
+
+def _resume_email_hash_default(context) -> str:
+    email = str(context.get_current_parameters().get("prospect_email") or "")
+    return hashlib.sha256(email.strip().lower().encode("utf-8")).hexdigest()
 
 
 class DemoSession(Base):
@@ -52,6 +58,9 @@ class DemoSession(Base):
     fixture_version: Mapped[str] = mapped_column(String(80), nullable=False)
     prospect_name: Mapped[str] = mapped_column(String(255), nullable=False)
     prospect_email: Mapped[str] = mapped_column(String(255), nullable=False)
+    resume_email_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True, default=_resume_email_hash_default
+    )
     status: Mapped[str] = mapped_column(
         String(24),
         nullable=False,

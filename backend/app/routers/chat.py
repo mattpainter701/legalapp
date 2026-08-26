@@ -58,7 +58,6 @@ from app.services.llm import LLMService
 from app.services.llm_routing import (
     classify_query_complexity,
     resolve_llm_route,
-    standard_matter_context_allowed,
     route_matter_context_allowed,
 )
 from app.services.billing import calculate_cost
@@ -660,11 +659,12 @@ def _premium_for_user(user, query: str, user_requested_premium: bool) -> bool:
 
 
 _PUBLIC_GENERAL_MATTER_DETAIL = (
-    "This conversation is linked to a matter. Standard AI cannot use matter "
-    "context; start an unlinked general conversation or use an approved private route."
+    "This conversation is linked to a matter. The selected AI route cannot use "
+    "matter context; start an unlinked general conversation or use an approved "
+    "private route."
 )
 _PUBLIC_GENERAL_ATTACHMENT_DETAIL = (
-    "Standard AI cannot process attachments. Start an unlinked general "
+    "The selected AI route cannot process attachments. Start an unlinked general "
     "conversation or use an approved private route."
 )
 
@@ -672,12 +672,18 @@ _PUBLIC_GENERAL_ATTACHMENT_DETAIL = (
 async def _is_public_general_route(db: AsyncSession, route, tenant_id) -> bool:
     """Return whether this request must carry only public/general data.
 
-    The route *request* is decisive, not the configured model alias. That
-    keeps a tenant's managed-standard alias or a future provider change from
-    accidentally receiving client context.
+    The resolved route and its independently approved policy are decisive. A
+    profile toggle cannot authorize a tenant override, explicit model, or BYOK
+    destination that was not validated with that profile.
     """
-    return route.requested_route in {"standard", "tenant-standard"} and not (
-        await standard_matter_context_allowed(db, tenant_id)
+    use_premium = route.requested_route in {"premium", "tenant-premium"}
+    return not (
+        await route_matter_context_allowed(
+            db,
+            tenant_id,
+            use_premium=use_premium,
+            route=route,
+        )
     )
 
 
@@ -690,6 +696,16 @@ def _assert_public_general_sources_allowed(
         raise HTTPException(status_code=409, detail=_PUBLIC_GENERAL_MATTER_DETAIL)
     if getattr(body, "attachment_ids", None):
         raise HTTPException(status_code=409, detail=_PUBLIC_GENERAL_ATTACHMENT_DETAIL)
+
+
+def _privacy_mode_for_route(user, *, public_general: bool) -> bool:
+    """Demo privacy is enforced even if a stale user row says otherwise."""
+
+    return bool(
+        public_general
+        or getattr(user, "privacy_mode", False)
+        or getattr(getattr(user, "tenant", None), "billing_tier", None) == "demo"
+    )
 
 
 async def _matter_for_tenant_or_400(
@@ -2181,11 +2197,11 @@ async def _send_message_under_generation_lock(
         use_premium=use_premium,
         requested_provider=body.provider,
     )
-    public_general = await _is_public_general_route(db, route, user.tenant_id)
     matter_sources_allowed = await route_matter_context_allowed(
-        db, user.tenant_id, use_premium=use_premium
+        db, user.tenant_id, use_premium=use_premium, route=route
     )
-    privacy_mode = public_general or bool(getattr(user, "privacy_mode", False))
+    public_general = not matter_sources_allowed
+    privacy_mode = _privacy_mode_for_route(user, public_general=public_general)
     if not matter_sources_allowed:
         _assert_public_general_sources_allowed(conv, body)
 
@@ -2913,11 +2929,11 @@ async def _stream_message_under_generation_lock(
             use_premium=use_premium,
             requested_provider=body.provider,
         )
-        public_general = await _is_public_general_route(db, route, user.tenant_id)
         matter_sources_allowed = await route_matter_context_allowed(
-            db, user.tenant_id, use_premium=use_premium
+            db, user.tenant_id, use_premium=use_premium, route=route
         )
-        privacy_mode = public_general or bool(getattr(user, "privacy_mode", False))
+        public_general = not matter_sources_allowed
+        privacy_mode = _privacy_mode_for_route(user, public_general=public_general)
         if not matter_sources_allowed:
             _assert_public_general_sources_allowed(conv, body)
         effective_matter = (

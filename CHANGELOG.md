@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+### Added
+- **Disposable demos can be resumed without passwords** (migration
+  `131_demo_resume_profile`): a visitor can choose **Resume demo** and enter the
+  same normalized email plus the current demo access code to reopen an active,
+  unexpired workspace. Resume preserves the original expiry and AI quota,
+  issues fresh hardened cookies, and uses a SHA-256 selector under a dedicated
+  SELECT-only RLS policy instead of granting the public endpoint a tenant
+  bypass.
+- **Platform can select a matter-aware Standard profile for new demos:** an
+  active profile whose Standard route passed confidential-data validation and
+  allows matter context can be marked **Use for demos**. New disposable tenants
+  receive that exact profile automatically; Premium remains unavailable and
+  private-detail protection remains enforced.
+
+### Fixed
+- **Matter-context approval is bound to the route that Platform validated:** a
+  Standard or Premium profile toggle no longer authorizes an unrelated tenant
+  alias, explicit model, or customer BYOK destination. Chat now fails closed on
+  those independently unapproved routes before loading a matter or attachment.
+- **Standard privacy messaging reflects the effective routing policy:** when an
+  approved Standard profile allows matter context, Chat explains that private
+  details are protected instead of incorrectly claiming Standard always
+  excludes matters. Public/general Standard routes remain visibly locked down.
+
 ### Fixed
 - **The dedicated MCP hostnames are no longer advertised to search engines:**
   `$x_robots_tag` is keyed on the request path, so `/` — the marketing home

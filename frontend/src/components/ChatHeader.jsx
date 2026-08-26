@@ -39,6 +39,7 @@ export default function ChatHeader({
   usePremium,
   setUsePremium,
   demoMode = false,
+  standardMatterContextAllowed = false,
   includePublic,
   setIncludePublic,
   privacyMode,
@@ -57,6 +58,9 @@ export default function ChatHeader({
   const [savingTitle, setSavingTitle] = useState(false)
   const menuRef = useRef(null)
   const settingsRef = useRef(null)
+  const standardPublicOnly = !usePremium && !standardMatterContextAllowed
+  const privacyProtectionOn = standardPublicOnly || demoMode || privacyMode
+  const privacyControlDisabled = standardPublicOnly || demoMode || privacySaving
 
   useDismissablePopover(showMenu, () => setShowMenu(false), menuRef)
   useDismissablePopover(showSettings, () => setShowSettings(false), settingsRef)
@@ -276,17 +280,19 @@ export default function ChatHeader({
                 <button
                   type="button"
                   role="switch"
-                  aria-checked={!usePremium || privacyMode}
+                  aria-checked={privacyProtectionOn}
                   aria-label="Protect private details"
-                  disabled={!usePremium || privacySaving}
+                  disabled={privacyControlDisabled}
                   onClick={onTogglePrivacy}
                   className="flex w-full items-center justify-between gap-4 rounded-xl text-left disabled:cursor-not-allowed disabled:opacity-80"
                 >
                   <span>
                     <span className="block text-sm font-semibold text-brand-ink">Protect private details</span>
                     <span className="mt-0.5 block text-[11px] leading-snug text-brand-muted">
-                      {!usePremium
-                        ? 'Standard always redacts detected details and excludes matters, attachments, and private context.'
+                      {standardPublicOnly
+                        ? 'This Standard route is public/general only and excludes matters, attachments, and private context.'
+                        : demoMode
+                          ? 'Approved synthetic matter context is available. Private-detail protection is enforced for this demo.'
                         : privacyMode
                           ? 'External MCP assistants are disconnected. Native LawHand assistance remains available.'
                           : 'Redact detected personal details before eligible provider requests. Turning this on disconnects external MCP assistants.'}
@@ -295,12 +301,12 @@ export default function ChatHeader({
                   <span
                     aria-hidden="true"
                     className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
-                      (!usePremium || privacyMode) ? 'bg-brand-accent' : 'bg-brand-line-2'
+                      privacyProtectionOn ? 'bg-brand-accent' : 'bg-brand-line-2'
                     }`}
                   >
                     <span
                       className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${
-                        (!usePremium || privacyMode) ? 'translate-x-6' : 'translate-x-1'
+                        privacyProtectionOn ? 'translate-x-6' : 'translate-x-1'
                       }`}
                     />
                   </span>

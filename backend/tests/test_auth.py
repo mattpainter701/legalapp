@@ -177,6 +177,20 @@ class TestAuthMe:
         assert research_grant.status == "active"
         assert research_grant.revoked_at is None
 
+    async def test_demo_users_cannot_disable_enforced_privacy(
+        self, client, db_session, test_tenant, test_user
+    ):
+        test_tenant.billing_tier = "demo"
+        test_user.privacy_mode = True
+        await db_session.commit()
+
+        response = await client.patch("/api/auth/me", json={"privacy_mode": False})
+
+        assert response.status_code == 403
+        assert response.json()["detail"] == (
+            "Private-detail protection is enforced in demo workspaces"
+        )
+
     async def test_me_profile_patch_restores_rls_context_after_commit(
         self, monkeypatch
     ):
