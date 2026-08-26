@@ -35,6 +35,7 @@ def test_lock_key_in_bigint_range_and_int():
         "user-sync",
         "cloud-sync",
         "smb-heartbeat",
+        "smb-pairing-cleanup",
     ]
     for name in names:
         key = _lock_key(name)

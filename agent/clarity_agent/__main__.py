@@ -391,21 +391,51 @@ async def _register_with_saas(
 
 
 def cmd_register(args) -> None:
-    config = AgentConfig(saas_url=args.url)
+    config = AgentConfig(saas_url=args.url or "https://getlawhand.com")
+    setup_logging(config.log_level)
     info = host_info()
 
-    result = asyncio.run(
-        _register_with_saas(
-            config,
-            args.code,
-            {
-                "agent_name": args.name or info["hostname"],
-                "agent_version": info["agent_version"],
-                "hostname": info["hostname"],
-                "os_info": info["os_info"],
-            },
+    try:
+        result = asyncio.run(
+            _register_with_saas(
+                config,
+                args.code,
+                {
+                    "agent_name": args.name or info["hostname"],
+                    "agent_version": info["agent_version"],
+                    "hostname": info["hostname"],
+                    "os_info": info["os_info"],
+                },
+            )
         )
-    )
+    except Exception as exc:
+        # Never print the request body or command line, which may contain the
+        # one-time pairing code. Keep the operator-facing failure actionable.
+        import httpx
+
+        if isinstance(exc, httpx.HTTPStatusError):
+            message = f"SaaS rejected registration (HTTP {exc.response.status_code})"
+            try:
+                detail = exc.response.json().get("detail")
+            except (ValueError, AttributeError):
+                detail = None
+            if (
+                isinstance(detail, str)
+                and 0 < len(detail) <= 200
+                and args.code not in detail
+                and not any(character in detail for character in "\r\n")
+            ):
+                message = f"{message}: {detail}"
+        elif isinstance(exc, httpx.RequestError):
+            message = "Could not reach the SaaS registration endpoint"
+        elif isinstance(exc, ValueError) and str(exc).startswith("CLARITY_SAAS_URL"):
+            message = str(exc)
+        else:
+            message = "Registration failed; check the agent log for details"
+            logging.getLogger(__name__).error(
+                "Registration failed (%s)", type(exc).__name__
+            )
+        raise SystemExit(message) from None
 
     config.api_key = result["api_key"]
     config.agent_id = result["agent_id"]

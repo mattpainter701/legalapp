@@ -24,9 +24,12 @@ import { format } from 'date-fns'
 import { Spinner } from '../components/ui'
 import { useConfirm } from '../components/dialog/ConfirmProvider'
 import { useToast } from '../components/toast/useToast'
-
-const AGENT_DOWNLOAD_BASE =
-  'https://github.com/mattpainter701/legalapp/releases/latest/download'
+import {
+  AGENT_DOWNLOAD_BASE,
+  buildWindowsInstallCommand,
+  isPairingPlaceholder,
+  isVisibleAgent,
+} from '../utils/smbAgentInstall'
 
 // Auth methods the agent knows how to use, mirroring AUTH_METHODS on the API.
 const AUTH_METHODS = [
@@ -305,10 +308,9 @@ function StatusPanel() {
 
 function InstallInstructions({ pairingCode }) {
   const code = pairingCode || '<pairing code>'
-  const windowsCommand =
-    `msiexec /i lawhand-agent-x64.msi /qn PAIRING_CODE=${code} SAAS_URL=${window.location.origin}`
+  const windowsCommand = buildWindowsInstallCommand(pairingCode)
   const linuxCommand =
-    `work="$(mktemp -d)" && tar xzf lawhand-agent-linux-x86_64.tar.gz -C "$work" --strip-components=1 && cd "$work" && sudo ./install.sh --code ${code} --url ${window.location.origin}`
+    `work="$(mktemp -d)" && tar xzf lawhand-agent-linux-x86_64.tar.gz -C "$work" --strip-components=1 && cd "$work" && sudo ./install.sh --code '${code}' --url 'https://getlawhand.com'`
 
   return (
     <div className="bg-brand-surface border border-brand-line rounded-xl p-5 shadow-sm space-y-4">
@@ -316,7 +318,8 @@ function InstallInstructions({ pairingCode }) {
         <h3 className="text-sm font-sans font-bold text-brand-ink">Install the agent</h3>
         <p className="text-xs text-brand-muted font-sans mt-1">
           The agent runs on a machine inside your network that can already reach the file share. It indexes
-          metadata and snippets only; document text is relayed on request and never bulk-uploaded.
+          metadata and snippets only; document text is relayed on request and never bulk-uploaded. On Windows,
+          run the complete two-stage block as Administrator: it installs first, then registers and restarts the agent.
         </p>
       </div>
 
@@ -336,6 +339,14 @@ function InstallInstructions({ pairingCode }) {
             {windowsCommand}
           </pre>
           <CopyButton value={windowsCommand} label="Copy command" />
+          <p className="text-xs text-brand-muted font-sans">Windows agent log:</p>
+          <pre className="bg-brand-bg-soft border border-brand-line rounded-lg p-3 text-[11px] font-mono text-brand-ink overflow-x-auto whitespace-pre-wrap break-all">
+            {"Get-Content 'C:\\ProgramData\\LawHand\\Agent\\logs\\agent.log' -Tail 200 -Wait"}
+          </pre>
+          <CopyButton value={"Get-Content 'C:\\ProgramData\\LawHand\\Agent\\logs\\agent.log' -Tail 200 -Wait"} label="Copy log command" />
+          <p className="text-[11px] text-brand-muted font-sans">
+            MSI failures are recorded separately at <span className="font-mono">$env:TEMP\lawhand-agent-install.log</span>.
+          </p>
         </div>
 
         <div className="space-y-2">
@@ -376,31 +387,64 @@ function AgentsPanel() {
   const toast = useToast()
   const [agents, setAgents] = useState([])
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshError, setRefreshError] = useState(null)
+  const [showHistory, setShowHistory] = useState(false)
   const [error, setError] = useState(null)
   const [pairingCode, setPairingCode] = useState(null)
   const [generating, setGenerating] = useState(false)
   const [updating, setUpdating] = useState(null)
   const [agentUpdates, setAgentUpdates] = useState({})
+  const mounted = useRef(false)
+  const refreshInFlight = useRef(false)
+  const refreshSequence = useRef(0)
 
-  const load = async () => {
-    setLoading(true)
-    setError(null)
+  const load = useCallback(async (initial = false, force = false) => {
+    if (refreshInFlight.current && !force) return
+    const sequence = ++refreshSequence.current
+    refreshInFlight.current = true
+    if (initial) setLoading(true)
+    else setRefreshing(true)
+    if (initial) setError(null)
     try {
       const data = await getSmbAgents()
       const nextAgents = asList(data, 'agents', 'items')
-      setAgents(nextAgents)
-      const updates = await Promise.all(nextAgents.map(async (agent) => {
+      const updates = await Promise.all(nextAgents.filter((agent) => !isPairingPlaceholder(agent)).map(async (agent) => {
         try { return [agent.id, await getSmbAgentUpdate(agent.id)] } catch { return [agent.id, null] }
       }))
+      if (!mounted.current || sequence !== refreshSequence.current) return
+      setAgents(nextAgents)
       setAgentUpdates(Object.fromEntries(updates))
+      setError(null)
+      setRefreshError(null)
     } catch (e) {
-      setError(errText(e, 'Failed to load agents'))
+      if (!mounted.current || sequence !== refreshSequence.current) return
+      const message = errText(e, 'Failed to load agents')
+      if (initial) setError(message)
+      else setRefreshError(message)
     } finally {
-      setLoading(false)
+      if (sequence === refreshSequence.current) {
+        refreshInFlight.current = false
+        if (mounted.current) {
+          setLoading(false)
+          setRefreshing(false)
+        }
+      }
     }
-  }
+  }, [])
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
+
+  useEffect(() => {
+    load(true)
+    const timer = window.setInterval(() => load(false), 30000)
+    return () => window.clearInterval(timer)
+  }, [load])
+
+  const visibleAgents = agents.filter((agent) => isVisibleAgent(agent, showHistory))
 
   const pendingUpdateIds = Object.entries(agentUpdates)
     .filter(([, update]) => ['queued', 'in_progress'].includes(update?.update_status))
@@ -449,7 +493,7 @@ function AgentsPanel() {
     setUpdating(agentId)
     try {
       await updateSmbAgent(agentId, { status: newStatus })
-      load()
+      await load(false, true)
     } catch (e) {
       toast.error('Agent was not updated', { message: errText(e, 'Unknown error') })
     } finally {
@@ -467,7 +511,7 @@ function AgentsPanel() {
     try {
       await requestSmbAgentUpdate(agentId)
       toast.success('Agent update queued')
-      await load()
+      await load(false, true)
     } catch (e) {
       toast.error('Agent update was not queued', { message: errText(e, 'Unknown error') })
     } finally { setUpdating(null) }
@@ -477,7 +521,7 @@ function AgentsPanel() {
     if (!await confirmAction({ title: 'Revoke agent?', message: 'This agent will permanently lose access.', confirmLabel: 'Revoke agent', destructive: true })) return
     try {
       await deleteSmbAgent(agentId)
-      load()
+      await load(false, true)
     } catch (e) {
       toast.error('Agent was not revoked', { message: errText(e, 'Unknown error') })
     }
@@ -502,6 +546,13 @@ function AgentsPanel() {
         >
           {generating ? 'Generating...' : 'Generate Pairing Code'}
         </button>
+        <button type="button" onClick={() => load(false)} disabled={refreshing} className="text-xs text-brand-accent font-sans font-medium hover:underline disabled:opacity-40">
+          {refreshing ? 'Refreshing...' : 'Refresh'}
+        </button>
+        <label className="ml-auto flex items-center gap-2 text-xs text-brand-muted font-sans">
+          <input type="checkbox" checked={showHistory} onChange={(event) => setShowHistory(event.target.checked)} />
+          Show revoked history
+        </label>
       </div>
 
       {pairingCode && (
@@ -511,6 +562,12 @@ function AgentsPanel() {
           </span>
           <CopyButton value={String(pairingCode)} label="Copy code" />
         </div>
+      )}
+
+      {refreshError && (
+        <p role="status" className="text-xs text-brand-amber font-sans">
+          Showing the last known agent state. Refresh failed: {refreshError}
+        </p>
       )}
 
       <InstallInstructions pairingCode={pairingCode ? String(pairingCode) : ''} />
@@ -529,7 +586,7 @@ function AgentsPanel() {
             </tr>
           </thead>
           <tbody className="divide-y divide-brand-line">
-            {agents.map((agent) => (
+            {visibleAgents.map((agent) => (
               <tr key={agent.id} className="hover:bg-brand-bg-soft transition-colors">
                 <td className="px-4 py-3 text-brand-ink font-sans font-medium">{agent.agent_name || '-'}</td>
                 <td className="px-4 py-3"><Badge label={agent.status} variant={statusVariant(agent.status)} /></td>
@@ -581,17 +638,19 @@ function AgentsPanel() {
                         {updating === agent.id ? '...' : 'Resume'}
                       </button>
                     )}
-                    <button
-                      onClick={() => handleDeleteAgent(agent.id)}
-                      className="text-xs text-brand-rose font-sans font-medium hover:underline"
-                    >
-                      Revoke
-                    </button>
+                    {agent.status !== 'revoked' && (
+                      <button
+                        onClick={() => handleDeleteAgent(agent.id)}
+                        className="text-xs text-brand-rose font-sans font-medium hover:underline"
+                      >
+                        Revoke
+                      </button>
+                    )}
                   </div>
                 </td>
               </tr>
             ))}
-            {agents.length === 0 && (
+            {visibleAgents.length === 0 && (
               <tr>
                 <td colSpan={7} className="px-4 py-12 text-center text-brand-muted font-sans">
                   No agents registered. Generate a pairing code, then run the installer above on the file server.
@@ -860,7 +919,7 @@ function SharesPanel() {
         getSmbCredentials(),
       ])
       setShares(asList(sharesData, 'shares', 'items'))
-      setAgents(asList(agentsData, 'agents', 'items'))
+      setAgents(asList(agentsData, 'agents', 'items').filter((agent) => isVisibleAgent(agent)))
       setCredentials(asList(credentialData, 'credentials', 'items'))
     } catch (e) {
       setError(errText(e, 'Failed to load shares'))
@@ -1158,7 +1217,7 @@ function CredentialsPanel() {
     try {
       const [credentialData, agentData] = await Promise.all([getSmbCredentials(), getSmbAgents()])
       setCredentials(asList(credentialData, 'credentials', 'items'))
-      setAgents(asList(agentData, 'agents', 'items'))
+      setAgents(asList(agentData, 'agents', 'items').filter((agent) => isVisibleAgent(agent)))
     } catch (e) {
       setError(errText(e, 'Failed to load credentials'))
     } finally {

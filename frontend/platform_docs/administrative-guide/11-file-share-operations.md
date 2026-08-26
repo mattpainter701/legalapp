@@ -13,7 +13,7 @@ icon: briefcase
 
 ## Install and register an agent
 
-Generate a pairing code on the **Agents** tab. The tab also shows the installer commands for the machine that will run the agent: a Windows MSI that registers an auto-starting service, and a Linux tarball with a systemd installer. The agent must run on a host that already has network access to the share; it needs no inbound firewall rule, only outbound HTTPS.
+Generate a pairing code on the **Agents** tab. The tab also shows copy-ready installer commands for the machine that will run the agent: on Windows, one verified PowerShell block installs or upgrades the auto-starting service and then registers it as a separate step; on Linux, the tarball installs a systemd service. The agent must run on a host that already has network access to the share; it needs no inbound firewall rule, only outbound HTTPS.
 
 Confirm the agent belongs to the intended environment and tenant before assigning shares to it. Pause or revoke an agent from the same tab when its host is decommissioned.
 

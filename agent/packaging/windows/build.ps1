@@ -127,4 +127,5 @@ if ($SignToolCertThumbprint) {
 Write-Host "Built $MsiPath" -ForegroundColor Green
 Write-Host ""
 Write-Host "Install on a file server with:" -ForegroundColor Cyan
-Write-Host "  msiexec /i lawhand-agent-$Version-x64.msi /qn PAIRING_CODE=<code> SAAS_URL=https://getlawhand.com"
+Write-Host "  msiexec /i lawhand-agent-$Version-x64.msi /qn /norestart"
+Write-Host "  lawhand-agent register --code <pairing code>"

@@ -12,7 +12,22 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["131_demo_resume_profile"]
+    assert heads == ["132_smb_agent_lifecycle_indexes"]
+
+
+def test_smb_agent_lifecycle_indexes_cover_auth_and_cleanup_paths():
+    backend_dir = Path(__file__).resolve().parents[1]
+    source = (
+        backend_dir
+        / "migrations"
+        / "versions"
+        / "132_smb_agent_lifecycle_indexes.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'down_revision = "131_demo_resume_profile"' in source
+    assert "ix_smb_agents_api_key_hash" in source
+    assert "ix_smb_agents_tenant_status_expiry" in source
+    assert '["tenant_id", "status", "pairing_expires_at"]' in source
 
 
 def test_demo_resume_rls_is_hash_scoped_select_only_and_profile_is_unique():

@@ -65,6 +65,7 @@ class AgentInfo(UuidStringModel):
     os_info: str | None
     last_heartbeat: datetime | None
     created_at: datetime
+    is_registered: bool = True
     update_status: str = "idle"
     update_target_version: str | None = None
     update_manifest_id: str | None = None

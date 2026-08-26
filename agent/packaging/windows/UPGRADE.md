@@ -21,19 +21,18 @@ availability gap and can discard installer-managed state. Run the upgrade
 directly with the new package:
 
 ```powershell
-$msi = "C:\Downloads\lawhand-agent-0.15.0-x64.msi"
+$msi = "C:\Downloads\lawhand-agent-0.15.1-x64.msi"
 $log = "C:\Windows\Temp\lawhand-agent-upgrade.log"
 $args = "/i `"$msi`" /qn /norestart /l*v `"$log`""
 $p = Start-Process msiexec.exe -ArgumentList $args -Wait -PassThru
-if ($p.ExitCode -notin @(0, 3010)) {
+if ($p.ExitCode -notin @(0, 1641, 3010)) {
     throw "LawHand agent upgrade failed with exit code $($p.ExitCode). See $log"
 }
 ```
 
-The pairing custom action is suppressed during a major upgrade, even if a
-pairing code is accidentally supplied. Enrollment is retained in the existing
-ProgramData files and the service starts with that enrollment after the new
-binary is installed.
+The MSI has no pairing custom action and does not consume a pairing-code property.
+Enrollment is retained in the existing ProgramData files and the service starts
+with that enrollment after the new binary is installed.
 
 When the late-upgrade invariant is preserved, the MSI reads the existing
 `LawHandAgent` service account from the SCM service registry entry. A normal

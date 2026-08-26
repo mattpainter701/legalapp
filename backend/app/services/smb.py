@@ -421,6 +421,28 @@ def _pairing_code() -> str:
     return "-".join(raw[i : i + 4] for i in range(0, PAIRING_CODE_SYMBOLS, 4))
 
 
+def _placeholder_has_no_related_state():
+    """SQL predicates proving a pairing reservation owns no durable state."""
+    return (
+        ~select(SmbShare.id)
+        .where(SmbShare.agent_id == SmbAgent.id)
+        .correlate(SmbAgent)
+        .exists(),
+        ~select(SmbCredential.id)
+        .where(SmbCredential.agent_id == SmbAgent.id)
+        .correlate(SmbAgent)
+        .exists(),
+        ~select(SmbFileIndex.id)
+        .where(SmbFileIndex.agent_id == SmbAgent.id)
+        .correlate(SmbAgent)
+        .exists(),
+        ~select(SmbAccessLog.id)
+        .where(SmbAccessLog.agent_id == SmbAgent.id)
+        .correlate(SmbAgent)
+        .exists(),
+    )
+
+
 async def _commit_audit_then_publish(
     db: AsyncSession,
     redis,
@@ -482,6 +504,64 @@ class SmbService:
         await db.flush()
 
         return code, expires_at
+
+    async def cleanup_expired_pairing_agents(
+        self,
+        db: AsyncSession,
+        tenant_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> int:
+        """Remove unregistered pairing placeholders after their reservation expires.
+
+        A placeholder has no API credential and cannot own useful agent state.
+        Restrict this cleanup to the sentinel hash written by
+        :meth:`generate_pairing_code`; registered agents (including revoked
+        ones) are never eligible. The caller supplies normal tenant RLS.
+        """
+        await set_tenant_context(db, tenant_id)
+        cutoff = now or datetime.now(timezone.utc)
+        result = await db.execute(
+            delete(SmbAgent).where(
+                SmbAgent.api_key_hash == "pending",
+                SmbAgent.tenant_id == _uuid(tenant_id),
+                sa_or(
+                    # A live pending reservation is retained until its code
+                    # expires; revoked placeholders are already unusable and
+                    # can be removed immediately (including legacy rows whose
+                    # expiry field was cleared or never populated).
+                    and_(
+                        SmbAgent.status == "pending",
+                        SmbAgent.pairing_expires_at.is_not(None),
+                        SmbAgent.pairing_expires_at <= cutoff,
+                    ),
+                    SmbAgent.status == "revoked",
+                ),
+                *_placeholder_has_no_related_state(),
+            )
+        )
+        await db.commit()
+        return int(result.rowcount or 0)
+
+    async def delete_pairing_placeholder_if_empty(
+        self,
+        db: AsyncSession,
+        agent_id: str,
+        tenant_id: str,
+    ) -> bool:
+        """Delete one never-registered reservation only when it owns no state."""
+        await set_tenant_context(db, tenant_id)
+        result = await db.execute(
+            delete(SmbAgent)
+            .where(
+                SmbAgent.id == _uuid(agent_id),
+                SmbAgent.tenant_id == _uuid(tenant_id),
+                SmbAgent.api_key_hash == "pending",
+                *_placeholder_has_no_related_state(),
+            )
+            .execution_options(synchronize_session=False)
+        )
+        return bool(result.rowcount)
 
     async def register_agent(
         self,
@@ -1297,6 +1377,13 @@ class SmbService:
         """
         await set_tenant_context(db, tenant_id)
 
+        # A short-lived pairing reservation must never own a share. This keeps
+        # lifecycle cleanup from cascading tenant configuration and also
+        # prevents credentials from being routed to an unregistered device.
+        await smb_credential_service.require_registered_agent(
+            db, tenant_id, agent_id
+        )
+
         credential_id = await self._resolve_share_credential(
             db, tenant_id, agent_id, data.credential_id, data.credential, user_id
         )
@@ -1849,9 +1936,16 @@ class SmbService:
         await set_tenant_context(db, tenant_id)
         tid = _uuid(tenant_id)
 
+        # Pending reservations and unregistered revoked tombstones are not
+        # operational agents. Registered revoked rows remain auditable but are
+        # intentionally excluded from this dashboard count as well.
         agent_count = (
             await db.execute(
-                select(func.count(SmbAgent.id)).where(SmbAgent.tenant_id == tid)
+                select(func.count(SmbAgent.id)).where(
+                    SmbAgent.tenant_id == tid,
+                    SmbAgent.status.in_(("active", "paused")),
+                    SmbAgent.api_key_hash != "pending",
+                )
             )
         ).scalar_one()
 
