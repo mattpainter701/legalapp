@@ -222,7 +222,9 @@ async def test_admin_workspace_mcp_grant_routes_fail_closed_across_tenants(
         consent_sha256="c" * 64,
         expires_at=datetime.now(timezone.utc) + timedelta(days=30),
     )
-    db_session.add_all([other_tenant, other_user, foreign_grant])
+    db_session.add_all([other_tenant, other_user])
+    await db_session.flush()
+    db_session.add(foreign_grant)
     await db_session.commit()
 
     detail = await client.get(
