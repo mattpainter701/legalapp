@@ -67,7 +67,7 @@ class SmbCredentialService:
         _validate(data.auth_method, data.username, data.password)
 
         if data.agent_id:
-            await self._require_agent(db, tenant_id, data.agent_id)
+            await self.require_registered_agent(db, tenant_id, data.agent_id)
 
         existing = await db.execute(
             select(SmbCredential).where(
@@ -169,7 +169,7 @@ class SmbCredentialService:
             if data.agent_id == "":
                 credential.agent_id = None
             else:
-                await self._require_agent(db, tenant_id, data.agent_id)
+                await self.require_registered_agent(db, tenant_id, data.agent_id)
                 credential.agent_id = _uuid(data.agent_id)
 
         if data.name is not None and data.name != credential.name:
@@ -315,17 +315,19 @@ class SmbCredentialService:
             "password": password,
         }
 
-    async def _require_agent(
+    async def require_registered_agent(
         self, db: AsyncSession, tenant_id: str, agent_id: str
     ) -> None:
         result = await db.execute(
             select(SmbAgent).where(
                 SmbAgent.id == _uuid(agent_id),
                 SmbAgent.tenant_id == _uuid(tenant_id),
+                SmbAgent.status.in_(("active", "paused")),
+                SmbAgent.api_key_hash != "pending",
             )
         )
         if result.scalar_one_or_none() is None:
-            raise SmbCredentialError("Agent not found")
+            raise SmbCredentialError("Registered agent not found or is revoked")
 
 
 smb_credential_service = SmbCredentialService()

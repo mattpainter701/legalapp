@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 pytest.importorskip("smbclient")
@@ -105,3 +106,62 @@ async def test_failed_deletion_sync_does_not_mark_local_ledger(monkeypatch):
 
     assert ledger.deleted == []
     assert outcome["status"] == "failed"
+    assert outcome["error"] == "Sync failed: RuntimeError"
+
+
+@pytest.mark.asyncio
+async def test_sync_validation_detail_is_reported_without_request_body(monkeypatch):
+    monkeypatch.setattr(agent_main, "SYNC_BATCH_SIZE", 100)
+    request = httpx.Request("POST", "https://getlawhand.com/api/v1/smb/agents/a/sync")
+    response = httpx.Response(
+        422, request=request, json={"detail": "modified_time: invalid datetime"}
+    )
+    ledger = _Ledger()
+    result = SimpleNamespace(
+        new_files=[_file(r"\\FS\Legal\bad.txt")],
+        changed_files=[],
+        deleted_files=[],
+        unchanged_files=[],
+        errors=[],
+    )
+
+    outcome = await agent_main._scan_share(
+        {"share_id": "share-1", "server": "FS", "share": "Legal"},
+        ledger,
+        _Client(error=httpx.HTTPStatusError("bad", request=request, response=response)),
+        _Scanner(result),
+    )
+
+    assert outcome["status"] == "failed"
+    assert outcome["error"] == "Sync failed: HTTP 422: modified_time: invalid datetime"
+    assert "bad.txt" not in outcome["error"]
+
+
+def test_safe_request_error_summarizes_pydantic_detail_without_input():
+    request = httpx.Request("POST", "https://getlawhand.com/api/v1/smb/agents/a/sync")
+    response = httpx.Response(
+        422,
+        request=request,
+        json={
+            "detail": [
+                {
+                    "loc": ["body", "files", 0, "modified_time"],
+                    "msg": "Input should be a valid datetime",
+                    "input": "\\\\home\\share\\secret.docx",
+                },
+                {
+                    "loc": ["body", "files", 0, "owner"],
+                    "msg": "value at https://evil.example?token=secret",
+                    "input": "home\\test:password",
+                },
+            ]
+        },
+    )
+
+    error = agent_main._safe_request_error(
+        httpx.HTTPStatusError("bad", request=request, response=response)
+    )
+
+    assert error == "HTTP 422: modified_time: Input should be a valid datetime"
+    assert "secret" not in error
+    assert "home" not in error

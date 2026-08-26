@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, String
+from sqlalchemy import DateTime, ForeignKey, Index, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -12,6 +12,20 @@ from app.database import Base
 
 class SmbAgent(Base):
     __tablename__ = "smb_agents"
+    __table_args__ = (
+        Index("ix_smb_agents_api_key_hash", "api_key_hash"),
+        Index(
+            "ix_smb_agents_tenant_status_expiry",
+            "tenant_id",
+            "status",
+            "pairing_expires_at",
+        ),
+    )
+
+    @property
+    def is_registered(self) -> bool:
+        """Distinguish a device enrollment from a one-time pairing reservation."""
+        return self.api_key_hash != "pending"
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

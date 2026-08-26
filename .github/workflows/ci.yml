@@ -20,6 +20,9 @@ on:
     branches: [main]
   push:
     branches: [main]
+  # Recovery path for GitHub pull_request event-delivery incidents. This runs
+  # the exact same required jobs against the explicitly selected ref.
+  workflow_dispatch:
 
 jobs:
   # Dedicated branch-protection gate for customer data. A fresh-schema test is

@@ -43,7 +43,11 @@ from app.schemas.smb import (
     SyncResponse,
     TaskAck,
 )
-from app.services.smb import fetch_agent_manifest, smb_service
+from app.services.smb import (
+    SmbShareConflictError,
+    fetch_agent_manifest,
+    smb_service,
+)
 from app.services.smb_credentials import (
     SmbCredentialError,
     smb_credential_service,
@@ -594,7 +598,7 @@ async def revoke_agent(
     db: AsyncSession = Depends(get_db),
     admin=Depends(require_admin),
 ):
-    """Revoke agent (soft delete via status='revoked')."""
+    """Revoke an agent, deleting only an unregistered pairing placeholder."""
     tenant_id = str(admin.tenant_id)
     await set_tenant_context(db, tenant_id)
 
@@ -608,7 +612,23 @@ async def revoke_agent(
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
 
+    if agent.api_key_hash == "pending":
+        # Pairing placeholders have no device credential or agent history. A
+        # failed/abandoned reservation should not leave a tombstone in the
+        # tenant's agent list. The service proves it owns no related state
+        # before deleting, so a legacy bad association cannot cascade data.
+        if await smb_service.delete_pairing_placeholder_if_empty(
+            db, agent_id, tenant_id
+        ):
+            await db.commit()
+            return {"status": "deleted", "agent_id": agent_id}
+
+    # Registered devices remain auditable after revocation. A legacy
+    # placeholder with related state is also retained instead of risking a
+    # cascading delete. Clear any stale pairing material in either case.
     agent.status = "revoked"
+    agent.pairing_code = None
+    agent.pairing_expires_at = None
     await db.flush()
     await db.commit()
     return {"status": "revoked", "agent_id": agent_id}
@@ -688,6 +708,8 @@ async def update_share(
     try:
         share = await smb_service.update_share(db, share_id, tenant_id, body)
     except SmbCredentialError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except SmbShareConflictError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))

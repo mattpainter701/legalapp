@@ -75,7 +75,7 @@ function Invoke-Msi(
     foreach ($argument in $Arguments) { [void]$start.ArgumentList.Add($argument) }
     $p = [Diagnostics.Process]::Start($start)
     $p.WaitForExit()
-    if ($p.ExitCode -notin @(0, 3010)) {
+    if ($p.ExitCode -notin @(0, 1641, 3010)) {
         Write-Host "::group::$Operation MSI log tail (password redacted)"
         if (Test-Path -LiteralPath $LogPath) {
             Get-Content -LiteralPath $LogPath -Tail 250 |

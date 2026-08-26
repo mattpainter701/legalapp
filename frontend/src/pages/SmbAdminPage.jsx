@@ -24,9 +24,14 @@ import { format } from 'date-fns'
 import { Spinner } from '../components/ui'
 import { useConfirm } from '../components/dialog/ConfirmProvider'
 import { useToast } from '../components/toast/useToast'
-
-const AGENT_DOWNLOAD_BASE =
-  'https://github.com/mattpainter701/legalapp/releases/latest/download'
+import {
+  AGENT_DOWNLOAD_BASE,
+  buildWindowsInstallCommand,
+  formatSmbDiagnostic,
+  isPairingPlaceholder,
+  isVisibleAgent,
+} from '../utils/smbAgentInstall'
+import { buildSmbOperationalActivity } from '../utils/smbActivity'
 
 // Auth methods the agent knows how to use, mirroring AUTH_METHODS on the API.
 const AUTH_METHODS = [
@@ -271,11 +276,17 @@ function StatusPanel() {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">
-        <Badge label={status?.enabled ? 'Enabled' : 'Disabled'} variant={status?.enabled ? 'success' : 'warning'} />
+        <Badge label={(status?.retrieval_enabled ?? status?.enabled) ? 'Retrieval enabled' : 'Retrieval disabled'} variant={(status?.retrieval_enabled ?? status?.enabled) ? 'success' : 'warning'} />
         <button onClick={load} className="text-xs text-brand-accent font-sans font-medium hover:underline ml-auto">
           Refresh
         </button>
       </div>
+
+      {status?.message && (
+        <div role="status" className="rounded-lg border border-brand-amber/30 bg-brand-amber/10 px-4 py-3 text-sm text-brand-ink-2 font-sans">
+          {status.message}
+        </div>
+      )}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard label="Agents" value={status?.total_agents ?? status?.agent_count ?? 0} sub={`${status?.active_agents ?? 0} active`} />
@@ -305,10 +316,9 @@ function StatusPanel() {
 
 function InstallInstructions({ pairingCode }) {
   const code = pairingCode || '<pairing code>'
-  const windowsCommand =
-    `msiexec /i lawhand-agent-x64.msi /qn PAIRING_CODE=${code} SAAS_URL=${window.location.origin}`
+  const windowsCommand = buildWindowsInstallCommand(pairingCode)
   const linuxCommand =
-    `work="$(mktemp -d)" && tar xzf lawhand-agent-linux-x86_64.tar.gz -C "$work" --strip-components=1 && cd "$work" && sudo ./install.sh --code ${code} --url ${window.location.origin}`
+    `work="$(mktemp -d)" && tar xzf lawhand-agent-linux-x86_64.tar.gz -C "$work" --strip-components=1 && cd "$work" && sudo ./install.sh --code '${code}' --url 'https://getlawhand.com'`
 
   return (
     <div className="bg-brand-surface border border-brand-line rounded-xl p-5 shadow-sm space-y-4">
@@ -316,7 +326,8 @@ function InstallInstructions({ pairingCode }) {
         <h3 className="text-sm font-sans font-bold text-brand-ink">Install the agent</h3>
         <p className="text-xs text-brand-muted font-sans mt-1">
           The agent runs on a machine inside your network that can already reach the file share. It indexes
-          metadata and snippets only; document text is relayed on request and never bulk-uploaded.
+          metadata and snippets only; document text is relayed on request and never bulk-uploaded. On Windows,
+          run the complete two-stage block as Administrator: it installs first, then registers and restarts the agent.
         </p>
       </div>
 
@@ -336,6 +347,14 @@ function InstallInstructions({ pairingCode }) {
             {windowsCommand}
           </pre>
           <CopyButton value={windowsCommand} label="Copy command" />
+          <p className="text-xs text-brand-muted font-sans">Windows agent log:</p>
+          <pre className="bg-brand-bg-soft border border-brand-line rounded-lg p-3 text-[11px] font-mono text-brand-ink overflow-x-auto whitespace-pre-wrap break-all">
+            {"Get-Content 'C:\\ProgramData\\LawHand\\Agent\\logs\\agent.log' -Tail 200 -Wait"}
+          </pre>
+          <CopyButton value={"Get-Content 'C:\\ProgramData\\LawHand\\Agent\\logs\\agent.log' -Tail 200 -Wait"} label="Copy log command" />
+          <p className="text-[11px] text-brand-muted font-sans">
+            MSI failures are recorded separately at <span className="font-mono">$env:TEMP\lawhand-agent-install.log</span>.
+          </p>
         </div>
 
         <div className="space-y-2">
@@ -376,31 +395,64 @@ function AgentsPanel() {
   const toast = useToast()
   const [agents, setAgents] = useState([])
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshError, setRefreshError] = useState(null)
+  const [showHistory, setShowHistory] = useState(false)
   const [error, setError] = useState(null)
   const [pairingCode, setPairingCode] = useState(null)
   const [generating, setGenerating] = useState(false)
   const [updating, setUpdating] = useState(null)
   const [agentUpdates, setAgentUpdates] = useState({})
+  const mounted = useRef(false)
+  const refreshInFlight = useRef(false)
+  const refreshSequence = useRef(0)
 
-  const load = async () => {
-    setLoading(true)
-    setError(null)
+  const load = useCallback(async (initial = false, force = false) => {
+    if (refreshInFlight.current && !force) return
+    const sequence = ++refreshSequence.current
+    refreshInFlight.current = true
+    if (initial) setLoading(true)
+    else setRefreshing(true)
+    if (initial) setError(null)
     try {
       const data = await getSmbAgents()
       const nextAgents = asList(data, 'agents', 'items')
-      setAgents(nextAgents)
-      const updates = await Promise.all(nextAgents.map(async (agent) => {
+      const updates = await Promise.all(nextAgents.filter((agent) => !isPairingPlaceholder(agent)).map(async (agent) => {
         try { return [agent.id, await getSmbAgentUpdate(agent.id)] } catch { return [agent.id, null] }
       }))
+      if (!mounted.current || sequence !== refreshSequence.current) return
+      setAgents(nextAgents)
       setAgentUpdates(Object.fromEntries(updates))
+      setError(null)
+      setRefreshError(null)
     } catch (e) {
-      setError(errText(e, 'Failed to load agents'))
+      if (!mounted.current || sequence !== refreshSequence.current) return
+      const message = errText(e, 'Failed to load agents')
+      if (initial) setError(message)
+      else setRefreshError(message)
     } finally {
-      setLoading(false)
+      if (sequence === refreshSequence.current) {
+        refreshInFlight.current = false
+        if (mounted.current) {
+          setLoading(false)
+          setRefreshing(false)
+        }
+      }
     }
-  }
+  }, [])
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
+
+  useEffect(() => {
+    load(true)
+    const timer = window.setInterval(() => load(false), 30000)
+    return () => window.clearInterval(timer)
+  }, [load])
+
+  const visibleAgents = agents.filter((agent) => isVisibleAgent(agent, showHistory))
 
   const pendingUpdateIds = Object.entries(agentUpdates)
     .filter(([, update]) => ['queued', 'in_progress'].includes(update?.update_status))
@@ -449,7 +501,7 @@ function AgentsPanel() {
     setUpdating(agentId)
     try {
       await updateSmbAgent(agentId, { status: newStatus })
-      load()
+      await load(false, true)
     } catch (e) {
       toast.error('Agent was not updated', { message: errText(e, 'Unknown error') })
     } finally {
@@ -467,7 +519,7 @@ function AgentsPanel() {
     try {
       await requestSmbAgentUpdate(agentId)
       toast.success('Agent update queued')
-      await load()
+      await load(false, true)
     } catch (e) {
       toast.error('Agent update was not queued', { message: errText(e, 'Unknown error') })
     } finally { setUpdating(null) }
@@ -477,7 +529,7 @@ function AgentsPanel() {
     if (!await confirmAction({ title: 'Revoke agent?', message: 'This agent will permanently lose access.', confirmLabel: 'Revoke agent', destructive: true })) return
     try {
       await deleteSmbAgent(agentId)
-      load()
+      await load(false, true)
     } catch (e) {
       toast.error('Agent was not revoked', { message: errText(e, 'Unknown error') })
     }
@@ -502,6 +554,13 @@ function AgentsPanel() {
         >
           {generating ? 'Generating...' : 'Generate Pairing Code'}
         </button>
+        <button type="button" onClick={() => load(false)} disabled={refreshing} className="text-xs text-brand-accent font-sans font-medium hover:underline disabled:opacity-40">
+          {refreshing ? 'Refreshing...' : 'Refresh'}
+        </button>
+        <label className="ml-auto flex items-center gap-2 text-xs text-brand-muted font-sans">
+          <input type="checkbox" checked={showHistory} onChange={(event) => setShowHistory(event.target.checked)} />
+          Show revoked history
+        </label>
       </div>
 
       {pairingCode && (
@@ -511,6 +570,12 @@ function AgentsPanel() {
           </span>
           <CopyButton value={String(pairingCode)} label="Copy code" />
         </div>
+      )}
+
+      {refreshError && (
+        <p role="status" className="text-xs text-brand-amber font-sans">
+          Showing the last known agent state. Refresh failed: {refreshError}
+        </p>
       )}
 
       <InstallInstructions pairingCode={pairingCode ? String(pairingCode) : ''} />
@@ -529,7 +594,7 @@ function AgentsPanel() {
             </tr>
           </thead>
           <tbody className="divide-y divide-brand-line">
-            {agents.map((agent) => (
+            {visibleAgents.map((agent) => (
               <tr key={agent.id} className="hover:bg-brand-bg-soft transition-colors">
                 <td className="px-4 py-3 text-brand-ink font-sans font-medium">{agent.agent_name || '-'}</td>
                 <td className="px-4 py-3"><Badge label={agent.status} variant={statusVariant(agent.status)} /></td>
@@ -581,17 +646,19 @@ function AgentsPanel() {
                         {updating === agent.id ? '...' : 'Resume'}
                       </button>
                     )}
-                    <button
-                      onClick={() => handleDeleteAgent(agent.id)}
-                      className="text-xs text-brand-rose font-sans font-medium hover:underline"
-                    >
-                      Revoke
-                    </button>
+                    {agent.status !== 'revoked' && (
+                      <button
+                        onClick={() => handleDeleteAgent(agent.id)}
+                        className="text-xs text-brand-rose font-sans font-medium hover:underline"
+                      >
+                        Revoke
+                      </button>
+                    )}
                   </div>
                 </td>
               </tr>
             ))}
-            {agents.length === 0 && (
+            {visibleAgents.length === 0 && (
               <tr>
                 <td colSpan={7} className="px-4 py-12 text-center text-brand-muted font-sans">
                   No agents registered. Generate a pairing code, then run the installer above on the file server.
@@ -634,10 +701,8 @@ function ShareForm({ agents, credentials, initial, onCancel, onSubmit, submittin
       max_depth: Number(form.max_depth) || 0,
       scan_schedule: form.scan_schedule || '0 */6 * * *',
     }
-    if (mode === 'create') {
-      payload.share_path = form.share_path
-      payload.agent_id = form.agent_id
-    }
+    payload.share_path = form.share_path
+    payload.agent_id = form.agent_id
     if (form.credential_mode === 'existing') {
       payload.credential_id = form.credential_id || ''
     } else if (form.credential_mode === 'new') {
@@ -662,35 +727,36 @@ function ShareForm({ agents, credentials, initial, onCancel, onSubmit, submittin
           {mode === 'create' ? 'Add share' : 'Edit share'}
         </h3>
 
-        {mode === 'create' && (
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field id={`${idPrefix}-share-path`} label="Share path" hint="UNC path, optionally scoped to a subfolder.">
-              <input
-                id={`${idPrefix}-share-path`}
-                type="text"
-                value={form.share_path}
-                onChange={(e) => set({ share_path: e.target.value })}
-                className={inputClass}
-                placeholder="\\\\FS01\\Legal\\Clients"
-                required
-              />
-            </Field>
-            <Field id={`${idPrefix}-agent`} label="Agent">
-              <select
-                id={`${idPrefix}-agent`}
-                value={form.agent_id}
-                onChange={(e) => set({ agent_id: e.target.value })}
-                className={inputClass}
-                required
-              >
-                <option value="">Select agent...</option>
-                {agents.map((a) => (
-                  <option key={a.id} value={a.id}>{a.agent_name || a.hostname || a.id}</option>
-                ))}
-              </select>
-            </Field>
-          </div>
-        )}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field id={`${idPrefix}-share-path`} label="Share path" hint="UNC path, optionally scoped to a subfolder. Example: \\\\home\\share.">
+            <input
+              id={`${idPrefix}-share-path`}
+              type="text"
+              value={form.share_path}
+              onChange={(e) => set({ share_path: e.target.value })}
+              className={inputClass}
+              placeholder="\\\\FS01\\Legal\\Clients"
+              required
+            />
+          </Field>
+          <Field id={`${idPrefix}-agent`} label="Agent" hint="The agent host that can reach this share.">
+            <select
+              id={`${idPrefix}-agent`}
+              value={form.agent_id}
+              onChange={(e) => set({ agent_id: e.target.value })}
+              className={inputClass}
+              required
+            >
+              <option value="">Select agent...</option>
+              {agents.map((a) => (
+                <option key={a.id} value={a.id}>{a.agent_name || a.hostname || a.id}</option>
+              ))}
+            </select>
+          </Field>
+        </div>
+        <p className="text-xs text-brand-muted font-sans">
+          For <span className="font-mono">DOMAIN\\user</span>, set Domain to <span className="font-mono">DOMAIN</span> and Username to <span className="font-mono">user</span>, or put the qualified name in Username and leave Domain blank.
+        </p>
 
         <Field id={`${idPrefix}-display-name`} label="Display name">
           <input
@@ -860,7 +926,7 @@ function SharesPanel() {
         getSmbCredentials(),
       ])
       setShares(asList(sharesData, 'shares', 'items'))
-      setAgents(asList(agentsData, 'agents', 'items'))
+      setAgents(asList(agentsData, 'agents', 'items').filter((agent) => isVisibleAgent(agent)))
       setCredentials(asList(credentialData, 'credentials', 'items'))
     } catch (e) {
       setError(errText(e, 'Failed to load shares'))
@@ -903,12 +969,12 @@ function SharesPanel() {
               ? kind === 'verify_share'
                 ? `Connected as ${res.detail?.identity || 'the configured identity'}${res.detail?.entries_sampled != null ? ` — ${res.detail.entries_sampled} entries visible` : ''}`
                 : 'Scan finished'
-              : res.error || 'Failed',
+              : formatSmbDiagnostic(res.error, kind),
           },
         }))
         load()
       } catch (e) {
-        setProbes((p) => ({ ...p, [shareId]: { state: 'failed', kind, message: errText(e, 'Could not read the result') } }))
+        setProbes((p) => ({ ...p, [shareId]: { state: 'failed', kind, message: formatSmbDiagnostic(e, kind) } }))
       }
     }, 2000)
   }, [load])
@@ -924,7 +990,7 @@ function SharesPanel() {
         : await scanSmbShareNow(share.id)
       pollTask(share.id, res.task_id, kind)
     } catch (e) {
-      setProbes((p) => ({ ...p, [share.id]: { state: 'failed', kind, message: errText(e, 'Request failed') } }))
+      setProbes((p) => ({ ...p, [share.id]: { state: 'failed', kind, message: formatSmbDiagnostic(e, kind) } }))
     }
   }
 
@@ -937,7 +1003,7 @@ function SharesPanel() {
       load()
       toast.success?.('Share added')
     } catch (e) {
-      toast.error('Share was not created', { message: errText(e, 'Unknown error') })
+      toast.error('Share was not created', { message: formatSmbDiagnostic(e, 'share_settings') })
     } finally {
       setSaving(false)
     }
@@ -950,7 +1016,7 @@ function SharesPanel() {
       setEditing(null)
       load()
     } catch (e) {
-      toast.error('Share was not updated', { message: errText(e, 'Unknown error') })
+      toast.error('Share was not updated', { message: formatSmbDiagnostic(e, 'share_settings') })
     } finally {
       setSaving(false)
     }
@@ -1075,7 +1141,7 @@ function SharesPanel() {
                     </div>
                     {(share.last_scan_error || share.last_verify_error) && (
                       <p className="mt-1 text-xs text-brand-rose font-sans max-w-xs break-words">
-                        {share.last_scan_error || share.last_verify_error}
+                        {formatSmbDiagnostic(share.last_scan_error || share.last_verify_error, share.last_scan_error ? 'scan_now' : 'verify_share')}
                       </p>
                     )}
                     {probe && (
@@ -1158,7 +1224,7 @@ function CredentialsPanel() {
     try {
       const [credentialData, agentData] = await Promise.all([getSmbCredentials(), getSmbAgents()])
       setCredentials(asList(credentialData, 'credentials', 'items'))
-      setAgents(asList(agentData, 'agents', 'items'))
+      setAgents(asList(agentData, 'agents', 'items').filter((agent) => isVisibleAgent(agent)))
     } catch (e) {
       setError(errText(e, 'Failed to load credentials'))
     } finally {
@@ -1364,16 +1430,29 @@ function CredentialsPanel() {
 // ── Activity Panel ────────────────────────────────────────────────────────────
 
 function ActivityPanel() {
-  const [entries, setEntries] = useState([])
+  const [activity, setActivity] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [warning, setWarning] = useState(null)
 
   const load = async () => {
     setLoading(true)
     setError(null)
+    setWarning(null)
     try {
-      const data = await getSmbActivity()
-      setEntries(asList(data, 'entries', 'items'))
+      const results = await Promise.allSettled([getSmbActivity(), getSmbAgents(), getSmbShares(), getSmbCredentials()])
+      const [accessResult, agentsResult, sharesResult, credentialsResult] = results
+      if (results.every((result) => result.status === 'rejected')) throw accessResult.reason
+      const sourceNames = ['content access', 'agents', 'shares', 'credentials']
+      const missingSources = results.flatMap((result, index) => result.status === 'rejected' ? [sourceNames[index]] : [])
+      if (missingSources.length) setWarning(`Some activity could not be loaded: ${missingSources.join(', ')}. Refresh to retry.`)
+      const agents = agentsResult.status === 'fulfilled' ? asList(agentsResult.value, 'agents', 'items').filter(isVisibleAgent) : []
+      setActivity(buildSmbOperationalActivity({
+        accessEntries: accessResult.status === 'fulfilled' ? asList(accessResult.value, 'entries', 'items') : [],
+        agents,
+        shares: sharesResult.status === 'fulfilled' ? asList(sharesResult.value, 'shares', 'items') : [],
+        credentials: credentialsResult.status === 'fulfilled' ? asList(credentialsResult.value, 'credentials', 'items') : [],
+      }))
     } catch (e) {
       setError(errText(e, 'Failed to load activity'))
     } finally {
@@ -1389,38 +1468,40 @@ function ActivityPanel() {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">
+        <div>
+          <h3 className="text-sm font-sans font-bold text-brand-ink">Operational activity</h3>
+          <p className="text-xs text-brand-muted font-sans mt-1">Agent heartbeats, updates, share scans/tests, credential verification, and file-content access.</p>
+        </div>
         <button onClick={load} className="text-xs text-brand-accent font-sans font-medium hover:underline ml-auto">
           Refresh
         </button>
       </div>
 
+      {warning && <div role="status" className="rounded-lg border border-brand-amber/30 bg-brand-amber/10 px-4 py-3 text-sm text-brand-ink-2 font-sans">{warning}</div>}
+
       <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-brand-line bg-brand-bg-soft/50">
-              <th className="text-left px-4 py-3 font-semibold text-brand-ink uppercase tracking-wider text-xs">File Path</th>
-              <th className="text-left px-4 py-3 font-semibold text-brand-ink uppercase tracking-wider text-xs">Reason</th>
-              <th className="text-left px-4 py-3 font-semibold text-brand-ink uppercase tracking-wider text-xs">User</th>
-              <th className="text-left px-4 py-3 font-semibold text-brand-ink uppercase tracking-wider text-xs">Accessed At</th>
+              <th className="text-left px-4 py-3 font-semibold text-brand-ink uppercase tracking-wider text-xs">Event</th>
+              <th className="text-left px-4 py-3 font-semibold text-brand-ink uppercase tracking-wider text-xs">Details</th>
+              <th className="text-left px-4 py-3 font-semibold text-brand-ink uppercase tracking-wider text-xs">When</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-brand-line">
-            {entries.map((entry, i) => (
-              <tr key={entry.id || i} className="hover:bg-brand-bg-soft transition-colors">
-                <td className="px-4 py-3 text-brand-ink font-sans font-mono text-xs max-w-xs truncate" title={entry.file_path}>
-                  {entry.file_path || '-'}
-                </td>
-                <td className="px-4 py-3 text-brand-ink-2 font-sans">{entry.access_reason || '-'}</td>
-                <td className="px-4 py-3 text-brand-muted font-sans">{entry.user_id || '-'}</td>
-                <td className="px-4 py-3 text-brand-muted font-sans font-mono">
-                  {entry.accessed_at ? format(new Date(entry.accessed_at), 'MMM d, HH:mm:ss') : '-'}
+            {activity.map((entry) => (
+              <tr key={entry.id} className="hover:bg-brand-bg-soft transition-colors">
+                <td className="px-4 py-3 text-brand-ink font-sans font-medium"><Badge label={entry.kind} variant={entry.state === 'error' ? 'error' : entry.state === 'success' ? 'success' : entry.state === 'warning' ? 'warning' : 'neutral'} /><div className="mt-1">{entry.title}</div></td>
+                <td className="px-4 py-3 text-brand-ink-2 font-sans max-w-xl break-words">{entry.detail || '-'}</td>
+                <td className="px-4 py-3 text-brand-muted font-sans font-mono whitespace-nowrap">
+                  {format(entry.occurredAt, 'MMM d, HH:mm:ss')}
                 </td>
               </tr>
             ))}
-            {entries.length === 0 && (
+            {activity.length === 0 && (
               <tr>
-                <td colSpan={4} className="px-4 py-12 text-center text-brand-muted font-sans">
-                  No recent activity.
+                <td colSpan={3} className="px-4 py-12 text-center text-brand-muted font-sans">
+                  No operational activity yet. Agent heartbeats and verification results will appear here after the agent connects.
                 </td>
               </tr>
             )}

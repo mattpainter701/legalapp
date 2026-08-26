@@ -615,15 +615,23 @@ async def smb_status(
     from app.services.smb import smb_service
     from app.config import get_settings as _gs
 
-    if not _gs().SMB_ENABLED:
-        return {"enabled": False, "message": "SMB file share feature is not enabled"}
-
+    # The feature flag controls retrieval/use by the application; it must not
+    # hide the operational inventory from an administrator.  Returning early
+    # here made a correctly registered agent look like an empty installation
+    # (and also skipped tenant authentication) whenever the flag was off.
     admin = await _require_admin(request, db)
     tenant_id = str(admin.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     stats = await smb_service.get_admin_stats(db, tenant_id)
-    stats["enabled"] = True
+    retrieval_enabled = bool(_gs().SMB_ENABLED)
+    stats["enabled"] = retrieval_enabled
+    stats["retrieval_enabled"] = retrieval_enabled
+    if not retrieval_enabled:
+        stats["message"] = (
+            "File share agents and indexing are available, but SMB retrieval "
+            "is disabled by server configuration"
+        )
     return stats
 
 
