@@ -64,14 +64,30 @@ $oldLog = Join-Path $work "old.log"
 $upgradeLog = Join-Path $work "upgrade.log"
 $policyChanged = $false
 
-function Invoke-Msi([string[]]$Arguments) {
+function Invoke-Msi(
+    [string]$Operation,
+    [string]$LogPath,
+    [string[]]$Arguments
+) {
     $start = [Diagnostics.ProcessStartInfo]::new("msiexec.exe")
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true
     foreach ($argument in $Arguments) { [void]$start.ArgumentList.Add($argument) }
     $p = [Diagnostics.Process]::Start($start)
     $p.WaitForExit()
-    if ($p.ExitCode -notin @(0, 3010)) { throw "MSI operation failed with exit code $($p.ExitCode)." }
+    if ($p.ExitCode -notin @(0, 3010)) {
+        Write-Host "::group::$Operation MSI log tail (password redacted)"
+        if (Test-Path -LiteralPath $LogPath) {
+            Get-Content -LiteralPath $LogPath -Tail 250 |
+                ForEach-Object { $_.Replace($passwordPlain, "<redacted>") } |
+                Write-Host
+        }
+        else {
+            Write-Host "MSI did not create the requested verbose log: $LogPath"
+        }
+        Write-Host "::endgroup::"
+        throw "$Operation failed with MSI exit code $($p.ExitCode)."
+    }
 }
 function Service-StartName {
     $out = & sc.exe qc LawHandAgent 2>$null
@@ -103,11 +119,16 @@ try {
         -d "AgentExe=$exe" -d "ProductVersion=0.14.0" -ext WixToolset.Util.wixext -o $oldMsi | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "Could not build predecessor MSI." }
 
-    Invoke-Msi -Arguments @("/i", $oldMsi, "/qn", "/norestart", "SERVICE_ACCOUNT=$account", "SERVICE_PASSWORD=$passwordPlain", "/l*v", $oldLog)
+    Invoke-Msi -Operation "Predecessor install" -LogPath $oldLog -Arguments @(
+        "/i", $oldMsi, "/qn", "/norestart", "SERVICE_ACCOUNT=$account",
+        "SERVICE_PASSWORD=$passwordPlain", "/l*v", $oldLog
+    )
     $before = Service-StartName
     if ($before -notlike "*$user") { throw "Predecessor service account was not installed as the test user." }
 
-    Invoke-Msi -Arguments @("/i", $currentMsi.FullName, "/qn", "/norestart", "/l*v", $upgradeLog)
+    Invoke-Msi -Operation "Overtop upgrade" -LogPath $upgradeLog -Arguments @(
+        "/i", $currentMsi.FullName, "/qn", "/norestart", "/l*v", $upgradeLog
+    )
     $after = Service-StartName
     if ($after -ne $before) { throw "Overtop upgrade changed service account." }
     $service = Get-Service -Name LawHandAgent
