@@ -43,7 +43,11 @@ from app.schemas.smb import (
     SyncResponse,
     TaskAck,
 )
-from app.services.smb import fetch_agent_manifest, smb_service
+from app.services.smb import (
+    SmbShareConflictError,
+    fetch_agent_manifest,
+    smb_service,
+)
 from app.services.smb_credentials import (
     SmbCredentialError,
     smb_credential_service,
@@ -704,6 +708,8 @@ async def update_share(
     try:
         share = await smb_service.update_share(db, share_id, tenant_id, body)
     except SmbCredentialError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except SmbShareConflictError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))

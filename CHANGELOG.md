@@ -26,6 +26,11 @@
   private-detail protection remains enforced.
 
 ### Fixed
+- **File-share connection tests and indexing now agree:** the API accepts the
+  empty timestamp sentinel emitted by installed v0.15.0 agents while v0.15.1
+  sends proper null values and reports bounded validation details. Admins can
+  edit a share's UNC path or assigned agent, and a move retires stale indexed
+  metadata before the new location is scanned into matter context.
 - **Abandoned file-share pairing attempts no longer look like installed
   agents** (migration `132_smb_agent_lifecycle_indexes`): expired
   never-registered reservations are removed by a tenant/RLS-

@@ -36,6 +36,8 @@ Add the narrowest approved path and a recognizable display name. Avoid drive roo
 
 Use **Test connection** immediately after adding the share. The agent mounts the path with the configured credential and reports back what identity it used and whether it could list the folder, so a wrong password or a missing permission surfaces at once instead of as an empty index hours later.
 
+Use **Edit** to correct the UNC path or move the share to another registered agent. A path or agent change clears the old scan/verification result and removes the prior file metadata from active search until the new location is scanned, preventing stale matter context from surviving a move.
+
 ## Index and search
 
 Start indexing during an approved window, using **Scan now** rather than waiting for the schedule. Record baseline file counts and monitor progress and failures — the share row shows the last scan time, its status, the file count, and the error text when a scan fails. After indexing, test a known allowed document and a known disallowed location.
@@ -44,6 +46,6 @@ File permissions can change after indexing. Establish a process for rescans, del
 
 ## Diagnose safely
 
-For an offline agent, check its registered identity, network path reachability, service status, and last heartbeat through the restricted operations procedure. For a share that stopped indexing, read the scan error on the share row and re-run **Test connection** to separate a credential problem from a path or permission problem. For file errors, preserve the relative path and error category without copying sensitive file contents into support notes.
+For an offline agent, check its registered identity, network path reachability, service status, and last heartbeat through the restricted operations procedure. For a share that stopped indexing, read the scan error on the share row and re-run **Test connection** to separate a credential problem from a path or permission problem. If the connection test succeeds but sync reports HTTP 422, the share credentials are working and the file-metadata payload needs a compatible server or agent update. For file errors, preserve the relative path and error category without copying sensitive file contents into support notes.
 
 Disable or remove a share when its business owner, path, tenant, or data classification changes. Verify what indexed data and caches remain under retention policy.

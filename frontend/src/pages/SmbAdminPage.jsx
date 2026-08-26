@@ -27,6 +27,7 @@ import { useToast } from '../components/toast/useToast'
 import {
   AGENT_DOWNLOAD_BASE,
   buildWindowsInstallCommand,
+  formatSmbDiagnostic,
   isPairingPlaceholder,
   isVisibleAgent,
 } from '../utils/smbAgentInstall'
@@ -693,10 +694,8 @@ function ShareForm({ agents, credentials, initial, onCancel, onSubmit, submittin
       max_depth: Number(form.max_depth) || 0,
       scan_schedule: form.scan_schedule || '0 */6 * * *',
     }
-    if (mode === 'create') {
-      payload.share_path = form.share_path
-      payload.agent_id = form.agent_id
-    }
+    payload.share_path = form.share_path
+    payload.agent_id = form.agent_id
     if (form.credential_mode === 'existing') {
       payload.credential_id = form.credential_id || ''
     } else if (form.credential_mode === 'new') {
@@ -721,35 +720,36 @@ function ShareForm({ agents, credentials, initial, onCancel, onSubmit, submittin
           {mode === 'create' ? 'Add share' : 'Edit share'}
         </h3>
 
-        {mode === 'create' && (
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field id={`${idPrefix}-share-path`} label="Share path" hint="UNC path, optionally scoped to a subfolder.">
-              <input
-                id={`${idPrefix}-share-path`}
-                type="text"
-                value={form.share_path}
-                onChange={(e) => set({ share_path: e.target.value })}
-                className={inputClass}
-                placeholder="\\\\FS01\\Legal\\Clients"
-                required
-              />
-            </Field>
-            <Field id={`${idPrefix}-agent`} label="Agent">
-              <select
-                id={`${idPrefix}-agent`}
-                value={form.agent_id}
-                onChange={(e) => set({ agent_id: e.target.value })}
-                className={inputClass}
-                required
-              >
-                <option value="">Select agent...</option>
-                {agents.map((a) => (
-                  <option key={a.id} value={a.id}>{a.agent_name || a.hostname || a.id}</option>
-                ))}
-              </select>
-            </Field>
-          </div>
-        )}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field id={`${idPrefix}-share-path`} label="Share path" hint="UNC path, optionally scoped to a subfolder. Example: \\\\home\\share.">
+            <input
+              id={`${idPrefix}-share-path`}
+              type="text"
+              value={form.share_path}
+              onChange={(e) => set({ share_path: e.target.value })}
+              className={inputClass}
+              placeholder="\\\\FS01\\Legal\\Clients"
+              required
+            />
+          </Field>
+          <Field id={`${idPrefix}-agent`} label="Agent" hint="The agent host that can reach this share.">
+            <select
+              id={`${idPrefix}-agent`}
+              value={form.agent_id}
+              onChange={(e) => set({ agent_id: e.target.value })}
+              className={inputClass}
+              required
+            >
+              <option value="">Select agent...</option>
+              {agents.map((a) => (
+                <option key={a.id} value={a.id}>{a.agent_name || a.hostname || a.id}</option>
+              ))}
+            </select>
+          </Field>
+        </div>
+        <p className="text-xs text-brand-muted font-sans">
+          For <span className="font-mono">DOMAIN\\user</span>, set Domain to <span className="font-mono">DOMAIN</span> and Username to <span className="font-mono">user</span>, or put the qualified name in Username and leave Domain blank.
+        </p>
 
         <Field id={`${idPrefix}-display-name`} label="Display name">
           <input
@@ -962,12 +962,12 @@ function SharesPanel() {
               ? kind === 'verify_share'
                 ? `Connected as ${res.detail?.identity || 'the configured identity'}${res.detail?.entries_sampled != null ? ` — ${res.detail.entries_sampled} entries visible` : ''}`
                 : 'Scan finished'
-              : res.error || 'Failed',
+              : formatSmbDiagnostic(res.error, kind),
           },
         }))
         load()
       } catch (e) {
-        setProbes((p) => ({ ...p, [shareId]: { state: 'failed', kind, message: errText(e, 'Could not read the result') } }))
+        setProbes((p) => ({ ...p, [shareId]: { state: 'failed', kind, message: formatSmbDiagnostic(e, kind) } }))
       }
     }, 2000)
   }, [load])
@@ -983,7 +983,7 @@ function SharesPanel() {
         : await scanSmbShareNow(share.id)
       pollTask(share.id, res.task_id, kind)
     } catch (e) {
-      setProbes((p) => ({ ...p, [share.id]: { state: 'failed', kind, message: errText(e, 'Request failed') } }))
+      setProbes((p) => ({ ...p, [share.id]: { state: 'failed', kind, message: formatSmbDiagnostic(e, kind) } }))
     }
   }
 
@@ -996,7 +996,7 @@ function SharesPanel() {
       load()
       toast.success?.('Share added')
     } catch (e) {
-      toast.error('Share was not created', { message: errText(e, 'Unknown error') })
+      toast.error('Share was not created', { message: formatSmbDiagnostic(e, 'share_settings') })
     } finally {
       setSaving(false)
     }
@@ -1009,7 +1009,7 @@ function SharesPanel() {
       setEditing(null)
       load()
     } catch (e) {
-      toast.error('Share was not updated', { message: errText(e, 'Unknown error') })
+      toast.error('Share was not updated', { message: formatSmbDiagnostic(e, 'share_settings') })
     } finally {
       setSaving(false)
     }
@@ -1134,7 +1134,7 @@ function SharesPanel() {
                     </div>
                     {(share.last_scan_error || share.last_verify_error) && (
                       <p className="mt-1 text-xs text-brand-rose font-sans max-w-xs break-words">
-                        {share.last_scan_error || share.last_verify_error}
+                        {formatSmbDiagnostic(share.last_scan_error || share.last_verify_error, share.last_scan_error ? 'scan_now' : 'verify_share')}
                       </p>
                     )}
                     {probe && (

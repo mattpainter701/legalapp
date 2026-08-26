@@ -377,6 +377,7 @@ remain the next controls if a Tailscale-equivalent device identity is required.
 | "SMB feature is not enabled" | Set `SMB_ENABLED=true` in `.env` and restart backend |
 | Pairing code expired | Generate a new one (they expire in 10 min) |
 | Agent can't connect to SMB | Check `smb_credentials` in config.toml, verify network access |
+| Connection test succeeds but sync returns HTTP 422 | Upgrade the SaaS compatibility fix or agent to v0.15.1+, then retry **Scan now**; SMB credentials are already working |
 | No files in search results | Use **Scan now** in the share admin view, or run `lawhand-agent scan` on the agent |
 | Content fetch timeout | Increase `SMB_CONTENT_FETCH_TIMEOUT` in `.env` |
 | Agent shows as "paused" | Heartbeat missed for 15+ minutes; check agent is running |

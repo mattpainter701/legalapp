@@ -81,6 +81,58 @@ export function isVisibleAgent(agent, showHistory = false) {
   return showHistory && agent?.status === 'revoked'
 }
 
+function flattenError(value, seen = new Set()) {
+  if (value == null) return []
+  if (Array.isArray(value)) return value.flatMap((item) => flattenError(item, seen))
+  if (typeof value === 'object') {
+    if (seen.has(value)) return []
+    seen.add(value)
+    return flattenError(value.response ?? value.data ?? value.detail ?? value.message ?? value.msg ?? value.error, seen)
+  }
+  const text = String(value)
+    .replace(/\[([^\]]+)]\(https?:\/\/[^)]+\)/gi, '$1')
+    .replace(/https?:\/\/\S+/gi, '')
+    .replace(/For more information check:\s*/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return text ? [text] : []
+}
+
+export function formatSmbDiagnostic(value, kind = 'scan') {
+  const messages = [...new Set(flattenError(value))]
+  if (!messages.length) {
+    if (kind === 'verify_share') return 'Connection test failed.'
+    if (kind === 'share_settings') return 'Share settings could not be saved.'
+    return 'Scan failed.'
+  }
+  const text = messages.join('; ')
+  const status = value?.response?.status ?? value?.status
+  if (status === 422 || /\b422\b|unprocessable entity|validation error/i.test(text)) {
+    if (kind === 'scan' || kind === 'scan_now') {
+      const field = text.match(/\b(modified_time|created_time|size_bytes|filename|path):\s*([^;]{1,100})/i)
+      const detail = field ? `: ${field[1]} — ${field[2].replace(/[.'"]+$/, '')}` : ''
+      return `Sync rejected file metadata (HTTP 422${detail}). Retry after updating the server or agent.`
+    }
+    if (kind === 'verify_share') {
+      return 'Connection settings were rejected (HTTP 422). Check the UNC path, selected agent, and credential.'
+    }
+    const detail = text
+      .replace(/^.*?\b422\b[: ]*/i, '')
+      .replace(/^unprocessable entity[: ]*/i, '')
+      .trim()
+    return detail
+      ? `Share settings were rejected (HTTP 422): ${detail}`
+      : 'Share settings were rejected (HTTP 422). Check the UNC path and selected agent.'
+  }
+  if (/offline|heartbeat|timed out|timeout|not responding/i.test(text)) {
+    return `${text} Confirm the agent service is running and has reached a recent heartbeat.`
+  }
+  if (/credential|logon|permission|access denied|authentication/i.test(text)) {
+    return `${text} Check the stored credential and that it can read the share.`
+  }
+  return text
+}
+
 export function buildWindowsInstallCommand(pairingCode = '') {
   const pairingLine = PAIRING_CODE_PATTERN.test(pairingCode)
     ? `$PairingCode = '${pairingCode}'`

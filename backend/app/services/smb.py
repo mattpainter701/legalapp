@@ -78,6 +78,12 @@ _manifest_cache: tuple[float, dict] | None = None
 _manifest_failure_until = 0.0
 AGENT_UPDATE_MANIFEST_FAILURE_BACKOFF_SECONDS = 30
 AGENT_MANIFEST_MAX_REDIRECTS = 5
+
+
+class SmbShareConflictError(ValueError):
+    """Raised when a tenant already has the requested agent/path share."""
+
+
 OFFICIAL_MANIFEST_REDIRECT_HOSTS = {
     "github.com",
     "objects.githubusercontent.com",
@@ -1422,6 +1428,43 @@ class SmbService:
         if share is None:
             raise ValueError("Share not found")
 
+        target_agent_id = str(data.agent_id or share.agent_id)
+        target_path = data.share_path or share.share_path
+        await smb_credential_service.require_registered_agent(
+            db, tenant_id, target_agent_id
+        )
+        duplicate = await db.execute(
+            select(SmbShare.id).where(
+                SmbShare.tenant_id == _uuid(tenant_id),
+                SmbShare.agent_id == _uuid(target_agent_id),
+                SmbShare.share_path == target_path,
+                SmbShare.id != _uuid(share_id),
+            )
+        )
+        if duplicate.scalar_one_or_none() is not None:
+            raise SmbShareConflictError(
+                "A share with this path already exists on the selected agent"
+            )
+
+        assignment_changed = (
+            str(share.agent_id) != target_agent_id or share.share_path != target_path
+        )
+        if (
+            assignment_changed
+            and data.credential is None
+            and data.credential_id is None
+            and share.credential_id is not None
+        ):
+            # Validate before mutating the ORM row so a pinned credential
+            # cannot leave a partially moved share in the transaction.
+            await self._resolve_share_credential(
+                db, tenant_id, target_agent_id, str(share.credential_id)
+            )
+        if data.share_path is not None:
+            share.share_path = target_path
+        if data.agent_id is not None:
+            share.agent_id = _uuid(target_agent_id)
+
         if data.display_name is not None:
             share.display_name = data.display_name
         if data.file_extensions is not None:
@@ -1452,6 +1495,28 @@ class SmbService:
             share.last_verify_status = None
             share.last_verify_error = None
 
+        if assignment_changed:
+            # A different path/agent has never been verified or scanned by
+            # this share row. Hide its old corpus entries immediately rather
+            # than leaving stale matter/context results until another scan.
+            await db.execute(
+                update(SmbFileIndex)
+                .where(
+                    SmbFileIndex.tenant_id == _uuid(tenant_id),
+                    SmbFileIndex.share_id == _uuid(share_id),
+                )
+                .values(is_deleted=True)
+            )
+            await advance_rag_corpus_revision(db, _uuid(tenant_id))
+
+            # Force the portal/agent to establish fresh operational state.
+            share.last_scan_at = None
+            share.last_scan_status = None
+            share.last_scan_file_count = None
+            share.last_scan_error = None
+            share.last_verified_at = None
+            share.last_verify_status = None
+            share.last_verify_error = None
         await db.flush()
         return share
 
