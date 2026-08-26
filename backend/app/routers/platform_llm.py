@@ -46,6 +46,7 @@ from app.services.llm_routing import (
     get_platform_llm_config,
     upsert_platform_llm_config,
 )
+from app.services.background_ai_quota import BACKGROUND_ROUTE_CONFIG_KEY
 from app.services.operator_audit import record_operator_audit
 from app.services.platform_auth import require_platform_token
 from app.services.token_vault import decrypt_token, encrypt_token
@@ -118,7 +119,7 @@ PROVIDER_PRESETS = [
         "name": "OpenCode Go",
         "base_url": "https://opencode.ai/zen/go/v1",
         "models_url": "https://opencode.ai/zen/go/v1/models",
-        "description": "Premium DeepSeek V4 Pro / Flash",
+        "description": "Subscription models including GPT Luna and DeepSeek",
         "auth_scheme": "bearer",
         "litellm_mode": "openai_compatible",
         "model_placeholder": "deepseek-v4-pro",
@@ -192,6 +193,9 @@ class RouteEntry(BaseModel):
 class RoutesUpdate(BaseModel):
     standard: RouteEntry
     premium: RouteEntry
+    # Background Automations is platform-global. Keep it optional so existing
+    # Standard/Premium profile saves remain compatible.
+    background: Optional[RouteEntry] = None
 
 
 class RoutingProfileCreate(BaseModel):
@@ -375,6 +379,7 @@ def _route_audit_payload(
     return {
         "standard": _target_payload(config.get("standard", {})),
         "premium": _target_payload(config.get("premium", {})),
+        "background": _target_payload(config.get("background", {})),
         "litellm_updated": bool(reload_result.get("litellm_updated")),
         "litellm_error": reload_result.get("litellm_error"),
     }
@@ -499,7 +504,7 @@ def _confidential_data_unsafe_targets(
                 }
             )
 
-    for route_name in ("standard", "premium"):
+    for route_name in ("standard", "premium", "background"):
         route = config.get(route_name, {})
         if not isinstance(route, dict):
             continue
@@ -606,15 +611,27 @@ def _route_compatible(provider_id: str, model_id: str) -> bool:
 def _model_data_policy(
     provider_id: str, model_id: str, is_free: bool
 ) -> dict[str, Any]:
+    mid = (model_id or "").lower()
     if provider_id == "opencode-zen" and is_free:
         return {
             "data_policy": "training_or_improvement_possible",
             "confidential_data_allowed": False,
         }
-    # OpenCode documents the Go plan as zero-retention with no model training
-    # across its curated provider set, not only for the DeepSeek entries.
-    # https://opencode.ai/docs/go/#privacy
     if provider_id == "opencode-go":
+        # Go publishes model-specific retention. GPT/Grok are not used for
+        # training but retain abuse-monitoring logs for up to 30 days; Muse is
+        # explicitly training-eligible. The remaining current Go catalog is
+        # documented as zero-day retention, subject to provider evidence gates.
+        if mid.startswith("muse-"):
+            return {
+                "data_policy": "training_or_improvement_possible",
+                "confidential_data_allowed": False,
+            }
+        if mid.startswith(("gpt-", "grok-")):
+            return {
+                "data_policy": "no_training_30_day_retention",
+                "confidential_data_allowed": True,
+            }
         return {
             "data_policy": "zero_retention",
             "confidential_data_allowed": True,
@@ -1406,9 +1423,99 @@ async def _get_route_config(db: AsyncSession) -> dict:
         select(PlatformSetting).where(PlatformSetting.key == LLM_ROUTE_CONFIG_KEY)
     )
     row = result.scalar_one_or_none()
-    if row and row.value:
-        return row.value
-    return {"standard": {}, "premium": {}}
+    saved = row.value if row and isinstance(row.value, dict) else {}
+    background_result = await db.execute(
+        select(PlatformSetting).where(
+            PlatformSetting.key == BACKGROUND_ROUTE_CONFIG_KEY
+        )
+    )
+    background_row = background_result.scalar_one_or_none()
+    background_saved = (
+        background_row.value
+        if background_row and isinstance(background_row.value, dict)
+        else {}
+    )
+    background_route = background_saved.get("route") or saved.get("background") or {}
+    if not isinstance(background_route, dict):
+        background_route = {}
+    else:
+        # Background work is never allowed to carry matter context, including
+        # when a legacy row was written before the global route existed.
+        background_route = dict(background_route)
+        background_route["allow_matter_context"] = False
+    activation = (
+        saved.get("activation") if isinstance(saved.get("activation"), dict) else {}
+    )
+    background_activation = (
+        background_saved.get("activation")
+        if isinstance(background_saved.get("activation"), dict)
+        else {}
+    )
+    background_saved_alias = _clean_optional(background_saved.get("model"))
+    if background_activation or background_saved_alias:
+        activation = {
+            **activation,
+            "background": background_activation,
+            "aliases": {
+                **(
+                    activation.get("aliases")
+                    if isinstance(activation.get("aliases"), dict)
+                    else {}
+                ),
+                "background": (background_activation.get("aliases", {}) or {}).get(
+                    "background"
+                )
+                or background_saved_alias,
+            },
+        }
+    return {
+        "standard": saved.get("standard") or {},
+        "premium": saved.get("premium") or {},
+        "background": background_route,
+        "activation": activation,
+    }
+
+
+def _background_activation_alias(config: dict[str, Any]) -> str | None:
+    """Return the persisted global alias, if one is available."""
+
+    activation = config.get("activation")
+    if isinstance(activation, dict):
+        aliases = activation.get("aliases")
+        if isinstance(aliases, dict):
+            alias = _clean_optional(aliases.get("background"))
+            if alias:
+                return alias
+    return _clean_optional(config.get("background_model"))
+
+
+async def _save_background_route_config(
+    db: AsyncSession, route: dict[str, Any], activation: dict[str, Any], alias: str
+) -> None:
+    """Persist the global background route without overwriting quota settings."""
+    result = await db.execute(
+        select(PlatformSetting).where(
+            PlatformSetting.key == BACKGROUND_ROUTE_CONFIG_KEY
+        )
+    )
+    row = result.scalar_one_or_none()
+    current = dict(row.value) if row and isinstance(row.value, dict) else {}
+    persisted_route = dict(route)
+    persisted_route["allow_matter_context"] = False
+    current.update(
+        {
+            "route": persisted_route,
+            "model": alias,
+            "activation": activation,
+        }
+    )
+    if row is None:
+        row = PlatformSetting(key=BACKGROUND_ROUTE_CONFIG_KEY, value=current)
+        db.add(row)
+    else:
+        row.value = current
+        row.updated_at = datetime.now(timezone.utc)
+    await db.flush()
 
 
 def _profile_payload(profile: LLMRoutingProfile) -> dict[str, Any]:
@@ -1512,23 +1619,45 @@ def _litellm_model_items(payload: Any) -> list[dict[str, Any]]:
     return [item for item in items if isinstance(item, dict)]
 
 
-def _route_revision(config: dict[str, Any]) -> str:
+def _route_revision(
+    config: dict[str, Any],
+    route_names: tuple[str, ...] = ("standard", "premium", "background"),
+) -> str:
     """Return a stable revision for the provider/key/model route graph."""
 
     material = {
-        route_name: config.get(route_name, {}) or {}
-        for route_name in ("standard", "premium")
+        route_name: config.get(route_name, {}) or {} for route_name in route_names
     }
     encoded = json.dumps(material, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:12]
 
 
 def _managed_route_aliases(config: dict[str, Any]) -> dict[str, str]:
-    revision = _route_revision(config)
-    return {
+    # Standard/Premium profile edits must not rotate the platform-global
+    # background alias. Each pool gets a revision based only on the graph it
+    # owns, while the activation record may still use the full graph revision.
+    revision = _route_revision(config, ("standard", "premium"))
+    aliases = {
         "standard": f"clarity-standard-r{revision}",
         "premium": f"clarity-premium-r{revision}",
     }
+    background = config.get("background") or {}
+    if isinstance(background, dict) and (
+        _target_is_complete(background)
+        or any(
+            _target_is_complete(target)
+            for target in (background.get("alternates") or [])
+            if isinstance(target, dict)
+        )
+        or any(
+            _target_is_complete(target)
+            for target in (background.get("fallbacks") or [])
+            if isinstance(target, dict)
+        )
+    ):
+        background_revision = _route_revision(config, ("background",))
+        aliases["background"] = f"clarity-background-r{background_revision}"
+    return aliases
 
 
 def _managed_deployment_id(
@@ -1703,7 +1832,9 @@ async def _call_litellm_config_update(
                     )
 
             router_settings: dict[str, Any] = {
-                "routing_strategy": "cost-based-routing",
+                # App-level quota reservation owns long-window fairness;
+                # LiteLLM should only shuffle admitted homogeneous targets.
+                "routing_strategy": "simple-shuffle",
                 # Always send the field so removing the final fallback clears the
                 # old router value instead of leaving a stale chain active.
                 "fallbacks": fallbacks,
@@ -1790,7 +1921,12 @@ def _build_litellm_reload_payload(
         )
         return True
 
-    for route_name in ("standard", "premium"):
+    # Background is a third platform-global pool. Primaries and alternates
+    # intentionally share its one versioned alias so LiteLLM balances keys
+    # within the pool; its explicit fallback chain never points at Premium.
+    for route_name in ("standard", "premium", "background"):
+        if route_name not in aliases:
+            continue
         route = config.get(route_name, {}) or {}
         alias = aliases[route_name]
 
@@ -1875,22 +2011,49 @@ async def _probe_litellm_aliases(
         async with httpx.AsyncClient(timeout=35.0) as client:
             for route_name, alias in aliases.items():
                 started = time.monotonic()
-                response = await client.post(
-                    f"{base_url}/chat/completions",
-                    headers=headers,
-                    json={
-                        "model": alias,
-                        "messages": [
-                            {
-                                "role": "system",
-                                "content": "Follow the user's output format exactly.",
-                            },
-                            {"role": "user", "content": "Reply with exactly OK"},
-                        ],
-                        "temperature": 0,
-                        "max_tokens": ROUTE_ACTIVATION_CANARY_MAX_TOKENS,
-                    },
+                background_responses = (
+                    route_name == "background"
+                    and str(settings.LITELLM_BACKGROUND_TRANSPORT).lower()
+                    == "responses"
                 )
+                if background_responses:
+                    responses_url = (
+                        f"{base_url}/responses"
+                        if base_url.endswith("/v1")
+                        else f"{base_url}/v1/responses"
+                    )
+                    response = await client.post(
+                        responses_url,
+                        headers=headers,
+                        json={
+                            "model": alias,
+                            "instructions": "Follow the user's output format exactly.",
+                            "input": [
+                                {
+                                    "role": "user",
+                                    "content": "Reply with exactly OK",
+                                }
+                            ],
+                            "max_output_tokens": ROUTE_ACTIVATION_CANARY_MAX_TOKENS,
+                        },
+                    )
+                else:
+                    response = await client.post(
+                        f"{base_url}/chat/completions",
+                        headers=headers,
+                        json={
+                            "model": alias,
+                            "messages": [
+                                {
+                                    "role": "system",
+                                    "content": "Follow the user's output format exactly.",
+                                },
+                                {"role": "user", "content": "Reply with exactly OK"},
+                            ],
+                            "temperature": 0,
+                            "max_tokens": ROUTE_ACTIVATION_CANARY_MAX_TOKENS,
+                        },
+                    )
                 elapsed_ms = int((time.monotonic() - started) * 1000)
                 if response.status_code != 200:
                     detail = _litellm_error_detail(response)
@@ -1906,12 +2069,15 @@ async def _probe_litellm_aliases(
                         f"Synthetic {route_name} completion failed ({response.status_code}): {detail}",
                     )
                 payload = response.json()
-                choices = payload.get("choices") or []
-                content = (
-                    ((choices[0].get("message") or {}).get("content") or "").strip()
-                    if choices and isinstance(choices[0], dict)
-                    else ""
-                )
+                if background_responses:
+                    content = _responses_output_text(payload)
+                else:
+                    choices = payload.get("choices") or []
+                    content = (
+                        ((choices[0].get("message") or {}).get("content") or "").strip()
+                        if choices and isinstance(choices[0], dict)
+                        else ""
+                    )
                 if not content:
                     results[route_name] = {
                         "alias": alias,
@@ -1955,7 +2121,11 @@ async def _check_litellm_gateway(
     base_url = (settings.LITELLM_BASE_URL or "").rstrip("/")
     expected_aliases = expected_aliases or [
         alias
-        for alias in (settings.LITELLM_STANDARD_MODEL, settings.LITELLM_PREMIUM_MODEL)
+        for alias in (
+            settings.LITELLM_STANDARD_MODEL,
+            settings.LITELLM_PREMIUM_MODEL,
+            settings.LITELLM_BACKGROUND_MODEL,
+        )
         if alias
     ]
     aliases = dict.fromkeys(expected_aliases, False)
@@ -2202,7 +2372,7 @@ async def delete_provider_key(
 
     in_use_by = [
         route_name
-        for route_name in ("standard", "premium")
+        for route_name in ("standard", "premium", "background")
         if _uses_key(route_config.get(route_name, {}) or {})
     ]
     if in_use_by:
@@ -2233,7 +2403,7 @@ async def delete_provider_key(
 
 @router.post("/provider-keys/sync-env")
 async def sync_env_keys(request: Request, db: AsyncSession = Depends(get_db)):
-    """Import DEEPSEEK_API_KEY and OPENROUTER_API_KEY from environment into the vault."""
+    """Import canonical provider credentials, with bounded legacy fallbacks."""
     _require_platform_key(request)
 
     synced = []
@@ -2252,15 +2422,32 @@ async def sync_env_keys(request: Request, db: AsyncSession = Depends(get_db)):
         logger.info("sync_env_keys: removed stale opencode-zen env key %s", stale.id)
 
     env_map = [
-        ("DEEPSEEK_API_KEY", "opencode-go", "OpenCode Go API Key (from env)"),
-        ("OPENCODE_API_KEY", "opencode-zen", "OpenCode Zen API Key (from env)"),
-        ("OPENROUTER_API_KEY", "openrouter", "OpenRouter API Key (from env)"),
+        (
+            ("OPENCODE_GO_API_KEY", "DEEPSEEK_API_KEY"),
+            "opencode-go",
+            "OpenCode Go API Key (from env)",
+        ),
+        (
+            ("OPENCODE_ZEN_API_KEY", "OPENCODE_API_KEY", "OPENCODE_KEY"),
+            "opencode-zen",
+            "OpenCode Zen API Key (from env)",
+        ),
+        (("OPENROUTER_API_KEY",), "openrouter", "OpenRouter API Key (from env)"),
     ]
 
-    for env_var, provider_id, display_name in env_map:
-        raw_key = getattr(settings, env_var, None) or ""
+    for env_vars, provider_id, display_name in env_map:
+        selected = next(
+            (
+                (env_var, str(getattr(settings, env_var, None) or "").strip())
+                for env_var in env_vars
+                if str(getattr(settings, env_var, None) or "").strip()
+            ),
+            None,
+        )
+        env_var, raw_key = selected or (env_vars[0], "")
         if not raw_key.strip():
-            errors.append(f"{env_var} is empty or not set")
+            aliases = ", ".join(env_vars)
+            errors.append(f"No configured credential found in: {aliases}")
             continue
 
         # Check if a key with this name already exists
@@ -2720,6 +2907,27 @@ async def get_routes(
 ):
     _require_platform_key(request)
     profile = await _selected_profile(db, profile_id)
+    global_config = await _get_route_config(db)
+    profile_activation = (
+        profile.activation if profile and isinstance(profile.activation, dict) else {}
+    )
+    profile_aliases = (
+        profile_activation.get("aliases")
+        if isinstance(profile_activation.get("aliases"), dict)
+        else {}
+    )
+    global_background_alias = _background_activation_alias(global_config)
+    selected_activation = {
+        **profile_activation,
+        "aliases": {
+            **profile_aliases,
+            **(
+                {"background": global_background_alias}
+                if global_background_alias
+                else {}
+            ),
+        },
+    }
     config = (
         {
             "standard": {
@@ -2730,10 +2938,12 @@ async def get_routes(
                 **dict(profile.premium_route or {}),
                 "allow_matter_context": profile.premium_allow_matter_context,
             },
-            "activation": profile.activation or {},
+            # Background is never stored on a tenant-assignable profile.
+            "background": dict(global_config.get("background") or {}),
+            "activation": selected_activation,
         }
         if profile
-        else await _get_route_config(db)
+        else global_config
     )
 
     # Hydrate with key hints (safe, no plaintext)
@@ -2773,6 +2983,7 @@ async def get_routes(
     return {
         "standard": _hydrate(config.get("standard", {})),
         "premium": _hydrate(config.get("premium", {})),
+        "background": _hydrate(config.get("background", {})),
         "activation": config.get("activation", {}),
         "providers": PROVIDER_PRESETS,
         "profile": _profile_payload(profile) if profile else None,
@@ -2886,8 +3097,17 @@ async def save_routes(
 
     _validate_route_entry(body.standard, "standard")
     _validate_route_entry(body.premium, "premium")
+    if body.background is not None:
+        _validate_route_entry(body.background, "background")
+        if body.background.allow_matter_context:
+            raise HTTPException(
+                status_code=400,
+                detail="Background Automations cannot use matter context",
+            )
 
-    def _normalize_route_entry(entry: RouteEntry) -> dict:
+    def _normalize_route_entry(
+        entry: RouteEntry, *, allow_matter_context: bool = True
+    ) -> dict:
         route = {
             "key_id": _clean_optional(entry.key_id) or None,
             "provider_id": _clean_optional(entry.provider_id) or None,
@@ -2895,7 +3115,9 @@ async def save_routes(
             "capacity": _capacity(entry.capacity),
             "alternates": [],
             "fallbacks": [],
-            "allow_matter_context": bool(entry.allow_matter_context),
+            "allow_matter_context": bool(
+                entry.allow_matter_context and allow_matter_context
+            ),
         }
         for alternate in entry.alternates:
             normalized = {
@@ -2945,12 +3167,29 @@ async def save_routes(
             status_code=400,
             detail="The demo routing profile must allow Standard matter context",
         )
+    global_config = await _get_route_config(db)
     config = {
         "standard": _normalize_route_entry(body.standard),
         "premium": _normalize_route_entry(body.premium),
+        # A profile save stores Standard/Premium on the profile. The global
+        # background route is carried into the reload graph and, when supplied,
+        # is persisted separately—never copied onto the tenant profile.
+        "background": (
+            _normalize_route_entry(body.background, allow_matter_context=False)
+            if body.background is not None
+            else dict(global_config.get("background") or {})
+        ),
     }
     await _enforce_customer_route_data_policy(request, db, config)
     aliases = _managed_route_aliases(config)
+    if body.background is None:
+        # Saving a tenant profile or editing Standard/Premium without a
+        # background payload must continue using the currently activated
+        # global alias, rather than creating a profile-derived background
+        # revision.
+        persisted_background_alias = _background_activation_alias(global_config)
+        if persisted_background_alias:
+            aliases["background"] = persisted_background_alias
     reload_result = await _reload_litellm_routes(
         config,
         keys_by_id,
@@ -2978,18 +3217,59 @@ async def save_routes(
             }
             profile.standard_allow_matter_context = body.standard.allow_matter_context
             profile.premium_allow_matter_context = body.premium.allow_matter_context
-            profile.activation = config["activation"]
+            profile.activation = {
+                **config["activation"],
+                "aliases": {
+                    key: value
+                    for key, value in aliases.items()
+                    if key in {"standard", "premium"}
+                },
+            }
         else:
             await _save_route_config(db, config)
-        if profile is None or profile.is_default:
+        # Background is platform-global. An explicit background payload is
+        # applied to its own setting even when Standard/Premium are being
+        # saved to a selected profile; it is never copied onto that profile.
+        if body.background is not None and "background" in aliases:
+            await _save_background_route_config(
+                db,
+                config["background"],
+                {
+                    "status": "active",
+                    "revision": config["activation"]["revision"],
+                    "aliases": {"background": aliases["background"]},
+                    "activated_at": config["activation"]["activated_at"],
+                },
+                aliases["background"],
+            )
+        if (
+            profile is None
+            or profile.is_default
+            or (body.background is not None and "background" in aliases)
+        ):
+            updates = {
+                **(
+                    {
+                        "standard_provider": LITELLM_PROVIDER,
+                        "standard_model": aliases["standard"],
+                        "premium_provider": LITELLM_PROVIDER,
+                        "premium_model": aliases["premium"],
+                    }
+                    if profile is None or profile.is_default
+                    else {}
+                ),
+                **(
+                    {
+                        "background_provider": LITELLM_PROVIDER,
+                        "background_model": aliases["background"],
+                    }
+                    if body.background is not None and "background" in aliases
+                    else {}
+                ),
+            }
             await upsert_platform_llm_config(
                 db,
-                {
-                    "standard_provider": LITELLM_PROVIDER,
-                    "standard_model": aliases["standard"],
-                    "premium_provider": LITELLM_PROVIDER,
-                    "premium_model": aliases["premium"],
-                },
+                updates,
             )
     audit_metadata = _route_audit_payload(config, reload_result)
     if profile:
@@ -3020,6 +3300,7 @@ async def get_gateway_status(request: Request, db: AsyncSession = Depends(get_db
     aliases = [
         str(config.get("standard_model") or "").strip(),
         str(config.get("premium_model") or "").strip(),
+        str(config.get("background_model") or "").strip(),
     ]
     return await _check_litellm_gateway([alias for alias in aliases if alias])
 
@@ -3032,6 +3313,16 @@ async def reload_routes(
 ):
     _require_platform_key(request)
     profile = await _selected_profile(db, profile_id)
+    global_config = await _get_route_config(db)
+    profile_activation = (
+        profile.activation if profile and isinstance(profile.activation, dict) else {}
+    )
+    profile_aliases = (
+        profile_activation.get("aliases")
+        if isinstance(profile_activation.get("aliases"), dict)
+        else {}
+    )
+    global_background_alias = _background_activation_alias(global_config)
     config = (
         {
             "standard": {
@@ -3042,16 +3333,38 @@ async def reload_routes(
                 **dict(profile.premium_route or {}),
                 "allow_matter_context": profile.premium_allow_matter_context,
             },
-            "activation": profile.activation or {},
+            "background": dict(global_config.get("background") or {}),
+            "activation": {
+                **profile_activation,
+                "aliases": {
+                    **profile_aliases,
+                    **(
+                        {"background": global_background_alias}
+                        if global_background_alias
+                        else {}
+                    ),
+                },
+            },
         }
         if profile
-        else await _get_route_config(db)
+        else global_config
     )
     await _enforce_customer_route_data_policy(request, db, config)
     keys_result = await db.execute(select(LLMProviderKey))
     keys_by_id = {str(k.id): k for k in keys_result.scalars().all()}
     activation = config.get("activation", {}) or {}
-    aliases = activation.get("aliases") or _managed_route_aliases(config)
+    activation_aliases = (
+        activation.get("aliases")
+        if isinstance(activation, dict) and isinstance(activation.get("aliases"), dict)
+        else {}
+    )
+    managed_aliases = _managed_route_aliases(config)
+    # A profile activation can contain only the global background alias when
+    # the profile has never been activated. Fill missing Standard/Premium
+    # aliases from the selected profile graph instead of dropping them.
+    aliases = {**managed_aliases, **(activation_aliases or {})}
+    if "background" in managed_aliases:
+        aliases.setdefault("background", managed_aliases["background"])
     reload_result = await _reload_litellm_routes(
         config, keys_by_id, aliases=aliases, validate=True
     )

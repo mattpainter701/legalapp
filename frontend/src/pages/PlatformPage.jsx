@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { createPlatformSession, getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformIntegrationReadiness, getPlatformMcpOverview, getPlatformWorkspaceMcpDiagnostics, getPlatformTenant, updatePlatformTenant, getPlatformPlans, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMModelCatalog, refreshLLMModelCatalog, getLLMRoutes, recommendLLMRoutes, saveLLMRoutes, getLLMGatewayStatus, reloadLLMRoutes, testLLMRoute, getLLMRoutingProfiles, createLLMRoutingProfile, updateLLMRoutingProfile } from '../api'
+import { createPlatformSession, getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformIntegrationReadiness, getPlatformMcpOverview, getPlatformWorkspaceMcpDiagnostics, getPlatformTenant, updatePlatformTenant, getPlatformPlans, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMModelCatalog, refreshLLMModelCatalog, getLLMRoutes, recommendLLMRoutes, saveLLMRoutes, getLLMGatewayStatus, reloadLLMRoutes, testLLMRoute, getLLMRoutingProfiles, createLLMRoutingProfile, updateLLMRoutingProfile, getBackgroundAssistantUsage, updateBackgroundAssistantQuota } from '../api'
 import { Activity, AlertTriangle, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3, FileText, Globe, Key, Plus, Trash2, RefreshCw, CheckCircle, XCircle, Cpu, ArrowDown, ArrowUp, Save, Settings2, PhoneCall, Video } from 'lucide-react'
 import { useConfirm } from '../components/dialog/ConfirmProvider'
 
@@ -636,12 +636,13 @@ function AliasPill({ label, alias, sub }) {
 function RoutingOverviewPanel({ config, onOpenRouting }) {
   const standardAlias = config?.standard_model || 'clarity-standard'
   const premiumAlias = config?.premium_model || 'clarity-premium'
+  const backgroundAlias = config?.background_model || 'clarity-background'
   return (
     <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden mb-8">
       <div className="px-5 py-4 border-b border-brand-line flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
           <h2 className="font-serif font-bold text-brand-ink">AI Gateway Routing</h2>
-          <p className="text-xs text-brand-muted font-sans mt-1">LawHand sends standard and premium work to LiteLLM aliases; the AI Routing tab controls the upstream provider, model, key, and fallback chain.</p>
+          <p className="text-xs text-brand-muted font-sans mt-1">LawHand sends interactive and background work to isolated LiteLLM aliases; the AI Routing tab controls their provider keys, models, balancing, and fallback boundaries.</p>
         </div>
         <button
           onClick={onOpenRouting}
@@ -651,9 +652,10 @@ function RoutingOverviewPanel({ config, onOpenRouting }) {
           AI Routing
         </button>
       </div>
-      <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="p-5 grid grid-cols-1 md:grid-cols-3 gap-4">
         <AliasPill label="Standard route" alias={standardAlias} sub="Resolved for normal chat, skills, summaries, and drafting." />
         <AliasPill label="Premium route" alias={premiumAlias} sub="Resolved when premium routing is requested." />
+        <AliasPill label="Background Automations" alias={backgroundAlias} sub="Platform-global, bounded, single-shot assistant work. Never tenant BYOK." />
       </div>
     </div>
   )
@@ -661,14 +663,21 @@ function RoutingOverviewPanel({ config, onOpenRouting }) {
 
 function TenantAliasOverride({ tenant, tenantDetail, platformKey, defaultAliases, onUpdate, onError, saving, setSaving }) {
   const config = tenantDetail?.llm_config || {}
+  const assistantConfig = tenantDetail?.assistant_config || {}
   const [profiles, setProfiles] = useState([])
   const [value, setValue] = useState(config.routing_profile_id || '')
+  const [backgroundEnabled, setBackgroundEnabled] = useState(Boolean(assistantConfig.background_assistant_enabled))
   const [saved, setSaved] = useState(false)
 
   useEffect(() => {
     setValue(config.routing_profile_id || '')
     setSaved(false)
   }, [config.routing_profile_id])
+
+  useEffect(() => {
+    setBackgroundEnabled(Boolean(assistantConfig.background_assistant_enabled))
+    setSaved(false)
+  }, [assistantConfig.background_assistant_enabled])
 
   useEffect(() => {
     getLLMRoutingProfiles(platformKey).then((data) => setProfiles(data.profiles || [])).catch(() => setProfiles([]))
@@ -678,14 +687,21 @@ function TenantAliasOverride({ tenant, tenantDetail, platformKey, defaultAliases
     || (!value ? profiles.find((profile) => profile.is_default) : null)
     || config.routing_profile
   const changed = value !== (config.routing_profile_id || '')
+    || backgroundEnabled !== Boolean(assistantConfig.background_assistant_enabled)
 
   const handleSave = async () => {
     setSaving(true)
     setSaved(false)
     try {
-      const payload = { llm_routing_profile_id: value || null }
+      const payload = {
+        llm_routing_profile_id: value || null,
+        background_assistant_enabled: backgroundEnabled,
+      }
       await updatePlatformTenant(platformKey, tenant.id, payload)
-      onUpdate(tenant.id, { llm_config: { ...config, routing_profile_id: value || null, routing_profile: selected || null } })
+      onUpdate(tenant.id, {
+        llm_config: { ...config, routing_profile_id: value || null, routing_profile: selected || null },
+        assistant_config: { ...assistantConfig, background_assistant_enabled: backgroundEnabled },
+      })
       setSaved(true)
     } catch (e) {
       onError?.(e?.response?.data?.detail || 'Failed to save tenant AI alias override.')
@@ -703,6 +719,18 @@ function TenantAliasOverride({ tenant, tenantDetail, platformKey, defaultAliases
         </select>
       </div>
       {selected && <div className="rounded-lg border border-brand-line bg-brand-bg px-4 py-3 text-xs font-sans"><p className="font-medium text-brand-ink">{selected.name}{!value ? ' · inherited default' : ' · tenant assignment'}</p><p className="mt-1 text-brand-muted">Standard matter context: {selected.standard_allow_matter_context ? 'Allowed' : 'Blocked'} · Premium matter context: {selected.premium_allow_matter_context ? 'Allowed' : 'Blocked'} · {selected.is_active ? 'Active' : 'Inactive'}</p></div>}
+      <label className="flex gap-3 rounded-lg border border-brand-line bg-brand-bg px-4 py-3 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={backgroundEnabled}
+          onChange={(event) => { setBackgroundEnabled(event.target.checked); setSaved(false) }}
+          className="mt-0.5 h-4 w-4 accent-brand-ink"
+        />
+        <span>
+          <span className="block text-sm font-medium text-brand-ink font-sans">Enable Background Automations for this firm</span>
+          <span className="block mt-1 text-xs text-brand-muted font-sans">Tenant kill switch. Global feature and confidential-data gates must also be enabled before any model call can run.</span>
+        </span>
+      </label>
       <div className="flex items-center gap-3">
         <button
           onClick={handleSave}
@@ -713,7 +741,7 @@ function TenantAliasOverride({ tenant, tenantDetail, platformKey, defaultAliases
               : 'bg-brand-ink text-white border-brand-ink hover:bg-brand-ink-2 disabled:opacity-40'
           }`}
         >
-          {saved ? 'Saved' : saving ? 'Saving...' : 'Apply Routes'}
+          {saved ? 'Saved' : saving ? 'Saving...' : 'Save AI Controls'}
         </button>
         <p className="text-xs text-brand-muted font-sans">Unassigned tenants inherit the default profile.</p>
       </div>
@@ -1144,7 +1172,15 @@ function LogsTab({ platformKey, tenants }) {
 // ── AI Routing Tab (Task 1206) ─────────────────────────────────────────────
 
 const emptyRoute = () => ({ key_id: '', provider_id: '', model: '', capacity: 100, alternates: [], fallbacks: [], allow_matter_context: false })
+const defaultBackgroundQuota = () => ({ account_five_hour: 2050, account_weekly: 5100, account_monthly: 10250, tenant_five_hour: 250, tenant_weekly: 750, tenant_monthly: 1500, reservation_ttl_minutes: 15 })
 const isCompleteTarget = (target) => Boolean(target?.provider_id && target?.key_id && target?.model)
+const hasRouteConfiguration = (route) => Boolean(
+  route?.provider_id
+  || route?.key_id
+  || route?.model
+  || (route?.alternates || []).some((target) => target?.provider_id || target?.key_id || target?.model)
+  || (route?.fallbacks || []).some((target) => target?.provider_id || target?.key_id || target?.model)
+)
 const modelTarget = (model) => ({ key_id: model.key_id, provider_id: model.provider_id, model: model.id, capacity: 100 })
 
 function preferredModelOptions(models = []) {
@@ -1185,12 +1221,15 @@ function routeIssues(route, allKeys) {
   return issues
 }
 
-function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, compact = false }) {
+function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, compact = false, allowResponses = false }) {
   const selectedPreset = presets.find((p) => p.id === value.provider_id)
   const keysForPreset = value.provider_id ? allKeys.filter((k) => k.provider_id === value.provider_id) : allKeys
   const placeholder = selectedPreset?.model_placeholder || 'model-id'
   const suggestedModels = preferredModelOptions(models)
   const selectedModelIsKnown = suggestedModels.some((model) => model.id === value.model)
+  const endpointSupported = (model) => (
+    model.route_compatible !== false || (allowResponses && model.api_mode === 'responses')
+  )
   const [manualModel, setManualModel] = useState(Boolean(value.model && !selectedModelIsKnown))
 
   // Only a catalog match may close manual entry. Keying off an empty model
@@ -1267,16 +1306,18 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
               <option
                 key={model.id}
                 value={model.id}
-                disabled={model.route_compatible === false || model.confidential_data_allowed === false}
+                disabled={!endpointSupported(model) || model.confidential_data_allowed === false}
               >
-                {model.name || model.id}{model.is_free ? ' — Free' : ' — Paid'}{model.route_compatible === false ? ' — Unsupported endpoint' : ''}{model.confidential_data_allowed === false ? ' — Not approved for client data' : ''}
+                {model.name || model.id}{model.is_free ? ' — Free' : ' — Paid'}{!endpointSupported(model) ? ' — Unsupported endpoint' : ''}{model.confidential_data_allowed === false ? ' — Not approved for client data' : ''}
               </option>
             ))}
           </select>
         )}
         {!compact && suggestedModels.length > 0 && (
           <p className="text-[11px] text-brand-muted mt-1 font-sans">
-            All provider/key-specific catalog models, ranked for legal work and latency. Unsupported endpoints are visible but cannot be activated on the Chat Completions route.
+            {allowResponses
+              ? 'Provider/key-specific Responses models are supported on this Background route; incompatible endpoint families stay disabled.'
+              : 'All provider/key-specific catalog models, ranked for legal work and latency. Unsupported endpoints are visible but cannot be activated on the Chat Completions route.'}
           </p>
         )}
       </div>
@@ -1323,14 +1364,14 @@ function RouteFlow({ label, alias, route, presets, keys, balanceCount, fallbackC
   )
 }
 
-function RouteCard({ label, alias: activeAlias, route, allKeys, presets, platformKey, catalogModels, onChange }) {
+function RouteCard({ label, routeName, alias: activeAlias, route, allKeys, presets, platformKey, catalogModels, onChange, allowMatterContextControl = true }) {
   const [fetchingModels, setFetchingModels] = useState(false)
   const [models, setModels] = useState([])
   const [modelsError, setModelsError] = useState(null)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState(null)
 
-  const routeKey = label.toLowerCase()
+  const routeKey = routeName || label.toLowerCase()
   const alias = activeAlias || `clarity-${routeKey}`
   const selectedPreset = presets.find((p) => p.id === route.provider_id)
   const selectedKey = allKeys.find((k) => k.id === route.key_id)
@@ -1476,7 +1517,7 @@ function RouteCard({ label, alias: activeAlias, route, allKeys, presets, platfor
 
       <div className="p-5 space-y-5">
         <RouteFlow label={label} alias={alias} route={route} presets={presets} keys={allKeys} balanceCount={balanceCount} fallbackCount={fallbackCount} />
-        {(
+        {allowMatterContextControl ? (
           <label className="flex gap-3 rounded-lg border border-brand-line bg-brand-bg px-4 py-3 cursor-pointer">
             <input
               type="checkbox"
@@ -1489,6 +1530,14 @@ function RouteCard({ label, alias: activeAlias, route, allKeys, presets, platfor
               <span className="block mt-1 text-xs text-brand-muted font-sans">Send matter-linked conversations and attachments through this profile's {label} route. Activation requires every target and fallback to be approved for confidential customer data.</span>
             </span>
           </label>
+        ) : (
+          <div className="flex gap-3 rounded-lg border border-brand-line bg-brand-bg px-4 py-3">
+            <Shield size={16} className="mt-0.5 shrink-0 text-brand-accent" />
+            <span>
+              <span className="block text-sm font-medium text-brand-ink font-sans">Matter context is blocked on Background</span>
+              <span className="block mt-1 text-xs text-brand-muted font-sans">This route is platform-owned, JSON-only, single shot, and cannot promote itself to Premium. Prospect data requires a separate fail-closed approval flag.</span>
+            </span>
+          </div>
         )}
         <div>
           <div className="flex items-center justify-between mb-2">
@@ -1503,6 +1552,7 @@ function RouteCard({ label, alias: activeAlias, route, allKeys, presets, platfor
             presets={presets}
             models={modelsFor(route)}
             modelListId={`models-${routeKey}-primary`}
+            allowResponses={routeKey === 'background'}
             onChange={(next) => updateRoute({ ...next, alternates: route.alternates || [], fallbacks: route.fallbacks || [] })}
           />
         </div>
@@ -1540,6 +1590,7 @@ function RouteCard({ label, alias: activeAlias, route, allKeys, presets, platfor
                   presets={presets}
                   models={modelsFor(alt)}
                   modelListId={`models-${routeKey}-alternate-${i}`}
+                  allowResponses={routeKey === 'background'}
                   compact
                   onChange={(next) => updateAlternate(i, next)}
                 />
@@ -1589,6 +1640,7 @@ function RouteCard({ label, alias: activeAlias, route, allKeys, presets, platfor
                   presets={presets}
                   models={modelsFor(fb)}
                   modelListId={`models-${routeKey}-fallback-${i}`}
+                  allowResponses={routeKey === 'background'}
                   compact
                   onChange={(next) => updateFallback(i, next)}
                 />
@@ -1742,7 +1794,7 @@ function KeyVaultPanel({ platformKey, keys, presets, onKeysChange }) {
         {keys.length === 0 && (
           <div className="px-5 py-8 text-sm text-brand-muted font-sans text-center space-y-2">
             <p>No API keys stored in the vault.</p>
-            <p className="text-xs">Click <strong>Sync from env</strong> to import keys from <code className="bg-brand-bg px-1 rounded">DEEPSEEK_API_KEY</code>, <code className="bg-brand-bg px-1 rounded">OPENCODE_API_KEY</code>, or <code className="bg-brand-bg px-1 rounded">OPENROUTER_API_KEY</code>, or <strong>Add key</strong> to enter one manually.</p>
+            <p className="text-xs">Click <strong>Sync from env</strong> to import keys from <code className="bg-brand-bg px-1 rounded">OPENCODE_GO_API_KEY</code>, <code className="bg-brand-bg px-1 rounded">OPENCODE_ZEN_API_KEY</code>, or <code className="bg-brand-bg px-1 rounded">OPENROUTER_API_KEY</code>. Legacy OpenCode names remain temporary fallbacks.</p>
           </div>
         )}
         {keys.map((k) => {
@@ -2470,6 +2522,63 @@ function LiteLLMGatewayPanel({ status, checking, reloading, onCheck, onReload })
   )
 }
 
+function BackgroundQuotaPanel({ usage, quota, onChange, saving, onSave }) {
+  const fiveHour = usage?.five_hour || {}
+  const weekly = usage?.weekly || {}
+  const monthly = usage?.monthly || {}
+  const fields = [
+    ['account_five_hour', 'Pool / 5 hours'],
+    ['account_weekly', 'Pool / 7 days'],
+    ['account_monthly', 'Pool / month'],
+    ['tenant_five_hour', 'Firm / 5 hours'],
+    ['tenant_weekly', 'Firm / 7 days'],
+    ['tenant_monthly', 'Firm / month'],
+  ]
+  return (
+    <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden mb-6">
+      <div className="px-5 py-4 border-b border-brand-line flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <Activity size={16} className="text-brand-accent" />
+            <h3 className="font-serif font-bold text-brand-ink">Background request budget</h3>
+            {monthly.projected_over_budget && <span className="rounded-full bg-brand-amber/10 px-2 py-0.5 text-[11px] text-brand-amber font-sans">Projected over budget</span>}
+          </div>
+          <p className="text-xs text-brand-muted font-sans mt-1">Atomic reservations enforce the shared subscription windows and per-firm fairness before inference.</p>
+        </div>
+        <button type="button" onClick={onSave} disabled={saving} className="inline-flex items-center gap-2 px-3 py-2 bg-brand-ink text-white text-xs font-medium font-sans rounded-lg hover:bg-brand-ink-2 disabled:opacity-40">
+          {saving ? <RefreshCw size={12} className="animate-spin" /> : <Save size={12} />}
+          {saving ? 'Saving…' : 'Save budget'}
+        </button>
+      </div>
+      <div className="p-5 grid grid-cols-1 xl:grid-cols-[1fr_1fr_1fr_2fr] gap-5">
+        <div className="rounded-lg border border-brand-line bg-brand-bg px-4 py-3">
+          <p className="text-[10px] uppercase tracking-wider text-brand-muted font-sans">Rolling five-hour pool</p>
+          <p className="mt-1 text-xl font-serif font-bold text-brand-ink">{fiveHour.used ?? 0} / {quota.account_five_hour}</p>
+          <p className="mt-1 text-xs text-brand-muted font-sans">{fiveHour.remaining ?? quota.account_five_hour} requests remaining</p>
+        </div>
+        <div className="rounded-lg border border-brand-line bg-brand-bg px-4 py-3">
+          <p className="text-[10px] uppercase tracking-wider text-brand-muted font-sans">Rolling seven-day pool</p>
+          <p className="mt-1 text-xl font-serif font-bold text-brand-ink">{weekly.used ?? 0} / {quota.account_weekly}</p>
+          <p className="mt-1 text-xs text-brand-muted font-sans">{weekly.remaining ?? quota.account_weekly} requests remaining</p>
+        </div>
+        <div className="rounded-lg border border-brand-line bg-brand-bg px-4 py-3">
+          <p className="text-[10px] uppercase tracking-wider text-brand-muted font-sans">Monthly pool</p>
+          <p className="mt-1 text-xl font-serif font-bold text-brand-ink">{monthly.used ?? 0} / {quota.account_monthly}</p>
+          <p className="mt-1 text-xs text-brand-muted font-sans">{monthly.percent ?? 0}% used · {monthly.month_elapsed_percent ?? 0}% of month elapsed</p>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          {fields.map(([field, label]) => (
+            <label key={field} className="text-xs text-brand-muted font-sans">
+              {label}
+              <input type="number" min="1" value={quota[field]} onChange={(event) => onChange({ ...quota, [field]: Number(event.target.value) })} className="mt-1 w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono bg-brand-surface" />
+            </label>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function AIRoutingTab({ platformKey, onAuthError }) {
   const [keys, setKeys] = useState([])
   const [presets, setPresets] = useState([])
@@ -2480,6 +2589,10 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
   const [reloadingRoutes, setReloadingRoutes] = useState(false)
   const [standard, setStandard] = useState(emptyRoute)
   const [premium, setPremium] = useState(emptyRoute)
+  const [background, setBackground] = useState(emptyRoute)
+  const [backgroundUsage, setBackgroundUsage] = useState(null)
+  const [backgroundQuota, setBackgroundQuota] = useState(defaultBackgroundQuota)
+  const [savingBackgroundQuota, setSavingBackgroundQuota] = useState(false)
   const [activation, setActivation] = useState(null)
   const [saving, setSaving] = useState(false)
   const [saveResult, setSaveResult] = useState(null)
@@ -2497,12 +2610,13 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
       const profilesData = await getLLMRoutingProfiles(platformKey)
       const nextProfiles = profilesData.profiles || []
       const profileId = requestedProfileId || nextProfiles.find((profile) => profile.is_default)?.id || nextProfiles[0]?.id || ''
-      const [keysData, presetsData, routesData, catalogData, gatewayData] = await Promise.all([
+      const [keysData, presetsData, routesData, catalogData, gatewayData, usageData] = await Promise.all([
         getLLMProviderKeys(platformKey),
         getLLMProviderPresets(platformKey),
         getLLMRoutes(platformKey, profileId),
         getLLMModelCatalog(platformKey),
         getLLMGatewayStatus(platformKey),
+        getBackgroundAssistantUsage(platformKey).catch(() => null),
       ])
       setKeys(keysData.keys || [])
       setPresets(presetsData.providers || [])
@@ -2513,8 +2627,12 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
       setActivation(routesData.activation || null)
       const std = routesData.standard || {}
       const prem = routesData.premium || {}
+      const bg = routesData.background || {}
       setStandard({ key_id: std.key_id || '', provider_id: std.provider_id || '', model: std.model || '', capacity: std.capacity || 100, alternates: std.alternates || [], fallbacks: std.fallbacks || [], allow_matter_context: Boolean(std.allow_matter_context) })
       setPremium({ key_id: prem.key_id || '', provider_id: prem.provider_id || '', model: prem.model || '', capacity: prem.capacity || 100, alternates: prem.alternates || [], fallbacks: prem.fallbacks || [], allow_matter_context: Boolean(prem.allow_matter_context) })
+      setBackground({ key_id: bg.key_id || '', provider_id: bg.provider_id || '', model: bg.model || '', capacity: bg.capacity || 100, alternates: bg.alternates || [], fallbacks: bg.fallbacks || [], allow_matter_context: false })
+      setBackgroundUsage(usageData)
+      setBackgroundQuota({ ...defaultBackgroundQuota(), ...(usageData?.limits || {}) })
     } catch (e) {
       if (e?.response?.status === 403) {
         setLoadError('Platform access was denied. Sign in again with the current platform key.')
@@ -2528,8 +2646,9 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
 
   useEffect(() => { load() }, [load])
 
-  const validationIssues = [...routeIssues(standard, keys), ...routeIssues(premium, keys)]
-  const configuredCount = [standard, premium].filter(isCompleteTarget).length
+  const backgroundIssues = hasRouteConfiguration(background) ? routeIssues(background, keys) : []
+  const validationIssues = [...routeIssues(standard, keys), ...routeIssues(premium, keys), ...backgroundIssues]
+  const configuredCount = [standard, premium, background].filter(isCompleteTarget).length
 
   const reloadSummary = (data, successPrefix = 'LiteLLM reloaded') => {
     const firstBuildError = data.build_errors?.[0]
@@ -2554,6 +2673,7 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
     })
     setStandard((prev) => clearMissingKeys(prev))
     setPremium((prev) => clearMissingKeys(prev))
+    setBackground((prev) => clearMissingKeys(prev))
   }
 
   const handleRefreshCatalog = async () => {
@@ -2596,14 +2716,18 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
   }
 
   const applyModel = (routeName, placement, model) => {
-    const setter = routeName === 'standard' ? setStandard : setPremium
+    const setter = routeName === 'standard'
+      ? setStandard
+      : routeName === 'premium'
+        ? setPremium
+        : setBackground
     const target = modelTarget(model)
     setter((prev) => {
       if (placement === 'primary') return { ...prev, ...target }
       if (placement === 'alternate') return { ...prev, alternates: [...(prev.alternates || []), target] }
       return { ...prev, fallbacks: [...(prev.fallbacks || []), target] }
     })
-    const routeLabel = routeName === 'standard' ? 'Standard' : 'Premium'
+    const routeLabel = routeName === 'standard' ? 'Standard' : routeName === 'premium' ? 'Premium' : 'Background'
     const placementLabel = placement === 'alternate' ? 'balanced target' : placement
     setSaveResult({
       ok: true,
@@ -2645,7 +2769,9 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
     setSaving(true)
     setSaveResult(null)
     try {
-      const data = await saveLLMRoutes(platformKey, { standard, premium }, selectedProfileId)
+      const payload = { standard, premium }
+      if (hasRouteConfiguration(background)) payload.background = { ...background, allow_matter_context: false }
+      const data = await saveLLMRoutes(platformKey, payload, selectedProfileId)
       if (data.gateway_status) setGatewayStatus(data.gateway_status)
       if (data.activated) {
         setActivation({
@@ -2671,6 +2797,26 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
     } catch (e) {
       setSaveResult({ ok: false, error: apiErrorMessage(e, 'Save failed') })
     } finally { setSaving(false) }
+  }
+
+  const handleSaveBackgroundQuota = async () => {
+    const invalid = Object.entries(backgroundQuota).find(([, value]) => !Number.isFinite(value) || value < 1)
+    if (invalid) {
+      setSaveResult({ ok: false, error: `${invalid[0].replaceAll('_', ' ')} must be at least 1.` })
+      return
+    }
+    setSavingBackgroundQuota(true)
+    setSaveResult(null)
+    try {
+      const data = await updateBackgroundAssistantQuota(platformKey, backgroundQuota)
+      setBackgroundUsage(data)
+      setBackgroundQuota({ ...defaultBackgroundQuota(), ...(data.limits || {}) })
+      setSaveResult({ ok: true, message: 'Background request budget saved.' })
+    } catch (error) {
+      setSaveResult({ ok: false, error: apiErrorMessage(error, 'Background budget save failed') })
+    } finally {
+      setSavingBackgroundQuota(false)
+    }
   }
 
   const handleCreateProfile = async () => {
@@ -2750,13 +2896,14 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
       <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4 mb-6">
         <div>
           <h2 className="text-xl font-serif font-bold text-brand-ink">AI Provider Routing</h2>
-          <p className="text-sm text-brand-muted font-sans mt-1">Activate versioned standard and premium routes after both aliases pass synthetic completions.</p>
+          <p className="text-sm text-brand-muted font-sans mt-1">Activate tenant-selectable Standard/Premium routes and one platform-global Background Automations route after synthetic validation.</p>
           <div className="flex flex-wrap items-center gap-2 mt-3">
             <span className="text-[11px] font-sans px-2 py-1 rounded-full bg-brand-bg border border-brand-line text-brand-ink">{activation?.aliases?.standard || 'No standard route active'}</span>
             <span className="text-[11px] font-sans px-2 py-1 rounded-full bg-brand-bg border border-brand-line text-brand-ink">{activation?.aliases?.premium || 'No premium route active'}</span>
+            <span className="text-[11px] font-sans px-2 py-1 rounded-full bg-brand-bg border border-brand-line text-brand-ink">{activation?.aliases?.background || 'No background route active'}</span>
             {activation?.revision && <span className="text-[11px] font-sans px-2 py-1 rounded-full bg-brand-bg border border-brand-line text-brand-muted">revision {activation.revision}</span>}
             <span className={`text-[11px] font-sans px-2 py-1 rounded-full ${validationIssues.length ? 'bg-brand-amber/10 text-brand-amber' : 'bg-brand-accent/10 text-brand-accent'}`}>
-              {validationIssues.length ? `${validationIssues.length} issue${validationIssues.length === 1 ? '' : 's'}` : `${configuredCount}/2 primary routes configured`}
+              {validationIssues.length ? `${validationIssues.length} issue${validationIssues.length === 1 ? '' : 's'}` : `${configuredCount}/3 primary routes configured`}
             </span>
           </div>
         </div>
@@ -2816,6 +2963,14 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
         onReload={handleReloadRoutes}
       />
 
+      <BackgroundQuotaPanel
+        usage={backgroundUsage}
+        quota={backgroundQuota}
+        onChange={setBackgroundQuota}
+        saving={savingBackgroundQuota}
+        onSave={handleSaveBackgroundQuota}
+      />
+
       <KeyVaultPanel platformKey={platformKey} keys={keys} presets={presets} onKeysChange={replaceKeys} />
 
       <SmartRouteBuilder
@@ -2851,6 +3006,20 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
           platformKey={platformKey}
           catalogModels={catalog?.models || []}
           onChange={setPremium}
+        />
+      </div>
+      <div className="mt-6">
+        <RouteCard
+          label="Background Automations (global)"
+          routeName="background"
+          alias={activation?.aliases?.background}
+          route={background}
+          allKeys={keys}
+          presets={presets}
+          platformKey={platformKey}
+          catalogModels={catalog?.models || []}
+          onChange={(next) => setBackground({ ...next, allow_matter_context: false })}
+          allowMatterContextControl={false}
         />
       </div>
     </div>

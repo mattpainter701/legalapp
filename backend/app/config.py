@@ -130,7 +130,12 @@ class Settings(BaseSettings):
 
     OPENAI_API_KEY: str = ""
     DEEPSEEK_API_KEY: str = ""
-    OPENCODE_KEY: str = ""  # alias accepted alongside DEEPSEEK_API_KEY
+    # Canonical OpenCode names. DEEPSEEK_API_KEY remains a deployment
+    # compatibility alias until existing production secrets are rotated.
+    OPENCODE_GO_API_KEY: str = ""
+    OPENCODE_ZEN_API_KEY: str = ""
+    OPENCODE_API_KEY: str = ""  # legacy Zen alias
+    OPENCODE_KEY: str = ""
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com/v1"
     ANTHROPIC_API_KEY: str = ""
 
@@ -147,7 +152,7 @@ class Settings(BaseSettings):
     )
 
     # OpenCode Zen — free-tier LLM access (OpenAI-compatible)
-    OPENCODE_ZEN_BASE_URL: str = "https://zen.opencode.ai/v1"
+    OPENCODE_ZEN_BASE_URL: str = "https://opencode.ai/zen/v1"
 
     # LiteLLM Gateway — primary OpenAI-compatible model router
     LITELLM_ENABLED: bool = False
@@ -155,6 +160,10 @@ class Settings(BaseSettings):
     LITELLM_API_KEY: str = ""
     LITELLM_STANDARD_MODEL: str = "clarity-standard"
     LITELLM_PREMIUM_MODEL: str = "clarity-premium"
+    # Platform-owned route for scheduled/event-driven assistant work. This is
+    # deliberately separate from tenant Standard/Premium profiles and BYOK.
+    LITELLM_BACKGROUND_MODEL: str = "clarity-background"
+    LITELLM_BACKGROUND_TRANSPORT: str = "responses"
     LITELLM_EMBEDDING_MODEL: str = ""
     LITELLM_DB_PASSWORD: str = ""
     LITELLM_DATABASE_URL: str = ""
@@ -162,6 +171,25 @@ class Settings(BaseSettings):
     GATEWAY_LOG_RETENTION_DAYS: int = 30
     GATEWAY_DEBUG_LOG_RETENTION_DAYS: int = 7
     GATEWAY_SPEND_LOG_RETENTION_DAYS: int = 365
+
+    # ── LawHand Assistant launch wedge ──────────────────────────────────────
+    # These switches fail closed. Building/deploying the code does not activate
+    # customer-content inference or prospect-facing background work.
+    VIRTUAL_ASSISTANT_ENABLED: bool = False
+    AFTER_CALL_CONCIERGE_ENABLED: bool = False
+    ENGAGEMENT_PACKETS_ENABLED: bool = False
+    BACKGROUND_ASSISTANT_ENABLED: bool = False
+    BACKGROUND_PROSPECT_CONFIDENTIAL_ENABLED: bool = False
+    BACKGROUND_MATTER_CONFIDENTIAL_ENABLED: bool = False
+    AI_REQUEST_TIMEOUT_SECONDS: float = 30.0
+    BACKGROUND_AI_POOL: str = "background-default"
+    BACKGROUND_AI_ACCOUNT_FIVE_HOUR_LIMIT: int = 2050
+    BACKGROUND_AI_ACCOUNT_WEEKLY_LIMIT: int = 5100
+    BACKGROUND_AI_ACCOUNT_MONTHLY_LIMIT: int = 10250
+    BACKGROUND_AI_TENANT_FIVE_HOUR_LIMIT: int = 250
+    BACKGROUND_AI_TENANT_WEEKLY_LIMIT: int = 750
+    BACKGROUND_AI_TENANT_MONTHLY_LIMIT: int = 1500
+    BACKGROUND_AI_RESERVATION_TTL_MINUTES: int = 15
 
     # QuickBooks Online OAuth2
     QBO_CLIENT_ID: str = ""

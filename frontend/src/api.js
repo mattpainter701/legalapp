@@ -1348,6 +1348,12 @@ export const reloadLLMRoutes = (key, profileId = null) =>
 export const testLLMRoute = (key, data) =>
   platformApi(key).post('/platform/llm/routes/test', data).then((r) => r.data)
 
+export const getBackgroundAssistantUsage = (key) =>
+  platformApi(key).get('/platform/assistant/background-usage').then((r) => r.data)
+
+export const updateBackgroundAssistantQuota = (key, data) =>
+  platformApi(key).put('/platform/assistant/background-quota', data).then((r) => r.data)
+
 export const getPlatformLogs = (key, params = {}) =>
   platformApi(key).get('/platform/logs', { params }).then((r) => r.data)
 
@@ -1698,6 +1704,32 @@ export const updateLead = (id, data) =>
 
 export const convertLead = (id, data) =>
   api.post(`/intake/${id}/convert`, data).then(r => r.data)
+
+// After-call assistant APIs stay isolated here while the backend contract is
+// finalized. The server remains authoritative for permissions and audit.
+export const getLeadFollowThrough = (leadId) =>
+  api.get(`/intake/leads/${leadId}/follow-through`).then(r => r.data)
+
+export const prepareLeadFollowThrough = (leadId, data) =>
+  api.post(`/intake/leads/${leadId}/follow-through`, data).then(r => r.data)
+
+export const updateLeadFollowThrough = (leadId, data) =>
+  api.patch(`/intake/leads/${leadId}/follow-through`, data).then(r => r.data)
+
+export const getLeadEngagementPacket = (leadId) =>
+  api.get(`/intake/leads/${leadId}/engagement-packets`).then(r => r.data)
+
+export const createLeadEngagementPacket = (leadId, data) =>
+  api.post(`/intake/leads/${leadId}/engagement-packets`, data).then(r => r.data)
+
+export const updateLeadEngagementPacket = (leadId, data) =>
+  api.patch(`/intake/leads/${leadId}/engagement-packets`, data).then(r => r.data)
+
+export const previewLeadEngagementPacket = (leadId) =>
+  api.post(`/intake/leads/${leadId}/engagement-packets/render-preview`).then(r => r.data)
+
+export const approveLeadEngagementPacket = (leadId, data = {}) =>
+  api.post(`/intake/leads/${leadId}/engagement-packets/approve`, data).then(r => r.data)
 
 // ── Intake Dashboard ───────────────────────────────────────────────────────
 

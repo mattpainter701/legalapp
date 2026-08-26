@@ -1,6 +1,7 @@
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import Enum
 from time import monotonic
 from typing import Any
 
@@ -11,6 +12,7 @@ from app.config import get_settings
 from app.models.platform import PlatformSetting
 from app.models.llm_routing_profile import LLMRoutingProfile
 from app.models.tenant import TenantSettings
+from app.services.background_ai_quota import BACKGROUND_ROUTE_CONFIG_KEY
 
 settings = get_settings()
 
@@ -18,7 +20,13 @@ LLM_ROUTING_KEY = "llm_routing"
 LLM_ROUTE_CONFIG_KEY = "llm_route_config_v2"
 LITELLM_PROVIDER = "litellm"
 VALID_LLM_PROVIDERS = {LITELLM_PROVIDER}
-VALID_LLM_ROUTES = {"standard", "premium", "tenant-standard", "tenant-premium"}
+VALID_LLM_ROUTES = {
+    "standard",
+    "premium",
+    "background",
+    "tenant-standard",
+    "tenant-premium",
+}
 LEGACY_DIRECT_PROVIDERS = {
     "deepseek",
     "opencode",
@@ -28,7 +36,32 @@ LEGACY_DIRECT_PROVIDERS = {
     "gemini",
 }
 ROUTE_CACHE_TTL_SECONDS = 30.0
-_route_cache: dict[tuple[str, bool, str, str | None], tuple[float, "LLMRoute"]] = {}
+_route_cache: dict[tuple[str, str, str, str | None], tuple[float, "LLMRoute"]] = {}
+
+
+class RouteTier(str, Enum):
+    """Authoritative application routing tier.
+
+    BACKGROUND is platform-owned. It must be requested explicitly by trusted
+    server code and never inferred from a caller-controlled provider/model.
+    """
+
+    STANDARD = "standard"
+    PREMIUM = "premium"
+    BACKGROUND = "background"
+
+
+def normalize_route_tier(
+    route_tier: RouteTier | str | None = None,
+    *,
+    use_premium: bool = False,
+) -> RouteTier:
+    if route_tier is None:
+        return RouteTier.PREMIUM if use_premium else RouteTier.STANDARD
+    try:
+        return RouteTier(str(getattr(route_tier, "value", route_tier)).lower())
+    except ValueError as exc:
+        raise ValueError("route_tier must be standard, premium, or background") from exc
 
 
 @dataclass(frozen=True)
@@ -75,19 +108,21 @@ def _route_cache_key(
     tenant_id: Any,
     *,
     use_premium: bool,
+    route_tier: RouteTier | str | None = None,
     requested_provider: str,
     requested_model: str | None,
-) -> tuple[str, bool, str, str | None]:
+) -> tuple[str, str, str, str | None]:
+    tier = normalize_route_tier(route_tier, use_premium=use_premium)
     return (
         str(tenant_id),
-        use_premium,
+        tier.value,
         (_clean(requested_provider) or "default").lower(),
         _clean(requested_model),
     )
 
 
 def _get_cached_route(
-    cache_key: tuple[str, bool, str, str | None],
+    cache_key: tuple[str, str, str, str | None],
 ) -> LLMRoute | None:
     cached = _route_cache.get(cache_key)
     if not cached:
@@ -101,35 +136,58 @@ def _get_cached_route(
 
 
 def _set_cached_route(
-    cache_key: tuple[str, bool, str, str | None],
+    cache_key: tuple[str, str, str, str | None],
     route: LLMRoute,
 ) -> LLMRoute:
     _route_cache[cache_key] = (monotonic() + ROUTE_CACHE_TTL_SECONDS, route)
     return route
 
 
-def provider_default_model(provider: str, use_premium: bool = False) -> str:
+def provider_default_model(
+    provider: str,
+    use_premium: bool = False,
+    *,
+    route_tier: RouteTier | str | None = None,
+) -> str:
     """Compatibility wrapper: every route resolves to a LiteLLM alias."""
+    tier = normalize_route_tier(route_tier, use_premium=use_premium)
+    if tier is RouteTier.BACKGROUND:
+        return settings.LITELLM_BACKGROUND_MODEL
     return (
         settings.LITELLM_PREMIUM_MODEL
-        if use_premium
+        if tier is RouteTier.PREMIUM
         else settings.LITELLM_STANDARD_MODEL
     )
 
 
-def fallback_route(use_premium: bool) -> LLMRoute:
-    route_name = "premium" if use_premium else "standard"
+def fallback_route(
+    use_premium: bool = False,
+    *,
+    route_tier: RouteTier | str | None = None,
+) -> LLMRoute:
+    tier = normalize_route_tier(route_tier, use_premium=use_premium)
+    route_name = tier.value
     return LLMRoute(
         requested_route=route_name,
         resolved_route=route_name,
-        gateway_alias=provider_default_model(LITELLM_PROVIDER, use_premium),
+        gateway_alias=provider_default_model(
+            LITELLM_PROVIDER, use_premium, route_tier=tier
+        ),
     )
 
 
-def _normalize_requested_route(requested: str | None, *, use_premium: bool) -> str:
+def _normalize_requested_route(
+    requested: str | None,
+    *,
+    use_premium: bool,
+    route_tier: RouteTier | str | None = None,
+) -> str:
+    tier = normalize_route_tier(route_tier, use_premium=use_premium)
+    if tier is RouteTier.BACKGROUND:
+        return RouteTier.BACKGROUND.value
     requested = (_clean(requested) or "default").lower()
     if requested in {"default", LITELLM_PROVIDER}:
-        return "premium" if use_premium else "standard"
+        return tier.value
     if requested in VALID_LLM_ROUTES:
         return requested
     if requested in LEGACY_DIRECT_PROVIDERS:
@@ -156,6 +214,8 @@ def _current_managed_alias(
         return _clean(platform_config.get("standard_model")) or alias
     if alias == "clarity-premium" or alias.startswith("clarity-premium-r"):
         return _clean(platform_config.get("premium_model")) or alias
+    if alias == "clarity-background" or alias.startswith("clarity-background-r"):
+        return _clean(platform_config.get("background_model")) or alias
     return alias
 
 
@@ -182,6 +242,8 @@ def default_platform_llm_config() -> dict[str, str | None]:
         "standard_model": settings.LITELLM_STANDARD_MODEL,
         "premium_provider": LITELLM_PROVIDER,
         "premium_model": settings.LITELLM_PREMIUM_MODEL,
+        "background_provider": LITELLM_PROVIDER,
+        "background_model": settings.LITELLM_BACKGROUND_MODEL,
     }
 
 
@@ -191,6 +253,7 @@ def _normalize_config(value: dict[str, Any] | None) -> dict[str, str | None]:
         return config
     standard_provider = _clean(value.get("standard_provider"))
     premium_provider = _clean(value.get("premium_provider"))
+    background_provider = _clean(value.get("background_provider"))
     if standard_provider in (None, LITELLM_PROVIDER):
         config["standard_model"] = (
             _clean(value.get("standard_model")) or settings.LITELLM_STANDARD_MODEL
@@ -198,6 +261,10 @@ def _normalize_config(value: dict[str, Any] | None) -> dict[str, str | None]:
     if premium_provider in (None, LITELLM_PROVIDER):
         config["premium_model"] = (
             _clean(value.get("premium_model")) or settings.LITELLM_PREMIUM_MODEL
+        )
+    if background_provider in (None, LITELLM_PROVIDER):
+        config["background_model"] = (
+            _clean(value.get("background_model")) or settings.LITELLM_BACKGROUND_MODEL
         )
     return config
 
@@ -207,7 +274,29 @@ async def get_platform_llm_config(db: AsyncSession) -> dict[str, str | None]:
         select(PlatformSetting).where(PlatformSetting.key == LLM_ROUTING_KEY)
     )
     row = result.scalar_one_or_none()
-    return _normalize_config(row.value if row else None)
+    config = _normalize_config(row.value if row else None)
+    # Background Automations is stored in its own platform-global setting so
+    # quota management can update the same row without touching route keys.
+    background_result = await db.execute(
+        select(PlatformSetting).where(
+            PlatformSetting.key == BACKGROUND_ROUTE_CONFIG_KEY
+        )
+    )
+    background = background_result.scalar_one_or_none()
+    background_value = (
+        background.value if background and isinstance(background.value, dict) else {}
+    )
+    background_activation = (
+        background_value.get("activation")
+        if isinstance(background_value.get("activation"), dict)
+        else {}
+    )
+    background_alias = _clean(background_value.get("model")) or _clean(
+        (background_activation.get("aliases") or {}).get("background")
+    )
+    if background_alias:
+        config["background_model"] = background_alias
+    return config
 
 
 async def get_tenant_routing_profile(
@@ -261,8 +350,9 @@ async def route_matter_context_allowed(
     db: AsyncSession,
     tenant_id: Any,
     *,
-    use_premium: bool,
+    use_premium: bool = False,
     route: LLMRoute | None = None,
+    route_tier: RouteTier | str | None = None,
 ) -> bool:
     """Return whether the resolved route may receive confidential matter data.
 
@@ -293,6 +383,15 @@ async def route_matter_context_allowed(
         ):
             return False
 
+    # Background work is platform-owned and must never receive matter
+    # context, regardless of a tenant profile or the premium compatibility
+    # flag supplied by older callers.
+    if normalize_route_tier(
+        route_tier, use_premium=use_premium
+    ) is RouteTier.BACKGROUND or (
+        route is not None and route.resolved_route == RouteTier.BACKGROUND.value
+    ):
+        return False
     profile = await get_tenant_routing_profile(db, tenant_id)
     if profile is not None and (
         route is None
@@ -317,7 +416,7 @@ async def upsert_platform_llm_config(
     row = result.scalar_one_or_none()
     current = _normalize_config(row.value if row else None)
     for key, value in updates.items():
-        if key in {"standard_provider", "premium_provider"}:
+        if key in {"standard_provider", "premium_provider", "background_provider"}:
             current[key] = LITELLM_PROVIDER
         elif key in current:
             current[key] = _clean(value)
@@ -337,13 +436,17 @@ async def resolve_llm_route(
     db: AsyncSession,
     tenant_id,
     *,
-    use_premium: bool,
+    use_premium: bool = False,
+    route_tier: RouteTier | str | None = None,
     requested_provider: str = "default",
     requested_model: str | None = None,
 ) -> LLMRoute:
+    tier = normalize_route_tier(route_tier, use_premium=use_premium)
+    use_premium = tier is RouteTier.PREMIUM
     cache_key = _route_cache_key(
         tenant_id,
         use_premium=use_premium,
+        route_tier=tier,
         requested_provider=requested_provider,
         requested_model=requested_model,
     )
@@ -354,7 +457,31 @@ async def resolve_llm_route(
     requested_route = _normalize_requested_route(
         requested_provider,
         use_premium=use_premium,
+        route_tier=tier,
     )
+
+    # The platform-owned Background route is deliberately resolved before any
+    # explicit model, tenant profile, tenant override, or BYOK inspection.
+    if tier is RouteTier.BACKGROUND:
+        platform_config = (
+            await get_platform_llm_config(db) if hasattr(db, "execute") else {}
+        )
+        alias = _clean(platform_config.get("background_model")) or _clean(
+            settings.LITELLM_BACKGROUND_MODEL
+        )
+        if not alias:
+            # Never turn a missing global background route into a Premium or
+            # tenant/BYOK request. The empty alias is surfaced to the broker as
+            # a route configuration failure.
+            alias = ""
+        return _set_cached_route(
+            cache_key,
+            LLMRoute(
+                requested_route=RouteTier.BACKGROUND.value,
+                resolved_route=RouteTier.BACKGROUND.value,
+                gateway_alias=alias,
+            ),
+        )
 
     explicit_alias = _clean(requested_model)
     requested_provider_clean = (_clean(requested_provider) or "default").lower()

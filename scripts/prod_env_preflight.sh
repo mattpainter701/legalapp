@@ -70,11 +70,26 @@ check_nonplaceholder() {
   fi
 }
 
-# The checked-in customer aliases use DEEPSEEK_API_KEY for both their
-# standard and premium primary OpenCode routes.  OPENROUTER_API_KEY remains an
-# optional fallback, but an unset primary key makes every customer route
-# unusable and must fail before deployment.
-check_nonplaceholder DEEPSEEK_API_KEY
+# OpenCode Go is the actual provider behind the checked-in premium/background
+# routes. Accept the legacy DEEPSEEK_API_KEY during secret migration, but name
+# the canonical credential accurately for operators and auditors.
+opencode_go_key="$(get_env OPENCODE_GO_API_KEY)"
+[[ -n "$opencode_go_key" ]] || opencode_go_key="$(get_env DEEPSEEK_API_KEY)"
+opencode_go_lowered="${opencode_go_key,,}"
+if [[ -z "$opencode_go_key" || "$opencode_go_lowered" == *change_me* || "$opencode_go_lowered" == *change-me* || "$opencode_go_lowered" == *changeme* ||
+      "$opencode_go_lowered" == *example.com* || "$opencode_go_lowered" == *example.invalid* ||
+      "$opencode_go_lowered" == *placeholder* ]]; then
+  errors+=("OPENCODE_GO_API_KEY (or legacy DEEPSEEK_API_KEY) must be configured with a non-placeholder value")
+fi
+opencode_zen_key="$(get_env OPENCODE_ZEN_API_KEY)"
+[[ -n "$opencode_zen_key" ]] || opencode_zen_key="$(get_env OPENCODE_API_KEY)"
+[[ -n "$opencode_zen_key" ]] || opencode_zen_key="$(get_env OPENCODE_KEY)"
+opencode_zen_lowered="${opencode_zen_key,,}"
+if [[ -z "$opencode_zen_key" || "$opencode_zen_lowered" == *change_me* || "$opencode_zen_lowered" == *change-me* || "$opencode_zen_lowered" == *changeme* ||
+      "$opencode_zen_lowered" == *example.com* || "$opencode_zen_lowered" == *example.invalid* ||
+      "$opencode_zen_lowered" == *placeholder* ]]; then
+  errors+=("OPENCODE_ZEN_API_KEY (or a legacy OpenCode Zen key) must be configured with a non-placeholder value")
+fi
 check_nonplaceholder EMAIL_FROM
 
 if [[ "$(get_env LITELLM_SALT_KEY)" == "$(get_env LITELLM_API_KEY)" ]]; then
