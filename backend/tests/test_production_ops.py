@@ -768,6 +768,34 @@ def test_host_capacity_gate_rejects_16_gib_and_low_disk_headroom() -> None:
     assert "12.0 GiB free" in output
 
 
+def test_cube_m_capacity_profile_accepts_the_ionos_host_and_rejects_undersizing() -> (
+    None
+):
+    accepted = _validate_capacity(
+        profile="cube-m",
+        cpus=4,
+        memory_gib=15,
+        disk_total_gib=232,
+        disk_free_gib=220,
+    )
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert "Host capacity passed (cube-m)" in accepted.stdout
+
+    rejected = _validate_capacity(
+        profile="cube-m",
+        cpus=2,
+        memory_gib=12,
+        disk_total_gib=180,
+        disk_free_gib=25,
+    )
+    output = rejected.stdout + rejected.stderr
+    assert rejected.returncode != 0
+    assert "2 online CPU(s); at least 4 are required" in output
+    assert "12.0 GiB RAM; at least 14.0 GiB is required" in output
+    assert "180.0 GiB total" in output
+    assert "25.0 GiB free" in output
+
+
 def test_host_capacity_gate_uses_realistic_hypervisor_disk_profile() -> None:
     result = _validate_capacity(
         profile="hypervisor",
@@ -856,6 +884,16 @@ def test_production_preflight_selects_only_known_capacity_profiles(
     vps = _run_preflight(tmp_path, _production_env(), compose_files=base_prod)
     assert vps.returncode == 0, vps.stdout + vps.stderr
     assert "overridden for the vps profile" in vps.stderr
+
+    cube_m = " ".join(
+        (
+            (ROOT / "docker-compose.hypervisor.yml").as_posix(),
+            (ROOT / "docker-compose.cube-m.yml").as_posix(),
+        )
+    )
+    cube = _run_preflight(tmp_path, _production_env(), compose_files=cube_m)
+    assert cube.returncode == 0, cube.stdout + cube.stderr
+    assert "overridden for the cube-m profile" in cube.stderr
 
     hypervisor_file = (ROOT / "docker-compose.hypervisor.yml").as_posix()
     mixed = _run_preflight(
@@ -1543,6 +1581,57 @@ def test_production_feature_flags_are_explicitly_mapped_and_rollback_images_rema
     assert "release-$release_tag" in deploy
     assert "rollback_manifest" in deploy
     assert 'APP_COMMIT" == "$git_commit' in deploy
+    assert (
+        "for service in backend scheduler migrator frontend office-addin nginx litellm"
+        in deploy
+    )
+
+
+def test_cube_m_overlay_bounds_runtime_without_weakening_private_ingress() -> None:
+    cube = yaml.safe_load((ROOT / "docker-compose.cube-m.yml").read_text())
+    services = cube["services"]
+    assert cube["name"] == "legalapp"
+    assert services["backend"]["command"].endswith("--workers 2")
+    assert "BACKEND_WORKERS" not in services["backend"]["command"]
+    assert "ports" not in services["nginx"]
+
+    steady_services = (
+        "postgres",
+        "redis",
+        "litellm-postgres",
+        "litellm",
+        "backend",
+        "scheduler",
+        "frontend",
+        "office-addin",
+        "nginx",
+    )
+
+    def memory_mib(value: str) -> int:
+        if value.endswith("G"):
+            return int(value[:-1]) * 1024
+        if value.endswith("M"):
+            return int(value[:-1])
+        raise AssertionError(f"unsupported memory limit {value}")
+
+    total_mib = sum(
+        memory_mib(services[name]["deploy"]["resources"]["limits"]["memory"])
+        for name in steady_services
+    )
+    assert total_mib <= 10 * 1024
+
+
+def test_ionos_stage_gate_is_private_exact_and_fail_closed() -> None:
+    stage = (ROOT / "scripts" / "ionos_stage_check.sh").read_text(encoding="utf-8")
+    assert "https://${origin_server_name}" in stage
+    assert '--resolve "${origin_server_name}:443:127.0.0.1"' in stage
+    assert '-H "Host: $host"' in stage
+    assert "MCP_SERVER_URL" in stage
+    assert 'ipaddress.ip_network("100.64.0.0/10")' in stage
+    assert "X-Clarity-Internal-Key" in stage
+    assert "MCP_SERVER_URL.rstrip('/')}/api/mcp\"" in stage
+    assert "Research MCP must remain disabled" in stage
+    assert "IONOS_PUBLIC_CUTOVER=not-yet-approved" in stage
 
 
 def test_upload_bind_scheduler_and_launch_capability_contracts() -> None:

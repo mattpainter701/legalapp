@@ -70,7 +70,7 @@ Set these non-secret relationships in `.env`:
   scheduled production-health issues.
 - Zoom Phone requires the tenant-owned app stored through Admin > Zoom. Save its client ID, client secret, and webhook secret; do not copy the numeric Account Number from Zoom Account Profile. OAuth plus an account call-history probe establishes API readiness immediately. A correctly signed completion event and exact provider fetch then learn or confirm Zoom's opaque `payload.account_id` for real-time delivery without blocking Test Connection or history sync. Shared platform/S2S Phone credentials are prohibited. The production check requires an active tenant app secret, refresh token, healthy API grant, required read scopes, public CRC, and live webhook/provider proof. Remove unused scopes in the Zoom Marketplace app and reauthorize only when the grant or scopes are invalid; the application cannot revoke provider-side grants.
 
-For a single-host VPS, provision at least 8 vCPU and 32 GB advertised memory.
+For a general single-host VPS, provision at least 8 vCPU and 32 GB advertised memory.
 The supported Lightsail starting size is the general-purpose
 [2Xlarge-32GB Linux bundle](https://docs.aws.amazon.com/lightsail/latest/userguide/amazon-lightsail-bundles.html)
 with 640 GB SSD; a 16 GB plan is not safe for this topology. Compose currently
@@ -92,6 +92,18 @@ For the VPS topology, preflight additionally requires the reviewed database
 sources `/data/legalapp/postgres` and `/data/legalapp/litellm-postgres`; do not
 relocate them without updating and re-proving the topology and capacity gate.
 Python 3 is required to inspect the canonical resolved Compose model safely.
+
+The reviewed exception is the first-customer IONOS Memory Cube M: 4 vCPU,
+16 GB advertised RAM, and 240 GB local disk. It is supported only with
+`docker-compose.hypervisor.yml docker-compose.cube-m.yml`, two backend workers,
+the checked-in resource ceilings, sequential image builds, and the `cube-m`
+capacity profile (4 online CPUs, 14 GiB guest-visible RAM, 200 GiB total disk,
+and at least 30 GiB free before the runtime threshold/build reserve is applied).
+The approximately 129-GB CourtListener/vector database and 58-GB staged source
+corpus remain on Skynet and are reached over a Tailscale-only authenticated
+sidecar path. Do not attach or copy those volumes to the Cube's core disk.
+The full placement, staging, cutover, and rollback procedure is
+[`IONOS_CUTOVER_RUNBOOK.md`](IONOS_CUTOVER_RUNBOOK.md).
 
 Validate without printing secret values:
 
@@ -123,6 +135,17 @@ HOST_CAPACITY_OVERRIDE_REASON="change record: dedicated storage/capacity reviewe
 Never persist either override variable in `.env`. Resolve the undersizing or
 record/load-test the nonstandard host before using the same process variables
 with `deploy_prod.sh`.
+
+The IONOS profile is selected only by the exact ordered pair:
+
+```bash
+ENV_FILE=/etc/lawhand/core.env \
+COMPOSE_FILES="docker-compose.hypervisor.yml docker-compose.cube-m.yml" \
+  bash scripts/prod_env_preflight.sh
+```
+
+`HOST_CAPACITY_OVERRIDE` is not Cube M acceptance evidence. Resize to Cube L if
+the bounded load gate cannot retain the documented memory and latency headroom.
 
 On a new hypervisor host, do not open public inbound 80/443. Nginx publishes
 only loopback ports and cloudflared uses egress-only Tunnel connections. First

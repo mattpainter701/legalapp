@@ -95,6 +95,14 @@ def test_public_health_gates_require_hsts_and_api_http_redirect() -> None:
     assert "PRODUCTION_DOMAIN: getlawhand.com" in scheduled_check
     assert "[production-alert] LawHand readiness failure" in scheduled_check
 
+    scheduled_hsts_helper = scheduled_check[
+        scheduled_check.index("require_single_hsts()") : scheduled_check.index(
+            "curl --fail --silent --show-error --max-time 20 \"$PRODUCTION_ORIGIN/health/readiness\""
+        )
+    ]
+    assert "curl --silent --show-error" in scheduled_hsts_helper
+    assert "curl --fail" not in scheduled_hsts_helper
+
     for check in (production_check, scheduled_check):
         assert "strict-transport-security:" in check
         assert "max-age=63072000" in check
