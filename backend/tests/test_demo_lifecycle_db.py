@@ -5,12 +5,15 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from fastapi import Response
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
+from unittest.mock import AsyncMock, Mock
 
 from app.database import set_tenant_context
 from app.models.contact import Contact
 from app.models.demo_session import DemoSession
+from app.models.llm_routing_profile import LLMRoutingProfile
 from app.models.document import Chunk, Document
 from app.models.plugin import Matter
 from app.models.tenant import Tenant, TenantSettings
@@ -25,6 +28,7 @@ from app.services.demo_quota import (
     settle_demo_operation,
 )
 from app.services import demo_clone, demo_purge
+from app.routers import demo as demo_router
 
 
 def _tenant(*, tenant_id, domain, billing_tier="fixture", expires_at=None):
@@ -49,6 +53,119 @@ def _user(*, tenant_id, user_id, email):
         oauth_subject=str(user_id),
         premium_ai_enabled=False,
     )
+
+
+@pytest.mark.asyncio
+async def test_active_demo_resumes_by_email_without_extending_expiry_or_quota(
+    db_session, monkeypatch
+):
+    fixture_id, tenant_id, user_id, session_id = (
+        uuid.uuid4(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+    )
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=6)
+    email = "resume@example.invalid"
+    db_session.add_all(
+        [
+            _tenant(tenant_id=fixture_id, domain="resume-fixture.invalid"),
+            _tenant(
+                tenant_id=tenant_id,
+                domain="resume.demo.invalid",
+                billing_tier="demo",
+                expires_at=expires_at,
+            ),
+        ]
+    )
+    await db_session.flush()
+    await set_tenant_context(db_session, str(tenant_id))
+    db_session.add_all(
+        [
+            User(
+                id=user_id,
+                tenant_id=tenant_id,
+                email=email,
+                full_name="Returning Prospect",
+                role="admin",
+                oauth_provider="demo",
+                oauth_subject=str(session_id),
+                is_active=True,
+                license_active=True,
+                premium_ai_enabled=False,
+                privacy_mode=True,
+            ),
+            DemoSession(
+                id=session_id,
+                tenant_id=tenant_id,
+                fixture_tenant_id=fixture_id,
+                fixture_version="resume-test",
+                prospect_name="Returning Prospect",
+                prospect_email=email,
+                status="active",
+                quota=20,
+                used=7,
+                expires_at=expires_at,
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    monkeypatch.setattr(demo_router, "record_operator_audit", AsyncMock())
+    monkeypatch.setattr(
+        demo_router, "_issue_access_token", AsyncMock(return_value="access")
+    )
+    monkeypatch.setattr(
+        demo_router, "_create_refresh_token", AsyncMock(return_value="refresh")
+    )
+    set_cookies = Mock()
+    monkeypatch.setattr(demo_router, "_set_auth_cookies", set_cookies)
+    response = Response()
+
+    resumed = await demo_router._resume_active_demo_session(
+        db_session,
+        email=email,
+        now=datetime.now(timezone.utc),
+        request=Mock(),
+        response=response,
+    )
+
+    assert resumed is not None
+    assert resumed.resumed is True
+    assert resumed.tenant_id == str(tenant_id)
+    assert resumed.session_id == str(session_id)
+    assert resumed.expires_at == expires_at
+    assert resumed.quota == 20
+    assert resumed.used == 7
+    assert response.status_code == 200
+    set_cookies.assert_called_once_with(response, "access", "refresh")
+
+
+@pytest.mark.asyncio
+async def test_new_demos_use_only_an_active_matter_aware_demo_profile(db_session):
+    profile = LLMRoutingProfile(
+        name="Demo Standard",
+        standard_route={"model": "gpt-standard"},
+        premium_route={"model": "gemini-premium"},
+        standard_allow_matter_context=True,
+        premium_allow_matter_context=True,
+        is_demo_default=True,
+        is_active=True,
+        activation={
+            "status": "active",
+            "aliases": {
+                "standard": "clarity-standard-rdemo",
+                "premium": "clarity-premium-rdemo",
+            },
+        },
+    )
+    db_session.add(profile)
+    await db_session.commit()
+
+    selected = await demo_router._active_demo_routing_profile(db_session)
+
+    assert selected is not None
+    assert selected.id == profile.id
 
 
 @pytest.mark.asyncio

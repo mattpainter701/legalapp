@@ -81,6 +81,7 @@ class UserInfo(BaseModel):
     is_active: bool
     license_active: bool = True
     premium_ai_enabled: bool = False
+    standard_matter_context_allowed: bool = False
     created_at: datetime
     billing_tier: str
     # Payment health, so the browser can tell a firm its subscription is in

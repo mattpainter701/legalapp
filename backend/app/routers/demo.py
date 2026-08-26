@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
+import hashlib
 import secrets
 import shutil
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import get_db, set_tenant_context
 from app.models.demo_session import DemoSession
+from app.models.llm_routing_profile import LLMRoutingProfile
 from app.models.plugin import TenantPluginEntitlement
 from app.models.tenant import Tenant, TenantSettings
 from app.models.user import User
@@ -33,6 +35,10 @@ router = APIRouter(prefix="/demo", tags=["demo"])
 settings = get_settings()
 _DEMO_DOMAIN_SUFFIX = ".demo.invalid"
 _PROVISION_LOCK = 7_341_991_204
+
+
+def _resume_email_hash(email: str) -> str:
+    return hashlib.sha256(email.strip().lower().encode("utf-8")).hexdigest()
 
 
 def _remove_target_files(tenant_id: uuid.UUID) -> None:
@@ -72,6 +78,104 @@ def _validate_fixture_tenant(tenant: Tenant) -> None:
         )
 
 
+async def _resume_active_demo_session(
+    db: AsyncSession,
+    *,
+    email: str,
+    now: datetime,
+    request: Request,
+    response: Response,
+) -> DemoSessionResponse | None:
+    """Re-authenticate an active demo without extending its life or quota."""
+
+    email_hash = _resume_email_hash(email)
+    # Public demo resume gets a narrow SELECT-only RLS selector. It reveals
+    # only rows matching this normalized-email hash and is cleared before the
+    # normal tenant context is bound.
+    await db.execute(
+        text("SELECT set_config('app.demo_resume_email_hash', :value, true)"),
+        {"value": email_hash},
+    )
+    demo_session = await db.scalar(
+        select(DemoSession)
+        .where(
+            DemoSession.resume_email_hash == email_hash,
+            DemoSession.status == "active",
+            DemoSession.expires_at > now,
+        )
+        .order_by(DemoSession.created_at.desc())
+        .limit(1)
+    )
+    await db.execute(text("SELECT set_config('app.demo_resume_email_hash', '', true)"))
+    if demo_session is None:
+        return None
+
+    await set_tenant_context(db, str(demo_session.tenant_id))
+    tenant = await db.get(Tenant, demo_session.tenant_id)
+    user = await db.scalar(
+        select(User).where(
+            User.tenant_id == demo_session.tenant_id,
+            User.oauth_provider == "demo",
+            func.lower(User.email) == email,
+            User.is_active.is_(True),
+            User.license_active.is_(True),
+        )
+    )
+    if (
+        tenant is None
+        or user is None
+        or tenant.billing_tier != "demo"
+        or not tenant.is_active
+        or tenant.expires_at is None
+        or tenant.expires_at <= now
+        or not tenant.domain.endswith(_DEMO_DOMAIN_SUFFIX)
+    ):
+        await db.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
+        return None
+    await record_operator_audit(
+        db,
+        request,
+        action="demo.session.resumed",
+        actor_type="demo_access_code",
+        resource_type="demo_session",
+        resource_id=str(demo_session.id),
+        metadata={"tenant_id": str(tenant.id)},
+    )
+    await db.commit()
+
+    access_token = await _issue_access_token(db, user, tenant)
+    refresh_token = await _create_refresh_token(request, user)
+    _set_auth_cookies(response, access_token, refresh_token)
+    response.status_code = status.HTTP_200_OK
+    return DemoSessionResponse(
+        user_id=str(user.id),
+        tenant_id=str(tenant.id),
+        session_id=str(demo_session.id),
+        expires_at=demo_session.expires_at,
+        quota=demo_session.quota,
+        used=demo_session.used,
+        resumed=True,
+    )
+
+
+async def _active_demo_routing_profile(
+    db: AsyncSession,
+) -> LLMRoutingProfile | None:
+    profile = await db.scalar(
+        select(LLMRoutingProfile).where(
+            LLMRoutingProfile.is_demo_default.is_(True),
+            LLMRoutingProfile.is_active.is_(True),
+        )
+    )
+    if (
+        profile is None
+        or not profile.assignable
+        or not profile.standard_allow_matter_context
+    ):
+        return None
+    return profile
+
+
 @router.post("/session", response_model=DemoSessionResponse, status_code=201)
 async def create_demo_session(
     body: DemoSessionRequest,
@@ -84,6 +188,7 @@ async def create_demo_session(
         raise HTTPException(status_code=401, detail="Invalid demo access code")
 
     now = datetime.now(timezone.utc)
+    normalized_email = str(body.email).strip().lower()
     target_tenant_id = uuid.uuid4()
     session_id = uuid.uuid4()
     user_id = uuid.uuid4()
@@ -93,6 +198,22 @@ async def create_demo_session(
         await db.execute(
             text("SELECT pg_advisory_xact_lock(:key)"), {"key": _PROVISION_LOCK}
         )
+        resumed = await _resume_active_demo_session(
+            db,
+            email=normalized_email,
+            now=now,
+            request=request,
+            response=response,
+        )
+        if resumed is not None:
+            return resumed
+
+        if not body.full_name:
+            raise HTTPException(
+                status_code=404,
+                detail="No active demo workspace was found. Enter your name to start a new demo.",
+            )
+
         fixture = await db.scalar(
             select(Tenant).where(
                 Tenant.domain == settings.DEMO_FIXTURE_TENANT_DOMAIN,
@@ -135,8 +256,8 @@ async def create_demo_session(
         user = User(
             id=user_id,
             tenant_id=target_tenant_id,
-            email=str(body.email).lower().strip(),
-            full_name=body.full_name.strip(),
+            email=normalized_email,
+            full_name=body.full_name,
             role="admin",
             oauth_provider="demo",
             oauth_subject=str(session_id),
@@ -150,18 +271,23 @@ async def create_demo_session(
             tenant_id=target_tenant_id,
             fixture_tenant_id=fixture.id,
             fixture_version=fixture.updated_at.astimezone(timezone.utc).isoformat(),
-            prospect_name=body.full_name.strip(),
-            prospect_email=str(body.email).lower().strip(),
+            prospect_name=body.full_name,
+            prospect_email=normalized_email,
+            resume_email_hash=_resume_email_hash(normalized_email),
             status="provisioning",
             quota=settings.DEMO_MESSAGE_QUOTA,
             expires_at=expires_at,
         )
+        demo_routing_profile = await _active_demo_routing_profile(db)
         db.add_all(
             [
                 user,
                 demo_session,
                 TenantSettings(
                     tenant_id=target_tenant_id,
+                    llm_routing_profile_id=(
+                        demo_routing_profile.id if demo_routing_profile else None
+                    ),
                     enable_pii_detection=True,
                     enable_auto_memory=False,
                     use_customer_llm=False,

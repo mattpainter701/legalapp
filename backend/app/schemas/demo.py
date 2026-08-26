@@ -4,17 +4,17 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 class DemoSessionRequest(BaseModel):
-    full_name: str = Field(min_length=1, max_length=255)
+    full_name: str | None = Field(default=None, max_length=255)
     email: EmailStr
     access_code: str = Field(min_length=1, max_length=256)
 
     @field_validator("full_name")
     @classmethod
-    def normalize_full_name(cls, value: str) -> str:
+    def normalize_full_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         normalized = value.strip()
-        if not normalized:
-            raise ValueError("Name is required")
-        return normalized
+        return normalized or None
 
 
 class DemoSessionResponse(BaseModel):
@@ -24,6 +24,7 @@ class DemoSessionResponse(BaseModel):
     expires_at: datetime
     quota: int
     used: int
+    resumed: bool = False
 
 
 class DemoInfo(BaseModel):

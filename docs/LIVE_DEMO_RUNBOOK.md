@@ -26,13 +26,21 @@ For the evidence boundary and presentation go/no-go gates, use
    DEMO_MAX_ACTIVE=5
    ```
 
-4. Open `/demo` in a private browser window and complete the smoke test below.
+4. In **Platform → AI Provider Routing**, select or create the profile intended
+   for demos. Enable **Allow confidential matter context on Standard**, validate
+   and activate the route, then choose **Use for demos**. The selected profile
+   must contain only targets approved for confidential customer data. This
+   assignment applies to newly created demo workspaces.
+5. Open `/demo` in a private browser window and complete the smoke test below.
    Passcode changes require an API restart because settings are cached.
 
 ## Salesperson smoke test
 
 - Create a session with the shared code and a test contact identity.
 - Confirm the amber demo banner shows `0 of 20` and approximately `72h`.
+- Sign out, return to `/demo`, choose **Resume demo**, and enter the same email
+  and demo access code. Confirm the same workspace opens with its original
+  expiry and usage count. Email alone must never resume a workspace.
 - Confirm the conversation list is empty; no prior prospect or fixture chat is
   shown.
 - Open the **Northstar Analytics - SaaS Vendor Review** matter and its two
@@ -47,6 +55,9 @@ For the evidence boundary and presentation go/no-go gates, use
   clean, citation-first workflow.
 - Open Matters, Tasks, Calendar, Contacts, Billing, and one plugin workflow.
 - Confirm Premium requests and live integration endpoints are rejected.
+- Confirm Chat reports that approved synthetic matter context is available and
+  that private-detail protection is enforced. The privacy control must not be
+  switchable off in a disposable demo.
 - Never enter prospect, client, employee, or active-case information. The name
   and email used to enter the demo are deleted with the workspace; they are not
   a consented CRM lead record.

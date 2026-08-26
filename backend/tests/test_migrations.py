@@ -12,7 +12,21 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["130_smb_agent_bootstrap_rls"]
+    assert heads == ["131_demo_resume_profile"]
+
+
+def test_demo_resume_rls_is_hash_scoped_select_only_and_profile_is_unique():
+    backend_dir = Path(__file__).resolve().parents[1]
+    source = (
+        backend_dir / "migrations" / "versions" / "131_demo_resume_profile.py"
+    ).read_text(encoding="utf-8")
+
+    assert "FOR SELECT TO PUBLIC" in source
+    assert "app.demo_resume_email_hash" in source
+    assert "resume_email_hash = NULLIF" in source
+    assert "app.rls_bypass" not in source
+    assert "uq_llm_routing_profiles_demo_default" in source
+    assert 'postgresql_where=sa.text("is_demo_default")' in source
 
 
 def test_smb_agent_bootstrap_rls_is_exact_select_only_and_not_a_bypass():

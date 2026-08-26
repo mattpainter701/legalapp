@@ -23,6 +23,7 @@ from app.config import get_settings
 from app.database import enable_rls_bypass, get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.services.module_visibility import resolve_enabled_modules, resolve_plan_meta
+from app.services.llm_routing import resolve_llm_route, route_matter_context_allowed
 from app.services.office_access import (
     require_office_globally_enabled,
     require_office_pilot_tenant,
@@ -92,6 +93,27 @@ async def _active_demo_session(
             "Unable to load optional demo metadata for tenant_id=%s", tenant_id
         )
         return None
+
+
+async def _standard_matter_context_policy(
+    db: AsyncSession, tenant_id: uuid.UUID
+) -> bool:
+    """Expose the same fail-closed resolved-route policy enforced by chat."""
+
+    try:
+        route = await resolve_llm_route(db, tenant_id, use_premium=False)
+        return await route_matter_context_allowed(
+            db,
+            tenant_id,
+            use_premium=False,
+            route=route,
+        )
+    except Exception:
+        logger.exception(
+            "Unable to resolve Standard matter-context policy for tenant_id=%s",
+            tenant_id,
+        )
+        return False
 
 
 def _require_public_signup_enabled() -> None:
@@ -1841,6 +1863,7 @@ async def get_me(
     )
     plan_id, upsell_target = await resolve_plan_meta(db, user.tenant_id)
     demo_session = await _active_demo_session(db, user.tenant_id)
+    standard_context_allowed = await _standard_matter_context_policy(db, user.tenant_id)
     return UserInfo(
         id=str(user.id),
         tenant_id=str(user.tenant_id),
@@ -1850,6 +1873,7 @@ async def get_me(
         is_active=user.is_active,
         license_active=user.license_active,
         premium_ai_enabled=user.premium_ai_enabled,
+        standard_matter_context_allowed=standard_context_allowed,
         created_at=user.created_at,
         billing_tier=user.tenant.billing_tier if user.tenant else "payg",
         subscription_status=(
@@ -1889,6 +1913,15 @@ async def update_me(
     """Update only the caller's verified professional profile fields."""
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
+    if (
+        user.tenant is not None
+        and user.tenant.billing_tier == "demo"
+        and body.privacy_mode is False
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Private-detail protection is enforced in demo workspaces",
+        )
     enabling_privacy_mode = body.privacy_mode is True and not user.privacy_mode
     if enabling_privacy_mode:
         await lock_tenant_workspace_mcp_policy(db, user.tenant_id)
@@ -1960,6 +1993,7 @@ async def update_me(
         db, user.tenant_id, user=user
     )
     plan_id, upsell_target = await resolve_plan_meta(db, user.tenant_id)
+    standard_context_allowed = await _standard_matter_context_policy(db, user.tenant_id)
     return UserInfo(
         id=str(user.id),
         tenant_id=str(user.tenant_id),
@@ -1969,6 +2003,7 @@ async def update_me(
         is_active=user.is_active,
         license_active=user.license_active,
         premium_ai_enabled=user.premium_ai_enabled,
+        standard_matter_context_allowed=standard_context_allowed,
         created_at=user.created_at,
         billing_tier=user.tenant.billing_tier if user.tenant else "payg",
         subscription_status=(

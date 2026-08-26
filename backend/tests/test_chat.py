@@ -28,6 +28,7 @@ from app.routers.chat import (
     _is_public_general_route,
     _assert_public_general_sources_allowed,
     _partition_stream_source_previews,
+    _privacy_mode_for_route,
     _propose_followthrough_actions,
     _normalize_source_url,
     _source_dict_from_chunk,
@@ -72,6 +73,14 @@ async def test_standard_route_matter_policy_is_platform_managed(db_session):
         requested_route="tenant-standard", gateway_alias="firm-default"
     )
     premium = SimpleNamespace(requested_route="premium", gateway_alias="premium-model")
+    customer_standard = SimpleNamespace(
+        requested_route="standard",
+        resolved_route="customer",
+        gateway_alias="customer-model",
+    )
+    tenant_standard.resolved_route = "tenant-standard"
+    standard.resolved_route = "standard"
+    premium.resolved_route = "premium"
     tenant_id = uuid.uuid4()
     assert await _is_public_general_route(db_session, standard, tenant_id)
     assert await _is_public_general_route(db_session, tenant_standard, tenant_id)
@@ -84,7 +93,8 @@ async def test_standard_route_matter_policy_is_platform_managed(db_session):
     )
     await db_session.commit()
     assert not await _is_public_general_route(db_session, standard, tenant_id)
-    assert not await _is_public_general_route(db_session, tenant_standard, tenant_id)
+    assert await _is_public_general_route(db_session, tenant_standard, tenant_id)
+    assert await _is_public_general_route(db_session, customer_standard, tenant_id)
 
 
 @pytest.mark.asyncio
@@ -109,14 +119,31 @@ async def test_routing_profile_controls_standard_and_premium_matter_policy(db_se
     db_session.add(profile)
     await db_session.commit()
 
-    standard = SimpleNamespace(requested_route="standard", gateway_alias="standard")
+    standard = SimpleNamespace(
+        requested_route="standard",
+        resolved_route="profile-standard",
+        gateway_alias="standard",
+    )
     assert not await _is_public_general_route(db_session, standard, tenant_id)
     assert await route_matter_context_allowed(
-        db_session, tenant_id, use_premium=False
+        db_session, tenant_id, use_premium=False, route=standard
+    )
+    customer = SimpleNamespace(resolved_route="customer")
+    assert not await route_matter_context_allowed(
+        db_session, tenant_id, use_premium=False, route=customer
     )
     assert not await route_matter_context_allowed(
         db_session, tenant_id, use_premium=True
     )
+
+
+def test_demo_privacy_is_enforced_on_a_matter_aware_standard_route():
+    demo_user = SimpleNamespace(
+        privacy_mode=False,
+        tenant=SimpleNamespace(billing_tier="demo"),
+    )
+
+    assert _privacy_mode_for_route(demo_user, public_general=False)
 
 
 def test_source_utilization_metrics_track_injected_cited_and_linkable_sources():

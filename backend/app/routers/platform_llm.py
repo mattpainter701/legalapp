@@ -205,6 +205,7 @@ class RoutingProfileUpdate(BaseModel):
     description: Optional[str] = None
     is_active: Optional[bool] = None
     is_default: Optional[bool] = None
+    is_demo_default: Optional[bool] = None
 
 
 class RouteTestRequest(BaseModel):
@@ -1416,6 +1417,7 @@ def _profile_payload(profile: LLMRoutingProfile) -> dict[str, Any]:
         "name": profile.name,
         "description": profile.description,
         "is_default": profile.is_default,
+        "is_demo_default": profile.is_demo_default,
         "is_active": profile.is_active,
         "assignable": profile.assignable,
         "standard_allow_matter_context": profile.standard_allow_matter_context,
@@ -2577,6 +2579,7 @@ async def create_routing_profile(
         if source
         else True,
         is_default=False,
+        is_demo_default=False,
         is_active=True,
         activation=dict(source.activation or {}) if source else None,
     )
@@ -2630,6 +2633,15 @@ async def update_routing_profile(
             raise HTTPException(
                 status_code=400, detail="The default routing profile cannot be inactive"
             )
+        if (
+            not body.is_active
+            and profile.is_demo_default
+            and body.is_demo_default is not False
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="The demo routing profile cannot be inactive",
+            )
         profile.is_active = body.is_active
     if body.is_default:
         if not profile.assignable:
@@ -2661,6 +2673,28 @@ async def update_routing_profile(
                     "premium_model": aliases["premium"],
                 },
             )
+    if body.is_demo_default is False:
+        profile.is_demo_default = False
+    elif body.is_demo_default:
+        if not profile.assignable or not profile.standard_allow_matter_context:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Activate the profile with Standard matter context allowed "
+                    "before using it for demo workspaces"
+                ),
+            )
+        for existing in (
+            await db.scalars(
+                select(LLMRoutingProfile).where(
+                    LLMRoutingProfile.is_demo_default.is_(True)
+                )
+            )
+        ).all():
+            existing.is_demo_default = False
+        await db.flush()
+        profile.is_demo_default = True
+        profile.is_active = True
     await record_operator_audit(
         db,
         request,
@@ -2670,6 +2704,7 @@ async def update_routing_profile(
         metadata={
             "name": profile.name,
             "is_default": profile.is_default,
+            "is_demo_default": profile.is_demo_default,
             "is_active": profile.is_active,
             "standard_allow_matter_context": profile.standard_allow_matter_context,
             "premium_allow_matter_context": profile.premium_allow_matter_context,
@@ -2901,6 +2936,15 @@ async def save_routes(
         return route
 
     profile = await _selected_profile(db, profile_id)
+    if (
+        profile is not None
+        and profile.is_demo_default
+        and not body.standard.allow_matter_context
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="The demo routing profile must allow Standard matter context",
+        )
     config = {
         "standard": _normalize_route_entry(body.standard),
         "premium": _normalize_route_entry(body.premium),
