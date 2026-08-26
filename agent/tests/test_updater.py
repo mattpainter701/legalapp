@@ -90,7 +90,9 @@ def test_update_redirect_flow_rejects_downgrade_or_untrusted_location(location):
     handler = updater._OfficialRedirectHandler()
     request = updater.urllib.request.Request(updater.RELEASE_MANIFEST_URL)
     with pytest.raises(updater.UpdateError, match="unsafe update redirect"):
-        handler.redirect_request(request, None, 302, "Found", {"Location": location}, location)
+        handler.redirect_request(
+            request, None, 302, "Found", {"Location": location}, location
+        )
 
 
 def test_manifest_rejects_caller_controlled_url():

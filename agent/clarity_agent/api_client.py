@@ -29,11 +29,16 @@ class SaaSClient:
             parsed.port
         except ValueError as exc:
             raise ValueError("CLARITY_SAAS_URL has a malformed host") from exc
-        loopback_http = parsed.scheme == "http" and hostname and hostname.casefold() in {
-            "localhost",
-            "127.0.0.1",
-            "::1",
-        }
+        loopback_http = (
+            parsed.scheme == "http"
+            and hostname
+            and hostname.casefold()
+            in {
+                "localhost",
+                "127.0.0.1",
+                "::1",
+            }
+        )
         if parsed.scheme != "https" and not loopback_http:
             raise ValueError("CLARITY_SAAS_URL must use HTTPS")
         if (
