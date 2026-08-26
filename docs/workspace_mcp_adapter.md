@@ -200,6 +200,14 @@ The consent screen identifies the user, tenant, client, and requested scopes.
 Access and refresh tokens are revocable; disconnecting the grant invalidates
 future workspace access.
 
+An RFC 7009 disconnect presented by a correctly bound client cascades to the
+entire durable Workspace grant: LawHand records one revocation audit event,
+blocks every unexpired access token for that grant, and removes all renewable
+refresh-token families. The user-facing connection list shows active grants
+only; revoked and expired rows remain retained as security/audit evidence.
+Listing and disconnect cleanup remain available when rollout gates are closed,
+so disabling MCP cannot strand a grant that later becomes active again.
+
 ### Safe connection validation
 
 1. Confirm the server initializes and exposes the documented read/proposal tool
