@@ -1666,6 +1666,12 @@ export const getMatterInboundEmail = (matterId, status = 'pending') =>
 export const acceptMatterInboundEmail = (matterId, inboundId) =>
   api.post(`/matters/${matterId}/inbound-email/${inboundId}/accept`).then(r => r.data)
 
+export const createMatterInboundExpenseDraft = (matterId, inboundId, attachmentIndex = null) =>
+  api.post(
+    `/matters/${matterId}/inbound-email/${inboundId}/expense-draft`,
+    attachmentIndex == null ? {} : { attachment_index: attachmentIndex },
+  ).then(r => r.data)
+
 export const rejectMatterInboundEmail = (matterId, inboundId) =>
   api.post(`/matters/${matterId}/inbound-email/${inboundId}/reject`).then(r => r.data)
 
@@ -2077,6 +2083,16 @@ export const getActiveTimer = () =>
 export const cancelTimer = () =>
   api.delete('/billing/time-entries/timer')
 
+// Matter expenses
+export const getExpenses = (params) =>
+  api.get('/billing/expenses', { params }).then(r => r.data)
+export const createExpense = (data) =>
+  api.post('/billing/expenses', data).then(r => r.data)
+export const updateExpense = (id, data) =>
+  api.patch(`/billing/expenses/${id}`, data).then(r => r.data)
+export const deleteExpense = (id) =>
+  api.delete(`/billing/expenses/${id}`)
+
 // Billing settings
 export const getBillingSettings = () =>
   api.get('/billing/settings').then(r => r.data)
@@ -2085,6 +2101,8 @@ export const updateBillingSettings = (data) =>
 
 export const getInvoices = (params) =>
   api.get('/billing/invoices', { params }).then(r => r.data)
+export const getInvoicePreview = (params) =>
+  api.get('/billing/invoices/preview', { params }).then(r => r.data)
 export const getInvoice = (id) =>
   api.get(`/billing/invoices/${id}`).then(r => r.data)
 export const generateInvoice = (data) =>
@@ -2093,6 +2111,8 @@ export const updateInvoice = (id, data) =>
   api.patch(`/billing/invoices/${id}`, data).then(r => r.data)
 export const recordPayment = (data) =>
   api.post('/billing/payments', data).then(r => r.data)
+export const createInvoicePaymentLink = (id) =>
+  api.post(`/billing/invoices/${id}/payment-link`).then(r => r.data)
 export const exportInvoice = (id, format = 'pdf') =>
   api.post(`/billing/invoices/${id}/export`, { format }, { responseType: 'blob' }).then(r => r.data)
 

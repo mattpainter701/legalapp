@@ -23,6 +23,7 @@ import AddTaskModal from '../components/AddTaskModal'
 import ComposeEmailModal from '../components/ComposeEmailModal'
 import UserSearchInput from '../components/UserSearchInput'
 import ContactPicker from '../components/ContactPicker'
+import MatterExpensesPanel from '../components/MatterExpensesPanel'
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
 function Icon({ d, size = 18, className = '' }) {
@@ -325,6 +326,13 @@ export default function MatterDetailPage() {
     } finally {
       setTasksLoading(false)
     }
+  }, [id])
+
+  const refreshBillingSummary = useCallback(async () => {
+    await Promise.all([
+      getMatterBudgetV2(id).then(setBudget).catch(() => {}),
+      getMatterDashboard(id).then(setDashboard).catch(() => {}),
+    ])
   }, [id])
 
   const loadCloudFiles = useCallback(async () => {
@@ -672,13 +680,25 @@ export default function MatterDetailPage() {
           {/* Budget card */}
           {budget && (
             <div className="bg-brand-surface border border-brand-line rounded-2xl p-5 text-right min-w-[180px] shadow-sm">
-              <div className="text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-2">Budget</div>
+              <div className="text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-2">Budget used</div>
               {budget.budget_amount ? (
                 <>
                   <div className="text-[26px] font-serif font-bold text-brand-ink">{budget.utilization_pct ?? 0}%</div>
                   <div className="text-[12px] text-brand-muted font-sans mb-2">
-                    ${Number(budget.total_billed).toLocaleString()} / ${Number(budget.budget_amount).toLocaleString()}
+                    ${Number(budget.total_billed).toLocaleString()} used / ${Number(budget.budget_amount).toLocaleString()} budget
                   </div>
+                  {(budget.billable_time_amount != null || budget.billable_expense_amount != null || budget.remaining != null) && (
+                    <div className="mb-2 space-y-0.5 text-[11px] text-brand-muted">
+                      {budget.billable_time_amount != null && <div>Time: ${Number(budget.billable_time_amount).toLocaleString()}</div>}
+                      {budget.billable_expense_amount != null && <div>Client expenses: ${Number(budget.billable_expense_amount).toLocaleString()}</div>}
+                      {budget.remaining != null && (
+                        <div>
+                          {Number(budget.remaining) >= 0 ? 'Remaining' : 'Over budget'}: ${Math.abs(Number(budget.remaining)).toLocaleString()}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <div className="text-[10px] text-brand-muted">Billable time and client expenses count; internal expenses do not.</div>
                   <div className="h-1.5 rounded-full bg-brand-line overflow-hidden">
                     <div
                       className={`h-full rounded-full transition-all ${(budget.utilization_pct ?? 0) > 90 ? 'bg-brand-rose' : (budget.utilization_pct ?? 0) > 70 ? 'bg-brand-amber' : 'bg-brand-green'}`}
@@ -724,7 +744,7 @@ export default function MatterDetailPage() {
                 {
                   label: 'Budget Used',
                   value: dashboard?.utilization_pct != null ? `${dashboard.utilization_pct}%` : (budget?.budget_amount ? `${budget.utilization_pct ?? 0}%` : '—'),
-                  sub: dashboard?.budget_amount ? `$${Number(dashboard.total_billed).toLocaleString()} billed` : null,
+                  sub: dashboard?.budget_amount ? `$${Number(dashboard.total_billed).toLocaleString()} budget used` : null,
                   alert: (dashboard?.utilization_pct ?? budget?.utilization_pct ?? 0) >= 85,
                 },
                 {
@@ -1292,7 +1312,7 @@ export default function MatterDetailPage() {
                 <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
                   <Icon d={Icons.dollar} size={18} className="text-brand-accent" /> Billing
                 </h2>
-                <p className="text-[13px] text-brand-muted font-sans mt-0.5">Time entries and billable work logged against this matter.</p>
+                <p className="text-[13px] text-brand-muted font-sans mt-0.5">Time, client costs, and internal spend for this matter.</p>
               </div>
               <button onClick={() => navigate(`/time-tracking?matter_id=${id}`)} className="flex items-center gap-2 px-4 py-2 bg-brand-surface border border-brand-line text-brand-ink text-sm font-sans font-medium rounded-lg hover:bg-brand-bg-soft shadow-sm">
                 <Icon d={Icons.plus} size={15} /> Log Time
@@ -1312,7 +1332,7 @@ export default function MatterDetailPage() {
                 </div>
               ) : (
                 <div className="space-y-4">
-                  <div className="grid grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                     <div className="bg-brand-bg-soft border border-brand-line rounded-xl p-4 text-center">
                       <div className="text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-1">Total Hours</div>
                       <div className="text-2xl font-serif font-bold text-brand-ink">
@@ -1320,7 +1340,7 @@ export default function MatterDetailPage() {
                       </div>
                     </div>
                     <div className="bg-brand-bg-soft border border-brand-line rounded-xl p-4 text-center">
-                      <div className="text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-1">Total Billed</div>
+                      <div className="text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-1">Time Value</div>
                       <div className="text-2xl font-serif font-bold text-brand-ink">
                         ${timeEntries.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0).toLocaleString()}
                       </div>
@@ -1362,6 +1382,11 @@ export default function MatterDetailPage() {
                 </div>
               )}
             </div>
+            <MatterExpensesPanel
+              matterId={id}
+              onOpenInbox={() => setActiveTab('correspondence')}
+              onExpensesChanged={refreshBillingSummary}
+            />
           </div>
         )}
 

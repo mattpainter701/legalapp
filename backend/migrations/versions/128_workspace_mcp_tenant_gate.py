@@ -4,7 +4,10 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = "128_workspace_mcp_tenant_gate"
-down_revision = "127_research_mcp_oauth_usage"
+down_revision = (
+    "127_research_mcp_oauth_usage",
+    "127_matter_expense_capture",
+)
 branch_labels = None
 depends_on = None
 

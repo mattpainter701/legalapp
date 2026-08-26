@@ -4,9 +4,12 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
 from app.routers import billing_extended
 from app.services import recurring_billing
+from app.services import rbac_service
+from app.services.stripe_webhook_guard import StripeTargetUnresolved
 
 
 class _Result:
@@ -29,6 +32,25 @@ class _Result:
 
     def first(self):
         return self._first
+
+
+@pytest.mark.asyncio
+async def test_billing_manager_rejects_view_only_capability(monkeypatch):
+    user = SimpleNamespace(id=uuid.uuid4(), role="user")
+
+    async def fake_current_user(request, db):
+        return user
+
+    async def fake_capabilities(db, user_id):
+        return {"view_billing"}
+
+    monkeypatch.setattr(billing_extended, "get_current_user", fake_current_user)
+    monkeypatch.setattr(rbac_service, "get_user_capabilities", fake_capabilities)
+
+    with pytest.raises(HTTPException) as exc:
+        await billing_extended._require_billing_manager(object(), object())
+
+    assert exc.value.status_code == 403
 
 
 @pytest.mark.asyncio
@@ -90,6 +112,58 @@ async def test_stripe_payment_intent_binds_tenant_before_reconciliation(
     assert len(db.added) == 1
     assert db.added[0].tenant_id == tenant_id
     assert db.added[0].invoice_id == invoice_id
+
+
+@pytest.mark.asyncio
+async def test_stripe_payment_intent_rejects_amount_above_remaining_balance(
+    monkeypatch,
+):
+    tenant_id = uuid.uuid4()
+    invoice_id = uuid.uuid4()
+
+    async def fake_set_tenant_context(db, value):
+        return None
+
+    monkeypatch.setattr(billing_extended, "set_tenant_context", fake_set_tenant_context)
+    invoice = SimpleNamespace(
+        tenant_id=tenant_id,
+        total=Decimal("25.00"),
+        status="partially_paid",
+        qbo_sync_status="pending",
+    )
+
+    class FakeDb:
+        def __init__(self):
+            self.responses = [
+                _Result(scalar=None),
+                _Result(scalar=invoice),
+                _Result(scalar=Decimal("20.00")),
+            ]
+            self.added = []
+
+        async def execute(self, statement):
+            return self.responses.pop(0)
+
+        def add(self, obj):
+            self.added.append(obj)
+
+    db = FakeDb()
+
+    with pytest.raises(StripeTargetUnresolved, match="exceeds"):
+        await billing_extended._handle_payment_intent_succeeded(
+            db,
+            {
+                "id": "pi_overpayment",
+                "amount": 1000,
+                "metadata": {
+                    "tenant_id": str(tenant_id),
+                    "invoice_id": str(invoice_id),
+                },
+            },
+        )
+
+    assert db.added == []
+    assert invoice.status == "partially_paid"
 
 
 @pytest.mark.asyncio

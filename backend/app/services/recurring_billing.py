@@ -118,6 +118,7 @@ async def _generate_recurring_invoices_for_tenant(
                     Expense.matter_id == matter.id,
                     Expense.invoice_id.is_(None),
                     Expense.is_billable.is_(True),
+                    Expense.review_status.in_(("ready", "approved")),
                 )
             )
             expenses = exp_result.scalars().all()
@@ -187,18 +188,21 @@ async def _generate_recurring_invoices_for_tenant(
                 sort_order += 1
 
             for exp in expenses:
+                client_amount = (
+                    exp.client_amount if exp.client_amount is not None else exp.amount
+                )
                 line_items.append(
                     InvoiceLineItem(
                         source_type="expense",
                         source_id=exp.id,
                         description=f"{exp.description} (Category: {exp.category})",
                         quantity=Decimal("1"),
-                        unit_price=exp.amount,
-                        amount=exp.amount,
+                        unit_price=client_amount,
+                        amount=client_amount,
                         sort_order=sort_order,
                     )
                 )
-                subtotal += exp.amount
+                subtotal += client_amount
                 sort_order += 1
 
             tax_rate = matter.tax_rate or Decimal("0")

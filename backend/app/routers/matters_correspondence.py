@@ -1,13 +1,16 @@
 """Matter correspondence, opaque inbound aliases, and review queue."""
 
+import asyncio
 import hashlib
+import logging
 import os
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, RedirectResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +24,7 @@ from app.middleware.tenant import get_current_user
 from app.models.communication_log import CommunicationLog
 from app.models.inbound_email import InboundEmail, InboundEmailAlias
 from app.models.matter_document import MatterDocument
+from app.models.billing import Expense
 from app.models.plugin import Matter
 from app.schemas.matter_correspondence import (
     CorrespondenceItem,
@@ -34,6 +38,7 @@ from app.schemas.matter_correspondence import (
     MatterInboundAlias,
     MatterInboundAliasResponse,
 )
+from app.schemas.billing import ExpenseResponse
 from app.services.correspondence_capture import (
     _matter_party_addresses,
     scan_and_capture,
@@ -44,15 +49,27 @@ from app.services.inbound_email import (
     file_inbound_email,
     generate_alias_local_part,
     parse_raw_email,
+    read_quarantined_message,
     quarantine_path,
     remove_quarantined_message,
     verify_delivery_signature,
     write_quarantined_message,
 )
+from app.services.receipt_extraction import (
+    ReceiptExtractionError,
+    attachment_hash,
+    extract_attachment_text,
+    extract_candidates,
+    iter_supported_attachments,
+)
+from app.services.matter_file_store import MatterFileStore
+from app.models.tenant import TenantSettings
 from app.services.token_vault import decrypt_token, encrypt_token
 
 settings = get_settings()
 router = APIRouter(prefix="/api", tags=["matter-correspondence"])
+matter_file_store = MatterFileStore()
+logger = logging.getLogger(__name__)
 
 
 def _inbound_domain() -> str:
@@ -656,6 +673,197 @@ async def accept_matter_inbound_email(
         status="accepted",
         communication_log_id=communication.id,
     )
+
+
+@router.post(
+    "/matters/{matter_id}/inbound-email/{inbound_id}/expense-draft",
+    response_model=ExpenseResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_inbound_expense_draft(
+    matter_id: uuid.UUID,
+    inbound_id: uuid.UUID,
+    request: Request,
+    attachment_index: int | None = Body(default=None, embed=True),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create one review-only expense from a quarantined receipt attachment."""
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    matter = await _get_matter_or_404(str(matter_id), user.tenant_id, db)
+    item = await _pending_inbound_or_404(
+        db, tenant_id=user.tenant_id, matter_id=matter.id, inbound_id=inbound_id
+    )
+    try:
+        raw_message = read_quarantined_message(item)
+        attachments = iter_supported_attachments(raw_message, attachment_index)
+    except (
+        FileNotFoundError,
+        PermissionError,
+        ValueError,
+        ReceiptExtractionError,
+    ) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not attachments:
+        raise HTTPException(
+            status_code=422, detail="No supported receipt attachment was found"
+        )
+
+    attachment = attachments[0]
+    content = attachment["content"]
+    source_hash = attachment_hash(content)
+    # Two independently forwarded copies of the same receipt must not race
+    # through cloud storage before the unique source-hash constraint is seen.
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(" "hashtextextended(:receipt_scope, 0))"),
+        {"receipt_scope": (f"expense-receipt:{user.tenant_id}:{source_hash}")},
+    )
+    existing = await db.scalar(
+        select(Expense).where(
+            Expense.tenant_id == user.tenant_id, Expense.source_hash == source_hash
+        )
+    )
+    if existing is not None:
+        raise HTTPException(
+            status_code=409, detail="This receipt has already been imported"
+        )
+
+    extracted_text, extraction_state, extraction_meta = await asyncio.to_thread(
+        extract_attachment_text, attachment
+    )
+    candidates = extract_candidates(extracted_text, item.body_preview)
+    values = candidates["values"]
+    try:
+        amount = Decimal(values["total"] or "0")
+    except (InvalidOperation, TypeError):
+        amount = Decimal("0")
+    try:
+        tax_amount = Decimal(values.get("tax_amount") or "0")
+    except (InvalidOperation, TypeError):
+        tax_amount = Decimal("0")
+    parsed_date = values["date"] or item.occurred_at.date().isoformat()
+    parsed_due_date = values.get("due_date")
+
+    settings_result = await db.execute(
+        select(TenantSettings).where(TenantSettings.tenant_id == item.tenant_id)
+    )
+    tenant_settings = settings_result.scalar_one_or_none()
+    storage_result = None
+    try:
+        storage_result = await matter_file_store.store_matter_file_result(
+            db=db,
+            tenant_id=str(item.tenant_id),
+            matter_slug=matter.slug,
+            category="billing",
+            filename=attachment["filename"],
+            content=content,
+            content_type=attachment["content_type"],
+            matter_cloud_folder=matter.cloud_folder,
+            preferred_provider=(
+                tenant_settings.primary_cloud_provider if tenant_settings else None
+            ),
+        )
+        document = MatterDocument(
+            tenant_id=item.tenant_id,
+            matter_id=matter.id,
+            uploaded_by_user_id=user.id,
+            filename=attachment["filename"],
+            content_type=attachment["content_type"],
+            file_size=len(content),
+            storage_path=storage_result.storage_path,
+            storage_provider=storage_result.provider,
+            storage_backend=storage_result.backend,
+            provider_object_id=storage_result.provider_item_id,
+            provider_drive_id=storage_result.drive_id,
+            provider_parent_id=storage_result.parent_id,
+            storage_error=storage_result.error,
+            description=f"Receipt from inbound email: {item.subject[:380]}",
+            document_category="expense_receipt",
+            document_sha256=source_hash,
+            storage_state="verified" if storage_result.succeeded else "pending",
+        )
+        db.add(document)
+        await db.flush()
+        communication = CommunicationLog(
+            tenant_id=item.tenant_id,
+            direction="inbound",
+            channel="email",
+            status="received",
+            subject=f"Expense receipt: {item.subject}"[:500],
+            body=item.body_preview,
+            matter_id=matter.id,
+            created_by_user_id=user.id,
+            occurred_at=item.occurred_at,
+            external_ref=f"inbound-expense:{item.id}:{source_hash[:16]}",
+            document_id=document.id,
+            thread_ref=item.provider_message_id,
+            participants=item.participants,
+        )
+        db.add(communication)
+        await db.flush()
+        expense = Expense(
+            tenant_id=item.tenant_id,
+            matter_id=matter.id,
+            user_id=user.id,
+            description=values["vendor"] or attachment["filename"],
+            amount=amount,
+            currency="USD",
+            date=datetime.fromisoformat(parsed_date).date(),
+            due_date=(
+                datetime.fromisoformat(parsed_due_date).date()
+                if parsed_due_date
+                else None
+            ),
+            category=values["category"] or "other",
+            vendor=values["vendor"],
+            reference_number=values["invoice_number"],
+            tax_amount=tax_amount,
+            is_billable=False,
+            source_type="email",
+            review_status="needs_review",
+            receipt_document_id=document.id,
+            source_inbound_email_id=item.id,
+            source_hash=source_hash,
+            extracted_data={
+                **values,
+                "extraction_state": extraction_state,
+                **extraction_meta,
+                "attachment": {
+                    "filename": attachment["filename"],
+                    "content_type": attachment["content_type"],
+                },
+            },
+            extraction_confidence=Decimal(str(candidates["confidence"])),
+        )
+        db.add(expense)
+        item.status = "accepted"
+        item.reviewed_by_user_id = user.id
+        item.reviewed_at = datetime.now(timezone.utc)
+        item.communication_log_id = communication.id
+        await db.commit()
+        await db.refresh(expense)
+    except Exception:
+        await db.rollback()
+        if storage_result is not None:
+            try:
+                await set_tenant_context(db, str(item.tenant_id))
+                await matter_file_store.delete_stored_result(
+                    db=db,
+                    tenant_id=str(item.tenant_id),
+                    result=storage_result,
+                )
+            except Exception:
+                logger.exception("Could not clean up staged inbound expense receipt")
+        raise
+    try:
+        remove_quarantined_message(item)
+        item.raw_storage_path = None
+        await set_tenant_context(db, str(item.tenant_id))
+        await db.commit()
+    except Exception:
+        logger.exception("Could not remove accepted expense receipt quarantine copy")
+        await db.rollback()
+    return ExpenseResponse.model_validate(expense, from_attributes=True)
 
 
 @router.post(

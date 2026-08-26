@@ -3,11 +3,10 @@
 import uuid
 from typing import Optional, Tuple
 
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.billing import TimeEntry
 from app.models.communication_log import CommunicationLog
 from app.models.matter_assignment import MatterAssignment
 from app.models.matter_note import MatterNote
@@ -15,6 +14,7 @@ from app.models.plugin import Matter, MatterEvent
 from app.models.retainer import Retainer
 from app.models.tenant import TenantSettings
 from app.services.pii_detection import detect_pii, scrub_pii
+from app.services.matter_budget import load_matter_billable_totals
 
 
 class MatterContextService:
@@ -227,27 +227,10 @@ class MatterContextService:
 
     async def _get_budget_summary(self, db: AsyncSession, matter: Matter) -> dict:
         """Get budget vs actuals summary."""
-        billed_q = await db.execute(
-            select(
-                func.coalesce(func.sum(TimeEntry.hours), 0),
-                func.coalesce(func.sum(TimeEntry.amount), 0),
-            ).where(
-                TimeEntry.matter_id == matter.id,
-                TimeEntry.is_billable.is_(True),
-            )
-        )
-        hours, billed = billed_q.one()
-        hours = float(hours or 0)
-        billed = float(billed or 0)
-
-        unbilled_q = await db.execute(
-            select(func.coalesce(func.sum(TimeEntry.amount), 0)).where(
-                TimeEntry.matter_id == matter.id,
-                TimeEntry.is_billable.is_(True),
-                TimeEntry.invoice_id.is_(None),
-            )
-        )
-        unbilled = float(unbilled_q.scalar() or 0)
+        totals = await load_matter_billable_totals(db, matter.id, matter.tenant_id)
+        hours = totals.total_hours
+        billed = float(totals.total_amount)
+        unbilled = float(totals.total_unbilled)
 
         return {
             "budget_amount": float(matter.budget_amount)
@@ -256,6 +239,8 @@ class MatterContextService:
             "budget_currency": matter.budget_currency,
             "total_hours": hours,
             "total_billed": billed,
+            "billable_time_amount": float(totals.time_amount),
+            "billable_expense_amount": float(totals.expense_amount),
             "total_unbilled": unbilled,
             "utilization_pct": (
                 round(billed / float(matter.budget_amount) * 100, 1)
@@ -411,8 +396,14 @@ class MatterContextService:
                 f"  Budget: ${budget.get('budget_amount') or 'N/A'} {budget.get('budget_currency', 'USD')}"
             )
             lines.append(
-                f"  Billed: ${budget.get('total_billed', 0):,.2f} ({budget.get('total_hours', 0):.1f}h)"
+                f"  Budget used: ${budget.get('total_billed', 0):,.2f} "
+                f"({budget.get('total_hours', 0):.1f}h)"
             )
+            if budget.get("billable_expense_amount"):
+                lines.append(
+                    "  Billable client expenses: "
+                    f"${budget['billable_expense_amount']:,.2f}"
+                )
             if budget.get("utilization_pct"):
                 lines.append(f"  Utilization: {budget['utilization_pct']}%")
 

@@ -7,6 +7,7 @@ from datetime import date, datetime, timezone, timedelta
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import Response
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.database import get_db, set_tenant_context, async_session_maker
 from app.middleware.tenant import get_current_user
-from app.services.access_control import require_finance_admin
+from app.services.access_control import require_finance_admin, can_manage_finance
 from app.routers.billing import _SUBSCRIPTION_HANDLERS
 from app.services.stripe_webhook_guard import (
     StripeTargetUnresolved,
@@ -22,6 +23,7 @@ from app.services.stripe_webhook_guard import (
     ordering_object_id,
 )
 from app.models.billing import TimeEntry, Expense, Invoice, InvoiceLineItem, Payment
+from app.models.contact import Contact
 from app.models.plugin import Matter
 from app.models.tenant import Tenant, TenantSettings
 from app.schemas.billing import (
@@ -59,8 +61,57 @@ settings = get_settings()
 router = APIRouter(prefix="/api/billing", tags=["billing"])
 logger = logging.getLogger(__name__)
 
+# These costs belong in matter profitability and QuickBooks, but never on a
+# client-facing prebill. Any other category can still be marked internal with
+# ``is_billable=False``.
+INTERNAL_ONLY_EXPENSE_CATEGORIES = {"meals", "internal case administration"}
+
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
+
+
+def _parse_uuid(value: str, label: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(value)
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(status_code=400, detail=f"Invalid {label} ID format")
+
+
+async def _deactivate_invoice_payment_link(invoice: Invoice) -> None:
+    """Retire a reusable Stripe link once the invoice balance changes."""
+    payment_link_id = getattr(invoice, "stripe_payment_link_id", None)
+    invoice.stripe_payment_link = None
+    invoice.stripe_payment_link_id = None
+    if not payment_link_id or not settings.STRIPE_SECRET_KEY:
+        return
+
+    import stripe
+
+    stripe.api_key = settings.STRIPE_SECRET_KEY
+    try:
+        await asyncio.to_thread(
+            stripe.PaymentLink.modify, payment_link_id, active=False
+        )
+    except stripe.StripeError:
+        # Never fail recording money that was actually received. Clearing the
+        # local URL keeps staff from reopening a stale link; the Stripe error
+        # remains visible to operators for manual deactivation.
+        logger.warning(
+            "Failed to deactivate stale Stripe payment link %s",
+            payment_link_id,
+            exc_info=True,
+        )
+
+
+async def _require_billing_manager(request: Request, db: AsyncSession):
+    """Require billing mutation rights, not merely read-only billing access."""
+    from app.services.rbac_service import get_user_capabilities
+
+    user = await get_current_user(request, db)
+    capabilities = await get_user_capabilities(db, user.id)
+    if "manage_billing" in capabilities or can_manage_finance(user.role):
+        return user
+    raise HTTPException(status_code=403, detail="Billing management access required")
 
 
 def _tenant_filter(tenant_id: uuid.UUID):
@@ -98,10 +149,7 @@ async def _resolve_hourly_rate(
 async def _get_matter_or_404(
     db: AsyncSession, matter_id: str, tenant_id: uuid.UUID
 ) -> Matter:
-    try:
-        matter_uuid = uuid.UUID(matter_id)
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=400, detail="Invalid matter ID format")
+    matter_uuid = _parse_uuid(matter_id, "matter")
     matter_result = await db.execute(
         select(Matter).where(
             Matter.id == matter_uuid,
@@ -112,6 +160,187 @@ async def _get_matter_or_404(
     if not matter_obj:
         raise HTTPException(status_code=404, detail="Matter not found")
     return matter_obj
+
+
+async def _billing_preview_data(
+    db: AsyncSession,
+    matter_id: str,
+    tenant_id: uuid.UUID,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    *,
+    lock_sources: bool = False,
+):
+    """Return the still-unbilled billable sources available for an invoice."""
+    matter = await _get_matter_or_404(db, matter_id, tenant_id)
+    time_conditions = [
+        TimeEntry.tenant_id == tenant_id,
+        TimeEntry.matter_id == matter.id,
+        TimeEntry.invoice_id.is_(None),
+        TimeEntry.is_billable.is_(True),
+        TimeEntry.status == "draft",
+    ]
+    expense_conditions = [
+        Expense.tenant_id == tenant_id,
+        Expense.matter_id == matter.id,
+        Expense.invoice_id.is_(None),
+        Expense.is_billable.is_(True),
+        # Receipt OCR produces a reviewable draft.  It must not become a
+        # client charge until a person has confirmed the extracted fields.
+        Expense.review_status.in_(("ready", "approved")),
+    ]
+    if date_from:
+        time_conditions.append(TimeEntry.date >= date_from)
+        expense_conditions.append(Expense.date >= date_from)
+    if date_to:
+        time_conditions.append(TimeEntry.date <= date_to)
+        expense_conditions.append(Expense.date <= date_to)
+    time_stmt = (
+        select(TimeEntry)
+        .where(*time_conditions)
+        .order_by(TimeEntry.date, TimeEntry.created_at)
+    )
+    expense_stmt = (
+        select(Expense)
+        .where(*expense_conditions)
+        .order_by(Expense.date, Expense.created_at)
+    )
+    if lock_sources:
+        # Draft generation claims source rows. Locking makes a concurrent
+        # generator wait, then re-evaluate the unbilled predicates instead of
+        # placing the same work on two invoices.
+        time_stmt = time_stmt.with_for_update()
+        expense_stmt = expense_stmt.with_for_update()
+
+    times = (await db.execute(time_stmt)).scalars().all()
+    expenses = (await db.execute(expense_stmt)).scalars().all()
+    return matter, times, expenses
+
+
+def _expense_invoice_amount(expense: Expense) -> Decimal:
+    """Return the client-facing amount without losing the firm's actual cost."""
+    value = expense.client_amount
+    if value is None:
+        value = expense.amount
+    return Decimal(str(value))
+
+
+async def _matter_billing_defaults(
+    db: AsyncSession, matter: Matter, tenant_id: uuid.UUID
+) -> dict:
+    """Resolve invoice defaults from the matter and its canonical client."""
+    client = None
+    if matter.client_contact_id:
+        client = (
+            await db.execute(
+                select(Contact).where(
+                    Contact.id == matter.client_contact_id,
+                    Contact.tenant_id == tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+
+    due_days = client.payment_terms_days if client else 30
+    due_days = 30 if due_days is None else due_days
+    payment_terms = "Due on receipt" if due_days == 0 else f"Net {due_days}"
+    return {
+        "default_due_date_days": due_days,
+        "default_payment_terms": payment_terms,
+        "default_tax_rate": matter.tax_rate or Decimal("0"),
+        "default_delivery_method": client.billing_delivery_method if client else None,
+        "default_recipient": client.email if client else None,
+        # Billing notes can be internal instructions, so never copy them into
+        # the client-facing invoice note automatically.
+        "default_notes": None,
+        "billing_instructions": client.billing_notes if client else None,
+    }
+
+
+def _select_requested_sources(items, requested_ids: list[str] | None, label: str):
+    """Apply an explicit prebill selection without silently widening it."""
+    if requested_ids is None:
+        return list(items)
+
+    parsed_ids: list[uuid.UUID] = []
+    try:
+        parsed_ids = [uuid.UUID(value) for value in requested_ids]
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(status_code=400, detail=f"Invalid selected {label} ID")
+
+    if len(parsed_ids) != len(set(parsed_ids)):
+        raise HTTPException(status_code=400, detail=f"Duplicate selected {label} ID")
+
+    by_id = {item.id: item for item in items}
+    if any(item_id not in by_id for item_id in parsed_ids):
+        raise HTTPException(
+            status_code=409,
+            detail=f"One or more selected {label}s are no longer available",
+        )
+    return [by_id[item_id] for item_id in parsed_ids]
+
+
+@router.get("/invoices/preview")
+async def preview_invoice_sources(
+    matter_id: str = Query(...),
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Preview selectable unbilled billable time and expenses before generating."""
+    user = await require_finance_admin(request, db)
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(
+            status_code=400, detail="date_from must not be after date_to"
+        )
+    await set_tenant_context(db, str(user.tenant_id))
+    matter, times, expenses = await _billing_preview_data(
+        db, matter_id, user.tenant_id, date_from, date_to
+    )
+    defaults = await _matter_billing_defaults(db, matter, user.tenant_id)
+    time_amount = sum((entry.amount for entry in times), Decimal("0"))
+    expense_amount = sum(
+        (_expense_invoice_amount(expense) for expense in expenses), Decimal("0")
+    )
+    return {
+        "matter_id": str(matter.id),
+        "matter_name": matter.matter_name,
+        "date_from": date_from,
+        "date_to": date_to,
+        "time_entries": [
+            {
+                "id": str(entry.id),
+                "date": entry.date,
+                "description": entry.description,
+                "hours": entry.hours,
+                "hourly_rate": entry.hourly_rate,
+                "amount": entry.amount,
+                "user_id": str(entry.user_id),
+            }
+            for entry in times
+        ],
+        "expenses": [
+            {
+                "id": str(expense.id),
+                "date": expense.date,
+                "description": expense.description,
+                "category": expense.category,
+                # ``amount`` remains the value used by the invoice/prebill UI.
+                # Cost is included separately for margin visibility and audit.
+                "amount": _expense_invoice_amount(expense),
+                "cost_amount": expense.amount,
+                "client_amount": expense.client_amount,
+                "vendor": expense.vendor,
+            }
+            for expense in expenses
+        ],
+        "total_hours": sum((entry.hours for entry in times), Decimal("0")),
+        "time_amount": time_amount,
+        "expense_amount": expense_amount,
+        "total_amount": time_amount + expense_amount,
+        **defaults,
+        "matter_hourly_rate": matter.hourly_rate,
+    }
 
 
 # ── Time Entries ────────────────────────────────────────────────────────────
@@ -130,12 +359,15 @@ async def create_time_entry(
     await set_tenant_context(db, str(user.tenant_id))
     matter_obj = await _get_matter_or_404(db, body.matter_id, user.tenant_id)
 
-    hourly_rate = await _resolve_hourly_rate(db, user, matter_obj, body.hourly_rate)
-    if not hourly_rate:
-        raise HTTPException(
-            status_code=400,
-            detail="No hourly rate provided and no default billing rate set on your profile. Please contact your administrator.",
-        )
+    if body.is_billable:
+        hourly_rate = await _resolve_hourly_rate(db, user, matter_obj, body.hourly_rate)
+        if not hourly_rate:
+            raise HTTPException(
+                status_code=400,
+                detail="No hourly rate provided and no default billing rate set on your profile. Please contact your administrator.",
+            )
+    else:
+        hourly_rate = Decimal("0")
 
     try:
         amount = body.hours * hourly_rate
@@ -290,12 +522,15 @@ async def start_timer(
             detail="A timer is already running. Stop it before starting a new one.",
         )
 
-    hourly_rate = await _resolve_hourly_rate(db, user, matter_obj, body.hourly_rate)
-    if not hourly_rate:
-        raise HTTPException(
-            status_code=400,
-            detail="No hourly rate provided and no default billing rate set on your profile. Please contact your administrator.",
-        )
+    if body.is_billable:
+        hourly_rate = await _resolve_hourly_rate(db, user, matter_obj, body.hourly_rate)
+        if not hourly_rate:
+            raise HTTPException(
+                status_code=400,
+                detail="No hourly rate provided and no default billing rate set on your profile. Please contact your administrator.",
+            )
+    else:
+        hourly_rate = Decimal("0")
 
     now = datetime.now(timezone.utc)
     entry = TimeEntry(
@@ -452,7 +687,14 @@ async def update_time_entry(
     entry = result.scalar_one_or_none()
     if not entry:
         raise HTTPException(status_code=404, detail="Time entry not found")
-    if entry.invoice_id and body.status not in ("written_off", None):
+    if entry.user_id != user.id and not can_manage_finance(user.role):
+        await _require_billing_manager(request, db)
+    update_data = body.model_dump(exclude_unset=True)
+    if "status" in update_data:
+        raise HTTPException(
+            status_code=400, detail="Time entry status is workflow-controlled"
+        )
+    if entry.invoice_id:
         raise HTTPException(
             status_code=400,
             detail="Cannot modify a billed time entry",
@@ -463,11 +705,20 @@ async def update_time_entry(
             detail="Stop the running timer before editing this entry",
         )
 
-    update_data = body.model_dump(exclude_unset=True)
-    if "hours" in update_data or "hourly_rate" in update_data:
-        hours = Decimal(str(update_data.get("hours", entry.hours)))
-        rate = Decimal(str(update_data.get("hourly_rate", entry.hourly_rate)))
-        update_data["amount"] = hours * rate
+    final_is_billable = update_data.get("is_billable", entry.is_billable)
+    if not final_is_billable:
+        update_data["hourly_rate"] = Decimal("0")
+        update_data["amount"] = Decimal("0")
+    else:
+        final_rate = Decimal(str(update_data.get("hourly_rate", entry.hourly_rate)))
+        if final_rate <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="A positive hourly rate is required for billable time",
+            )
+        if any(key in update_data for key in ("hours", "hourly_rate", "is_billable")):
+            hours = Decimal(str(update_data.get("hours", entry.hours)))
+            update_data["amount"] = hours * final_rate
 
     for key, value in update_data.items():
         setattr(entry, key, value)
@@ -495,6 +746,8 @@ async def delete_time_entry(
     entry = result.scalar_one_or_none()
     if not entry:
         raise HTTPException(status_code=404, detail="Time entry not found")
+    if entry.user_id != user.id and not can_manage_finance(user.role):
+        await _require_billing_manager(request, db)
     if entry.invoice_id:
         raise HTTPException(
             status_code=400,
@@ -518,25 +771,46 @@ async def create_expense(
     user = await get_current_user(request, db)
 
     await set_tenant_context(db, str(user.tenant_id))
-    matter = await db.execute(
-        select(Matter).where(
-            Matter.id == body.matter_id,
-            Matter.tenant_id == user.tenant_id,
-        )
-    )
-    if not matter.scalar_one_or_none():
-        raise HTTPException(status_code=404, detail="Matter not found")
+    matter = await _get_matter_or_404(db, body.matter_id, user.tenant_id)
 
+    category = body.category.strip() or "other"
+    is_billable = body.is_billable and (
+        category.casefold() not in INTERNAL_ONLY_EXPENSE_CATEGORIES
+    )
     expense = Expense(
         tenant_id=user.tenant_id,
-        matter_id=uuid.UUID(body.matter_id),
+        matter_id=matter.id,
         user_id=user.id,
         description=body.description,
         amount=body.amount,
+        client_amount=body.client_amount if is_billable else None,
+        currency=body.currency,
         date=body.date,
-        category=body.category,
+        due_date=body.due_date,
+        category=category,
         vendor=body.vendor,
-        is_billable=body.is_billable,
+        reference_number=body.reference_number,
+        is_billable=is_billable,
+        payment_method=body.payment_method,
+        payment_account=body.payment_account,
+        expense_account=body.expense_account,
+        tax_amount=body.tax_amount,
+        tax_code=body.tax_code,
+        notes=body.notes,
+        qbo_vendor_id=body.qbo_vendor_id,
+        qbo_vendor_name=body.qbo_vendor_name or body.vendor,
+        qbo_expense_account_id=body.qbo_expense_account_id,
+        qbo_expense_account_name=(
+            body.qbo_expense_account_name or body.expense_account
+        ),
+        qbo_payment_account_id=body.qbo_payment_account_id,
+        qbo_payment_account_name=(
+            body.qbo_payment_account_name or body.payment_account
+        ),
+        # Provenance and review state are server-owned for manual entries.
+        # Emailed receipts are created by the dedicated intake endpoint.
+        source_type="manual",
+        review_status="ready",
     )
     db.add(expense)
     await db.commit()
@@ -600,7 +874,6 @@ async def get_expense(
     expense = result.scalar_one_or_none()
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
-
     return ExpenseResponse.model_validate(expense, from_attributes=True)
 
 
@@ -623,6 +896,8 @@ async def update_expense(
     expense = result.scalar_one_or_none()
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
+    if expense.user_id != user.id and not can_manage_finance(user.role):
+        await _require_billing_manager(request, db)
     if expense.invoice_id:
         raise HTTPException(
             status_code=400,
@@ -630,8 +905,32 @@ async def update_expense(
         )
 
     update_data = body.model_dump(exclude_unset=True)
+    if "category" in update_data:
+        update_data["category"] = str(update_data["category"] or "").strip() or "other"
     for key, value in update_data.items():
         setattr(expense, key, value)
+    if (
+        str(expense.category or "").strip().casefold()
+        in INTERNAL_ONLY_EXPENSE_CATEGORIES
+    ):
+        expense.is_billable = False
+    if not expense.is_billable:
+        expense.client_amount = None
+    if "vendor" in update_data and "qbo_vendor_name" not in update_data:
+        if not expense.qbo_vendor_id:
+            expense.qbo_vendor_name = expense.vendor
+    if (
+        "expense_account" in update_data
+        and "qbo_expense_account_name" not in update_data
+        and not expense.qbo_expense_account_id
+    ):
+        expense.qbo_expense_account_name = expense.expense_account
+    if (
+        "payment_account" in update_data
+        and "qbo_payment_account_name" not in update_data
+        and not expense.qbo_payment_account_id
+    ):
+        expense.qbo_payment_account_name = expense.payment_account
 
     await db.commit()
     await db.refresh(expense)
@@ -656,6 +955,8 @@ async def delete_expense(
     expense = result.scalar_one_or_none()
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
+    if expense.user_id != user.id and not can_manage_finance(user.role):
+        await _require_billing_manager(request, db)
     if expense.invoice_id:
         raise HTTPException(
             status_code=400,
@@ -692,41 +993,27 @@ async def generate_invoice(
     db: AsyncSession = Depends(get_db),
 ) -> InvoiceResponse:
     """Generate an invoice from unbilled time entries and expenses for a matter. Admin only."""
-    user = await require_finance_admin(request, db)
+    user = await _require_billing_manager(request, db)
 
-    # Verify matter
-    matter_result = await db.execute(
-        select(Matter).where(
-            Matter.id == body.matter_id,
-            Matter.tenant_id == user.tenant_id,
+    if body.date_from and body.date_to and body.date_from > body.date_to:
+        raise HTTPException(
+            status_code=400, detail="date_from must not be after date_to"
         )
-    )
-    matter = matter_result.scalar_one_or_none()
-    if not matter:
-        raise HTTPException(status_code=404, detail="Matter not found")
 
-    # Gather unbilled time entries
-    time_result = await db.execute(
-        select(TimeEntry).where(
-            TimeEntry.tenant_id == user.tenant_id,
-            TimeEntry.matter_id == body.matter_id,
-            TimeEntry.invoice_id.is_(None),
-            TimeEntry.is_billable.is_(True),
-            TimeEntry.status == "draft",
-        )
+    matter, available_time, available_expenses = await _billing_preview_data(
+        db,
+        body.matter_id,
+        user.tenant_id,
+        body.date_from,
+        body.date_to,
+        lock_sources=True,
     )
-    time_entries = time_result.scalars().all()
-
-    # Gather unbilled expenses
-    exp_result = await db.execute(
-        select(Expense).where(
-            Expense.tenant_id == user.tenant_id,
-            Expense.matter_id == body.matter_id,
-            Expense.invoice_id.is_(None),
-            Expense.is_billable.is_(True),
-        )
+    time_entries = _select_requested_sources(
+        available_time, body.time_entry_ids, "time entry"
     )
-    expenses = exp_result.scalars().all()
+    expenses = _select_requested_sources(
+        available_expenses, body.expense_ids, "expense"
+    )
 
     if not time_entries and not expenses:
         raise HTTPException(
@@ -755,22 +1042,29 @@ async def generate_invoice(
         sort_order += 1
 
     for exp in expenses:
+        client_amount = _expense_invoice_amount(exp)
         line_items.append(
             {
                 "source_type": "expense",
                 "source_id": str(exp.id),
                 "description": f"{exp.description} (Category: {exp.category})",
                 "quantity": Decimal("1"),
-                "unit_price": exp.amount,
-                "amount": exp.amount,
+                "unit_price": client_amount,
+                "amount": client_amount,
                 "sort_order": sort_order,
             }
         )
-        subtotal += exp.amount
+        subtotal += client_amount
         sort_order += 1
 
+    defaults = await _matter_billing_defaults(db, matter, user.tenant_id)
+
     # Calculate tax
-    tax_rate = body.tax_rate or Decimal("0")
+    tax_rate = (
+        body.tax_rate
+        if body.tax_rate is not None
+        else Decimal(str(defaults["default_tax_rate"]))
+    )
     tax_amount = (subtotal * tax_rate).quantize(Decimal("0.01"))
     total = subtotal + tax_amount
 
@@ -778,14 +1072,19 @@ async def generate_invoice(
     # (PATCH status → "sent") before it counts as outstanding A/R or syncs
     # to QuickBooks.
     issue_date = body.issue_date or date.today()
-    due_date = issue_date + timedelta(days=body.due_date_days)
+    due_date_days = (
+        body.due_date_days
+        if body.due_date_days is not None
+        else defaults["default_due_date_days"]
+    )
+    due_date = issue_date + timedelta(days=due_date_days)
     invoice_number = await _next_invoice_number(db, user.tenant_id)
 
     billed_dates = [e.date for e in time_entries] + [x.date for x in expenses]
 
     invoice = Invoice(
         tenant_id=user.tenant_id,
-        matter_id=uuid.UUID(body.matter_id),
+        matter_id=matter.id,
         invoice_number=invoice_number,
         status="draft",
         issue_date=issue_date,
@@ -793,8 +1092,8 @@ async def generate_invoice(
         subtotal=subtotal,
         tax_amount=tax_amount,
         total=total,
-        notes=body.notes,
-        payment_terms=body.payment_terms,
+        notes=body.notes if body.notes is not None else defaults["default_notes"],
+        payment_terms=body.payment_terms or defaults["default_payment_terms"],
         billing_period_start=min(billed_dates) if billed_dates else None,
         billing_period_end=max(billed_dates) if billed_dates else None,
         created_by=user.id,
@@ -1013,7 +1312,9 @@ async def get_invoice(
 ) -> InvoiceResponse:
     """Get a single invoice by ID with line items and payments."""
     user = await get_current_user(request, db)
-    return await _load_invoice_response(db, uuid.UUID(invoice_id), user.tenant_id)
+    return await _load_invoice_response(
+        db, _parse_uuid(invoice_id, "invoice"), user.tenant_id
+    )
 
 
 async def _trigger_qbo_sync_invoice(invoice_id: str, tenant_id: str):
@@ -1061,13 +1362,16 @@ async def update_invoice(
     db: AsyncSession = Depends(get_db),
 ) -> InvoiceResponse:
     """Update invoice fields or transition status. Admin only."""
-    user = await require_finance_admin(request, db)
+    user = await _require_billing_manager(request, db)
+    invoice_uuid = _parse_uuid(invoice_id, "invoice")
 
     result = await db.execute(
-        select(Invoice).where(
-            Invoice.id == invoice_id,
+        select(Invoice)
+        .where(
+            Invoice.id == invoice_uuid,
             Invoice.tenant_id == user.tenant_id,
         )
+        .with_for_update()
     )
     invoice = result.scalar_one_or_none()
     if not invoice:
@@ -1077,12 +1381,26 @@ async def update_invoice(
     update_data = body.model_dump(exclude_unset=True)
     new_status = update_data.get("status", old_status)
 
+    if old_status != "draft" and any(key != "status" for key in update_data):
+        raise HTTPException(status_code=400, detail="Only draft invoices may be edited")
+
     if new_status != old_status:
         if not can_transition_invoice(old_status, new_status):
             raise HTTPException(
                 status_code=400,
                 detail=f"Cannot change invoice status from '{old_status}' to '{new_status}'",
             )
+        if new_status == "paid":
+            paid_result = await db.execute(
+                select(func.coalesce(func.sum(Payment.amount), 0)).where(
+                    Payment.invoice_id == invoice.id
+                )
+            )
+            if Decimal(str(paid_result.scalar() or 0)) < invoice.total:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invoice cannot be marked paid until payments cover the total",
+                )
         if new_status == "void":
             paid_result = await db.execute(
                 select(func.count(Payment.id)).where(Payment.invoice_id == invoice.id)
@@ -1136,7 +1454,7 @@ async def update_invoice(
         except Exception:
             logger.warning("QBO invoice sync task failed", exc_info=True)
 
-    return await _load_invoice_response(db, uuid.UUID(invoice_id), user.tenant_id)
+    return await _load_invoice_response(db, invoice_uuid, user.tenant_id)
 
 
 # ── Payments ────────────────────────────────────────────────────────────────
@@ -1149,14 +1467,17 @@ async def create_payment(
     db: AsyncSession = Depends(get_db),
 ) -> PaymentResponse:
     """Record a payment against an invoice. Admin only."""
-    user = await require_finance_admin(request, db)
+    user = await _require_billing_manager(request, db)
+    invoice_uuid = _parse_uuid(body.invoice_id, "invoice")
 
     # Verify invoice exists and belongs to tenant
     inv_result = await db.execute(
-        select(Invoice).where(
-            Invoice.id == body.invoice_id,
+        select(Invoice)
+        .where(
+            Invoice.id == invoice_uuid,
             Invoice.tenant_id == user.tenant_id,
         )
+        .with_for_update()
     )
     invoice = inv_result.scalar_one_or_none()
     if not invoice:
@@ -1167,9 +1488,20 @@ async def create_payment(
             detail=f"Cannot record a payment against a '{invoice.status}' invoice. Send it first.",
         )
 
+    paid_result = await db.execute(
+        select(func.coalesce(func.sum(Payment.amount), 0)).where(
+            Payment.invoice_id == invoice.id
+        )
+    )
+    paid = Decimal(str(paid_result.scalar() or 0))
+    if body.amount > invoice.total - paid:
+        raise HTTPException(
+            status_code=400, detail="Payment exceeds the invoice balance"
+        )
+
     payment = Payment(
         tenant_id=user.tenant_id,
-        invoice_id=uuid.UUID(body.invoice_id),
+        invoice_id=invoice_uuid,
         amount=body.amount,
         payment_date=body.payment_date,
         method=body.method,
@@ -1181,7 +1513,7 @@ async def create_payment(
     # Update invoice payment status
     total_paid_result = await db.execute(
         select(func.sum(Payment.amount)).where(
-            Payment.invoice_id == body.invoice_id,
+            Payment.invoice_id == invoice_uuid,
         )
     )
     total_paid = total_paid_result.scalar() or Decimal("0")
@@ -1195,6 +1527,7 @@ async def create_payment(
     if invoice.qbo_sync_status == "synced":
         invoice.qbo_sync_status = "pending"  # Re-sync needed
 
+    await _deactivate_invoice_payment_link(invoice)
     await db.commit()
     await db.refresh(payment)
 
@@ -1252,6 +1585,7 @@ async def create_stripe_payment_link(
     db: AsyncSession = Depends(get_db),
 ) -> StripePaymentLinkResponse:
     """Generate a Stripe Payment Link for an invoice."""
+    user = await _require_billing_manager(request, db)
     if not settings.STRIPE_SECRET_KEY:
         raise HTTPException(status_code=501, detail="Stripe not configured")
 
@@ -1259,31 +1593,47 @@ async def create_stripe_payment_link(
 
     stripe.api_key = settings.STRIPE_SECRET_KEY
 
-    user = await get_current_user(request, db)
-    inv = await _load_invoice_response(db, uuid.UUID(invoice_id), user.tenant_id)
-
-    if inv.status not in ("sent", "partially_paid"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot create payment link for invoice in '{inv.status}' status. Send the invoice first.",
-        )
-
-    # Get the invoice from DB to update
+    invoice_uuid = _parse_uuid(invoice_id, "invoice")
     result = await db.execute(
-        select(Invoice).where(
-            Invoice.id == invoice_id,
+        select(Invoice)
+        .where(
+            Invoice.id == invoice_uuid,
             Invoice.tenant_id == user.tenant_id,
         )
+        .with_for_update()
     )
     invoice = result.scalar_one_or_none()
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if invoice.status not in ("sent", "partially_paid"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot create payment link for invoice in '{invoice.status}' status. Send the invoice first.",
+        )
+
+    paid_result = await db.execute(
+        select(func.coalesce(func.sum(Payment.amount), 0)).where(
+            Payment.invoice_id == invoice.id
+        )
+    )
+    paid = Decimal(str(paid_result.scalar() or 0))
+    balance_due = invoice.total - paid
+    if balance_due <= 0:
+        raise HTTPException(status_code=400, detail="Invoice has no balance due")
+    if invoice.stripe_payment_link and invoice.stripe_payment_link_id:
+        return StripePaymentLinkResponse(
+            invoice_id=str(invoice.id),
+            payment_link_url=invoice.stripe_payment_link,
+            payment_link_id=invoice.stripe_payment_link_id,
+        )
 
     try:
         price = stripe.Price.create(
-            unit_amount=int(invoice.total * 100),  # cents
+            unit_amount=int(balance_due * 100),  # cents; only collect current balance
             currency="usd",
             product_data={
                 "name": f"Invoice {invoice.invoice_number}",
-                "description": f"Legal services — Matter: {inv.matter_id}",
+                "description": f"Legal services — Matter: {invoice.matter_id}",
             },
         )
 
@@ -1301,7 +1651,7 @@ async def create_stripe_payment_link(
         await db.commit()
 
         return StripePaymentLinkResponse(
-            invoice_id=inv.id,
+            invoice_id=str(invoice.id),
             payment_link_url=payment_link.url,
             payment_link_id=payment_link.id,
         )
@@ -1321,7 +1671,9 @@ async def export_invoice(
 ):
     """Export an invoice in the requested format (csv, ledes1998b). Admin only."""
     user = await require_finance_admin(request, db)
-    inv = await _load_invoice_response(db, uuid.UUID(invoice_id), user.tenant_id)
+    inv = await _load_invoice_response(
+        db, _parse_uuid(invoice_id, "invoice"), user.tenant_id
+    )
 
     if body.format == "csv":
         import csv
@@ -1362,17 +1714,28 @@ async def export_invoice(
                     inv.payment_terms if li.sort_order == 0 else "",
                 ]
             )
-        return {"format": "csv", "data": output.getvalue()}
+        return Response(
+            content=output.getvalue(),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f"attachment; filename=invoice_{inv.invoice_number}.csv"
+            },
+        )
 
     elif body.format == "ledes1998b":
         from app.services.ledes_export import export_ledes_1998b
 
         ledes_data = export_ledes_1998b(inv)
-        return {"format": "ledes1998b", "data": ledes_data}
+        return Response(
+            content=ledes_data,
+            media_type="text/plain",
+            headers={
+                "Content-Disposition": f"attachment; filename=invoice_{inv.invoice_number}_ledes1998b.txt"
+            },
+        )
 
     elif body.format == "pdf":
         from app.services.invoice_pdf import generate_invoice_pdf
-        from fastapi.responses import Response
 
         pdf_bytes = generate_invoice_pdf(inv)
         return Response(
@@ -1417,7 +1780,7 @@ async def update_billing_settings(
     db: AsyncSession = Depends(get_db),
 ) -> BillingSettingsResponse:
     """Update tenant-level billing defaults. Admin only."""
-    user = await require_finance_admin(request, db)
+    user = await _require_billing_manager(request, db)
     await set_tenant_context(db, str(user.tenant_id))
 
     ts_result = await db.execute(
@@ -1607,6 +1970,12 @@ async def _handle_payment_intent_succeeded(db: AsyncSession, intent: dict):
         )
         return
 
+    invoice_uuid = _uuid_from_stripe_metadata(metadata, "invoice_id")
+    if not invoice_uuid:
+        raise StripeTargetUnresolved(
+            f"Stripe payment {stripe_payment_intent_id} has an invalid invoice_id"
+        )
+
     tenant_id = await _resolve_and_bind_stripe_tenant(db, metadata)
     if not tenant_id:
         logger.warning(
@@ -1628,12 +1997,14 @@ async def _handle_payment_intent_succeeded(db: AsyncSession, intent: dict):
         )
         return
 
-    amount = Decimal(str(intent["amount"] / 100))  # Convert cents to dollars
+    amount = Decimal(str(intent["amount"])) / Decimal("100")
     payment_date = date.today()
     method = "stripe"
 
     # Verify invoice exists
-    inv_result = await db.execute(select(Invoice).where(Invoice.id == invoice_id))
+    inv_result = await db.execute(
+        select(Invoice).where(Invoice.id == invoice_uuid).with_for_update()
+    )
     invoice = inv_result.scalar_one_or_none()
     if not invoice:
         logger.warning(
@@ -1644,10 +2015,32 @@ async def _handle_payment_intent_succeeded(db: AsyncSession, intent: dict):
         )
         return
 
+    if invoice.status not in ("sent", "partially_paid"):
+        raise StripeTargetUnresolved(
+            f"Invoice {invoice_id} cannot accept a Stripe payment while "
+            f"its status is '{invoice.status}'"
+        )
+
+    paid_result = await db.execute(
+        select(func.coalesce(func.sum(Payment.amount), 0)).where(
+            Payment.invoice_id == invoice_uuid
+        )
+    )
+    paid = Decimal(str(paid_result.scalar() or 0))
+    balance_due = invoice.total - paid
+    if amount > balance_due:
+        # The customer has already been charged, so do not silently truncate
+        # the cash receipt or create a negative invoice balance. Leave the
+        # webhook replayable while an operator refunds or applies the excess.
+        raise StripeTargetUnresolved(
+            f"Stripe payment {stripe_payment_intent_id} for ${amount} exceeds "
+            f"invoice {invoice_id} balance ${balance_due}"
+        )
+
     # Create payment
     payment = Payment(
         tenant_id=invoice.tenant_id,
-        invoice_id=uuid.UUID(invoice_id),
+        invoice_id=invoice_uuid,
         amount=amount,
         payment_date=payment_date,
         method=method,
@@ -1658,12 +2051,7 @@ async def _handle_payment_intent_succeeded(db: AsyncSession, intent: dict):
     db.add(payment)
 
     # Update invoice status
-    total_paid_result = await db.execute(
-        select(func.sum(Payment.amount)).where(
-            Payment.invoice_id == invoice_id,
-        )
-    )
-    total_paid = (total_paid_result.scalar() or Decimal("0")) + amount
+    total_paid = paid + amount
 
     if total_paid >= invoice.total:
         invoice.status = "paid"
@@ -1673,6 +2061,7 @@ async def _handle_payment_intent_succeeded(db: AsyncSession, intent: dict):
     if invoice.qbo_sync_status == "synced":
         invoice.qbo_sync_status = "pending"
 
+    await _deactivate_invoice_payment_link(invoice)
     await db.commit()
     logger.info(
         f"Auto-reconciled payment for invoice {invoice_id}: ${amount} via Stripe"

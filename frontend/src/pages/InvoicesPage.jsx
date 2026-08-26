@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { reportError } from '../utils/reportError'
 import { Link, useNavigate } from 'react-router-dom'
 import { Plus, Receipt, RefreshCw } from 'lucide-react'
-import { generateInvoice, getInvoices, getMattersV2 } from '../api'
+import { generateInvoice, getInvoicePreview, getInvoices, getMattersV2 } from '../api'
 import {
   AlertBanner,
   EmptyState,
@@ -74,8 +74,23 @@ export default function InvoicesPage() {
   const [filter, setFilter] = useState('all')
   const [showGenerate, setShowGenerate] = useState(false)
   const [generating, setGenerating] = useState(false)
-  const [generateForm, setGenerateForm] = useState({ matter_id: '' })
+  const [generateForm, setGenerateForm] = useState({
+    matter_id: '',
+    date_from: '',
+    date_to: '',
+    issue_date: new Date().toISOString().slice(0, 10),
+    due_date_days: 30,
+    payment_terms: 'Net 30',
+    tax_rate: '',
+    notes: '',
+  })
   const [generateError, setGenerateError] = useState(null)
+  const [preview, setPreview] = useState(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewError, setPreviewError] = useState(null)
+  const [selectedTimeIds, setSelectedTimeIds] = useState(new Set())
+  const [selectedExpenseIds, setSelectedExpenseIds] = useState(new Set())
+  const defaultsMatterRef = useRef(null)
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -102,14 +117,59 @@ export default function InvoicesPage() {
     loadData()
   }, [loadData])
 
+  useEffect(() => {
+    if (!showGenerate || !generateForm.matter_id) {
+      setPreview(null)
+      return
+    }
+    let cancelled = false
+    setPreviewLoading(true)
+    setPreviewError(null)
+    getInvoicePreview({
+      matter_id: generateForm.matter_id,
+      date_from: generateForm.date_from || undefined,
+      date_to: generateForm.date_to || undefined,
+    }).then((data) => {
+      if (cancelled) return
+      setPreview(data)
+      setSelectedTimeIds(new Set((data.time_entries || []).map((entry) => entry.id)))
+      setSelectedExpenseIds(new Set((data.expenses || []).map((expense) => expense.id)))
+      if (defaultsMatterRef.current !== data.matter_id) {
+        defaultsMatterRef.current = data.matter_id
+        setGenerateForm((current) => ({
+          ...current,
+          due_date_days: data.default_due_date_days ?? current.due_date_days,
+          payment_terms: data.default_payment_terms || current.payment_terms,
+          tax_rate: data.default_tax_rate != null ? String(Number(data.default_tax_rate) * 100) : current.tax_rate,
+          notes: data.default_notes || current.notes,
+        }))
+      }
+    }).catch((error) => {
+      if (!cancelled) setPreviewError(error?.response?.data?.detail || 'The billing preview could not be loaded.')
+    }).finally(() => {
+      if (!cancelled) setPreviewLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [showGenerate, generateForm.matter_id, generateForm.date_from, generateForm.date_to])
+
   const handleGenerate = async (event) => {
     event.preventDefault()
     setGenerateError(null)
     setGenerating(true)
     try {
-      const invoice = await generateInvoice({ matter_id: generateForm.matter_id })
+      if (!generateForm.matter_id) return
+      const invoice = await generateInvoice({
+        ...generateForm,
+        date_from: generateForm.date_from || undefined,
+        date_to: generateForm.date_to || undefined,
+        due_date_days: generateForm.due_date_days === '' ? undefined : Number(generateForm.due_date_days),
+        tax_rate: generateForm.tax_rate === '' ? undefined : Number(generateForm.tax_rate) / 100,
+        time_entry_ids: [...selectedTimeIds],
+        expense_ids: [...selectedExpenseIds],
+      })
       setShowGenerate(false)
-      setGenerateForm({ matter_id: '' })
+      defaultsMatterRef.current = null
+      setGenerateForm({ matter_id: '', date_from: '', date_to: '', issue_date: new Date().toISOString().slice(0, 10), due_date_days: 30, payment_terms: 'Net 30', tax_rate: '', notes: '' })
       navigate(`/invoices/${invoice.id}`)
     } catch (error) {
       const detail = error?.response?.data?.detail
@@ -128,6 +188,14 @@ export default function InvoicesPage() {
     .reduce((sum, invoice) => sum + Number(invoice.balance_due ?? invoice.total ?? 0), 0)
   const overdueCount = invoices.filter((invoice) => invoice.is_overdue).length
   const draftCount = invoices.filter((invoice) => invoice.status === 'draft').length
+  const selectedTime = (preview?.time_entries || []).filter((entry) => selectedTimeIds.has(entry.id))
+  const selectedExpenses = (preview?.expenses || []).filter((expense) => selectedExpenseIds.has(expense.id))
+  const selectedHours = selectedTime.reduce((sum, entry) => sum + Number(entry.hours || 0), 0)
+  const selectedSubtotal = [...selectedTime, ...selectedExpenses]
+    .reduce((sum, item) => sum + Number(item.amount || 0), 0)
+  const selectedTax = selectedSubtotal * (Number(generateForm.tax_rate || 0) / 100)
+  const selectedTotal = selectedSubtotal + selectedTax
+  const selectedCount = selectedTime.length + selectedExpenses.length
 
   return (
     <WorkspacePage width="wide">
@@ -153,6 +221,7 @@ export default function InvoicesPage() {
               onClick={() => {
                 setShowGenerate((open) => !open)
                 setGenerateError(null)
+                defaultsMatterRef.current = null
               }}
               aria-expanded={showGenerate}
               className="btn-primary inline-flex items-center gap-2"
@@ -194,15 +263,18 @@ export default function InvoicesPage() {
               {generateError}
             </AlertBanner>
           )}
-          <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
-            <div className="flex-1">
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div>
               <label htmlFor="invoicespage-matter" className="mb-1.5 block text-xs font-semibold text-brand-ink">
                 Matter
               </label>
               <select
                 id="invoicespage-matter"
                 value={generateForm.matter_id}
-                onChange={(event) => setGenerateForm({ matter_id: event.target.value })}
+                onChange={(event) => {
+                  defaultsMatterRef.current = null
+                  setGenerateForm((current) => ({ ...current, matter_id: event.target.value }))
+                }}
                 required
                 className="min-h-11 w-full rounded-xl border border-brand-line bg-brand-surface px-3 text-sm text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-accent"
               >
@@ -212,15 +284,103 @@ export default function InvoicesPage() {
                 ))}
               </select>
             </div>
+            <div>
+              <label htmlFor="invoicespage-date-from" className="mb-1.5 block text-xs font-semibold text-brand-ink">Work from</label>
+              <input id="invoicespage-date-from" type="date" max={generateForm.date_to || undefined} value={generateForm.date_from} onChange={(event) => setGenerateForm((current) => ({ ...current, date_from: event.target.value }))} className="min-h-11 w-full rounded-xl border border-brand-line bg-brand-surface px-3 text-sm text-brand-ink" />
+            </div>
+            <div>
+              <label htmlFor="invoicespage-date-to" className="mb-1.5 block text-xs font-semibold text-brand-ink">Work through</label>
+              <input id="invoicespage-date-to" type="date" min={generateForm.date_from || undefined} value={generateForm.date_to} onChange={(event) => setGenerateForm((current) => ({ ...current, date_to: event.target.value }))} className="min-h-11 w-full rounded-xl border border-brand-line bg-brand-surface px-3 text-sm text-brand-ink" />
+            </div>
+            <div>
+              <label htmlFor="invoicespage-issue-date" className="mb-1.5 block text-xs font-semibold text-brand-ink">Issue date</label>
+              <input id="invoicespage-issue-date" type="date" value={generateForm.issue_date} onChange={(event) => setGenerateForm((current) => ({ ...current, issue_date: event.target.value }))} required className="min-h-11 w-full rounded-xl border border-brand-line bg-brand-surface px-3 text-sm text-brand-ink" />
+            </div>
+            <div>
+              <label htmlFor="invoicespage-terms" className="mb-1.5 block text-xs font-semibold text-brand-ink">Payment terms</label>
+              <input id="invoicespage-terms" value={generateForm.payment_terms} onChange={(event) => setGenerateForm((current) => ({ ...current, payment_terms: event.target.value }))} className="min-h-11 w-full rounded-xl border border-brand-line bg-brand-surface px-3 text-sm text-brand-ink" />
+            </div>
+            <div>
+              <label htmlFor="invoicespage-due-days" className="mb-1.5 block text-xs font-semibold text-brand-ink">Due in (days)</label>
+              <input id="invoicespage-due-days" type="number" min="0" value={generateForm.due_date_days} onChange={(event) => setGenerateForm((current) => ({ ...current, due_date_days: event.target.value }))} className="min-h-11 w-full rounded-xl border border-brand-line bg-brand-surface px-3 text-sm text-brand-ink" />
+            </div>
+            <div>
+              <label htmlFor="invoicespage-tax" className="mb-1.5 block text-xs font-semibold text-brand-ink">Tax rate (%)</label>
+              <input id="invoicespage-tax" type="number" min="0" max="100" step="0.01" value={generateForm.tax_rate} onChange={(event) => setGenerateForm((current) => ({ ...current, tax_rate: event.target.value }))} placeholder="0" className="min-h-11 w-full rounded-xl border border-brand-line bg-brand-surface px-3 text-sm text-brand-ink" />
+            </div>
+            <div className="sm:col-span-2">
+              <label htmlFor="invoicespage-notes" className="mb-1.5 block text-xs font-semibold text-brand-ink">Invoice notes</label>
+              <input id="invoicespage-notes" value={generateForm.notes} onChange={(event) => setGenerateForm((current) => ({ ...current, notes: event.target.value }))} placeholder="Optional note for the client" className="min-h-11 w-full rounded-xl border border-brand-line bg-brand-surface px-3 text-sm text-brand-ink" />
+            </div>
             <button
               type="submit"
-              disabled={generating}
-              className="btn-primary inline-flex min-h-11 items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={generating || previewLoading || !preview || selectedCount === 0}
+              className="btn-primary self-end inline-flex min-h-11 items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {generating && <RefreshCw size={15} className="animate-spin" />}
               {generating ? 'Generating draft' : 'Generate draft'}
             </button>
           </div>
+          {previewError && <AlertBanner type="error" title="Preview unavailable" className="mt-4">{previewError}</AlertBanner>}
+          {previewLoading && <div className="mt-5"><Spinner /></div>}
+          {preview && !previewLoading && selectedCount === 0 && (
+            <AlertBanner type="warning" title="Select work to invoice" className="mt-4">
+              This billing period has no selected time or expenses. Adjust the dates or include at least one row.
+            </AlertBanner>
+          )}
+          {preview && !previewLoading && (
+            <div className="mt-5 rounded-xl border border-brand-line bg-brand-bg-soft/40 p-4">
+              <h3 className="text-sm font-semibold text-brand-ink">Review billable work{preview.matter_name ? ` · ${preview.matter_name}` : ''}</h3>
+              <div className="mt-3 overflow-x-auto">
+                <table className="min-w-full text-left text-xs">
+                  <thead><tr className="border-b border-brand-line text-[10px] uppercase tracking-wide text-brand-muted"><th className="px-2 py-2">Include</th><th className="px-2 py-2">Date</th><th className="px-2 py-2">Description</th><th className="px-2 py-2 text-right">Hours / Amount</th></tr></thead>
+                  <tbody className="divide-y divide-brand-line/60">
+                    {[...(preview.time_entries || []).map((entry) => ({ ...entry, kind: 'time' })), ...(preview.expenses || []).map((expense) => ({ ...expense, kind: 'expense' }))].map((item) => {
+                      const selected = item.kind === 'time' ? selectedTimeIds.has(item.id) : selectedExpenseIds.has(item.id)
+                      return (
+                        <tr key={`${item.kind}-${item.id}`}>
+                          <td className="px-2 py-2">
+                            <input
+                              type="checkbox"
+                              checked={selected}
+                              onChange={() => (item.kind === 'time' ? setSelectedTimeIds : setSelectedExpenseIds)((current) => {
+                                const next = new Set(current)
+                                selected ? next.delete(item.id) : next.add(item.id)
+                                return next
+                              })}
+                              aria-label={`Include ${item.description}`}
+                            />
+                          </td>
+                          <td className="px-2 py-2 text-brand-muted">{item.date || '—'}</td>
+                          <td className="max-w-md px-2 py-2 text-brand-ink">{item.description}</td>
+                          <td className="px-2 py-2 text-right font-mono">
+                            {item.kind === 'time'
+                              ? `${item.hours}h · ${money.format(Number(item.amount || 0))}`
+                              : (
+                                <>
+                                  {money.format(Number(item.amount || 0))}
+                                  {item.cost_amount != null && Number(item.cost_amount) !== Number(item.amount) && (
+                                    <span className="block text-[10px] text-brand-muted">
+                                      firm cost {money.format(Number(item.cost_amount))}
+                                    </span>
+                                  )}
+                                </>
+                              )}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <dl className="mt-4 grid gap-3 border-t border-brand-line pt-3 text-sm sm:grid-cols-4">
+                <div><dt className="text-xs text-brand-muted">Selected work</dt><dd className="mt-1 font-semibold text-brand-ink">{selectedCount} item{selectedCount === 1 ? '' : 's'} · {selectedHours.toFixed(2)}h</dd></div>
+                <div><dt className="text-xs text-brand-muted">Subtotal</dt><dd className="mt-1 font-semibold text-brand-ink">{money.format(selectedSubtotal)}</dd></div>
+                <div><dt className="text-xs text-brand-muted">Tax</dt><dd className="mt-1 font-semibold text-brand-ink">{money.format(selectedTax)}</dd></div>
+                <div><dt className="text-xs text-brand-muted">Draft total</dt><dd className="mt-1 font-serif text-lg font-bold text-brand-ink">{money.format(selectedTotal)}</dd></div>
+              </dl>
+            </div>
+          )}
         </form>
       )}
 
