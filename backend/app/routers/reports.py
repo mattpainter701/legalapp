@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
-from app.models.billing import Invoice, Payment, TimeEntry
+from app.models.billing import Expense, Invoice, Payment, TimeEntry
 from app.models.contact import Lead
 from app.models.plugin import Matter
 from app.models.task import Task
@@ -33,6 +33,10 @@ from app.schemas.reports import (
     MatterBudgetReport,
     MatterStatusReport,
     OverdueTasksReport,
+)
+from app.services.matter_budget import (
+    expense_client_amount_expression,
+    load_matter_billable_totals,
 )
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
@@ -164,8 +168,6 @@ async def _overdue_tasks_report(
 
 async def _realization_report(db: AsyncSession, tenant_id: uuid.UUID) -> list[dict]:
     """Per-matter billable hours/amount vs. amount collected via payments."""
-
-    # Billable hours/amount per matter (only matters with billable time entries)
     time_rows = await db.execute(
         select(
             TimeEntry.matter_id,
@@ -176,20 +178,54 @@ async def _realization_report(db: AsyncSession, tenant_id: uuid.UUID) -> list[di
         .join(Matter, Matter.id == TimeEntry.matter_id)
         .where(
             TimeEntry.tenant_id == tenant_id,
+            Matter.tenant_id == tenant_id,
             TimeEntry.is_billable.is_(True),
         )
         .group_by(TimeEntry.matter_id, Matter.matter_name)
     )
-
     results: dict[uuid.UUID, dict] = {}
-    for matter_id, matter_name, billable_hours, billable_amount in time_rows.all():
+    for matter_id, matter_name, billable_hours, time_amount in time_rows.all():
+        time_value = float(time_amount or 0)
         results[matter_id] = {
             "matter_id": str(matter_id),
             "matter_name": matter_name,
             "billable_hours": float(billable_hours or 0),
-            "billable_amount": float(billable_amount or 0),
+            "billable_amount": time_value,
+            "billable_time_amount": time_value,
+            "billable_expense_amount": 0.0,
             "collected_amount": 0.0,
         }
+
+    expense_rows = await db.execute(
+        select(
+            Expense.matter_id,
+            Matter.matter_name,
+            func.sum(expense_client_amount_expression()),
+        )
+        .join(Matter, Matter.id == Expense.matter_id)
+        .where(
+            Expense.tenant_id == tenant_id,
+            Matter.tenant_id == tenant_id,
+            Expense.is_billable.is_(True),
+        )
+        .group_by(Expense.matter_id, Matter.matter_name)
+    )
+    for matter_id, matter_name, expense_amount in expense_rows.all():
+        expense_value = float(expense_amount or 0)
+        row = results.setdefault(
+            matter_id,
+            {
+                "matter_id": str(matter_id),
+                "matter_name": matter_name,
+                "billable_hours": 0.0,
+                "billable_amount": 0.0,
+                "billable_time_amount": 0.0,
+                "billable_expense_amount": 0.0,
+                "collected_amount": 0.0,
+            },
+        )
+        row["billable_expense_amount"] = expense_value
+        row["billable_amount"] += expense_value
 
     if not results:
         return []
@@ -226,9 +262,8 @@ async def _realization_report(db: AsyncSession, tenant_id: uuid.UUID) -> list[di
 
 
 async def _wip_report(db: AsyncSession, tenant_id: uuid.UUID) -> list[dict]:
-    """Per-matter uninvoiced billable time (work-in-progress)."""
-
-    rows = await db.execute(
+    """Per-matter uninvoiced billable time and client expenses."""
+    time_rows = await db.execute(
         select(
             TimeEntry.matter_id,
             Matter.matter_name,
@@ -238,27 +273,51 @@ async def _wip_report(db: AsyncSession, tenant_id: uuid.UUID) -> list[dict]:
         .join(Matter, Matter.id == TimeEntry.matter_id)
         .where(
             TimeEntry.tenant_id == tenant_id,
+            Matter.tenant_id == tenant_id,
             TimeEntry.is_billable.is_(True),
             TimeEntry.invoice_id.is_(None),
         )
         .group_by(TimeEntry.matter_id, Matter.matter_name)
     )
+    results: dict[uuid.UUID, dict] = {}
+    for matter_id, matter_name, hours, time_amount in time_rows.all():
+        results[matter_id] = {
+            "matter_id": str(matter_id),
+            "matter_name": matter_name,
+            "wip_hours": float(hours or 0),
+            "wip_value": float(time_amount or 0),
+        }
 
-    result = []
-    for matter_id, matter_name, wip_hours, wip_value in rows.all():
-        wip_hours_f = float(wip_hours or 0)
-        if wip_hours_f <= 0:
-            continue
-        result.append(
+    expense_rows = await db.execute(
+        select(
+            Expense.matter_id,
+            Matter.matter_name,
+            func.sum(expense_client_amount_expression()),
+        )
+        .join(Matter, Matter.id == Expense.matter_id)
+        .where(
+            Expense.tenant_id == tenant_id,
+            Matter.tenant_id == tenant_id,
+            Expense.is_billable.is_(True),
+            Expense.invoice_id.is_(None),
+        )
+        .group_by(Expense.matter_id, Matter.matter_name)
+    )
+    for matter_id, matter_name, expense_amount in expense_rows.all():
+        row = results.setdefault(
+            matter_id,
             {
                 "matter_id": str(matter_id),
                 "matter_name": matter_name,
-                "wip_hours": wip_hours_f,
-                "wip_value": float(wip_value or 0),
-            }
+                "wip_hours": 0.0,
+                "wip_value": 0.0,
+            },
         )
+        row["wip_value"] += float(expense_amount or 0)
 
-    return result
+    return [
+        row for row in results.values() if row["wip_hours"] > 0 or row["wip_value"] > 0
+    ]
 
 
 async def _aging_report(db: AsyncSession, tenant_id: uuid.UUID) -> list[dict]:
@@ -427,21 +486,9 @@ async def get_matter_budget_report(
     if matter is None:
         raise HTTPException(status_code=404, detail="Matter not found")
 
-    # Sum billable hours and amounts
-    agg_result = await db.execute(
-        select(
-            func.coalesce(func.sum(TimeEntry.hours), 0),
-            func.coalesce(func.sum(TimeEntry.amount), 0),
-        ).where(
-            TimeEntry.matter_id == matter.id,
-            TimeEntry.tenant_id == tenant_id,
-            TimeEntry.is_billable.is_(True),
-        )
-    )
-    total_hours_decimal, total_billed_decimal = agg_result.one()
-
-    total_hours = float(total_hours_decimal)
-    total_billed = float(total_billed_decimal)
+    totals = await load_matter_billable_totals(db, matter.id, tenant_id)
+    total_hours = totals.total_hours
+    total_billed = float(totals.total_amount)
     budget_amt = float(matter.budget_amount) if matter.budget_amount else None
 
     utilization_pct = None
@@ -455,6 +502,9 @@ async def get_matter_budget_report(
         budget_currency=matter.budget_currency,
         total_hours=total_hours,
         total_billed=total_billed,
+        billable_time_amount=float(totals.time_amount),
+        billable_expense_amount=float(totals.expense_amount),
+        remaining=(budget_amt - total_billed) if budget_amt is not None else None,
         utilization_pct=utilization_pct,
     )
 

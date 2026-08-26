@@ -93,18 +93,82 @@ class ExpenseCreate(BaseModel):
     description: str = Field(..., min_length=1)
     amount: Decimal = Field(..., gt=0)
     date: date
-    category: str = "other"
-    vendor: Optional[str] = None
+    due_date: Optional[date] = None
+    category: str = Field(default="other", min_length=1, max_length=100)
+    vendor: Optional[str] = Field(default=None, max_length=300)
+    reference_number: Optional[str] = Field(default=None, max_length=100)
     is_billable: bool = True
+    client_amount: Optional[Decimal] = Field(default=None, ge=0)
+    currency: str = Field(default="USD", min_length=3, max_length=3)
+    payment_method: Optional[str] = Field(default=None, max_length=30)
+    payment_account: Optional[str] = Field(default=None, max_length=100)
+    expense_account: Optional[str] = Field(default=None, max_length=100)
+    tax_amount: Optional[Decimal] = Field(default=None, ge=0)
+    tax_code: Optional[str] = Field(default=None, max_length=50)
+    notes: Optional[str] = None
+    qbo_vendor_id: Optional[str] = Field(default=None, max_length=100)
+    qbo_vendor_name: Optional[str] = Field(default=None, max_length=300)
+    qbo_expense_account_id: Optional[str] = Field(default=None, max_length=100)
+    qbo_expense_account_name: Optional[str] = Field(default=None, max_length=300)
+    qbo_payment_account_id: Optional[str] = Field(default=None, max_length=100)
+    qbo_payment_account_name: Optional[str] = Field(default=None, max_length=300)
+
+    @field_validator("currency")
+    @classmethod
+    def _currency_upper(cls, value: str) -> str:
+        value = value.upper()
+        if not value.isalpha():
+            raise ValueError("currency must be a three-letter ISO code")
+        return value
 
 
 class ExpenseUpdate(BaseModel):
-    description: Optional[str] = None
+    description: Optional[str] = Field(default=None, min_length=1)
     amount: Optional[Decimal] = Field(default=None, gt=0)
     date: Optional[date] = None
-    category: Optional[str] = None
-    vendor: Optional[str] = None
+    due_date: Optional[date] = None
+    category: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    vendor: Optional[str] = Field(default=None, max_length=300)
+    reference_number: Optional[str] = Field(default=None, max_length=100)
     is_billable: Optional[bool] = None
+    client_amount: Optional[Decimal] = Field(default=None, ge=0)
+    currency: Optional[str] = Field(default=None, min_length=3, max_length=3)
+    payment_method: Optional[str] = Field(default=None, max_length=30)
+    payment_account: Optional[str] = Field(default=None, max_length=100)
+    expense_account: Optional[str] = Field(default=None, max_length=100)
+    tax_amount: Optional[Decimal] = Field(default=None, ge=0)
+    tax_code: Optional[str] = Field(default=None, max_length=50)
+    notes: Optional[str] = None
+    review_status: Optional[str] = Field(default=None, max_length=30)
+    qbo_vendor_id: Optional[str] = Field(default=None, max_length=100)
+    qbo_vendor_name: Optional[str] = Field(default=None, max_length=300)
+    qbo_expense_account_id: Optional[str] = Field(default=None, max_length=100)
+    qbo_expense_account_name: Optional[str] = Field(default=None, max_length=300)
+    qbo_payment_account_id: Optional[str] = Field(default=None, max_length=100)
+    qbo_payment_account_name: Optional[str] = Field(default=None, max_length=300)
+
+    @field_validator("currency")
+    @classmethod
+    def _currency_upper(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.upper()
+        if not value.isalpha():
+            raise ValueError("currency must be a three-letter ISO code")
+        return value
+
+    @field_validator("review_status")
+    @classmethod
+    def _review_status(cls, value: str | None) -> str | None:
+        if value is not None and value not in {
+            "ready",
+            "needs_review",
+            "pending",
+            "approved",
+            "rejected",
+        }:
+            raise ValueError("invalid expense review status")
+        return value
 
 
 class ExpenseResponse(BaseModel):
@@ -115,9 +179,37 @@ class ExpenseResponse(BaseModel):
     description: str
     amount: Decimal
     date: date
+    due_date: Optional[date] = None
     category: str
     vendor: Optional[str] = None
+    reference_number: Optional[str] = None
     is_billable: bool
+    client_amount: Optional[Decimal] = None
+    currency: str = "USD"
+    payment_method: Optional[str] = None
+    payment_account: Optional[str] = None
+    expense_account: Optional[str] = None
+    tax_amount: Optional[Decimal] = None
+    tax_code: Optional[str] = None
+    notes: Optional[str] = None
+    source_type: str = "manual"
+    review_status: str = "ready"
+    receipt_document_id: Optional[str] = None
+    source_inbound_email_id: Optional[str] = None
+    source_hash: Optional[str] = None
+    extracted_data: Optional[dict] = None
+    extraction_confidence: Optional[Decimal] = None
+    qbo_vendor_id: Optional[str] = None
+    qbo_vendor_name: Optional[str] = None
+    qbo_expense_account_id: Optional[str] = None
+    qbo_expense_account_name: Optional[str] = None
+    qbo_payment_account_id: Optional[str] = None
+    qbo_payment_account_name: Optional[str] = None
+    qbo_transaction_id: Optional[str] = None
+    qbo_transaction_type: Optional[str] = None
+    qbo_sync_status: Optional[str] = None
+    qbo_sync_error: Optional[str] = None
+    qbo_synced_at: Optional[datetime] = None
     invoice_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
@@ -125,11 +217,26 @@ class ExpenseResponse(BaseModel):
     model_config = {"from_attributes": True}
 
     @field_validator(
-        "id", "tenant_id", "matter_id", "user_id", "invoice_id", mode="before"
+        "id",
+        "tenant_id",
+        "matter_id",
+        "user_id",
+        "invoice_id",
+        "receipt_document_id",
+        "source_inbound_email_id",
+        mode="before",
     )
     @classmethod
     def _coerce_uuid(cls, value: str | _uuid.UUID | None) -> str | None:
         return str(value) if value is not None else None
+
+    @field_validator("currency")
+    @classmethod
+    def _currency_upper(cls, value: str) -> str:
+        value = value.upper()
+        if len(value) != 3 or not value.isalpha():
+            raise ValueError("currency must be a three-letter ISO code")
+        return value
 
 
 class ExpenseListResponse(BaseModel):
@@ -240,10 +347,16 @@ class GenerateInvoiceRequest(BaseModel):
 
     matter_id: str
     issue_date: Optional[date] = None
-    due_date_days: int = 30
+    due_date_days: Optional[int] = Field(default=None, ge=0, le=365)
     notes: Optional[str] = None
-    payment_terms: str = "Net 30"
+    payment_terms: Optional[str] = None
     tax_rate: Optional[Decimal] = Field(default=None, ge=0, le=1)
+    date_from: Optional[date] = None
+    date_to: Optional[date] = None
+    # ``None`` means "use every matching source" for backwards compatibility;
+    # an explicit empty list means "include none of this source type".
+    time_entry_ids: Optional[list[str]] = None
+    expense_ids: Optional[list[str]] = None
 
 
 # ── Payments ─────────────────────────────────────────────────────────────────

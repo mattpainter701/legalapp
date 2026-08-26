@@ -9,6 +9,7 @@ not pay the OCR model startup cost.
 from __future__ import annotations
 
 import threading
+from io import BytesIO
 from dataclasses import dataclass
 from typing import Any
 
@@ -52,6 +53,15 @@ class PdfOcrResult:
         return [line.as_pdf_fragment() for line in self.lines]
 
 
+@dataclass(frozen=True)
+class ImageOcrResult:
+    """Text recovered from one bounded receipt/photo image."""
+
+    text: str
+    average_confidence: float
+    lines_detected: int
+
+
 _ENGINE = None
 _ENGINE_LOCK = threading.Lock()
 _INFERENCE_LOCK = threading.Lock()
@@ -60,6 +70,9 @@ _MAX_RENDERED_PIXELS = 80_000_000
 _MAX_PAGE_PIXELS = 10_000_000
 _TARGET_SCALE = 2.25  # 162 DPI: readable scans without unbounded memory use.
 _MIN_LINE_CONFIDENCE = 0.35
+_MAX_IMAGE_SOURCE_BYTES = 10 * 1024 * 1024
+_MAX_IMAGE_SOURCE_PIXELS = 25_000_000
+_MAX_IMAGE_INFERENCE_PIXELS = 10_000_000
 
 
 def _engine():
@@ -187,4 +200,71 @@ def ocr_pdf(content: bytes, *, max_pages: int = _MAX_OCR_PAGES) -> PdfOcrResult:
         pages_total=total_pages,
         average_confidence=round(confidence, 4),
         truncated=total_pages > page_limit,
+    )
+
+
+def ocr_image(content: bytes) -> ImageOcrResult:
+    """OCR a JPEG/PNG receipt without unbounded image allocation.
+
+    Dimensions are checked from the image header before pixel data is loaded,
+    then large-but-valid photos are downsampled for inference.  The original
+    bytes remain the audit attachment; only the OCR working copy is resized.
+    """
+
+    if not content:
+        raise TemplateOcrError("The receipt image is empty.")
+    if len(content) > _MAX_IMAGE_SOURCE_BYTES:
+        raise TemplateOcrError("The receipt image exceeds the 10 MB OCR limit.")
+    try:
+        from PIL import Image, UnidentifiedImageError
+    except ImportError as exc:  # pragma: no cover - deployment guard
+        raise TemplateOcrError(
+            "Image scanning is not installed on this server."
+        ) from exc
+
+    try:
+        with Image.open(BytesIO(content)) as source:
+            width, height = (int(value) for value in source.size)
+            if width <= 0 or height <= 0:
+                raise TemplateOcrError("The receipt image has invalid dimensions.")
+            source_pixels = width * height
+            if source_pixels > _MAX_IMAGE_SOURCE_PIXELS:
+                raise TemplateOcrError(
+                    "This receipt image is too large to scan safely. Resize it and try again."
+                )
+            image = source.convert("RGB")
+            if source_pixels > _MAX_IMAGE_INFERENCE_PIXELS:
+                scale = (_MAX_IMAGE_INFERENCE_PIXELS / source_pixels) ** 0.5
+                target = (max(1, int(width * scale)), max(1, int(height * scale)))
+                image = image.resize(target, Image.Resampling.LANCZOS)
+    except TemplateOcrError:
+        raise
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise TemplateOcrError(
+            "The receipt image could not be opened for OCR."
+        ) from exc
+
+    try:
+        with _INFERENCE_LOCK:
+            result = _engine()(image)
+    except TemplateOcrError:
+        raise
+    except Exception as exc:  # pragma: no cover - engine/runtime guard
+        raise TemplateOcrError("The receipt image could not be read by OCR.") from exc
+
+    texts = tuple(getattr(result, "txts", None) or ())
+    scores = tuple(getattr(result, "scores", None) or ())
+    retained: list[tuple[str, float]] = []
+    for raw_text, raw_score in zip(texts, scores):
+        text = " ".join(str(raw_text or "").split()).strip()
+        score = max(0.0, min(1.0, float(raw_score or 0.0)))
+        if text and score >= _MIN_LINE_CONFIDENCE:
+            retained.append((text, score))
+    confidence = (
+        sum(score for _, score in retained) / len(retained) if retained else 0.0
+    )
+    return ImageOcrResult(
+        text="\n".join(text for text, _ in retained),
+        average_confidence=round(confidence, 4),
+        lines_detected=len(retained),
     )

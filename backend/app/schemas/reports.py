@@ -30,6 +30,9 @@ class MatterBudgetReport(BaseModel):
     budget_currency: str | None = "USD"
     total_hours: float
     total_billed: float
+    billable_time_amount: float | None = None
+    billable_expense_amount: float | None = None
+    remaining: float | None = None
     utilization_pct: float | None  # None when budget_amount is null/zero
 
 
@@ -47,12 +50,14 @@ class RealizationReportRow(BaseModel):
     matter_name: str
     billable_hours: float
     billable_amount: float
+    billable_time_amount: float = 0
+    billable_expense_amount: float = 0
     collected_amount: float
     realization_pct: float  # collected_amount / billable_amount * 100, rounded to 1dp
 
 
 class WipReportRow(BaseModel):
-    """Per-matter uninvoiced (work-in-progress) billable time."""
+    """Per-matter uninvoiced billable time and client expenses."""
 
     matter_id: str
     matter_name: str
