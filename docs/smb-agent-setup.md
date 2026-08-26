@@ -18,9 +18,10 @@ alembic upgrade head
 
 This creates the 5 SMB tables (`smb_agents`, `smb_shares`, `smb_file_index`, `smb_access_log`, `matter_smb_shares`), RLS policies, GIN index on `search_vector`, and adds `smb_folders` JSONB to the `matters` table.
 
-## Step 2: Enable SMB in .env
+## Step 2: Enable SMB
 
-Ensure these are set in your `.env`:
+For development and self-managed base Compose deployments, ensure these are
+set in your `.env`:
 
 ```env
 SMB_ENABLED=true
@@ -30,6 +31,12 @@ SMB_SNIPPET_MAX_CHARS=500
 SMB_TASK_POLL_INTERVAL=30
 SMB_CONTENT_FETCH_TIMEOUT=120
 ```
+
+The reviewed Skynet and production Compose overlays pin `SMB_ENABLED=true` for
+both the API and scheduler. This prevents a stale inherited host value from
+silently disabling file-share retrieval for search and matter context;
+disabling it in production
+requires an intentional reviewed deployment change.
 
 Restart the backend container after changing `.env`:
 

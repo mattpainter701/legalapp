@@ -139,6 +139,8 @@ services:
       APP_BUILD_TIME: ${APP_BUILD_TIME:-}
       RUN_SCHEDULER: "false" # API processes never own background jobs
       PUBLIC_SIGNUP_ENABLED: ${PUBLIC_SIGNUP_ENABLED:-false}
+      # Production invariant: override stale SMB_ENABLED=false from env_file.
+      SMB_ENABLED: "true"
       WORKSPACE_MCP_ENABLED: ${WORKSPACE_MCP_ENABLED:-false}
       WORKSPACE_MCP_RESOURCE: ${WORKSPACE_MCP_RESOURCE:-}
       WORKSPACE_MCP_CANONICAL_RESOURCE: ${WORKSPACE_MCP_CANONICAL_RESOURCE:-https://mcp.getlawhand.com/api/mcp/workspace}
@@ -218,6 +220,8 @@ services:
       APP_BUILD_TIME: ${APP_BUILD_TIME:-}
       RUN_SCHEDULER: "true"
       PUBLIC_SIGNUP_ENABLED: ${PUBLIC_SIGNUP_ENABLED:-false}
+      # Keep scheduler retrieval policy identical to the API process.
+      SMB_ENABLED: "true"
       WORKSPACE_MCP_ENABLED: ${WORKSPACE_MCP_ENABLED:-false}
       WORKSPACE_MCP_RESOURCE: ${WORKSPACE_MCP_RESOURCE:-}
       WORKSPACE_MCP_CANONICAL_RESOURCE: ${WORKSPACE_MCP_CANONICAL_RESOURCE:-https://mcp.getlawhand.com/api/mcp/workspace}

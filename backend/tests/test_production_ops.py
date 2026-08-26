@@ -1498,16 +1498,18 @@ def test_production_feature_flags_are_explicitly_mapped_and_rollback_images_rema
             == "${VITE_PUBLIC_SIGNUP_ENABLED:-false}"
         )
 
-    prod_services = yaml.safe_load(
-        (ROOT / "docker-compose.prod.yml").read_text(encoding="utf-8")
-    )["services"]
-    for service in ("backend", "scheduler"):
-        assert prod_services[service]["environment"]["PUBLIC_SIGNUP_ENABLED"] == (
-            "${PUBLIC_SIGNUP_ENABLED:-false}"
-        )
-        assert prod_services[service]["environment"]["SMB_ENABLED"] == (
-            "${SMB_ENABLED:-true}"
-        )
+    production_models = [
+        yaml.safe_load((ROOT / compose_name).read_text(encoding="utf-8"))["services"]
+        for compose_name in ("docker-compose.hypervisor.yml", "docker-compose.prod.yml")
+    ]
+    for prod_services in production_models:
+        for service in ("backend", "scheduler"):
+            assert prod_services[service]["environment"]["PUBLIC_SIGNUP_ENABLED"] == (
+                "${PUBLIC_SIGNUP_ENABLED:-false}"
+            )
+            # Production intentionally ignores stale host SMB_ENABLED=false values.
+            assert prod_services[service]["environment"]["SMB_ENABLED"] == "true"
+    prod_services = production_models[-1]
     assert (
         prod_services["frontend"]["build"]["args"]["VITE_PUBLIC_SIGNUP_ENABLED"]
         == "${VITE_PUBLIC_SIGNUP_ENABLED:-false}"
