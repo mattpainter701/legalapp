@@ -27,6 +27,8 @@ For court or statutory deadlines, follow your firm's verification procedure. Do 
 
 Open [Communications](/communications) for workspace message history. When integrations are enabled, email and collaboration activity may be captured or synchronized. Keep the correct contact and matter association so future readers can find the exchange.
 
+Email that belongs to one file lives on that matter's **Correspondence** tab rather than here: open the matter from [My Matters](/matters) to capture mail from a connected mailbox, forward a message to the matter, and review what is waiting to be filed.
+
 Before sending any draft:
 
 1. confirm recipients and attachments;

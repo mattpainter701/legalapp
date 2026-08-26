@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom'
 import {
   ArrowRight, Bot, Braces, Building2, CalendarClock, CheckCircle2, ClipboardList,
-  Files, FileSignature, FolderInput, Home, Landmark, Lightbulb, Lock, MessageSquareText,
+  Files, FileSignature, FolderInput, Home, Inbox, Landmark, Lightbulb, Lock, MessageSquareText,
   Receipt, Rocket, Scale, ShieldCheck, UserCircle, Users, Vault, Handshake,
 } from 'lucide-react'
 import MarketingPageLayout from '../components/MarketingChrome'
@@ -24,6 +24,11 @@ const CORE_SURFACES = [
     body: 'Hold the parties, documents, correspondence, and history for a matter in one place instead of across mailboxes and drives.',
   },
   {
+    icon: Inbox,
+    title: 'Correspondence and matter email',
+    body: 'Capture mail from a connected mailbox, and — where the deployment enables it — give each matter its own forwarding address. Forwarded mail waits for a person to file it before it becomes matter correspondence.',
+  },
+  {
     icon: CalendarClock,
     title: 'Calendar and deadlines',
     body: 'Keep matter dates and follow-up commitments visible, with supported Microsoft and Google calendar connections.',
@@ -42,6 +47,11 @@ const CORE_SURFACES = [
     icon: FileSignature,
     title: 'Client portal and signature',
     body: 'Share what a client or participant is entitled to see, collect what you need back, and route documents for signature.',
+  },
+  {
+    icon: Bot,
+    title: 'Connected assistants',
+    body: 'Where a firm enables it, a user can connect an approved external assistant to their own workspace by explicit consent — scoped, audit logged, and revocable by the user or an administrator.',
   },
 ]
 

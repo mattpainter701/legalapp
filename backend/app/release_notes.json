@@ -2,6 +2,27 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.26.1",
+      "version": "2026.08.26.1",
+      "title": "Guides now cover matter email and connected assistants",
+      "published_at": "2026-08-26",
+      "summary": "The in-product guides explain how matter email reaches a file and how to review or revoke an external assistant connected to your workspace.",
+      "highlights": [
+        {
+          "title": "Matter email is documented end to end",
+          "description": "The user guide covers the Correspondence tab: capture rules and Scan now, forwarding addresses for a matter, and the queue where you file or reject a message."
+        },
+        {
+          "title": "Connected assistants are yours to review",
+          "description": "The guide explains the Workspace MCP list in your profile — what each connection holds, when it was last used, and how revoking one takes effect immediately."
+        },
+        {
+          "title": "Administrators can see who may connect",
+          "description": "The administrative guide covers the per-user Workspace MCP control, the default for new accounts, and how consent-based access differs from a scoped product key."
+        }
+      ]
+    },
+    {
       "id": "2026.08.25.1",
       "version": "2026.08.25.1",
       "title": "Workspace MCP connections respect your firm’s access settings",

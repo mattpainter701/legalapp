@@ -429,6 +429,19 @@ for transport in edge tls; do
     "$platform_portal" "$transport platform MCP portal isolation"
   assert_common_security_headers \
     "$research_portal" "$transport research MCP portal isolation"
+
+  # "/" is the indexable marketing home page on the product hostname. On these
+  # hostnames the same path is a protocol alias, so the noindex header must be
+  # chosen per host and not per path.
+  assert_header_exactly_once "$workspace_root" \
+    "$transport workspace MCP shorthand root" \
+    "X-Robots-Tag" "noindex, nofollow, noarchive"
+  assert_header_exactly_once "$research_root" \
+    "$transport research MCP shorthand root" \
+    "X-Robots-Tag" "noindex, nofollow, noarchive"
+  assert_header_exactly_once "$research_allowed" \
+    "$transport research MCP allowlist" \
+    "X-Robots-Tag" "noindex, nofollow, noarchive"
 done
 
 

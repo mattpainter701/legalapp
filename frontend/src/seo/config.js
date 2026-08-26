@@ -18,7 +18,7 @@ export const PLATFORM_PRICE_USD = '89'
 export const MCP_TOOL_CALL_PRICE_USD = '0.45'
 
 // Bumped whenever public marketing copy changes; feeds sitemap <lastmod>.
-export const PUBLIC_CONTENT_LASTMOD = '2026-08-15'
+export const PUBLIC_CONTENT_LASTMOD = '2026-08-26'
 
 export const PRICING_FAQ = Object.freeze([
   Object.freeze([
@@ -58,7 +58,7 @@ export const PUBLIC_ROUTE_META = Object.freeze({
   '/product': {
     title: 'The LawHand Platform for Law Firm Operations',
     description:
-      'See how the LawHand platform connects intake, matters, documents, deadlines, billing, practice-area skills, matter-aware AI chat, and controlled MCP integrations.',
+      'See how the LawHand platform connects intake, matters, documents, matter email, deadlines, billing, practice-area skills, matter-aware AI chat, and controlled MCP integrations.',
     canonicalPath: '/product',
     indexable: true,
     priority: '0.9',
@@ -75,9 +75,9 @@ export const PUBLIC_ROUTE_META = Object.freeze({
     parentPath: '/product',
   },
   '/product/mcp': {
-    title: 'LawHand Research MCP for Public Legal Authority',
+    title: 'LawHand MCP for Controlled Legal Integrations',
     description:
-      'LawHand Research MCP connects ChatGPT, Claude, and API clients to approved public legal authority through OAuth or a scoped API token, with PAYG metering and no workspace or matter access.',
+      'Connect approved assistants to tenant-controlled LawHand workspaces, or retrieve public legal authority through scoped Research MCP OAuth and product keys with bounded usage.',
     canonicalPath: '/product/mcp',
     indexable: true,
     priority: '0.8',

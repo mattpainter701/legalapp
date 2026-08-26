@@ -31,6 +31,24 @@ preserving POST bodies and avoiding client-dependent redirect behavior. Nginx
 returns 404 for every other path outside the corresponding allowlist. The raw
 CourtListener sidecar stays private and is never a public Cloudflare origin.
 
+## Search-engine exposure
+
+Neither MCP hostname publishes a human-readable page, and neither may appear in
+search results. Nginx chooses `X-Robots-Tag` per host: the path-keyed
+`$x_robots_tag` map treats `/` as indexable because the marketing home page
+lives there, so the host-keyed `$robots_tag` map overrides both dedicated
+hostnames with `noindex, nofollow, noarchive` and falls back to the path-keyed
+value everywhere else. `robots.txt` is intentionally outside each host's
+allowlist and returns 404; the header, not a robots file, is what keeps these
+origins out of an index.
+
+A person who opens `research.getlawhand.com` in a browser reaches the protocol
+endpoint and receives its unauthenticated JSON reply. That body carries a
+`documentation` pointer to the public `/product/mcp` page, which is the
+supported way to give that reader somewhere to go. Do not add an HTML landing
+page, a redirect, or any additional allowed path to a dedicated MCP hostname:
+the marketing site is the only place public product content belongs.
+
 ## Cloudflare topology
 
 Create proxied CNAME records for both MCP hosts targeting the existing
@@ -104,6 +122,10 @@ curl -i https://research.getlawhand.com/.well-known/oauth-authorization-server
 curl -i https://mcp.getlawhand.com/api/version
 curl -i https://research.getlawhand.com/api/version
 
+# Neither dedicated hostname is indexable.
+curl -sI https://mcp.getlawhand.com/ | grep -i x-robots-tag
+curl -sI https://research.getlawhand.com/api/mcp/manifest | grep -i x-robots-tag
+
 # Legacy workspace clients remain bounded and receive the canonical challenge.
 curl -i https://getlawhand.com/api/mcp/workspace
 ```
@@ -119,6 +141,8 @@ Expected results:
 - Research transport, manifest, OAuth discovery, registration, and token paths
   return 404 while `MCP_PRODUCT_ENABLED=false`;
 - unrelated paths on both dedicated hosts return 404;
+- every response from both dedicated hosts carries
+  `X-Robots-Tag: noindex, nofollow, noarchive`;
 - all three public origins present HSTS and certificates with at least the
   configured minimum remaining lifetime.
 

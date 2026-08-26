@@ -517,6 +517,18 @@ async def authenticate_product_request(scope: Scope) -> MCPProductIdentity:
     return identity
 
 
+def _research_documentation_url() -> str:
+    """Where a person who reached this endpoint by hand should go instead.
+
+    ``research.getlawhand.com`` publishes no page: its root is an alias for the
+    protocol endpoint, so a browser lands on this JSON error. Carrying the
+    public MCP page in the unauthenticated body gives that reader somewhere to
+    go without widening the hostname's surface to serve HTML.
+    """
+
+    return f"{settings.FRONTEND_URL.rstrip('/')}/product/mcp"
+
+
 class MCPProtocolEndpoint:
     """Exact-path ASGI endpoint with fail-closed product authentication."""
 
@@ -538,8 +550,11 @@ class MCPProtocolEndpoint:
         try:
             identity = await authenticate_product_request(scope)
         except HTTPException as exc:
+            body: dict[str, str] = {"detail": exc.detail}
+            if exc.status_code == 401:
+                body["documentation"] = _research_documentation_url()
             await JSONResponse(
-                {"detail": exc.detail},
+                body,
                 status_code=exc.status_code,
                 headers=exc.headers,
             )(scope, receive, send)

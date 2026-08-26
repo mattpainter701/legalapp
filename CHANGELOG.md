@@ -3,6 +3,33 @@
 ## [Unreleased]
 
 ### Fixed
+- **The dedicated MCP hostnames are no longer advertised to search engines:**
+  `$x_robots_tag` is keyed on the request path, so `/` — the marketing home
+  page on the product hostname — was published as indexable on every hostname
+  nginx answers, including `mcp.getlawhand.com` and `research.getlawhand.com`,
+  whose root is an alias for a protocol endpoint that replies with a JSON
+  error. A host-keyed `$robots_tag` map now forces `noindex, nofollow,
+  noarchive` on those hostnames and falls back to the path-keyed value
+  everywhere else. The unauthenticated research response also carries a
+  `documentation` pointer to `/product/mcp`, so a person who reaches the
+  endpoint in a browser has somewhere to go without the hostname serving HTML.
+
+### Added
+- **Matter correspondence and email are documented for the people who use
+  them:** the in-product user guide now covers the matter Correspondence tab —
+  mailbox capture rules and **Scan now**, per-matter forwarding addresses and
+  their rotation and disabling, and the **Emails awaiting review** queue where
+  a person selects **File to matter** or **Reject** before anything becomes
+  correspondence. The platform marketing page lists the same capability.
+- **Workspace MCP is documented and marketed as its own connection type:** the
+  user guide explains the connected-assistant list in Profile and how to revoke
+  a connection; the administrative guide covers the per-user **Connected
+  assistants** control, the default applied to new accounts, and how the
+  consent-based surface differs from keyed product access; and the public MCP
+  page contrasts the two connection types instead of describing only scoped
+  product keys.
+
+### Fixed
 - **Workspace MCP now follows tenant-administered user access:** retired the
   legacy deployment-time pilot tenant allowlist that could reject an otherwise
   eligible user before the Admin → Users permission, Privacy Mode, license,
