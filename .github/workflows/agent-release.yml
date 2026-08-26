@@ -19,7 +19,8 @@ permissions:
 
 concurrency:
   group: agent-release-${{ github.ref }}
-  cancel-in-progress: false
+  # A newer PR commit supersedes its build. Never cancel main/tag release runs.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 on:
   push:
