@@ -69,6 +69,9 @@ jobs:
           path: |
             agent/dist/lawhand-agent.exe
             agent/dist/*.msi
+          # PyInstaller and the embedded MSI cabinet are already compressed;
+          # recompressing them made the Windows upload take several minutes.
+          compression-level: 0
           retention-days: 14
           if-no-files-found: error
 
