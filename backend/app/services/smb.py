@@ -1380,9 +1380,7 @@ class SmbService:
         # A short-lived pairing reservation must never own a share. This keeps
         # lifecycle cleanup from cascading tenant configuration and also
         # prevents credentials from being routed to an unregistered device.
-        await smb_credential_service.require_registered_agent(
-            db, tenant_id, agent_id
-        )
+        await smb_credential_service.require_registered_agent(db, tenant_id, agent_id)
 
         credential_id = await self._resolve_share_credential(
             db, tenant_id, agent_id, data.credential_id, data.credential, user_id

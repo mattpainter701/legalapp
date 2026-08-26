@@ -51,6 +51,11 @@ def truncate_snippet(text: str, max_chars: int = 500) -> str:
     return text[:max_chars] + "…"
 
 
+def _windows_file_logging_enabled() -> bool:
+    """Return whether service diagnostics need the Windows file sink."""
+    return os.name == "nt"
+
+
 def setup_logging(level: str = "INFO") -> logging.Logger:
     """Configure bounded application logging once.
 
@@ -60,10 +65,8 @@ def setup_logging(level: str = "INFO") -> logging.Logger:
     """
     root = logging.getLogger()
     root.setLevel(getattr(logging, level.upper(), logging.INFO))
-    formatter = logging.Formatter(
-        "%(asctime)s %(levelname)-8s [%(name)s] %(message)s"
-    )
-    if os.name == "nt":
+    formatter = logging.Formatter("%(asctime)s %(levelname)-8s [%(name)s] %(message)s")
+    if _windows_file_logging_enabled():
         from clarity_agent.config import CONFIG_DIR
 
         log_dir = Path(CONFIG_DIR) / "logs"

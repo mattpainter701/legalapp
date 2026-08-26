@@ -13,7 +13,7 @@ def test_windows_logging_is_rotating_and_idempotent(monkeypatch, tmp_path):
     try:
         root = logging.getLogger()
         root.handlers.clear()
-        monkeypatch.setattr(utils.os, "name", "nt")
+        monkeypatch.setattr(utils, "_windows_file_logging_enabled", lambda: True)
         monkeypatch.setattr(config, "CONFIG_DIR", tmp_path)
 
         utils.setup_logging()
@@ -28,12 +28,12 @@ def test_windows_logging_is_rotating_and_idempotent(monkeypatch, tmp_path):
         assert matching[0].baseFilename.endswith("logs\\agent.log") or matching[
             0
         ].baseFilename.endswith("logs/agent.log")
-        matching[0].emit(
-            logging.LogRecord("x", logging.INFO, "", 0, "ok", (), None)
+        matching[0].emit(logging.LogRecord("x", logging.INFO, "", 0, "ok", (), None))
+        assert (
+            (tmp_path / "logs" / "agent.log")
+            .read_text(encoding="utf-8")
+            .endswith("ok\n")
         )
-        assert (tmp_path / "logs" / "agent.log").read_text(
-            encoding="utf-8"
-        ).endswith("ok\n")
     finally:
         for handler in logging.getLogger().handlers:
             handler.close()
