@@ -31,6 +31,7 @@ import {
   isPairingPlaceholder,
   isVisibleAgent,
 } from '../utils/smbAgentInstall'
+import { buildSmbOperationalActivity } from '../utils/smbActivity'
 
 // Auth methods the agent knows how to use, mirroring AUTH_METHODS on the API.
 const AUTH_METHODS = [
@@ -275,11 +276,17 @@ function StatusPanel() {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">
-        <Badge label={status?.enabled ? 'Enabled' : 'Disabled'} variant={status?.enabled ? 'success' : 'warning'} />
+        <Badge label={(status?.retrieval_enabled ?? status?.enabled) ? 'Retrieval enabled' : 'Retrieval disabled'} variant={(status?.retrieval_enabled ?? status?.enabled) ? 'success' : 'warning'} />
         <button onClick={load} className="text-xs text-brand-accent font-sans font-medium hover:underline ml-auto">
           Refresh
         </button>
       </div>
+
+      {status?.message && (
+        <div role="status" className="rounded-lg border border-brand-amber/30 bg-brand-amber/10 px-4 py-3 text-sm text-brand-ink-2 font-sans">
+          {status.message}
+        </div>
+      )}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard label="Agents" value={status?.total_agents ?? status?.agent_count ?? 0} sub={`${status?.active_agents ?? 0} active`} />
@@ -1423,16 +1430,29 @@ function CredentialsPanel() {
 // ── Activity Panel ────────────────────────────────────────────────────────────
 
 function ActivityPanel() {
-  const [entries, setEntries] = useState([])
+  const [activity, setActivity] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [warning, setWarning] = useState(null)
 
   const load = async () => {
     setLoading(true)
     setError(null)
+    setWarning(null)
     try {
-      const data = await getSmbActivity()
-      setEntries(asList(data, 'entries', 'items'))
+      const results = await Promise.allSettled([getSmbActivity(), getSmbAgents(), getSmbShares(), getSmbCredentials()])
+      const [accessResult, agentsResult, sharesResult, credentialsResult] = results
+      if (results.every((result) => result.status === 'rejected')) throw accessResult.reason
+      const sourceNames = ['content access', 'agents', 'shares', 'credentials']
+      const missingSources = results.flatMap((result, index) => result.status === 'rejected' ? [sourceNames[index]] : [])
+      if (missingSources.length) setWarning(`Some activity could not be loaded: ${missingSources.join(', ')}. Refresh to retry.`)
+      const agents = agentsResult.status === 'fulfilled' ? asList(agentsResult.value, 'agents', 'items').filter(isVisibleAgent) : []
+      setActivity(buildSmbOperationalActivity({
+        accessEntries: accessResult.status === 'fulfilled' ? asList(accessResult.value, 'entries', 'items') : [],
+        agents,
+        shares: sharesResult.status === 'fulfilled' ? asList(sharesResult.value, 'shares', 'items') : [],
+        credentials: credentialsResult.status === 'fulfilled' ? asList(credentialsResult.value, 'credentials', 'items') : [],
+      }))
     } catch (e) {
       setError(errText(e, 'Failed to load activity'))
     } finally {
@@ -1448,38 +1468,40 @@ function ActivityPanel() {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">
+        <div>
+          <h3 className="text-sm font-sans font-bold text-brand-ink">Operational activity</h3>
+          <p className="text-xs text-brand-muted font-sans mt-1">Agent heartbeats, updates, share scans/tests, credential verification, and file-content access.</p>
+        </div>
         <button onClick={load} className="text-xs text-brand-accent font-sans font-medium hover:underline ml-auto">
           Refresh
         </button>
       </div>
 
+      {warning && <div role="status" className="rounded-lg border border-brand-amber/30 bg-brand-amber/10 px-4 py-3 text-sm text-brand-ink-2 font-sans">{warning}</div>}
+
       <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-brand-line bg-brand-bg-soft/50">
-              <th className="text-left px-4 py-3 font-semibold text-brand-ink uppercase tracking-wider text-xs">File Path</th>
-              <th className="text-left px-4 py-3 font-semibold text-brand-ink uppercase tracking-wider text-xs">Reason</th>
-              <th className="text-left px-4 py-3 font-semibold text-brand-ink uppercase tracking-wider text-xs">User</th>
-              <th className="text-left px-4 py-3 font-semibold text-brand-ink uppercase tracking-wider text-xs">Accessed At</th>
+              <th className="text-left px-4 py-3 font-semibold text-brand-ink uppercase tracking-wider text-xs">Event</th>
+              <th className="text-left px-4 py-3 font-semibold text-brand-ink uppercase tracking-wider text-xs">Details</th>
+              <th className="text-left px-4 py-3 font-semibold text-brand-ink uppercase tracking-wider text-xs">When</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-brand-line">
-            {entries.map((entry, i) => (
-              <tr key={entry.id || i} className="hover:bg-brand-bg-soft transition-colors">
-                <td className="px-4 py-3 text-brand-ink font-sans font-mono text-xs max-w-xs truncate" title={entry.file_path}>
-                  {entry.file_path || '-'}
-                </td>
-                <td className="px-4 py-3 text-brand-ink-2 font-sans">{entry.access_reason || '-'}</td>
-                <td className="px-4 py-3 text-brand-muted font-sans">{entry.user_id || '-'}</td>
-                <td className="px-4 py-3 text-brand-muted font-sans font-mono">
-                  {entry.accessed_at ? format(new Date(entry.accessed_at), 'MMM d, HH:mm:ss') : '-'}
+            {activity.map((entry) => (
+              <tr key={entry.id} className="hover:bg-brand-bg-soft transition-colors">
+                <td className="px-4 py-3 text-brand-ink font-sans font-medium"><Badge label={entry.kind} variant={entry.state === 'error' ? 'error' : entry.state === 'success' ? 'success' : entry.state === 'warning' ? 'warning' : 'neutral'} /><div className="mt-1">{entry.title}</div></td>
+                <td className="px-4 py-3 text-brand-ink-2 font-sans max-w-xl break-words">{entry.detail || '-'}</td>
+                <td className="px-4 py-3 text-brand-muted font-sans font-mono whitespace-nowrap">
+                  {format(entry.occurredAt, 'MMM d, HH:mm:ss')}
                 </td>
               </tr>
             ))}
-            {entries.length === 0 && (
+            {activity.length === 0 && (
               <tr>
-                <td colSpan={4} className="px-4 py-12 text-center text-brand-muted font-sans">
-                  No recent activity.
+                <td colSpan={3} className="px-4 py-12 text-center text-brand-muted font-sans">
+                  No operational activity yet. Agent heartbeats and verification results will appear here after the agent connects.
                 </td>
               </tr>
             )}

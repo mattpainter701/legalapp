@@ -26,6 +26,13 @@
   private-detail protection remains enforced.
 
 ### Fixed
+- **File-share operations now report the real tenant state:** production
+  explicitly enables SMB retrieval, while the Status tab always authenticates
+  and returns tenant-scoped agent, share, credential, heartbeat, scan, and
+  index counts even when retrieval is disabled. The Activity tab now combines
+  agent lifecycle and heartbeat, update, share scan/connection-test,
+  credential verification/delivery, and audited full-content access events so
+  administrators can diagnose a quiet or failing installation from one place.
 - **File-share connection tests and indexing now agree:** the API accepts the
   empty timestamp sentinel emitted by installed v0.15.0 agents while v0.15.1
   sends proper null values and reports bounded validation details. Admins can

@@ -46,6 +46,21 @@ File permissions can change after indexing. Establish a process for rescans, del
 
 ## Diagnose safely
 
+Start with **Status**. Its counts describe the tenant's registered agents,
+configured shares, stored credentials, and indexed files even if retrieval has
+been disabled by server configuration. The retrieval badge and warning are a
+separate signal: disabled retrieval prevents indexed file-share results from
+being used in search and matter context, but it does not erase the operational
+inventory.
+
+Use **Activity** as the tenant-scoped operational timeline. It combines agent
+registration and heartbeats, agent updates, share configuration, scans and
+connection tests, credential creation, delivery and verification, and audited
+full-document access. Passwords, API keys, and document contents are never
+included. A successful connection test followed by a failed scan usually
+means the server accepted the SMB identity but rejected or could not process
+the later metadata sync.
+
 For an offline agent, check its registered identity, network path reachability, service status, and last heartbeat through the restricted operations procedure. For a share that stopped indexing, read the scan error on the share row and re-run **Test connection** to separate a credential problem from a path or permission problem. If the connection test succeeds but sync reports HTTP 422, the share credentials are working and the file-metadata payload needs a compatible server or agent update. For file errors, preserve the relative path and error category without copying sensitive file contents into support notes.
 
 Disable or remove a share when its business owner, path, tenant, or data classification changes. Verify what indexed data and caches remain under retention policy.

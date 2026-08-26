@@ -2017,6 +2017,7 @@ class SmbService:
                 select(func.count(SmbAgent.id)).where(
                     SmbAgent.tenant_id == tid,
                     SmbAgent.status == "active",
+                    SmbAgent.api_key_hash != "pending",
                 )
             )
         ).scalar_one()
@@ -2085,6 +2086,24 @@ class SmbService:
             )
         ).scalar_one()
 
+        last_agent_heartbeat = (
+            await db.execute(
+                select(func.max(SmbAgent.last_heartbeat)).where(
+                    SmbAgent.tenant_id == tid,
+                    SmbAgent.status.in_(("active", "paused")),
+                    SmbAgent.api_key_hash != "pending",
+                )
+            )
+        ).scalar_one()
+
+        # Share scan completion is a better operational signal than the newest
+        # changed file: a successful no-change scan must still move this value.
+        last_file_sync = (
+            await db.execute(
+                select(func.max(SmbShare.last_scan_at)).where(SmbShare.tenant_id == tid)
+            )
+        ).scalar_one()
+
         return {
             "agent_count": agent_count,
             "active_agents": active_agents,
@@ -2095,6 +2114,8 @@ class SmbService:
             "credential_count": credential_count,
             "shares_failing": shares_failing,
             "shares_without_credential": shares_without_credential,
+            "last_agent_heartbeat": last_agent_heartbeat,
+            "last_file_sync": last_file_sync,
         }
 
     async def get_access_log(
