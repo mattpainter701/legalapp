@@ -116,6 +116,16 @@ LawHand can dynamically register supported public desktop clients when
 bypass user consent, tenant-administered per-user access, license checks,
 scopes, or RBAC.
 
+Registration happens before LawHand knows which user will sign in. Therefore a
+Claude message such as "Couldn't register with the sign-in service" is a
+discovery or dynamic-client-registration failure, not a Privacy Mode or
+per-user permission decision. The registration service accepts RFC 7591 JSON
+and a bounded form-encoded compatibility shape, including Claude's current
+`https://claude.ai/api/mcp/auth_callback` callback and the forward-compatible
+`https://claude.com/api/mcp/auth_callback` spelling. Its source-IP ceiling is
+sized for hosted clients that share cloud egress while retaining an nginx and
+application-layer abuse bound.
+
 The self-service commands below require dynamic registration. If it is
 disabled, stop: the client must first be provisioned through the approved
 LawHand client-registration process and configured with its assigned client ID
@@ -165,6 +175,14 @@ claude mcp add --transport http --scope user lawhand https://mcp.getlawhand.com/
 Then run `/mcp` inside Claude Code, choose `lawhand`, and authenticate in the
 browser. Claude Code can use dynamic client registration, so no client secret
 belongs in the project configuration.
+
+If Claude reports that it could not register the connector, verify that the
+protected-resource document names `https://getlawhand.com` as its authorization
+server and that the authorization-server document advertises
+`https://getlawhand.com/api/workspace-mcp/oauth/register`. After a failed or
+cached connector setup, remove that custom connector and add the official full
+URL again. Do not change Privacy Mode or paste a Research MCP key to repair a
+registration-stage error.
 
 ### OpenCode
 

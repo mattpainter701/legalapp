@@ -549,6 +549,20 @@ async def test_research_router_gate_discovery_and_registration_errors(monkeypatc
         _request(client_name="Desktop", redirect_uris=["https://x/c"]), db
     )
     assert response.status_code == 201 and db.added[0].client_id.startswith("research.")
+
+    form_request = _request(
+        client_name="Claude",
+        redirect_uris='["https://claude.ai/api/mcp/auth_callback"]',
+        grant_types='["authorization_code"]',
+        response_types='["code"]',
+        token_endpoint_auth_method="none",
+    )
+    form_request.json = AsyncMock(side_effect=ValueError("not JSON"))
+    form_db = _DB()
+    form_response = await router.register_research_client(form_request, form_db)
+    assert form_response.status_code == 201
+    assert form_db.added[0].redirect_uris == ["https://claude.ai/api/mcp/auth_callback"]
+
     for form in (
         {},
         {"client_name": "x", "redirect_uris": ["https://x/c", "https://x/c"]},

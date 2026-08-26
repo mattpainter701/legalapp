@@ -1,6 +1,7 @@
 import base64
 import json
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -33,6 +34,65 @@ def test_redirect_pkce_and_scopes_reject_bad_inputs():
         oauth.validate_pkce_challenge("!" * 43, "S256")
     with pytest.raises(oauth.WorkspaceOAuthError):
         oauth.normalized_scopes("")
+
+
+class _RegistrationForm:
+    def __init__(self, values):
+        self.values = values
+
+    def get(self, field, default=None):
+        values = self.values.get(field, [])
+        return values[-1] if values else default
+
+    def getlist(self, field):
+        return self.values.get(field, [])
+
+
+@pytest.mark.asyncio
+async def test_registration_payload_json_and_form_compatibility():
+    json_payload = {
+        "client_name": "Claude",
+        "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+    }
+    json_request = SimpleNamespace(json=AsyncMock(return_value=json_payload))
+    assert await oauth.parse_dynamic_client_registration_payload(json_request) == (
+        json_payload
+    )
+
+    non_object = SimpleNamespace(json=AsyncMock(return_value=[]))
+    with pytest.raises(oauth.WorkspaceOAuthError, match="must be an object"):
+        await oauth.parse_dynamic_client_registration_payload(non_object)
+
+    form = _RegistrationForm(
+        {
+            "client_name": ["Claude"],
+            "redirect_uris[]": ["https://claude.com/api/mcp/auth_callback"],
+            "grant_types": ['["authorization_code"]'],
+            "response_types": ["code"],
+            "token_endpoint_auth_method": ["none"],
+            "application_type": ["web"],
+        }
+    )
+    form_request = SimpleNamespace(
+        json=AsyncMock(side_effect=ValueError("not JSON")),
+        form=AsyncMock(return_value=form),
+    )
+    parsed = await oauth.parse_dynamic_client_registration_payload(form_request)
+    assert parsed == {
+        "client_name": "Claude",
+        "token_endpoint_auth_method": "none",
+        "application_type": "web",
+        "redirect_uris": ["https://claude.com/api/mcp/auth_callback"],
+        "grant_types": ["authorization_code"],
+        "response_types": ["code"],
+    }
+
+    invalid_form = SimpleNamespace(
+        json=AsyncMock(side_effect=ValueError("not JSON")),
+        form=AsyncMock(side_effect=ValueError("not form data")),
+    )
+    with pytest.raises(oauth.WorkspaceOAuthError, match="valid JSON or form data"):
+        await oauth.parse_dynamic_client_registration_payload(invalid_form)
 
 
 def test_pkce_verifier_ascii_and_length_fail_closed():

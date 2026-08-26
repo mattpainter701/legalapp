@@ -261,6 +261,70 @@ def validate_redirect_uri(value: str) -> str:
     return value
 
 
+def _registration_form_values(form: Any, field: str) -> list[Any]:
+    """Read repeated or JSON-array form values from a compatibility request."""
+
+    getlist = getattr(form, "getlist", None)
+    if callable(getlist):
+        values = [*getlist(field), *getlist(f"{field}[]")]
+    else:
+        value = form.get(field) if hasattr(form, "get") else None
+        values = (
+            value if isinstance(value, list) else ([] if value is None else [value])
+        )
+
+    if len(values) == 1 and isinstance(values[0], str):
+        try:
+            decoded = json.loads(values[0])
+        except (TypeError, ValueError):
+            decoded = None
+        if isinstance(decoded, list):
+            return decoded
+    return values
+
+
+async def parse_dynamic_client_registration_payload(request: Request) -> dict[str, Any]:
+    """Parse RFC 7591 JSON and a conservative form-encoded compatibility shape.
+
+    Dynamic client registration is specified as JSON, but some hosted connector
+    brokers have emitted URL-encoded metadata during migrations. Supporting the
+    same bounded fields keeps that interoperability fallback from becoming an
+    unhandled 500 while all normal metadata validation remains unchanged.
+    """
+
+    try:
+        payload = await request.json()
+    except (TypeError, ValueError):
+        try:
+            form = await request.form()
+        except (TypeError, ValueError) as exc:
+            raise WorkspaceOAuthError(
+                "invalid_client_metadata",
+                "Registration metadata must be valid JSON or form data",
+            ) from exc
+        payload = {}
+        for field in (
+            "client_name",
+            "token_endpoint_auth_method",
+            "software_id",
+            "software_version",
+            "application_type",
+        ):
+            value = form.get(field) if hasattr(form, "get") else None
+            if value is not None:
+                payload[field] = value
+        for field in ("redirect_uris", "grant_types", "response_types"):
+            values = _registration_form_values(form, field)
+            if values:
+                payload[field] = values
+
+    if not isinstance(payload, dict):
+        raise WorkspaceOAuthError(
+            "invalid_client_metadata", "Registration metadata must be an object"
+        )
+    return payload
+
+
 def validate_pkce_challenge(challenge: str, method: str) -> None:
     if method != "S256":
         raise WorkspaceOAuthError("invalid_request", "S256 PKCE is required")

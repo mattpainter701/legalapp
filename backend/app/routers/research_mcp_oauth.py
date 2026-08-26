@@ -56,6 +56,9 @@ from app.services.research_mcp_oauth import (
 )
 from app.services.research_mcp_oauth import require_active_research_grant
 from app.services.tenant_state import require_active_tenant
+from app.services.workspace_mcp_oauth import (
+    parse_dynamic_client_registration_payload,
+)
 
 settings = get_settings()
 router = APIRouter(tags=["research-mcp-oauth"])
@@ -212,17 +215,11 @@ async def register_research_client(
             )
         )
     try:
-        try:
-            payload = await request.json()
-        except (TypeError, ValueError) as exc:
-            raise WorkspaceOAuthError(
-                "invalid_client_metadata", "Registration metadata must be valid JSON"
-            ) from exc
-        if not isinstance(payload, dict):
-            raise WorkspaceOAuthError(
-                "invalid_client_metadata", "Registration metadata must be an object"
-            )
-        client_name = str(payload.get("client_name") or "").strip()
+        payload = await parse_dynamic_client_registration_payload(request)
+        client_name_value = payload.get("client_name")
+        client_name = (
+            client_name_value.strip() if isinstance(client_name_value, str) else ""
+        )
         redirect_values = payload.get("redirect_uris")
         if not 1 <= len(client_name) <= 200:
             raise WorkspaceOAuthError(

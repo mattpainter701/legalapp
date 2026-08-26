@@ -32,7 +32,11 @@ AUTH_LIMITS = {
     "/api/auth/register": (5, 600),
     "/api/auth/forgot-password": (5, 900),
     "/api/auth/reset-password": (5, 900),
-    "/api/workspace-mcp/oauth/register": (10, 3600),
+    # Hosted MCP clients register from shared cloud egress. Ten requests/hour
+    # can lock every customer out after a small retry burst, so keep a bounded
+    # database-write ceiling that still accommodates brokered Claude/GPT users.
+    "/api/workspace-mcp/oauth/register": (300, 3600),
+    "/api/research-mcp/oauth/register": (300, 3600),
     "/api/workspace-mcp/oauth/token": (30, 300),
     "/api/workspace-mcp/oauth/revoke": (30, 300),
     # Public opaque-token exchanges perform bounded, tenant-by-tenant RLS

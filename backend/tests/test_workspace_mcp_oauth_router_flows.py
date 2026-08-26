@@ -4,6 +4,7 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
@@ -118,6 +119,43 @@ async def test_registration_success_and_invalid_metadata(monkeypatch):
     assert content["redirect_uris"] == payload["redirect_uris"]
     assert db.commits == 1 and len(db.added) == 1
 
+    claude_payload = {
+        "client_name": "Claude",
+        "client_uri": "https://claude.ai",
+        "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+        "grant_types": ["authorization_code"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "none",
+        "application_type": "web",
+    }
+    claude_db = _DB()
+    claude = await oauth_router.register_workspace_client(
+        _Request(json_data=claude_payload), claude_db
+    )
+    claude_content = json.loads(claude.body)
+    assert claude.status_code == 201
+    assert claude_content["client_name"] == "Claude"
+    assert claude_content["redirect_uris"] == claude_payload["redirect_uris"]
+    assert claude_content["grant_types"] == ["authorization_code"]
+
+    form_request = _Request(
+        form_data={
+            "client_name": "Claude",
+            "redirect_uris": '["https://claude.com/api/mcp/auth_callback"]',
+            "grant_types": '["authorization_code"]',
+            "response_types": '["code"]',
+            "token_endpoint_auth_method": "none",
+            "application_type": "web",
+        }
+    )
+    form_request.json = AsyncMock(side_effect=ValueError("not JSON"))
+    form_db = _DB()
+    form_encoded = await oauth_router.register_workspace_client(form_request, form_db)
+    assert form_encoded.status_code == 201
+    assert json.loads(form_encoded.body)["redirect_uris"] == [
+        "https://claude.com/api/mcp/auth_callback"
+    ]
+
     duplicate = {**payload, "redirect_uris": [payload["redirect_uris"][0]] * 2}
     invalid_db = _DB()
     invalid = await oauth_router.register_workspace_client(
@@ -126,6 +164,22 @@ async def test_registration_success_and_invalid_metadata(monkeypatch):
     assert invalid.status_code == 400
     assert json.loads(invalid.body)["error"] == "invalid_client_metadata"
     assert invalid_db.rollbacks == 1
+
+    malformed_db = _DB()
+    malformed = await oauth_router.register_workspace_client(
+        _Request(
+            json_data={
+                "client_name": "Claude",
+                "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+                "grant_types": [{}],
+                "response_types": ["code"],
+            }
+        ),
+        malformed_db,
+    )
+    assert malformed.status_code == 400
+    assert json.loads(malformed.body)["error"] == "invalid_client_metadata"
+    assert malformed_db.rollbacks == 1
 
 
 @pytest.mark.asyncio

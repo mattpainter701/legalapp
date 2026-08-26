@@ -49,6 +49,7 @@ from app.services.workspace_mcp_oauth import (
     load_authorization_code,
     mint_workspace_access_token,
     normalized_scopes,
+    parse_dynamic_client_registration_payload,
     replace_active_grant,
     require_workspace_tenant_allowed,
     revoke_workspace_grant_runtime,
@@ -321,12 +322,11 @@ async def register_workspace_client(
             )
         )
     try:
-        payload = await request.json()
-        if not isinstance(payload, dict):
-            raise WorkspaceOAuthError(
-                "invalid_client_metadata", "Registration metadata must be an object"
-            )
-        client_name = str(payload.get("client_name") or "").strip()
+        payload = await parse_dynamic_client_registration_payload(request)
+        client_name_value = payload.get("client_name")
+        client_name = (
+            client_name_value.strip() if isinstance(client_name_value, str) else ""
+        )
         if not 1 <= len(client_name) <= 200:
             raise WorkspaceOAuthError(
                 "invalid_client_metadata", "client_name is required"
@@ -347,8 +347,11 @@ async def register_workspace_client(
         response_types = payload.get("response_types", ["code"])
         if (
             not isinstance(grant_types, list)
+            or not all(isinstance(value, str) for value in grant_types)
             or "authorization_code" not in grant_types
             or set(grant_types) - {"authorization_code", "refresh_token"}
+            or not isinstance(response_types, list)
+            or not all(isinstance(value, str) for value in response_types)
             or response_types != ["code"]
             or payload.get("token_endpoint_auth_method", "none") != "none"
         ):
