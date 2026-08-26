@@ -30,3 +30,17 @@ def test_clone_is_a_strict_subset_of_the_purge_registry():
 def test_sensitive_integration_and_credential_tables_never_clone():
     assert SENSITIVE_NEVER_CLONE <= set(DEMO_TABLE_REGISTRY)
     assert all(not DEMO_TABLE_REGISTRY[table].clone for table in SENSITIVE_NEVER_CLONE)
+
+
+def test_assistant_runtime_state_is_purged_but_never_cloned():
+    runtime_tables = {
+        "background_ai_usage_reservations",
+        "engagement_packets",
+        "prospect_contact_events",
+        "prospect_follow_through",
+        "prospect_follow_through_events",
+    }
+
+    assert runtime_tables <= set(DEMO_TABLE_REGISTRY)
+    assert all(DEMO_TABLE_REGISTRY[table].purge for table in runtime_tables)
+    assert all(not DEMO_TABLE_REGISTRY[table].clone for table in runtime_tables)

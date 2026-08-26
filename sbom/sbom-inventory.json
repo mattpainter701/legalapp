@@ -2,28 +2,28 @@
   "ai_routes": [
     {
       "api_base": "https://opencode.ai/zen/v1",
-      "api_key_env": "os.environ/DEEPSEEK_API_KEY",
+      "api_key_env": "os.environ/OPENCODE_ZEN_API_KEY",
       "provider_model": "openai/nemotron-3-ultra-free",
       "route_name": "clarity-standard",
       "source": "litellm_config.yaml"
     },
     {
       "api_base": "https://opencode.ai/zen/v1",
-      "api_key_env": "os.environ/DEEPSEEK_API_KEY",
+      "api_key_env": "os.environ/OPENCODE_ZEN_API_KEY",
       "provider_model": "openai/nemotron-3-ultra-free",
       "route_name": "clarity-standard-zen-nemotron",
       "source": "litellm_config.yaml"
     },
     {
       "api_base": "https://opencode.ai/zen/v1",
-      "api_key_env": "os.environ/DEEPSEEK_API_KEY",
+      "api_key_env": "os.environ/OPENCODE_ZEN_API_KEY",
       "provider_model": "openai/deepseek-v4-flash-free",
       "route_name": "clarity-standard-deepseek-flash-free",
       "source": "litellm_config.yaml"
     },
     {
       "api_base": "https://opencode.ai/zen/go/v1",
-      "api_key_env": "os.environ/DEEPSEEK_API_KEY",
+      "api_key_env": "os.environ/OPENCODE_GO_API_KEY",
       "provider_model": "openai/deepseek-v4-pro",
       "route_name": "clarity-premium",
       "source": "litellm_config.yaml"
@@ -33,6 +33,20 @@
       "api_key_env": "os.environ/OPENROUTER_API_KEY",
       "provider_model": "openrouter/google/gemma-4-31b-it:free",
       "route_name": "clarity-premium-openrouter-gemma",
+      "source": "litellm_config.yaml"
+    },
+    {
+      "api_base": "https://opencode.ai/zen/go/v1",
+      "api_key_env": "os.environ/OPENCODE_GO_API_KEY",
+      "provider_model": "openai/gpt-5.6-luna",
+      "route_name": "clarity-background",
+      "source": "litellm_config.yaml"
+    },
+    {
+      "api_base": "https://opencode.ai/zen/v1",
+      "api_key_env": "os.environ/OPENCODE_ZEN_API_KEY",
+      "provider_model": "openai/gpt-5.6-luna",
+      "route_name": "clarity-background-zen",
       "source": "litellm_config.yaml"
     }
   ],
@@ -171,7 +185,7 @@
     },
     {
       "image": "node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
-      "line": 26,
+      "line": 28,
       "pinned_by_digest": true,
       "source": "frontend/Dockerfile",
       "stage_reference": false

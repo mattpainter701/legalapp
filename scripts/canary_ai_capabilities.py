@@ -28,6 +28,8 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 KEY_NAMES = (
     "OPENROUTER_API_KEY",
+    "OPENCODE_GO_API_KEY",
+    "OPENCODE_ZEN_API_KEY",
     "DEEPSEEK_API_KEY",
     "OPENCODE_KEY",
     "OPENCODE_API_KEY",
@@ -113,8 +115,10 @@ def post_json(
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
             body = json.load(response)
-            return response.status, body if isinstance(body, dict) else None, int(
-                (time.monotonic() - started) * 1000
+            return (
+                response.status,
+                body if isinstance(body, dict) else None,
+                int((time.monotonic() - started) * 1000),
             )
     except urllib.error.HTTPError as exc:
         return exc.code, None, int((time.monotonic() - started) * 1000)
@@ -181,8 +185,10 @@ def post_multipart(
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
             body = json.load(response)
-            return response.status, body if isinstance(body, dict) else None, int(
-                (time.monotonic() - started) * 1000
+            return (
+                response.status,
+                body if isinstance(body, dict) else None,
+                int((time.monotonic() - started) * 1000),
             )
     except urllib.error.HTTPError as exc:
         return exc.code, None, int((time.monotonic() - started) * 1000)
@@ -236,6 +242,31 @@ def text_canary(provider: str, url: str, key: str, model: str, timeout: int):
             answer = str(body["choices"][0]["message"]["content"]).strip()
         except (KeyError, IndexError, TypeError):
             pass
+    return _result("text", provider, model, status, latency, answer == "CANARY_OK")
+
+
+def responses_text_canary(provider: str, url: str, key: str, model: str, timeout: int):
+    """Exercise providers, such as OpenCode Go, that only expose Responses."""
+    status, body, latency = post_json(
+        url,
+        key,
+        {
+            "model": model,
+            "input": "Synthetic API canary. Reply exactly CANARY_OK.",
+            "max_output_tokens": 20,
+        },
+        timeout,
+    )
+    answer = str((body or {}).get("output_text") or "").strip()
+    if not answer and body:
+        parts: list[str] = []
+        for output in body.get("output") or []:
+            if not isinstance(output, dict):
+                continue
+            for content in output.get("content") or []:
+                if isinstance(content, dict) and isinstance(content.get("text"), str):
+                    parts.append(content["text"])
+        answer = "".join(parts).strip()
     return _result("text", provider, model, status, latency, answer == "CANARY_OK")
 
 
@@ -450,10 +481,16 @@ def local_document_canaries() -> list[dict[str, Any]]:
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--env-file", action="append", type=Path, default=[], help="Explicit dotenv source"
+        "--env-file",
+        action="append",
+        type=Path,
+        default=[],
+        help="Explicit dotenv source",
     )
     parser.add_argument("--live", action="store_true", help="Run metered API canaries")
-    parser.add_argument("--audio-file", type=Path, help="Synthetic/consented STT fixture")
+    parser.add_argument(
+        "--audio-file", type=Path, help="Synthetic/consented STT fixture"
+    )
     parser.add_argument(
         "--expected-transcript", default="LawHand canary seven four two"
     )
@@ -529,17 +566,15 @@ def build_evidence(args: argparse.Namespace) -> dict[str, Any]:
         else:
             blockers.append("openrouter_key_not_configured")
 
-        opencode_key = (
-            values.get("OPENCODE_API_KEY")
-            or values.get("OPENCODE_KEY")
-            or values.get("DEEPSEEK_API_KEY")
+        opencode_go_key = values.get("OPENCODE_GO_API_KEY") or values.get(
+            "DEEPSEEK_API_KEY"
         )
-        if credential_state(opencode_key) == "configured":
+        if credential_state(opencode_go_key) == "configured":
             results.append(
-                text_canary(
+                responses_text_canary(
                     "opencode-go",
-                    "https://opencode.ai/zen/go/v1/chat/completions",
-                    opencode_key,
+                    "https://opencode.ai/zen/go/v1/responses",
+                    opencode_go_key,
                     args.opencode_text_model,
                     args.timeout,
                 )

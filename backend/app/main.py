@@ -52,6 +52,8 @@ from app.routers.communications import (
 from app.routers.intake_dashboard import router as intake_dashboard_router
 from app.routers.plan import router as plan_router
 from app.routers.intake import router as intake_router
+from app.routers.intake_assistant import router as intake_assistant_router
+from app.routers.engagement_packets import router as engagement_packets_router
 from app.routers.matter_parties import router as matter_parties_router
 from app.routers.matter_documents import router as matter_documents_router
 from app.routers.matters_correspondence import (
@@ -88,6 +90,7 @@ from app.routers.smb import router as smb_router
 from app.routers.portfolio import router as portfolio_router
 from app.routers.users import router as users_router
 from app.routers.platform_llm import router as platform_llm_router
+from app.routers.platform_assistant import router as platform_assistant_router
 from app.routers.external_imports import router as external_imports_router
 from app.routers.roles import router as roles_router  # noqa: E402
 from app.routers.office_assistant import router as office_assistant_router
@@ -394,6 +397,7 @@ app.include_router(billing_router, prefix="/api")
 app.include_router(mcp_router, prefix="/api")
 app.include_router(platform_router, prefix="/api")
 app.include_router(platform_llm_router, prefix="/api")
+app.include_router(platform_assistant_router, prefix="/api")
 # Dedicated plugin-subpath routers MUST be registered before the generic
 # plugins_router, whose greedy ``POST /{plugin}/{skill}`` skill-execution route
 # would otherwise shadow specific paths like ``/api/plugins/mediation/cases``.
@@ -426,6 +430,8 @@ app.include_router(communications_router)
 app.include_router(intake_dashboard_router)
 app.include_router(plan_router, prefix="/api")
 app.include_router(intake_router)
+app.include_router(intake_assistant_router)
+app.include_router(engagement_packets_router)
 app.include_router(matter_parties_router)
 app.include_router(matter_documents_router)
 app.include_router(matters_correspondence_router)

@@ -85,6 +85,9 @@ begin_exported_snapshot() {
   }
 }
 
+# Pairing reservations use the exact api_key_hash sentinel "pending" and are
+# intentionally deleted after expiry. Exclude only those ephemeral rows from
+# durable count comparisons; every registered agent row remains protected.
 snapshot_app_counts() {
   local snapshot_id="${1:-}"
   if [[ -n "$snapshot_id" ]]; then
@@ -94,7 +97,10 @@ snapshot_app_counts() {
 BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
 SET TRANSACTION SNAPSHOT :'snapshot_id';
 SELECT format(
-  'SELECT %L AS metric, count(*)::bigint AS row_count FROM %I.%I;',
+  CASE WHEN table_name = 'smb_agents'
+    THEN 'SELECT %L AS metric, count(*)::bigint AS row_count FROM %I.%I WHERE api_key_hash IS DISTINCT FROM ''pending'';'
+    ELSE 'SELECT %L AS metric, count(*)::bigint AS row_count FROM %I.%I;'
+  END,
   'table:' || table_name,
   table_schema,
   table_name
@@ -106,7 +112,10 @@ WHERE table_schema = 'public'
 ORDER BY table_name
 \gexec
 SELECT format(
-  'SELECT (%L || COALESCE(tenant_id::text, ''<null>'')) AS metric, count(*)::bigint AS row_count FROM %I.%I GROUP BY tenant_id;',
+  CASE WHEN table_name = 'smb_agents'
+    THEN 'SELECT (%L || COALESCE(tenant_id::text, ''<null>'')) AS metric, count(*)::bigint AS row_count FROM %I.%I WHERE api_key_hash IS DISTINCT FROM ''pending'' GROUP BY tenant_id;'
+    ELSE 'SELECT (%L || COALESCE(tenant_id::text, ''<null>'')) AS metric, count(*)::bigint AS row_count FROM %I.%I GROUP BY tenant_id;'
+  END,
   'tenant:' || table_name || ':',
   table_schema,
   table_name
@@ -127,7 +136,10 @@ SQL
     -X -qAt -F $'\t' \
     -v ON_ERROR_STOP=1 <<'SQL'
 SELECT format(
-  'SELECT %L AS metric, count(*)::bigint AS row_count FROM %I.%I;',
+  CASE WHEN table_name = 'smb_agents'
+    THEN 'SELECT %L AS metric, count(*)::bigint AS row_count FROM %I.%I WHERE api_key_hash IS DISTINCT FROM ''pending'';'
+    ELSE 'SELECT %L AS metric, count(*)::bigint AS row_count FROM %I.%I;'
+  END,
   'table:' || table_name,
   table_schema,
   table_name
@@ -139,7 +151,10 @@ WHERE table_schema = 'public'
 ORDER BY table_name
 \gexec
 SELECT format(
-  'SELECT (%L || COALESCE(tenant_id::text, ''<null>'')) AS metric, count(*)::bigint AS row_count FROM %I.%I GROUP BY tenant_id;',
+  CASE WHEN table_name = 'smb_agents'
+    THEN 'SELECT (%L || COALESCE(tenant_id::text, ''<null>'')) AS metric, count(*)::bigint AS row_count FROM %I.%I WHERE api_key_hash IS DISTINCT FROM ''pending'' GROUP BY tenant_id;'
+    ELSE 'SELECT (%L || COALESCE(tenant_id::text, ''<null>'')) AS metric, count(*)::bigint AS row_count FROM %I.%I GROUP BY tenant_id;'
+  END,
   'tenant:' || table_name || ':',
   table_schema,
   table_name

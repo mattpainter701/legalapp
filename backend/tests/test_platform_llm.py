@@ -591,7 +591,7 @@ def test_paid_go_model_is_eligible_and_not_excluded_for_cost():
     assert "not_free" not in model["exclusion_reasons"]
 
 
-def test_all_go_models_inherit_documented_zero_retention_policy():
+def test_zero_day_go_models_are_cataloged_with_documented_policy():
     model = platform_llm_router._normalize_model_item(
         {"id": "mimo-v2.5", "name": "MiMo V2.5"},
         "opencode-go",
@@ -599,6 +599,27 @@ def test_all_go_models_inherit_documented_zero_retention_policy():
 
     assert model["data_policy"] == "zero_retention"
     assert model["confidential_data_allowed"] is True
+
+
+def test_go_luna_reports_its_published_thirty_day_retention():
+    model = platform_llm_router._normalize_model_item(
+        {"id": "gpt-5.6-luna", "name": "GPT 5.6 Luna"},
+        "opencode-go",
+    )
+
+    assert model["data_policy"] == "no_training_30_day_retention"
+    assert model["confidential_data_allowed"] is True
+    assert model["api_mode"] == "responses"
+
+
+def test_go_muse_is_not_approved_for_confidential_data():
+    model = platform_llm_router._normalize_model_item(
+        {"id": "muse-spark-1.2-contributor", "name": "Muse Spark"},
+        "opencode-go",
+    )
+
+    assert model["data_policy"] == "training_or_improvement_possible"
+    assert model["confidential_data_allowed"] is False
 
 
 def test_openrouter_models_require_zero_retention_and_deny_data_collection():

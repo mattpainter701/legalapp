@@ -83,7 +83,9 @@ services:
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}
       OPENCODE_KEY: ${OPENCODE_KEY:-}
       OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
-      OPENCODE_ZEN_BASE_URL: ${OPENCODE_ZEN_BASE_URL:-https://zen.opencode.ai/v1}
+      OPENCODE_GO_API_KEY: ${OPENCODE_GO_API_KEY:-${DEEPSEEK_API_KEY:-}}
+      OPENCODE_ZEN_API_KEY: ${OPENCODE_ZEN_API_KEY:-${OPENCODE_API_KEY:-${OPENCODE_KEY:-}}}
+      OPENCODE_ZEN_BASE_URL: ${OPENCODE_ZEN_BASE_URL:-https://opencode.ai/zen/v1}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
     command: ["--config", "/app/config.yaml", "--port", "4000"]
@@ -151,6 +153,7 @@ services:
         VITE_PUBLIC_SITE_URL: ${VITE_PUBLIC_SITE_URL:-}
         VITE_CONTACT_URL: ${VITE_CONTACT_URL:-mailto:support@getlawhand.com}
         VITE_PUBLIC_SIGNUP_ENABLED: ${VITE_PUBLIC_SIGNUP_ENABLED:-false}
+        VITE_ENABLE_AFTER_CALL_ASSISTANT: ${VITE_ENABLE_AFTER_CALL_ASSISTANT:-false}
     depends_on:
       backend:
         condition: service_started

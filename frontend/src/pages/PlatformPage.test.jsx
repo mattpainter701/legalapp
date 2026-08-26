@@ -15,6 +15,8 @@ import {
   saveLLMRoutes,
   testLLMRoute,
   updateLLMRoutingProfile,
+  getBackgroundAssistantUsage,
+  updateBackgroundAssistantQuota,
 } from '../api'
 
 vi.mock('../api', async (importOriginal) => ({
@@ -30,6 +32,8 @@ vi.mock('../api', async (importOriginal) => ({
   saveLLMRoutes: vi.fn(),
   testLLMRoute: vi.fn(),
   updateLLMRoutingProfile: vi.fn(),
+  getBackgroundAssistantUsage: vi.fn(),
+  updateBackgroundAssistantQuota: vi.fn(),
 }))
 
 const activeAliases = {
@@ -80,6 +84,18 @@ beforeEach(() => {
   })
   getLLMModelCatalog.mockResolvedValue({ models: [] })
   getLLMGatewayStatus.mockResolvedValue({ reachable: true, aliases: {} })
+  getBackgroundAssistantUsage.mockResolvedValue({
+    limits: { account_five_hour: 2050, account_weekly: 5100, account_monthly: 10250, tenant_five_hour: 250, tenant_weekly: 750, tenant_monthly: 1500, reservation_ttl_minutes: 15 },
+    five_hour: { used: 0, remaining: 2050, percent: 0 },
+    weekly: { used: 0, remaining: 5100, percent: 0 },
+    monthly: { used: 0, remaining: 10250, percent: 0, month_elapsed_percent: 50, projected_over_budget: false },
+  })
+  updateBackgroundAssistantQuota.mockResolvedValue({
+    limits: { account_five_hour: 2050, account_weekly: 5100, account_monthly: 10250, tenant_five_hour: 250, tenant_weekly: 750, tenant_monthly: 1500, reservation_ttl_minutes: 15 },
+    five_hour: { used: 0, remaining: 2050, percent: 0 },
+    weekly: { used: 0, remaining: 5100, percent: 0 },
+    monthly: { used: 0, remaining: 10250, percent: 0, month_elapsed_percent: 50, projected_over_budget: false },
+  })
   saveLLMRoutes.mockResolvedValue({
     activated: true,
     litellm_updated: true,
@@ -129,13 +145,50 @@ describe('platform AI routing', () => {
     expect(await screen.findAllByText(activeAliases.standard)).not.toHaveLength(0)
     expect(screen.getAllByText(activeAliases.premium)).not.toHaveLength(0)
     expect(screen.getByText('revision abc123')).toBeInTheDocument()
-    expect(screen.getAllByRole('button', { name: 'Test provider' })).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: 'Test provider' })).toHaveLength(3)
 
     expect(getLLMProviderKeys).toHaveBeenCalledWith('platform-token')
     expect(getLLMProviderPresets).toHaveBeenCalledWith('platform-token')
     expect(getLLMRoutes).toHaveBeenCalledWith('platform-token', defaultProfile.id)
     expect(getLLMModelCatalog).toHaveBeenCalledWith('platform-token')
     expect(getLLMGatewayStatus).toHaveBeenCalledWith('platform-token')
+    expect(getBackgroundAssistantUsage).toHaveBeenCalledWith('platform-token')
+    expect(screen.getAllByText('Background Automations (global)')).toHaveLength(2)
+    expect(screen.getByText('Background request budget')).toBeInTheDocument()
+  })
+
+  it('allows Responses-only Luna on the Background route', async () => {
+    const user = userEvent.setup()
+    getLLMProviderKeys.mockResolvedValue({
+      keys: [{ id: 'key-go', name: 'Go', provider_id: 'opencode-go', key_hint: '1234' }],
+    })
+    getLLMProviderPresets.mockResolvedValue({
+      providers: [{ id: 'opencode-go', name: 'OpenCode Go', description: 'Go subscription' }],
+    })
+    getLLMModelCatalog.mockResolvedValue({
+      models: [{
+        id: 'gpt-5.6-luna',
+        name: 'GPT 5.6 Luna',
+        provider_id: 'opencode-go',
+        key_id: 'key-go',
+        key_ids: ['key-go'],
+        api_mode: 'responses',
+        route_compatible: false,
+        confidential_data_allowed: true,
+      }],
+    })
+    renderRouting()
+
+    await waitFor(() => expect(document.getElementById('models-background-primary-provider')).not.toBeNull())
+    const provider = document.getElementById('models-background-primary-provider')
+    await user.selectOptions(provider, 'opencode-go')
+    await user.selectOptions(document.getElementById('models-background-primary-key'), 'key-go')
+    const model = document.getElementById('models-background-primary-model')
+    await waitFor(() => expect(model.querySelector('option[value="gpt-5.6-luna"]')).not.toBeNull())
+    const luna = model.querySelector('option[value="gpt-5.6-luna"]')
+
+    expect(luna).not.toBeDisabled()
+    expect(luna).not.toHaveTextContent('Unsupported endpoint')
   })
 
   it('validates and activates both complete routes as one operation', async () => {
@@ -236,7 +289,7 @@ describe('platform AI routing', () => {
     expect(providerFilter).toHaveTextContent('OpenRouter (2)')
     expect(providerFilter).toHaveTextContent('OpenCode Go (1)')
     expect(providerFilter).toHaveTextContent('OpenCode Zen (1)')
-    expect(screen.getAllByRole('combobox', { name: 'Model' })).toHaveLength(2)
+    expect(screen.getAllByRole('combobox', { name: 'Model' })).toHaveLength(3)
     expect(screen.getByText('Demo-only data policy')).toBeInTheDocument()
   })
 

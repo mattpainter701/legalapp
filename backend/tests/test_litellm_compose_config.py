@@ -53,4 +53,28 @@ def test_standard_chat_route_uses_fast_primary_and_live_fallbacks():
     assert config["router_settings"]["fallbacks"] == [
         {"clarity-standard": ["clarity-standard-deepseek-flash-free"]},
         {"clarity-premium": ["clarity-standard"]},
+        {"clarity-background": ["clarity-background-zen"]},
     ]
+
+
+def test_background_route_is_luna_responses_only_and_never_falls_to_premium():
+    config = yaml.safe_load((ROOT / "litellm_config.yaml").read_text())
+    entries = {entry["model_name"]: entry for entry in config["model_list"]}
+
+    assert entries["clarity-background"]["litellm_params"] == {
+        "model": "openai/gpt-5.6-luna",
+        "api_base": "https://opencode.ai/zen/go/v1",
+        "api_key": "os.environ/OPENCODE_GO_API_KEY",
+        "timeout": 30,
+    }
+    assert entries["clarity-background-zen"]["litellm_params"]["api_base"] == (
+        "https://opencode.ai/zen/v1"
+    )
+    assert config["router_settings"]["routing_strategy"] == "simple-shuffle"
+    background_fallbacks = next(
+        item["clarity-background"]
+        for item in config["router_settings"]["fallbacks"]
+        if "clarity-background" in item
+    )
+    assert background_fallbacks == ["clarity-background-zen"]
+    assert "clarity-premium" not in background_fallbacks
