@@ -19,10 +19,25 @@ from app.schemas.chat_action import MatterDocumentDraftAction
 from app.schemas.task import PendingActionEdit
 
 
-def test_chat_and_workspace_mcp_share_one_capability_catalog():
+def test_chat_catalog_stays_stable_and_workspace_adds_lifecycle_tools():
+    chat = capability_catalog(audience="matter_chat")
     workspace = capability_catalog(audience="workspace_mcp")
 
-    assert {item["name"] for item in workspace} == set(ALLOWED_TOOLS)
+    chat_names = {item["name"] for item in chat}
+    workspace_names = {item["name"] for item in workspace}
+    assert chat_names == set(ALLOWED_TOOLS)
+    assert chat_names < workspace_names
+    assert workspace_names - chat_names == {
+        "search_clients",
+        "get_client",
+        "search_intakes",
+        "get_intake",
+        "search_matters",
+        "search_tasks",
+        "get_task",
+        "get_document_template_text",
+        "propose_document_from_template",
+    }
     assert len({spec.name for spec in CAPABILITY_SPECS}) == len(CAPABILITY_SPECS)
 
 

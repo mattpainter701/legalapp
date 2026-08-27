@@ -110,6 +110,8 @@ def test_bearer_challenge_uses_resource_origin_not_oauth_issuer(monkeypatch):
         'resource_metadata="https://mcp.getlawhand.com'
         '/.well-known/oauth-protected-resource/api/mcp/workspace"'
     ) in challenge
+    for scope in workspace_mcp_protocol.KNOWN_WORKSPACE_SCOPES:
+        assert scope in challenge
 
 
 def _identity(
@@ -392,6 +394,9 @@ async def test_official_client_discovers_only_scope_and_rbac_allowed_tools(
         "get_matter_context",
         "list_matter_tasks",
         "propose_task",
+        "search_matters",
+        "search_tasks",
+        "get_task",
     }
     proposed = next(tool for tool in discovered.tools if tool.name == "propose_task")
     assert proposed.annotations is not None

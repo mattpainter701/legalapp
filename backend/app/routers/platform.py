@@ -1567,6 +1567,7 @@ async def platform_workspace_mcp_diagnostics(
             "matters:read": {"manage_matters"},
             "tasks:read": {"manage_matters"},
             "contacts:read": {"manage_matters"},
+            "intakes:read": {"manage_intake"},
             "documents:read": {"manage_documents"},
             "templates:read": {"manage_documents"},
             "tasks:propose": {"manage_matters"},

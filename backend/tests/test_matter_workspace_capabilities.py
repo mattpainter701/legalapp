@@ -68,9 +68,21 @@ def test_matter_context_arguments_are_bounded_to_safe_sections():
 
     assert args.sections == ["team", "tasks", "events", "notes"]
     assert args.max_items_per_section == 10
+    expanded = GetMatterContextArgs.model_validate(
+        {
+            "matter_id": str(uuid4()),
+            "sections": ["client", "parties", "documents", "communications"],
+        }
+    )
+    assert expanded.sections == [
+        "client",
+        "parties",
+        "documents",
+        "communications",
+    ]
     with pytest.raises(ValidationError):
         GetMatterContextArgs.model_validate(
-            {"matter_id": str(uuid4()), "sections": ["communications"]}
+            {"matter_id": str(uuid4()), "sections": ["billing"]}
         )
     with pytest.raises(ValidationError):
         GetMatterContextArgs.model_validate(

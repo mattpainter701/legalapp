@@ -176,9 +176,10 @@ require_http_status() {
 
 require_workspace_bearer_challenge() {
   local label="$1" bearer="${2:-}" expect_invalid="${3:-false}" transport_origin="${4:-https://${DOMAIN}}"
-  local metadata_url headers status challenge_count challenge
+  local metadata_url headers status challenge_count challenge expected_scope
   local -a curl_args
   metadata_url="https://mcp.${DOMAIN}/.well-known/oauth-protected-resource/api/mcp/workspace"
+  expected_scope="communications:propose contacts:read documents:propose documents:read intakes:read matters:read tasks:propose tasks:read templates:read"
   curl_args=(
     -sS --max-time 15 -D - -o /dev/null
     -X POST
@@ -193,7 +194,7 @@ require_workspace_bearer_challenge() {
   status="$(printf '%s\n' "$headers" | awk 'toupper($1) ~ /^HTTP\// { status=$2 } END { print status }')"
   challenge_count="$(printf '%s\n' "$headers" | awk 'tolower($0) ~ /^www-authenticate:/ { count++ } END { print count + 0 }')"
   challenge="$(printf '%s\n' "$headers" | awk 'tolower($0) ~ /^www-authenticate:/ { sub(/^[^:]*:[[:space:]]*/, ""); print }')"
-  if [[ "$status" != "401" || "$challenge_count" != "1"         || "$challenge" != Bearer*         || "$challenge" != *"resource_metadata=\"$metadata_url\""*         || "$challenge" != *'scope="matters:read"'* ]]; then
+  if [[ "$status" != "401" || "$challenge_count" != "1"         || "$challenge" != Bearer*         || "$challenge" != *"resource_metadata=\"$metadata_url\""*         || "$challenge" != *"scope=\"$expected_scope\""* ]]; then
     fail "$label must return one RFC 9728 Bearer challenge"
     return
   fi
@@ -219,6 +220,7 @@ expected={
     "contacts:read",
     "documents:propose",
     "documents:read",
+    "intakes:read",
     "matters:read",
     "offline_access",
     "tasks:propose",

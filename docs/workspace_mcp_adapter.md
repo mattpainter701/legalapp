@@ -37,17 +37,35 @@ same handlers used by LawHand matter chat. Business rules, tenant checks,
 recipient resolution, and review-task creation do not live in the MCP
 transport.
 
-The initial catalog contains only:
+The current catalog covers the operational lifecycle while keeping every
+result bounded:
 
-- reads: `find_matter`, `get_matter_context`, `list_matter_tasks`,
-  `list_matter_recipients`, `list_matter_documents`,
-  `get_matter_document_text`, and `list_document_templates`
-- proposals: `propose_task`, `propose_client_email`,
-  `propose_matter_document`
+| Area | Read tools | Review-first proposal tools |
+| --- | --- | --- |
+| Clients | `search_clients`, `get_client` | — |
+| Intake | `search_intakes`, `get_intake` | — |
+| Matters | `search_matters`, `find_matter`, `get_matter_context`, `list_matter_recipients` | `propose_client_email` |
+| Tasks | `search_tasks`, `get_task`, `list_matter_tasks` | `propose_task` |
+| Documents | `list_matter_documents`, `get_matter_document_text` | `propose_matter_document` |
+| Templates | `list_document_templates`, `get_document_template_text` | `propose_document_from_template` |
+
+`get_matter_context` can select client, team, parties, tasks, documents,
+events, notes, and communications. `get_task` returns its LawHand review URL
+and bounded history. Document results include authenticated LawHand open and
+download routes as well as IDs that can be passed to
+`get_matter_document_text` for local reasoning.
 
 There are deliberately no MCP tools for approval, filing, sending, delivery,
 or execution. Proposed work lands in LawHand Review; deterministic platform
 workers act only after a human completes the required review workflow.
+
+`propose_document_from_template` accepts an active template ID and bounded
+variable map. For approved DOCX templates, LawHand verifies the retained source
+hash, renders the source layout, records template and variable provenance,
+writes the exact rendered bytes to the tenant cloud, and creates a separate
+staff → attorney Review task. Markdown templates use the same artifact and
+review lifecycle. PDF templates still require an exact visual preview in
+LawHand and fail closed from MCP rather than skipping that review boundary.
 
 ## Connect a desktop or coding client
 
@@ -87,6 +105,14 @@ OAuth discovery advertises the standard optional `offline_access` scope. When
 a client requests it, the consent screen explains persistent sign-in and the
 server issues the same rotating, replay-detected refresh-token family used by
 other Workspace MCP clients. `offline_access` never adds a workspace tool scope.
+
+The unauthenticated Bearer challenge advertises the complete current workspace
+scope set. A connection authorized before the lifecycle catalog was expanded
+retains its original narrower grant; scopes are never enlarged silently. If a
+client discovers only `find_matter` after this release, disconnect/remove that
+Workspace MCP connection and authenticate again so the person can review the
+current scopes. Restarting a client without reconnecting does not change an
+existing grant.
 
 Disabling the tenant master switch or an existing user's permission immediately
 revokes active Workspace MCP grants. Re-enabling either control does not restore
@@ -200,7 +226,7 @@ to `opencode.json`.
 
 Client setup references:
 
-- OpenAI: <https://learn.chatgpt.com/docs/extend/mcp?surface=cli>
+- OpenAI Codex: <https://developers.openai.com/codex/mcp/>
 - Claude Desktop: <https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp>
 - Claude Code: <https://code.claude.com/docs/en/mcp>
 - OpenCode: <https://dev.opencode.ai/docs/mcp-servers/>
@@ -209,7 +235,7 @@ Client setup references:
 
 The production metadata advertises these bounded scopes:
 
-- reads: `matters:read`, `tasks:read`, `contacts:read`,
+- reads: `matters:read`, `tasks:read`, `contacts:read`, `intakes:read`,
   `documents:read`, and `templates:read`
 - proposals: `tasks:propose`, `communications:propose`, and
   `documents:propose`
@@ -230,9 +256,9 @@ so disabling MCP cannot strand a grant that later becomes active again.
 
 1. Confirm the server initializes and exposes the documented read/proposal tool
    catalog.
-2. Run `find_matter` with a deliberately nonexistent smoke-test query. This
+2. Run `search_matters` with a deliberately nonexistent smoke-test query. This
    validates an authenticated tenant-scoped read without creating work.
-3. For an intended real matter, call `find_matter`, then
+3. For an intended real matter, call `search_matters`, then
    `get_matter_context`, and inspect tasks, documents, recipients, and
    templates as needed.
 4. Call a proposal tool only when a real review item is intended. A proposal
@@ -247,8 +273,10 @@ so disabling MCP cannot strand a grant that later becomes active again.
 A typical supported workflow is:
 
 ```text
-find matter -> load context/process evidence -> inspect templates and documents
--> propose DOCX + review task -> staff review -> attorney review/override
+search matter -> load client/parties/tasks/events/notes/communications
+-> inspect template raw text + uploaded-document text -> reason/draft
+-> render DOCX into tenant cloud + create Review task
+-> staff/paralegal review -> attorney review/override
 -> separately approved deterministic delivery
 ```
 
@@ -263,8 +291,10 @@ production-capable OAuth and workflow foundation:
 
 - a shared, scope-filtered capability catalog used by matter chat and workspace
   MCP;
-- bounded tenant-scoped matter, task, document-text, recipient, and template
-  reads;
+- bounded tenant-scoped client, intake, matter, task, document-text, recipient,
+  and raw-template reads;
+- deterministic approved-DOCX/Markdown template rendering into the versioned
+  tenant-cloud artifact lifecycle with source hash and variable provenance;
 - durable user/tenant/client/scope consent grants, dynamic public-client
   registration, PKCE, rotating refresh tokens, asymmetric signing/JWKS, and
   revocation;
@@ -424,9 +454,9 @@ requires:
   idempotency metadata, and a reconciliation worker/webhook path that survives
   crashes after provider acceptance and retains ambiguous/failure evidence in a
   separate transaction;
-- a shared deterministic template resolver/renderer that produces DOCX/PDF from
-  the exact recorded template version instead of the current plain-DOCX
-  fallback;
+- reviewed PDF-template automation from an exact visual-preview artifact (DOCX
+  and Markdown template proposals are implemented; PDF remains fail-closed in
+  MCP until the preview evidence can be bound to the review task);
 - separate, attorney-approved client delivery of the filed artifact as a
   hash-bound attachment (current email automation is body-only);
 - matter visibility/ethical-wall policy beyond tenant isolation;
