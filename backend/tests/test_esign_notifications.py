@@ -74,3 +74,73 @@ async def test_delivery_failure_is_visible_in_audit(monkeypatch):
     await notifications.notify_actionable_signers(request)
     assert request.signers[0].audit["invitation_delivery_status"] == "unconfigured"
     assert "invitation_sent_at" not in request.signers[0].audit
+
+
+class _Scalars:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def unique(self):
+        return self.rows
+
+
+class _Result:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def scalars(self):
+        return _Scalars(self.rows)
+
+
+class _Db:
+    def __init__(self, rows):
+        self.rows = rows
+        self.commits = 0
+
+    async def execute(self, statement):
+        return _Result(self.rows)
+
+    async def commit(self):
+        self.commits += 1
+
+
+@pytest.mark.asyncio
+async def test_due_reminders_send_once_and_expire_overdue_requests(monkeypatch):
+    now = datetime(2026, 8, 27, tzinfo=timezone.utc)
+    due = _request()
+    due.expires_at = now + timedelta(days=7)
+    expired = _request()
+    expired.expires_at = now - timedelta(minutes=1)
+    delivered = []
+
+    async def send_email(*args, **kwargs):
+        delivered.append(args)
+        return EmailDeliveryResult.SENT
+
+    monkeypatch.setattr(notifications.email_service, "send_email", send_email)
+    db = _Db([due, expired])
+
+    assert await notifications.process_due_reminders(db, now=now) == 1
+    assert due.signers[0].audit["reminder_7_days_sent_at"]
+    assert expired.status == "expired"
+    assert db.commits == 1
+
+    assert await notifications.process_due_reminders(db, now=now) == 0
+    assert len(delivered) == 1
+
+
+@pytest.mark.asyncio
+async def test_reminder_skips_unconfigured_day(monkeypatch):
+    request = _request()
+    request.expires_at = datetime(2026, 9, 5, tzinfo=timezone.utc)
+
+    async def unexpected(*args, **kwargs):
+        pytest.fail("email should not be sent")
+
+    monkeypatch.setattr(notifications.email_service, "send_email", unexpected)
+    assert (
+        await notifications.process_due_reminders(
+            _Db([request]), now=datetime(2026, 8, 27, tzinfo=timezone.utc)
+        )
+        == 0
+    )
