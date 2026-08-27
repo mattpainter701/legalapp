@@ -11,6 +11,7 @@ import logging
 import time
 import uuid
 from types import SimpleNamespace
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -49,6 +50,14 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/mcp", tags=["mcp"])
 _embedding_service = EmbeddingService()
+
+
+def _require_canonical_research_host(request: Request) -> None:
+    """Keep public research compatibility routes on the OAuth resource host."""
+
+    expected_host = urlsplit(settings.research_mcp_endpoint).netloc.casefold()
+    if not expected_host or request.url.netloc.casefold() != expected_host:
+        raise HTTPException(status_code=404, detail="Research MCP route is unavailable")
 
 
 def _mcp_proxy_url(base_url: str, path: str) -> str:
@@ -168,7 +177,7 @@ async def _require_mcp_identity(
 # ── Manifest ──────────────────────────────────────────────────────────────────
 
 
-@router.get("/manifest")
+@router.get("/manifest", dependencies=[Depends(_require_canonical_research_host)])
 async def mcp_manifest(request: Request):
     """Return principal-scoped metadata backed by the private tool catalog."""
     if not settings.MCP_PRODUCT_ENABLED:
@@ -476,7 +485,7 @@ async def _call_tool_with_product_key(
     return response
 
 
-@router.post("/tools/call")
+@router.post("/tools/call", dependencies=[Depends(_require_canonical_research_host)])
 async def call_tool(
     body: ToolCallRequest,
     request: Request,

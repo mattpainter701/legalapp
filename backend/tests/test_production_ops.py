@@ -559,6 +559,36 @@ def test_production_preflight_accepts_native_workspace_mcp_oauth(
     assert public_key[:48] not in output
 
 
+def test_production_preflight_accepts_enabled_research_mcp_oauth(
+    tmp_path: Path,
+) -> None:
+    private_key, public_key = _workspace_rsa_pair()
+    research_settings = {
+        "MCP_PRODUCT_ENABLED": "true",
+        "RESEARCH_MCP_PUBLIC_URL": "https://research.ops-test.invalid/api/mcp",
+        "RESEARCH_MCP_OAUTH_ENABLED": "true",
+        "RESEARCH_MCP_AUDIENCE": "lawhand-research-mcp",
+        "RESEARCH_MCP_ISSUER": "https://research.ops-test.invalid",
+        "RESEARCH_MCP_ACCESS_TOKEN_MAX_MINUTES": "15",
+        "RESEARCH_MCP_AUTH_CODE_TTL_SECONDS": "300",
+        "RESEARCH_MCP_REFRESH_TOKEN_DAYS": "30",
+        "RESEARCH_MCP_GRANT_DAYS": "90",
+        "RESEARCH_MCP_CLIENT_REGISTRATION_DAYS": "30",
+        "RESEARCH_MCP_DYNAMIC_REGISTRATION_ENABLED": "true",
+        "WORKSPACE_MCP_SIGNING_PRIVATE_KEY_B64": private_key,
+        "WORKSPACE_MCP_SIGNING_PUBLIC_KEY_B64": public_key,
+        "WORKSPACE_MCP_SIGNING_KEY_ID": "research-test-2026-08",
+        "WORKSPACE_MCP_PREVIOUS_PUBLIC_KEYS_JSON": "[]",
+    }
+
+    result = _run_preflight(tmp_path, _production_env(**research_settings))
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, output
+    assert private_key[:48] not in output
+    assert public_key[:48] not in output
+
+
 def test_production_preflight_rejects_legacy_workspace_signing_secret(
     tmp_path: Path,
 ) -> None:
@@ -1103,7 +1133,10 @@ def test_production_preflight_rejects_launch_flags_and_unstaged_credentials(
     output = result.stdout + result.stderr
 
     assert result.returncode != 0
-    assert "MCP_PRODUCT_ENABLED must remain false" in output
+    assert (
+        "RESEARCH_MCP_PUBLIC_URL is required when the Research MCP product is enabled"
+        in output
+    )
     assert "PUBLIC_SIGNUP_ENABLED must remain false" in output
     assert "VITE_PUBLIC_SIGNUP_ENABLED must remain false" in output
     assert "MCP_UPSTREAM_API_KEY must be at least 32 characters" in output
@@ -1187,7 +1220,7 @@ def test_production_check_rejects_mcp_env_file_and_process_drift(
     )
     missing_output = missing.stdout + missing.stderr
     assert missing.returncode != 0
-    assert "MCP_PRODUCT_ENABLED must remain false" in missing_output
+    assert "MCP_PRODUCT_ENABLED must be explicitly true or false" in missing_output
 
     conflict = _run_production_policy_check(
         tmp_path,
