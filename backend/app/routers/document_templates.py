@@ -15,9 +15,11 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import os
 import re
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -25,6 +27,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
+from itsdangerous import BadData, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy import case, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -50,28 +53,64 @@ from app.schemas.document_template import (
     DocumentTemplateUpdate,
     DocumentTemplateVariableSuggestion,
 )
-from app.services.template_intake import analyze_template_upload
+from app.services.template_intake import (
+    TemplateAnalysis,
+    analyze_template_upload,
+    prepare_template_source,
+)
+from app.services.template_ai_service import (
+    TemplateAiAssistError,
+    assist_template_mapping,
+)
+from app.services.template_ai_assist import (
+    AiFieldProposal,
+    reconcile_ai_template_fields,
+)
 from app.services.pdf_templates import (
     TemplatePdfError,
     fill_pdf_template,
     pdf_review_evidence,
+    render_pdf_page_preview,
     validate_representative_pdf_variables,
 )
 from app.services.docx_templates import TemplateDocxError, fill_docx_template
-from app.services.template_ocr import TemplateOcrError
+from app.services.template_ocr import TemplateOcrError, image_to_pdf
 from app.services.matter_file_store import MatterFileStore
 from app.services.access_control import require_capability
+from app.utils.text_processing import extract_text
 
 router = APIRouter(prefix="/api/templates", tags=["document-templates"])
 logger = logging.getLogger(__name__)
 settings = get_settings()
 matter_file_store = MatterFileStore()
 VARIABLE_PATTERN = re.compile(r"\{\{(.+?)\}\}")
-_ALLOWED_TEMPLATE_UPLOAD_EXTENSIONS = (".docx", ".pdf", ".txt")
+_IMAGE_TEMPLATE_EXTENSIONS = (
+    ".bmp",
+    ".jpeg",
+    ".jpg",
+    ".png",
+    ".tif",
+    ".tiff",
+    ".webp",
+)
+_IMAGE_TEMPLATE_CONTENT_TYPES = {
+    "image/bmp",
+    "image/jpeg",
+    "image/png",
+    "image/tiff",
+    "image/webp",
+}
+_ALLOWED_TEMPLATE_UPLOAD_EXTENSIONS = (
+    ".docx",
+    ".pdf",
+    ".txt",
+    *_IMAGE_TEMPLATE_EXTENSIONS,
+)
 _ALLOWED_TEMPLATE_UPLOAD_CONTENT_TYPES = {
     "application/pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "text/plain",
+    *_IMAGE_TEMPLATE_CONTENT_TYPES,
 }
 _PDF_RENDERER_VERSION = "pdf-source-v4-ocr-preview-bound"
 _MAX_PERSISTED_PREVIEWS_PER_USER_PURPOSE = 50
@@ -81,6 +120,17 @@ _PDF_PREVIEW_TTLS = {
     "generation": timedelta(minutes=30),
 }
 _COMMIT_OUTCOME_DELAYS = (0, 0.1, 0.3, 0.6, 1.0)
+_ANALYSIS_TOKEN_SALT = "document-template-intake-v1"
+_ANALYSIS_TOKEN_MAX_AGE_SECONDS = 2 * 60 * 60
+
+
+@dataclass(frozen=True)
+class TemplateUploadSample:
+    content: bytes
+    filename: str
+    content_type: str
+    original_filename: str
+    warnings: tuple[str, ...] = ()
 
 
 def _canonical_json_bytes(payload: dict[str, Any]) -> bytes:
@@ -97,6 +147,181 @@ def _canonical_sha256(payload: dict[str, Any]) -> str:
     return hashlib.sha256(_canonical_json_bytes(payload)).hexdigest()
 
 
+def _analysis_token_serializer() -> URLSafeTimedSerializer:
+    return URLSafeTimedSerializer(
+        settings.SECRET_KEY,
+        salt=_ANALYSIS_TOKEN_SALT,
+        signer_kwargs={"digest_method": hashlib.sha256},
+    )
+
+
+def _issue_analysis_token(
+    *,
+    analysis: dict[str, Any],
+    file_bytes: bytes,
+    filename: str,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> str:
+    """Bind a reviewed intake result to the exact user, tenant, and source.
+
+    The token is signed rather than stored in process memory so it remains
+    valid across API workers.  It travels in multipart form data (never a URL)
+    and expires quickly.  Creation still validates every user-edited field
+    against the signed server-discovered map.
+    """
+
+    return _analysis_token_serializer().dumps(
+        {
+            "version": 1,
+            "tenant_id": str(tenant_id),
+            "user_id": str(user_id),
+            "filename": _safe_upload_filename(filename),
+            "source_sha256": hashlib.sha256(file_bytes).hexdigest(),
+            "analysis": analysis,
+        }
+    )
+
+
+def _analysis_from_token(
+    token: str,
+    *,
+    file_bytes: bytes,
+    filename: str,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> dict[str, Any]:
+    detail = (
+        "This document analysis is no longer current. Analyze the source again "
+        "before saving the template."
+    )
+    if len(token) > 250_000:
+        raise HTTPException(status_code=409, detail=detail)
+    try:
+        payload = _analysis_token_serializer().loads(
+            token,
+            max_age=_ANALYSIS_TOKEN_MAX_AGE_SECONDS,
+        )
+    except (SignatureExpired, BadData) as exc:
+        raise HTTPException(status_code=409, detail=detail) from exc
+    if not isinstance(payload, dict) or payload.get("version") != 1:
+        raise HTTPException(status_code=409, detail=detail)
+    expected_source_sha256 = str(payload.get("source_sha256") or "")
+    actual_source_sha256 = hashlib.sha256(file_bytes).hexdigest()
+    claims_match = (
+        hmac.compare_digest(str(payload.get("tenant_id") or ""), str(tenant_id))
+        and hmac.compare_digest(str(payload.get("user_id") or ""), str(user_id))
+        and hmac.compare_digest(expected_source_sha256, actual_source_sha256)
+        and hmac.compare_digest(
+            str(payload.get("filename") or ""),
+            _safe_upload_filename(filename),
+        )
+    )
+    analysis = payload.get("analysis")
+    required = {
+        "title",
+        "format",
+        "body",
+        "body_preview",
+        "extracted_text",
+        "suggested_variable_schema",
+        "detected_branding_profile",
+        "warnings",
+    }
+    if (
+        not claims_match
+        or not isinstance(analysis, dict)
+        or not required <= analysis.keys()
+    ):
+        raise HTTPException(status_code=409, detail=detail)
+    return analysis
+
+
+def _analysis_from_snapshot(
+    snapshot: dict[str, Any],
+    *,
+    source_bytes: bytes,
+    source_filename: str,
+    source_content_type: str,
+    source_format: str,
+    requested_title: str | None,
+) -> TemplateAnalysis:
+    """Rehydrate a signed analysis while attaching freshly verified source bytes."""
+
+    if str(snapshot.get("format") or "").lower() != source_format:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This document analysis no longer matches the uploaded source. "
+                "Analyze the source again before saving the template."
+            ),
+        )
+    return TemplateAnalysis(
+        title=requested_title or str(snapshot["title"]),
+        format=source_format,
+        body=str(snapshot["body"]),
+        body_preview=str(snapshot["body_preview"]),
+        extracted_text=str(snapshot["extracted_text"]),
+        source_text=str(snapshot.get("source_text") or snapshot["extracted_text"]),
+        variable_schema=dict(snapshot["suggested_variable_schema"]),
+        branding_profile=dict(snapshot["detected_branding_profile"]),
+        warnings=[str(item) for item in snapshot["warnings"]],
+        _normalized_source_bytes=source_bytes,
+        _normalized_source_filename=source_filename,
+        _normalized_source_content_type=source_content_type,
+    )
+
+
+async def _analysis_for_template_create(
+    *,
+    file_bytes: bytes,
+    filename: str,
+    content_type: str | None,
+    requested_title: str | None,
+    analysis_token: str | None,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> TemplateAnalysis:
+    if not analysis_token:
+        return await asyncio.to_thread(
+            analyze_template_upload,
+            file_bytes=file_bytes,
+            filename=filename,
+            content_type=content_type,
+            title=requested_title,
+        )
+
+    snapshot = _analysis_from_token(
+        analysis_token,
+        file_bytes=file_bytes,
+        filename=filename,
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
+    prepared = await asyncio.to_thread(
+        prepare_template_source,
+        file_bytes=file_bytes,
+        filename=filename,
+        content_type=content_type,
+    )
+    analysis = _analysis_from_snapshot(
+        snapshot,
+        source_bytes=prepared.source_bytes,
+        source_filename=prepared.filename,
+        source_content_type=prepared.content_type,
+        source_format=prepared.format,
+        requested_title=requested_title,
+    )
+    if prepared.format == "docx":
+        analysis.source_text = await asyncio.to_thread(
+            extract_text,
+            prepared.source_bytes,
+            prepared.content_type,
+            prepared.filename,
+        )
+    return analysis
+
+
 def _pdf_contract_sha256(
     template: DocumentTemplate,
     *,
@@ -109,9 +334,18 @@ def _pdf_contract_sha256(
     # ``upload_analysis`` to ``reviewed_upload``). Only the mapped fields affect
     # PDF output and required/review semantics, so do not invalidate a preview
     # for metadata that cannot change the rendered artifact.
-    schema_contract = {
-        "fields": (schema or {}).get("fields") or [],
-    }
+    schema_contract_fields = []
+    for field in (schema or {}).get("fields") or []:
+        if not isinstance(field, dict):
+            schema_contract_fields.append(field)
+            continue
+        normalized_field = dict(field)
+        # Intake schemas historically omitted ``included`` when a discovered
+        # field used the default (included) state. Revalidation makes that
+        # default explicit, but the rendered contract is unchanged.
+        normalized_field.setdefault("included", True)
+        schema_contract_fields.append(normalized_field)
+    schema_contract = {"fields": schema_contract_fields}
     return _canonical_sha256(
         {
             "renderer_version": _PDF_RENDERER_VERSION,
@@ -550,6 +784,79 @@ async def _compensate_staged_document(
         return False
 
 
+def _reconcile_submitted_ai_fields(
+    raw: str | None,
+    *,
+    analysis,
+    file_bytes: bytes,
+) -> None:
+    """Re-locate submitted AI proposals without trusting client coordinates."""
+
+    if raw is None or not raw.strip():
+        return
+    try:
+        submitted = json.loads(raw)
+    except json.JSONDecodeError:
+        return
+    fields = submitted.get("fields") if isinstance(submitted, dict) else None
+    if not isinstance(fields, list):
+        return
+    proposals: list[AiFieldProposal] = []
+    try:
+        for field in fields:
+            if not isinstance(field, dict) or not field.get("ai_suggested"):
+                continue
+            proposals.append(
+                AiFieldProposal(
+                    existing_name=(
+                        str(field.get("ai_existing_name") or "").strip() or None
+                    )
+                    if field.get("ai_update_kind") == "updated"
+                    else None,
+                    name=str(field.get("name") or ""),
+                    label=str(field.get("label") or field.get("name") or ""),
+                    source_text=str(
+                        field.get("source_text") or field.get("example") or ""
+                    ),
+                    field_type=str(field.get("field_type") or "text"),
+                    confidence=min(
+                        0.75,
+                        max(0.0, float(field.get("confidence") or 0.5)),
+                    ),
+                    reason=str(field.get("ai_reason") or ""),
+                )
+            )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="An AI-proposed field is invalid. Run the proposal again and review it.",
+        ) from exc
+    if len(proposals) > 40:
+        raise HTTPException(
+            status_code=422,
+            detail="A premium AI proposal may contain at most 40 fields.",
+        )
+    if proposals:
+        mapped, unmapped = reconcile_ai_template_fields(
+            analysis=analysis,
+            file_bytes=file_bytes,
+            proposals=proposals,
+        )
+        added_count = sum(field.get("ai_update_kind") == "added" for field in mapped)
+        updated_count = sum(
+            field.get("ai_update_kind") == "updated" for field in mapped
+        )
+        analysis.variable_schema.setdefault("detection", {}).update(
+            {
+                "ai_assisted": True,
+                "ai_added_count": added_count,
+                "ai_updated_count": updated_count,
+                "ai_unmapped_count": len(unmapped),
+                "review_required": True,
+            }
+        )
+
+
 def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
     if raw is None or not raw.strip():
         return discovered
@@ -593,9 +900,108 @@ def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
         and (field.get("pdf_overlay") or field.get("pdf_overlays"))
         and field.get("pdf_source_key")
     }
+    signed_pages = {
+        int(page.get("page")): page
+        for page in (discovered.get("pages") or [])
+        if isinstance(page, dict) and page.get("page") is not None
+    }
+    discovered_docx_keys = {
+        str(field.get("docx_source_key"))
+        for field in (discovered.get("fields") or [])
+        if isinstance(field, dict) and field.get("docx_source_key")
+    }
+    discovered_by_docx_key = {
+        str(field.get("docx_source_key")): field
+        for field in (discovered.get("fields") or [])
+        if isinstance(field, dict) and field.get("docx_source_key")
+    }
+
+    def _safe_rect(value, *, page_number: int, label: str) -> list[float]:
+        if not isinstance(value, (list, tuple)) or len(value) != 4:
+            raise HTTPException(
+                status_code=422, detail=f"{label} must be a four-number rectangle"
+            )
+        try:
+            rect = [float(item) for item in value]
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=422, detail=f"{label} must be a four-number rectangle"
+            ) from exc
+        if not all(math.isfinite(item) for item in rect):
+            raise HTTPException(
+                status_code=422, detail=f"{label} must contain finite numbers"
+            )
+        if rect[2] <= rect[0] or rect[3] <= rect[1]:
+            raise HTTPException(
+                status_code=422, detail=f"{label} must have positive size"
+            )
+        page = signed_pages.get(page_number)
+        if (
+            page is None
+            or rect[0] < 0
+            or rect[1] < 0
+            or (
+                rect[2] > float(page.get("width", 0))
+                or rect[3] > float(page.get("height", 0))
+            )
+        ):
+            raise HTTPException(
+                status_code=422, detail=f"{label} falls outside its signed page bounds"
+            )
+        return rect
+
+    def _review_bool(field: dict, key: str, default: bool = False) -> bool:
+        value = field.get(key, default)
+        if not isinstance(value, bool):
+            raise HTTPException(
+                status_code=422, detail=f"PDF field {key} must be boolean"
+            )
+        return value
+
+    def _review_overlay_specs(field: dict, authoritative: dict) -> list[dict]:
+        submitted = field.get("pdf_overlays") or [field.get("pdf_overlay")]
+        original = authoritative.get("pdf_overlays") or [
+            authoritative.get("pdf_overlay")
+        ]
+        if not isinstance(submitted, list) or len(submitted) != len(original):
+            raise HTTPException(
+                status_code=422, detail="Reviewed PDF overlay count cannot change"
+            )
+        reviewed: list[dict] = []
+        for candidate, source in zip(submitted, original):
+            if not isinstance(candidate, dict) or not isinstance(source, dict):
+                raise HTTPException(
+                    status_code=422, detail="Reviewed PDF overlay mapping is invalid"
+                )
+            page_number = int(source.get("page"))
+            rect = _safe_rect(
+                candidate.get("rect", source.get("rect")),
+                page_number=page_number,
+                label="PDF overlay rectangle",
+            )
+            immutable = dict(source)
+            immutable["rect"] = rect
+            immutable["source_rect"] = _safe_rect(
+                source.get("source_rect", source.get("rect")),
+                page_number=page_number,
+                label="PDF source rectangle",
+            )
+            for key in (
+                "page",
+                "source_text",
+                "source_kind",
+                "pdf_source_key",
+                "erase_source",
+            ):
+                if key in source:
+                    immutable[key] = source[key]
+            reviewed.append(immutable)
+        return reviewed
+
     seen_names: set[str] = set()
     seen_pdf_names: set[str] = set()
     seen_overlay_keys: set[str] = set()
+    seen_docx_keys: set[str] = set()
     for field in schema["fields"]:
         if not isinstance(field, dict):
             raise HTTPException(
@@ -615,13 +1021,110 @@ def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
                 status_code=422, detail=f"Duplicate variable name: {name}"
             )
         seen_names.add(name)
-        pdf_name = field.get("pdf_field_name")
-        if discovered_pdf_names and pdf_name is None:
+        field["name"] = name
+        docx_key = field.get("docx_source_key")
+        if docx_key is not None:
+            docx_key = str(docx_key)
+            if docx_key not in discovered_docx_keys:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Unknown Word field mapping: {name!r}",
+                )
+            if docx_key in seen_docx_keys:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Duplicate Word field mapping: {name!r}",
+                )
+            seen_docx_keys.add(docx_key)
+            authoritative = discovered_by_docx_key[docx_key]
+            field["docx_source_key"] = docx_key
+            field["docx_anchor"] = authoritative.get("docx_anchor")
+            field["source_text"] = authoritative.get("source_text")
+            if authoritative.get("example") is not None:
+                field["example"] = authoritative.get("example")
+        elif field.get("docx_anchor") is not None and discovered_docx_keys:
             raise HTTPException(
                 status_code=422,
-                detail=f"PDF variable {name!r} is missing pdf_field_name",
+                detail=f"Word variable {name!r} is missing its reviewed source mapping",
             )
-        if pdf_name is not None:
+        pdf_name = field.get("pdf_field_name")
+        overlay_key = field.get("pdf_source_key")
+        has_pdf_mapping = pdf_name is not None
+        has_overlay_mapping = bool(
+            field.get("pdf_overlay") or field.get("pdf_overlays")
+        )
+        is_manual = isinstance(overlay_key, str) and overlay_key.startswith("manual:")
+        if is_manual:
+            try:
+                uuid.UUID(overlay_key.split(":", 1)[1])
+            except (ValueError, IndexError) as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Manual PDF source key must contain a valid UUID",
+                ) from exc
+            if not has_overlay_mapping:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Manual PDF variable {name!r} needs an overlay mapping",
+                )
+            field_type = str(field.get("field_type") or "text")
+            if field_type not in {"text", "date", "checkbox", "signature"}:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Manual PDF fields support text, date, checkbox, or signature",
+                )
+            specs = field.get("pdf_overlays") or [field.get("pdf_overlay")]
+            if (
+                not isinstance(specs, list)
+                or len(specs) != 1
+                or not isinstance(specs[0], dict)
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail="Manual PDF fields support exactly one overlay",
+                )
+            spec = dict(specs[0])
+            try:
+                page_number = int(spec.get("page"))
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(
+                    status_code=422, detail="Manual PDF overlay page must be an integer"
+                ) from exc
+            spec["rect"] = _safe_rect(
+                spec.get("rect"),
+                page_number=page_number,
+                label="Manual PDF overlay rectangle",
+            )
+            spec.update(
+                {
+                    "pdf_source_key": overlay_key,
+                    "source_kind": "manual",
+                    "erase_source": False,
+                }
+            )
+            field["pdf_overlay"] = spec
+            field.pop("pdf_overlays", None)
+            field["pdf_source_key"] = overlay_key
+            field["included"] = _review_bool(field, "included", True)
+            field["required"] = _review_bool(field, "required")
+            field["multiline"] = _review_bool(field, "multiline")
+            continue
+        if has_pdf_mapping and has_overlay_mapping:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"PDF variable {name!r} cannot combine AcroForm and "
+                    "overlay mappings"
+                ),
+            )
+        if (discovered_pdf_names or discovered_overlay_keys) and not (
+            has_pdf_mapping or has_overlay_mapping
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=f"PDF variable {name!r} is missing its source mapping",
+            )
+        if has_pdf_mapping:
             pdf_name = str(pdf_name)
             if pdf_name not in discovered_pdf_names:
                 raise HTTPException(
@@ -633,17 +1136,25 @@ def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
                 )
             seen_pdf_names.add(pdf_name)
             authoritative = discovered_by_pdf_name[pdf_name]
+            submitted_required = _review_bool(field, "required")
             for key in (
+                "pdf_field_name",
+                "pdf_source_key",
                 "field_type",
-                "required",
                 "multiline",
                 "options",
                 "page",
                 "rect",
             ):
                 field[key] = authoritative.get(key)
-        overlay_key = field.get("pdf_source_key")
-        if discovered_overlay_keys:
+            # The source controls geometry/type/options and a source-required
+            # field can never be weakened, but review may promote an optional
+            # AcroForm field to required for downstream automation.
+            field["required"] = bool(
+                authoritative.get("required") or submitted_required
+            )
+            field["included"] = _review_bool(field, "included", True)
+        if has_overlay_mapping:
             if overlay_key is None:
                 raise HTTPException(
                     status_code=422,
@@ -662,17 +1173,28 @@ def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
                 )
             seen_overlay_keys.add(overlay_key)
             authoritative = discovered_by_overlay_key[overlay_key]
-            for key in (
-                "field_type",
-                "required",
-                "multiline",
-                "page",
-                "rect",
-                "pdf_overlay",
-                "pdf_overlays",
-                "source_text",
-            ):
+            field_type = str(
+                field.get("field_type") or authoritative.get("field_type") or "text"
+            )
+            if field_type not in {"text", "date", "checkbox", "signature"}:
+                raise HTTPException(
+                    status_code=422,
+                    detail="PDF overlays support text, date, checkbox, or signature",
+                )
+            field["field_type"] = field_type
+            field["required"] = bool(
+                authoritative.get("required") or _review_bool(field, "required")
+            )
+            field["multiline"] = _review_bool(
+                field, "multiline", bool(authoritative.get("multiline", False))
+            )
+            field["included"] = _review_bool(field, "included", True)
+            for key in ("page", "rect", "source_text"):
                 field[key] = authoritative.get(key)
+            reviewed = _review_overlay_specs(field, authoritative)
+            field["pdf_overlays"] = reviewed
+            field["pdf_overlay"] = reviewed[0]
+            field["pdf_source_key"] = authoritative.get("pdf_source_key")
     if discovered_pdf_names and seen_pdf_names != discovered_pdf_names:
         raise HTTPException(
             status_code=422,
@@ -683,6 +1205,11 @@ def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
             status_code=422,
             detail="Reviewed PDF schema must preserve every detected overlay mapping",
         )
+    if discovered_docx_keys and seen_docx_keys != discovered_docx_keys:
+        raise HTTPException(
+            status_code=422,
+            detail="Reviewed Word schema must preserve every detected source mapping",
+        )
     try:
         schema["version"] = max(1, int(schema.get("version") or 1))
     except (TypeError, ValueError) as exc:
@@ -691,6 +1218,12 @@ def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
         ) from exc
     if isinstance(discovered.get("detection"), dict):
         schema["detection"] = discovered["detection"]
+    if discovered.get("pages"):
+        # Page geometry is signed/server-discovered metadata; clients may not
+        # rewrite it while reviewing placements.
+        schema["pages"] = discovered["pages"]
+    schema.pop("ai_proposal", None)
+    schema.pop("unmapped_ai_suggestions", None)
     schema["source"] = "reviewed_upload"
     return schema
 
@@ -706,12 +1239,12 @@ def _is_allowed_template_sample(filename: str | None, content_type: str | None) 
     )
 
 
-async def _read_template_sample(file: UploadFile) -> tuple[bytes, str]:
-    filename = _safe_upload_filename(file.filename)
-    if not _is_allowed_template_sample(filename, file.content_type):
+async def _read_template_sample(file: UploadFile) -> TemplateUploadSample:
+    original_filename = _safe_upload_filename(file.filename)
+    if not _is_allowed_template_sample(original_filename, file.content_type):
         raise HTTPException(
             status_code=400,
-            detail="Unsupported file type. Allowed: DOCX, PDF, TXT.",
+            detail="Unsupported file type. Allowed: DOCX, PDF, TXT, PNG, JPEG, TIFF, BMP, and WebP.",
         )
     max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
     file_bytes = await file.read(max_bytes + 1)
@@ -722,7 +1255,44 @@ async def _read_template_sample(file: UploadFile) -> tuple[bytes, str]:
             status_code=413,
             detail=f"File exceeds maximum size of {settings.MAX_FILE_SIZE_MB}MB",
         )
-    return file_bytes, filename
+    media_type = _normalized_media_type(file.content_type)
+    filename_lower = original_filename.lower()
+    is_image = (
+        filename_lower.endswith(_IMAGE_TEMPLATE_EXTENSIONS)
+        or media_type in _IMAGE_TEMPLATE_CONTENT_TYPES
+    )
+    if is_image:
+        try:
+            normalized = await asyncio.to_thread(image_to_pdf, file_bytes)
+        except TemplateOcrError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        normalized_filename = _safe_upload_filename(
+            f"{Path(original_filename).stem or 'scanned-template'}.pdf"
+        )
+        return TemplateUploadSample(
+            content=normalized.content,
+            filename=normalized_filename,
+            content_type="application/pdf",
+            original_filename=original_filename,
+            warnings=(
+                f"The {normalized.image_format} image was converted to a safe {normalized.pages}-page PDF for OCR and reusable field placement. Review every detected field.",
+            ),
+        )
+
+    if filename_lower.endswith(".pdf") or media_type == "application/pdf":
+        normalized_content_type = "application/pdf"
+    elif filename_lower.endswith(".docx"):
+        normalized_content_type = (
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
+    else:
+        normalized_content_type = "text/plain"
+    return TemplateUploadSample(
+        content=file_bytes,
+        filename=original_filename,
+        content_type=normalized_content_type,
+        original_filename=original_filename,
+    )
 
 
 def render_template(template_body: str, variables: dict[str, str]) -> str:
@@ -1092,18 +1662,115 @@ async def analyze_template_sample(
     db: AsyncSession = Depends(get_db),
 ):
     await set_tenant_context(db, str(current_user.tenant_id))
-    file_bytes, filename = await _read_template_sample(file)
+    sample = await _read_template_sample(file)
     try:
         analysis = await asyncio.to_thread(
             analyze_template_upload,
-            file_bytes=file_bytes,
-            filename=filename,
-            content_type=file.content_type,
+            file_bytes=sample.content,
+            filename=sample.filename,
+            content_type=sample.content_type,
             title=_validated_title(title),
         )
     except (TemplatePdfError, TemplateDocxError, TemplateOcrError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return DocumentTemplateUploadAnalysisResponse(**analysis.as_dict())
+    response_payload = analysis.as_dict()
+    response_payload["warnings"] = list(
+        dict.fromkeys([*(response_payload.get("warnings") or []), *sample.warnings])
+    )
+    response_payload["analysis_token"] = _issue_analysis_token(
+        analysis=response_payload,
+        file_bytes=sample.content,
+        filename=sample.filename,
+        tenant_id=current_user.tenant_id,
+        user_id=current_user.id,
+    )
+    return DocumentTemplateUploadAnalysisResponse(**response_payload)
+
+
+@router.post(
+    "/intake/ai-propose",
+    response_model=DocumentTemplateUploadAnalysisResponse,
+)
+async def propose_template_fields_with_ai(
+    file: UploadFile = File(...),
+    title: str | None = Form(None),
+    consent_to_external_ai: bool = Form(False),
+    current_user=Depends(require_capability("use_premium_ai")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return a review-only premium-AI field proposal for one upload."""
+
+    if not getattr(current_user, "premium_ai_enabled", False):
+        raise HTTPException(
+            status_code=403,
+            detail="Premium AI is not enabled for this user.",
+        )
+    await set_tenant_context(db, str(current_user.tenant_id))
+    sample = await _read_template_sample(file)
+    try:
+        analysis = await asyncio.to_thread(
+            analyze_template_upload,
+            file_bytes=sample.content,
+            filename=sample.filename,
+            content_type=sample.content_type,
+            title=_validated_title(title),
+        )
+        analysis.warnings.extend(
+            warning for warning in sample.warnings if warning not in analysis.warnings
+        )
+        analysis = await assist_template_mapping(
+            db=db,
+            user=current_user,
+            analysis=analysis,
+            file_bytes=sample.content,
+            consent_to_external_ai=consent_to_external_ai,
+        )
+    except (
+        TemplatePdfError,
+        TemplateDocxError,
+        TemplateOcrError,
+        TemplateAiAssistError,
+    ) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    response_payload = analysis.as_dict()
+    response_payload["analysis_token"] = _issue_analysis_token(
+        analysis=response_payload,
+        file_bytes=sample.content,
+        filename=sample.filename,
+        tenant_id=current_user.tenant_id,
+        user_id=current_user.id,
+    )
+    return DocumentTemplateUploadAnalysisResponse(**response_payload)
+
+
+@router.post("/intake/pdf-page-preview")
+async def preview_template_pdf_page(
+    file: UploadFile = File(...),
+    page_number: int = Query(1, ge=1, le=250),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Render an uploaded PDF page for the visual manual field mapper."""
+    await set_tenant_context(db, str(current_user.tenant_id))
+    sample = await _read_template_sample(file)
+    if not sample.content.startswith(b"%PDF-"):
+        raise HTTPException(
+            status_code=400, detail="PDF page preview requires a PDF upload"
+        )
+    try:
+        image, metadata = await asyncio.to_thread(
+            render_pdf_page_preview, sample.content, page_number
+        )
+    except TemplatePdfError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    headers = {
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+        "X-PDF-Page-Count": str(metadata["page_count"]),
+        "X-PDF-Page-Width": str(metadata["width"]),
+        "X-PDF-Page-Height": str(metadata["height"]),
+    }
+    return Response(content=image, media_type="image/png", headers=headers)
 
 
 @router.post(
@@ -1116,6 +1783,7 @@ async def create_template_from_sample(
     title: str | None = Form(None),
     reviewed_body: str | None = Form(None),
     variable_schema: str | None = Form(None),
+    analysis_token: str | None = Form(None),
     category: str = Form("other"),
     module: str | None = Form(None),
     stage: str | None = Form(None),
@@ -1133,33 +1801,22 @@ async def create_template_from_sample(
             detail=f"Invalid category. Must be one of: {', '.join(CATEGORIES)}",
         )
 
-    file_bytes, filename = await _read_template_sample(file)
+    sample = await _read_template_sample(file)
+    file_bytes = sample.content
+    filename = sample.filename
+    requested_title = _validated_title(title)
     try:
-        analysis = await asyncio.to_thread(
-            analyze_template_upload,
+        analysis = await _analysis_for_template_create(
             file_bytes=file_bytes,
             filename=filename,
-            content_type=file.content_type,
-            title=_validated_title(title),
+            content_type=sample.content_type,
+            requested_title=requested_title,
+            analysis_token=analysis_token,
+            tenant_id=current_user.tenant_id,
+            user_id=current_user.id,
         )
     except (TemplatePdfError, TemplateDocxError, TemplateOcrError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if analysis.format == "pdf" and not any(
-        isinstance(field, dict)
-        and (
-            field.get("pdf_field_name")
-            or field.get("pdf_overlay")
-            or field.get("pdf_overlays")
-        )
-        for field in (analysis.variable_schema.get("fields") or [])
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "No reusable PDF fields were detected. Try a clearer source or add "
-                "visible labels next to the values that should change."
-            ),
-        )
     body = analysis.body
     if reviewed_body is not None:
         if len(reviewed_body) > 20_000:
@@ -1171,11 +1828,38 @@ async def create_template_from_sample(
             raise HTTPException(
                 status_code=422, detail="reviewed_body may not be empty"
             )
+    _reconcile_submitted_ai_fields(
+        variable_schema,
+        analysis=analysis,
+        file_bytes=file_bytes,
+    )
     reviewed_schema = _reviewed_variable_schema(
         variable_schema, analysis.variable_schema
     )
+    # A scan may legitimately yield zero automatic detections: the review
+    # canvas can still add valid manual overlays. Validate the final reviewed
+    # contract, rather than rejecting the source before the user's edits are
+    # considered.
+    if analysis.format == "pdf" and not any(
+        isinstance(field, dict)
+        and field.get("included", True) is True
+        and (
+            field.get("pdf_field_name")
+            or field.get("pdf_overlay")
+            or field.get("pdf_overlays")
+        )
+        for field in (reviewed_schema.get("fields") or [])
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "No reusable PDF fields were detected. Add at least one field "
+                "in the review canvas or upload a clearer source."
+            ),
+        )
     if analysis.format == "docx":
         seen_source_text: dict[str, str] = {}
+        seen_docx_anchors: dict[tuple[int, int, int], str] = {}
         for field in reviewed_schema.get("fields") or []:
             if not isinstance(field, dict):
                 continue
@@ -1188,7 +1872,7 @@ async def create_template_from_sample(
                     status_code=422,
                     detail=f"Word variable {name!r} needs the exact source text it replaces.",
                 )
-            if source_text not in analysis.extracted_text:
+            if source_text not in analysis.source_text:
                 raise HTTPException(
                     status_code=422,
                     detail=(
@@ -1196,6 +1880,46 @@ async def create_template_from_sample(
                         "Select the source again and review the detected details."
                     ),
                 )
+            anchor = field.get("docx_anchor")
+            if anchor is not None:
+                if not isinstance(anchor, dict):
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Word variable {name!r} has an invalid reviewed location.",
+                    )
+                try:
+                    anchor_key = (
+                        int(anchor["paragraph_ordinal"]),
+                        int(anchor["start"]),
+                        int(anchor["end"]),
+                    )
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Word variable {name!r} has an invalid reviewed location.",
+                    ) from exc
+                if (
+                    anchor_key[0] < 0
+                    or anchor_key[1] < 0
+                    or anchor_key[2] <= anchor_key[1]
+                    or anchor_key[2] - anchor_key[1] != len(source_text)
+                ):
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            f"Word variable {name!r} has a reviewed location that does not match its source text."
+                        ),
+                    )
+                previous_name = seen_docx_anchors.get(anchor_key)
+                if previous_name and previous_name != name:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            f"The same Word location cannot map to both {previous_name!r} and {name!r}."
+                        ),
+                    )
+                seen_docx_anchors[anchor_key] = name
+                continue
             previous_name = seen_source_text.get(source_text)
             if previous_name and previous_name != name:
                 raise HTTPException(
@@ -1206,11 +1930,28 @@ async def create_template_from_sample(
                     ),
                 )
             seen_source_text[source_text] = name
+        try:
+            await asyncio.to_thread(
+                fill_docx_template,
+                file_bytes,
+                variable_schema=reviewed_schema,
+                variables={},
+            )
+        except TemplateDocxError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "A reviewed Word field location no longer matches the uploaded document. "
+                    "Re-run detection and review the highlighted source locations."
+                ),
+            ) from exc
     if analysis.format in {"pdf", "docx"}:
         mapped_variables = {
             str(field.get("name"))
             for field in (reviewed_schema.get("fields") or [])
-            if isinstance(field, dict) and field.get("name")
+            if isinstance(field, dict)
+            and field.get("included", True) is True
+            and field.get("name")
         }
         unknown_body_variables = (
             set(extract_template_variables(body)) - mapped_variables
@@ -1223,12 +1964,19 @@ async def create_template_from_sample(
                     + ", ".join(sorted(unknown_body_variables))
                 ),
             )
+    canonical_source_bytes = analysis._normalized_source_bytes or file_bytes
+    canonical_source_filename = analysis._normalized_source_filename or filename
+    canonical_source_content_type = (
+        analysis._normalized_source_content_type
+        or sample.content_type
+        or "application/octet-stream"
+    )
     template_id = uuid.uuid4()
     source_path = await _persist_template_source(
         tenant_id=tenant_id,
         template_id=template_id,
-        filename=filename,
-        content=file_bytes,
+        filename=canonical_source_filename,
+        content=canonical_source_bytes,
     )
     template = DocumentTemplate(
         id=template_id,
@@ -1236,7 +1984,7 @@ async def create_template_from_sample(
         title=analysis.title,
         body=body,
         category=category,
-        description=f"Draft created from uploaded sample: {filename}",
+        description=f"Draft created from uploaded sample: {sample.original_filename}",
         status="draft",
         format=analysis.format,
         module=_clean_optional_form_value(module),
@@ -1246,14 +1994,10 @@ async def create_template_from_sample(
         variable_schema=reviewed_schema,
         branding_profile=analysis.branding_profile,
         source_storage_path=source_path,
-        source_filename=filename,
-        source_content_type=(
-            "application/pdf"
-            if analysis.format == "pdf"
-            else _normalized_media_type(file.content_type) or "application/octet-stream"
-        ),
-        source_sha256=hashlib.sha256(file_bytes).hexdigest(),
-        source_file_size=len(file_bytes),
+        source_filename=canonical_source_filename,
+        source_content_type=canonical_source_content_type,
+        source_sha256=hashlib.sha256(canonical_source_bytes).hexdigest(),
+        source_file_size=len(canonical_source_bytes),
         is_active=False,
     )
     try:
@@ -1605,12 +2349,6 @@ async def update_template(
             )
         except TemplatePdfError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        discovered_fields = rediscovered.variable_schema.get("fields") or []
-        if not discovered_fields:
-            raise HTTPException(
-                status_code=422,
-                detail="A PDF template must contain at least one reviewed form or text-overlay field before activation.",
-            )
         discovered_schema = rediscovered.variable_schema
         effective_schema = updates.get("variable_schema", template.variable_schema)
         updates["variable_schema"] = _reviewed_variable_schema(
@@ -1620,12 +2358,21 @@ async def update_template(
             str(field.get("name"))
             for field in (updates["variable_schema"].get("fields") or [])
             if isinstance(field, dict)
+            and field.get("included", True) is True
             and (
                 field.get("pdf_field_name")
                 or field.get("pdf_overlay")
                 or field.get("pdf_overlays")
             )
         }
+        if not mapped_variables:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "A PDF template must contain at least one included form or "
+                    "text-overlay field before activation."
+                ),
+            )
         effective_body = str(updates.get("body", template.body) or "")
         unknown_body_variables = (
             set(extract_template_variables(effective_body)) - mapped_variables

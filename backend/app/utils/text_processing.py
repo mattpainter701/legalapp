@@ -95,12 +95,15 @@ def extract_text_from_docx(file_bytes: bytes) -> str:
 def _extract_text_from_docx_document(doc) -> str:
     """Extract body, nested-table, header, and footer text from a DOCX object."""
 
+    from docx.oxml.ns import qn
+    from docx.text.paragraph import Paragraph
+
     text_parts: list[str] = []
-    seen_paragraphs: set[int] = set()
+    seen_paragraphs: set[object] = set()
 
     def add_paragraphs(paragraphs) -> None:
         for para in paragraphs:
-            marker = id(para._p)
+            marker = para._p
             if marker in seen_paragraphs:
                 continue
             seen_paragraphs.add(marker)
@@ -117,7 +120,24 @@ def _extract_text_from_docx_document(doc) -> str:
                 elif nonblank:
                     text_parts.append(" | ".join(nonblank))
                 for cell in row.cells:
+                    # The row-level representation above is authoritative for
+                    # ordinary table cells. Mark their high-level paragraphs
+                    # as seen so the low-level text-box/content-control pass
+                    # does not append duplicate, decontextualized labels.
+                    seen_paragraphs.update(
+                        paragraph._p for paragraph in cell.paragraphs
+                    )
                     add_tables(cell.tables)
+
+    def add_missing_xml(root, parent) -> None:
+        for paragraph_element in root.iter(qn("w:p")):
+            marker = paragraph_element
+            if marker in seen_paragraphs:
+                continue
+            paragraph = Paragraph(paragraph_element, parent)
+            seen_paragraphs.add(marker)
+            if paragraph.text.strip():
+                text_parts.append(paragraph.text.strip())
 
     add_paragraphs(doc.paragraphs)
     add_tables(doc.tables)
@@ -125,6 +145,10 @@ def _extract_text_from_docx_document(doc) -> str:
         for container in (section.header, section.footer):
             add_paragraphs(container.paragraphs)
             add_tables(container.tables)
+    add_missing_xml(doc.element.body, doc)
+    for section in doc.sections:
+        for container in (section.header, section.footer):
+            add_missing_xml(container._element, container)
 
     return "\n\n".join(text_parts)
 
