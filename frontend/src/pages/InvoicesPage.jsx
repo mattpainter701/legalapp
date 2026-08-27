@@ -305,8 +305,9 @@ export default function InvoicesPage() {
               <input id="invoicespage-due-days" type="number" min="0" value={generateForm.due_date_days} onChange={(event) => setGenerateForm((current) => ({ ...current, due_date_days: event.target.value }))} className="min-h-11 w-full rounded-xl border border-brand-line bg-brand-surface px-3 text-sm text-brand-ink" />
             </div>
             <div>
-              <label htmlFor="invoicespage-tax" className="mb-1.5 block text-xs font-semibold text-brand-ink">Tax rate (%)</label>
+              <label htmlFor="invoicespage-tax" className="mb-1.5 block text-xs font-semibold text-brand-ink">Sales tax rate (%)</label>
               <input id="invoicespage-tax" type="number" min="0" max="100" step="0.01" value={generateForm.tax_rate} onChange={(event) => setGenerateForm((current) => ({ ...current, tax_rate: event.target.value }))} placeholder="0" className="min-h-11 w-full rounded-xl border border-brand-line bg-brand-surface px-3 text-sm text-brand-ink" />
+              <p className="mt-1 text-xs text-brand-ink-2">Use 0 for non-taxable services. QuickBooks will receive the same taxable status.</p>
             </div>
             <div className="sm:col-span-2">
               <label htmlFor="invoicespage-notes" className="mb-1.5 block text-xs font-semibold text-brand-ink">Invoice notes</label>

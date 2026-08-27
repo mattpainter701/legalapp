@@ -62,6 +62,11 @@ export default function QBOPanel() {
   const [syncing, setSyncing] = useState(false)
   const [syncResult, setSyncResult] = useState(null)
   const [error, setError] = useState(null)
+  const [connectionMessage, setConnectionMessage] = useState(() =>
+    new URLSearchParams(window.location.search).get('qbo') === 'connected'
+      ? 'QuickBooks Online connected successfully.'
+      : null
+  )
 
   const mappingKey = (source_type, expense_category) =>
     `${source_type}:${expense_category ?? ''}`
@@ -96,15 +101,20 @@ export default function QBOPanel() {
 
   const loadItems = useCallback(async () => {
     setItemsLoading(true)
-    try {
-      const [itemList, accountList] = await Promise.all([getQBOItems(), getQBOAccounts()])
-      setItems(itemList)
-      setAccounts(accountList)
-    } catch {
-      setError('Failed to fetch QBO items. Make sure QBO is connected.')
-    } finally {
-      setItemsLoading(false)
+    const [itemResult, accountResult] = await Promise.allSettled([
+      getQBOItems(),
+      getQBOAccounts(),
+    ])
+    if (itemResult.status === 'fulfilled') setItems(itemResult.value)
+    if (accountResult.status === 'fulfilled') setAccounts(accountResult.value)
+    if (itemResult.status === 'rejected' && accountResult.status === 'rejected') {
+      setError('Failed to fetch QuickBooks service items and accounts. Please retry in a moment.')
+    } else if (itemResult.status === 'rejected') {
+      setError('Failed to fetch QuickBooks service items. Account settings are still available.')
+    } else if (accountResult.status === 'rejected') {
+      setError('Failed to fetch QuickBooks accounts. Service-item mappings are still available.')
     }
+    setItemsLoading(false)
   }, [])
 
   useEffect(() => {
@@ -115,6 +125,13 @@ export default function QBOPanel() {
   useEffect(() => {
     if (status?.connected) loadItems()
   }, [status?.connected, loadItems])
+
+  useEffect(() => {
+    if (!connectionMessage) return
+    const url = new URL(window.location.href)
+    url.searchParams.delete('qbo')
+    window.history.replaceState({}, '', url.pathname + url.search + url.hash)
+  }, [connectionMessage])
 
   const handleConnect = async () => {
     try {
@@ -213,6 +230,13 @@ export default function QBOPanel() {
         <div className="px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-xs font-medium">
           {error}
           <button className="ml-2 underline" onClick={() => setError(null)}>Dismiss</button>
+        </div>
+      )}
+
+      {connectionMessage && (
+        <div className="px-4 py-3 bg-green-50 border border-green-200 rounded-xl text-green-800 text-xs font-medium">
+          {connectionMessage}
+          <button className="ml-2 underline" onClick={() => setConnectionMessage(null)}>Dismiss</button>
         </div>
       )}
 

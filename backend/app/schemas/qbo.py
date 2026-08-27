@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from typing import Optional
+from uuid import UUID
 
 from pydantic import BaseModel
 
@@ -22,8 +23,8 @@ class QBOIntegrationStatus(BaseModel):
 
 
 class QBOIntegrationResponse(BaseModel):
-    id: str
-    tenant_id: str
+    id: UUID
+    tenant_id: UUID
     qbo_realm_id: Optional[str] = None
     is_active: bool
     sandbox_mode: bool
