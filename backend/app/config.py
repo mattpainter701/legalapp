@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     DEMO_FIXTURE_TENANT_DOMAIN: str = ""
     DEMO_SESSION_TTL_HOURS: int = 72
     DEMO_MESSAGE_QUOTA: int = 20
-    DEMO_MAX_ACTIVE: int = 5
+    DEMO_MAX_ACTIVE: int = 10
 
     # ── Background scheduler ─────────────────────────────────────────────────
     # APScheduler must run in EXACTLY ONE process. In prod, API workers set this

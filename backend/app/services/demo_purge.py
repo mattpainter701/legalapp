@@ -143,7 +143,12 @@ def _remove_tenant_files(tenant_id: uuid.UUID) -> None:
 
 
 async def _purge_demo_tenant_locked(
-    db: AsyncSession, tenant_id: uuid.UUID
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    actor_type: str = "scheduler",
+    actor_id: str | None = None,
+    reason: str | None = None,
 ) -> dict[str, int]:
     now = datetime.now(timezone.utc)
     tenant = await db.get(Tenant, tenant_id)
@@ -224,13 +229,15 @@ async def _purge_demo_tenant_locked(
         db.add(
             OperatorAuditLog(
                 action="demo.session.purged",
-                actor_type="scheduler",
+                actor_type=actor_type,
+                actor_id=actor_id,
                 resource_type="demo_session",
                 resource_id=str(session_id),
                 metadata_json={
                     "tenant_id": str(tenant_id),
                     "fixture_version": fixture_version,
                     "deleted_rows": sum(deleted.values()),
+                    "reason": reason,
                 },
             )
         )
@@ -247,13 +254,15 @@ async def _purge_demo_tenant_locked(
         db.add(
             OperatorAuditLog(
                 action="demo.session.purge_failed",
-                actor_type="scheduler",
+                actor_type=actor_type,
+                actor_id=actor_id,
                 resource_type="demo_session",
                 resource_id=str(session_id),
                 metadata_json={
                     "tenant_id": str(tenant_id),
                     "fixture_version": fixture_version,
                     "error_type": type(exc).__name__,
+                    "reason": reason,
                 },
             )
         )
@@ -265,6 +274,64 @@ async def purge_demo_tenant(db: AsyncSession, tenant_id: uuid.UUID) -> dict[str,
     """Purge one tenant while holding a cluster-wide, crash-safe fence."""
     async with _tenant_purge_lock(db, tenant_id):
         return await _purge_demo_tenant_locked(db, tenant_id)
+
+
+async def terminate_demo_tenant(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    *,
+    actor_id: str,
+    reason: str | None = None,
+) -> dict[str, int]:
+    """Expire and purge exactly one operator-selected demo workspace.
+
+    The session id is a second, independently displayed identifier. Requiring
+    both ids prevents a stale operator panel from terminating a different
+    workspace, while the existing advisory lock keeps this path serialized
+    with the hourly purge worker.
+    """
+    async with _tenant_purge_lock(db, tenant_id):
+        now = datetime.now(timezone.utc)
+        tenant = await db.get(Tenant, tenant_id)
+        if (
+            tenant is None
+            or tenant.billing_tier != "demo"
+            or not tenant.domain.endswith(_DEMO_DOMAIN_SUFFIX)
+        ):
+            raise DemoPurgeRefused("Tenant is not a disposable demo")
+
+        await set_tenant_context(db, str(tenant_id))
+        demo = await db.scalar(
+            select(DemoSession)
+            .where(
+                DemoSession.tenant_id == tenant_id,
+                DemoSession.id == session_id,
+            )
+            .with_for_update()
+        )
+        if demo is None or demo.fixture_tenant_id == tenant_id:
+            raise DemoPurgeRefused("Demo session provenance check failed")
+        if demo.status == "provisioning":
+            raise DemoPurgeRefused("Demo workspace is still provisioning")
+        if demo.status == "purging":
+            raise DemoPurgeRefused("Demo session is already being purged")
+        if demo.status == "purged":
+            raise DemoPurgeRefused("Demo workspace has already been purged")
+
+        tenant.is_active = False
+        tenant.expires_at = now
+        demo.expires_at = now
+        demo.status = "expired"
+        await db.commit()
+
+        return await _purge_demo_tenant_locked(
+            db,
+            tenant_id,
+            actor_type="platform_operator",
+            actor_id=actor_id,
+            reason=(reason or "Operator terminated demo workspace")[:300],
+        )
 
 
 async def purge_expired_demo_tenants() -> int:

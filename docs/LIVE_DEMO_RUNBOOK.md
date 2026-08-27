@@ -23,7 +23,7 @@ For the evidence boundary and presentation go/no-go gates, use
    DEMO_FIXTURE_TENANT_DOMAIN=lawhand-demo-fixture-v2.invalid
    DEMO_SESSION_TTL_HOURS=72
    DEMO_MESSAGE_QUOTA=20
-   DEMO_MAX_ACTIVE=5
+   DEMO_MAX_ACTIVE=10
    ```
 
 4. In **Platform → AI Provider Routing**, select or create the profile intended

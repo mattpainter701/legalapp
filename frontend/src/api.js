@@ -1269,6 +1269,15 @@ export const getPlatformTenant = (key, id) =>
 export const updatePlatformTenant = (key, id, data) =>
   platformApi(key).put(`/platform/tenants/${id}`, data).then((r) => r.data)
 
+export const getPlatformDemoWorkspaces = (key) =>
+  platformApi(key).get('/platform/demo-workspaces').then((r) => r.data)
+
+export const terminatePlatformDemoWorkspace = (key, tenantId, sessionId, reason) =>
+  platformApi(key).post(`/platform/demo-workspaces/${tenantId}/terminate`, {
+    session_id: sessionId,
+    reason,
+  }).then((r) => r.data)
+
 export const getPlatformPlans = (key) =>
   platformApi(key).get('/platform/plans').then((r) => r.data)
 
