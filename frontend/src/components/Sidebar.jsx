@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Blocks, X, BarChart2, CalendarDays, MessageSquare, FileSignature,
   Briefcase, Clock, Receipt, User, Landmark, CheckSquare, Users, ClipboardList,
-  Mail, Shield, Rocket, PhoneCall, Lock, LogOut, PanelLeftClose, PanelLeftOpen,
+  Mail, Shield, ShieldCheck, Rocket, PhoneCall, Lock, LogOut, PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react'
 import UpgradeModal from './UpgradeModal'
 import { canAccessModuleList } from '../moduleAccess'
@@ -24,6 +24,7 @@ const NAV_GROUPS = [
       { path: '/tasks',          label: 'Tasks',          icon: CheckSquare, module: 'tasks' },
       { path: '/communications', label: 'Communications', icon: Mail, module: 'communications' },
       { path: '/clients',        label: 'Clients & CRM',  icon: Users, module: 'contacts' },
+      { path: '/conflicts',      label: 'Conflict Search', icon: ShieldCheck, module: 'contacts' },
       { path: '/intake/dashboard', label: 'Call Intake',   icon: PhoneCall, module: 'intake-dashboard' },
       { path: '/intake',         label: 'Intake',         icon: ClipboardList, module: 'intake' },
       { path: '/templates',      label: 'Document Automation', icon: FileSignature, module: 'templates' },

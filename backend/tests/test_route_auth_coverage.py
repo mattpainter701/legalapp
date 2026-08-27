@@ -273,6 +273,10 @@ PUBLIC_ROUTES: dict[tuple[frozenset[str], str], str] = {
         "/api/portal/client/documents/{doc_id}/download",
     ): "get_client_portal_context",
     (frozenset({"GET"}), "/api/portal/client/invoices"): "get_client_portal_context",
+    (
+        frozenset({"GET"}),
+        "/api/portal/client/invoices/{invoice_id}/download",
+    ): "get_client_portal_context",
     (frozenset({"GET"}), "/api/portal/client/signatures"): "get_client_portal_context",
     (
         frozenset({"POST"}),

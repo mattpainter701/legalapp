@@ -30,6 +30,23 @@ The contact detail view has four working areas:
 
 Review these relationships before changing identity fields. A renamed organization or corrected email may affect many active matters.
 
+## Run a standalone conflict search
+
+Open [Conflict Search](/conflicts) before accepting or expanding a
+representation. Give the check a recognizable label, then enter the person's
+name and known aliases, related organizations or former names, and available
+email addresses. You may link the check to one of your assigned matters.
+
+The result is saved exactly as shown. A restricted-match warning means the
+search found a matter you are not permitted to identify; stop and ask an
+administrator or conflicts reviewer to resolve it. Do not try to discover the
+matter through another screen.
+
+Review every result, record the reasoning and any waiver or conditions, and
+choose the review decision. Closing locks the record and makes the saved report
+available as a PDF. **No potential matches returned** describes the database
+search only. It is not automatic attorney clearance.
+
 ## Link contacts to matters
 
 Open the relevant matter from [My Matters](/matters) and assign the contact with the correct role. Distinguish the client, billing contact, opposing party, counsel, witness, and other participants. A person may have different roles on different matters.

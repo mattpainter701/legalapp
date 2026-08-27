@@ -26,6 +26,7 @@ from app.models.billing import TimeEntry, Expense, Invoice, InvoiceLineItem, Pay
 from app.models.contact import Contact
 from app.models.plugin import Matter
 from app.models.tenant import Tenant, TenantSettings
+from app.routers.firm import get_firm_branding
 from app.schemas.billing import (
     TimeEntryCreate,
     TimeEntryUpdate,
@@ -1737,7 +1738,9 @@ async def export_invoice(
     elif body.format == "pdf":
         from app.services.invoice_pdf import generate_invoice_pdf
 
-        pdf_bytes = generate_invoice_pdf(inv)
+        tenant = await db.scalar(select(Tenant).where(Tenant.id == user.tenant_id))
+        branding = await get_firm_branding(db, tenant)
+        pdf_bytes = generate_invoice_pdf(inv, branding)
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",

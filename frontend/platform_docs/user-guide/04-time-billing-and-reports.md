@@ -21,6 +21,12 @@ Check for duplicate timers or entries before saving. If you need to correct post
 
 Open [Invoices](/invoices) to review invoices available to you. Confirm the client, matter, time and expense lines, adjustments, dates, and payment status. Treat generated descriptions and totals as reviewable work product until the responsible person approves them.
 
+Invoice PDFs use the tenant's configured firm name, logo, address, contact
+details, and optional PDF footer. The PDF shows the matter name and current
+balance but does not expose internal tenant or matter identifiers. Ask an
+administrator to correct firm branding before sending a bill rather than
+editing each exported copy.
+
 ## Trust accounting
 
 Use [Trust Accounting](/trust) only if you are authorized and trained for your jurisdiction and firm. Choose the correct client ledger before recording a transaction. Preserve the source documentation and never use a balancing entry to conceal an unexplained difference.

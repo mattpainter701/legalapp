@@ -1192,6 +1192,9 @@ export const downloadClientPortalDocumentUrl = (docId) =>
 export const listClientPortalInvoices = () =>
   clientPortalApi.get('/portal/client/invoices').then((r) => r.data)
 
+export const downloadClientPortalInvoiceUrl = (invoiceId) =>
+  `${BASE_URL}/portal/client/invoices/${invoiceId}/download`
+
 // Firm-side client portal invite management (firm login)
 export const createMatterPortalInvite = (matterId, data) =>
   api.post(`/matters/${matterId}/portal/invite`, data).then((r) => r.data)
@@ -1400,6 +1403,18 @@ export const getContactCommunications = (id, params = {}) =>
 
 export const conflictCheck = (data) =>
   api.post('/contacts/conflict-check', data).then(r => r.data)
+
+export const createConflictCheck = (data) =>
+  api.post('/conflict-checks', data).then(r => r.data)
+
+export const listConflictChecks = (params = {}) =>
+  api.get('/conflict-checks', { params }).then(r => r.data)
+
+export const closeConflictCheck = (id, data) =>
+  api.post(`/conflict-checks/${id}/close`, data).then(r => r.data)
+
+export const downloadConflictCheckReport = (id) =>
+  api.get(`/conflict-checks/${id}/report.pdf`, { responseType: 'blob' }).then(r => r.data)
 
 // ── Clients & CRM ─────────────────────────────────────────────────────────
 
