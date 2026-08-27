@@ -1,5 +1,42 @@
 # TASKS.md
 
+## BK27 — Task, Correspondence, Intake, and Portal Follow-through — 2026-08-26
+
+**Goal:** Keep LawHand tasks authoritative while meeting firms in Outlook,
+turning explicit correspondence instructions into traceable work, and defining
+safe follow-ups for document dates, bespoke intake, probate gathering, portal
+storage/invoices, and Workspace MCP search.
+
+Discovery, decisions, current-state evidence, vendor options, and acceptance
+criteria: `docs/task-correspondence-discovery-2026-08-26.md`.
+
+- [x] `TC-01` Add deterministic `[TASK]` / `[DEADLINE]` email subject tags,
+      reviewed inbound preview, atomic correspondence/task creation, received-date
+      relative math, audit lineage, calendar projection, and tests. Remove
+      model-only automatic deadline creation for untagged email.
+- [ ] `TC-02` Make portal uploads honor the tenant primary cloud and an explicit
+      fail-closed cloud-storage policy; expose provider/error state.
+- [ ] `TC-03` Replace free-form key-date writes with typed, provenance-bearing,
+      reviewable key dates while retaining legacy reads during migration.
+- [ ] `TC-04` Extract cited document date/trigger candidates into review; never
+      auto-promote an extracted date to a legal deadline.
+- [ ] `TC-05` Complete current LawToolBox/CalendarRules partner diligence and a
+      sandbox rules calculation before selecting a legal deadline provider.
+- [ ] `TC-06` Add a standalone Conflict Search and saved attorney clearance
+      evidence on top of the existing shared conflict service.
+- [ ] `TC-07` Build versioned bespoke intake forms/submissions and approved
+      document-variable bindings separate from CRM/matter summary fields.
+- [ ] `TC-08` Build the probate portal questionnaire/checklist on the shared
+      intake answer model and map verified facts to estate records/templates.
+- [ ] `TC-09` Apply tenant branding to invoice PDFs and add audited client-portal
+      invoice PDF downloads.
+- [ ] `TC-10` Add bounded, cited global Workspace MCP search across matters,
+      contacts/clients, documents, correspondence, and tasks.
+- [ ] `TC-11` Detect and review Outlook/Google edits or deletions that diverge
+      from authoritative LawHand tasks.
+- [ ] `TC-12` Add tenant subject-tag help/aliases, metrics, and an ambiguous-date
+      review queue.
+
 ## BK26 — Virtual Assistant Product — 2026-08-26 (IMPLEMENTATION PR IN REVIEW)
 
 **Goal:** Make LawHand Assistant a legitimate, review-first virtual assistant

@@ -29,6 +29,8 @@ Open [Communications](/communications) for workspace message history. When integ
 
 Email that belongs to one file lives on that matter's **Correspondence** tab rather than here: open the matter from [My Matters](/matters) to capture mail from a connected mailbox, forward a message to the matter, and review what is waiting to be filed.
 
+To request a task from reviewed matter email, start the subject with `[TASK]` or `[DEADLINE]`. For example, `[TASK] Meet with Nigel in two weeks` previews a task and due date on the inbound review card. Filing the message creates the task and, when a due date is present, mirrors it to the reviewer's connected Outlook or Google calendar. Untagged text, replies, forwards, and AI-only date detection do not create work automatically.
+
 Before sending any draft:
 
 1. confirm recipients and attachments;

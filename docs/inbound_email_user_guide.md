@@ -47,6 +47,31 @@ For every queued message:
 Nothing in the queue silently becomes official correspondence. Filing records
 the reviewing user and time.
 
+## Create a task with a subject tag
+
+Put one of these tags at the very beginning of the subject when the reviewed
+message should also create work:
+
+```text
+[TASK] Nigel I need to meet with you in two weeks
+[TASK due=2026-09-09] Meet with Nigel
+[DEADLINE] File response by 09/15/2026
+```
+
+The review card shows the task title, due date, and whether a connected Outlook
+or Google calendar event will be created before you file the email. Select
+**File + create task** only after checking that result. The task is assigned to
+the reviewer and linked back to the filed email.
+
+The automatic date parser is deliberately limited to exact ISO/US dates,
+`tomorrow`, and `in N days/weeks`. If no safe date can be determined, LawHand
+creates the task without a calendar event so a person can set the date. Replies
+and forwards beginning with `Re:` or `Fwd:` do not retrigger the tag.
+
+Untagged body language and AI-detected date phrases do not create tasks. For
+court or statutory deadlines, verify the trigger, controlling rule,
+jurisdiction, holidays, and calculated date under firm procedure.
+
 ## Rotate or disable an address
 
 - Select **Rotate** if the address was shared too broadly or starts receiving
