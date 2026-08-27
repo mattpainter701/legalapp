@@ -29,7 +29,10 @@ jobs:
         run: |
           require_single_hsts() {
             local url="$1" headers count value
-            headers="$(curl --fail --silent --show-error --max-time 20 --dump-header - --output /dev/null "$url" | tr -d '\r')"
+            # The two MCP probes intentionally return 401 and 404. curl's
+            # --fail treats those expected isolation responses as transport
+            # failures before their security headers can be inspected.
+            headers="$(curl --silent --show-error --max-time 20 --dump-header - --output /dev/null "$url" | tr -d '\r')"
             count="$(printf '%s\n' "$headers" | awk 'tolower($0) ~ /^strict-transport-security:/ { count++ } END { print count + 0 }')"
             value="$(printf '%s\n' "$headers" | awk 'tolower($0) ~ /^strict-transport-security:/ { sub(/^[^:]*:[[:space:]]*/, ""); print }')"
             [[ "$count" == "1" ]]

@@ -190,3 +190,32 @@ def test_production_acceptance_preflights_root_entrypoint_capability() -> None:
     assert "Operator action: install the versioned scripts/lawhand-deploy-from-github" in workflow
     assert "sudo -n /usr/local/sbin/lawhand-deploy-from-github accept" in workflow
     assert "  verify|deploy|accept) ;;" in entrypoint
+
+
+def test_ionos_candidate_uses_pinned_main_without_runner_checkout_or_release_tag() -> (
+    None
+):
+    workflow = (
+        ROOT / ".github" / "workflows" / "deploy-ionos-candidate.yml"
+    ).read_text(encoding="utf-8")
+    entrypoint = (ROOT / "scripts" / "lawhand-ionos-deploy-from-github").read_text(
+        encoding="utf-8"
+    )
+    host_deploy = (ROOT / "scripts" / "deploy_ionos_runner.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Require successful CI for mutation" in workflow
+    assert "runs-on: [self-hosted, Linux, X64, ionos, lawhand-prod]" in workflow
+    assert "environment:" in workflow and "ionos-production" in workflow
+    assert "actions/checkout" not in workflow
+    assert "git/refs/tags/production" not in workflow
+    assert "sudo -n /usr/local/sbin/lawhand-ionos-deploy-from-github" in workflow
+
+    assert "rev-parse 'origin/main^{commit}'" in entrypoint
+    assert '[[ "$requested_sha" == "$main_sha" ]]' in entrypoint
+    assert 'reset --hard "$requested_sha"' in entrypoint
+    assert "  verify|stage|deploy|accept) ;;" in entrypoint
+    assert 'readonly APP_DIR="/srv/lawhand/app"' in entrypoint
+    assert 'readonly PROD_ENV_FILE="/etc/lawhand/core.env"' in host_deploy
+    assert "docker-compose.cube-m.yml" in host_deploy

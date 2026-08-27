@@ -31,6 +31,27 @@ preserving POST bodies and avoiding client-dependent redirect behavior. Nginx
 returns 404 for every other path outside the corresponding allowlist. The raw
 CourtListener sidecar stays private and is never a public Cloudflare origin.
 
+### IONOS core and Skynet research placement
+
+For the first-customer IONOS cutover, all three public product hostnames remain
+on one IONOS core Tunnel and the existing nginx hostname/path allowlists. The
+CourtListener/vector database, source corpus, embedding workers, and raw MCP
+sidecar remain on Skynet. The IONOS backend reaches that sidecar only through a
+Tailscale-restricted private address and the separate
+`MCP_UPSTREAM_API_KEY`; customer keys, OAuth tokens, and application JWTs are
+never forwarded upstream.
+
+This placement keeps the IONOS tenant database as the identity, entitlement,
+billing, quota, and audit source of truth for both public MCP gateways. Pointing
+`research.getlawhand.com` directly at an independent Skynet application copy
+would split that source of truth and is forbidden. A later dedicated research
+gateway may replace the private sidecar path only after it implements the same
+central authorization and billing contract.
+
+The raw sidecar's loopback listener may be published to the tailnet, but never
+to public DNS, a public VM port, or a Cloudflare hostname. The complete host and
+rollback sequence is in [IONOS Cube M production cutover](IONOS_CUTOVER_RUNBOOK.md).
+
 ## Search-engine exposure
 
 Neither MCP hostname publishes a human-readable page, and neither may appear in

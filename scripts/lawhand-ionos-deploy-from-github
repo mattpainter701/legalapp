@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# Root-owned boundary between the IONOS GitHub runner and production checkout.
+# Install as /usr/local/sbin/lawhand-ionos-deploy-from-github. The dedicated
+# runner may sudo only this fixed command.
+set -Eeuo pipefail
+umask 077
+
+readonly APP_DIR="/srv/lawhand/app"
+readonly DEPLOY_USER="lawhandadmin"
+readonly DEPLOY_HOME="/home/lawhandadmin"
+readonly DEPLOY_UID="$(id -u "$DEPLOY_USER")"
+readonly DEPLOY_RUNTIME_DIR="/run/user/$DEPLOY_UID"
+readonly EXPECTED_ORIGIN="https://github.com/mattpainter701/legalapp.git"
+readonly LOCK_FILE="/run/lock/lawhand-ionos-production-deploy.lock"
+
+operation="${1:-}"
+requested_sha="${2:-}"
+
+case "$operation" in
+  verify|stage|deploy|accept) ;;
+  *) echo "Usage: $0 <verify|stage|deploy|accept> <40-character-main-commit>" >&2; exit 2 ;;
+esac
+[[ "$requested_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "ERROR: release must be a full lowercase Git SHA" >&2; exit 2; }
+[[ "$(id -u)" -eq 0 ]] || { echo "ERROR: invoke this entrypoint through its restricted sudo rule" >&2; exit 2; }
+[[ -d "$APP_DIR/.git" && ! -L "$APP_DIR" ]] || { echo "ERROR: IONOS production checkout is missing or unsafe" >&2; exit 2; }
+
+exec 9>"$LOCK_FILE"
+flock -n 9 || { echo "ERROR: another IONOS production operation is running" >&2; exit 75; }
+
+as_deploy_user() {
+  runuser -u "$DEPLOY_USER" -- env \
+    HOME="$DEPLOY_HOME" USER="$DEPLOY_USER" LOGNAME="$DEPLOY_USER" \
+    XDG_RUNTIME_DIR="$DEPLOY_RUNTIME_DIR" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=$DEPLOY_RUNTIME_DIR/bus" \
+    "$@"
+}
+
+[[ "$(as_deploy_user git -C "$APP_DIR" remote get-url origin)" == "$EXPECTED_ORIGIN" ]] || {
+  echo "ERROR: unexpected IONOS Git origin" >&2
+  exit 3
+}
+
+echo "==> Fetching canonical main"
+as_deploy_user git -C "$APP_DIR" fetch --prune origin main
+main_sha="$(as_deploy_user git -C "$APP_DIR" rev-parse 'origin/main^{commit}')"
+[[ "$requested_sha" == "$main_sha" ]] || { echo "ERROR: requested release is not current origin/main" >&2; exit 3; }
+
+current_sha="$(as_deploy_user git -C "$APP_DIR" rev-parse HEAD)"
+tracked_changes="$(as_deploy_user git -C "$APP_DIR" status --porcelain --untracked-files=no)"
+[[ -z "$tracked_changes" ]] || { echo "ERROR: IONOS checkout has tracked local changes" >&2; printf '%s\n' "$tracked_changes" >&2; exit 3; }
+
+if [[ "$operation" == verify ]]; then
+  echo "IONOS_RUNNER_VERIFY=ok"
+  echo "IONOS_DEPLOYED_COMMIT=$current_sha"
+  echo "AVAILABLE_MAIN_COMMIT=$main_sha"
+  exit 0
+fi
+
+if [[ "$operation" == accept ]]; then
+  [[ "$current_sha" == "$requested_sha" ]] || { echo "ERROR: IONOS checkout does not match accepted release" >&2; exit 4; }
+  as_deploy_user env \
+    GITHUB_DEPLOY_COMMIT="$requested_sha" \
+    ENV_FILE=/etc/lawhand/core.env \
+    COMPOSE_FILES="$APP_DIR/docker-compose.hypervisor.yml $APP_DIR/docker-compose.cube-m.yml" \
+    bash "$APP_DIR/scripts/production_acceptance.sh" "$requested_sha"
+  exit 0
+fi
+
+log_dir="/var/log/lawhand-ionos-deploy"
+install -d -m 0700 -o root -g root "$log_dir"
+log_file="$log_dir/$(date -u +%Y%m%dT%H%M%SZ)-${requested_sha:0:12}-${operation}.log"
+exec > >(tee -a "$log_file") 2>&1
+
+as_deploy_user git -C "$APP_DIR" reset --hard "$requested_sha"
+[[ "$(as_deploy_user git -C "$APP_DIR" rev-parse HEAD)" == "$requested_sha" ]] || { echo "ERROR: checkout reset failed" >&2; exit 4; }
+
+verification_mode=full
+[[ "$operation" == stage ]] && verification_mode=cutover-stage
+as_deploy_user env \
+  GITHUB_DEPLOY_COMMIT="$requested_sha" \
+  DEPLOY_VERIFICATION_MODE="$verification_mode" \
+  bash "$APP_DIR/scripts/deploy_ionos_runner.sh"
+
+[[ "$(as_deploy_user git -C "$APP_DIR" rev-parse HEAD)" == "$requested_sha" ]] || { echo "ERROR: checkout moved during deployment" >&2; exit 4; }
+echo "IONOS_DEPLOY_LOG=$log_file"
