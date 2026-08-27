@@ -20,7 +20,7 @@ levels and review controls.
 ## Preflight — 20 minutes before the meeting
 
 1. Confirm production version/readiness and the active paid demo route.
-2. Confirm all 15 matters, 48 documents, contacts, communications, and task-board cards are visible only in the demo tenant.
+2. Confirm all 18 matters, 75 documents, 72 contacts, 54 call records, communications, and task-board cards are visible only in the demo tenant.
 3. Open each document and verify the synthetic warning is visible.
 4. Run each exact prompt below once; keep successful tabs open.
 5. Confirm citations open the correct matter document and passage.

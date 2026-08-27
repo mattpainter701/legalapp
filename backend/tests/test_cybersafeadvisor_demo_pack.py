@@ -19,12 +19,10 @@ def test_demo_manifest_covers_every_shipped_practice_module_with_rich_sources():
 
     assert manifest["tenant_domain"] == "cybersafeadvisor.com"
     assert manifest["synthetic"] is True
-    assert manifest["schema_version"] == 2
-    assert manifest["pack_version"] == "demo-scenario-library-v1"
+    assert manifest["schema_version"] == 3
+    assert manifest["pack_version"] == "demo-scenario-library-v2"
     matters = manifest["matters"]
-    assert set(valid_plugin_names()) <= {
-        matter["primary_plugin"] for matter in matters
-    }
+    assert set(valid_plugin_names()) <= {matter["primary_plugin"] for matter in matters}
     assert all(
         {
             "external_key",
@@ -48,16 +46,29 @@ def test_demo_manifest_covers_every_shipped_practice_module_with_rich_sources():
     assert all(
         matter["client_profile"]["address"]
         and matter["client_profile"]["primary_contact"]["email"].endswith(".invalid")
+        and matter["client_profile"]["secondary_contact"]["email"].endswith(".invalid")
+        and matter["client_profile"]["client_since"]
+        and matter["client_profile"]["preferred_contact_method"] in {"email", "phone"}
         for matter in matters
     )
     assert all(
-        matter["client_profile"]["opposing_party"]["organization"].endswith(" (fictional)")
+        matter["client_profile"]["opposing_party"]["organization"].endswith(
+            " (fictional)"
+        )
         and "[" not in matter["client_profile"]["opposing_party"]["organization"]
         and "]" not in matter["client_profile"]["opposing_party"]["organization"]
         for matter in matters
     )
+    assert len(
+        {
+            matter["client_profile"]["opposing_party"]["organization"]
+            for matter in matters
+        }
+    ) == len(matters)
     documents = [name for matter in manifest["matters"] for name in matter["documents"]]
-    assert len(documents) >= len(matters) * 3
+    assert len(matters) == 18
+    assert len(documents) == 75
+    assert all(len(matter["documents"]) >= 4 for matter in matters)
     assert len(set(documents)) == len(documents)
     assert all((PACK / name).is_file() for name in documents)
 
@@ -106,7 +117,8 @@ def test_demo_support_intake_documents_match_manifest_party_links():
         intake = next(
             PACK / filename
             for filename in matter["documents"]
-            if filename.startswith("support-") and filename.endswith("-intake-and-contact-profile.docx")
+            if filename.startswith("support-")
+            and filename.endswith("-intake-and-contact-profile.docx")
         )
         text = "\n".join(paragraph.text for paragraph in Document(intake).paragraphs)
         opposing = matter["client_profile"]["opposing_party"]
@@ -129,7 +141,9 @@ def test_demo_docx_ooxml_namespace_declarations_are_self_consistent():
                 if not name.endswith(".xml"):
                     continue
                 payload = package.read(name)
-                declared = {match.decode("ascii") for match in namespace_decl.findall(payload)}
+                declared = {
+                    match.decode("ascii") for match in namespace_decl.findall(payload)
+                }
                 for value in ignorable.findall(payload):
                     for prefix in value.split():
                         assert prefix.decode("ascii") in declared, (
