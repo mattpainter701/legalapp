@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import QBOPanel from './QBOPanel'
 
@@ -56,5 +56,11 @@ describe('QBOPanel', () => {
       'Failed to fetch QuickBooks service items. Account settings are still available.'
     )).toBeInTheDocument()
     expect(await screen.findByRole('option', { name: 'Accounts Receivable' })).toBeInTheDocument()
+    api.getQBOItems.mockResolvedValue([{ id: '7', name: 'Legal Services' }])
+    fireEvent.click(screen.getByRole('button', { name: 'Retry QuickBooks data' }))
+    await waitFor(() => expect(api.getQBOItems).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.queryByText(
+      'Failed to fetch QuickBooks service items. Account settings are still available.'
+    )).not.toBeInTheDocument())
   })
 })

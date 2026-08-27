@@ -101,6 +101,7 @@ export default function QBOPanel() {
 
   const loadItems = useCallback(async () => {
     setItemsLoading(true)
+    setError(null)
     const [itemResult, accountResult] = await Promise.allSettled([
       getQBOItems(),
       getQBOAccounts(),
@@ -229,6 +230,9 @@ export default function QBOPanel() {
       {error && (
         <div className="px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-xs font-medium">
           {error}
+          {status?.connected && (
+            <button className="ml-2 underline" onClick={loadItems}>Retry QuickBooks data</button>
+          )}
           <button className="ml-2 underline" onClick={() => setError(null)}>Dismiss</button>
         </div>
       )}
