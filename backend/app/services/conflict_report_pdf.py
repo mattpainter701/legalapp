@@ -17,7 +17,13 @@ def generate_conflict_report_pdf(record) -> bytes:
         from reportlab.lib import colors
         from reportlab.lib.pagesizes import letter
         from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-        from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+        from reportlab.platypus import (
+            Paragraph,
+            SimpleDocTemplate,
+            Spacer,
+            Table,
+            TableStyle,
+        )
     except ImportError as exc:  # pragma: no cover - deployment dependency guard
         raise ImportError("reportlab is required for PDF generation") from exc
 
@@ -69,11 +75,15 @@ def generate_conflict_report_pdf(record) -> bytes:
         ("Email addresses", "emails"),
     ):
         values = query.get(key) or []
-        story.append(Paragraph(f"<b>{label}:</b> {escape(', '.join(values) or 'None')}", body))
+        story.append(
+            Paragraph(f"<b>{label}:</b> {escape(', '.join(values) or 'None')}", body)
+        )
 
     story.extend([Spacer(1, 14), Paragraph("Search results", styles["Heading3"])])
     if not record.result_snapshot:
-        story.append(Paragraph("No potential matches were returned by this search.", body))
+        story.append(
+            Paragraph("No potential matches were returned by this search.", body)
+        )
     for index, match in enumerate(record.result_snapshot or [], 1):
         matter_names = match.get("matter_names") or []
         restricted = int(match.get("restricted_matter_count") or 0)
@@ -82,7 +92,9 @@ def generate_conflict_report_pdf(record) -> bytes:
             f"Matched {escape(str(match.get('match_field') or 'record'))}: {escape(str(match.get('match_value') or ''))}",
         ]
         if matter_names:
-            detail.append(f"Visible matters: {escape(', '.join(str(v) for v in matter_names))}")
+            detail.append(
+                f"Visible matters: {escape(', '.join(str(v) for v in matter_names))}"
+            )
         if restricted:
             detail.append(
                 f"{restricted} restricted matter reference(s); contact an administrator or conflicts reviewer."
@@ -94,7 +106,9 @@ def generate_conflict_report_pdf(record) -> bytes:
         [
             Spacer(1, 10),
             Paragraph("Review notes", styles["Heading3"]),
-            Paragraph(escape(record.notes or "No review decision has been recorded."), body),
+            Paragraph(
+                escape(record.notes or "No review decision has been recorded."), body
+            ),
             Spacer(1, 14),
             Paragraph(
                 "A database search is evidence for attorney review; it is not, by itself, a legal conflict clearance.",

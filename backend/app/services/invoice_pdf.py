@@ -131,13 +131,13 @@ def generate_invoice_pdf(invoice_response, branding: dict | None = None) -> byte
 
     logo = None
     if branding.get("firm_logo_url"):
-        logo = _fetch_logo_image(
-            branding["firm_logo_url"], LOGO_MAX_W, LOGO_MAX_H
-        )
+        logo = _fetch_logo_image(branding["firm_logo_url"], LOGO_MAX_W, LOGO_MAX_H)
     firm_lines = [Paragraph(escape(firm_name), style_title)]
     if branding.get("firm_address"):
         firm_lines.append(
-            Paragraph(escape(branding["firm_address"]).replace("\n", "<br/>"), style_body)
+            Paragraph(
+                escape(branding["firm_address"]).replace("\n", "<br/>"), style_body
+            )
         )
     contact_bits = [
         branding.get(key)

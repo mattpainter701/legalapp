@@ -3,7 +3,15 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -16,7 +24,9 @@ class ConflictCheckRecord(Base):
         Index("idx_conflict_checks_tenant_created", "tenant_id", "created_at"),
         Index("idx_conflict_checks_matter", "matter_id"),
         Index("idx_conflict_checks_creator", "tenant_id", "created_by_user_id"),
-        CheckConstraint("status IN ('open', 'closed')", name="ck_conflict_checks_status"),
+        CheckConstraint(
+            "status IN ('open', 'closed')", name="ck_conflict_checks_status"
+        ),
         CheckConstraint(
             "decision IN ('needs_review', 'no_conflict_found', 'conflict_found', 'cleared_with_conditions')",
             name="ck_conflict_checks_decision",

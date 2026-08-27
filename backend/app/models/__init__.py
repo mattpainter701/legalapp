@@ -184,6 +184,8 @@ __all__ = [
     "IntakeCallDraft",
     "PartnerRotationState",
     "ClientPortalInvite",
+    "ConflictCheckRecord",
+    "PortalInvoiceDownload",
     "SignatureRequest",
     "SignatureSigner",
     "MatterDocument",

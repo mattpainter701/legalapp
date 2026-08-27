@@ -25,9 +25,7 @@ class ConflictCheckCreate(BaseModel):
 
 
 class ConflictCheckClose(BaseModel):
-    decision: Literal[
-        "no_conflict_found", "conflict_found", "cleared_with_conditions"
-    ]
+    decision: Literal["no_conflict_found", "conflict_found", "cleared_with_conditions"]
     notes: str = Field(min_length=1, max_length=10000)
     acknowledge_attorney_review: bool
 

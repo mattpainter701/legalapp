@@ -1111,9 +1111,7 @@ async def portal_download_invoice(
     if invoice is None:
         raise HTTPException(status_code=404, detail="Invoice not found")
 
-    response = await _load_invoice_response(
-        db, invoice.id, uuid.UUID(ctx.tenant_id)
-    )
+    response = await _load_invoice_response(db, invoice.id, uuid.UUID(ctx.tenant_id))
     # A paid status can represent a write-off or trust transfer that has no
     # Payment row. Match the portal list's authoritative paid-state behavior.
     if invoice.status == "paid":

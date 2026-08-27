@@ -34,7 +34,9 @@ def _clean_terms(values: list[str]) -> list[str]:
         if not value:
             continue
         if len(value) > 300:
-            raise HTTPException(status_code=422, detail="Search terms are limited to 300 characters")
+            raise HTTPException(
+                status_code=422, detail="Search terms are limited to 300 characters"
+            )
         key = value.casefold()
         if key not in seen:
             seen.add(key)
@@ -68,7 +70,9 @@ async def _visible_matter_ids(db: AsyncSession, user) -> set[uuid.UUID] | None:
     return assigned | owned
 
 
-def _snapshot_matches(raw_matches: list[dict], visible: set[uuid.UUID] | None) -> tuple[list[dict], int]:
+def _snapshot_matches(
+    raw_matches: list[dict], visible: set[uuid.UUID] | None
+) -> tuple[list[dict], int]:
     snapshot: list[dict] = []
     total_restricted = 0
     for raw in raw_matches:
@@ -97,9 +101,13 @@ def _snapshot_matches(raw_matches: list[dict], visible: set[uuid.UUID] | None) -
                     else str(raw.get("display_name") or "Potential match")
                 ),
                 "contact_type": (
-                    "restricted" if counterparty_only and fully_restricted else raw.get("contact_type")
+                    "restricted"
+                    if counterparty_only and fully_restricted
+                    else raw.get("contact_type")
                 ),
-                "email": None if counterparty_only and fully_restricted else raw.get("email"),
+                "email": None
+                if counterparty_only and fully_restricted
+                else raw.get("email"),
                 "match_field": raw.get("match_field"),
                 "match_value": raw.get("match_value"),
                 "matter_ids": visible_ids,
@@ -122,14 +130,20 @@ def _to_response(record: ConflictCheckRecord) -> ConflictCheckResponse:
         status=record.status,
         decision=record.decision,
         notes=record.notes,
-        created_by_user_id=(str(record.created_by_user_id) if record.created_by_user_id else None),
-        closed_by_user_id=(str(record.closed_by_user_id) if record.closed_by_user_id else None),
+        created_by_user_id=(
+            str(record.created_by_user_id) if record.created_by_user_id else None
+        ),
+        closed_by_user_id=(
+            str(record.closed_by_user_id) if record.closed_by_user_id else None
+        ),
         created_at=record.created_at,
         closed_at=record.closed_at,
     )
 
 
-async def _record_or_404(db: AsyncSession, record_id: uuid.UUID, user) -> ConflictCheckRecord:
+async def _record_or_404(
+    db: AsyncSession, record_id: uuid.UUID, user
+) -> ConflictCheckRecord:
     record = await db.scalar(
         select(ConflictCheckRecord).where(
             ConflictCheckRecord.id == record_id,
@@ -164,13 +178,17 @@ async def create_conflict_check(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail="Invalid matter ID") from exc
         matter = await db.scalar(
-            select(Matter).where(Matter.id == matter_id, Matter.tenant_id == user.tenant_id)
+            select(Matter).where(
+                Matter.id == matter_id, Matter.tenant_id == user.tenant_id
+            )
         )
         if matter is None:
             raise HTTPException(status_code=404, detail="Matter not found")
         visible = await _visible_matter_ids(db, user)
         if visible is not None and matter_id not in visible:
-            raise HTTPException(status_code=403, detail="You are not assigned to that matter")
+            raise HTTPException(
+                status_code=403, detail="You are not assigned to that matter"
+            )
 
     result = await run_conflict_check(
         db=db,
@@ -221,7 +239,10 @@ async def list_conflict_checks(
                 ConflictCheckRecord.matter_id.in_(visible or {ZERO_UUID}),
             )
         )
-    total = int(await db.scalar(select(func.count(ConflictCheckRecord.id)).where(*conditions)) or 0)
+    total = int(
+        await db.scalar(select(func.count(ConflictCheckRecord.id)).where(*conditions))
+        or 0
+    )
     rows = list(
         (
             await db.scalars(
@@ -258,7 +279,9 @@ async def close_conflict_check(
     await set_tenant_context(db, str(user.tenant_id))
     record = await _record_or_404(db, record_id, user)
     if record.status == "closed":
-        raise HTTPException(status_code=409, detail="Closed conflict checks are immutable")
+        raise HTTPException(
+            status_code=409, detail="Closed conflict checks are immutable"
+        )
     if not body.acknowledge_attorney_review:
         raise HTTPException(
             status_code=422,
