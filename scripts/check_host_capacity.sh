@@ -7,12 +7,16 @@ set -euo pipefail
 # several build/init processes remain uncapped. Keep a meaningful host/daemon
 # margin above that configured sum while allowing advertised 32 GB hosts to
 # report less than 32 GiB to the guest OS.
-readonly MIN_HOST_CPUS=8
-readonly MIN_HOST_MEMORY_KIB=$((24 * 1024 * 1024))
+readonly STANDARD_MIN_HOST_CPUS=8
+readonly STANDARD_MIN_HOST_MEMORY_KIB=$((24 * 1024 * 1024))
+readonly CUBE_M_MIN_HOST_CPUS=4
+readonly CUBE_M_MIN_HOST_MEMORY_KIB=$((14 * 1024 * 1024))
 readonly VPS_MIN_DISK_TOTAL_KIB=$((160 * 1024 * 1024))
 readonly VPS_MIN_DISK_AVAILABLE_KIB=$((25 * 1024 * 1024))
 readonly HYPERVISOR_MIN_DISK_TOTAL_KIB=$((80 * 1024 * 1024))
 readonly HYPERVISOR_MIN_DISK_AVAILABLE_KIB=$((15 * 1024 * 1024))
+readonly CUBE_M_MIN_DISK_TOTAL_KIB=$((200 * 1024 * 1024))
+readonly CUBE_M_MIN_DISK_AVAILABLE_KIB=$((30 * 1024 * 1024))
 # Builds and pre-deploy recovery artifacts consume transient space after this
 # check runs. Reserve a fixed amount in addition to the free space needed for
 # `df` to remain strictly below the runtime DISK_MAX_PERCENT gate.
@@ -27,6 +31,7 @@ validate_capacity() {
   local profile="$1" cpus="$2" memory_kib="$3" disk_total_kib="$4"
   local disk_used_kib="$5" disk_available_kib="$6" disk_path="$7"
   local disk_max_percent="${DISK_MAX_PERCENT:-$DEFAULT_DISK_MAX_PERCENT}"
+  local min_host_cpus min_host_memory_kib
   local min_disk_total_kib min_disk_available_kib disk_usable_kib
   local runtime_free_percent runtime_free_kib threshold_required_kib
   local effective_required_kib
@@ -34,12 +39,22 @@ validate_capacity() {
 
   case "$profile" in
     vps)
+      min_host_cpus="$STANDARD_MIN_HOST_CPUS"
+      min_host_memory_kib="$STANDARD_MIN_HOST_MEMORY_KIB"
       min_disk_total_kib="$VPS_MIN_DISK_TOTAL_KIB"
       min_disk_available_kib="$VPS_MIN_DISK_AVAILABLE_KIB"
       ;;
     hypervisor)
+      min_host_cpus="$STANDARD_MIN_HOST_CPUS"
+      min_host_memory_kib="$STANDARD_MIN_HOST_MEMORY_KIB"
       min_disk_total_kib="$HYPERVISOR_MIN_DISK_TOTAL_KIB"
       min_disk_available_kib="$HYPERVISOR_MIN_DISK_AVAILABLE_KIB"
+      ;;
+    cube-m)
+      min_host_cpus="$CUBE_M_MIN_HOST_CPUS"
+      min_host_memory_kib="$CUBE_M_MIN_HOST_MEMORY_KIB"
+      min_disk_total_kib="$CUBE_M_MIN_DISK_TOTAL_KIB"
+      min_disk_available_kib="$CUBE_M_MIN_DISK_AVAILABLE_KIB"
       ;;
     *)
       echo "ERROR: unknown host capacity profile: $profile" >&2
@@ -56,11 +71,11 @@ validate_capacity() {
     && (( disk_max_percent >= 1 && disk_max_percent <= 100 )) \
     || failures+=("DISK_MAX_PERCENT must be an integer from 1 to 100")
 
-  if [[ "$cpus" =~ ^[0-9]+$ ]] && (( cpus < MIN_HOST_CPUS )); then
-    failures+=("$cpus online CPU(s); at least $MIN_HOST_CPUS are required")
+  if [[ "$cpus" =~ ^[0-9]+$ ]] && (( cpus < min_host_cpus )); then
+    failures+=("$cpus online CPU(s); at least $min_host_cpus are required")
   fi
-  if [[ "$memory_kib" =~ ^[0-9]+$ ]] && (( memory_kib < MIN_HOST_MEMORY_KIB )); then
-    failures+=("$(format_gib "$memory_kib") GiB RAM; at least $(format_gib "$MIN_HOST_MEMORY_KIB") GiB is required")
+  if [[ "$memory_kib" =~ ^[0-9]+$ ]] && (( memory_kib < min_host_memory_kib )); then
+    failures+=("$(format_gib "$memory_kib") GiB RAM; at least $(format_gib "$min_host_memory_kib") GiB is required")
   fi
   if [[ "$disk_total_kib" =~ ^[0-9]+$ ]] && (( disk_total_kib < min_disk_total_kib )); then
     failures+=("$(format_gib "$disk_total_kib") GiB total on $disk_path; at least $(format_gib "$min_disk_total_kib") GiB is required for the $profile profile")
@@ -174,14 +189,14 @@ for service_name, service in services.items():
 
 main() {
   if (( $# < 2 )); then
-    echo "Usage: bash scripts/check_host_capacity.sh <vps|hypervisor> <capacity-path> [capacity-path ...]" >&2
+    echo "Usage: bash scripts/check_host_capacity.sh <vps|hypervisor|cube-m> <capacity-path> [capacity-path ...]" >&2
     return 2
   fi
 
   local profile="$1"
   case "$profile" in
-    vps|hypervisor) ;;
-    *) echo "ERROR: host capacity profile must be vps or hypervisor" >&2; return 2 ;;
+    vps|hypervisor|cube-m) ;;
+    *) echo "ERROR: host capacity profile must be vps, hypervisor, or cube-m" >&2; return 2 ;;
   esac
 
   local override="${HOST_CAPACITY_OVERRIDE:-false}"

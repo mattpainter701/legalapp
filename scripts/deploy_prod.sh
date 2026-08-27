@@ -10,6 +10,12 @@ case "$BOOTSTRAP_MODE" in
   *) echo "ERROR: BOOTSTRAP_MODE must be true or false" >&2; exit 2 ;;
 esac
 
+DEPLOY_VERIFICATION_MODE="${DEPLOY_VERIFICATION_MODE:-full}"
+case "$DEPLOY_VERIFICATION_MODE" in
+  full|cutover-stage) ;;
+  *) echo "ERROR: DEPLOY_VERIFICATION_MODE must be full or cutover-stage" >&2; exit 2 ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$ROOT_DIR"
@@ -199,7 +205,7 @@ mkdir -p "$release_state_dir"
 chmod 700 "$release_state_dir"
 rollback_manifest="$release_state_dir/$release_tag.images.tsv"
 printf 'release\tphase\tservice\timage_id\timage_tag\n' > "$rollback_manifest"
-for service in backend scheduler migrator frontend nginx litellm; do
+for service in backend scheduler migrator frontend office-addin nginx litellm; do
   previous_id="$("${compose[@]}" images -q "$service" 2>/dev/null | head -n 1 || true)"
   [[ -n "$previous_id" ]] || continue
   previous_tag="clarity-legal/$service:rollback-before-$release_tag"
@@ -212,8 +218,13 @@ if [[ "$MODE" == "--pull" ]]; then
   "${compose[@]}" pull --ignore-buildable
 fi
 
-echo "==> Building application images"
-"${compose[@]}" build backend scheduler migrator frontend nginx litellm
+echo "==> Building application images sequentially"
+# The first-customer Cube has ample runtime headroom but not enough memory for
+# several independent Node/Python image builds to peak concurrently. Sequential
+# builds trade a few minutes of release time for a deterministic memory ceiling.
+for service in backend scheduler migrator frontend office-addin nginx litellm; do
+  COMPOSE_PARALLEL_LIMIT=1 "${compose[@]}" build "$service"
+done
 
 echo "==> Proving backend UID 10001 can write, read, and delete the upload bind"
 upload_probe=".legalapp-upload-probe-$release_tag-$$"
@@ -326,17 +337,22 @@ echo "==> Verifying frontend image contents"
 echo "==> Verifying that no existing table or tenant count decreased"
 COMPOSE_FILES="$compose_guard_files" BACKUP_DIR=backups bash scripts/prod_data_guard.sh post "$data_guard_counts" "$litellm_data_guard_counts"
 
-echo "==> Running production readiness, scheduler, Zoom ingress, HTTP, and TLS gates"
+echo "==> Running release verification gates"
 zoom_required=true
 if [[ "$BOOTSTRAP_MODE" == true ]]; then
   zoom_required=false
   echo "WARNING: BOOTSTRAP MODE — deployment is NOT GO-LIVE until tenant Zoom setup and a strict production check pass." >&2
 fi
-ENV_FILE="$ENV_FILE" COMPOSE_FILES="$COMPOSE_FILES" ZOOM_REQUIRED="$zoom_required" bash scripts/production_check.sh
+if [[ "$DEPLOY_VERIFICATION_MODE" == cutover-stage ]]; then
+  echo "WARNING: CUTOVER STAGE — the IONOS origin is not public production until the full post-DNS production check passes." >&2
+  ENV_FILE="$ENV_FILE" COMPOSE_FILES="$COMPOSE_FILES" bash scripts/ionos_stage_check.sh
+else
+  ENV_FILE="$ENV_FILE" COMPOSE_FILES="$COMPOSE_FILES" ZOOM_REQUIRED="$zoom_required" bash scripts/production_check.sh
+fi
 
 # Keep the immediately previous release images available for an operator-led
 # rollback. Image retention/pruning is a separate, deliberate maintenance task.
-for service in backend scheduler migrator frontend nginx litellm; do
+for service in backend scheduler migrator frontend office-addin nginx litellm; do
   current_id="$("${compose[@]}" images -q "$service" 2>/dev/null | head -n 1 || true)"
   [[ -n "$current_id" ]] || continue
   current_tag="clarity-legal/$service:release-$release_tag"

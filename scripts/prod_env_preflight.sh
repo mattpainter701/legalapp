@@ -467,8 +467,12 @@ elif (( ${#compose_file_paths[@]} == 2 )) \
   && [[ "${compose_file_paths[0]}" == "$ROOT_DIR/docker-compose.yml" ]] \
   && [[ "${compose_file_paths[1]}" == "$ROOT_DIR/docker-compose.prod.yml" ]]; then
   capacity_profile="vps"
+elif (( ${#compose_file_paths[@]} == 2 )) \
+  && [[ "${compose_file_paths[0]}" == "$ROOT_DIR/docker-compose.hypervisor.yml" ]] \
+  && [[ "${compose_file_paths[1]}" == "$ROOT_DIR/docker-compose.cube-m.yml" ]]; then
+  capacity_profile="cube-m"
 else
-  errors+=("COMPOSE_FILES must be exactly docker-compose.hypervisor.yml, or docker-compose.yml followed by docker-compose.prod.yml; extra, reversed, mixed, and unknown overrides are prohibited")
+  errors+=("COMPOSE_FILES must be exactly docker-compose.hypervisor.yml, docker-compose.hypervisor.yml followed by docker-compose.cube-m.yml, or docker-compose.yml followed by docker-compose.prod.yml; extra, reversed, mixed, and unknown overrides are prohibited")
 fi
 for key in "${!guarded_compose_vars[@]}"; do
   case "$key" in

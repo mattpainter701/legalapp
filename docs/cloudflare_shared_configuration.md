@@ -93,6 +93,15 @@ Do not synchronize R2 credentials across the web allowlist. Scope them to the ex
 - Unknown and sensitive paths fail closed.
 - DNS is published only after the application route, hostname isolation, authentication, and TLS behavior are verified.
 
+During the IONOS host migration, create a separately credentialed Tunnel and
+stage its canonical ingress before changing any record. Keep the existing
+`LAWHAND_CLOUDFLARE_TUNNEL_*` repository variables pointed at the live Skynet
+Tunnel until public DNS has moved and the exact IONOS revision passes
+acceptance. Then update the three Tunnel variables together and retain the old
+target in the private release record for the bounded rollback window. Never
+route `research.getlawhand.com` directly to the raw Skynet sidecar; it remains a
+public IONOS gateway backed by a private authenticated research connection.
+
 See `docs/mcp_hostname_operations.md` and `docs/mcp_security_operations.md` for the production procedures.
 
 ## Change record
@@ -103,3 +112,7 @@ On 2026-08-24, `intake.getlawhand.com` was onboarded to Email Routing, its
 catch-all was attached to `lawhand-inbound-email`, and the encrypted delivery
 secret name was added to the `legalapp` production environment. The existing
 Cloudflare Tunnel ingress was not changed.
+
+On 2026-08-26, the repository documented the staged IONOS Tunnel cutover model.
+No DNS record, live Tunnel identifier, or credential was changed by that
+documentation update.
