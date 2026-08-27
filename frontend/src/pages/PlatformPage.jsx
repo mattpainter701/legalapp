@@ -1175,7 +1175,30 @@ function LogsTab({ platformKey, tenants }) {
 // ── AI Routing Tab (Task 1206) ─────────────────────────────────────────────
 
 const emptyRoute = () => ({ key_id: '', provider_id: '', model: '', capacity: 100, alternates: [], fallbacks: [], allow_matter_context: false })
-const defaultBackgroundQuota = () => ({ account_five_hour: 2050, account_weekly: 5100, account_monthly: 10250, tenant_five_hour: 250, tenant_weekly: 750, tenant_monthly: 1500, reservation_ttl_minutes: 15 })
+// The pool's real budget is provider value; the request ceilings are a coarse
+// backstop. Defaults mirror the published OpenCode Go dollar windows.
+const defaultBackgroundQuota = () => ({
+  account_five_hour: 2050, account_weekly: 5100, account_monthly: 10250,
+  tenant_five_hour: 250, tenant_weekly: 750, tenant_monthly: 1500,
+  reservation_ttl_minutes: 15,
+  account_five_hour_usd: 12, account_weekly_usd: 30, account_monthly_usd: 60,
+  tenant_five_hour_usd: 3, tenant_weekly_usd: 8, tenant_monthly_usd: 15,
+})
+
+const MICROS_PER_USD = 1_000_000
+const SPEND_WINDOWS = ['account_five_hour', 'account_weekly', 'account_monthly', 'tenant_five_hour', 'tenant_weekly', 'tenant_monthly']
+
+// The API stores money as integer micros; the form edits dollars.
+const quotaFromLimits = (limits) => {
+  const next = { ...defaultBackgroundQuota(), ...(limits || {}) }
+  SPEND_WINDOWS.forEach((window) => {
+    const micros = limits?.[`${window}_micros`]
+    if (typeof micros === 'number' && micros > 0) next[`${window}_usd`] = micros / MICROS_PER_USD
+  })
+  return next
+}
+
+const money = (value) => `$${Number(value ?? 0).toFixed(2)}`
 const isCompleteTarget = (target) => Boolean(target?.provider_id && target?.key_id && target?.model)
 const hasRouteConfiguration = (route) => Boolean(
   route?.provider_id
@@ -2525,11 +2548,39 @@ function LiteLLMGatewayPanel({ status, checking, reloading, onCheck, onReload })
   )
 }
 
+function SpendWindowCard({ label, spend, requests, children }) {
+  const percent = Math.min(100, Number(spend?.percent ?? 0))
+  return (
+    <div className="rounded-lg border border-brand-line bg-brand-bg px-4 py-3">
+      <p className="text-[10px] uppercase tracking-wider text-brand-muted font-sans">{label}</p>
+      <p className="mt-1 text-xl font-serif font-bold text-brand-ink tabular-nums">
+        {money(spend?.spent_usd)} <span className="text-brand-muted font-normal">/ {money(spend?.limit_usd)}</span>
+      </p>
+      <div className="mt-2 h-1 rounded-full bg-brand-line overflow-hidden">
+        <div className={`h-full ${percent >= 90 ? 'bg-brand-amber' : 'bg-brand-accent'}`} style={{ width: `${percent}%` }} />
+      </div>
+      <p className="mt-2 text-xs text-brand-muted font-sans tabular-nums">
+        {money(spend?.remaining_usd)} left · {requests?.used ?? 0} requests
+      </p>
+      {children}
+    </div>
+  )
+}
+
 function BackgroundQuotaPanel({ usage, quota, onChange, saving, onSave }) {
-  const fiveHour = usage?.five_hour || {}
-  const weekly = usage?.weekly || {}
-  const monthly = usage?.monthly || {}
-  const fields = [
+  const value = usage?.value || {}
+  const monthlySpend = value.monthly || {}
+  const unreconciled = value.unreconciled || {}
+  // Money is the enforced budget; request ceilings are the coarse second guard.
+  const spendFields = [
+    ['account_five_hour_usd', 'Pool / 5 hours'],
+    ['account_weekly_usd', 'Pool / 7 days'],
+    ['account_monthly_usd', 'Pool / month'],
+    ['tenant_five_hour_usd', 'Firm / 5 hours'],
+    ['tenant_weekly_usd', 'Firm / 7 days'],
+    ['tenant_monthly_usd', 'Firm / month'],
+  ]
+  const requestFields = [
     ['account_five_hour', 'Pool / 5 hours'],
     ['account_weekly', 'Pool / 7 days'],
     ['account_monthly', 'Pool / month'],
@@ -2541,41 +2592,61 @@ function BackgroundQuotaPanel({ usage, quota, onChange, saving, onSave }) {
     <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden mb-6">
       <div className="px-5 py-4 border-b border-brand-line flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <Activity size={16} className="text-brand-accent" />
-            <h3 className="font-serif font-bold text-brand-ink">Background request budget</h3>
-            {monthly.projected_over_budget && <span className="rounded-full bg-brand-amber/10 px-2 py-0.5 text-[11px] text-brand-amber font-sans">Projected over budget</span>}
+            <h3 className="font-serif font-bold text-brand-ink">Background pool budget</h3>
+            {monthlySpend.projected_over_budget && <span className="rounded-full bg-brand-amber/10 px-2 py-0.5 text-[11px] text-brand-amber font-sans">Projected over budget</span>}
           </div>
-          <p className="text-xs text-brand-muted font-sans mt-1">Atomic reservations enforce the shared subscription windows and per-firm fairness before inference.</p>
+          <p className="text-xs text-brand-muted font-sans mt-1">The provider meters spend, not calls, so admission reserves against these dollar windows before every request.</p>
         </div>
         <button type="button" onClick={onSave} disabled={saving} className="inline-flex items-center gap-2 px-3 py-2 bg-brand-ink text-white text-xs font-medium font-sans rounded-lg hover:bg-brand-ink-2 disabled:opacity-40">
           {saving ? <RefreshCw size={12} className="animate-spin" /> : <Save size={12} />}
           {saving ? 'Saving…' : 'Save budget'}
         </button>
       </div>
+
+      {Number(unreconciled.requests ?? 0) > 0 && (
+        <div className="px-5 py-3 bg-brand-amber/5 border-b border-brand-line flex items-start gap-2">
+          <AlertTriangle size={14} className="text-brand-amber mt-0.5 shrink-0" />
+          <p className="text-xs text-brand-ink font-sans">
+            <span className="font-medium">{unreconciled.requests} unconfirmed {unreconciled.requests === 1 ? 'request holds' : 'requests hold'} {money(unreconciled.held_usd)}.</span>{' '}
+            The provider never confirmed whether these were billed, so they keep their estimated cost against the budget until reconciliation resolves them.
+          </p>
+        </div>
+      )}
+
       <div className="p-5 grid grid-cols-1 xl:grid-cols-[1fr_1fr_1fr_2fr] gap-5">
-        <div className="rounded-lg border border-brand-line bg-brand-bg px-4 py-3">
-          <p className="text-[10px] uppercase tracking-wider text-brand-muted font-sans">Rolling five-hour pool</p>
-          <p className="mt-1 text-xl font-serif font-bold text-brand-ink">{fiveHour.used ?? 0} / {quota.account_five_hour}</p>
-          <p className="mt-1 text-xs text-brand-muted font-sans">{fiveHour.remaining ?? quota.account_five_hour} requests remaining</p>
-        </div>
-        <div className="rounded-lg border border-brand-line bg-brand-bg px-4 py-3">
-          <p className="text-[10px] uppercase tracking-wider text-brand-muted font-sans">Rolling seven-day pool</p>
-          <p className="mt-1 text-xl font-serif font-bold text-brand-ink">{weekly.used ?? 0} / {quota.account_weekly}</p>
-          <p className="mt-1 text-xs text-brand-muted font-sans">{weekly.remaining ?? quota.account_weekly} requests remaining</p>
-        </div>
-        <div className="rounded-lg border border-brand-line bg-brand-bg px-4 py-3">
-          <p className="text-[10px] uppercase tracking-wider text-brand-muted font-sans">Monthly pool</p>
-          <p className="mt-1 text-xl font-serif font-bold text-brand-ink">{monthly.used ?? 0} / {quota.account_monthly}</p>
-          <p className="mt-1 text-xs text-brand-muted font-sans">{monthly.percent ?? 0}% used · {monthly.month_elapsed_percent ?? 0}% of month elapsed</p>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          {fields.map(([field, label]) => (
-            <label key={field} className="text-xs text-brand-muted font-sans">
-              {label}
-              <input type="number" min="1" value={quota[field]} onChange={(event) => onChange({ ...quota, [field]: Number(event.target.value) })} className="mt-1 w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono bg-brand-surface" />
-            </label>
-          ))}
+        <SpendWindowCard label="Rolling five-hour pool" spend={value.five_hour} requests={usage?.five_hour} />
+        <SpendWindowCard label="Rolling seven-day pool" spend={value.weekly} requests={usage?.weekly} />
+        <SpendWindowCard label="Monthly pool" spend={monthlySpend} requests={usage?.monthly}>
+          <p className="mt-1 text-xs text-brand-muted font-sans tabular-nums">
+            {monthlySpend.month_elapsed_percent ?? 0}% of month elapsed · tracking to {money(monthlySpend.projected_month_usd)}
+          </p>
+        </SpendWindowCard>
+        <div className="flex flex-col gap-4">
+          <div>
+            <p className="text-[10px] uppercase tracking-wider text-brand-muted font-sans mb-2">Spend limits (USD) — enforced</p>
+            <div className="grid grid-cols-2 gap-3">
+              {spendFields.map(([field, label]) => (
+                <label key={field} className="text-xs text-brand-muted font-sans">
+                  {label}
+                  <input type="number" min="0.01" step="0.01" value={quota[field]} onChange={(event) => onChange({ ...quota, [field]: Number(event.target.value) })} className="mt-1 w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono bg-brand-surface" />
+                </label>
+              ))}
+            </div>
+          </div>
+          <details className="text-xs">
+            <summary className="cursor-pointer text-brand-muted font-sans">Request backstop — not the provider's limit</summary>
+            <p className="mt-2 text-[11px] text-brand-muted font-sans">A coarse second ceiling. Published request counts are estimates, so these must never be treated as the budget.</p>
+            <div className="grid grid-cols-2 gap-3 mt-2">
+              {requestFields.map(([field, label]) => (
+                <label key={field} className="text-xs text-brand-muted font-sans">
+                  {label}
+                  <input type="number" min="1" value={quota[field]} onChange={(event) => onChange({ ...quota, [field]: Number(event.target.value) })} className="mt-1 w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono bg-brand-surface" />
+                </label>
+              ))}
+            </div>
+          </details>
         </div>
       </div>
     </div>
@@ -2635,7 +2706,7 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
       setPremium({ key_id: prem.key_id || '', provider_id: prem.provider_id || '', model: prem.model || '', capacity: prem.capacity || 100, alternates: prem.alternates || [], fallbacks: prem.fallbacks || [], allow_matter_context: Boolean(prem.allow_matter_context) })
       setBackground({ key_id: bg.key_id || '', provider_id: bg.provider_id || '', model: bg.model || '', capacity: bg.capacity || 100, alternates: bg.alternates || [], fallbacks: bg.fallbacks || [], allow_matter_context: false })
       setBackgroundUsage(usageData)
-      setBackgroundQuota({ ...defaultBackgroundQuota(), ...(usageData?.limits || {}) })
+      setBackgroundQuota(quotaFromLimits(usageData?.limits))
     } catch (e) {
       if (e?.response?.status === 403) {
         setLoadError('Platform access was denied. Sign in again with the current platform key.')
@@ -2813,7 +2884,7 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
     try {
       const data = await updateBackgroundAssistantQuota(platformKey, backgroundQuota)
       setBackgroundUsage(data)
-      setBackgroundQuota({ ...defaultBackgroundQuota(), ...(data.limits || {}) })
+      setBackgroundQuota(quotaFromLimits(data.limits))
       setSaveResult({ ok: true, message: 'Background request budget saved.' })
     } catch (error) {
       setSaveResult({ ok: false, error: apiErrorMessage(error, 'Background budget save failed') })
