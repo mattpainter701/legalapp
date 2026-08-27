@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.27.4 — QuickBooks invoice sync is smoother and respects tax choices
+
+Released August 27, 2026.
+
+QuickBooks connections now return directly to LawHand, account setup is more reliable, and each invoice's sales-tax choice carries into QuickBooks.
+
+- **Return directly to QuickBooks settings.** After approving the connection in Intuit, administrators land back in LawHand with a clear connected confirmation.
+- **Configure accounts without losing other mappings.** Accounts-receivable settings save correctly, and a temporary catalogue error no longer hides every available QuickBooks option.
+- **Keep non-taxable legal services non-taxable.** An invoice with a zero sales-tax rate sends non-taxable lines to QuickBooks; a positive rate sends taxable lines.
+
 ## 2026.08.27.3 — Signature requests are easier to deliver and follow through
 
 Released August 27, 2026.

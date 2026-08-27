@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Added
+- **QuickBooks connection and invoice tax handling are production-ready:**
+  successful Intuit authorization returns to the LawHand QuickBooks admin tab,
+  A/R settings serialize database UUIDs correctly, QBO routes use an isolated
+  edge-rate bucket, partial catalogue failures remain usable, and invoice
+  sales-tax choices explicitly set each synced QBO line taxable or non-taxable.
 - **E-sign delivery completion:** internal signature requests now email the
   actionable signer, expose delivery and first-view status, support manual
   resend, notify the next signer in sequential workflows, and execute configured
@@ -125,6 +130,11 @@
   endpoint in a browser has somewhere to go without the hostname serving HTML.
 
 ### Added
+- **QuickBooks connection and invoice tax handling are production-ready:**
+  successful Intuit authorization returns to the LawHand QuickBooks admin tab,
+  A/R settings serialize database UUIDs correctly, QBO routes use an isolated
+  edge-rate bucket, partial catalogue failures remain usable, and invoice
+  sales-tax choices explicitly set each synced QBO line taxable or non-taxable.
 - **Matter correspondence and email are documented for the people who use
   them:** the in-product user guide now covers the matter Correspondence tab —
   mailbox capture rules and **Scan now**, per-matter forwarding addresses and
@@ -147,6 +157,11 @@
   diagnostics now report the native tenant/user access model directly.
 
 ### Added
+- **QuickBooks connection and invoice tax handling are production-ready:**
+  successful Intuit authorization returns to the LawHand QuickBooks admin tab,
+  A/R settings serialize database UUIDs correctly, QBO routes use an isolated
+  edge-rate bucket, partial catalogue failures remain usable, and invoice
+  sales-tax choices explicitly set each synced QBO line taxable or non-taxable.
 - **Release-gated LawHand Research MCP connection contract:** the public
   research catalog is now strictly authority retrieval/status/export and new
   header credentials use the `lhrk_` prefix while existing hashed `clmcp_`
@@ -421,6 +436,11 @@
   now names the unsupported Office versions instead.
 
 ### Added
+- **QuickBooks connection and invoice tax handling are production-ready:**
+  successful Intuit authorization returns to the LawHand QuickBooks admin tab,
+  A/R settings serialize database UUIDs correctly, QBO routes use an isolated
+  edge-rate bucket, partial catalogue failures remain usable, and invoice
+  sales-tax choices explicitly set each synced QBO line taxable or non-taxable.
 - **Billing status visible to the firm:** `/auth/me` and `/api/billing/status`
   now return `subscription_status` and `billing_status`. The browser previously
   received only `billing_tier` and could not learn a tenant was `past_due` even
@@ -447,6 +467,11 @@
   See `docs/archive/word-addin-removed.md`.
 
 ### Added
+- **QuickBooks connection and invoice tax handling are production-ready:**
+  successful Intuit authorization returns to the LawHand QuickBooks admin tab,
+  A/R settings serialize database UUIDs correctly, QBO routes use an isolated
+  edge-rate bucket, partial catalogue failures remain usable, and invoice
+  sales-tax choices explicitly set each synced QBO line taxable or non-taxable.
 - **Dedicated Clients & CRM workspace:** replaced the hidden generic contact
   entry with first-class client list and profile workspaces covering lifecycle,
   identity, addresses, two phone numbers, DOB, emergency contacts,
@@ -613,6 +638,11 @@
   a user's browser without requiring them to clear storage.
 
 ### Added
+- **QuickBooks connection and invoice tax handling are production-ready:**
+  successful Intuit authorization returns to the LawHand QuickBooks admin tab,
+  A/R settings serialize database UUIDs correctly, QBO routes use an isolated
+  edge-rate bucket, partial catalogue failures remain usable, and invoice
+  sales-tax choices explicitly set each synced QBO line taxable or non-taxable.
 - **SBOM and AI-BOM inventory tracking:** added a standard-library inventory
   generator, `make sbom-inventory`, generated JSON/Markdown inventory outputs,
   and an AI/SBOM/DLP risk roadmap. This is a tracking artifact for current
@@ -686,6 +716,11 @@
   the nullable `error_logs.tenant_id` RLS policy.
 
 ### Added
+- **QuickBooks connection and invoice tax handling are production-ready:**
+  successful Intuit authorization returns to the LawHand QuickBooks admin tab,
+  A/R settings serialize database UUIDs correctly, QBO routes use an isolated
+  edge-rate bucket, partial catalogue failures remain usable, and invoice
+  sales-tax choices explicitly set each synced QBO line taxable or non-taxable.
 - **Intake call drafts and action receipts:** added
   `intake_call_drafts` (`078_intake_call_drafts`) with hardened tenant RLS,
   current-user draft list/upsert/delete endpoints at `/api/intake/drafts`,
@@ -1148,6 +1183,11 @@
   backend compile, and `npm run build`.
 
 ### Added
+- **QuickBooks connection and invoice tax handling are production-ready:**
+  successful Intuit authorization returns to the LawHand QuickBooks admin tab,
+  A/R settings serialize database UUIDs correctly, QBO routes use an isolated
+  edge-rate bucket, partial catalogue failures remain usable, and invoice
+  sales-tax choices explicitly set each synced QBO line taxable or non-taxable.
 - **Call Inbox dashboard redesign:** reworked the intake dashboard into a two-pane "Call Inbox" — a left-hand unified call feed that auto-refreshes every 15s (visibility-aware polling) and a right-hand work panel (caller facts → auto-searched history → pre-filled capture/route form). New calls (manual or webhook-imported) surface within ~15s with an in-page toast + WebAudio chime; mute toggle persisted per tenant. The `recent-callers` feed now exposes `source`, `answered_by`, `result`, `duration_seconds`, and recording/transcript URLs, accepts `limit=5`, and batches its enrichment queries (was N+1 per row). Source-agnostic framing: integration controls (Sync, source filter) appear only when the tenant has a connected call source, so a manual-only tenant sees a clean inbox. New `frontend/src/hooks/useCallFeedPolling.js`, `useCallAlerts.js`, and `components/intake/` (CallFeed, CallFeedItem, CallFacts, NewCallToasts, RecordsTabs).
 - **Zoom Phone post-call webhooks:** added tenant-specific Zoom Phone webhook URLs with Zoom CRC/signature validation, encrypted tenant webhook secret-token storage, and post-call `phone.callee_call_history_completed` / `phone.caller_call_history_completed` ingestion. Completed inbound webhook records now fetch Zoom call-history detail before idempotent `CommunicationLog` upsert; manual Sync Zoom remains the backfill path. Migration `067` adds webhook secret storage to tenant-owned Zoom apps.
 - **Tenant-owned Zoom Phone OAuth apps:** tenant admins can now save encrypted Zoom OAuth client credentials from a firm-owned Zoom app, use that app for the Phone authorization callback, and refresh Zoom Phone tokens without global Clarity Zoom OAuth credentials. The Admin -> Zoom Phone card shows the callback URL, required Phone scopes, masked saved client ID, save/clear actions, and keeps platform/global credentials as fallback only.
@@ -1203,6 +1243,11 @@
 ### Sprint 12 — LiteLLM Gateway & AI Operations Control Plane
 
 ### Added
+- **QuickBooks connection and invoice tax handling are production-ready:**
+  successful Intuit authorization returns to the LawHand QuickBooks admin tab,
+  A/R settings serialize database UUIDs correctly, QBO routes use an isolated
+  edge-rate bucket, partial catalogue failures remain usable, and invoice
+  sales-tax choices explicitly set each synced QBO line taxable or non-taxable.
 - **Task 1206 — Provider Route Builder:** Full UI-driven AI routing console in the Platform admin. Operators can now manage provider API keys, fetch live model lists, and configure standard/premium routes with fallback chains — all without touching config files.
   - `llm_provider_keys` table (migration 045): Fernet-encrypted key vault with provider association and masked key hints
   - `GET/POST/DELETE /api/platform/llm/provider-keys`: key vault CRUD
@@ -1283,6 +1328,11 @@
 - **Reports schema:** `budget_currency` made Optional with "USD" default to prevent potential schema validation 500s.
 
 ### Added
+- **QuickBooks connection and invoice tax handling are production-ready:**
+  successful Intuit authorization returns to the LawHand QuickBooks admin tab,
+  A/R settings serialize database UUIDs correctly, QBO routes use an isolated
+  edge-rate bucket, partial catalogue failures remain usable, and invoice
+  sales-tax choices explicitly set each synced QBO line taxable or non-taxable.
 - `GET /api/auth/calendar-providers` endpoint — returns which calendar providers the current user has configured tokens for.
 - `default_billing_rate` field added to `UserPatchRequest` so admin can set rates via `PATCH /admin/users/{user_id}`.
 
@@ -1295,6 +1345,11 @@
 ### AppShell Layout — Restore Consistent UI Across All Pages
 
 ### Added
+- **QuickBooks connection and invoice tax handling are production-ready:**
+  successful Intuit authorization returns to the LawHand QuickBooks admin tab,
+  A/R settings serialize database UUIDs correctly, QBO routes use an isolated
+  edge-rate bucket, partial catalogue failures remain usable, and invoice
+  sales-tax choices explicitly set each synced QBO line taxable or non-taxable.
 - **`AppShell.jsx`:** Shared layout component wrapping all authenticated pages with sidebar (always visible on desktop, hamburger overlay on mobile) + top header bar with prominent Admin button (Shield icon) for admin users.
 - **`AppShellContext`:** React context for shared conversations/documents state across sidebar and ChatPage.
 - **AdminPage collapsible tabs:** Toggle button to collapse/expand the admin tab bar; dropdown picker when collapsed for mobile-friendly tab switching.
@@ -1321,6 +1376,11 @@
 - **`integrations.py`:** Added `_ensure_cloud_root()` call after admin re-auth so re-authorizing automatically backfills `claritylegal-records` root folder for tenants that completed onboarding with broken scopes.
 
 ### Added
+- **QuickBooks connection and invoice tax handling are production-ready:**
+  successful Intuit authorization returns to the LawHand QuickBooks admin tab,
+  A/R settings serialize database UUIDs correctly, QBO routes use an isolated
+  edge-rate bucket, partial catalogue failures remain usable, and invoice
+  sales-tax choices explicitly set each synced QBO line taxable or non-taxable.
 - **`integrations.py`:** `POST /api/integrations/cloud-init/retry` endpoint — admin-only, re-creates the `claritylegal-records` root folder and backfills all matters with `cloud_folder = null`, returning `{root, matters_initialized, matters_failed}`.
 - **`cloud_init.py`:** `initialize_matter_folders()` now stores `url` for OneDrive (via `_get_onedrive_web_url`) and Google Drive (direct `drive.google.com/drive/folders/{id}` URL) so matter detail pages can link directly to folders.
 - **`api.js`:** Added `retryCloudInit()` call for the new retry endpoint.
@@ -1338,6 +1398,11 @@
 - **`PlatformPage.jsx`:** Masked user emails in tenant detail view — now shows `full_name` (or "User XXXX…") and user ID prefix instead of exposing email addresses.
 
 ### Added
+- **QuickBooks connection and invoice tax handling are production-ready:**
+  successful Intuit authorization returns to the LawHand QuickBooks admin tab,
+  A/R settings serialize database UUIDs correctly, QBO routes use an isolated
+  edge-rate bucket, partial catalogue failures remain usable, and invoice
+  sales-tax choices explicitly set each synced QBO line taxable or non-taxable.
 - **Platform error log endpoints** in `platform.py`: `GET /api/platform/logs` (cross-tenant errors, paginated, filterable by tenant/severity/type/days/unresolved), `GET /api/platform/logs/summary` (by_severity, by_type, by_tenant top 20, daily trend), `GET /api/platform/logs/tenant/{id}`, `GET /api/platform/logs/tenant/{id}/summary`. All endpoints anonymize user_id.
 - **`ApiAccessLog` model** (`api_access_log.py`) + migration 038: metadata-only request logging (tenant_id, endpoint, method, status_code, latency_ms, ip_address, user_agent_short).
 - **`ApiAccessLogMiddleware`** (`middleware/access_log.py`): Logs every request after TenantMiddleware resolves tenant_id. Skips /health, /docs, /api/platform, /static.
@@ -1366,6 +1431,11 @@
 ### Task 1110 — Mobile Responsive UI Overhaul
 
 ### Added
+- **QuickBooks connection and invoice tax handling are production-ready:**
+  successful Intuit authorization returns to the LawHand QuickBooks admin tab,
+  A/R settings serialize database UUIDs correctly, QBO routes use an isolated
+  edge-rate bucket, partial catalogue failures remain usable, and invoice
+  sales-tax choices explicitly set each synced QBO line taxable or non-taxable.
 - **Sidebar mobile overlay:** Hamburger button in `ChatHeader` (hidden on md+) opens sidebar as a slide-in overlay with backdrop on mobile. Sidebar uses `position: fixed md:relative` so it doesn't push content on desktop. State managed via `sidebarOpen` in `ChatPage`.
 - **iOS safe-area bottom padding:** `ChatInput` uses `env(safe-area-inset-bottom)` so the input bar clears the home indicator on iPhone.
 
@@ -1402,6 +1472,11 @@
 - **Content fetch polling:** Added `poll_content_result()` with exponential backoff (1s → 8s) to `SmbService`, replacing fixed 2s polling in `smb_search.py`.
 
 ### Added
+- **QuickBooks connection and invoice tax handling are production-ready:**
+  successful Intuit authorization returns to the LawHand QuickBooks admin tab,
+  A/R settings serialize database UUIDs correctly, QBO routes use an isolated
+  edge-rate bucket, partial catalogue failures remain usable, and invoice
+  sales-tax choices explicitly set each synced QBO line taxable or non-taxable.
 - **Per-share file extension filtering:** `SmbScanner.scan_share()` accepts `file_extensions` parameter, propagated from share config through `_scan_share()`.
 - **`build_smb_context()`** on `SmbService` (static method) — consolidates context formatting from `smb_search.py`.
 - **JSON config fallback** in agent `config.py` — `load()` supports both TOML and JSON formats.
@@ -1417,6 +1492,11 @@
 ### Sprint 10 — SMB File Share Relay Agent
 
 ### Added
+- **QuickBooks connection and invoice tax handling are production-ready:**
+  successful Intuit authorization returns to the LawHand QuickBooks admin tab,
+  A/R settings serialize database UUIDs correctly, QBO routes use an isolated
+  edge-rate bucket, partial catalogue failures remain usable, and invoice
+  sales-tax choices explicitly set each synced QBO line taxable or non-taxable.
 - **SMB Agent Models**: `SmbAgent`, `SmbShare`, `SmbFileIndex`, `SmbAccessLog`, `MatterSmbShare` SQLAlchemy models with pgvector-style tsvector/GIN full-text search, RLS policies, and migration 036
 - `smb_folders` JSONB column on `matters` table (parallel to `cloud_folder`)
 - **Migration 036**: Five new tables (`smb_agents`, `smb_shares`, `smb_file_index`, `smb_access_log`, `matter_smb_shares`) with RLS, GIN index on search_vector, tsvector auto-update trigger, and `smb_folders` column on matters
@@ -1447,6 +1527,11 @@
 ### Sprint 9 — Plugin Platform & Matter Workflow Framework
 
 ### Added
+- **QuickBooks connection and invoice tax handling are production-ready:**
+  successful Intuit authorization returns to the LawHand QuickBooks admin tab,
+  A/R settings serialize database UUIDs correctly, QBO routes use an isolated
+  edge-rate bucket, partial catalogue failures remain usable, and invoice
+  sales-tax choices explicitly set each synced QBO line taxable or non-taxable.
 - Canonical plugin catalog manifest with display metadata, skill IDs, workflow routes, matter type mappings, required/optional integrations (`backend/app/services/plugins/manifest.py`)
 - `TenantPluginEntitlement` model: tenant-level plugin purchase/trial/locked state, decoupled from practice profile
 - `TenantPluginSetup` model: structured per-plugin configuration with typed schemas (jurisdictions, escalation rules, approval thresholds, templates, source folders, calendars, house style)
@@ -1484,6 +1569,11 @@
 ### Sprint 8 — Tenant Onboarding & Integration Hub
 
 ### Added
+- **QuickBooks connection and invoice tax handling are production-ready:**
+  successful Intuit authorization returns to the LawHand QuickBooks admin tab,
+  A/R settings serialize database UUIDs correctly, QBO routes use an isolated
+  edge-rate bucket, partial catalogue failures remain usable, and invoice
+  sales-tax choices explicitly set each synced QBO line taxable or non-taxable.
 
 #### PR #38 — Mediation Platform Module
 - `MediationCase` model expanded: case_name, party_a/b, dispute_type, mediation_stage, mediator, attorney, claim_value, scheduled_session, confidentiality_signed
@@ -1565,6 +1655,11 @@
 ### Sprint 7 — Calendar, Communications & Matter Operations
 
 ### Added
+- **QuickBooks connection and invoice tax handling are production-ready:**
+  successful Intuit authorization returns to the LawHand QuickBooks admin tab,
+  A/R settings serialize database UUIDs correctly, QBO routes use an isolated
+  edge-rate bucket, partial catalogue failures remain usable, and invoice
+  sales-tax choices explicitly set each synced QBO line taxable or non-taxable.
 
 #### Task 801 — Deadline Calendar
 - `GET /api/calendar/events` endpoint aggregating task due_dates, matter key_dates, and renewal dates with `?start=&end=` range filter
@@ -1624,6 +1719,11 @@
 ### Sprint 6 — Matters, Document Management & Firm Reporting
 
 ### Added
+- **QuickBooks connection and invoice tax handling are production-ready:**
+  successful Intuit authorization returns to the LawHand QuickBooks admin tab,
+  A/R settings serialize database UUIDs correctly, QBO routes use an isolated
+  edge-rate bucket, partial catalogue failures remain usable, and invoice
+  sales-tax choices explicitly set each synced QBO line taxable or non-taxable.
 
 #### MatterParty — Multi-Party Matter Support (701)
 - `MatterParty` model — M:N link between matters and contacts with role (client/opposing_party/counsel/witness/expert/other), is_primary flag, notes
@@ -1993,6 +2093,11 @@
 ## [0.3.0] — 2026-06-01
 
 ### Added
+- **QuickBooks connection and invoice tax handling are production-ready:**
+  successful Intuit authorization returns to the LawHand QuickBooks admin tab,
+  A/R settings serialize database UUIDs correctly, QBO routes use an isolated
+  edge-rate bucket, partial catalogue failures remain usable, and invoice
+  sales-tax choices explicitly set each synced QBO line taxable or non-taxable.
 - CourtListener public RAG pipeline
   - `scripts/ingest_courtlistener.py` now extracts/chunks only and inserts `public_chunks` rows pending Jetson embeddings
   - `scripts/jetson_embed_worker.py` remains the BGE-small embedding writer for `public_chunks.embedding`
@@ -2043,6 +2148,11 @@
 ## [0.2.0] — 2026-05-31
 
 ### Added
+- **QuickBooks connection and invoice tax handling are production-ready:**
+  successful Intuit authorization returns to the LawHand QuickBooks admin tab,
+  A/R settings serialize database UUIDs correctly, QBO routes use an isolated
+  edge-rate bucket, partial catalogue failures remain usable, and invoice
+  sales-tax choices explicitly set each synced QBO line taxable or non-taxable.
 - Email/password registration (`POST /auth/register`) with company details form
 - Email/password login (`POST /auth/login`)
 - Password reset flow (`POST /auth/forgot-password`, `POST /auth/reset-password`)
@@ -2080,6 +2190,11 @@
 ## [0.1.0] — Initial
 
 ### Added
+- **QuickBooks connection and invoice tax handling are production-ready:**
+  successful Intuit authorization returns to the LawHand QuickBooks admin tab,
+  A/R settings serialize database UUIDs correctly, QBO routes use an isolated
+  edge-rate bucket, partial catalogue failures remain usable, and invoice
+  sales-tax choices explicitly set each synced QBO line taxable or non-taxable.
 - Multi-tenant architecture with domain-based tenant isolation
 - Row-Level Security (RLS) on all tables
 - OAuth authentication (Microsoft, Google)
