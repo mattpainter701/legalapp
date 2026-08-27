@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -385,7 +386,10 @@ async def qbo_callback(
 
         await db.commit()
 
-    return {"status": "connected", "provider": "qbo", "realm_id": realmId}
+    return RedirectResponse(
+        url=f"{settings.FRONTEND_URL.rstrip('/')}/admin?tab=qbo&qbo=connected",
+        status_code=303,
+    )
 
 
 # ── Status ──────────────────────────────────────────────────────────────────

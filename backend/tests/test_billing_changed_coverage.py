@@ -38,8 +38,14 @@ class _Result:
         return self._rows[0] if self._rows else None
 
 
+@pytest.mark.parametrize(
+    ("tax_amount", "tax_code"),
+    [(Decimal("0"), "NON"), (Decimal("1.25"), "TAX")],
+)
 @pytest.mark.asyncio
-async def test_qbo_invoice_uses_legacy_expense_mapping_and_private_note(monkeypatch):
+async def test_qbo_invoice_uses_legacy_expense_mapping_and_private_note(
+    monkeypatch, tax_amount, tax_code
+):
     tenant_id = str(uuid4())
     invoice_id = uuid4()
     expense_id = uuid4()
@@ -52,6 +58,7 @@ async def test_qbo_invoice_uses_legacy_expense_mapping_and_private_note(monkeypa
         due_date=date(2026, 2, 1),
         invoice_number="INV-1",
         notes=None,
+        tax_amount=tax_amount,
         qbo_invoice_id=None,
     )
     matter = SimpleNamespace(counterparty="Client", matter_name="Matter")
@@ -119,6 +126,9 @@ async def test_qbo_invoice_uses_legacy_expense_mapping_and_private_note(monkeypa
     assert requests[0][1]["Line"][0]["SalesItemLineDetail"]["ItemRef"] == {
         "value": "7",
         "name": "Filing",
+    }
+    assert requests[0][1]["Line"][0]["SalesItemLineDetail"]["TaxCodeRef"] == {
+        "value": tax_code
     }
 
 

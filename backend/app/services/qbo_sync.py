@@ -380,6 +380,12 @@ class QBOSyncService:
             detail: dict = {
                 "UnitPrice": float(li.unit_price),
                 "Qty": float(li.quantity),
+                # QBO otherwise inherits the Item/customer default, which can
+                # silently mark legal services taxable. LawHand's invoice tax
+                # choice is authoritative for every line on the invoice.
+                "TaxCodeRef": {
+                    "value": "TAX" if getattr(invoice, "tax_amount", 0) > 0 else "NON"
+                },
             }
             category = (
                 expense_categories.get(li.source_id)

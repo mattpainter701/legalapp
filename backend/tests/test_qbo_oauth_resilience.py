@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -254,3 +255,94 @@ async def test_list_ar_accounts_returns_connected_company_accounts(monkeypatch):
     assert [(account.id, account.name) for account in accounts] == [
         ("12", "Accounts Receivable")
     ]
+
+
+@pytest.mark.asyncio
+async def test_successful_callback_returns_to_qbo_admin(monkeypatch):
+    tenant_id = uuid4()
+    request = httpx.Request("POST", qbo.QBO_TOKEN_URL)
+    token_response = httpx.Response(
+        200,
+        request=request,
+        json={"access_token": "access", "refresh_token": "refresh", "expires_in": 3600},
+    )
+
+    class _ClientContext:
+        async def __aenter__(self):
+            return _FakeClient([token_response])
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class _Db:
+        def __init__(self):
+            self.added = None
+            self.committed = False
+
+        def add(self, value):
+            self.added = value
+
+        async def commit(self):
+            self.committed = True
+
+    async def consume_state(_request, _state):
+        return True, {"tenant_id": str(tenant_id)}
+
+    async def no_context(_db, _tenant_id):
+        return None
+
+    async def no_existing(_db, _tenant_id):
+        return None
+
+    async def endpoints():
+        return qbo._fallback_oauth_endpoints()
+
+    monkeypatch.setattr(qbo, "_consume_state", consume_state)
+    monkeypatch.setattr(qbo, "set_tenant_context", no_context)
+    monkeypatch.setattr(qbo, "_get_qbo_integration", no_existing)
+    monkeypatch.setattr(qbo, "_get_qbo_oauth_endpoints", endpoints)
+    monkeypatch.setattr(qbo, "encrypt_token", lambda value: f"encrypted-{value}")
+    monkeypatch.setattr(qbo.httpx, "AsyncClient", lambda **_kwargs: _ClientContext())
+    monkeypatch.setattr(qbo.settings, "FRONTEND_URL", "https://getlawhand.com")
+
+    db = _Db()
+    response = await qbo.qbo_callback(
+        code="code",
+        state="state",
+        realmId="realm-1",
+        request=object(),
+        db=db,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        "https://getlawhand.com/admin?tab=qbo&qbo=connected"
+    )
+    assert db.committed is True
+    assert db.added.qbo_realm_id == "realm-1"
+
+
+def test_integration_response_serializes_database_uuids():
+    now = datetime.now(timezone.utc)
+    value = SimpleNamespace(
+        id=uuid4(),
+        tenant_id=uuid4(),
+        qbo_realm_id="realm-1",
+        is_active=True,
+        sandbox_mode=False,
+        scopes="accounting",
+        token_expires_at=now,
+        sync_frequency_minutes=15,
+        last_sync_at=None,
+        last_sync_status=None,
+        last_sync_error=None,
+        qbo_ar_account_id="84",
+        qbo_ar_account_name="Accounts Receivable",
+        created_at=now,
+        updated_at=now,
+    )
+
+    response = qbo.QBOIntegrationResponse.model_validate(value)
+
+    assert response.id == value.id
+    assert response.tenant_id == value.tenant_id

@@ -764,6 +764,9 @@ def test_dedicated_mcp_hosts_are_isolated_and_streamed() -> None:
 
     assert "zone=mcp_workspace:10m rate=60r/m;" in nginx
     assert "zone=mcp_research:10m rate=60r/m;" in nginx
+    assert "zone=qbo:10m rate=120r/m;" in nginx
+    assert nginx.count("location ^~ /api/integrations/qbo/ {") == 2
+    assert nginx.count("limit_req zone=qbo burst=30 nodelay;") == 2
     assert "limit_conn_zone $binary_remote_addr zone=mcp_connections:10m;" in nginx
     assert "limit_conn_status 429;" in nginx
     assert "map $uri $mcp_allow_header" in nginx
