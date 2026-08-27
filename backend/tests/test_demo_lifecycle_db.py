@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, Mock
 
 from app.database import set_tenant_context
 from app.models.contact import Contact
+from app.models.operator_audit import OperatorAuditLog
 from app.models.demo_session import DemoSession
 from app.models.llm_routing_profile import LLMRoutingProfile
 from app.models.document import Chunk, Document
@@ -19,7 +20,11 @@ from app.models.plugin import Matter
 from app.models.tenant import Tenant, TenantSettings
 from app.models.user import User
 from app.services.demo_clone import clone_demo_fixture
-from app.services.demo_purge import DemoPurgeRefused, purge_demo_tenant
+from app.services.demo_purge import (
+    DemoPurgeRefused,
+    purge_demo_tenant,
+    terminate_demo_tenant,
+)
 from app.services.demo_quota import (
     DemoQuotaExceeded,
     DemoReservation,
@@ -853,3 +858,93 @@ async def test_purge_refuses_any_tenant_that_is_not_an_expired_disposable_demo(
         await purge_demo_tenant(db_session, tenant_id)
 
     assert await db_session.scalar(select(Tenant.id).where(Tenant.id == tenant_id))
+
+
+@pytest.mark.asyncio
+async def test_operator_termination_purges_only_the_selected_active_demo(
+    db_session, tmp_path, monkeypatch
+):
+    fixture_id = uuid.uuid4()
+    target_id = uuid.uuid4()
+    other_id = uuid.uuid4()
+    target_session_id = uuid.uuid4()
+    other_session_id = uuid.uuid4()
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=2)
+    monkeypatch.setattr(demo_purge.get_settings(), "UPLOAD_DIR", str(tmp_path))
+
+    db_session.add_all(
+        [
+            _tenant(tenant_id=fixture_id, domain="operator-fixture.invalid"),
+            _tenant(
+                tenant_id=target_id,
+                domain="operator-target.demo.invalid",
+                billing_tier="demo",
+                expires_at=expires_at,
+            ),
+            _tenant(
+                tenant_id=other_id,
+                domain="ongoing-demo.demo.invalid",
+                billing_tier="demo",
+                expires_at=expires_at,
+            ),
+        ]
+    )
+    await db_session.flush()
+    db_session.add_all(
+        [
+            DemoSession(
+                id=target_session_id,
+                tenant_id=target_id,
+                fixture_tenant_id=fixture_id,
+                fixture_version="operator-test",
+                prospect_name="Completed Demo",
+                prospect_email="completed@example.invalid",
+                status="active",
+                quota=20,
+                expires_at=expires_at,
+            ),
+            DemoSession(
+                id=other_session_id,
+                tenant_id=other_id,
+                fixture_tenant_id=fixture_id,
+                fixture_version="operator-test",
+                prospect_name="Ongoing Demo",
+                prospect_email="ongoing@example.invalid",
+                status="active",
+                quota=20,
+                expires_at=expires_at,
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    await terminate_demo_tenant(
+        db_session,
+        target_id,
+        target_session_id,
+        actor_id="demo-operator",
+        reason="Demo completed",
+    )
+
+    assert await db_session.get(Tenant, target_id) is None
+    other = await db_session.get(Tenant, other_id)
+    assert other is not None
+    assert other.is_active is True
+    assert other.expires_at == expires_at
+
+    await set_tenant_context(db_session, str(other_id))
+    other_session = await db_session.scalar(
+        select(DemoSession).where(DemoSession.id == other_session_id)
+    )
+    assert other_session is not None
+    assert other_session.status == "active"
+
+    audit = await db_session.scalar(
+        select(OperatorAuditLog).where(
+            OperatorAuditLog.action == "demo.session.purged",
+            OperatorAuditLog.resource_id == str(target_session_id),
+        )
+    )
+    assert audit.actor_type == "platform_operator"
+    assert audit.actor_id == "demo-operator"
+    assert audit.metadata_json["reason"] == "Demo completed"

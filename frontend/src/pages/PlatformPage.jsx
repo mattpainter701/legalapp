@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { createPlatformSession, getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformIntegrationReadiness, getPlatformMcpOverview, getPlatformWorkspaceMcpDiagnostics, getPlatformTenant, updatePlatformTenant, getPlatformPlans, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMModelCatalog, refreshLLMModelCatalog, getLLMRoutes, recommendLLMRoutes, saveLLMRoutes, getLLMGatewayStatus, reloadLLMRoutes, testLLMRoute, getLLMRoutingProfiles, createLLMRoutingProfile, updateLLMRoutingProfile, getBackgroundAssistantUsage, updateBackgroundAssistantQuota } from '../api'
 import { Activity, AlertTriangle, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3, FileText, Globe, Key, Plus, Trash2, RefreshCw, CheckCircle, XCircle, Cpu, ArrowDown, ArrowUp, Save, Settings2, PhoneCall, Video } from 'lucide-react'
 import { useConfirm } from '../components/dialog/ConfirmProvider'
+import { getPlatformDemoWorkspaces, terminatePlatformDemoWorkspace } from '../api'
 
 const apiErrorMessage = (error, fallback) => {
   const detail = error?.response?.data?.detail
@@ -27,10 +28,12 @@ function TierBadge({ tier }) {
   const colors = {
     flat: 'bg-brand-accent/10 text-brand-accent border-brand-accent/20',
     payg: 'bg-brand-amber/10 text-brand-amber border-brand-amber/20',
+    demo: 'bg-brand-ink/10 text-brand-ink border-brand-ink/20',
   }
+  const labels = { flat: 'Flat-seat', payg: 'PAYG', demo: 'Demo' }
   return (
     <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${colors[tier] || colors.payg}`}>
-      {tier === 'flat' ? 'Flat-seat' : 'PAYG'}
+      {labels[tier] || tier}
     </span>
   )
 }
@@ -3026,6 +3029,156 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
   )
 }
 
+
+const demoStatusClasses = {
+  active: 'bg-brand-accent/10 text-brand-accent border-brand-accent/20',
+  expired: 'bg-brand-amber/10 text-brand-amber border-brand-amber/20',
+  failed: 'bg-brand-rose/10 text-brand-rose border-brand-rose/20',
+  provisioning: 'bg-brand-bg-soft text-brand-muted border-brand-line',
+  purging: 'bg-brand-bg-soft text-brand-muted border-brand-line',
+}
+
+const demoTime = (value) => value
+  ? new Date(value).toLocaleString()
+  : '—'
+
+export function DemoWorkspacesTab({ platformKey, onAuthError }) {
+  const confirm = useConfirm()
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+  const [terminating, setTerminating] = useState(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      setData(await getPlatformDemoWorkspaces(platformKey))
+    } catch (loadError) {
+      if (loadError?.response?.status === 403) onAuthError?.()
+      setError(apiErrorMessage(loadError, 'Failed to load demo workspaces'))
+    } finally {
+      setLoading(false)
+    }
+  }, [platformKey, onAuthError])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  const terminate = async (workspace) => {
+    const approved = await confirm({
+      title: 'Terminate this demo workspace?',
+      message: `This immediately signs out ${workspace.prospect_name} and permanently removes only ${workspace.domain}. Every other active demo continues uninterrupted.`,
+      confirmLabel: 'Terminate workspace',
+      destructive: true,
+    })
+    if (!approved) return
+
+    setTerminating(workspace.tenant_id)
+    setError(null)
+    try {
+      await terminatePlatformDemoWorkspace(
+        platformKey,
+        workspace.tenant_id,
+        workspace.session_id,
+        'Terminated from the platform demo workspace panel',
+      )
+      await load()
+    } catch (terminateError) {
+      if (terminateError?.response?.status === 403) onAuthError?.()
+      setError(apiErrorMessage(terminateError, 'Failed to terminate demo workspace'))
+    } finally {
+      setTerminating(null)
+    }
+  }
+
+  const capacity = data?.capacity || {}
+  const workspaces = data?.workspaces || []
+
+  return (
+    <div>
+      <div className="mb-6 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="font-serif text-2xl font-bold text-brand-ink">Demo workspaces</h1>
+          <p className="mt-1 text-sm text-brand-muted">Live disposable workspaces only. Termination is isolated to the selected session.</p>
+        </div>
+        <button type="button" onClick={load} disabled={loading} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-brand-line px-4 text-sm font-medium text-brand-ink disabled:opacity-50">
+          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+          Refresh
+        </button>
+      </div>
+
+      {error && <div role="alert" className="mb-5 rounded-lg border border-brand-rose/20 bg-brand-rose/10 px-4 py-3 text-sm text-brand-rose">{error}</div>}
+
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <StatCard label="Capacity" value={capacity.limit} sub="maximum concurrent demos" icon={Users} />
+        <StatCard label="In use" value={capacity.active} sub="active, unexpired workspaces" icon={Activity} />
+        <StatCard label="Available" value={capacity.available} sub="ready for new demos" icon={CheckCircle} />
+      </div>
+
+      <div className="overflow-hidden rounded-xl border border-brand-line bg-brand-surface shadow-sm">
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="border-b border-brand-line bg-brand-bg-soft">
+              <tr className="text-xs uppercase tracking-wider text-brand-muted">
+                <th className="px-5 py-3 text-left">Prospect</th>
+                <th className="px-5 py-3 text-left">Workspace</th>
+                <th className="px-5 py-3 text-left">Status</th>
+                <th className="px-5 py-3 text-center">Messages</th>
+                <th className="px-5 py-3 text-left">Expires</th>
+                <th className="px-5 py-3 text-right">Action</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-brand-line">
+              {workspaces.map((workspace) => {
+                const canTerminate = !['provisioning', 'purging'].includes(workspace.status)
+                return (
+                  <tr key={workspace.session_id}>
+                    <td className="px-5 py-4">
+                      <p className="text-sm font-medium text-brand-ink">{workspace.prospect_name}</p>
+                      <p className="text-xs text-brand-muted">{workspace.prospect_email}</p>
+                    </td>
+                    <td className="px-5 py-4">
+                      <p className="text-xs font-mono text-brand-ink">{workspace.domain}</p>
+                      <p className="mt-1 text-[11px] font-mono text-brand-muted">session {workspace.session_id.slice(0, 8)}…</p>
+                    </td>
+                    <td className="px-5 py-4">
+                      <span className={`inline-flex rounded border px-2 py-0.5 text-xs font-medium ${demoStatusClasses[workspace.status] || demoStatusClasses.expired}`}>
+                        {workspace.status}
+                      </span>
+                      {workspace.counts_toward_capacity && <p className="mt-1 text-[11px] text-brand-muted">uses a slot</p>}
+                    </td>
+                    <td className="px-5 py-4 text-center text-sm text-brand-ink">{workspace.used} / {workspace.quota}</td>
+                    <td className="px-5 py-4 text-xs text-brand-muted">{demoTime(workspace.expires_at)}</td>
+                    <td className="px-5 py-4 text-right">
+                      <button
+                        type="button"
+                        onClick={() => terminate(workspace)}
+                        disabled={!canTerminate || terminating === workspace.tenant_id}
+                        className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-brand-rose/30 px-3 text-xs font-semibold text-brand-rose hover:bg-brand-rose/5 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <Trash2 size={14} />
+                        {terminating === workspace.tenant_id ? 'Terminating…' : 'Terminate'}
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })}
+              {!loading && workspaces.length === 0 && (
+                <tr><td colSpan={6} className="px-5 py-12 text-center text-sm text-brand-muted">No demo workspaces are present.</td></tr>
+              )}
+              {loading && workspaces.length === 0 && (
+                <tr><td colSpan={6} className="px-5 py-12 text-center text-sm text-brand-muted">Loading demo workspaces…</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function PlatformTenantRow({ tenant: t, expanded, onToggle }) {
   const toggle = () => onToggle?.(t.id)
 
@@ -3165,6 +3318,7 @@ export default function PlatformPage() {
   const tabs = [
     { id: 'dashboard', label: 'Dashboard', icon: BarChart3 },
     { id: 'tenants', label: 'Tenants', icon: Users },
+    { id: 'demos', label: 'Demos', icon: Users },
     { id: 'integrations', label: 'Integrations', icon: Zap },
     { id: 'mcp', label: 'MCP', icon: Key },
     { id: 'ai-routing', label: 'AI Routing', icon: Cpu },
@@ -3346,19 +3500,25 @@ export default function PlatformPage() {
                                     </div>
                                     <div>
                                       <h4 className="text-xs font-bold text-brand-ink uppercase tracking-wider mb-3 font-sans">Actions</h4>
-                                      <div className="space-y-3">
-                                        <button onClick={() => handleTenantPatch(t, { is_active: !t.is_active })} className={`w-full px-3 py-2 rounded-lg text-xs font-medium font-sans border transition-colors ${t.is_active ? 'border-brand-rose/30 text-brand-rose hover:bg-brand-rose/5' : 'border-brand-accent/30 text-brand-accent hover:bg-brand-accent/5'}`}>
-                                          {t.is_active ? 'Deactivate Tenant' : 'Activate Tenant'}
-                                        </button>
-                                        <div className="flex gap-2">
-                                          <button onClick={() => handleTenantPatch(t, { billing_tier: 'flat' })} className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium font-sans border transition-colors ${t.billing_tier === 'flat' ? 'bg-brand-accent/10 border-brand-accent/20 text-brand-accent' : 'border-brand-line text-brand-muted hover:border-brand-ink'}`}>
-                                            Flat-seat
+                                      {t.billing_tier === 'demo' ? (
+                                        <p className="rounded-lg border border-brand-line bg-brand-bg px-3 py-2 text-xs leading-5 text-brand-muted">
+                                          Use the Demos tab to terminate this disposable workspace. Generic tenant controls are disabled so an ongoing demo cannot be interrupted accidentally.
+                                        </p>
+                                      ) : (
+                                        <div className="space-y-3">
+                                          <button onClick={() => handleTenantPatch(t, { is_active: !t.is_active })} className={`w-full px-3 py-2 rounded-lg text-xs font-medium font-sans border transition-colors ${t.is_active ? 'border-brand-rose/30 text-brand-rose hover:bg-brand-rose/5' : 'border-brand-accent/30 text-brand-accent hover:bg-brand-accent/5'}`}>
+                                            {t.is_active ? 'Deactivate Tenant' : 'Activate Tenant'}
                                           </button>
-                                          <button onClick={() => handleTenantPatch(t, { billing_tier: 'payg' })} className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium font-sans border transition-colors ${t.billing_tier === 'payg' ? 'bg-brand-amber/10 border-brand-amber/20 text-brand-amber' : 'border-brand-line text-brand-muted hover:border-brand-ink'}`}>
-                                            PAYG
-                                          </button>
+                                          <div className="flex gap-2">
+                                            <button onClick={() => handleTenantPatch(t, { billing_tier: 'flat' })} className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium font-sans border transition-colors ${t.billing_tier === 'flat' ? 'bg-brand-accent/10 border-brand-accent/20 text-brand-accent' : 'border-brand-line text-brand-muted hover:border-brand-ink'}`}>
+                                              Flat-seat
+                                            </button>
+                                            <button onClick={() => handleTenantPatch(t, { billing_tier: 'payg' })} className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium font-sans border transition-colors ${t.billing_tier === 'payg' ? 'bg-brand-amber/10 border-brand-amber/20 text-brand-amber' : 'border-brand-line text-brand-muted hover:border-brand-ink'}`}>
+                                              PAYG
+                                            </button>
+                                          </div>
                                         </div>
-                                      </div>
+                                      )}
                                     </div>
                                   </div>
                                   {/* LLM Provider override — full-width row */}
@@ -3413,6 +3573,15 @@ export default function PlatformPage() {
             )}
           </div>
         )}
+
+        {/* ── Demos Tab ── */}
+        {tab === 'demos' && (
+          <DemoWorkspacesTab
+            platformKey={platformKey}
+            onAuthError={() => setPlatformKey(null)}
+          />
+        )}
+
 
         {/* ── Integrations Tab ── */}
         {tab === 'integrations' && (
