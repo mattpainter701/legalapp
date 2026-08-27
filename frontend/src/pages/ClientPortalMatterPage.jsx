@@ -10,6 +10,7 @@ import {
   uploadClientPortalDocument,
   downloadClientPortalDocumentUrl,
   listClientPortalInvoices,
+  downloadClientPortalInvoiceUrl,
   listClientPortalSignatures,
   signClientPortalSignature,
   declineClientPortalSignature,
@@ -1082,16 +1083,24 @@ function InvoicesTab({ onSessionError }) {
                       <p className="text-xs text-brand-green">Paid in full</p>
                     )}
                   </div>
-                  {Number(inv.balance_due) > 0 && inv.stripe_payment_link && (
+                  <div className="flex flex-wrap items-center justify-end gap-2">
                     <a
-                      href={inv.stripe_payment_link}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="px-3 py-1.5 bg-brand-green text-white rounded-lg hover:opacity-90 transition-all whitespace-nowrap"
+                      href={downloadClientPortalInvoiceUrl(inv.id)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-brand-line text-brand-ink rounded-lg hover:bg-brand-bg transition-all whitespace-nowrap"
                     >
-                      Pay now
+                      <Download size={14} /> PDF
                     </a>
-                  )}
+                    {Number(inv.balance_due) > 0 && inv.stripe_payment_link && (
+                      <a
+                        href={inv.stripe_payment_link}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="px-3 py-1.5 bg-brand-green text-white rounded-lg hover:opacity-90 transition-all whitespace-nowrap"
+                      >
+                        Pay now
+                      </a>
+                    )}
+                  </div>
                 </div>
               </li>
             ))}

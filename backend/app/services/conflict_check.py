@@ -12,6 +12,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.contact import Contact
+from app.models.matter_party import MatterParty
 from app.models.plugin import Matter
 
 
@@ -74,6 +75,21 @@ async def run_conflict_check(
             m_result = await db.execute(m_stmt)
             matters = m_result.scalars().all()
 
+            # Matters where this contact is linked in any party role. The
+            # standalone search must not miss opposing counsel, witnesses, or
+            # other participants merely because they are not the client.
+            party_stmt = (
+                select(Matter)
+                .join(MatterParty, MatterParty.matter_id == Matter.id)
+                .where(
+                    Matter.tenant_id == tenant_id,
+                    MatterParty.tenant_id == tenant_id,
+                    MatterParty.contact_id == c.id,
+                )
+            )
+            party_result = await db.execute(party_stmt)
+            party_matters = party_result.scalars().all()
+
             # Matters where counterparty string matches
             cp_stmt = select(Matter).where(
                 Matter.tenant_id == tenant_id,
@@ -82,7 +98,11 @@ async def run_conflict_check(
             cp_result = await db.execute(cp_stmt)
             cp_matters = cp_result.scalars().all()
 
-            all_matters = {m.id: m for m in matters + cp_matters}
+            all_matters = {
+                m.id: m
+                for m in matters + party_matters + cp_matters
+                if m.id not in exclude_matter_ids
+            }
 
             # Avoid duplicate contact entries
             already_seen = any(m.get("contact_id") == c.id for m in matches)

@@ -37,7 +37,10 @@ A client portal opens on a summary of the matter: status and stage, the next
 key date, the assigned legal team, and counters for unread messages, documents
 awaiting signature, and any balance due. From there the client can exchange
 secure messages with the team, download what the firm has shared, upload
-documents of their own, sign acknowledgments, and pay invoices.
+documents of their own, sign acknowledgments, download a firm-branded invoice
+PDF, and pay invoices. Invoice downloads are matter-scoped and recorded in the
+firm's audit metadata; the generated PDF is streamed to the client and is not
+retained as a second document copy by this workflow.
 
 The portal list on the matter shows each invitation's state — awaiting first
 sign-in, active, expired, or revoked — alongside when that portal was last

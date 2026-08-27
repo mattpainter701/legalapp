@@ -56,13 +56,13 @@ place for untagged, matter-matched messages.
 |---|---|---|
 | Inbound correspondence | Opaque per-matter aliases, signed delivery, quarantine, human accept/reject, `.eml` filing, mailbox capture | This PR adds explicit subject-tag task creation and preview. Attachment/date intelligence is separate. |
 | Task/calendar ownership | Task CRUD/history and Microsoft/Google event upsert/delete already exist. Outlook events carry a stable LawHand task property. | No inbound reconciliation of user edits/deletes made directly in Outlook. Decide whether those edits are ignored, proposed back, or permitted for selected fields. |
-| Conflict check | Shared `run_conflict_check` service and `/api/contacts/conflict-check` endpoint exist outside caller intake. | There is no obvious standalone firm-wide Conflict Search screen, saved search/report, or explicit clearance sign-off. |
+| Conflict check | Shared search now has a standalone `/conflicts` workflow with normalized aliases/organizations/email terms, visibility-aware results, saved evidence, explicit review decisions, locked records, and PDF reports. | Document-content search is not part of the first saved workflow. A restricted match requires escalation; no result is automatic legal clearance. |
 | Uploaded-document dates | Documents are stored and indexed; PDF/OCR extraction primitives exist. | No typed date-candidate record, source-page citation, trigger/rule selection, or approval workflow. |
 | Key dates | `Matter.key_dates` is a free-form JSON map; the calendar and client portal read it. | Labels and dates lack type, provenance, source document/page, jurisdiction/rule, calculation lineage, verification state, owner, and reminder policy. |
 | Public/bespoke intake | Lead/call intake exists. `TASKS.md` already sketches public forms, but no versioned form/submission model or public renderer is implemented. | Create a reusable schema/version/submission/binding system. Keep case answers separate from CRM identity and matter summary fields. |
 | Probate information gathering | Estate/probate workflow and client-portal plans exist. | Implement a portal checklist/questionnaire for parties, fiduciaries, assets, creditors, will/death-certificate uploads, missing facts, and attorney verification. This is a workflow, not one task. |
-| Client portal invoices | Portal lists client-visible invoices and payment totals/links. Firm users can export invoice PDFs. | Clients cannot download a portal-authorized invoice PDF. |
-| Invoice branding | Tenant firm-name/logo/address/contact/footer settings and admin UI already exist. Trust PDFs use them. | `invoice_pdf.py` still renders LawHand defaults and receives no tenant branding. |
+| Client portal invoices | Portal lists client-visible invoices and payment totals/links and now streams a matter-authorized branded PDF. Each response records metadata, content hash, branding snapshot, recipient/invite, and time without storing PDF bytes. | Durable historical invoice-version archives remain a separate customer-cloud decision. |
+| Invoice branding | Tenant firm-name/logo/address/contact/footer settings now apply to staff and client-portal invoice PDFs as well as trust PDFs. | Firms still need to configure and preview approved identity assets before client use. |
 | Portal document storage | Portal uploads use the shared `MatterFileStore`, route to `client_uploads`, and record provider IDs. The store now resolves an admin selection or Auto Microsoft 365→OneDrive binding and fails closed for cloud-bound writes. | Inventory and migrate legacy/unbound local documents before claiming the customer-owned-content invariant for an existing tenant. |
 | Workspace MCP | Tenant-scoped `find_matter`, task/document listing, document-text retrieval, and task/email/document proposals exist. | There is no one-call global search across all documents, clients/contacts, matters, correspondence, and tasks with typed result citations. |
 
@@ -174,17 +174,20 @@ Implemented storage policy:
 
 ### P1 — customer workflow gaps
 
-- **TC-06 — Standalone Conflict Search.** Add a top-level screen using the
-  existing service, include aliases/organizations/matter parties, save search
-  evidence, and separate “no matches found” from attorney clearance.
+- **TC-06 — Standalone Conflict Search (implemented).** The top-level screen
+  uses the existing tenant search, accepts aliases/organizations/emails, saves
+  visibility-aware evidence, requires attorney review acknowledgement, locks
+  closed decisions, and exports the saved snapshot as PDF.
 - **TC-07 — Versioned bespoke intake forms.** Add form/schema versions,
   authenticated/public distribution, submission snapshots, conditional fields,
   upload slots, spam/rate limits, review state, and canonical variable bindings.
 - **TC-08 — Probate portal questionnaire.** Build reusable portal checklist
   sections for parties, appointments, assets, debts/creditors, documents, and
   missing facts; map verified answers to estate records and template variables.
-- **TC-09 — Branded portal invoice PDF.** Reuse tenant branding in invoice PDF
-  generation and add matter/portal-authorized invoice download with audit events.
+- **TC-09 — Branded portal invoice PDF (implemented).** Invoice PDFs reuse
+  tenant branding. The portal authorizes the invoice against its tenant/matter,
+  streams it with `private, no-store`, and retains only download audit metadata
+  and a content hash.
 - **TC-10 — Global Workspace MCP search.** Add bounded `search_workspace`
   returning typed matter/contact/client/document/correspondence/task hits,
   snippets, source IDs, access decisions, and deep links under existing OAuth
@@ -201,7 +204,8 @@ Implemented storage policy:
 ## Suggested PR sequence
 
 1. This PR: `TC-01`, `TC-02`, documentation, and the evidence-backed backlog.
-2. Invoice PR: `TC-09` (portal trust and customer-visible output).
+2. Follow-up workflow PR: `TC-06` and `TC-09` (implemented by the standalone
+   conflict-review and portal-invoice change).
 3. Deadline foundation PR: `TC-03` and `TC-04`, without a vendor commitment.
 4. Partner spike/adapter PR: `TC-05` behind a tenant flag.
 5. Intake/probate PRs: `TC-07` then `TC-08` on the shared answer/binding model.

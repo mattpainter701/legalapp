@@ -3,6 +3,15 @@
 ## [Unreleased]
 
 ### Added
+- **Standalone conflict review now preserves clearance evidence:** the Conflict
+  Search workspace accepts people/aliases, organizations, and email addresses,
+  saves the visibility-aware result snapshot, warns without disclosing a
+  restricted matter, requires review notes and explicit attorney
+  acknowledgement, locks closed decisions, and exports the saved record as PDF.
+- **Client portal invoice PDFs are branded and audit-traceable:** staff and
+  portal invoice exports use tenant firm identity, while the portal authorizes
+  only client-visible invoices on its matter, streams the PDF with private
+  no-store caching, and retains a metadata/hash audit rather than PDF bytes.
 - **Document templates now have a reviewed Prepare Form workflow:** uploaded
   PDFs and supported images preserve their page design while staff review
   detected fields, add or adjust fields manually, and create a reusable

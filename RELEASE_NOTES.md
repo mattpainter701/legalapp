@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.27.2 — Conflict reviews and portal invoice PDFs are traceable
+
+Released August 27, 2026.
+
+Staff can save and close a conflict review, and clients can download a firm-branded invoice PDF from their matter portal.
+
+- **Conflict searches keep their evidence.** The new Conflict Search workspace saves the terms and results the reviewer saw, records notes and a decision, and locks the record after closing.
+- **Restricted matters stay restricted.** A reviewer is warned when a potential match exists on a matter they cannot access without exposing that matter's identity.
+- **Clients can download branded invoices.** A client-visible invoice is rendered with firm branding and streamed as a PDF; LawHand records download metadata and a hash without retaining another PDF copy.
+
 ## 2026.08.27.1 — Prepare document templates with a guided review workspace
 
 Released August 27, 2026.
