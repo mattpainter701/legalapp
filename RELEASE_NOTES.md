@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.27.7 — Research connections now complete authorization
+
+Released August 27, 2026.
+
+Claude, ChatGPT, and other hosted clients can now complete the LawHand Research authorization screen without supplying a separate API key.
+
+- **Approve the connection in LawHand.** After adding the Research MCP URL, sign in and approve research-only access through the normal LawHand authorization page.
+- **No pasted key for hosted clients.** Hosted clients register securely and use OAuth; Research API keys remain an option only for clients that support custom headers.
+
 ## 2026.08.27.6 — Plaintiff and defendant fields are clear and reusable
 
 Released August 27, 2026.

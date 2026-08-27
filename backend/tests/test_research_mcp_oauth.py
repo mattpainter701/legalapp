@@ -244,6 +244,66 @@ async def test_research_asgi_rejects_apex_mcp_and_oauth_routes(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/research-mcp/oauth/requests/diagnostic-request-id",
+        "/api/research-mcp/grants",
+    ],
+)
+async def test_research_portal_routes_use_portal_host(monkeypatch, path):
+    monkeypatch.setattr(router.settings, "MCP_PRODUCT_ENABLED", True)
+    monkeypatch.setattr(router.settings, "RESEARCH_MCP_OAUTH_ENABLED", True)
+    monkeypatch.setattr(router.settings, "FRONTEND_URL", "https://getlawhand.com")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport,
+        base_url="https://getlawhand.com",
+    ) as portal_client:
+        portal_response = await portal_client.get(path)
+    async with AsyncClient(
+        transport=transport,
+        base_url="https://research.getlawhand.com",
+    ) as research_client:
+        research_response = await research_client.get(path)
+
+    assert portal_response.status_code == 401
+    assert research_response.status_code == 404
+    assert research_response.json()["detail"] == "Research MCP route is unavailable"
+
+
+def test_research_routes_declare_their_product_host_boundary():
+    dependency_calls = {
+        route.path: {dependency.call for dependency in route.dependant.dependencies}
+        for route in router.router.routes
+    }
+    research_paths = {
+        "/.well-known/oauth-protected-resource/api/mcp",
+        "/api/research-mcp/oauth/protected-resource-metadata",
+        "/api/research-mcp/oauth/authorization-server-metadata",
+        "/api/research-mcp/oauth/jwks",
+        "/api/research-mcp/oauth/register",
+        "/api/research-mcp/oauth/authorize",
+        "/api/research-mcp/oauth/token",
+        "/api/research-mcp/oauth/revoke",
+    }
+    portal_paths = {
+        "/api/research-mcp/oauth/requests/{request_id}",
+        "/api/research-mcp/oauth/requests/{request_id}/decision",
+        "/api/research-mcp/grants",
+        "/api/research-mcp/grants/{grant_id}/revoke",
+    }
+
+    assert research_paths | portal_paths == set(dependency_calls)
+    for path in research_paths:
+        assert router._require_canonical_research_host in dependency_calls[path]
+        assert router._require_canonical_portal_host not in dependency_calls[path]
+    for path in portal_paths:
+        assert router._require_canonical_portal_host in dependency_calls[path]
+        assert router._require_canonical_research_host not in dependency_calls[path]
+
+
+@pytest.mark.asyncio
 async def test_research_refresh_uses_separate_namespace_and_resource(monkeypatch):
     captured = {}
 

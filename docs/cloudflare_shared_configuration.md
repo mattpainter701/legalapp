@@ -85,7 +85,8 @@ Do not synchronize R2 credentials across the web allowlist. Scope them to the ex
 ## MCP and Tunnel invariants
 
 - `mcp.getlawhand.com` is the canonical platform/workspace MCP hostname.
-- `research.getlawhand.com` remains disabled until a separately authenticated research MCP is deliberately deployed.
+- `research.getlawhand.com` exposes only the separately authenticated Research
+  MCP; it is never a portal alias or a route to the raw research sidecar.
 - MCP discovery and execution require authentication.
 - The Tunnel ingress must end in `http_status:404`.
 - `intake.getlawhand.com` uses Email Routing MX records and is never a Tunnel
@@ -116,3 +117,7 @@ Cloudflare Tunnel ingress was not changed.
 On 2026-08-26, the repository documented the staged IONOS Tunnel cutover model.
 No DNS record, live Tunnel identifier, or credential was changed by that
 documentation update.
+
+On 2026-08-27, the separately authenticated Research MCP was activated at
+`research.getlawhand.com`. Hosted clients use OAuth dynamic registration and
+PKCE; header-capable clients may use separately issued Research API tokens.

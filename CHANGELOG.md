@@ -78,6 +78,12 @@
   private-detail protection remains enforced.
 
 ### Fixed
+- **Research MCP hosted-client consent uses the authenticated portal origin:**
+  OAuth discovery, dynamic registration, authorization start, token exchange,
+  revocation, and JWKS remain isolated to `research.getlawhand.com`, while the
+  signed-in consent and grant-management APIs are now explicitly limited to
+  `getlawhand.com`. Claude, ChatGPT, and similar public PKCE clients can finish
+  authorization without a manually issued Research API key.
 - **Windows agent releases now fail closed on platform trust and stop cleanly
   for overtop upgrades:** tagged builds use Microsoft Public Trust Artifact
   Signing for the EXE before it is embedded and for the final MSI, verify both
