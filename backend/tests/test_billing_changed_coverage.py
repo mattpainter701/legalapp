@@ -110,7 +110,9 @@ async def test_qbo_invoice_uses_legacy_expense_mapping_and_private_note(monkeypa
     result = await service.sync_invoice(str(invoice_id))
 
     assert result == {"Invoice": {"Id": "qbo-1"}}
-    assert requests[0][1]["PrivateNote"] == ""
+    assert requests[0][1]["PrivateNote"] == f"LawHand invoice INV-1; matter {invoice.matter_id}"
+    assert invoice.billed_at is not None
+    assert invoice.status == "sent"
     assert requests[0][1]["Line"][0]["SalesItemLineDetail"]["ItemRef"] == {
         "value": "7",
         "name": "Filing",

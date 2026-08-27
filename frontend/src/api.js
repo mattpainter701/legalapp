@@ -2200,6 +2200,10 @@ export const disconnectQBO = () =>
   api.post('/integrations/qbo/disconnect').then(r => r.data)
 export const getQBOItems = () =>
   api.get('/integrations/qbo/items').then(r => r.data)
+export const getQBOAccounts = () =>
+  api.get('/integrations/qbo/accounts').then(r => r.data)
+export const updateQBOSettings = (data) =>
+  api.put('/integrations/qbo/settings', data).then(r => r.data)
 export const getQBOMappings = () =>
   api.get('/integrations/qbo/mappings').then(r => r.data)
 export const upsertQBOMapping = (data) =>

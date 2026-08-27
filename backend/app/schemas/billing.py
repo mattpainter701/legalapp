@@ -311,6 +311,9 @@ class InvoiceResponse(BaseModel):
     stripe_payment_link: Optional[str] = None
     qbo_invoice_id: Optional[str] = None
     qbo_sync_status: str
+    qbo_synced_at: Optional[datetime] = None
+    qbo_sync_error: Optional[str] = None
+    billed_at: Optional[datetime] = None
     ledes_exported_at: Optional[datetime] = None
     retainer_id: Optional[str] = None
     billing_period_start: Optional[date] = None

@@ -5,6 +5,8 @@ import {
   connectQBO,
   disconnectQBO,
   getQBOItems,
+  getQBOAccounts,
+  updateQBOSettings,
   getQBOMappings,
   upsertQBOMapping,
   syncAllToQBO,
@@ -50,6 +52,8 @@ export default function QBOPanel() {
   const confirmAction = useConfirm()
   const [status, setStatus] = useState(null)
   const [items, setItems] = useState([])
+  const [accounts, setAccounts] = useState([])
+  const [selectedAccount, setSelectedAccount] = useState('')
   const [mappings, setMappings] = useState({})      // key: "source_type:expense_category" → { qbo_item_id, qbo_item_name }
   const [pendingMappings, setPendingMappings] = useState({})
   const [loading, setLoading] = useState(true)
@@ -66,6 +70,7 @@ export default function QBOPanel() {
     try {
       const s = await getQBOStatus()
       setStatus(s)
+      setSelectedAccount(s.qbo_ar_account_id || '')
     } catch {
       setError('Failed to load QBO status.')
     } finally {
@@ -92,8 +97,9 @@ export default function QBOPanel() {
   const loadItems = useCallback(async () => {
     setItemsLoading(true)
     try {
-      const list = await getQBOItems()
-      setItems(list)
+      const [itemList, accountList] = await Promise.all([getQBOItems(), getQBOAccounts()])
+      setItems(itemList)
+      setAccounts(accountList)
     } catch {
       setError('Failed to fetch QBO items. Make sure QBO is connected.')
     } finally {
@@ -138,6 +144,21 @@ export default function QBOPanel() {
     }))
   }
 
+  const handleSaveAccount = async () => {
+    setSaving(true)
+    try {
+      const account = accounts.find((item) => item.id === selectedAccount)
+      await updateQBOSettings({
+        qbo_ar_account_id: account?.id || "",
+        qbo_ar_account_name: account?.name || "",
+      })
+      await loadStatus()
+    } catch {
+      setError("Failed to save the QBO accounts-receivable account.")
+    } finally {
+      setSaving(false)
+    }
+  }
   const handleSaveMappings = async () => {
     setSaving(true)
     try {
@@ -256,6 +277,35 @@ export default function QBOPanel() {
         )}
       </div>
 
+      {status?.connected && (
+        <div className="bg-brand-surface border border-brand-line rounded-xl p-6">
+          <h3 className="text-brand-ink font-sans text-base font-bold">Accounts receivable</h3>
+          <p className="text-xs text-brand-ink-2 mt-1 mb-3">
+            Choose the QuickBooks A/R account that will receive LawHand invoices.
+          </p>
+          <div className="flex gap-2">
+            <select
+              value={selectedAccount}
+              onChange={(event) => setSelectedAccount(event.target.value)}
+              className="flex-1 text-xs px-3 py-2 border border-brand-line rounded-lg bg-brand-surface"
+            >
+              <option value="">Use the QuickBooks default</option>
+              {accounts.map((account) => (
+                <option key={account.id} value={account.id}>{account.name}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={handleSaveAccount}
+              disabled={saving}
+              className="px-4 py-2 rounded-lg text-white text-xs font-medium disabled:opacity-50"
+              style={{ background: QBO_GREEN }}
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      )}
       {/* Field mapping card */}
       {status?.connected && (
         <div className="bg-brand-surface border border-brand-line rounded-xl p-6">

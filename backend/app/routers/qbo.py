@@ -28,6 +28,7 @@ from app.schemas.qbo import (
     QBOIntegrationResponse,
     QBOIntegrationUpdate,
     QBOItemOption,
+    QBOAccountOption,
     QBOItemMappingResponse,
     QBOItemMappingUpsert,
     QBOSyncStatus,
@@ -330,6 +331,8 @@ async def qbo_status(
         last_sync_at=qbo.last_sync_at,
         last_sync_status=qbo.last_sync_status,
         last_sync_error=qbo.last_sync_error,
+        qbo_ar_account_id=qbo.qbo_ar_account_id,
+        qbo_ar_account_name=qbo.qbo_ar_account_name,
     )
 
 
@@ -354,8 +357,9 @@ async def qbo_update_settings(
 
     if body.sync_frequency_minutes is not None:
         qbo.sync_frequency_minutes = body.sync_frequency_minutes
-    if body.sandbox_mode is not None:
-        qbo.sandbox_mode = body.sandbox_mode
+    if body.qbo_ar_account_id is not None:
+        qbo.qbo_ar_account_id = body.qbo_ar_account_id or None
+        qbo.qbo_ar_account_name = body.qbo_ar_account_name or None
 
     await db.commit()
     await db.refresh(qbo)
@@ -458,6 +462,41 @@ async def qbo_list_items(
     return [QBOItemOption(id=it["Id"], name=it["Name"]) for it in items]
 
 
+@router.get("/accounts")
+async def qbo_list_ar_accounts(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> list[QBOAccountOption]:
+    """Return active accounts-receivable accounts from the connected company."""
+    user = await get_current_user(request, db)
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    await set_tenant_context(db, str(user.tenant_id))
+    access_token = await _get_fresh_qbo_token(db, str(user.tenant_id))
+    qbo = await _get_qbo_integration(db, str(user.tenant_id))
+    if not access_token or not qbo or not qbo.qbo_realm_id:
+        raise HTTPException(status_code=400, detail="QBO not connected")
+
+    base = (
+        "https://sandbox-quickbooks.api.intuit.com"
+        if qbo.sandbox_mode
+        else "https://quickbooks.api.intuit.com"
+    )
+    url = f"{base}/v3/company/{qbo.qbo_realm_id}/query"
+    query = "SELECT * FROM Account WHERE AccountType = 'Accounts Receivable' AND Active = true MAXRESULTS 100"
+    async with httpx.AsyncClient(timeout=20) as client:
+        resp = await client.get(
+            url,
+            params={"query": query},
+            headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
+        )
+    if resp.status_code != 200:
+        logger.warning(f"QBO account fetch failed: {resp.status_code} {resp.text[:200]}")
+        raise HTTPException(status_code=502, detail="Failed to fetch QBO accounts")
+    accounts = resp.json().get("QueryResponse", {}).get("Account", [])
+    return [QBOAccountOption(id=a["Id"], name=a["Name"]) for a in accounts]
+
 # ── Item Mappings ─────────────────────────────────────────────────────────────
 
 
@@ -543,7 +582,14 @@ async def qbo_sync_invoice(
 
     from app.services.qbo_sync import QBOSyncService
 
-    svc = QBOSyncService(db, str(user.tenant_id), access_token, sandbox=sandbox)
+    svc = QBOSyncService(
+        db,
+        str(user.tenant_id),
+        access_token,
+        sandbox=sandbox,
+        ar_account_id=qbo.qbo_ar_account_id if qbo else None,
+        ar_account_name=qbo.qbo_ar_account_name if qbo else None,
+    )
     result = await svc.sync_invoice_with_retry(invoice_id)
 
     if result is None:
