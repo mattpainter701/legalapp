@@ -9,6 +9,7 @@ storage root.
 from __future__ import annotations
 
 import copy
+import re
 import shutil
 import uuid
 from collections import defaultdict, deque
@@ -33,6 +34,13 @@ _FILE_COLUMNS = {
     "output_storage_path",
     "generated_storage_path",
 }
+
+_UUID_TOKEN = re.compile(
+    r"(?<![0-9A-Fa-f])"
+    r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[1-5][0-9A-Fa-f]{3}-"
+    r"[89ABab][0-9A-Fa-f]{3}-[0-9A-Fa-f]{12}"
+    r"(?![0-9A-Fa-f])"
+)
 
 
 def _clone_tables() -> dict[str, Table]:
@@ -87,7 +95,12 @@ def _remap_embedded(value: Any, id_map: dict[uuid.UUID, uuid.UUID]) -> Any:
         try:
             source_id = uuid.UUID(value)
         except (ValueError, AttributeError):
-            return value
+            return _UUID_TOKEN.sub(
+                lambda match: str(
+                    id_map.get(uuid.UUID(match.group(0)), uuid.UUID(match.group(0)))
+                ),
+                value,
+            )
         mapped = id_map.get(source_id)
         return str(mapped) if mapped else value
     if isinstance(value, list):

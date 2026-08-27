@@ -15,6 +15,7 @@ def test_embedded_fixture_identifiers_are_recursively_remapped():
     payload = {
         "matter_id": str(old_id),
         "nested": [old_id, {"source": str(old_id)}],
+        "external_ref": f"intake-dashboard:call:{old_id}:general-task",
         "ordinary": "synthetic text",
     }
 
@@ -23,6 +24,7 @@ def test_embedded_fixture_identifiers_are_recursively_remapped():
     assert remapped == {
         "matter_id": str(new_id),
         "nested": [new_id, {"source": str(new_id)}],
+        "external_ref": f"intake-dashboard:call:{new_id}:general-task",
         "ordinary": "synthetic text",
     }
 
