@@ -2423,10 +2423,10 @@ async def test_pdf_finalization_read_failure_removes_staged_storage(
     }
     original_load = document_templates._load_generation_preview_evidence
 
-    async def fail_final_evidence_read(**kwargs):
+    async def fail_final_evidence_read(db, **kwargs):
         if kwargs["lock"]:
             raise RuntimeError("injected final evidence read failure")
-        return await original_load(**kwargs)
+        return await original_load(db, **kwargs)
 
     with monkeypatch.context() as failure:
         failure.setattr(
