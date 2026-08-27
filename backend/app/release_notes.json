@@ -2,6 +2,27 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.26.3",
+      "version": "2026.08.26.3",
+      "title": "Tagged matter email can create traceable tasks",
+      "published_at": "2026-08-26",
+      "summary": "A reviewed matter email whose subject begins with [TASK] or [DEADLINE] can now be filed and turned into a linked task in one step.",
+      "highlights": [
+        {
+          "title": "Use an explicit subject tag",
+          "description": "Start a new subject with [TASK] or [DEADLINE]. The tag must be the first token, so replies and forwarded subjects do not trigger."
+        },
+        {
+          "title": "Review the task before filing",
+          "description": "The Correspondence queue previews the task title and any safely parsed due date before the reviewer chooses File + create task."
+        },
+        {
+          "title": "Keep the source email attached",
+          "description": "The filed email, correspondence record, task, and task history remain linked so the source and resulting work can be audited from the matter."
+        }
+      ]
+    },
+    {
       "id": "2026.08.26.2",
       "version": "2026.08.26.2",
       "title": "Demo workspaces reopen with approved matter-aware AI",

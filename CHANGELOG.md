@@ -3,6 +3,12 @@
 ## [Unreleased]
 
 ### Added
+- **Reviewed matter email can create a traceable task from an explicit subject
+  tag:** a new message beginning with `[TASK]` or `[DEADLINE]` previews its task
+  title and a bounded, deterministic due date in the Correspondence queue. The
+  reviewer can file the `.eml`, correspondence record, task, and task history
+  atomically, after which existing calendar projection is requested without
+  making provider availability a condition of durable capture.
 - **File share agents now have operator-grade local diagnostics:** Windows
   services write bounded rotating logs under the protected ProgramData agent
   directory, Linux continues to use journald, and the File Shares console

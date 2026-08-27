@@ -98,7 +98,9 @@ def _task_type(tag: str, title: str) -> str:
     return "general"
 
 
-def _relative_due_date(title: str, base_date: date) -> tuple[date | None, str, str | None]:
+def _relative_due_date(
+    title: str, base_date: date
+) -> tuple[date | None, str, str | None]:
     relative = _TRAILING_RELATIVE_RE.search(title)
     if relative:
         raw_count = relative.group("count").lower()

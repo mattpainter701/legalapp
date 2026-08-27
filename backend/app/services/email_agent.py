@@ -113,9 +113,7 @@ async def _auto_log_and_task(
         # created only from an explicit first-token subject tag.  Untagged
         # classification remains useful transient triage metadata.
         task = None
-        suggestion = parse_email_task_tag(
-            email.get("subject"), received_at=received_at
-        )
+        suggestion = parse_email_task_tag(email.get("subject"), received_at=received_at)
         if suggestion is not None:
             task = await add_tagged_email_task(
                 db,
