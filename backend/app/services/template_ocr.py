@@ -67,6 +67,7 @@ class ImageOcrResult:
     average_confidence: float
     lines_detected: int
 
+
 def _same_row(left: OcrLine, right: OcrLine) -> bool:
     """Return whether two OCR boxes plausibly belong to one visual row."""
     if left.page_index != right.page_index:
@@ -75,7 +76,10 @@ def _same_row(left: OcrLine, right: OcrLine) -> bool:
     r_bottom, r_top = right.rect[1], right.rect[3]
     overlap = max(0.0, min(l_top, r_top) - max(l_bottom, r_bottom))
     height = max(1.0, min(l_top - l_bottom, r_top - r_bottom))
-    return overlap / height >= 0.35 or abs((l_bottom + l_top) - (r_bottom + r_top)) <= height * 0.75
+    return (
+        overlap / height >= 0.35
+        or abs((l_bottom + l_top) - (r_bottom + r_top)) <= height * 0.75
+    )
 
 
 def _is_label_fragment(text: str) -> bool:
@@ -87,21 +91,66 @@ def _is_label_fragment(text: str) -> bool:
     # OCR frequently drops the colon on printed labels. Keep this deliberately
     # conservative so ordinary prose is not merged with its neighbour.
     return normalized.lower() in {
-        "name", "full name", "full legal name", "legal name", "first name",
-        "middle name", "last name", "preferred name", "applicant",
-        "applicant name", "client", "client name", "address",
-        "mailing address", "street", "street address", "city", "state",
-        "zip", "zip code", "postal code", "country", "county",
-        "county of residence", "phone", "phone number", "telephone",
-        "mobile", "email", "email address", "date", "date of birth", "dob",
-        "date signed", "case", "case number", "case no", "file number",
-        "file no", "matter", "court", "judge", "plaintiff", "defendant",
-        "petitioner", "respondent", "opposing party", "spouse", "signature",
-        "amount", "fee", "fee amount", "employer", "occupation",
+        "name",
+        "full name",
+        "full legal name",
+        "legal name",
+        "first name",
+        "middle name",
+        "last name",
+        "preferred name",
+        "applicant",
+        "applicant name",
+        "client",
+        "client name",
+        "address",
+        "mailing address",
+        "street",
+        "street address",
+        "city",
+        "state",
+        "zip",
+        "zip code",
+        "postal code",
+        "country",
+        "county",
+        "county of residence",
+        "phone",
+        "phone number",
+        "telephone",
+        "mobile",
+        "email",
+        "email address",
+        "date",
+        "date of birth",
+        "dob",
+        "date signed",
+        "case",
+        "case number",
+        "case no",
+        "file number",
+        "file no",
+        "matter",
+        "court",
+        "judge",
+        "plaintiff",
+        "defendant",
+        "petitioner",
+        "respondent",
+        "opposing party",
+        "spouse",
+        "signature",
+        "amount",
+        "fee",
+        "fee amount",
+        "employer",
+        "occupation",
     }
 
 
-def reconstruct_ocr_lines(lines: list[OcrLine] | tuple[OcrLine, ...]) -> tuple[OcrLine, ...]:
+def reconstruct_ocr_lines(
+    lines: list[OcrLine] | tuple[OcrLine, ...],
+) -> tuple[OcrLine, ...]:
     """Join adjacent same-row label/value OCR fragments.
 
     OCR engines often return ``Applicant Name:`` and handwritten ``Ada`` as
@@ -109,7 +158,9 @@ def reconstruct_ocr_lines(lines: list[OcrLine] | tuple[OcrLine, ...]) -> tuple[O
     understanding only; ``PdfOcrResult.lines`` retains the original boxes for
     coordinate-sensitive replacement and redaction.
     """
-    ordered = sorted(lines, key=lambda line: (line.page_index, -line.rect[3], line.rect[0]))
+    ordered = sorted(
+        lines, key=lambda line: (line.page_index, -line.rect[3], line.rect[0])
+    )
     output: list[OcrLine] = []
     index = 0
     while index < len(ordered):
@@ -274,12 +325,8 @@ def image_to_pdf(content: bytes) -> NormalizedImagePdf:
                     rgb = frame.convert("RGB")
                 try:
                     x_dpi, y_dpi = _image_dpi(source.info.get("dpi"))
-                    page_width = max(
-                        36.0, min(14_400.0, width * 72.0 / x_dpi)
-                    )
-                    page_height = max(
-                        36.0, min(14_400.0, height * 72.0 / y_dpi)
-                    )
+                    page_width = max(36.0, min(14_400.0, width * 72.0 / x_dpi))
+                    page_height = max(36.0, min(14_400.0, height * 72.0 / y_dpi))
                     pdf.setPageSize((page_width, page_height))
                     pdf.drawImage(
                         ImageReader(rgb),
@@ -299,9 +346,7 @@ def image_to_pdf(content: bytes) -> NormalizedImagePdf:
     except TemplateOcrError:
         raise
     except Exception as exc:
-        raise TemplateOcrError(
-            "The image could not be normalized for OCR."
-        ) from exc
+        raise TemplateOcrError("The image could not be normalized for OCR.") from exc
     finally:
         source.close()
 
@@ -360,6 +405,7 @@ def ocr_pdf(
     # Cloud OCR is deliberately opt-in; local RapidOCR remains the default.
     if get_settings().TEMPLATE_OCR_PROVIDER.strip().lower() == "azure":
         from app.services.template_ocr_azure import ocr_pdf_azure
+
         return ocr_pdf_azure(content, max_pages=max_pages)
 
     try:
@@ -456,13 +502,23 @@ def ocr_pdf(
     finally:
         document.close()
 
-    source_lines = tuple(sorted(lines, key=lambda line: (line.page_index, -line.rect[3], line.rect[0])))
+    source_lines = tuple(
+        sorted(lines, key=lambda line: (line.page_index, -line.rect[3], line.rect[0]))
+    )
     reconstructed_lines = reconstruct_ocr_lines(source_lines)
     page_text: dict[int, list[str]] = {page_index: [] for page_index in selected_pages}
     for line in reconstructed_lines:
         page_text.setdefault(line.page_index, []).append(line.text)
-    text = "\n\n".join("\n".join(page_text[page_index]) for page_index in selected_pages if page_text.get(page_index)).strip()
-    confidence = sum(line.score for line in source_lines) / len(source_lines) if source_lines else 0.0
+    text = "\n\n".join(
+        "\n".join(page_text[page_index])
+        for page_index in selected_pages
+        if page_text.get(page_index)
+    ).strip()
+    confidence = (
+        sum(line.score for line in source_lines) / len(source_lines)
+        if source_lines
+        else 0.0
+    )
     return PdfOcrResult(
         text=text,
         # Preserve exact OCR fragments for coordinate-sensitive overlays. The

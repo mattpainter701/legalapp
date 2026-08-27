@@ -1038,9 +1038,7 @@ def validate_template_ocr_settings(settings: Settings) -> None:
         ):
             raise ValueError("AZURE_DOCUMENT_INTELLIGENCE_API_VERSION is invalid")
     if not 5 <= settings.TEMPLATE_OCR_AZURE_TIMEOUT_SECONDS <= 120:
-        raise ValueError(
-            "TEMPLATE_OCR_AZURE_TIMEOUT_SECONDS must be between 5 and 120"
-        )
+        raise ValueError("TEMPLATE_OCR_AZURE_TIMEOUT_SECONDS must be between 5 and 120")
     if not 10 <= settings.TEMPLATE_OCR_AZURE_MAX_POLL_SECONDS <= 180:
         raise ValueError(
             "TEMPLATE_OCR_AZURE_MAX_POLL_SECONDS must be between 10 and 180"

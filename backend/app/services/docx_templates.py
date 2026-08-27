@@ -55,13 +55,8 @@ def validate_docx_package(content: bytes) -> None:
         with zipfile.ZipFile(io.BytesIO(content)) as package:
             infos = package.infolist()
             names = {info.filename for info in infos}
-            if (
-                "[Content_Types].xml" not in names
-                or "word/document.xml" not in names
-            ):
-                raise TemplateDocxError(
-                    "The DOCX is damaged or could not be parsed."
-                )
+            if "[Content_Types].xml" not in names or "word/document.xml" not in names:
+                raise TemplateDocxError("The DOCX is damaged or could not be parsed.")
             if len(infos) > _MAX_DOCX_PACKAGE_FILES:
                 raise TemplateDocxError(
                     "This Word file contains too many internal parts to process safely."
@@ -85,15 +80,10 @@ def validate_docx_package(content: bytes) -> None:
                     raise TemplateDocxError(
                         "Password-protected Word files are not supported. Upload an unlocked clean master."
                     )
-                if (
-                    normalized_key
-                    in {part.casefold() for part in _UNSAFE_DOCX_PARTS}
-                    or normalized_key.startswith(
-                        tuple(
-                            prefix.casefold()
-                            for prefix in _UNSAFE_DOCX_PART_PREFIXES
-                        )
-                    )
+                if normalized_key in {
+                    part.casefold() for part in _UNSAFE_DOCX_PARTS
+                } or normalized_key.startswith(
+                    tuple(prefix.casefold() for prefix in _UNSAFE_DOCX_PART_PREFIXES)
                 ):
                     raise TemplateDocxError(
                         "Word templates with macros, ActiveX controls, or embedded files are not supported. Remove them and upload a clean master."
@@ -110,8 +100,7 @@ def validate_docx_package(content: bytes) -> None:
                 if (
                     info.file_size > 1_000_000
                     and info.file_size
-                    > max(1, int(info.compress_size))
-                    * _MAX_DOCX_COMPRESSION_RATIO
+                    > max(1, int(info.compress_size)) * _MAX_DOCX_COMPRESSION_RATIO
                 ):
                     raise TemplateDocxError(
                         "This Word file uses an unsafe compression ratio."

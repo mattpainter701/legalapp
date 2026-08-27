@@ -69,9 +69,7 @@ def _candidate_fields(
     proposals: list[AiFieldProposal],
     existing_fields: list[dict],
 ) -> tuple[list[tuple[AiFieldProposal, str, str]], list[dict]]:
-    existing_names = {
-        str(field.get("name") or "").strip() for field in existing_fields
-    }
+    existing_names = {str(field.get("name") or "").strip() for field in existing_fields}
     existing_sources = {
         str(field.get("source_text") or "").strip()
         for field in existing_fields
@@ -170,9 +168,7 @@ def _update_existing_fields(
         field["ai_reason"] = proposal.reason.strip()
         field["ai_confidence"] = round(min(0.75, proposal.confidence), 2)
         if next_name != existing_name:
-            placeholder = re.compile(
-                r"\{\{\s*" + re.escape(existing_name) + r"\s*\}\}"
-            )
+            placeholder = re.compile(r"\{\{\s*" + re.escape(existing_name) + r"\s*\}\}")
             analysis.body = placeholder.sub(
                 "{{" + next_name + "}}",
                 analysis.body,

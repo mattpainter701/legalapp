@@ -228,7 +228,11 @@ def _analysis_from_token(
         "detected_branding_profile",
         "warnings",
     }
-    if not claims_match or not isinstance(analysis, dict) or not required <= analysis.keys():
+    if (
+        not claims_match
+        or not isinstance(analysis, dict)
+        or not required <= analysis.keys()
+    ):
         raise HTTPException(status_code=409, detail=detail)
     return analysis
 
@@ -796,8 +800,7 @@ def _reconcile_submitted_ai_fields(
             proposals.append(
                 AiFieldProposal(
                     existing_name=(
-                        str(field.get("ai_existing_name") or "").strip()
-                        or None
+                        str(field.get("ai_existing_name") or "").strip() or None
                     )
                     if field.get("ai_update_kind") == "updated"
                     else None,
@@ -830,9 +833,7 @@ def _reconcile_submitted_ai_fields(
             file_bytes=file_bytes,
             proposals=proposals,
         )
-        added_count = sum(
-            field.get("ai_update_kind") == "added" for field in mapped
-        )
+        added_count = sum(field.get("ai_update_kind") == "added" for field in mapped)
         updated_count = sum(
             field.get("ai_update_kind") == "updated" for field in mapped
         )
@@ -905,50 +906,89 @@ def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
         for field in (discovered.get("fields") or [])
         if isinstance(field, dict) and field.get("docx_source_key")
     }
+
     def _safe_rect(value, *, page_number: int, label: str) -> list[float]:
         if not isinstance(value, (list, tuple)) or len(value) != 4:
-            raise HTTPException(status_code=422, detail=f"{label} must be a four-number rectangle")
+            raise HTTPException(
+                status_code=422, detail=f"{label} must be a four-number rectangle"
+            )
         try:
             rect = [float(item) for item in value]
         except (TypeError, ValueError) as exc:
-            raise HTTPException(status_code=422, detail=f"{label} must be a four-number rectangle") from exc
+            raise HTTPException(
+                status_code=422, detail=f"{label} must be a four-number rectangle"
+            ) from exc
         if not all(math.isfinite(item) for item in rect):
-            raise HTTPException(status_code=422, detail=f"{label} must contain finite numbers")
+            raise HTTPException(
+                status_code=422, detail=f"{label} must contain finite numbers"
+            )
         if rect[2] <= rect[0] or rect[3] <= rect[1]:
-            raise HTTPException(status_code=422, detail=f"{label} must have positive size")
+            raise HTTPException(
+                status_code=422, detail=f"{label} must have positive size"
+            )
         page = signed_pages.get(page_number)
-        if page is None or rect[0] < 0 or rect[1] < 0 or (
-            rect[2] > float(page.get("width", 0))
-            or rect[3] > float(page.get("height", 0))
+        if (
+            page is None
+            or rect[0] < 0
+            or rect[1] < 0
+            or (
+                rect[2] > float(page.get("width", 0))
+                or rect[3] > float(page.get("height", 0))
+            )
         ):
-            raise HTTPException(status_code=422, detail=f"{label} falls outside its signed page bounds")
+            raise HTTPException(
+                status_code=422, detail=f"{label} falls outside its signed page bounds"
+            )
         return rect
 
     def _review_bool(field: dict, key: str, default: bool = False) -> bool:
         value = field.get(key, default)
         if not isinstance(value, bool):
-            raise HTTPException(status_code=422, detail=f"PDF field {key} must be boolean")
+            raise HTTPException(
+                status_code=422, detail=f"PDF field {key} must be boolean"
+            )
         return value
 
     def _review_overlay_specs(field: dict, authoritative: dict) -> list[dict]:
         submitted = field.get("pdf_overlays") or [field.get("pdf_overlay")]
-        original = authoritative.get("pdf_overlays") or [authoritative.get("pdf_overlay")]
+        original = authoritative.get("pdf_overlays") or [
+            authoritative.get("pdf_overlay")
+        ]
         if not isinstance(submitted, list) or len(submitted) != len(original):
-            raise HTTPException(status_code=422, detail="Reviewed PDF overlay count cannot change")
+            raise HTTPException(
+                status_code=422, detail="Reviewed PDF overlay count cannot change"
+            )
         reviewed: list[dict] = []
         for candidate, source in zip(submitted, original):
             if not isinstance(candidate, dict) or not isinstance(source, dict):
-                raise HTTPException(status_code=422, detail="Reviewed PDF overlay mapping is invalid")
+                raise HTTPException(
+                    status_code=422, detail="Reviewed PDF overlay mapping is invalid"
+                )
             page_number = int(source.get("page"))
-            rect = _safe_rect(candidate.get("rect", source.get("rect")), page_number=page_number, label="PDF overlay rectangle")
+            rect = _safe_rect(
+                candidate.get("rect", source.get("rect")),
+                page_number=page_number,
+                label="PDF overlay rectangle",
+            )
             immutable = dict(source)
             immutable["rect"] = rect
-            immutable["source_rect"] = _safe_rect(source.get("source_rect", source.get("rect")), page_number=page_number, label="PDF source rectangle")
-            for key in ("page", "source_text", "source_kind", "pdf_source_key", "erase_source"):
+            immutable["source_rect"] = _safe_rect(
+                source.get("source_rect", source.get("rect")),
+                page_number=page_number,
+                label="PDF source rectangle",
+            )
+            for key in (
+                "page",
+                "source_text",
+                "source_kind",
+                "pdf_source_key",
+                "erase_source",
+            ):
                 if key in source:
                     immutable[key] = source[key]
             reviewed.append(immutable)
         return reviewed
+
     seen_names: set[str] = set()
     seen_pdf_names: set[str] = set()
     seen_overlay_keys: set[str] = set()
@@ -1009,22 +1049,50 @@ def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
             try:
                 uuid.UUID(overlay_key.split(":", 1)[1])
             except (ValueError, IndexError) as exc:
-                raise HTTPException(status_code=422, detail="Manual PDF source key must contain a valid UUID") from exc
+                raise HTTPException(
+                    status_code=422,
+                    detail="Manual PDF source key must contain a valid UUID",
+                ) from exc
             if not has_overlay_mapping:
-                raise HTTPException(status_code=422, detail=f"Manual PDF variable {name!r} needs an overlay mapping")
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Manual PDF variable {name!r} needs an overlay mapping",
+                )
             field_type = str(field.get("field_type") or "text")
             if field_type not in {"text", "date", "checkbox", "signature"}:
-                raise HTTPException(status_code=422, detail="Manual PDF fields support text, date, checkbox, or signature")
+                raise HTTPException(
+                    status_code=422,
+                    detail="Manual PDF fields support text, date, checkbox, or signature",
+                )
             specs = field.get("pdf_overlays") or [field.get("pdf_overlay")]
-            if not isinstance(specs, list) or len(specs) != 1 or not isinstance(specs[0], dict):
-                raise HTTPException(status_code=422, detail="Manual PDF fields support exactly one overlay")
+            if (
+                not isinstance(specs, list)
+                or len(specs) != 1
+                or not isinstance(specs[0], dict)
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail="Manual PDF fields support exactly one overlay",
+                )
             spec = dict(specs[0])
             try:
                 page_number = int(spec.get("page"))
             except (TypeError, ValueError) as exc:
-                raise HTTPException(status_code=422, detail="Manual PDF overlay page must be an integer") from exc
-            spec["rect"] = _safe_rect(spec.get("rect"), page_number=page_number, label="Manual PDF overlay rectangle")
-            spec.update({"pdf_source_key": overlay_key, "source_kind": "manual", "erase_source": False})
+                raise HTTPException(
+                    status_code=422, detail="Manual PDF overlay page must be an integer"
+                ) from exc
+            spec["rect"] = _safe_rect(
+                spec.get("rect"),
+                page_number=page_number,
+                label="Manual PDF overlay rectangle",
+            )
+            spec.update(
+                {
+                    "pdf_source_key": overlay_key,
+                    "source_kind": "manual",
+                    "erase_source": False,
+                }
+            )
             field["pdf_overlay"] = spec
             field.pop("pdf_overlays", None)
             field["pdf_source_key"] = overlay_key
@@ -1073,7 +1141,9 @@ def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
             # The source controls geometry/type/options and a source-required
             # field can never be weakened, but review may promote an optional
             # AcroForm field to required for downstream automation.
-            field["required"] = bool(authoritative.get("required") or submitted_required)
+            field["required"] = bool(
+                authoritative.get("required") or submitted_required
+            )
             field["included"] = _review_bool(field, "included", True)
         if has_overlay_mapping:
             if overlay_key is None:
@@ -1094,12 +1164,21 @@ def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
                 )
             seen_overlay_keys.add(overlay_key)
             authoritative = discovered_by_overlay_key[overlay_key]
-            field_type = str(field.get("field_type") or authoritative.get("field_type") or "text")
+            field_type = str(
+                field.get("field_type") or authoritative.get("field_type") or "text"
+            )
             if field_type not in {"text", "date", "checkbox", "signature"}:
-                raise HTTPException(status_code=422, detail="PDF overlays support text, date, checkbox, or signature")
+                raise HTTPException(
+                    status_code=422,
+                    detail="PDF overlays support text, date, checkbox, or signature",
+                )
             field["field_type"] = field_type
-            field["required"] = bool(authoritative.get("required") or _review_bool(field, "required"))
-            field["multiline"] = _review_bool(field, "multiline", bool(authoritative.get("multiline", False)))
+            field["required"] = bool(
+                authoritative.get("required") or _review_bool(field, "required")
+            )
+            field["multiline"] = _review_bool(
+                field, "multiline", bool(authoritative.get("multiline", False))
+            )
             field["included"] = _review_bool(field, "included", True)
             for key in ("page", "rect", "source_text"):
                 field[key] = authoritative.get(key)
@@ -1586,9 +1665,9 @@ async def analyze_template_sample(
     except (TemplatePdfError, TemplateDocxError, TemplateOcrError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     response_payload = analysis.as_dict()
-    response_payload["warnings"] = list(dict.fromkeys(
-        [*(response_payload.get("warnings") or []), *sample.warnings]
-    ))
+    response_payload["warnings"] = list(
+        dict.fromkeys([*(response_payload.get("warnings") or []), *sample.warnings])
+    )
     response_payload["analysis_token"] = _issue_analysis_token(
         analysis=response_payload,
         file_bytes=sample.content,
@@ -1628,9 +1707,7 @@ async def propose_template_fields_with_ai(
             title=_validated_title(title),
         )
         analysis.warnings.extend(
-            warning
-            for warning in sample.warnings
-            if warning not in analysis.warnings
+            warning for warning in sample.warnings if warning not in analysis.warnings
         )
         analysis = await assist_template_mapping(
             db=db,
@@ -1668,7 +1745,9 @@ async def preview_template_pdf_page(
     await set_tenant_context(db, str(current_user.tenant_id))
     sample = await _read_template_sample(file)
     if not sample.content.startswith(b"%PDF-"):
-        raise HTTPException(status_code=400, detail="PDF page preview requires a PDF upload")
+        raise HTTPException(
+            status_code=400, detail="PDF page preview requires a PDF upload"
+        )
     try:
         image, metadata = await asyncio.to_thread(
             render_pdf_page_preview, sample.content, page_number

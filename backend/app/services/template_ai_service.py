@@ -51,9 +51,7 @@ _REDACTIONS = (
         "[REDACTED_EMAIL]",
     ),
     (
-        re.compile(
-            r"\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b"
-        ),
+        re.compile(r"\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b"),
         "[REDACTED_PHONE]",
     ),
     (
@@ -143,9 +141,7 @@ async def assist_template_mapping(
         {
             "name": field.get("name"),
             "label": field.get("label"),
-            "source_text": _redact_evidence(
-                str(field.get("source_text") or "")
-            ),
+            "source_text": _redact_evidence(str(field.get("source_text") or "")),
             "page": field.get("page"),
         }
         for field in (analysis.variable_schema.get("fields") or [])
@@ -193,9 +189,7 @@ async def assist_template_mapping(
 
     db.add(_usage_record(user, route, tokens_in, tokens_out))
     try:
-        proposal = AiTemplateProposal.model_validate_json(
-            _json_payload(response_text)
-        )
+        proposal = AiTemplateProposal.model_validate_json(_json_payload(response_text))
     except (ValidationError, ValueError) as exc:
         await db.commit()
         raise TemplateAiAssistError(
@@ -210,12 +204,8 @@ async def assist_template_mapping(
         file_bytes=file_bytes,
         proposals=proposal.fields,
     )
-    added_count = sum(
-        field.get("ai_update_kind") == "added" for field in mapped
-    )
-    updated_count = sum(
-        field.get("ai_update_kind") == "updated" for field in mapped
-    )
+    added_count = sum(field.get("ai_update_kind") == "added" for field in mapped)
+    updated_count = sum(field.get("ai_update_kind") == "updated" for field in mapped)
     detection = analysis.variable_schema.setdefault("detection", {})
     detection.update(
         {

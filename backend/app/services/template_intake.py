@@ -42,7 +42,12 @@ class PreparedTemplateSource:
 
 _IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp", ".bmp")
 _IMAGE_MEDIA_TYPES = {
-    "image/png", "image/jpeg", "image/jpg", "image/tiff", "image/webp", "image/bmp",
+    "image/png",
+    "image/jpeg",
+    "image/jpg",
+    "image/tiff",
+    "image/webp",
+    "image/bmp",
 }
 _MAX_IMAGE_PAGES = 50
 _MAX_IMAGE_PAGE_PIXELS = 25_000_000
@@ -56,7 +61,10 @@ def _normalized_media_type(content_type: str | None) -> str:
 
 
 def _is_image_source(filename: str, content_type: str | None) -> bool:
-    return filename.lower().endswith(_IMAGE_EXTENSIONS) or _normalized_media_type(content_type) in _IMAGE_MEDIA_TYPES
+    return (
+        filename.lower().endswith(_IMAGE_EXTENSIONS)
+        or _normalized_media_type(content_type) in _IMAGE_MEDIA_TYPES
+    )
 
 
 def _image_source_to_pdf(file_bytes: bytes, filename: str) -> bytes:
@@ -131,11 +139,20 @@ def _image_source_to_pdf(file_bytes: bytes, filename: str) -> bytes:
             page_scale = min(1.0, _MAX_IMAGE_PAGE_POINTS / max(raw_page_size))
             page_size = (raw_page_size[0] * page_scale, raw_page_size[1] * page_scale)
             pdf.setPageSize(page_size)
-            pdf.drawImage(ImageReader(frame), 0, 0, width=page_size[0], height=page_size[1], mask="auto")
+            pdf.drawImage(
+                ImageReader(frame),
+                0,
+                0,
+                width=page_size[0],
+                height=page_size[1],
+                mask="auto",
+            )
             pdf.showPage()
         pdf.save()
     except Exception as exc:
-        raise TemplateImageError("The image could not be converted into a document template source.") from exc
+        raise TemplateImageError(
+            "The image could not be converted into a document template source."
+        ) from exc
     return output.getvalue()
 
 
@@ -149,7 +166,9 @@ def prepare_template_source(
     Existing PDF, DOCX, and text bytes are returned untouched.
     """
     media_type = _normalized_media_type(content_type)
-    safe_filename = os.path.basename((filename or "uploaded-template").replace("\\", "/"))
+    safe_filename = os.path.basename(
+        (filename or "uploaded-template").replace("\\", "/")
+    )
     if _is_image_source(safe_filename, media_type):
         return PreparedTemplateSource(
             source_bytes=_image_source_to_pdf(file_bytes, safe_filename),
@@ -159,11 +178,32 @@ def prepare_template_source(
             normalized=True,
         )
     lower = safe_filename.lower()
-    if lower.endswith(".pdf") or media_type == "application/pdf" or file_bytes.startswith(b"%PDF-"):
-        return PreparedTemplateSource(file_bytes, safe_filename, "application/pdf", "pdf")
-    if lower.endswith(".docx") or media_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-        return PreparedTemplateSource(file_bytes, safe_filename, media_type or "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx")
-    return PreparedTemplateSource(file_bytes, safe_filename, media_type or "text/plain", _format_from_filename(safe_filename, media_type))
+    if (
+        lower.endswith(".pdf")
+        or media_type == "application/pdf"
+        or file_bytes.startswith(b"%PDF-")
+    ):
+        return PreparedTemplateSource(
+            file_bytes, safe_filename, "application/pdf", "pdf"
+        )
+    if (
+        lower.endswith(".docx")
+        or media_type
+        == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    ):
+        return PreparedTemplateSource(
+            file_bytes,
+            safe_filename,
+            media_type
+            or "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "docx",
+        )
+    return PreparedTemplateSource(
+        file_bytes,
+        safe_filename,
+        media_type or "text/plain",
+        _format_from_filename(safe_filename, media_type),
+    )
 
 
 DATE_PATTERN = re.compile(
@@ -179,9 +219,7 @@ PHONE_PATTERN = re.compile(
 )
 MONEY_PATTERN = re.compile(r"\$\s?\d[\d,]*(?:\.\d{2})?")
 PLACEHOLDER_PATTERN = re.compile(r"\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}")
-DOCX_BRACKET_PLACEHOLDER_PATTERN = re.compile(
-    r"\[([A-Z][A-Z0-9_'’./# -]{1,80})\]"
-)
+DOCX_BRACKET_PLACEHOLDER_PATTERN = re.compile(r"\[([A-Z][A-Z0-9_'’./# -]{1,80})\]")
 BLANK_PATTERN = re.compile(r"\b([A-Z][A-Za-z /]{2,40})\s*[:\-]\s*_{3,}")
 DOCX_LABELED_BLANK_PATTERN = re.compile(
     r"(?P<label>(?:\d+\.\s*)?[A-Za-z][A-Za-z0-9 /&.'’()\-]{1,80}?)"
@@ -308,9 +346,15 @@ class TemplateAnalysis:
     variable_schema: dict
     branding_profile: dict
     warnings: list[str] = field(default_factory=list)
-    _normalized_source_bytes: bytes | None = field(default=None, repr=False, compare=False)
-    _normalized_source_filename: str | None = field(default=None, repr=False, compare=False)
-    _normalized_source_content_type: str | None = field(default=None, repr=False, compare=False)
+    _normalized_source_bytes: bytes | None = field(
+        default=None, repr=False, compare=False
+    )
+    _normalized_source_filename: str | None = field(
+        default=None, repr=False, compare=False
+    )
+    _normalized_source_content_type: str | None = field(
+        default=None, repr=False, compare=False
+    )
     evidence_fragments: list[dict] | None = None
 
     def as_dict(self) -> dict:
@@ -418,12 +462,18 @@ def analyze_template_upload(
                     existing_lines = {line.casefold() for line in cleaned.splitlines()}
                     cleaned = "\n".join(
                         [*cleaned.splitlines()]
-                        + [line for line in ocr_text.splitlines() if line.casefold() not in existing_lines]
+                        + [
+                            line
+                            for line in ocr_text.splitlines()
+                            if line.casefold() not in existing_lines
+                        ]
                     )
                 else:
                     cleaned = ocr_text
                 if sparse_pdf_pages:
-                    cleaned = _merge_pdf_text_and_ocr(pdf_page_text, ocr_result, max_chars=20_000)
+                    cleaned = _merge_pdf_text_and_ocr(
+                        pdf_page_text, ocr_result, max_chars=20_000
+                    )
                 warnings.append(
                     "Scanned pages were read automatically with OCR and merged with any searchable PDF text. Review low-confidence fields before creating the template."
                 )
@@ -488,7 +538,9 @@ def analyze_template_upload(
                     if acro_page != int(page):
                         continue
                     a_left, a_bottom, a_right, a_top = acro_rect
-                    if min(right, a_right) > max(left, a_left) and min(top, a_top) > max(bottom, a_bottom):
+                    if min(right, a_right) > max(left, a_left) and min(
+                        top, a_top
+                    ) > max(bottom, a_bottom):
                         return True
                 return False
 
@@ -755,6 +807,7 @@ def _merge_pdf_text_and_ocr(
         remaining -= len(clipped)
     return "\n\n".join(parts).strip()
 
+
 def _needs_pdf_ocr(text: str, reader=None) -> bool:
     visible = [character for character in text if character.isalnum()]
     meaningful_lines = [line for line in text.splitlines() if len(line.strip()) >= 3]
@@ -765,7 +818,9 @@ def _needs_pdf_ocr(text: str, reader=None) -> bool:
     return _pdf_has_large_page_image(reader) and _looks_form_like(text)
 
 
-def _detection_summary(*, fmt: str, fields: list[dict], ocr_result, pdf_fields, pdf_pages=None) -> dict:
+def _detection_summary(
+    *, fmt: str, fields: list[dict], ocr_result, pdf_fields, pdf_pages=None
+) -> dict:
     if pdf_fields and ocr_result:
         method = "fillable_pdf_ocr"
         label = "PDF form fields and automatic scan reading"
@@ -836,13 +891,16 @@ def _detection_summary(*, fmt: str, fields: list[dict], ocr_result, pdf_fields, 
 def _pdf_pages_metadata(reader) -> list[dict]:
     pages = []
     for index, page in enumerate(reader.pages):
-        pages.append({
-            "page": index + 1,
-            "width": round(float(page.mediabox.width), 3),
-            "height": round(float(page.mediabox.height), 3),
-            "rotation": int(page.get("/Rotate", 0) or 0) % 360,
-        })
+        pages.append(
+            {
+                "page": index + 1,
+                "width": round(float(page.mediabox.width), 3),
+                "height": round(float(page.mediabox.height), 3),
+                "rotation": int(page.get("/Rotate", 0) or 0) % 360,
+            }
+        )
     return pages
+
 
 def _suggest_template_body(
     text: str,
@@ -867,7 +925,9 @@ def _suggest_template_body(
                 ),
             )
 
-    body = _replace_labeled_values(body, fields, allow_custom_labels=allow_custom_labels)
+    body = _replace_labeled_values(
+        body, fields, allow_custom_labels=allow_custom_labels
+    )
     body = _replace_dear_line(body, fields)
     body = _replace_re_line(body, fields)
     body = _replace_case_number(body, fields)
@@ -875,7 +935,7 @@ def _suggest_template_body(
 
     if include_value_heuristics:
         for pattern, name, label, confidence, source_path in [
-            (DATE_PATTERN, "document_date",  "Document Date", 0.72, None),
+            (DATE_PATTERN, "document_date", "Document Date", 0.72, None),
             (EMAIL_PATTERN, "firm_email", "Firm Email", 0.7, "tenant.branding.email"),
             (PHONE_PATTERN, "firm_phone", "Firm Phone", 0.66, "tenant.branding.phone"),
             (MONEY_PATTERN, "fee_amount", "Fee Amount", 0.62, None),
@@ -994,9 +1054,7 @@ def _suggest_docx_template(
     # known legal-contact labels are candidates and dates/money/prose are not.
     if not has_authored_placeholders:
         fallback_by_name: dict[str, IntakeField] = {}
-        _replace_labeled_values(
-            text, fallback_by_name, allow_custom_labels=False
-        )
+        _replace_labeled_values(text, fallback_by_name, allow_custom_labels=False)
         _replace_dear_line(text, fallback_by_name)
         _replace_re_line(text, fallback_by_name)
         _replace_case_number(text, fallback_by_name)
@@ -1050,9 +1108,10 @@ def _reusable_overlay_candidates(fields: list[IntakeField]) -> list[IntakeField]
             mark in sample for mark in (".", "?", "!")
         )
         word_set = set(words)
-        instruction_like = bool(word_set & _OVERLAY_INSTRUCTION_WORDS) or len(
-            word_set & _OVERLAY_INSTRUCTION_SUPPORT_WORDS
-        ) >= 2
+        instruction_like = (
+            bool(word_set & _OVERLAY_INSTRUCTION_WORDS)
+            or len(word_set & _OVERLAY_INSTRUCTION_SUPPORT_WORDS) >= 2
+        )
         if len(words) >= 8 or sentence_like or instruction_like:
             continue
         candidates.append(candidate_field)

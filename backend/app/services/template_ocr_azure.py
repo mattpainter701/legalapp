@@ -1,4 +1,5 @@
 """Opt-in Azure Document Intelligence Read adapter."""
+
 from __future__ import annotations
 
 import io
@@ -41,7 +42,9 @@ def ocr_pdf_azure(content: bytes, *, max_pages: int = 25) -> PdfOcrResult:
         with httpx.Client(timeout=timeout) as client:
             response = client.post(url, params=params, headers=headers, content=content)
             if response.status_code != 202:
-                raise TemplateOcrError("Azure OCR could not start. Try again or use local OCR.")
+                raise TemplateOcrError(
+                    "Azure OCR could not start. Try again or use local OCR."
+                )
             operation = response.headers.get("Operation-Location")
             if not operation:
                 raise TemplateOcrError("Azure OCR returned no operation location.")
@@ -57,7 +60,9 @@ def ocr_pdf_azure(content: bytes, *, max_pages: int = 25) -> PdfOcrResult:
                     },
                 )
                 if result.status_code >= 400:
-                    raise TemplateOcrError("Azure OCR failed while retrieving its result.")
+                    raise TemplateOcrError(
+                        "Azure OCR failed while retrieving its result."
+                    )
                 payload = result.json()
                 status = str(payload.get("status") or "").lower()
                 if status == "succeeded":
@@ -124,7 +129,9 @@ def _line_confidence(line: dict[str, Any], page_words: list[dict[str, Any]]) -> 
     candidate_words = (
         nested_words
         if isinstance(nested_words, list)
-        else page_words if line_spans else []
+        else page_words
+        if line_spans
+        else []
     )
     for word in candidate_words:
         if not isinstance(word, dict) or word.get("confidence") is None:
@@ -188,7 +195,10 @@ def _result(payload: dict[str, Any]) -> PdfOcrResult:
             if len(polygon) < 8 or width <= 0 or height <= 0:
                 continue
             try:
-                points = [(float(polygon[i]), float(polygon[i + 1])) for i in range(0, len(polygon) - 1, 2)]
+                points = [
+                    (float(polygon[i]), float(polygon[i + 1]))
+                    for i in range(0, len(polygon) - 1, 2)
+                ]
             except (TypeError, ValueError):
                 continue
             xs, ys = zip(*points)
@@ -209,9 +219,7 @@ def _result(payload: dict[str, Any]) -> PdfOcrResult:
     ordered = tuple(
         sorted(lines, key=lambda line: (line.page_index, -line.rect[3], line.rect[0]))
     )
-    confidence = (
-        sum(line.score for line in ordered) / len(ordered) if ordered else 0.0
-    )
+    confidence = sum(line.score for line in ordered) / len(ordered) if ordered else 0.0
     return PdfOcrResult(
         text="\n".join(line.text for line in ordered),
         lines=ordered,
