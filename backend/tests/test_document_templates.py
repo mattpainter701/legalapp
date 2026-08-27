@@ -886,8 +886,16 @@ def test_reviewed_static_pdf_schema_keeps_server_discovered_placements():
     )
 
     assert validated["fields"][0]["name"] == "party_name"
-    assert validated["fields"][0]["pdf_overlays"][0]["rect"] == [72.0, 700.0, 220.0, 716.0]
-    assert validated["fields"][0]["pdf_overlays"][0]["source_rect"] == discovered["fields"][0]["pdf_overlays"][0]["source_rect"]
+    assert validated["fields"][0]["pdf_overlays"][0]["rect"] == [
+        72.0,
+        700.0,
+        220.0,
+        716.0,
+    ]
+    assert (
+        validated["fields"][0]["pdf_overlays"][0]["source_rect"]
+        == discovered["fields"][0]["pdf_overlays"][0]["source_rect"]
+    )
     assert len(validated["fields"][0]["pdf_overlays"]) == 2
 
 
@@ -947,7 +955,10 @@ def test_docx_intake_recognizes_bracket_placeholders_and_ignores_static_brackets
     rendered = fill_docx_template(
         source.getvalue(),
         variable_schema=analysis.variable_schema,
-        variables={"plaintiff_name": "Alex Plaintiff", "defendant_name": "Dana Defendant"},
+        variables={
+            "plaintiff_name": "Alex Plaintiff",
+            "defendant_name": "Dana Defendant",
+        },
     )
     reopened = Document(BytesIO(rendered))
     assert reopened.paragraphs[0].text == "Plaintiff: Alex Plaintiff"
@@ -1021,7 +1032,10 @@ def test_docx_intake_rejects_tracked_changes_before_field_detection():
     document.save(source)
 
     revised = BytesIO()
-    with zipfile.ZipFile(source, "r") as source_zip, zipfile.ZipFile(revised, "w") as revised_zip:
+    with (
+        zipfile.ZipFile(source, "r") as source_zip,
+        zipfile.ZipFile(revised, "w") as revised_zip,
+    ):
         for item in source_zip.infolist():
             payload = source_zip.read(item.filename)
             if item.filename == "word/document.xml":
@@ -2575,7 +2589,7 @@ async def test_pdf_patch_revalidates_field_map_source_and_activation(
         f"/api/templates/{template_id}", json={"variable_schema": phantom}
     )
     assert unmapped.status_code == 422
-    assert "missing pdf_field_name" in unmapped.json()["detail"]
+    assert "missing its source mapping" in unmapped.json()["detail"]
 
     phantom_body = await client.patch(
         f"/api/templates/{template_id}", json={"body": "{{phantom}}"}
@@ -2701,9 +2715,10 @@ async def test_pdf_creation_rejects_unmapped_reviewed_body_and_json_shortcut(
     assert phantom_body.status_code == 422
     assert "without source mappings" in phantom_body.json()["detail"]
 
+    source = _fillable_pdf()
     analysis = await client.post(
         "/api/templates/intake/analyze",
-        files={"file": ("excluded.pdf", _fillable_pdf(), "application/pdf")},
+        files={"file": ("excluded.pdf", source, "application/pdf")},
     )
     assert analysis.status_code == 200, analysis.text
     analyzed = analysis.json()
@@ -2712,7 +2727,7 @@ async def test_pdf_creation_rejects_unmapped_reviewed_body_and_json_shortcut(
     reviewed_schema["fields"][0]["included"] = False
     excluded_placeholder = await client.post(
         "/api/templates/intake/create",
-        files={"file": ("excluded.pdf", _fillable_pdf(), "application/pdf")},
+        files={"file": ("excluded.pdf", source, "application/pdf")},
         data={
             "analysis_token": analyzed["analysis_token"],
             "variable_schema": json.dumps(reviewed_schema),
@@ -2759,6 +2774,7 @@ async def test_manual_only_pdf_can_be_previewed_and_activated(
         body="",
         body_preview="",
         extracted_text="",
+        source_text="",
         variable_schema={
             "version": 1,
             "source": "pdf_ocr_overlay",
@@ -2777,16 +2793,18 @@ async def test_manual_only_pdf_can_be_previewed_and_activated(
     manual_key = f"manual:{uuid.uuid4()}"
     reviewed_schema = {
         **discovered.variable_schema,
-        "fields": [{
-            "name": "manual_name",
-            "label": "Name",
-            "pdf_source_key": manual_key,
-            "pdf_overlay": {"page": 1, "rect": [72, 700, 260, 724]},
-            "field_type": "text",
-            "required": True,
-            "multiline": False,
-            "included": True,
-        }],
+        "fields": [
+            {
+                "name": "manual_name",
+                "label": "Name",
+                "pdf_source_key": manual_key,
+                "pdf_overlay": {"page": 1, "rect": [72, 700, 260, 724]},
+                "field_type": "text",
+                "required": True,
+                "multiline": False,
+                "included": True,
+            }
+        ],
     }
     created = await client.post(
         "/api/templates/intake/create",
@@ -3023,7 +3041,9 @@ async def test_image_upload_uses_ocr_and_returns_pdf_mapping(monkeypatch):
     assert payload["suggested_variable_schema"]["detection"]["method"] == "ocr"
     assert payload["suggested_variable_schema"]["detection"]["ocr_pages"] == [1]
     assert payload["suggested_variable_schema"]["fields"][0]["name"] == "client_name"
-    assert any("converted to a safe 1-page PDF" in warning for warning in payload["warnings"])
+    assert any(
+        "converted to a safe 1-page PDF" in warning for warning in payload["warnings"]
+    )
 
 
 def test_mixed_pdf_merges_native_text_and_only_sparse_page_ocr(monkeypatch):
@@ -3069,10 +3089,7 @@ def test_mixed_pdf_merges_native_text_and_only_sparse_page_ocr(monkeypatch):
     )
 
     assert scanned_pages == [1]
-    fields = {
-        field["name"]: field
-        for field in analysis.variable_schema["fields"]
-    }
+    fields = {field["name"]: field for field in analysis.variable_schema["fields"]}
     assert {"client_name", "case_number"} <= set(fields)
     assert fields["client_name"]["pdf_overlay"]["source_kind"] == "text"
     assert fields["case_number"]["pdf_overlay"]["source_kind"] == "ocr"
@@ -3146,9 +3163,9 @@ def test_docx_content_control_placeholder_is_detected_and_rendered():
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         ),
     )
-    assert [
-        field["name"] for field in analysis.variable_schema["fields"]
-    ] == ["wrapped_client_name"]
+    assert [field["name"] for field in analysis.variable_schema["fields"]] == [
+        "wrapped_client_name"
+    ]
 
     rendered = fill_docx_template(
         source.getvalue(),
@@ -3157,8 +3174,7 @@ def test_docx_content_control_placeholder_is_detected_and_rendered():
     )
     rendered_document = Document(BytesIO(rendered))
     all_text = " ".join(
-        node.text or ""
-        for node in rendered_document.element.body.iter(qn("w:t"))
+        node.text or "" for node in rendered_document.element.body.iter(qn("w:t"))
     )
     assert "Donna Price" in all_text
     assert "wrapped_client_name" not in all_text
@@ -3354,24 +3370,19 @@ def test_reviewed_docx_schema_restores_server_authoritative_identical_blank_loca
     )
     original_fields = analysis.variable_schema["fields"]
     submitted = json.loads(json.dumps(analysis.variable_schema))
-    submitted["fields"][0]["docx_anchor"] = dict(
-        submitted["fields"][1]["docx_anchor"]
-    )
+    submitted["fields"][0]["docx_anchor"] = dict(submitted["fields"][1]["docx_anchor"])
 
     reviewed = document_templates._reviewed_variable_schema(
         json.dumps(submitted),
         analysis.variable_schema,
     )
 
-    assert reviewed["fields"][0]["docx_source_key"] == original_fields[0][
-        "docx_source_key"
-    ]
-    assert reviewed["fields"][0]["docx_anchor"] == original_fields[0][
-        "docx_anchor"
-    ]
-    assert reviewed["fields"][0]["docx_anchor"] != original_fields[1][
-        "docx_anchor"
-    ]
+    assert (
+        reviewed["fields"][0]["docx_source_key"]
+        == original_fields[0]["docx_source_key"]
+    )
+    assert reviewed["fields"][0]["docx_anchor"] == original_fields[0]["docx_anchor"]
+    assert reviewed["fields"][0]["docx_anchor"] != original_fields[1]["docx_anchor"]
 
 
 def test_premium_ai_evidence_redacts_obvious_identifiers():

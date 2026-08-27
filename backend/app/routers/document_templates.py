@@ -334,9 +334,18 @@ def _pdf_contract_sha256(
     # ``upload_analysis`` to ``reviewed_upload``). Only the mapped fields affect
     # PDF output and required/review semantics, so do not invalidate a preview
     # for metadata that cannot change the rendered artifact.
-    schema_contract = {
-        "fields": (schema or {}).get("fields") or [],
-    }
+    schema_contract_fields = []
+    for field in (schema or {}).get("fields") or []:
+        if not isinstance(field, dict):
+            schema_contract_fields.append(field)
+            continue
+        normalized_field = dict(field)
+        # Intake schemas historically omitted ``included`` when a discovered
+        # field used the default (included) state. Revalidation makes that
+        # default explicit, but the rendered contract is unchanged.
+        normalized_field.setdefault("included", True)
+        schema_contract_fields.append(normalized_field)
+    schema_contract = {"fields": schema_contract_fields}
     return _canonical_sha256(
         {
             "renderer_version": _PDF_RENDERER_VERSION,
