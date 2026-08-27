@@ -11,7 +11,7 @@ import {
   getTasks, updateTask, getMatterDashboard, getMatterCloudFiles,
   createMatterPortalInvite, listMatterPortalInvites, revokeMatterPortalInvite,
   getMatterDocuments, createSignatureRequest, listSignatureRequests,
-  sendSignatureRequest, voidSignatureRequest, getMatterDocumentDownloadUrl,
+  sendSignatureRequest, resendSignatureRequest, voidSignatureRequest, getMatterDocumentDownloadUrl,
   syncMatterCloudFolder, listTrustAccounts,
   getContacts, getAdminUsers,
 } from '../api'
@@ -2323,6 +2323,18 @@ function SignatureRequestsPanel({ matterId }) {
     }
   }
 
+  const resendReq = async (id) => {
+    setErr('')
+    setNotice('')
+    try {
+      await resendSignatureRequest(matterId, id)
+      setNotice('Signature invitation resent to the signer or signers who can act now.')
+      load()
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'Failed to resend the signature invitation.')
+    }
+  }
+
   const statusBadge = (status) => {
     const styles = {
       completed: 'bg-brand-green/10 text-brand-green border-brand-green/20',
@@ -2422,6 +2434,7 @@ function SignatureRequestsPanel({ matterId }) {
                       {r.signed_document_id && (
                         <a href={getMatterDocumentDownloadUrl(matterId, r.signed_document_id)} className="text-xs font-semibold text-brand-accent hover:text-brand-ink">Download executed copy</a>
                       )}
+                      {['sent', 'partially_signed'].includes(r.status) && <button onClick={() => resendReq(r.id)} className="text-brand-accent hover:underline text-xs font-medium">Resend</button>}
                       {!['completed', 'voided', 'declined', 'expired'].includes(r.status) && <button onClick={() => voidReq(r.id)} className="text-brand-rose hover:underline text-xs font-medium">Void</button>}
                     </div>
                   </div>
@@ -2437,8 +2450,10 @@ function SignatureRequestsPanel({ matterId }) {
                     {r.signers?.map((s, idx) => (
                       <div key={s.id} className="flex items-center justify-between rounded-lg bg-brand-bg-soft px-3 py-2 text-xs">
                         <span className="text-brand-ink">{idx + 1}. {formatSignerRole(s.role)} · {s.name} · {s.email}</span>
-                        <span className={s.status === 'signed' ? 'text-brand-green font-semibold' : s.status === 'declined' ? 'text-brand-rose font-semibold' : 'text-brand-amber font-semibold'}>
-                          {signerStatusLabel(s)}
+                        <span className="text-right">
+                          <span className={s.status === 'signed' ? 'text-brand-green font-semibold' : s.status === 'declined' ? 'text-brand-rose font-semibold' : 'text-brand-amber font-semibold'}>{signerStatusLabel(s)}</span>
+                          {s.viewed_at && s.status === 'pending' && <span className="block text-brand-muted">Viewed {formatSignatureDate(s.viewed_at)}</span>}
+                          {!s.viewed_at && s.invitation_delivery_status && <span className="block text-brand-muted">Email {s.invitation_delivery_status.replace('_', ' ')}</span>}
                         </span>
                       </div>
                     ))}
