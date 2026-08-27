@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["134_background_ai_quota"]
+    assert heads == ["135_conflict_invoice_audit"]
 
 
 def test_smb_agent_lifecycle_indexes_cover_auth_and_cleanup_paths():

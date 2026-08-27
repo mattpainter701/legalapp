@@ -2,6 +2,27 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.27.1",
+      "version": "2026.08.27.1",
+      "title": "Conflict reviews and portal invoice PDFs are traceable",
+      "published_at": "2026-08-27",
+      "summary": "Staff can save and close a conflict review, and clients can download a firm-branded invoice PDF from their matter portal.",
+      "highlights": [
+        {
+          "title": "Conflict searches keep their evidence",
+          "description": "The new Conflict Search workspace saves the terms and results the reviewer saw, records notes and a decision, and locks the record after closing."
+        },
+        {
+          "title": "Restricted matters stay restricted",
+          "description": "A reviewer is warned when a potential match exists on a matter they cannot access without exposing that matter's identity."
+        },
+        {
+          "title": "Clients can download branded invoices",
+          "description": "A client-visible invoice is rendered with firm branding and streamed as a PDF; LawHand records download metadata and a hash without retaining another PDF copy."
+        }
+      ]
+    },
+    {
       "id": "2026.08.26.4",
       "version": "2026.08.26.4",
       "title": "Customer cloud storage is explicit and fail-closed",

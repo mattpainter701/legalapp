@@ -45,6 +45,7 @@ from app.database import bind_tenant_context, get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.billing import Invoice, Payment
 from app.models.client_portal import ClientPortalInvite
+from app.models.conflict_check import PortalInvoiceDownload
 from app.models.communication_log import CommunicationLog
 from app.models.contact import Contact
 from app.models.matter_assignment import MatterAssignment
@@ -99,6 +100,9 @@ from app.services.portal_token import (
     PORTAL_TOKEN_EXPIRE_MINUTES,
     create_matter_portal_token,
 )
+from app.routers.billing_extended import _load_invoice_response
+from app.routers.firm import get_firm_branding
+from app.services.invoice_pdf import generate_invoice_pdf
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -1081,6 +1085,79 @@ async def portal_list_invoices(
         overdue_balance=sum(
             (i.balance_due for i in invoices if i.is_overdue), Decimal("0")
         ),
+    )
+
+
+@router.get("/invoices/{invoice_id}/download")
+async def portal_download_invoice(
+    invoice_id: uuid.UUID,
+    resolved: tuple[ClientPortalContext, Matter] = Depends(portal_matter_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """Download the current client-visible invoice as a branded, audited PDF.
+
+    PDF bytes are generated in memory and returned directly. Only metadata and
+    the content hash are retained, preserving the customer-datastore posture.
+    """
+    ctx, _matter = resolved
+    invoice = await db.scalar(
+        select(Invoice).where(
+            Invoice.id == invoice_id,
+            Invoice.matter_id == ctx.matter_id,
+            Invoice.tenant_id == ctx.tenant_id,
+            Invoice.status.in_(("sent", "partially_paid", "paid")),
+        )
+    )
+    if invoice is None:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+
+    response = await _load_invoice_response(
+        db, invoice.id, uuid.UUID(ctx.tenant_id)
+    )
+    # A paid status can represent a write-off or trust transfer that has no
+    # Payment row. Match the portal list's authoritative paid-state behavior.
+    if invoice.status == "paid":
+        response.amount_paid = max(response.amount_paid, response.total)
+        response.balance_due = Decimal("0")
+
+    tenant = await db.scalar(select(Tenant).where(Tenant.id == ctx.tenant_id))
+    branding = await get_firm_branding(db, tenant)
+    pdf_bytes = generate_invoice_pdf(response, branding)
+    db.add(
+        PortalInvoiceDownload(
+            id=uuid.uuid4(),
+            tenant_id=uuid.UUID(ctx.tenant_id),
+            matter_id=uuid.UUID(ctx.matter_id),
+            invoice_id=invoice.id,
+            invite_id=uuid.UUID(ctx.invite_id) if ctx.invite_id else None,
+            contact_id=uuid.UUID(ctx.contact_id) if ctx.contact_id else None,
+            recipient_email=ctx.email,
+            content_sha256=hashlib.sha256(pdf_bytes).hexdigest(),
+            content_length=len(pdf_bytes),
+            branding_snapshot={
+                key: branding.get(key)
+                for key in (
+                    "firm_name",
+                    "firm_logo_url",
+                    "firm_address",
+                    "firm_phone",
+                    "firm_email",
+                    "firm_website",
+                    "firm_pdf_footer",
+                )
+            },
+        )
+    )
+    await db.commit()
+    safe_number = re.sub(r"[^A-Za-z0-9._-]+", "_", invoice.invoice_number)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="invoice_{safe_number}.pdf"',
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 

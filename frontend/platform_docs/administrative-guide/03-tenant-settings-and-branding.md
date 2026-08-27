@@ -21,6 +21,13 @@ Use [Tenant](/admin?tab=tenant) to review the organization record and plan conte
 
 Branding may flow into generated documents and customer-facing experiences. Use approved firm assets, accessible contrast, and current contact information. Preview a representative template after a branding change.
 
+Invoice and trust-statement PDFs use the configured firm name, logo URL,
+address, phone, email, website, and optional PDF footer. Client portal invoice
+downloads use the same settings. A logo that cannot be fetched or decoded does
+not block the PDF; the remaining firm identity is still rendered. The invoice
+download audit retains the branding values and content hash used for that
+response, not a stored PDF copy.
+
 ## Feature flags and plan scope
 
 Feature controls are rollout tools, not substitutes for permissions. Enabling a module can expose new navigation and workflows to eligible users; it does not automatically establish the firm's process or train staff.

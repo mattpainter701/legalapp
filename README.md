@@ -49,6 +49,7 @@ for the backend contract, recovery checks, and remaining legacy-local migration.
 | Document templates | DOCX/TXT sample analysis and variable substitution; retained PDF source files with AcroForm discovery, reviewed field mapping, binary preview, default flattened output, and matter storage. |
 | Matters and CRM | Matters, contacts, parties, notes, assignments, budgets, files, timelines, communications, intake, and reports. |
 | Billing | Time, expenses, invoices, payments, retainers, LEDES export, and optional Stripe payment flows. |
+| Conflict review | Standalone tenant-wide search with restricted-matter redaction, saved evidence, attorney review decisions, locked records, and PDF reports. |
 | Research and drafting | Tenant document RAG, public CourtListener context, practice-area workflows, source labels, and attorney-review guardrails. |
 | Cloud integrations | Microsoft and Google OAuth, cloud search/storage paths, Zoom, QuickBooks, Teams, SMTP, and optional Slack/webhook notifications. Each provider still requires its own production consent and ingress proof. |
 | Authentication | Email/password, Microsoft and Google login, short-lived access cookies, rotating Redis-backed refresh tokens, tenant/module authorization, and scoped platform-operator sessions. |
@@ -130,6 +131,8 @@ Production separates schema ownership from runtime access:
 
 The detailed trust boundaries and data flows are in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Saved conflict evidence and metadata-only portal invoice download auditing are
+documented in [the conflict and invoice workflow architecture](docs/conflict-search-and-portal-invoice-architecture.md).
 
 ## Can this run on AWS Lightsail or another VPS?
 

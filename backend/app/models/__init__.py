@@ -57,6 +57,7 @@ from app.models.intake_dashboard import (
     PartnerRotationState,
 )
 from app.models.client_portal import ClientPortalInvite
+from app.models.conflict_check import ConflictCheckRecord, PortalInvoiceDownload
 from app.models.signature import SignatureRequest, SignatureSigner
 from app.models.matter_document import MatterDocument
 from app.models.task import Task, TaskAutomationRun, TaskEvent

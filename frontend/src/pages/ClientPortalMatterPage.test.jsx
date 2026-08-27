@@ -25,6 +25,7 @@ vi.mock('../api', () => ({
   uploadClientPortalDocument: vi.fn(),
   downloadClientPortalDocumentUrl: (id) => `/api/portal/client/documents/${id}/download`,
   listClientPortalInvoices: vi.fn(),
+  downloadClientPortalInvoiceUrl: (id) => `/api/portal/client/invoices/${id}/download`,
   listClientPortalSignatures: vi.fn(),
   signClientPortalSignature: vi.fn(),
   declineClientPortalSignature: vi.fn(),
@@ -192,6 +193,10 @@ describe('ClientPortalMatterPage', () => {
     expect(screen.getByRole('link', { name: 'Pay now' })).toHaveAttribute(
       'href',
       'https://pay.example/inv-001',
+    )
+    expect(screen.getByRole('link', { name: 'PDF' })).toHaveAttribute(
+      'href',
+      '/api/portal/client/invoices/i1/download',
     )
   })
 
