@@ -19,6 +19,7 @@ import math
 import os
 import re
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -57,41 +58,59 @@ from app.services.template_intake import (
     analyze_template_upload,
     prepare_template_source,
 )
+from app.services.template_ai_service import (
+    TemplateAiAssistError,
+    assist_template_mapping,
+)
+from app.services.template_ai_assist import (
+    AiFieldProposal,
+    reconcile_ai_template_fields,
+)
 from app.services.pdf_templates import (
     TemplatePdfError,
     fill_pdf_template,
     pdf_review_evidence,
+    render_pdf_page_preview,
     validate_representative_pdf_variables,
 )
 from app.services.docx_templates import TemplateDocxError, fill_docx_template
-from app.services.template_ocr import TemplateOcrError
+from app.services.template_ocr import TemplateOcrError, image_to_pdf
 from app.services.matter_file_store import MatterFileStore
 from app.services.access_control import require_capability
+from app.utils.text_processing import extract_text
 
 router = APIRouter(prefix="/api/templates", tags=["document-templates"])
 logger = logging.getLogger(__name__)
 settings = get_settings()
 matter_file_store = MatterFileStore()
 VARIABLE_PATTERN = re.compile(r"\{\{(.+?)\}\}")
+_IMAGE_TEMPLATE_EXTENSIONS = (
+    ".bmp",
+    ".jpeg",
+    ".jpg",
+    ".png",
+    ".tif",
+    ".tiff",
+    ".webp",
+)
+_IMAGE_TEMPLATE_CONTENT_TYPES = {
+    "image/bmp",
+    "image/jpeg",
+    "image/png",
+    "image/tiff",
+    "image/webp",
+}
 _ALLOWED_TEMPLATE_UPLOAD_EXTENSIONS = (
     ".docx",
     ".pdf",
     ".txt",
-    ".png",
-    ".jpg",
-    ".jpeg",
-    ".tif",
-    ".tiff",
-    ".webp",
+    *_IMAGE_TEMPLATE_EXTENSIONS,
 )
 _ALLOWED_TEMPLATE_UPLOAD_CONTENT_TYPES = {
     "application/pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "text/plain",
-    "image/png",
-    "image/jpeg",
-    "image/tiff",
-    "image/webp",
+    *_IMAGE_TEMPLATE_CONTENT_TYPES,
 }
 _PDF_RENDERER_VERSION = "pdf-source-v4-ocr-preview-bound"
 _MAX_PERSISTED_PREVIEWS_PER_USER_PURPOSE = 50
@@ -103,6 +122,15 @@ _PDF_PREVIEW_TTLS = {
 _COMMIT_OUTCOME_DELAYS = (0, 0.1, 0.3, 0.6, 1.0)
 _ANALYSIS_TOKEN_SALT = "document-template-intake-v1"
 _ANALYSIS_TOKEN_MAX_AGE_SECONDS = 2 * 60 * 60
+
+
+@dataclass(frozen=True)
+class TemplateUploadSample:
+    content: bytes
+    filename: str
+    content_type: str
+    original_filename: str
+    warnings: tuple[str, ...] = ()
 
 
 def _canonical_json_bytes(payload: dict[str, Any]) -> bytes:
@@ -230,6 +258,7 @@ def _analysis_from_snapshot(
         body=str(snapshot["body"]),
         body_preview=str(snapshot["body_preview"]),
         extracted_text=str(snapshot["extracted_text"]),
+        source_text=str(snapshot.get("source_text") or snapshot["extracted_text"]),
         variable_schema=dict(snapshot["suggested_variable_schema"]),
         branding_profile=dict(snapshot["detected_branding_profile"]),
         warnings=[str(item) for item in snapshot["warnings"]],
@@ -271,7 +300,7 @@ async def _analysis_for_template_create(
         filename=filename,
         content_type=content_type,
     )
-    return _analysis_from_snapshot(
+    analysis = _analysis_from_snapshot(
         snapshot,
         source_bytes=prepared.source_bytes,
         source_filename=prepared.filename,
@@ -279,6 +308,14 @@ async def _analysis_for_template_create(
         source_format=prepared.format,
         requested_title=requested_title,
     )
+    if prepared.format == "docx":
+        analysis.source_text = await asyncio.to_thread(
+            extract_text,
+            prepared.source_bytes,
+            prepared.content_type,
+            prepared.filename,
+        )
+    return analysis
 
 
 def _pdf_contract_sha256(
@@ -734,6 +771,82 @@ async def _compensate_staged_document(
         return False
 
 
+def _reconcile_submitted_ai_fields(
+    raw: str | None,
+    *,
+    analysis,
+    file_bytes: bytes,
+) -> None:
+    """Re-locate submitted AI proposals without trusting client coordinates."""
+
+    if raw is None or not raw.strip():
+        return
+    try:
+        submitted = json.loads(raw)
+    except json.JSONDecodeError:
+        return
+    fields = submitted.get("fields") if isinstance(submitted, dict) else None
+    if not isinstance(fields, list):
+        return
+    proposals: list[AiFieldProposal] = []
+    try:
+        for field in fields:
+            if not isinstance(field, dict) or not field.get("ai_suggested"):
+                continue
+            proposals.append(
+                AiFieldProposal(
+                    existing_name=(
+                        str(field.get("ai_existing_name") or "").strip()
+                        or None
+                    )
+                    if field.get("ai_update_kind") == "updated"
+                    else None,
+                    name=str(field.get("name") or ""),
+                    label=str(field.get("label") or field.get("name") or ""),
+                    source_text=str(
+                        field.get("source_text") or field.get("example") or ""
+                    ),
+                    field_type=str(field.get("field_type") or "text"),
+                    confidence=min(
+                        0.75,
+                        max(0.0, float(field.get("confidence") or 0.5)),
+                    ),
+                    reason=str(field.get("ai_reason") or ""),
+                )
+            )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="An AI-proposed field is invalid. Run the proposal again and review it.",
+        ) from exc
+    if len(proposals) > 40:
+        raise HTTPException(
+            status_code=422,
+            detail="A premium AI proposal may contain at most 40 fields.",
+        )
+    if proposals:
+        mapped, unmapped = reconcile_ai_template_fields(
+            analysis=analysis,
+            file_bytes=file_bytes,
+            proposals=proposals,
+        )
+        added_count = sum(
+            field.get("ai_update_kind") == "added" for field in mapped
+        )
+        updated_count = sum(
+            field.get("ai_update_kind") == "updated" for field in mapped
+        )
+        analysis.variable_schema.setdefault("detection", {}).update(
+            {
+                "ai_assisted": True,
+                "ai_added_count": added_count,
+                "ai_updated_count": updated_count,
+                "ai_unmapped_count": len(unmapped),
+                "review_required": True,
+            }
+        )
+
+
 def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
     if raw is None or not raw.strip():
         return discovered
@@ -782,7 +895,16 @@ def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
         for page in (discovered.get("pages") or [])
         if isinstance(page, dict) and page.get("page") is not None
     }
-
+    discovered_docx_keys = {
+        str(field.get("docx_source_key"))
+        for field in (discovered.get("fields") or [])
+        if isinstance(field, dict) and field.get("docx_source_key")
+    }
+    discovered_by_docx_key = {
+        str(field.get("docx_source_key")): field
+        for field in (discovered.get("fields") or [])
+        if isinstance(field, dict) and field.get("docx_source_key")
+    }
     def _safe_rect(value, *, page_number: int, label: str) -> list[float]:
         if not isinstance(value, (list, tuple)) or len(value) != 4:
             raise HTTPException(status_code=422, detail=f"{label} must be a four-number rectangle")
@@ -830,6 +952,7 @@ def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
     seen_names: set[str] = set()
     seen_pdf_names: set[str] = set()
     seen_overlay_keys: set[str] = set()
+    seen_docx_keys: set[str] = set()
     for field in schema["fields"]:
         if not isinstance(field, dict):
             raise HTTPException(
@@ -849,6 +972,32 @@ def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
                 status_code=422, detail=f"Duplicate variable name: {name}"
             )
         seen_names.add(name)
+        field["name"] = name
+        docx_key = field.get("docx_source_key")
+        if docx_key is not None:
+            docx_key = str(docx_key)
+            if docx_key not in discovered_docx_keys:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Unknown Word field mapping: {name!r}",
+                )
+            if docx_key in seen_docx_keys:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Duplicate Word field mapping: {name!r}",
+                )
+            seen_docx_keys.add(docx_key)
+            authoritative = discovered_by_docx_key[docx_key]
+            field["docx_source_key"] = docx_key
+            field["docx_anchor"] = authoritative.get("docx_anchor")
+            field["source_text"] = authoritative.get("source_text")
+            if authoritative.get("example") is not None:
+                field["example"] = authoritative.get("example")
+        elif field.get("docx_anchor") is not None and discovered_docx_keys:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Word variable {name!r} is missing its reviewed source mapping",
+            )
         pdf_name = field.get("pdf_field_name")
         overlay_key = field.get("pdf_source_key")
         has_pdf_mapping = pdf_name is not None
@@ -968,6 +1117,11 @@ def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
             status_code=422,
             detail="Reviewed PDF schema must preserve every detected overlay mapping",
         )
+    if discovered_docx_keys and seen_docx_keys != discovered_docx_keys:
+        raise HTTPException(
+            status_code=422,
+            detail="Reviewed Word schema must preserve every detected source mapping",
+        )
     try:
         schema["version"] = max(1, int(schema.get("version") or 1))
     except (TypeError, ValueError) as exc:
@@ -980,6 +1134,8 @@ def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
         # Page geometry is signed/server-discovered metadata; clients may not
         # rewrite it while reviewing placements.
         schema["pages"] = discovered["pages"]
+    schema.pop("ai_proposal", None)
+    schema.pop("unmapped_ai_suggestions", None)
     schema["source"] = "reviewed_upload"
     return schema
 
@@ -995,15 +1151,12 @@ def _is_allowed_template_sample(filename: str | None, content_type: str | None) 
     )
 
 
-async def _read_template_sample(file: UploadFile) -> tuple[bytes, str]:
-    filename = _safe_upload_filename(file.filename)
-    if not _is_allowed_template_sample(filename, file.content_type):
+async def _read_template_sample(file: UploadFile) -> TemplateUploadSample:
+    original_filename = _safe_upload_filename(file.filename)
+    if not _is_allowed_template_sample(original_filename, file.content_type):
         raise HTTPException(
             status_code=400,
-            detail=(
-                "Unsupported file type. Allowed: DOCX, PDF, TXT, PNG, JPG, "
-                "TIFF, and WebP."
-            ),
+            detail="Unsupported file type. Allowed: DOCX, PDF, TXT, PNG, JPEG, TIFF, BMP, and WebP.",
         )
     max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
     file_bytes = await file.read(max_bytes + 1)
@@ -1014,7 +1167,44 @@ async def _read_template_sample(file: UploadFile) -> tuple[bytes, str]:
             status_code=413,
             detail=f"File exceeds maximum size of {settings.MAX_FILE_SIZE_MB}MB",
         )
-    return file_bytes, filename
+    media_type = _normalized_media_type(file.content_type)
+    filename_lower = original_filename.lower()
+    is_image = (
+        filename_lower.endswith(_IMAGE_TEMPLATE_EXTENSIONS)
+        or media_type in _IMAGE_TEMPLATE_CONTENT_TYPES
+    )
+    if is_image:
+        try:
+            normalized = await asyncio.to_thread(image_to_pdf, file_bytes)
+        except TemplateOcrError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        normalized_filename = _safe_upload_filename(
+            f"{Path(original_filename).stem or 'scanned-template'}.pdf"
+        )
+        return TemplateUploadSample(
+            content=normalized.content,
+            filename=normalized_filename,
+            content_type="application/pdf",
+            original_filename=original_filename,
+            warnings=(
+                f"The {normalized.image_format} image was converted to a safe {normalized.pages}-page PDF for OCR and reusable field placement. Review every detected field.",
+            ),
+        )
+
+    if filename_lower.endswith(".pdf") or media_type == "application/pdf":
+        normalized_content_type = "application/pdf"
+    elif filename_lower.endswith(".docx"):
+        normalized_content_type = (
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
+    else:
+        normalized_content_type = "text/plain"
+    return TemplateUploadSample(
+        content=file_bytes,
+        filename=original_filename,
+        content_type=normalized_content_type,
+        original_filename=original_filename,
+    )
 
 
 def render_template(template_body: str, variables: dict[str, str]) -> str:
@@ -1384,26 +1574,115 @@ async def analyze_template_sample(
     db: AsyncSession = Depends(get_db),
 ):
     await set_tenant_context(db, str(current_user.tenant_id))
-    file_bytes, filename = await _read_template_sample(file)
+    sample = await _read_template_sample(file)
     try:
         analysis = await asyncio.to_thread(
             analyze_template_upload,
-            file_bytes=file_bytes,
-            filename=filename,
-            content_type=file.content_type,
+            file_bytes=sample.content,
+            filename=sample.filename,
+            content_type=sample.content_type,
             title=_validated_title(title),
         )
     except (TemplatePdfError, TemplateDocxError, TemplateOcrError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     response_payload = analysis.as_dict()
+    response_payload["warnings"] = list(dict.fromkeys(
+        [*(response_payload.get("warnings") or []), *sample.warnings]
+    ))
     response_payload["analysis_token"] = _issue_analysis_token(
         analysis=response_payload,
-        file_bytes=file_bytes,
-        filename=filename,
+        file_bytes=sample.content,
+        filename=sample.filename,
         tenant_id=current_user.tenant_id,
         user_id=current_user.id,
     )
     return DocumentTemplateUploadAnalysisResponse(**response_payload)
+
+
+@router.post(
+    "/intake/ai-propose",
+    response_model=DocumentTemplateUploadAnalysisResponse,
+)
+async def propose_template_fields_with_ai(
+    file: UploadFile = File(...),
+    title: str | None = Form(None),
+    consent_to_external_ai: bool = Form(False),
+    current_user=Depends(require_capability("use_premium_ai")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return a review-only premium-AI field proposal for one upload."""
+
+    if not getattr(current_user, "premium_ai_enabled", False):
+        raise HTTPException(
+            status_code=403,
+            detail="Premium AI is not enabled for this user.",
+        )
+    await set_tenant_context(db, str(current_user.tenant_id))
+    sample = await _read_template_sample(file)
+    try:
+        analysis = await asyncio.to_thread(
+            analyze_template_upload,
+            file_bytes=sample.content,
+            filename=sample.filename,
+            content_type=sample.content_type,
+            title=_validated_title(title),
+        )
+        analysis.warnings.extend(
+            warning
+            for warning in sample.warnings
+            if warning not in analysis.warnings
+        )
+        analysis = await assist_template_mapping(
+            db=db,
+            user=current_user,
+            analysis=analysis,
+            file_bytes=sample.content,
+            consent_to_external_ai=consent_to_external_ai,
+        )
+    except (
+        TemplatePdfError,
+        TemplateDocxError,
+        TemplateOcrError,
+        TemplateAiAssistError,
+    ) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    response_payload = analysis.as_dict()
+    response_payload["analysis_token"] = _issue_analysis_token(
+        analysis=response_payload,
+        file_bytes=sample.content,
+        filename=sample.filename,
+        tenant_id=current_user.tenant_id,
+        user_id=current_user.id,
+    )
+    return DocumentTemplateUploadAnalysisResponse(**response_payload)
+
+
+@router.post("/intake/pdf-page-preview")
+async def preview_template_pdf_page(
+    file: UploadFile = File(...),
+    page_number: int = Query(1, ge=1, le=250),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Render an uploaded PDF page for the visual manual field mapper."""
+    await set_tenant_context(db, str(current_user.tenant_id))
+    sample = await _read_template_sample(file)
+    if not sample.content.startswith(b"%PDF-"):
+        raise HTTPException(status_code=400, detail="PDF page preview requires a PDF upload")
+    try:
+        image, metadata = await asyncio.to_thread(
+            render_pdf_page_preview, sample.content, page_number
+        )
+    except TemplatePdfError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    headers = {
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+        "X-PDF-Page-Count": str(metadata["page_count"]),
+        "X-PDF-Page-Width": str(metadata["width"]),
+        "X-PDF-Page-Height": str(metadata["height"]),
+    }
+    return Response(content=image, media_type="image/png", headers=headers)
 
 
 @router.post(
@@ -1434,13 +1713,15 @@ async def create_template_from_sample(
             detail=f"Invalid category. Must be one of: {', '.join(CATEGORIES)}",
         )
 
-    file_bytes, filename = await _read_template_sample(file)
+    sample = await _read_template_sample(file)
+    file_bytes = sample.content
+    filename = sample.filename
     requested_title = _validated_title(title)
     try:
         analysis = await _analysis_for_template_create(
             file_bytes=file_bytes,
             filename=filename,
-            content_type=file.content_type,
+            content_type=sample.content_type,
             requested_title=requested_title,
             analysis_token=analysis_token,
             tenant_id=current_user.tenant_id,
@@ -1459,6 +1740,11 @@ async def create_template_from_sample(
             raise HTTPException(
                 status_code=422, detail="reviewed_body may not be empty"
             )
+    _reconcile_submitted_ai_fields(
+        variable_schema,
+        analysis=analysis,
+        file_bytes=file_bytes,
+    )
     reviewed_schema = _reviewed_variable_schema(
         variable_schema, analysis.variable_schema
     )
@@ -1485,6 +1771,7 @@ async def create_template_from_sample(
         )
     if analysis.format == "docx":
         seen_source_text: dict[str, str] = {}
+        seen_docx_anchors: dict[tuple[int, int, int], str] = {}
         for field in reviewed_schema.get("fields") or []:
             if not isinstance(field, dict):
                 continue
@@ -1497,7 +1784,7 @@ async def create_template_from_sample(
                     status_code=422,
                     detail=f"Word variable {name!r} needs the exact source text it replaces.",
                 )
-            if source_text not in analysis.extracted_text:
+            if source_text not in analysis.source_text:
                 raise HTTPException(
                     status_code=422,
                     detail=(
@@ -1505,6 +1792,46 @@ async def create_template_from_sample(
                         "Select the source again and review the detected details."
                     ),
                 )
+            anchor = field.get("docx_anchor")
+            if anchor is not None:
+                if not isinstance(anchor, dict):
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Word variable {name!r} has an invalid reviewed location.",
+                    )
+                try:
+                    anchor_key = (
+                        int(anchor["paragraph_ordinal"]),
+                        int(anchor["start"]),
+                        int(anchor["end"]),
+                    )
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Word variable {name!r} has an invalid reviewed location.",
+                    ) from exc
+                if (
+                    anchor_key[0] < 0
+                    or anchor_key[1] < 0
+                    or anchor_key[2] <= anchor_key[1]
+                    or anchor_key[2] - anchor_key[1] != len(source_text)
+                ):
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            f"Word variable {name!r} has a reviewed location that does not match its source text."
+                        ),
+                    )
+                previous_name = seen_docx_anchors.get(anchor_key)
+                if previous_name and previous_name != name:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            f"The same Word location cannot map to both {previous_name!r} and {name!r}."
+                        ),
+                    )
+                seen_docx_anchors[anchor_key] = name
+                continue
             previous_name = seen_source_text.get(source_text)
             if previous_name and previous_name != name:
                 raise HTTPException(
@@ -1515,6 +1842,21 @@ async def create_template_from_sample(
                     ),
                 )
             seen_source_text[source_text] = name
+        try:
+            await asyncio.to_thread(
+                fill_docx_template,
+                file_bytes,
+                variable_schema=reviewed_schema,
+                variables={},
+            )
+        except TemplateDocxError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "A reviewed Word field location no longer matches the uploaded document. "
+                    "Re-run detection and review the highlighted source locations."
+                ),
+            ) from exc
     if analysis.format in {"pdf", "docx"}:
         mapped_variables = {
             str(field.get("name"))
@@ -1538,7 +1880,7 @@ async def create_template_from_sample(
     canonical_source_filename = analysis._normalized_source_filename or filename
     canonical_source_content_type = (
         analysis._normalized_source_content_type
-        or _normalized_media_type(file.content_type)
+        or sample.content_type
         or "application/octet-stream"
     )
     template_id = uuid.uuid4()
@@ -1554,7 +1896,7 @@ async def create_template_from_sample(
         title=analysis.title,
         body=body,
         category=category,
-        description=f"Draft created from uploaded sample: {filename}",
+        description=f"Draft created from uploaded sample: {sample.original_filename}",
         status="draft",
         format=analysis.format,
         module=_clean_optional_form_value(module),

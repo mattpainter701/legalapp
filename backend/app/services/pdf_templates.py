@@ -18,6 +18,93 @@ class TemplatePdfError(ValueError):
     """A customer-actionable PDF template error."""
 
 
+def pdf_page_metadata(content: bytes | PdfReader) -> list[dict[str, Any]]:
+    """Return immutable page geometry used to validate visual field maps."""
+
+    reader = content if isinstance(content, PdfReader) else _open_pdf(content)
+    pages: list[dict[str, Any]] = []
+    for index, page in enumerate(reader.pages, start=1):
+        box = page.mediabox
+        left, bottom = float(box.left), float(box.bottom)
+        right, top = float(box.right), float(box.top)
+        if right <= left or top <= bottom:
+            raise TemplatePdfError(f"Page {index} has invalid PDF dimensions.")
+        rotation = int(page.get("/Rotate", 0) or 0) % 360
+        if rotation not in {0, 90, 180, 270}:
+            raise TemplatePdfError(f"Page {index} has an unsupported rotation.")
+        pages.append(
+            {
+                "page": index,
+                "width": right - left,
+                "height": top - bottom,
+                "left": left,
+                "bottom": bottom,
+                "right": right,
+                "top": top,
+                "rotation": rotation,
+            }
+        )
+    return pages
+
+
+def render_pdf_page_preview(
+    content: bytes,
+    page_number: int,
+) -> tuple[bytes, dict[str, Any]]:
+    """Render one immutable source page for visual field review."""
+
+    pages = pdf_page_metadata(content)
+    if page_number < 1 or page_number > len(pages):
+        raise TemplatePdfError("The requested PDF page does not exist.")
+    selected_page = pages[page_number - 1]
+    if selected_page["rotation"] != 0:
+        raise TemplatePdfError(
+            "This page is rotated. Rotate it upright and save a new PDF before highlighting fields."
+        )
+    if abs(selected_page["left"]) > 0.01 or abs(selected_page["bottom"]) > 0.01:
+        raise TemplatePdfError(
+            "This PDF uses an offset page origin that cannot be highlighted safely. Print it to a new PDF, then try again."
+        )
+    document = None
+    page = None
+    try:
+        import pypdfium2 as pdfium
+
+        document = pdfium.PdfDocument(content)
+        page = document[page_number - 1]
+        width, height = (float(value) for value in page.get_size())
+        scale = min(
+            2.0,
+            (4_000_000 / max(1.0, width * height)) ** 0.5,
+            16_384 / max(1.0, width),
+            16_384 / max(1.0, height),
+        )
+        if not 0 < scale <= 2.0:
+            raise TemplatePdfError(
+                "The selected PDF page dimensions are too large to preview safely."
+            )
+        bitmap = page.render(scale=scale, rev_byteorder=True, draw_annots=True)
+        try:
+            image = bitmap.to_pil().convert("RGB")
+            output = io.BytesIO()
+            image.save(output, format="PNG", optimize=True)
+            image.close()
+        finally:
+            bitmap.close()
+    except TemplatePdfError:
+        raise
+    except Exception as exc:
+        raise TemplatePdfError(
+            "The selected PDF page could not be rendered for review."
+        ) from exc
+    finally:
+        if page is not None:
+            page.close()
+        if document is not None:
+            document.close()
+    return output.getvalue(), {**selected_page, "page_count": len(pages)}
+
+
 @dataclass(frozen=True)
 class PdfWidget:
     page_index: int
@@ -414,6 +501,7 @@ def _discover_pdf_overlay_fields(
     candidates: list[dict[str, Any]],
     *,
     fragments: list[dict[str, Any]] | None = None,
+    merge_native_fragments: bool = False,
 ) -> list[dict[str, Any]]:
     """Locate reusable values using an already validated PDF reader.
 
@@ -447,7 +535,7 @@ def _discover_pdf_overlay_fields(
                 )
             except (TypeError, ValueError):
                 continue
-    else:
+    if fragments is None or merge_native_fragments:
         for page_index, page in enumerate(reader.pages):
             if int(page.get("/Rotate", 0) or 0) % 360:
                 continue
@@ -698,11 +786,17 @@ def discover_pdf_overlay_fields(
     candidates: list[dict[str, Any]],
     *,
     fragments: list[dict[str, Any]] | None = None,
+    merge_native_fragments: bool = False,
 ) -> list[dict[str, Any]]:
     """Validate a PDF and locate conservative, review-required overlays."""
 
     reader = _open_pdf(content)
-    return _discover_pdf_overlay_fields(reader, candidates, fragments=fragments)
+    return _discover_pdf_overlay_fields(
+        reader,
+        candidates,
+        fragments=fragments,
+        merge_native_fragments=merge_native_fragments,
+    )
 
 
 def _schema_value_map(schema: dict | None, variables: dict[str, str]) -> dict[str, str]:

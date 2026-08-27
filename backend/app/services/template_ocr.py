@@ -8,10 +8,12 @@ not pay the OCR model startup cost.
 
 from __future__ import annotations
 
+import io
 import threading
 from io import BytesIO
+import warnings
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterable
 
 from app.config import get_settings
 
@@ -51,6 +53,7 @@ class PdfOcrResult:
     average_confidence: float
     truncated: bool
     provider: str = "local"
+    page_indexes: tuple[int, ...] = ()
 
     def fragments(self) -> list[dict[str, Any]]:
         return [line.as_pdf_fragment() for line in self.lines]
@@ -163,6 +166,150 @@ _MIN_LINE_CONFIDENCE = 0.35
 _MAX_IMAGE_SOURCE_BYTES = 10 * 1024 * 1024
 _MAX_IMAGE_SOURCE_PIXELS = 25_000_000
 _MAX_IMAGE_INFERENCE_PIXELS = 10_000_000
+_ALLOWED_IMAGE_FORMATS = {"BMP", "JPEG", "PNG", "TIFF", "WEBP"}
+_MAX_IMAGE_FRAMES = 25
+_MAX_IMAGE_PAGE_PIXELS = 30_000_000
+_MAX_IMAGE_TOTAL_PIXELS = 80_000_000
+
+
+@dataclass(frozen=True)
+class NormalizedImagePdf:
+    """A bounded, inert PDF produced from a standalone image upload."""
+
+    content: bytes
+    pages: int
+    image_format: str
+
+
+def _image_dpi(raw_dpi: Any) -> tuple[float, float]:
+    try:
+        x_dpi, y_dpi = raw_dpi
+        x_dpi = float(x_dpi)
+        y_dpi = float(y_dpi)
+    except (TypeError, ValueError):
+        return 150.0, 150.0
+    if not (72 <= x_dpi <= 600 and 72 <= y_dpi <= 600):
+        return 150.0, 150.0
+    return x_dpi, y_dpi
+
+
+def image_to_pdf(content: bytes) -> NormalizedImagePdf:
+    """Validate a standalone image and rasterize it into a safe PDF.
+
+    Template rendering already has a carefully reviewed PDF overlay path. A
+    standalone scan is therefore normalized to an inert PDF instead of
+    retaining animation, metadata, or format-specific payloads. Pixel and
+    frame limits are enforced before OCR or persistence.
+    """
+
+    try:
+        from PIL import Image, ImageOps
+        from reportlab.lib.utils import ImageReader
+        from reportlab.pdfgen import canvas
+    except ImportError as exc:  # pragma: no cover - deployment guard
+        raise TemplateOcrError(
+            "Image scanning is not installed on this server. Ask an administrator to enable the document OCR worker."
+        ) from exc
+
+    if not content:
+        raise TemplateOcrError("The uploaded image is empty.")
+
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            source = Image.open(io.BytesIO(content))
+    except Exception as exc:
+        raise TemplateOcrError(
+            "The uploaded file is not a supported document image."
+        ) from exc
+
+    image_format = str(source.format or "").upper()
+    if image_format not in _ALLOWED_IMAGE_FORMATS:
+        source.close()
+        raise TemplateOcrError(
+            "Unsupported image format. Use PNG, JPEG, TIFF, BMP, or WebP."
+        )
+
+    frame_count = int(getattr(source, "n_frames", 1) or 1)
+    if frame_count < 1 or frame_count > _MAX_IMAGE_FRAMES:
+        source.close()
+        raise TemplateOcrError(
+            f"Image templates may contain at most {_MAX_IMAGE_FRAMES} pages. Split this file and try again."
+        )
+
+    output = io.BytesIO()
+    pdf = canvas.Canvas(output, pageCompression=1)
+    total_pixels = 0
+    try:
+        for frame_index in range(frame_count):
+            source.seek(frame_index)
+            source_width, source_height = source.size
+            pixels = int(source_width) * int(source_height)
+            if (
+                source_width <= 0
+                or source_height <= 0
+                or pixels > _MAX_IMAGE_PAGE_PIXELS
+            ):
+                raise TemplateOcrError(
+                    "An image page is too large to process safely. Export it at 300 DPI or lower and try again."
+                )
+            total_pixels += pixels
+            if total_pixels > _MAX_IMAGE_TOTAL_PIXELS:
+                raise TemplateOcrError(
+                    "The combined image pages are too large to process safely. Split the scan and try again."
+                )
+
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", Image.DecompressionBombWarning)
+                frame = ImageOps.exif_transpose(source.copy())
+                frame.load()
+            try:
+                width, height = frame.size
+                if frame.mode in {"RGBA", "LA"} or "transparency" in frame.info:
+                    rgba = frame.convert("RGBA")
+                    rgb = Image.new("RGB", rgba.size, "white")
+                    rgb.paste(rgba, mask=rgba.getchannel("A"))
+                    rgba.close()
+                else:
+                    rgb = frame.convert("RGB")
+                try:
+                    x_dpi, y_dpi = _image_dpi(source.info.get("dpi"))
+                    page_width = max(
+                        36.0, min(14_400.0, width * 72.0 / x_dpi)
+                    )
+                    page_height = max(
+                        36.0, min(14_400.0, height * 72.0 / y_dpi)
+                    )
+                    pdf.setPageSize((page_width, page_height))
+                    pdf.drawImage(
+                        ImageReader(rgb),
+                        0,
+                        0,
+                        width=page_width,
+                        height=page_height,
+                        preserveAspectRatio=True,
+                        mask="auto",
+                    )
+                    pdf.showPage()
+                finally:
+                    rgb.close()
+            finally:
+                frame.close()
+        pdf.save()
+    except TemplateOcrError:
+        raise
+    except Exception as exc:
+        raise TemplateOcrError(
+            "The image could not be normalized for OCR."
+        ) from exc
+    finally:
+        source.close()
+
+    return NormalizedImagePdf(
+        content=output.getvalue(),
+        pages=frame_count,
+        image_format=image_format,
+    )
 
 
 def _engine():
@@ -202,7 +349,12 @@ def _safe_scale(width: float, height: float, remaining_pixels: int) -> float:
     return scale
 
 
-def ocr_pdf(content: bytes, *, max_pages: int = _MAX_OCR_PAGES) -> PdfOcrResult:
+def ocr_pdf(
+    content: bytes,
+    *,
+    max_pages: int = _MAX_OCR_PAGES,
+    page_indexes: Iterable[int] | None = None,
+) -> PdfOcrResult:
     """OCR a PDF into reading-order text and PDF-coordinate line boxes."""
 
     # Cloud OCR is deliberately opt-in; local RapidOCR remains the default.
@@ -223,20 +375,40 @@ def ocr_pdf(content: bytes, *, max_pages: int = _MAX_OCR_PAGES) -> PdfOcrResult:
         raise TemplateOcrError("The PDF could not be opened for OCR.") from exc
 
     total_pages = len(document)
-    page_limit = min(total_pages, max(1, min(int(max_pages), _MAX_OCR_PAGES)))
+    page_limit = max(1, min(int(max_pages), _MAX_OCR_PAGES))
+    if page_indexes is None:
+        requested_pages = list(range(total_pages))
+    else:
+        requested_pages = sorted(
+            {
+                int(page_index)
+                for page_index in page_indexes
+                if 0 <= int(page_index) < total_pages
+            }
+        )
+    selected_pages = requested_pages[:page_limit]
     remaining_pixels = _MAX_RENDERED_PIXELS
     lines: list[OcrLine] = []
     engine = _engine()
 
     try:
-        for page_index in range(page_limit):
+        for page_index in selected_pages:
             page = document[page_index]
+            image = None
             try:
                 width, height = (float(value) for value in page.get_size())
                 scale = _safe_scale(width, height, remaining_pixels)
                 bitmap = page.render(scale=scale, rev_byteorder=True)
                 try:
-                    image = bitmap.to_pil().convert("RGB")
+                    rendered_image = bitmap.to_pil()
+                    try:
+                        image = (
+                            rendered_image.copy()
+                            if rendered_image.mode == "RGB"
+                            else rendered_image.convert("RGB")
+                        )
+                    finally:
+                        rendered_image.close()
                 finally:
                     bitmap.close()
                 remaining_pixels -= image.width * image.height
@@ -249,6 +421,8 @@ def ocr_pdf(content: bytes, *, max_pages: int = _MAX_OCR_PAGES) -> PdfOcrResult:
                     f"Page {page_index + 1} could not be read by OCR."
                 ) from exc
             finally:
+                if image is not None:
+                    image.close()
                 page.close()
 
             boxes = getattr(result, "boxes", None)
@@ -284,21 +458,22 @@ def ocr_pdf(content: bytes, *, max_pages: int = _MAX_OCR_PAGES) -> PdfOcrResult:
 
     source_lines = tuple(sorted(lines, key=lambda line: (line.page_index, -line.rect[3], line.rect[0])))
     reconstructed_lines = reconstruct_ocr_lines(source_lines)
-    page_text: list[list[str]] = [[] for _ in range(page_limit)]
+    page_text: dict[int, list[str]] = {page_index: [] for page_index in selected_pages}
     for line in reconstructed_lines:
-        page_text[line.page_index].append(line.text)
-    text = "\n\n".join("\n".join(values) for values in page_text if values).strip()
+        page_text.setdefault(line.page_index, []).append(line.text)
+    text = "\n\n".join("\n".join(page_text[page_index]) for page_index in selected_pages if page_text.get(page_index)).strip()
     confidence = sum(line.score for line in source_lines) / len(source_lines) if source_lines else 0.0
     return PdfOcrResult(
         text=text,
         # Preserve exact OCR fragments for coordinate-sensitive overlays. The
         # reconstructed text above is intentionally separate from these boxes.
         lines=source_lines,
-        pages_analyzed=page_limit,
+        pages_analyzed=len(selected_pages),
         pages_total=total_pages,
         average_confidence=round(confidence, 4),
-        truncated=total_pages > page_limit,
+        truncated=len(requested_pages) > len(selected_pages),
         provider="local",
+        page_indexes=tuple(selected_pages),
     )
 
 

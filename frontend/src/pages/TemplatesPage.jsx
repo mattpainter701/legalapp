@@ -4,6 +4,7 @@ import PrepareFormWorkspace from '../components/templates/PrepareFormWorkspace'
 import {
   getTemplates,
   analyzeTemplateUpload,
+  proposeTemplateFieldsWithAi,
   createTemplate,
   createTemplateFromUpload,
   updateTemplate,
@@ -381,6 +382,8 @@ function UploadTemplateForm({ onCreated, onCancel }) {
   const [rejection, setRejection] = useState('')
   const [reviewConfirmed, setReviewConfirmed] = useState(false)
   const [sourceReviewReady, setSourceReviewReady] = useState(false)
+  const [aiConsent, setAiConsent] = useState(false)
+  const [aiAnalyzing, setAiAnalyzing] = useState(false)
   const analysisRequestRef = useRef(0)
 
   const fileKey = file ? `${file.name}:${file.size}:${file.lastModified}` : ''
@@ -413,7 +416,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
 
   const handleAnalyze = async (selectedFile = file) => {
     if (!selectedFile) {
-      setError('Choose a DOCX, PDF, TXT, PNG, JPEG, TIFF, or WebP sample first.')
+      setError('Choose a DOCX, PDF, TXT, PNG, JPEG, TIFF, BMP, or WebP sample first.')
       return
     }
     const requestId = analysisRequestRef.current + 1
@@ -423,6 +426,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
     setAnalyzing(true)
     setError(null)
     setSourceReviewReady(false)
+    setAiConsent(false)
     try {
       const form = buildFormData({ sourceFile: selectedFile })
       const result = await analyzeTemplateUpload(form)
@@ -452,6 +456,39 @@ function UploadTemplateForm({ onCreated, onCancel }) {
     }
   }
 
+  const handleAiProposal = async () => {
+    if (!file || !analysis || analysisFileKey !== fileKey) {
+      setError('Run the local document scan before requesting a premium AI proposal.')
+      return
+    }
+    if (!aiConsent) {
+      setError('Confirm the premium AI text-sharing notice before continuing.')
+      return
+    }
+    const requestId = analysisRequestRef.current
+    setAiAnalyzing(true)
+    setError(null)
+    try {
+      const form = buildFormData()
+      form.append('consent_to_external_ai', 'true')
+      const result = await proposeTemplateFieldsWithAi(form)
+      if (analysisRequestRef.current !== requestId) return
+      const proposals = result?.suggested_variable_schema?.fields || []
+      setAnalysis(result)
+      setDraftBody(result.body || result.extracted_text || '')
+      setMappedFields(proposals.map((field) => ({ ...field, _bodyName: field.name })))
+      setReviewConfirmed(false)
+      setSourceReviewReady(false)
+      if (!proposals.some((field) => field?.ai_suggested)) {
+        setError('Premium AI found no additional source-backed fields to propose.')
+      }
+    } catch (err) {
+      if (analysisRequestRef.current === requestId) setError(getErrorMessage(err, 'Premium AI could not propose template fields.'))
+    } finally {
+      if (analysisRequestRef.current === requestId) setAiAnalyzing(false)
+    }
+  }
+
   const selectFile = (selectedFile) => {
     analysisRequestRef.current += 1
     setFile(selectedFile)
@@ -464,6 +501,8 @@ function UploadTemplateForm({ onCreated, onCancel }) {
     setSourcePreviewKind('')
     setSourceReviewReady(false)
     setAnalyzing(false)
+    setAiAnalyzing(false)
+    setAiConsent(false)
     setError(null)
     setRejection('')
     if (selectedFile) void handleAnalyze(selectedFile)
@@ -479,7 +518,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
     const message = reason?.code === 'file-too-large'
       ? 'That file is too large. Choose a file up to 50 MB.'
       : reason?.code === 'file-invalid-type'
-        ? 'Use a PDF, DOCX, TXT, PNG, JPEG, TIFF, or WebP file.'
+        ? 'Use a PDF, DOCX, TXT, PNG, JPEG, TIFF, BMP, or WebP file.'
         : reason?.message || 'Choose one supported document or image.'
     setRejection(message)
     setError(null)
@@ -499,6 +538,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
       'image/png': ['.png'],
       'image/jpeg': ['.jpg', '.jpeg'],
       'image/tiff': ['.tif', '.tiff'],
+      'image/bmp': ['.bmp'],
       'image/webp': ['.webp'],
     },
   })
@@ -574,6 +614,10 @@ function UploadTemplateForm({ onCreated, onCancel }) {
   const isPdfAnalysis = String(analysis?.format || '').toLowerCase() === 'pdf'
   const hasPdfMappings = fields.some((field) => field?.included !== false && (field?.pdf_field_name || field?.pdf_overlay || field?.pdf_overlays?.length))
   const requiresHumanReview = fieldsRequireHumanReview(fields, analysis)
+  const lowConfidenceFieldCount = fields.filter((field) => (
+    Number(field?.confidence ?? 1) < 0.75 || field?.ai_suggested
+  )).length
+  const unmappedAiSuggestions = analysis?.suggested_variable_schema?.unmapped_ai_suggestions || []
   const handleWorkspaceFieldsChange = (nextFields) => {
     const previousByIdentity = new Map(fields.map((field, index) => [workspaceFieldIdentity(field, index), field]))
     setDraftBody((current) => {
@@ -711,11 +755,19 @@ function UploadTemplateForm({ onCreated, onCancel }) {
             />
             <Upload size={22} className="mx-auto mb-2 text-brand-accent-2" />
             <p className="text-sm font-semibold text-brand-ink">{isDragActive ? 'Drop the sample here' : 'Drop a sample here or browse'}</p>
-            <p className="mt-1 text-xs text-brand-muted">One PDF, DOCX, TXT, PNG, JPEG, TIFF, or WebP · up to 50 MB</p>
+            <p className="mt-1 text-xs text-brand-muted">One PDF, DOCX, TXT, PNG, JPEG, TIFF, BMP, or WebP · up to 50 MB</p>
           </div>
           <p id="template-sample-guidance" className="mt-2 text-xs text-brand-muted">
-            Upload the document your team already reuses. We read Word files, PDFs, and image-only scans while preserving the original design. Filled or handwritten entries help locate reusable details; uncertain readings are flagged for review.
+            Upload the document your team already reuses. We read Word files, PDFs, and image-only scans while preserving the original design. Filled or handwritten entries help locate reusable details; uncertain readings are flagged for review. Image uploads are converted to a safe PDF so reviewed field locations and the page design stay together.
           </p>
+          <details className="mt-2 rounded border border-brand-line bg-brand-surface-2 p-3 text-xs text-brand-muted">
+            <summary className="cursor-pointer font-semibold text-brand-ink">Pro tips for reliable field detection</summary>
+            <ul className="mt-2 list-disc space-y-1 pl-5">
+              <li>In Word, use a clear label beside the value, a labeled blank, or an explicit placeholder such as {'{{client_name}}'}.</li>
+              <li>In PDFs, real form controls work best. For scans, use upright, high-contrast pages and include a filled sample when possible.</li>
+              <li>If something is missed, add the exact Word replacement text or place a field directly on the PDF page, then verify it against the source.</li>
+            </ul>
+          </details>
           {file && (
             <p className="mt-2 text-xs font-medium text-brand-accent-2" role="status">
               Current source: {file.name} ({Math.max(1, Math.round(file.size / 1024))} KB)
@@ -753,6 +805,19 @@ function UploadTemplateForm({ onCreated, onCancel }) {
       </div>
 
       <div className="sticky bottom-0 z-10 -mx-2 flex flex-col gap-3 border-t border-brand-line bg-brand-surface-2/95 px-2 py-3 backdrop-blur sm:flex-row">
+        {analysis && (
+          <div className="order-first rounded border border-brand-accent/30 bg-brand-accent/5 p-3 text-left sm:order-none sm:flex-1">
+            <p className="text-sm font-semibold text-brand-ink">Optional premium AI field proposal</p>
+            <p className="mt-1 text-xs text-brand-muted">Only extracted text and field metadata are sent after local redaction; the original file and page images stay here. AI suggestions are review-only and never save or activate a template.</p>
+            <label className="mt-2 flex items-start gap-2 text-xs text-brand-muted">
+              <input type="checkbox" checked={aiConsent} onChange={(event) => { setAiConsent(event.target.checked); setError(null) }} className="mt-0.5" />
+              I consent to sending extracted text to the configured premium AI provider for this proposal.
+            </label>
+            <button type="button" onClick={handleAiProposal} disabled={aiAnalyzing || !aiConsent} className="mt-2 rounded border border-brand-accent/40 px-3 py-1.5 text-xs text-brand-ink hover:bg-brand-bg disabled:opacity-50">
+              {aiAnalyzing ? 'Proposing fields…' : 'Suggest fields with premium AI'}
+            </button>
+          </div>
+        )}
         <button
           type="button"
           onClick={() => handleAnalyze()}
@@ -801,12 +866,27 @@ function UploadTemplateForm({ onCreated, onCancel }) {
                 ? `Read using ${detection.label || 'document structure'}${detectionProviderLabel ? ` (${detectionProviderLabel})` : ''}. We’ll ask for these details whenever someone uses this template.`
                 : 'Try a clearer copy, or add a replacement field below. Nothing has been saved yet.'}
             </p>
+            <p className="mt-2 text-xs text-brand-muted">
+              Detected: {fields.length} · Needs verification: {lowConfidenceFieldCount}
+            </p>
             {detection.pages_analyzed && (
               <p className="mt-2 text-xs text-brand-muted">
                 Pages checked: {detection.pages_analyzed}{detection.pages_total ? ` of ${detection.pages_total}` : ''}
               </p>
             )}
+            {Array.isArray(detection.ocr_pages) && detection.ocr_pages.length > 0 && (
+              <p className="mt-1 text-xs text-brand-muted">Pages OCR-checked: {detection.ocr_pages.join(', ')}</p>
+            )}
           </div>
+          {unmappedAiSuggestions.length > 0 && (
+            <div className="mt-3 rounded border border-brand-amber/40 bg-brand-amber/10 p-3 text-xs text-brand-ink" role="status">
+              <p className="font-semibold">AI suggestions needing source confirmation</p>
+              <p className="mt-1 text-brand-muted">These ideas were not added because the scan could not locate exact source evidence.</p>
+              <ul className="mt-2 list-disc space-y-1 pl-5">
+                {unmappedAiSuggestions.map((item, index) => <li key={`${item?.name || item?.label || 'suggestion'}-${index}`}>{item?.label || item?.name || item?.text || 'Unmapped suggestion'}</li>)}
+              </ul>
+            </div>
+          )}
           {isPdfAnalysis && (
             <div className="border border-brand-green/30 rounded bg-brand-green/10 p-4 text-sm text-brand-ink">
               <p className="font-semibold">{sourcePreviewKind === 'image' ? 'Original scan design preserved' : 'Original PDF design preserved'}</p>
@@ -886,6 +966,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
                             {Number(field.confidence || 0) >= 0.75 ? 'Strong match' : 'Please verify'}
                           </span>
                           {(field.pdf_overlay?.source_kind === 'ocr' || field.pdf_overlays?.some((item) => item?.source_kind === 'ocr')) && <span className="rounded border border-brand-line bg-brand-bg px-2 py-0.5 text-brand-muted">Read from scan</span>}
+                          {field.ai_suggested && <span className="rounded border border-brand-accent/30 bg-brand-accent/10 px-2 py-0.5 text-brand-ink">AI proposal · verify</span>}
                         </div>
                         <details className="mt-2">
                           <summary className="cursor-pointer text-brand-muted">Advanced field settings</summary>
@@ -904,6 +985,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
                         )}
                         {optionLabels.length > 0 && <p className="mt-2 text-brand-muted break-words"><span className="font-semibold text-brand-ink">Options:</span> {optionLabels.join(', ')}</p>}
                         {(field.example || field.source_text || field.source_path) && <p className="mt-1 text-brand-muted break-words"><span className="font-semibold text-brand-ink">Replaces:</span> {field.example || field.source_text || field.source_path}</p>}
+                        {field.ai_reason && <p className="mt-1 text-brand-muted break-words"><span className="font-semibold text-brand-ink">AI rationale:</span> {field.ai_reason}</p>}
                         {!isPdfAnalysis && (
                           <div className="mt-2 space-y-1.5">
                             <label htmlFor={`source-text-${index}`} className="block text-brand-muted">Exact text in the source</label>

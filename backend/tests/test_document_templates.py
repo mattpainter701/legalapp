@@ -14,10 +14,30 @@ from app.services.pdf_templates import (
     TemplatePdfError,
     discover_pdf_fields,
     fill_pdf_template,
+    pdf_page_metadata,
+    render_pdf_page_preview,
     validate_representative_pdf_variables,
 )
-from app.services.docx_templates import TemplateDocxError, fill_docx_template
-from app.services.template_ocr import OcrLine, PdfOcrResult
+from app.services.docx_templates import (
+    TemplateDocxError,
+    fill_docx_template,
+    validate_docx_package,
+)
+from app.services.template_ai_assist import (
+    AiFieldProposal,
+    reconcile_ai_template_fields,
+)
+from app.services.template_ai_service import (
+    TemplateAiAssistError,
+    _redact_evidence,
+    assist_template_mapping as run_template_ai_mapping,
+)
+from app.services.template_ocr import (
+    OcrLine,
+    PdfOcrResult,
+    TemplateOcrError,
+    image_to_pdf,
+)
 
 
 def _fillable_pdf() -> bytes:
@@ -902,6 +922,122 @@ def test_docx_source_render_preserves_structure_and_replaces_split_run_values():
     assert reopened.paragraphs[1].text == "Case No. CV-2027-9"
     assert reopened.tables[0].cell(0, 0).text == "Client: Ada Lovelace Jr."
     assert len(reopened.tables) == 1
+
+
+def test_docx_intake_recognizes_bracket_placeholders_and_ignores_static_brackets():
+    from docx import Document
+
+    document = Document()
+    document.add_paragraph("Plaintiff: [PLAINTIFF'S FULL NAME]")
+    document.add_paragraph("Defendant: [DEFENDANT'S FULL NAME]")
+    document.add_paragraph("[THIS SPACE INTENTIONALLY LEFT BLANK]")
+    source = BytesIO()
+    document.save(source)
+
+    analysis = analyze_template_upload(
+        file_bytes=source.getvalue(),
+        filename="stipulation.docx",
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+    fields = {field["name"]: field for field in analysis.variable_schema["fields"]}
+
+    assert set(fields) == {"plaintiff_name", "defendant_name"}
+    assert fields["plaintiff_name"]["source_text"] == "[PLAINTIFF'S FULL NAME]"
+
+    rendered = fill_docx_template(
+        source.getvalue(),
+        variable_schema=analysis.variable_schema,
+        variables={"plaintiff_name": "Alex Plaintiff", "defendant_name": "Dana Defendant"},
+    )
+    reopened = Document(BytesIO(rendered))
+    assert reopened.paragraphs[0].text == "Plaintiff: Alex Plaintiff"
+    assert reopened.paragraphs[1].text == "Defendant: Dana Defendant"
+    assert reopened.paragraphs[2].text == "[THIS SPACE INTENTIONALLY LEFT BLANK]"
+
+
+def test_docx_intake_anchors_identical_underscore_blanks_independently():
+    from docx import Document
+
+    document = Document()
+    document.add_paragraph("Husband's date of birth: __________")
+    document.add_paragraph("Wife's date of birth: __________")
+    document.add_paragraph("Section A: Basic Information")
+    source = BytesIO()
+    document.save(source)
+
+    analysis = analyze_template_upload(
+        file_bytes=source.getvalue(),
+        filename="questionnaire.docx",
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+    fields = {field["name"]: field for field in analysis.variable_schema["fields"]}
+
+    assert set(fields) == {"husband_s_date_of_birth", "wife_s_date_of_birth"}
+    assert all(field["docx_anchor"] for field in fields.values())
+    assert fields["husband_s_date_of_birth"]["source_text"] == "__________"
+
+    rendered = fill_docx_template(
+        source.getvalue(),
+        variable_schema=analysis.variable_schema,
+        variables={
+            "husband_s_date_of_birth": "01/02/1980",
+            "wife_s_date_of_birth": "03/04/1982",
+        },
+    )
+    reopened = Document(BytesIO(rendered))
+    assert reopened.paragraphs[0].text.endswith("01/02/1980")
+    assert reopened.paragraphs[1].text.endswith("03/04/1982")
+    assert reopened.paragraphs[2].text == "Section A: Basic Information"
+
+
+def test_docx_intake_finds_late_placeholders_without_truncating_schema():
+    from docx import Document
+
+    document = Document()
+    document.add_paragraph("A" * 20_050)
+    document.add_paragraph("Signature date: [DATE]")
+    source = BytesIO()
+    document.save(source)
+
+    analysis = analyze_template_upload(
+        file_bytes=source.getvalue(),
+        filename="long-template.docx",
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+
+    assert len(analysis.body) == 20_000
+    assert len(analysis.extracted_text) == 20_000
+    assert [field["name"] for field in analysis.variable_schema["fields"]] == ["date"]
+    assert any("full Word source" in warning for warning in analysis.warnings)
+
+
+def test_docx_intake_rejects_tracked_changes_before_field_detection():
+    from docx import Document
+    import zipfile
+
+    document = Document()
+    document.add_paragraph("Client: Ada Lovelace")
+    source = BytesIO()
+    document.save(source)
+
+    revised = BytesIO()
+    with zipfile.ZipFile(source, "r") as source_zip, zipfile.ZipFile(revised, "w") as revised_zip:
+        for item in source_zip.infolist():
+            payload = source_zip.read(item.filename)
+            if item.filename == "word/document.xml":
+                payload = payload.replace(
+                    b"<w:body>",
+                    b'<w:body><w:ins w:id="1" w:author="test" w:date="2026-01-01T00:00:00Z">',
+                    1,
+                ).replace(b"</w:body>", b"</w:ins></w:body>", 1)
+            revised_zip.writestr(item, payload)
+
+    with pytest.raises(TemplateDocxError, match="tracked changes"):
+        analyze_template_upload(
+            file_bytes=revised.getvalue(),
+            filename="revised.docx",
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
 
 
 def test_docx_render_recurses_through_deep_tables():
@@ -2766,3 +2902,580 @@ async def test_pdf_mime_normalization_blocks_active_extensionless_uploads(client
     )
     assert disguised.status_code == 422
     assert "Active PDF content" in disguised.json()["detail"]
+
+
+def _document_image_bytes(*, image_format: str = "PNG") -> bytes:
+    from PIL import Image, ImageDraw
+
+    image = Image.new("RGB", (1200, 400), "white")
+    draw = ImageDraw.Draw(image)
+    draw.text((60, 80), "Client name:", fill="black")
+    output = BytesIO()
+    image.save(output, format=image_format, dpi=(150, 150))
+    image.close()
+    return output.getvalue()
+
+
+def test_pdf_page_preview_reports_authoritative_geometry_and_png():
+    from PIL import Image
+    from reportlab.pdfgen import canvas
+
+    output = BytesIO()
+    pdf = canvas.Canvas(output, pagesize=(612, 792))
+    pdf.drawString(72, 720, "Page one")
+    pdf.showPage()
+    pdf.drawString(72, 720, "Page two")
+    pdf.save()
+
+    image_bytes, metadata = render_pdf_page_preview(output.getvalue(), 2)
+
+    with Image.open(BytesIO(image_bytes)) as image:
+        assert image.format == "PNG"
+        assert image.width * image.height <= 4_100_000
+    assert metadata == {
+        "page": 2,
+        "width": 612.0,
+        "height": 792.0,
+        "left": 0.0,
+        "bottom": 0.0,
+        "right": 612.0,
+        "top": 792.0,
+        "rotation": 0,
+        "page_count": 2,
+    }
+
+
+def test_standalone_image_is_normalized_to_bounded_pdf():
+    normalized = image_to_pdf(_document_image_bytes())
+
+    assert normalized.content.startswith(b"%PDF-")
+    assert normalized.pages == 1
+    assert normalized.image_format == "PNG"
+    metadata = pdf_page_metadata(normalized.content)
+    assert len(metadata) == 1
+    assert metadata[0]["width"] == pytest.approx(576, abs=1)
+    assert metadata[0]["height"] == pytest.approx(192, abs=1)
+
+
+def test_image_normalization_uses_exif_corrected_page_geometry():
+    from PIL import Image
+    from pypdf import PdfReader
+
+    source = BytesIO()
+    image = Image.new("RGB", (120, 60), "white")
+    exif = Image.Exif()
+    exif[274] = 6
+    image.save(source, format="JPEG", exif=exif)
+    image.close()
+
+    normalized = image_to_pdf(source.getvalue())
+    page = PdfReader(BytesIO(normalized.content)).pages[0]
+
+    assert float(page.mediabox.height) > float(page.mediabox.width)
+
+
+def test_unsupported_gif_image_is_rejected():
+    with pytest.raises(TemplateOcrError, match="Unsupported image format"):
+        image_to_pdf(_document_image_bytes(image_format="GIF"))
+
+
+@pytest.mark.asyncio
+async def test_image_upload_uses_ocr_and_returns_pdf_mapping(monkeypatch):
+    from app.services import template_intake
+    from starlette.datastructures import Headers, UploadFile
+
+    monkeypatch.setattr(
+        template_intake,
+        "ocr_pdf",
+        lambda _content, **_kwargs: PdfOcrResult(
+            text="Client name:",
+            lines=(
+                OcrLine(
+                    page_index=0,
+                    text="Client name:",
+                    score=0.93,
+                    rect=(30, 90, 150, 115),
+                ),
+            ),
+            pages_analyzed=1,
+            pages_total=1,
+            average_confidence=0.93,
+            truncated=False,
+            page_indexes=(0,),
+        ),
+    )
+
+    sample = await document_templates._read_template_sample(
+        UploadFile(
+            file=BytesIO(_document_image_bytes()),
+            filename="intake.png",
+            headers=Headers({"content-type": "image/png"}),
+        )
+    )
+    analysis = analyze_template_upload(
+        file_bytes=sample.content,
+        filename=sample.filename,
+        content_type=sample.content_type,
+    )
+    analysis.warnings.extend(sample.warnings)
+    payload = analysis.as_dict()
+    assert payload["format"] == "pdf"
+    assert payload["suggested_variable_schema"]["detection"]["method"] == "ocr"
+    assert payload["suggested_variable_schema"]["detection"]["ocr_pages"] == [1]
+    assert payload["suggested_variable_schema"]["fields"][0]["name"] == "client_name"
+    assert any("converted to a safe 1-page PDF" in warning for warning in payload["warnings"])
+
+
+def test_mixed_pdf_merges_native_text_and_only_sparse_page_ocr(monkeypatch):
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+
+    from app.services import template_intake
+
+    output = BytesIO()
+    pdf = canvas.Canvas(output, pagesize=letter)
+    pdf.drawString(72, 720, "Client: Alice Example")
+    pdf.showPage()
+    pdf.rect(72, 650, 300, 40)
+    pdf.showPage()
+    pdf.save()
+
+    scanned_pages = []
+
+    def fake_ocr(_content, *, page_indexes, **_kwargs):
+        scanned_pages.extend(page_indexes)
+        return PdfOcrResult(
+            text="Case Number: BETA-77",
+            lines=(
+                OcrLine(
+                    page_index=1,
+                    text="Case Number: BETA-77",
+                    score=0.91,
+                    rect=(72, 650, 300, 675),
+                ),
+            ),
+            pages_analyzed=1,
+            pages_total=2,
+            average_confidence=0.91,
+            truncated=False,
+            page_indexes=(1,),
+        )
+
+    monkeypatch.setattr(template_intake, "ocr_pdf", fake_ocr)
+    analysis = analyze_template_upload(
+        file_bytes=output.getvalue(),
+        filename="mixed.pdf",
+        content_type="application/pdf",
+    )
+
+    assert scanned_pages == [1]
+    fields = {
+        field["name"]: field
+        for field in analysis.variable_schema["fields"]
+    }
+    assert {"client_name", "case_number"} <= set(fields)
+    assert fields["client_name"]["pdf_overlay"]["source_kind"] == "text"
+    assert fields["case_number"]["pdf_overlay"]["source_kind"] == "ocr"
+    assert analysis.variable_schema["detection"]["ocr_pages"] == [2]
+
+
+def test_docx_package_rejects_embedded_payloads():
+    import zipfile
+
+    from docx import Document
+
+    source = BytesIO()
+    document = Document()
+    document.add_paragraph("Clean source")
+    document.save(source)
+    with zipfile.ZipFile(source, mode="a") as package:
+        package.writestr("word/embeddings/embedded.bin", b"not allowed")
+
+    with pytest.raises(TemplateDocxError, match="embedded files"):
+        validate_docx_package(source.getvalue())
+
+
+def test_docx_package_rejects_duplicate_internal_parts():
+    import warnings
+    import zipfile
+
+    from docx import Document
+
+    source = BytesIO()
+    document = Document()
+    document.add_paragraph("Clean source")
+    document.save(source)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        with zipfile.ZipFile(source, mode="a") as package:
+            package.writestr(
+                "word/document.xml",
+                package.read("word/document.xml"),
+            )
+
+    with pytest.raises(TemplateDocxError, match="duplicate internal parts"):
+        validate_docx_package(source.getvalue())
+
+
+def test_docx_content_control_placeholder_is_detected_and_rendered():
+    from docx import Document
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    document = Document()
+    document.add_paragraph("Visible paragraph")
+    sdt = OxmlElement("w:sdt")
+    content = OxmlElement("w:sdtContent")
+    paragraph = OxmlElement("w:p")
+    run = OxmlElement("w:r")
+    text = OxmlElement("w:t")
+    text.text = "{{wrapped_client_name}}"
+    run.append(text)
+    paragraph.append(run)
+    content.append(paragraph)
+    sdt.append(content)
+    body = document.element.body
+    body.insert(len(body) - 1, sdt)
+    source = BytesIO()
+    document.save(source)
+
+    analysis = analyze_template_upload(
+        file_bytes=source.getvalue(),
+        filename="wrapped.docx",
+        content_type=(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ),
+    )
+    assert [
+        field["name"] for field in analysis.variable_schema["fields"]
+    ] == ["wrapped_client_name"]
+
+    rendered = fill_docx_template(
+        source.getvalue(),
+        variable_schema=analysis.variable_schema,
+        variables={"wrapped_client_name": "Donna Price"},
+    )
+    rendered_document = Document(BytesIO(rendered))
+    all_text = " ".join(
+        node.text or ""
+        for node in rendered_document.element.body.iter(qn("w:t"))
+    )
+    assert "Donna Price" in all_text
+    assert "wrapped_client_name" not in all_text
+
+
+def test_ai_docx_proposals_require_one_exact_source_location():
+    from docx import Document
+
+    document = Document()
+    document.add_paragraph("Internal reference ALPHA-123")
+    document.add_paragraph("Repeated token")
+    document.add_paragraph("Repeated token")
+    source = BytesIO()
+    document.save(source)
+    analysis = analyze_template_upload(
+        file_bytes=source.getvalue(),
+        filename="uncurated.docx",
+        content_type=(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ),
+    )
+
+    mapped, unmapped = reconcile_ai_template_fields(
+        analysis=analysis,
+        file_bytes=source.getvalue(),
+        proposals=[
+            AiFieldProposal(
+                name="internal_reference",
+                label="Internal reference",
+                source_text="ALPHA-123",
+                confidence=0.96,
+                reason="A reusable identifier.",
+            ),
+            AiFieldProposal(
+                name="ambiguous_value",
+                label="Ambiguous value",
+                source_text="Repeated token",
+                confidence=0.9,
+                reason="Appears to repeat.",
+            ),
+        ],
+    )
+
+    assert len(mapped) == 1
+    assert mapped[0]["name"] == "internal_reference"
+    assert mapped[0]["confidence"] == 0.75
+    assert mapped[0]["review_required"] is True
+    assert mapped[0]["docx_anchor"]["paragraph_ordinal"] >= 0
+    assert len(unmapped) == 1
+    assert "more than once" in unmapped[0]["unmapped_reason"]
+
+
+def test_ai_can_improve_existing_docx_field_without_moving_its_anchor():
+    from docx import Document
+
+    document = Document()
+    document.add_paragraph("Yes: __________")
+    source = BytesIO()
+    document.save(source)
+    content = source.getvalue()
+    analysis = analyze_template_upload(
+        file_bytes=content,
+        filename="questionnaire.docx",
+        content_type=(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ),
+    )
+    original = analysis.variable_schema["fields"][0]
+    original_anchor = dict(original["docx_anchor"])
+
+    mapped, unmapped = reconcile_ai_template_fields(
+        analysis=analysis,
+        file_bytes=content,
+        proposals=[
+            AiFieldProposal(
+                existing_name=original["name"],
+                name="client_consents",
+                label="Client consents",
+                source_text=original["source_text"],
+                field_type="checkbox",
+                confidence=0.93,
+                reason="The label describes a yes/no response.",
+            )
+        ],
+    )
+
+    assert unmapped == []
+    assert len(mapped) == 1
+    assert len(analysis.variable_schema["fields"]) == 1
+    updated = analysis.variable_schema["fields"][0]
+    assert updated["name"] == "client_consents"
+    assert updated["label"] == "Client consents"
+    assert updated["field_type"] == "checkbox"
+    assert updated["docx_anchor"] == original_anchor
+    assert updated["ai_update_kind"] == "updated"
+
+
+def test_submitted_ai_update_is_reconciled_against_fresh_docx_analysis():
+    from docx import Document
+
+    document = Document()
+    document.add_paragraph("Yes: __________")
+    source = BytesIO()
+    document.save(source)
+    content = source.getvalue()
+    proposed = analyze_template_upload(
+        file_bytes=content,
+        filename="questionnaire.docx",
+        content_type=(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ),
+    )
+    current_name = proposed.variable_schema["fields"][0]["name"]
+    reconcile_ai_template_fields(
+        analysis=proposed,
+        file_bytes=content,
+        proposals=[
+            AiFieldProposal(
+                existing_name=current_name,
+                name="client_consents",
+                label="Client consents",
+                source_text="__________",
+                field_type="checkbox",
+                confidence=0.9,
+                reason="A clearer reusable-field name.",
+            )
+        ],
+    )
+    raw_schema = json.dumps(proposed.variable_schema)
+    fresh = analyze_template_upload(
+        file_bytes=content,
+        filename="questionnaire.docx",
+        content_type=(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ),
+    )
+
+    document_templates._reconcile_submitted_ai_fields(
+        raw_schema,
+        analysis=fresh,
+        file_bytes=content,
+    )
+
+    fields = fresh.variable_schema["fields"]
+    assert len(fields) == 1
+    assert fields[0]["name"] == "client_consents"
+    assert fields[0]["ai_update_kind"] == "updated"
+    assert fresh.variable_schema["detection"]["ai_added_count"] == 0
+    assert fresh.variable_schema["detection"]["ai_updated_count"] == 1
+
+
+def test_docx_renderer_rejects_a_tampered_reviewed_anchor():
+    from docx import Document
+
+    document = Document()
+    document.add_paragraph("Client: __________")
+    source = BytesIO()
+    document.save(source)
+    content = source.getvalue()
+    analysis = analyze_template_upload(
+        file_bytes=content,
+        filename="agreement.docx",
+        content_type=(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ),
+    )
+    field = analysis.variable_schema["fields"][0]
+    field["docx_anchor"]["start"] += 1
+    field["docx_anchor"]["end"] += 1
+
+    with pytest.raises(TemplateDocxError, match="reviewed location"):
+        fill_docx_template(
+            content,
+            variable_schema=analysis.variable_schema,
+            variables={},
+        )
+
+
+def test_reviewed_docx_schema_restores_server_authoritative_identical_blank_locations():
+    from docx import Document
+
+    document = Document()
+    document.add_paragraph("Client name: __________")
+    document.add_paragraph("Matter name: __________")
+    source = BytesIO()
+    document.save(source)
+    analysis = analyze_template_upload(
+        file_bytes=source.getvalue(),
+        filename="identical-blanks.docx",
+        content_type=(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ),
+    )
+    original_fields = analysis.variable_schema["fields"]
+    submitted = json.loads(json.dumps(analysis.variable_schema))
+    submitted["fields"][0]["docx_anchor"] = dict(
+        submitted["fields"][1]["docx_anchor"]
+    )
+
+    reviewed = document_templates._reviewed_variable_schema(
+        json.dumps(submitted),
+        analysis.variable_schema,
+    )
+
+    assert reviewed["fields"][0]["docx_source_key"] == original_fields[0][
+        "docx_source_key"
+    ]
+    assert reviewed["fields"][0]["docx_anchor"] == original_fields[0][
+        "docx_anchor"
+    ]
+    assert reviewed["fields"][0]["docx_anchor"] != original_fields[1][
+        "docx_anchor"
+    ]
+
+
+def test_premium_ai_evidence_redacts_obvious_identifiers():
+    redacted = _redact_evidence(
+        "SSN 123-45-6789 email client@example.com phone (701) 555-0100 account 123456789012"
+    )
+
+    assert "123-45-6789" not in redacted
+    assert "client@example.com" not in redacted
+    assert "701" not in redacted
+    assert "123456789012" not in redacted
+    assert "[REDACTED_SSN]" in redacted
+    assert "[REDACTED_ACCOUNT_NUMBER]" in redacted
+
+
+@pytest.mark.asyncio
+async def test_premium_ai_requires_explicit_consent_before_any_model_work():
+    analysis = analyze_template_upload(
+        file_bytes=b"Client: Example Person",
+        filename="sample.txt",
+        content_type="text/plain",
+    )
+
+    with pytest.raises(TemplateAiAssistError, match="Confirm"):
+        await run_template_ai_mapping(
+            db=object(),
+            user=object(),
+            analysis=analysis,
+            file_bytes=b"Client: Example Person",
+            consent_to_external_ai=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_premium_ai_proposal_is_audited_and_reconciled_locally(monkeypatch):
+    from app.services import template_ai_service
+
+    class FakeDatabase:
+        def __init__(self):
+            self.added = []
+            self.commits = 0
+
+        def add(self, value):
+            self.added.append(value)
+
+        async def commit(self):
+            self.commits += 1
+
+    class FakeLlm:
+        async def complete(self, **_kwargs):
+            return (
+                '{"document_type":"agreement","fields":['
+                '{"name":"internal_reference","label":"Internal reference",'
+                '"source_text":"ALPHA-123","field_type":"text",'
+                '"confidence":0.94,"reason":"Reusable identifier"}],'
+                '"warnings":[]}',
+                120,
+                35,
+            )
+
+    async def allow_budget(_db, _user):
+        return None
+
+    async def premium_route(_db, _tenant_id, *, use_premium):
+        assert use_premium is True
+        return SimpleNamespace(
+            model="premium-test",
+            provider="litellm",
+            customer_api_key="tenant-key",
+            customer_provider="openai",
+            customer_endpoint=None,
+            requested_route="premium",
+            resolved_route="customer",
+            gateway_provider="customer",
+            gateway_alias="premium-test",
+        )
+
+    monkeypatch.setattr(template_ai_service, "check_token_budget", allow_budget)
+    monkeypatch.setattr(template_ai_service, "resolve_llm_route", premium_route)
+    database = FakeDatabase()
+    user = SimpleNamespace(
+        id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
+        tenant=SimpleNamespace(name="Test firm", billing_tier="payg"),
+    )
+    analysis = analyze_template_upload(
+        file_bytes=b"Internal reference ALPHA-123",
+        filename="sample.txt",
+        content_type="text/plain",
+    )
+
+    result = await run_template_ai_mapping(
+        db=database,
+        user=user,
+        analysis=analysis,
+        file_bytes=b"Internal reference ALPHA-123",
+        consent_to_external_ai=True,
+        llm=FakeLlm(),
+    )
+
+    fields = result.variable_schema["fields"]
+    assert fields[0]["name"] == "internal_reference"
+    assert fields[0]["ai_suggested"] is True
+    assert fields[0]["confidence"] == 0.75
+    assert result.variable_schema["detection"]["ai_added_count"] == 1
+    assert database.added[0].operation_type == "template_ai_map"
+    assert database.commits == 1

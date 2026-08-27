@@ -786,7 +786,10 @@ export default function PrepareFormWorkspace({
                 className={`flex w-full items-center justify-between gap-2 rounded border px-2 py-1.5 text-left text-xs ${selectedIdentity === entry.identity ? 'border-brand-accent bg-brand-accent/10' : 'border-brand-line bg-brand-surface-2'}`}
               >
                 <span className={`truncate ${entry.field.included === false ? 'line-through opacity-60' : ''}`}>{entry.field.label || entry.field.name}</span>
-                <span className="shrink-0 text-[10px] text-brand-muted">p.{firstPageFor(entry.field)}</span>
+                <span className="flex shrink-0 items-center gap-1 text-[10px] text-brand-muted">
+                  {entry.field.ai_suggested && <span className="rounded bg-brand-accent/10 px-1 text-brand-ink">AI</span>}
+                  p.{firstPageFor(entry.field)}
+                </span>
               </button>
             )) : <p className="rounded border border-dashed border-brand-line p-3 text-xs text-brand-muted">No fields yet. Add one above and place it on the page.</p>}
           </div>
@@ -802,6 +805,12 @@ export default function PrepareFormWorkspace({
             <label className="mt-2 block text-xs text-brand-muted">Automation key<input value={selected.name || ''} onChange={(event) => updateField(selectedEntry.identity, { name: event.target.value })} className={`mt-1 w-full rounded border bg-brand-surface-2 px-2 py-1.5 font-mono text-xs text-brand-ink ${selectedNameInvalid || selectedNameDuplicate ? 'border-brand-rose' : 'border-brand-line'}`} /></label>
             {selectedNameInvalid && <p role="alert" className="mt-1 text-[11px] text-brand-rose">Start with a letter; then use letters, numbers, dots, dashes, or underscores.</p>}
             {selectedNameDuplicate && <p role="alert" className="mt-1 text-[11px] text-brand-rose">Automation keys must be unique.</p>}
+            {selected.ai_suggested && (
+              <div className="mt-2 rounded border border-brand-accent/30 bg-brand-accent/5 px-2 py-1.5 text-[11px] text-brand-muted">
+                <p className="font-semibold text-brand-ink">AI proposal · verify against the source</p>
+                {selected.ai_reason && <p className="mt-1">{selected.ai_reason}</p>}
+              </div>
+            )}
             <label className="mt-2 block text-xs text-brand-muted">Type
               <select
                 value={selected.multiline && (selected.field_type || 'text') === 'text' ? 'multiline' : selected.field_type || 'text'}

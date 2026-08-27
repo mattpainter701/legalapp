@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import TemplatesPage from './TemplatesPage'
 import {
   analyzeTemplateUpload,
+  proposeTemplateFieldsWithAi,
   createTemplate,
   createTemplateFromUpload,
   discoverTemplateVariables,
@@ -20,6 +21,7 @@ vi.mock('../api', () => ({
   getTemplates: vi.fn().mockResolvedValue({ items: [{ id: 'template-1', title: 'Engagement Letter', body: 'Dear {{client_name}}', category: 'engagement_letter', is_active: true }] }),
   getMattersV2: vi.fn().mockResolvedValue({ items: [{ id: 'matter-1', matter_name: 'Smith Matter', client_name: 'Smith' }] }),
   analyzeTemplateUpload: vi.fn(),
+  proposeTemplateFieldsWithAi: vi.fn(),
   createTemplate: vi.fn().mockResolvedValue({}),
   createTemplateFromUpload: vi.fn().mockResolvedValue({}),
   updateTemplate: vi.fn(),
@@ -282,6 +284,111 @@ describe('document template workflow', () => {
     expect(screen.getByDisplayValue('Second Source')).toBeInTheDocument()
     expect(screen.queryByDisplayValue('Stale First Source')).not.toBeInTheDocument()
     expect(screen.getByText(/Current source: second.docx/)).toHaveTextContent('ready to review')
+  })
+
+  it('requires consent, sends the selected file, and ignores a stale AI proposal', async () => {
+    let resolveAi
+    analyzeTemplateUpload
+      .mockResolvedValueOnce({
+        title: 'First Source',
+        format: 'docx',
+        body: 'Yes: {{yes}}',
+        suggested_variable_schema: { fields: [{ name: 'yes', label: 'Yes', source_text: '________' }] },
+        detected_branding_profile: {},
+        warnings: [],
+      })
+      .mockResolvedValueOnce({
+        title: 'Second Source',
+        format: 'docx',
+        body: 'Client: {{client_name}}',
+        suggested_variable_schema: { fields: [{ name: 'client_name', label: 'Client name', source_text: 'Ada' }] },
+        detected_branding_profile: {},
+        warnings: [],
+      })
+    proposeTemplateFieldsWithAi.mockImplementationOnce(() => new Promise((resolve) => { resolveAi = resolve }))
+    const user = userEvent.setup()
+    render(<TemplatesPage />)
+
+    await user.click(await screen.findByRole('button', { name: 'Upload Sample' }))
+    const input = screen.getByLabelText('Sample document')
+    const first = new File(['first'], 'first.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+    fireEvent.change(input, { target: { files: [first] } })
+    await screen.findByDisplayValue('First Source')
+
+    const aiButton = screen.getByRole('button', { name: 'Suggest fields with premium AI' })
+    expect(aiButton).toBeDisabled()
+    await user.click(screen.getByRole('checkbox', { name: /I consent to sending extracted text/ }))
+    expect(aiButton).toBeEnabled()
+    await user.click(aiButton)
+    const aiForm = proposeTemplateFieldsWithAi.mock.calls[0][0]
+    expect(aiForm.get('file')).toEqual(first)
+    expect(aiForm.get('consent_to_external_ai')).toBe('true')
+
+    const second = new File(['second'], 'second.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+    fireEvent.change(input, { target: { files: [second] } })
+    expect(await screen.findByDisplayValue('Second Source')).toBeInTheDocument()
+
+    await act(async () => {
+      resolveAi({
+        title: 'Stale AI Source',
+        format: 'docx',
+        body: '{{client_consents}}',
+        suggested_variable_schema: { fields: [{ name: 'client_consents', label: 'Client consents', ai_suggested: true }] },
+        detected_branding_profile: {},
+        warnings: [],
+      })
+      await Promise.resolve()
+    })
+    expect(screen.getByDisplayValue('Second Source')).toBeInTheDocument()
+    expect(screen.queryByDisplayValue('Stale AI Source')).not.toBeInTheDocument()
+  })
+
+  it('adopts the signed AI analysis and keeps every proposal review-only', async () => {
+    analyzeTemplateUpload.mockResolvedValue({
+      title: 'AI Assisted Source',
+      format: 'docx',
+      body: 'Internal reference ABC-123',
+      analysis_token: 'local-token',
+      suggested_variable_schema: { source: 'docx_source', fields: [] },
+      detected_branding_profile: {},
+      warnings: [],
+    })
+    proposeTemplateFieldsWithAi.mockResolvedValue({
+      title: 'AI Assisted Source',
+      format: 'docx',
+      body: 'Internal reference {{internal_reference}}',
+      analysis_token: 'ai-token',
+      suggested_variable_schema: {
+        source: 'docx_source',
+        fields: [{
+          name: 'internal_reference',
+          label: 'Internal reference',
+          source_text: 'ABC-123',
+          ai_suggested: true,
+          ai_reason: 'This value appears client-specific.',
+          confidence: 0.7,
+        }],
+      },
+      detected_branding_profile: {},
+      warnings: [],
+    })
+    const user = userEvent.setup()
+    render(<TemplatesPage />)
+
+    await user.click(await screen.findByRole('button', { name: 'Upload Sample' }))
+    const file = new File(['word'], 'ai-source.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+    fireEvent.change(screen.getByLabelText('Sample document'), { target: { files: [file] } })
+    await screen.findByDisplayValue('AI Assisted Source')
+    await user.click(screen.getByRole('checkbox', { name: /I consent to sending extracted text/ }))
+    await user.click(screen.getByRole('button', { name: 'Suggest fields with premium AI' }))
+
+    expect(await screen.findByText('AI proposal · verify')).toBeInTheDocument()
+    expect(screen.getByText(/This value appears client-specific/)).toBeInTheDocument()
+    await user.click(screen.getByRole('checkbox', { name: 'Confirm source comparison' }))
+    await user.click(screen.getByRole('button', { name: 'Save reusable template' }))
+
+    await waitFor(() => expect(createTemplateFromUpload).toHaveBeenCalledTimes(1))
+    expect(createTemplateFromUpload.mock.calls[0][0].get('analysis_token')).toBe('ai-token')
   })
 
   it('lets a reviewer mark an undetected Word value as a replacement field', async () => {
@@ -737,7 +844,7 @@ describe('document template workflow', () => {
     const file = new File(['binary'], 'template.exe', { type: 'application/octet-stream' })
     fireEvent.drop(dropTarget, { dataTransfer: { files: [file], types: ['Files'] } })
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/PDF, DOCX, TXT, PNG, JPEG, TIFF, or WebP/i)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/PDF, DOCX, TXT, PNG, JPEG, TIFF, BMP, or WebP/i)
     expect(analyzeTemplateUpload).not.toHaveBeenCalled()
   })
 })

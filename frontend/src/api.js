@@ -1951,6 +1951,23 @@ export const analyzeTemplateUpload = (formData) =>
     headers: { 'Content-Type': 'multipart/form-data' },
   }).then(r => r.data)
 
+export const proposeTemplateFieldsWithAi = (formData) =>
+  api.post('/templates/intake/ai-propose', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then(r => r.data)
+
+export const previewTemplateUploadPdfPage = (formData, pageNumber = 1) =>
+  api.post('/templates/intake/pdf-page-preview', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    params: { page_number: pageNumber },
+    responseType: 'blob',
+  }).then((r) => ({
+    blob: r.data,
+    pageCount: Number(getHeaderValue(r.headers, 'x-pdf-page-count') || 1),
+    pageWidth: Number(getHeaderValue(r.headers, 'x-pdf-page-width')),
+    pageHeight: Number(getHeaderValue(r.headers, 'x-pdf-page-height')),
+  }))
+
 export const createTemplateFromUpload = (formData) =>
   api.post('/templates/intake/create', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
