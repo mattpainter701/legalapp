@@ -140,7 +140,9 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from app.config import settings
+from app.config import get_settings
+
+settings = get_settings()
 
 if not settings.MCP_SERVER_URL:
     raise SystemExit("private research upstream is not configured")

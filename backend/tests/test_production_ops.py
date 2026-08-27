@@ -1725,6 +1725,9 @@ def test_ionos_stage_gate_is_private_exact_and_fail_closed() -> None:
     assert '--resolve "${origin_server_name}:443:127.0.0.1"' in stage
     assert '-H "Host: $host"' in stage
     assert "MCP_SERVER_URL" in stage
+    assert "from app.config import get_settings" in stage
+    assert "settings = get_settings()" in stage
+    assert "from app.config import settings" not in stage
     assert 'ipaddress.ip_network("100.64.0.0/10")' in stage
     assert "X-Clarity-Internal-Key" in stage
     assert "MCP_SERVER_URL.rstrip('/')}/api/mcp\"" in stage
