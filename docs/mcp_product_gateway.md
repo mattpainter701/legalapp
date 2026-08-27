@@ -4,8 +4,10 @@ LegalApp is designed to offer **LawHand Research MCP**, backed in part by the
 private CourtListener corpus service, through the LegalApp backend. It is a
 research-only product boundary: workspace matters, documents, tasks, and
 other tenant-workspace tools are never exposed here.
-Production exposure remains disabled until the release gates in this document
-are approved; this contract does not enable `MCP_PRODUCT_ENABLED`.
+Production exposure was activated on 2026-08-27 after the release gates in
+this document were approved. Availability remains entitlement- and
+billing-gated, and this contract does not by itself enable
+`MCP_PRODUCT_ENABLED` in another environment.
 
 ## Runtime Shape
 
@@ -47,8 +49,9 @@ the server supplies only opaque correlation identifiers to LiteLLM.
 
 ## Release State And Protocol
 
-- Public MCP is disabled unless `MCP_PRODUCT_ENABLED=true`. Production must keep
-  it false until protocol, billing, deployment, monitoring and restore gates pass.
+- Public MCP is disabled unless `MCP_PRODUCT_ENABLED=true`. Production enables
+  it only while protocol, billing, deployment, monitoring, and restore gates
+  remain satisfied.
 - `/api/mcp` is the official SDK-backed Streamable HTTP endpoint and performs
   initialization, protocol negotiation and tool discovery.
 - `POST /api/mcp/tools/call` is a compatibility REST adapter, not an MCP transport.

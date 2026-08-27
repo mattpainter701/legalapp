@@ -14,6 +14,7 @@ from app.schemas.chat_action import (
     ListDocumentTemplatesArgs,
     ListMatterDocumentsArgs,
 )
+from app.schemas.workspace_mcp import GetDocumentTemplateTextArgs
 from app.services.automation_capabilities import CapabilityContext, CapabilityError
 from app.services.matter_file_store import MatterFileReadError
 
@@ -373,6 +374,51 @@ async def test_list_document_templates_filters_and_ranks_automation_ready_matche
         "case_number",
         "client_name",
     ]
+
+
+@pytest.mark.asyncio
+async def test_get_document_template_text_returns_delimited_raw_text_and_schema():
+    tenant_id = uuid4()
+    matter = _matter(tenant_id=tenant_id)
+    template = SimpleNamespace(
+        id=uuid4(),
+        tenant_id=tenant_id,
+        title="Discovery Motion",
+        description="Approved motion template",
+        category="pleading",
+        kind="motion",
+        format="markdown",
+        status="approved",
+        approved_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        is_active=True,
+        body="Caption {{case_number}}\n" + "Argument " * 40,
+        jurisdiction="North Dakota",
+        stage="discovery",
+        module="domestic",
+        source_storage_path=None,
+        source_filename=None,
+        source_sha256=None,
+        variable_schema={
+            "properties": {"case_number": {"type": "string"}},
+            "required": ["case_number"],
+        },
+    )
+    db = _DB(scalar_values=[matter, template])
+
+    payload = await workspace.get_document_template_text(
+        _context(db, tenant_id),
+        GetDocumentTemplateTextArgs(
+            matter_id=matter.id,
+            template_id=template.id,
+            max_characters=100,
+        ),
+    )
+
+    assert payload["template"]["template_id"] == str(template.id)
+    assert payload["template"]["variable_names"] == ["case_number"]
+    assert payload["text"].startswith("<untrusted_document_text")
+    assert payload["truncated"] is True
+    assert payload["total_character_count"] > payload["character_count"]
 
 
 def test_workspace_helpers_fail_closed_on_empty_or_malformed_metadata():

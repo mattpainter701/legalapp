@@ -19,6 +19,7 @@ import math
 import os
 import re
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -38,6 +39,7 @@ from app.middleware.tenant import get_current_user
 from app.models.document_template import DocumentTemplate
 from app.models.document_template_preview import DocumentTemplatePreview
 from app.models.matter_document import MatterDocument
+from app.models.matter_party import MatterParty
 from app.models.plugin import Matter, MatterEvent
 from app.models.tenant import TenantSettings
 from app.schemas.document_template import (
@@ -53,6 +55,7 @@ from app.schemas.document_template import (
     DocumentTemplateUpdate,
     DocumentTemplateVariableSuggestion,
 )
+from app.schemas.matter_party import normalize_matter_party_role
 from app.services.template_intake import (
     TemplateAnalysis,
     analyze_template_upload,
@@ -1359,11 +1362,20 @@ def _add_candidate(
     record_id: uuid.UUID | str | None = None,
     confidence: float = 1.0,
     review_required: bool = False,
+    provenance: dict[str, Any] | None = None,
 ) -> None:
     suggested_value = _stringify_suggestion(value)
     if suggested_value is None:
         return
     key = _normalize_variable_name(alias)
+    candidate_provenance = {
+        "source_type": source_type,
+        "source_field": source_field,
+        "record_id": str(record_id) if record_id else None,
+        "collected_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if provenance:
+        candidate_provenance.update(provenance)
     candidates.setdefault(
         key,
         DocumentTemplateVariableSuggestion(
@@ -1371,12 +1383,7 @@ def _add_candidate(
             suggested_value=suggested_value,
             source_type=source_type,
             source_field=source_field,
-            provenance={
-                "source_type": source_type,
-                "source_field": source_field,
-                "record_id": str(record_id) if record_id else None,
-                "collected_at": datetime.now(timezone.utc).isoformat(),
-            },
+            provenance=candidate_provenance,
             confidence=confidence,
             review_required=review_required,
         ),
@@ -1389,9 +1396,148 @@ def _address_value(address: dict | None, key: str) -> str | None:
     return _stringify_suggestion(address.get(key))
 
 
+def _caption_parties(parties: Sequence[MatterParty], role: str) -> list[MatterParty]:
+    matching: list[MatterParty] = []
+    for party in parties:
+        try:
+            party_role = normalize_matter_party_role(getattr(party, "role", "other"))
+        except ValueError:
+            continue
+        if party_role != role:
+            continue
+        if not _stringify_suggestion(
+            getattr(getattr(party, "contact", None), "display_name", None)
+        ):
+            continue
+        matching.append(party)
+    return sorted(
+        matching,
+        key=lambda party: (
+            not bool(getattr(party, "is_primary", False)),
+            str(getattr(party, "created_at", "")),
+            str(getattr(party, "id", "")),
+        ),
+    )
+
+
+def _collect_caption_party_candidates(
+    candidates: dict[str, DocumentTemplateVariableSuggestion],
+    parties: Sequence[MatterParty],
+) -> None:
+    for role in ("plaintiff", "defendant"):
+        role_parties = _caption_parties(parties, role)
+        if not role_parties:
+            continue
+
+        primary_party = role_parties[0]
+        primary_contact = primary_party.contact
+        primary_name = primary_contact.display_name
+        selection = (
+            "primary"
+            if bool(getattr(primary_party, "is_primary", False))
+            else "first_listed"
+        )
+        singular_provenance = {
+            "party_role": role,
+            "selection": selection,
+            "contact_id": str(primary_contact.id),
+        }
+        for alias in (role, f"{role}_name"):
+            _add_candidate(
+                candidates,
+                alias,
+                primary_name,
+                source_type="matter_party",
+                source_field="contact.display_name",
+                record_id=primary_party.id,
+                provenance=singular_provenance,
+            )
+
+        unique_names = list(
+            dict.fromkeys(party.contact.display_name for party in role_parties)
+        )
+        all_party_ids = [str(party.id) for party in role_parties]
+        for alias in (f"{role}s", f"{role}_names"):
+            _add_candidate(
+                candidates,
+                alias,
+                "; ".join(unique_names),
+                source_type="matter_parties",
+                source_field="contacts.display_name",
+                provenance={
+                    "party_role": role,
+                    "selection": "all",
+                    "record_ids": all_party_ids,
+                },
+            )
+
+        for suffix, value, source_field in (
+            ("email", primary_contact.email, "contact.email"),
+            ("phone", primary_contact.phone, "contact.phone"),
+        ):
+            _add_candidate(
+                candidates,
+                f"{role}_{suffix}",
+                value,
+                source_type="matter_party",
+                source_field=source_field,
+                record_id=primary_party.id,
+                provenance=singular_provenance,
+            )
+        for suffix, address_key in (
+            ("street", "street"),
+            ("city", "city"),
+            ("state", "state"),
+            ("zip", "zip"),
+            ("country", "country"),
+        ):
+            _add_candidate(
+                candidates,
+                f"{role}_{suffix}",
+                _address_value(primary_contact.address, address_key),
+                source_type="matter_party",
+                source_field=f"contact.address.{address_key}",
+                record_id=primary_party.id,
+                provenance=singular_provenance,
+            )
+
+
+def _represented_caption_role(value: Any) -> str | None:
+    tokens = set(_normalize_variable_name(str(value or "")).split("_"))
+    roles = tokens.intersection({"plaintiff", "defendant"})
+    return roles.pop() if len(roles) == 1 else None
+
+
+def _add_inferred_caption_name(
+    candidates: dict[str, DocumentTemplateVariableSuggestion],
+    *,
+    role: str,
+    value: Any,
+    source_type: str,
+    source_field: str,
+    record_id: uuid.UUID | str | None,
+) -> None:
+    for alias in (role, f"{role}_name", f"{role}s", f"{role}_names"):
+        _add_candidate(
+            candidates,
+            alias,
+            value,
+            source_type=source_type,
+            source_field=source_field,
+            record_id=record_id,
+            confidence=0.75,
+            review_required=True,
+            provenance={
+                "party_role": role,
+                "selection": "legacy_matter_role_inference",
+            },
+        )
+
+
 def _collect_smart_fill_candidates(
     *,
     matter: Matter | None,
+    parties: Sequence[MatterParty] = (),
     current_user,
 ) -> dict[str, DocumentTemplateVariableSuggestion]:
     candidates: dict[str, DocumentTemplateVariableSuggestion] = {}
@@ -1441,6 +1587,8 @@ def _collect_smart_fill_candidates(
         "billing_cycle": matter.billing_cycle,
         "hourly_rate": matter.hourly_rate,
         "budget_amount": matter.budget_amount,
+        "matter_role": matter.role,
+        "represented_side": matter.role,
         "counterparty": matter.counterparty,
     }
     for alias, value in matter_fields.items():
@@ -1452,6 +1600,8 @@ def _collect_smart_fill_candidates(
             source_field=alias,
             record_id=matter.id,
         )
+
+    _collect_caption_party_candidates(candidates, parties)
 
     client = getattr(matter, "client", None)
     if client:
@@ -1495,6 +1645,27 @@ def _collect_smart_fill_candidates(
                 source_field=f"address.{key}",
                 record_id=client.id,
             )
+
+    represented_role = _represented_caption_role(matter.role)
+    if represented_role:
+        opposing_role = "defendant" if represented_role == "plaintiff" else "plaintiff"
+        if client:
+            _add_inferred_caption_name(
+                candidates,
+                role=represented_role,
+                value=client.display_name,
+                source_type="contact",
+                source_field="display_name",
+                record_id=client.id,
+            )
+        _add_inferred_caption_name(
+            candidates,
+            role=opposing_role,
+            value=matter.counterparty,
+            source_type="matter",
+            source_field="counterparty",
+            record_id=matter.id,
+        )
 
     attorney = getattr(matter, "attorney_of_record", None)
     if attorney:
@@ -1548,6 +1719,29 @@ async def _load_matter_context(
     return matter
 
 
+async def _load_matter_parties(
+    *,
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    matter: Matter | None,
+) -> list[MatterParty]:
+    if matter is None:
+        return []
+    result = await db.execute(
+        select(MatterParty)
+        .where(
+            MatterParty.matter_id == matter.id,
+            MatterParty.tenant_id == tenant_id,
+        )
+        .order_by(
+            MatterParty.is_primary.desc(),
+            MatterParty.created_at,
+            MatterParty.id,
+        )
+    )
+    return list(result.scalars().all())
+
+
 async def build_variable_suggestions(
     *,
     template: DocumentTemplate,
@@ -1558,6 +1752,11 @@ async def build_variable_suggestions(
     db: AsyncSession,
 ) -> tuple[str | None, list[DocumentTemplateVariableSuggestion]]:
     matter = await _load_matter_context(db=db, tenant_id=tenant_id, matter_id=matter_id)
+    parties = await _load_matter_parties(
+        db=db,
+        tenant_id=tenant_id,
+        matter=matter,
+    )
     if requested_variables is not None:
         variables = requested_variables
     else:
@@ -1569,7 +1768,9 @@ async def build_variable_suggestions(
             if variable not in variables:
                 variables.append(variable)
     candidates = _collect_smart_fill_candidates(
-        matter=matter, current_user=current_user
+        matter=matter,
+        parties=parties,
+        current_user=current_user,
     )
 
     suggestions: list[DocumentTemplateVariableSuggestion] = []

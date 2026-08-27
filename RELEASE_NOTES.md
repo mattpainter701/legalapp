@@ -5,6 +5,36 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.27.8 — Connected assistants can prepare complete matter work for review
+
+Released August 27, 2026.
+
+Claude, Codex, ChatGPT, and other approved Workspace MCP clients can now gather client-to-task context, read matter documents and templates, and place prepared documents into LawHand's staged review workflow.
+
+- **Gather the working context.** Approved assistants can search clients, intakes, matters, and tasks, then load parties, team, events, notes, communications, and history within the user's permissions.
+- **Reason over documents and templates.** The assistant can read bounded text from uploaded matter documents and approved templates, including the template's fillable-field contract.
+- **Send prepared documents through human review.** Fresh or template-rendered Word documents go to tenant cloud with a LawHand Review task for staff and attorney approval. Assistants cannot approve, file, send, or deliver.
+- **Reconnect older one-tool connections.** Connections that still show only Find matter keep their original consent. Remove and reconnect once to review expanded scopes; LawHand never enlarges grants silently.
+
+## 2026.08.27.7 — Research connections now complete authorization
+
+Released August 27, 2026.
+
+Claude, ChatGPT, and other hosted clients can now complete the LawHand Research authorization screen without supplying a separate API key.
+
+- **Approve the connection in LawHand.** After adding the Research MCP URL, sign in and approve research-only access through the normal LawHand authorization page.
+- **No pasted key for hosted clients.** Hosted clients register securely and use OAuth; Research API keys remain an option only for clients that support custom headers.
+
+## 2026.08.27.6 — Plaintiff and defendant fields are clear and reusable
+
+Released August 27, 2026.
+
+Matter parties now distinguish caption roles from the client relationship, and document templates can Smart Fill reviewed singular or multi-party plaintiff and defendant names.
+
+- **Identify the actual caption role.** The Parties tab now defines plaintiff, defendant, petitioner, and respondent alongside client, counsel, witness, and expert roles.
+- **Choose the primary named party.** For matters with multiple plaintiffs or defendants, staff can mark the primary contact used by a singular template field.
+- **Reuse parties safely in documents.** Templates can use explicit singular and plural plaintiff or defendant fields, with every Smart Fill value still reviewed before preview or save.
+
 ## 2026.08.27.5 — Integration administration is organized in one clear workspace
 
 Released August 27, 2026.

@@ -2,6 +2,69 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.27.8",
+      "version": "2026.08.27.8",
+      "title": "Connected assistants can prepare complete matter work for review",
+      "published_at": "2026-08-27",
+      "summary": "Claude, Codex, ChatGPT, and other approved Workspace MCP clients can now gather client-to-task context, read matter documents and templates, and place prepared documents into LawHand's staged review workflow.",
+      "highlights": [
+        {
+          "title": "Gather the working context",
+          "description": "Approved assistants can search clients, intakes, matters, and tasks, then load parties, team, events, notes, communications, and history within the user's permissions."
+        },
+        {
+          "title": "Reason over documents and templates",
+          "description": "The assistant can read bounded text from uploaded matter documents and approved templates, including the template's fillable-field contract."
+        },
+        {
+          "title": "Send prepared documents through human review",
+          "description": "Fresh or template-rendered Word documents go to tenant cloud with a LawHand Review task for staff and attorney approval. Assistants cannot approve, file, send, or deliver."
+        },
+        {
+          "title": "Reconnect older one-tool connections",
+          "description": "Connections that still show only Find matter keep their original consent. Remove and reconnect once to review expanded scopes; LawHand never enlarges grants silently."
+        }
+      ]
+    },
+    {
+      "id": "2026.08.27.7",
+      "version": "2026.08.27.7",
+      "title": "Research connections now complete authorization",
+      "published_at": "2026-08-27",
+      "summary": "Claude, ChatGPT, and other hosted clients can now complete the LawHand Research authorization screen without supplying a separate API key.",
+      "highlights": [
+        {
+          "title": "Approve the connection in LawHand",
+          "description": "After adding the Research MCP URL, sign in and approve research-only access through the normal LawHand authorization page."
+        },
+        {
+          "title": "No pasted key for hosted clients",
+          "description": "Hosted clients register securely and use OAuth; Research API keys remain an option only for clients that support custom headers."
+        }
+      ]
+    },
+    {
+      "id": "2026.08.27.6",
+      "version": "2026.08.27.6",
+      "title": "Plaintiff and defendant fields are clear and reusable",
+      "published_at": "2026-08-27",
+      "summary": "Matter parties now distinguish caption roles from the client relationship, and document templates can Smart Fill reviewed singular or multi-party plaintiff and defendant names.",
+      "highlights": [
+        {
+          "title": "Identify the actual caption role",
+          "description": "The Parties tab now defines plaintiff, defendant, petitioner, and respondent alongside client, counsel, witness, and expert roles."
+        },
+        {
+          "title": "Choose the primary named party",
+          "description": "For matters with multiple plaintiffs or defendants, staff can mark the primary contact used by a singular template field."
+        },
+        {
+          "title": "Reuse parties safely in documents",
+          "description": "Templates can use explicit singular and plural plaintiff or defendant fields, with every Smart Fill value still reviewed before preview or save."
+        }
+      ]
+    },
+    {
       "id": "2026.08.27.5",
       "version": "2026.08.27.5",
       "title": "Integration administration is organized in one clear workspace",

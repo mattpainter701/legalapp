@@ -94,9 +94,17 @@ class WorkspaceMCPIdentity:
 # checked independently so removing a user's role takes effect immediately,
 # even while a short-lived access token remains cryptographically valid.
 _APP_CAPABILITIES_BY_TOOL: dict[str, frozenset[str]] = {
+    "search_clients": frozenset({"manage_matters"}),
+    "get_client": frozenset({"manage_matters"}),
+    "search_intakes": frozenset({"manage_intake"}),
+    "get_intake": frozenset({"manage_intake"}),
+    "search_matters": frozenset({"manage_matters"}),
+    "search_tasks": frozenset({"manage_matters"}),
+    "get_task": frozenset({"manage_matters"}),
     "find_matter": frozenset({"manage_matters"}),
     "get_matter_context": frozenset({"manage_matters"}),
     "list_document_templates": frozenset({"manage_matters", "manage_documents"}),
+    "get_document_template_text": frozenset({"manage_matters", "manage_documents"}),
     "get_matter_document_text": frozenset({"manage_matters", "manage_documents"}),
     "list_matter_documents": frozenset({"manage_matters", "manage_documents"}),
     "list_matter_tasks": frozenset({"manage_matters"}),
@@ -104,6 +112,7 @@ _APP_CAPABILITIES_BY_TOOL: dict[str, frozenset[str]] = {
     "propose_task": frozenset({"manage_matters"}),
     "propose_client_email": frozenset({"manage_matters"}),
     "propose_matter_document": frozenset({"manage_matters", "manage_documents"}),
+    "propose_document_from_template": frozenset({"manage_matters", "manage_documents"}),
 }
 
 
@@ -120,7 +129,8 @@ KNOWN_WORKSPACE_SCOPES = _known_workspace_scopes()
 
 def workspace_bearer_challenge(*, invalid_token: bool = False) -> str:
     metadata_url = workspace_protected_resource_metadata_uri()
-    challenge = f'Bearer resource_metadata="{metadata_url}", scope="matters:read"'
+    requested_scopes = " ".join(sorted(KNOWN_WORKSPACE_SCOPES))
+    challenge = f'Bearer resource_metadata="{metadata_url}", scope="{requested_scopes}"'
     if invalid_token:
         challenge += ', error="invalid_token"'
     return challenge

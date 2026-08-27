@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 
 from app.schemas.chat_action import ProposeMatterDocumentArgs
+from app.schemas.workspace_mcp import ProposeDocumentFromTemplateArgs
 from app.services import chat_tools
 from app.services.chat_tools import handlers
 from app.services.chat_tools.handlers import ChatToolContext
@@ -156,8 +157,106 @@ async def test_propose_document_creates_task_materializes_and_returns_contract(
     assert response["document_open_url"].endswith(
         f"/documents/{materialized.document.id}/open"
     )
+    assert response["document_absolute_open_url"].endswith(
+        f"/documents/{materialized.document.id}/open"
+    )
+    assert response["task_url"].endswith(f"/tasks/{task.id}")
     assert response["due_date"] == "2026-09-01"
     assert context.db.flushes == 2
+
+
+@pytest.mark.asyncio
+async def test_template_document_binds_provenance_and_exact_rendered_docx(monkeypatch):
+    context, args, result, _artifact, _revision, task, materialized = _fixture()
+    _patch_common(monkeypatch, task=task)
+    monkeypatch.setattr(handlers, "derive_artifact_request_id", lambda **_k: uuid4())
+    captured_artifact = {}
+    captured_materialization = {}
+
+    async def create_artifact(*_args, **kwargs):
+        captured_artifact.update(kwargs)
+        return result
+
+    async def create_task(*_args, **kwargs):
+        task.pending_action = kwargs["pending_action"]
+        task.staff_reviewer_user_id = kwargs["staff_reviewer_user_id"]
+        task.attorney_reviewer_user_id = kwargs["attorney_reviewer_user_id"]
+        return task
+
+    async def materialize(**kwargs):
+        captured_materialization.update(kwargs)
+        return materialized
+
+    monkeypatch.setattr(handlers, "create_initial_generated_artifact", create_artifact)
+    monkeypatch.setattr(handlers, "_create_proposed_task", create_task)
+    monkeypatch.setattr(
+        handlers.cloud_artifact_materializer, "materialize", materialize
+    )
+    template_id = uuid4()
+    source_bytes = b"verified-rendered-docx"
+
+    response = await handlers._propose_matter_document(
+        context,
+        args,
+        source_docx_bytes=source_bytes,
+        template_id=template_id,
+        template_sha256="c" * 64,
+        template_format="docx",
+        variable_snapshot={"client_name": "Avery Client"},
+    )
+
+    assert captured_artifact["template_id"] == template_id
+    assert captured_artifact["template_sha256"] == "c" * 64
+    assert captured_artifact["variable_snapshot"] == {"client_name": "Avery Client"}
+    assert captured_materialization["source_docx_bytes"] == source_bytes
+    assert response["template_id"] == str(template_id)
+    assert response["review_policy"] == "staff_then_attorney"
+
+
+@pytest.mark.asyncio
+async def test_template_proposal_routes_rendered_bytes_into_staged_review(monkeypatch):
+    context, _args, _result, _artifact, _revision, _task, _materialized = _fixture()
+    template_id = uuid4()
+    rendered = SimpleNamespace(
+        template=SimpleNamespace(id=template_id, title="Approved Client Letter"),
+        title="Client Letter",
+        document_kind="letter",
+        review_text="Dear Avery Client",
+        source_docx_bytes=b"exact-rendered-docx",
+        template_sha256="c" * 64,
+        template_format="docx",
+        variable_snapshot={"client_name": "Avery Client"},
+        preview_truncated=False,
+    )
+    captured = {}
+
+    async def render(*_args, **kwargs):
+        captured["render"] = kwargs
+        return rendered
+
+    async def propose(_context, proposal, **kwargs):
+        captured["proposal"] = proposal
+        captured["provenance"] = kwargs
+        return {"task_id": str(uuid4()), "review_policy": "staff_then_attorney"}
+
+    monkeypatch.setattr(handlers, "render_workspace_template", render)
+    monkeypatch.setattr(handlers, "_propose_matter_document", propose)
+    args = ProposeDocumentFromTemplateArgs(
+        matter_id=uuid4(),
+        template_id=template_id,
+        variables={"client_name": "Avery Client"},
+        title="Client Letter",
+        source_ids=["source-1"],
+    )
+
+    response = await handlers.propose_document_from_template(context, args)
+
+    assert captured["render"]["template_id"] == template_id
+    assert captured["proposal"].body == "Dear Avery Client"
+    assert captured["provenance"]["source_docx_bytes"] == b"exact-rendered-docx"
+    assert captured["provenance"]["template_sha256"] == "c" * 64
+    assert response["template_title"] == "Approved Client Letter"
+    assert response["filled_variables"] == ["client_name"]
 
 
 @pytest.mark.asyncio

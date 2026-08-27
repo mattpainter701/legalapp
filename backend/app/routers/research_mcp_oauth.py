@@ -86,7 +86,12 @@ def _require_canonical_research_host(request: Request) -> None:
         raise HTTPException(status_code=404, detail="Research MCP route is unavailable")
 
 
-router.dependencies.append(Depends(_require_canonical_research_host))
+def _require_canonical_portal_host(request: Request) -> None:
+    """Keep authenticated consent and grant management on the user portal."""
+
+    expected_host = urlsplit(settings.FRONTEND_URL).netloc.casefold()
+    if not expected_host or request.url.netloc.casefold() != expected_host:
+        raise HTTPException(status_code=404, detail="Research MCP route is unavailable")
 
 
 def _oauth_error(exc: WorkspaceOAuthError) -> JSONResponse:
@@ -193,26 +198,42 @@ def authorization_server_metadata_payload() -> dict:
 # Nginx maps the standards-defined root discovery URLs on the dedicated
 # research host to these unambiguous internal routes. The path-specific
 # protected-resource document does not conflict with Workspace MCP.
-@router.get("/.well-known/oauth-protected-resource/api/mcp")
-@router.get("/api/research-mcp/oauth/protected-resource-metadata")
+@router.get(
+    "/.well-known/oauth-protected-resource/api/mcp",
+    dependencies=[Depends(_require_canonical_research_host)],
+)
+@router.get(
+    "/api/research-mcp/oauth/protected-resource-metadata",
+    dependencies=[Depends(_require_canonical_research_host)],
+)
 async def research_protected_resource_metadata():
     _require_enabled()
     return protected_resource_metadata_payload()
 
 
-@router.get("/api/research-mcp/oauth/authorization-server-metadata")
+@router.get(
+    "/api/research-mcp/oauth/authorization-server-metadata",
+    dependencies=[Depends(_require_canonical_research_host)],
+)
 async def research_authorization_server_metadata():
     _require_enabled()
     return authorization_server_metadata_payload()
 
 
-@router.get("/api/research-mcp/oauth/jwks")
+@router.get(
+    "/api/research-mcp/oauth/jwks",
+    dependencies=[Depends(_require_canonical_research_host)],
+)
 async def research_jwks_endpoint():
     _require_enabled()
     return workspace_jwks()
 
 
-@router.post("/api/research-mcp/oauth/register", status_code=201)
+@router.post(
+    "/api/research-mcp/oauth/register",
+    status_code=201,
+    dependencies=[Depends(_require_canonical_research_host)],
+)
 async def register_research_client(
     request: Request, db: AsyncSession = Depends(get_db)
 ):
@@ -297,7 +318,10 @@ async def register_research_client(
         return _oauth_error(exc)
 
 
-@router.get("/api/research-mcp/oauth/authorize")
+@router.get(
+    "/api/research-mcp/oauth/authorize",
+    dependencies=[Depends(_require_canonical_research_host)],
+)
 async def begin_research_authorization(
     request: Request,
     response_type: str = Query(...),
@@ -347,7 +371,10 @@ async def begin_research_authorization(
         return _oauth_error(exc)
 
 
-@router.get("/api/research-mcp/oauth/requests/{request_id}")
+@router.get(
+    "/api/research-mcp/oauth/requests/{request_id}",
+    dependencies=[Depends(_require_canonical_portal_host)],
+)
 async def get_research_authorization_request(
     request_id: str,
     request: Request,
@@ -377,7 +404,10 @@ async def get_research_authorization_request(
     }
 
 
-@router.post("/api/research-mcp/oauth/requests/{request_id}/decision")
+@router.post(
+    "/api/research-mcp/oauth/requests/{request_id}/decision",
+    dependencies=[Depends(_require_canonical_portal_host)],
+)
 async def decide_research_authorization(
     request_id: str,
     decision: ConsentDecision,
@@ -477,7 +507,10 @@ async def decide_research_authorization(
         raise
 
 
-@router.post("/api/research-mcp/oauth/token")
+@router.post(
+    "/api/research-mcp/oauth/token",
+    dependencies=[Depends(_require_canonical_research_host)],
+)
 async def research_token(request: Request, db: AsyncSession = Depends(get_db)):
     _require_enabled()
     cleanup_family: str | None = None
@@ -616,7 +649,10 @@ async def research_token(request: Request, db: AsyncSession = Depends(get_db)):
         raise
 
 
-@router.post("/api/research-mcp/oauth/revoke")
+@router.post(
+    "/api/research-mcp/oauth/revoke",
+    dependencies=[Depends(_require_canonical_research_host)],
+)
 async def revoke_research_token(request: Request, db: AsyncSession = Depends(get_db)):
     _require_enabled()
     form = await request.form()
@@ -658,7 +694,10 @@ async def revoke_research_token(request: Request, db: AsyncSession = Depends(get
     return JSONResponse({}, headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
 
 
-@router.get("/api/research-mcp/grants")
+@router.get(
+    "/api/research-mcp/grants",
+    dependencies=[Depends(_require_canonical_portal_host)],
+)
 async def list_research_grants(
     user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
@@ -713,7 +752,10 @@ async def list_research_grants(
     }
 
 
-@router.post("/api/research-mcp/grants/{grant_id}/revoke")
+@router.post(
+    "/api/research-mcp/grants/{grant_id}/revoke",
+    dependencies=[Depends(_require_canonical_portal_host)],
+)
 async def revoke_research_grant(
     grant_id: uuid.UUID,
     payload: RevokeGrantRequest,

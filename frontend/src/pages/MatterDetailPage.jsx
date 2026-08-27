@@ -1618,8 +1618,9 @@ export default function MatterDetailPage() {
                       <input id="matterdetailpage-jurisdiction" type="text" value={editData.jurisdiction || ''} onChange={e => setEditData(p => ({ ...p, jurisdiction: e.target.value }))} className={inputCls} placeholder="For example, North Dakota" />
                     </div>
                     <div>
-                      <label htmlFor="matterdetailpage-our-role" className={labelCls}>Our Role</label>
+                      <label htmlFor="matterdetailpage-our-role" className={labelCls}>Represented Side / Our Role</label>
                       <input id="matterdetailpage-our-role" type="text" value={editData.role || ''} onChange={e => setEditData(p => ({ ...p, role: e.target.value }))} className={inputCls} placeholder="For example, plaintiff's counsel" />
+                      <p className="mt-1 text-xs text-brand-muted">Names and caption roles belong in the Parties tab.</p>
                     </div>
                     <div>
                       <label htmlFor="matterdetailpage-stage" className={labelCls}>Current Stage</label>
@@ -1730,10 +1731,11 @@ export default function MatterDetailPage() {
                 </Field>
                 <Field label="Case Number">{dm.case_number}</Field>
                 <Field label="Stage">{dm.stage}</Field>
+                <Field label="Represented Side / Our Role">{dm.role}</Field>
                 <Field label="Jurisdiction">{dm.jurisdiction}</Field>
                 <Field label="Court">{dm.court}</Field>
                 <Field label="Judge">{dm.judge}</Field>
-                <Field label="Counterparty">{dm.counterparty}</Field>
+                <Field label="Counterparty Summary">{dm.counterparty}</Field>
                 {hasCloudStorageLinks(matter.cloud_folder) && (
                   <Field label="Cloud Storage">
                     <CloudStorageLinks cloudFolder={matter.cloud_folder} />

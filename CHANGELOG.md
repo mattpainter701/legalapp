@@ -3,6 +3,21 @@
 ## [Unreleased]
 
 ### Added
+- **Workspace MCP now covers review-first matter work end to end:** approved
+  desktop clients can search and inspect clients, intakes, matters, and tasks;
+  load client, party, team, document, event, note, and communication context;
+  read bounded uploaded-document and raw-template text; and render approved DOCX
+  or Markdown templates into the existing immutable artifact and tenant-cloud
+  workflow. Fresh and template-rendered documents return authenticated open and
+  download routes plus a LawHand task deep link and always enter staged staff →
+  attorney Review. OAuth discovery now requests the complete current scope set,
+  including `intakes:read`; existing narrow grants remain unchanged and require
+  explicit reconnection rather than silent scope expansion.
+- **Matter caption parties now drive explicit document fields:** the Parties
+  workspace defines plaintiff and defendant separately from the client
+  relationship and represented side, supports a primary contact per role, and
+  exposes the canonical singular and plural caption fields to document Smart
+  Fill with source provenance and review-required legacy fallback behavior.
 - **Admin integrations are consolidated into a single role-aware workspace:**
   Microsoft and Google cloud accounts, Cloud Search, SMB file shares, Teams,
   Zoom, QuickBooks, and MCP now share one catalog with focused subsections,
@@ -73,6 +88,12 @@
   private-detail protection remains enforced.
 
 ### Fixed
+- **Research MCP hosted-client consent uses the authenticated portal origin:**
+  OAuth discovery, dynamic registration, authorization start, token exchange,
+  revocation, and JWKS remain isolated to `research.getlawhand.com`, while the
+  signed-in consent and grant-management APIs are now explicitly limited to
+  `getlawhand.com`. Claude, ChatGPT, and similar public PKCE clients can finish
+  authorization without a manually issued Research API key.
 - **Windows agent releases now fail closed on platform trust and stop cleanly
   for overtop upgrades:** tagged builds use Microsoft Public Trust Artifact
   Signing for the EXE before it is embedded and for the final MSI, verify both

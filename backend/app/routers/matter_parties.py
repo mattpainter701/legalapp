@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
+from app.models.contact import Contact
 from app.models.matter_party import MatterParty
 from app.models.plugin import Matter
 from app.schemas.matter_party import (
@@ -22,9 +23,37 @@ from app.schemas.matter_party import (
     MatterPartyListResponse,
     MatterPartyResponse,
     MatterPartyUpdate,
+    matter_party_role_definitions,
+    normalize_matter_party_role,
 )
 
 router = APIRouter(prefix="/api/matters", tags=["matter-parties"])
+
+
+async def _clear_other_primary_for_role(
+    db: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    matter_id: uuid.UUID,
+    role: str,
+    excluding_party_id: uuid.UUID | None = None,
+) -> None:
+    result = await db.execute(
+        select(MatterParty).where(
+            MatterParty.tenant_id == tenant_id,
+            MatterParty.matter_id == matter_id,
+            MatterParty.is_primary.is_(True),
+        )
+    )
+    for existing in result.scalars().all():
+        if excluding_party_id is not None and existing.id == excluding_party_id:
+            continue
+        try:
+            existing_role = normalize_matter_party_role(existing.role)
+        except ValueError:
+            continue
+        if existing_role == role:
+            existing.is_primary = False
 
 
 def _party_to_response(p: MatterParty) -> MatterPartyResponse:
@@ -68,6 +97,7 @@ async def list_matter_parties(
     return MatterPartyListResponse(
         items=[_party_to_response(p) for p in rows],
         total=total,
+        role_definitions=matter_party_role_definitions(),
     )
 
 
@@ -91,11 +121,32 @@ async def add_matter_party(
     )
     if not matter_result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Matter not found")
+    if payload.matter_id != matter_id:
+        raise HTTPException(
+            status_code=422,
+            detail="matter_id in the request body must match the route",
+        )
+
+    contact = await db.scalar(
+        select(Contact).where(
+            Contact.id == payload.contact_id,
+            Contact.tenant_id == uuid.UUID(tenant_id),
+        )
+    )
+    if contact is None:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    if payload.is_primary:
+        await _clear_other_primary_for_role(
+            db,
+            tenant_id=uuid.UUID(tenant_id),
+            matter_id=matter_id,
+            role=payload.role,
+        )
 
     party = MatterParty(
         tenant_id=uuid.UUID(tenant_id),
         matter_id=matter_id,
-        contact_id=payload.contact_id,
+        contact=contact,
         role=payload.role,
         is_primary=payload.is_primary,
         notes=payload.notes,
@@ -127,6 +178,16 @@ async def update_matter_party(
         raise HTTPException(status_code=404, detail="Party not found")
 
     update_data = payload.model_dump(exclude_unset=True)
+    resulting_role = update_data.get("role", party.role)
+    resulting_primary = update_data.get("is_primary", party.is_primary)
+    if resulting_primary:
+        await _clear_other_primary_for_role(
+            db,
+            tenant_id=uuid.UUID(tenant_id),
+            matter_id=matter_id,
+            role=normalize_matter_party_role(resulting_role),
+            excluding_party_id=party.id,
+        )
     for key, value in update_data.items():
         setattr(party, key, value)
 

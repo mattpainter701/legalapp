@@ -5,8 +5,8 @@
 | Host | Product and identity | Allowed public paths | Release state |
 |---|---|---|---|
 | `mcp.getlawhand.com` | Workspace/platform MCP; individual LawHand OAuth grant | `/` internally routes to `/api/mcp/workspace`; that transport and its two OAuth protected-resource metadata paths | Tenant-gated pilot |
-| `research.getlawhand.com` | Legal-research/RAG MCP; individual OAuth grant or tenant Research API token | `/` internally routes to `/api/mcp`; that transport, its OAuth discovery/authorization paths, `/api/mcp/manifest`, and `/api/mcp/tools/call` | Disabled; all Research paths expected 404 |
-| `getlawhand.com` | Main portal and OAuth authorization server | Existing portal/API plus bounded legacy MCP aliases | Production |
+| `research.getlawhand.com` | Legal-research/RAG MCP; individual OAuth grant or tenant Research API token | `/` internally routes to `/api/mcp`; that transport, its public OAuth protocol paths, `/api/mcp/manifest`, and `/api/mcp/tools/call` | Production |
+| `getlawhand.com` | Main portal and Workspace OAuth authorization server; authenticated Research consent surface | Existing portal/API, Research consent and grant-management APIs, plus bounded legacy MCP aliases | Production |
 
 The workspace OAuth protected resource and authorization server intentionally
 have different origins. The resource is
@@ -19,6 +19,17 @@ ChatGPT and Claude clients discover OAuth 2.1 at
 use dynamic client registration plus PKCE. Header-capable clients may instead
 send a LawHand Research API token as `X-MCP-API-Key: lhrk_...`.
 
+The Research authorization endpoint starts on the dedicated issuer and then
+redirects the user to the signed-in portal for consent. The portal page reads
+and decides the pending request through
+`/api/research-mcp/oauth/requests/{request_id}` on `getlawhand.com`; Research
+grant listing and revocation are portal-only as well. Those authenticated APIs
+must return 404 on the dedicated Research host. Conversely, public Research
+OAuth discovery, registration, authorization-start, token, revocation, and
+JWKS routes must return 404 on the portal origin. This split preserves the
+declared OAuth issuer while allowing the existing LawHand session to authorize
+the connection.
+
 Neither MCP hostname is a second portal origin. Official documentation and
 generated configuration use the full transport URLs:
 
@@ -29,7 +40,7 @@ generated configuration use the full transport URLs:
 
 The production acceptance check validates the complete published Workspace
 scope set: `communications:propose`, `contacts:read`, `documents:propose`,
-`documents:read`, `matters:read`, `offline_access`, `tasks:propose`,
+`documents:read`, `intakes:read`, `matters:read`, `offline_access`, `tasks:propose`,
 `tasks:read`, and `templates:read`. When a Workspace MCP feature adds or
 removes a scope, update the protected-resource metadata, this checklist, and
 the production check in the same release. A scope drift is an operator signal,
@@ -178,6 +189,10 @@ curl -i https://research.getlawhand.com/api/research-mcp/oauth/jwks
 # The apex is not a second Research MCP origin.
 curl -i https://getlawhand.com/api/mcp
 curl -i https://getlawhand.com/api/mcp/manifest
+# The authenticated consent API belongs to the portal. Without a LawHand
+# session it returns 401 there and remains unavailable on the Research host.
+curl -i https://getlawhand.com/api/research-mcp/oauth/requests/diagnostic-request-id
+curl -i https://research.getlawhand.com/api/research-mcp/oauth/requests/diagnostic-request-id
 # Neither dedicated hostname exposes an ordinary portal/API route.
 curl -i https://mcp.getlawhand.com/api/version
 curl -i https://research.getlawhand.com/api/version
@@ -207,6 +222,9 @@ Expected results:
   `https://research.getlawhand.com/api/mcp`;
 - the apex Research transport and manifest return `404` so clients cannot mix
   the OAuth issuer and resource origins;
+- unauthenticated Research consent requests return `401` on the apex, proving
+  the portal route is reachable and session-protected, while the same consent
+  path returns `404` on the Research host;
 - unrelated paths on both dedicated hosts return 404;
 - every response from both dedicated hosts carries
   `X-Robots-Tag: noindex, nofollow, noarchive`;

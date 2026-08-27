@@ -95,10 +95,14 @@ class ListMatterRecipientsArgs(ChatActionModel):
 
 
 MatterContextSection = Literal[
+    "client",
     "team",
+    "parties",
     "tasks",
+    "documents",
     "events",
     "notes",
+    "communications",
 ]
 
 
@@ -107,7 +111,7 @@ class GetMatterContextArgs(ChatActionModel):
     sections: list[MatterContextSection] = Field(
         default_factory=lambda: ["team", "tasks", "events", "notes"],
         min_length=1,
-        max_length=4,
+        max_length=8,
     )
     max_items_per_section: int = Field(default=10, ge=1, le=25)
 

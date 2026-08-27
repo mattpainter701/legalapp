@@ -1,9 +1,10 @@
 export const WORKSPACE_MCP_SCOPE_LABELS = {
   'matters:read': 'Find matters and read bounded matter context',
-  'tasks:read': 'Read matter task lists',
-  'contacts:read': 'Read enumerated matter recipients',
+  'tasks:read': 'Read work-board tasks and review history',
+  'contacts:read': 'Read client and matter contact records',
+  'intakes:read': 'Read intake leads and their prospect context',
   'documents:read': 'Read bounded matter document metadata and text',
-  'templates:read': 'Read active firm document template metadata',
+  'templates:read': 'Read active firm templates and bounded template text',
   'tasks:propose': 'Create tasks that start in human review',
   'communications:propose': 'Draft client email proposals without sending',
   'documents:propose': 'Create cloud-backed DOCX drafts for staged review',
