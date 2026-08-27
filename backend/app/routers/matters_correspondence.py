@@ -35,6 +35,7 @@ from app.schemas.matter_correspondence import (
     InboundEmailItem,
     InboundEmailListResponse,
     InboundEmailReviewResponse,
+    InboundTaskSuggestion,
     MatterInboundAlias,
     MatterInboundAliasResponse,
 )
@@ -55,6 +56,7 @@ from app.services.inbound_email import (
     verify_delivery_signature,
     write_quarantined_message,
 )
+from app.services.email_task_tags import parse_email_task_tag
 from app.services.receipt_extraction import (
     ReceiptExtractionError,
     attachment_hash,
@@ -65,6 +67,7 @@ from app.services.receipt_extraction import (
 from app.services.matter_file_store import MatterFileStore
 from app.models.tenant import TenantSettings
 from app.services.token_vault import decrypt_token, encrypt_token
+from app.services.task_notifications import notify_task_created
 
 settings = get_settings()
 router = APIRouter(prefix="/api", tags=["matter-correspondence"])
@@ -608,10 +611,25 @@ async def list_matter_inbound_email(
         .order_by(InboundEmail.created_at.desc())
         .limit(100)
     )
-    return InboundEmailListResponse(
-        items=[InboundEmailItem.model_validate(row) for row in result.scalars().all()],
-        total=total,
-    )
+    items = []
+    for row in result.scalars().all():
+        suggestion = parse_email_task_tag(row.subject, received_at=row.occurred_at)
+        suggestion_response = None
+        if suggestion is not None:
+            suggestion_response = InboundTaskSuggestion(
+                tag=suggestion.tag,
+                title=suggestion.title,
+                task_type=suggestion.task_type,
+                priority=suggestion.priority,
+                due_date=suggestion.due_date,
+                calendar_sync=suggestion.due_date is not None,
+            )
+        items.append(
+            InboundEmailItem.model_validate(row).model_copy(
+                update={"task_suggestion": suggestion_response}
+            )
+        )
+    return InboundEmailListResponse(items=items, total=total)
 
 
 async def _pending_inbound_or_404(
@@ -660,7 +678,7 @@ async def accept_matter_inbound_email(
         inbound_id=inbound_id,
     )
     try:
-        communication = await file_inbound_email(
+        filing = await file_inbound_email(
             db,
             item=item,
             matter=matter,
@@ -668,10 +686,24 @@ async def accept_matter_inbound_email(
         )
     except (FileNotFoundError, PermissionError, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    if filing.task is not None:
+        try:
+            await set_tenant_context(db, str(user.tenant_id))
+            await notify_task_created(db, filing.task, str(user.tenant_id))
+        except Exception:
+            # Filing and task creation are already durable. A provider or
+            # notification lookup outage must not turn success into a retry
+            # that can only receive "already reviewed".
+            logger.exception(
+                "Tagged inbound task %s was created but notification dispatch failed",
+                filing.task.id,
+            )
     return InboundEmailReviewResponse(
         id=item.id,
         status="accepted",
-        communication_log_id=communication.id,
+        communication_log_id=filing.communication.id,
+        task_id=filing.task.id if filing.task is not None else None,
+        task_due_date=filing.task.due_date if filing.task is not None else None,
     )
 
 

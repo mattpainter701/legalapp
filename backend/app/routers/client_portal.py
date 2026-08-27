@@ -897,7 +897,7 @@ async def portal_upload_document(
         db=db,
         tenant_id=str(ctx.tenant_id),
         matter_slug=matter.slug,
-        category="client-portal",
+        category="client_uploads",
         filename=safe_filename,
         content=file_bytes,
         content_type=file.content_type or "application/octet-stream",
@@ -920,7 +920,7 @@ async def portal_upload_document(
         provider_parent_id=storage_result.parent_id,
         storage_error=storage_result.error,
         description=(description or None),
-        document_category="client-portal",
+        document_category="client_uploads",
         portal_visible=True,
     )
     db.add(doc)

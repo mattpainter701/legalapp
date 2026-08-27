@@ -1,4 +1,5 @@
 import hashlib
+import uuid
 from types import SimpleNamespace
 
 import httpx
@@ -10,6 +11,7 @@ from app.services.matter_file_store import (
     MatterFileCleanupError,
     MatterFileIntegrityError,
     MatterFileMetadataError,
+    MatterFileStoragePolicyError,
     MatterFileStore,
     MatterFileTooLarge,
     StorageResult,
@@ -236,7 +238,7 @@ async def test_cloud_read_requires_durable_item_id_before_any_token_or_http_call
 
 
 @pytest.mark.asyncio
-async def test_explicit_primary_cloud_never_spills_to_another_cloud_and_warns_on_local_fallback(
+async def test_explicit_primary_cloud_fails_closed_without_local_or_cross_cloud_spill(
     tmp_path,
     monkeypatch,
 ):
@@ -264,29 +266,85 @@ async def test_explicit_primary_cloud_never_spills_to_another_cloud_and_warns_on
     monkeypatch.setattr(store, "_try_store_sharepoint", unexpected_sharepoint)
 
     content = b"durably retained bytes"
-    result = await store.store_matter_file_result(
-        db=object(),
-        tenant_id=tenant_id,
-        matter_slug="matter-1",
-        category="documents",
-        filename="agreement.pdf",
-        content=content,
-        content_type="application/pdf",
-        preferred_provider="google_drive",
-    )
+    with pytest.raises(MatterFileStoragePolicyError) as exc_info:
+        await store.store_matter_file_result(
+            db=object(),
+            tenant_id=tenant_id,
+            matter_slug="matter-1",
+            category="documents",
+            filename="agreement.pdf",
+            content=content,
+            content_type="application/pdf",
+            preferred_provider="google_drive",
+        )
 
     assert calls == ["google_drive"]
-    assert result.provider == "local"
-    assert result.backend == "local"
-    assert result.storage_path is not None
-    assert result.error is not None
-    assert "Configured Google Drive upload failed" in result.error
-    assert "saved to local storage" in result.error
-    assert "Reconnect Google Drive" in result.error
-    assert "provider failure that must not be exposed verbatim" not in result.error
-    assert (
+    message = str(exc_info.value)
+    assert "No durable local copy was created" in message
+    assert "Reconnect Google Drive" in message
+    assert "provider failure that must not be exposed verbatim" not in message
+    assert not (
         tmp_path / tenant_id / "matters" / "matter-1" / "documents" / "agreement.pdf"
-    ).read_bytes() == content
+    ).exists()
+
+
+@pytest.mark.asyncio
+async def test_auto_mode_binds_an_active_microsoft_tenant_to_onedrive(monkeypatch):
+    class _Result:
+        def __init__(self, *, scalar=None, values=None):
+            self.scalar = scalar
+            self.values = values or []
+
+        def scalar_one_or_none(self):
+            return self.scalar
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            return self.values
+
+    class _Db:
+        def __init__(self):
+            self.results = [
+                _Result(scalar=None),
+                _Result(values=["google", "microsoft"]),
+            ]
+
+        async def execute(self, _query):
+            return self.results.pop(0)
+
+    store = MatterFileStore()
+    calls = []
+
+    async def successful_onedrive(*_args, **_kwargs):
+        calls.append("onedrive")
+        return StorageResult(
+            provider="microsoft",
+            backend="onedrive",
+            storage_path="https://contoso.sharepoint.com/document.pdf",
+            provider_item_id="item-1",
+        )
+
+    async def unexpected_provider(*_args, **_kwargs):
+        raise AssertionError("Microsoft Auto binding must be exclusive")
+
+    monkeypatch.setattr(store, "_try_store_onedrive", successful_onedrive)
+    monkeypatch.setattr(store, "_try_store_sharepoint", unexpected_provider)
+    monkeypatch.setattr(store, "_try_store_google_drive", unexpected_provider)
+
+    result = await store.store_matter_file_result(
+        db=_Db(),
+        tenant_id=str(uuid.uuid4()),
+        matter_slug="matter-1",
+        category="client_uploads",
+        filename="statement.pdf",
+        content=b"content",
+        content_type="application/pdf",
+    )
+
+    assert calls == ["onedrive"]
+    assert result.backend == "onedrive"
 
 
 @pytest.mark.asyncio

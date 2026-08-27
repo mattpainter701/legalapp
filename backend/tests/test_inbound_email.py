@@ -24,6 +24,7 @@ from app.services.inbound_email import (
     verify_delivery_signature,
     write_quarantined_message,
 )
+from app.services.email_task_tags import email_received_at, parse_email_task_tag
 from app.services.matter_file_store import StorageResult
 
 
@@ -107,6 +108,60 @@ def test_raw_email_parser_extracts_bounded_review_metadata():
     assert parsed["participants"]["from"] == "jane@example.com"
     assert parsed["message_id"] == "<message-123@example.com>"
     assert "dmarc=pass" in parsed["authentication_results"]["authentication_results"][0]
+
+
+def test_task_subject_tag_parses_relative_meeting_from_received_date():
+    suggestion = parse_email_task_tag(
+        "[TASK] Nigel I need to meet with you in two weeks",
+        received_at=datetime(2026, 8, 26, 16, 30, tzinfo=timezone.utc),
+    )
+
+    assert suggestion is not None
+    assert suggestion.title == "Nigel I need to meet with you"
+    assert suggestion.task_type == "follow_up"
+    assert suggestion.priority == "medium"
+    assert suggestion.due_date.isoformat() == "2026-09-09"
+
+
+@pytest.mark.parametrize(
+    ("subject", "expected_tag", "expected_due"),
+    [
+        ("[DEADLINE] File response by 09/15/2026", "deadline", "2026-09-15"),
+        ("[TASK due=2026-09-12] Call client", "task", "2026-09-12"),
+        ("[TASK] Review exhibits tomorrow", "task", "2026-08-27"),
+    ],
+)
+def test_task_subject_tag_supports_bounded_date_forms(
+    subject, expected_tag, expected_due
+):
+    suggestion = parse_email_task_tag(
+        subject,
+        received_at=datetime(2026, 8, 26, tzinfo=timezone.utc),
+    )
+
+    assert suggestion is not None
+    assert suggestion.tag == expected_tag
+    assert suggestion.due_date.isoformat() == expected_due
+
+
+@pytest.mark.parametrize(
+    "subject",
+    [
+        "Nigel I need to meet with you in two weeks",
+        "Re: [TASK] Meet with Nigel in two weeks",
+        "Fwd: [DEADLINE] File response by 2026-09-15",
+    ],
+)
+def test_untagged_replies_and_forwards_do_not_create_tasks(subject):
+    assert parse_email_task_tag(subject) is None
+
+
+def test_email_received_at_normalizes_microsoft_and_google_dates():
+    microsoft = email_received_at({"received": "2026-08-26T10:00:00-05:00"})
+    google = email_received_at({"date": "Wed, 26 Aug 2026 10:00:00 -0500"})
+
+    assert microsoft.isoformat() == "2026-08-26T15:00:00+00:00"
+    assert google == microsoft
 
 
 def test_signature_and_parser_fail_closed_edge_cases():
@@ -304,19 +359,58 @@ async def test_file_inbound_email_moves_verified_message_and_audits(
     monkeypatch.setattr(inbound_service, "matter_file_store", store)
     db = ServiceDB()
 
-    communication = await file_inbound_email(
+    filing = await file_inbound_email(
         db,
         item=item,
         matter=matter,
         reviewed_by_user_id=uuid.uuid4(),
     )
 
-    assert communication.id == item.communication_log_id
+    assert filing.communication.id == item.communication_log_id
+    assert filing.task is None
     assert item.status == "accepted"
     assert item.raw_storage_path is None
     assert not path.exists()
     assert db.commits == 2
     assert len(db.added) == 2
+
+
+@pytest.mark.asyncio
+async def test_file_inbound_email_atomically_creates_explicit_tagged_task(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(inbound_service.settings, "UPLOAD_DIR", str(tmp_path))
+    item, matter, path = service_item(tmp_path)
+    item.subject = "[TASK] Nigel I need to meet with you in two weeks"
+    item.occurred_at = datetime(2026, 8, 26, 16, 30, tzinfo=timezone.utc)
+    stored = StorageResult(
+        provider="local", backend="local", storage_path=str(tmp_path / "filed.eml")
+    )
+    store = SimpleNamespace(
+        store_matter_file_result=AsyncMock(return_value=stored),
+        delete_stored_result=AsyncMock(),
+    )
+    monkeypatch.setattr(inbound_service, "matter_file_store", store)
+    db = ServiceDB()
+    reviewer_id = uuid.uuid4()
+
+    filing = await file_inbound_email(
+        db,
+        item=item,
+        matter=matter,
+        reviewed_by_user_id=reviewer_id,
+    )
+
+    assert filing.task is not None
+    assert filing.task.title == "Nigel I need to meet with you"
+    assert filing.task.due_date.isoformat() == "2026-09-09"
+    assert filing.task.assigned_to_user_id == reviewer_id
+    assert filing.task.external_ref == f"inbound-email:{item.id}"
+    assert filing.task.source == "email_subject_tag"
+    assert item.status == "accepted"
+    assert not path.exists()
+    assert db.commits == 2
+    assert len(db.added) == 5
 
 
 @pytest.mark.asyncio
@@ -343,5 +437,38 @@ async def test_file_inbound_email_cleans_staged_storage_after_database_failure(
             matter=matter,
             reviewed_by_user_id=uuid.uuid4(),
         )
+    assert db.rollbacks == 1
+    store.delete_stored_result.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_tagged_task_failure_rolls_back_email_filing_and_staged_storage(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(inbound_service.settings, "UPLOAD_DIR", str(tmp_path))
+    item, matter, _ = service_item(tmp_path)
+    item.subject = "[DEADLINE] File response by 2026-09-15"
+    stored = StorageResult(
+        provider="local", backend="local", storage_path=str(tmp_path / "filed.eml")
+    )
+    store = SimpleNamespace(
+        store_matter_file_result=AsyncMock(return_value=stored),
+        delete_stored_result=AsyncMock(),
+    )
+    monkeypatch.setattr(inbound_service, "matter_file_store", store)
+    monkeypatch.setattr(inbound_service, "set_tenant_context", AsyncMock())
+    # Document and communication flushes succeed; task flush fails before the
+    # shared transaction can accept the inbound message.
+    db = ServiceDB(flush_error_at=3)
+
+    with pytest.raises(RuntimeError, match="flush failed"):
+        await file_inbound_email(
+            db,
+            item=item,
+            matter=matter,
+            reviewed_by_user_id=uuid.uuid4(),
+        )
+
+    assert db.commits == 0
     assert db.rollbacks == 1
     store.delete_stored_result.assert_awaited_once()

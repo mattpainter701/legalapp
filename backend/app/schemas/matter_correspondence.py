@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict
@@ -72,6 +72,17 @@ class MatterInboundAliasResponse(BaseModel):
     alias: Optional[MatterInboundAlias] = None
 
 
+class InboundTaskSuggestion(BaseModel):
+    """Preview of the task an explicit email subject tag will create."""
+
+    tag: str
+    title: str
+    task_type: str
+    priority: str
+    due_date: Optional[date] = None
+    calendar_sync: bool = False
+
+
 class InboundEmailItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -89,6 +100,7 @@ class InboundEmailItem(BaseModel):
     reviewed_at: Optional[datetime] = None
     communication_log_id: Optional[uuid.UUID] = None
     created_at: datetime
+    task_suggestion: Optional[InboundTaskSuggestion] = None
 
 
 class InboundEmailListResponse(BaseModel):
@@ -100,3 +112,5 @@ class InboundEmailReviewResponse(BaseModel):
     id: uuid.UUID
     status: str
     communication_log_id: Optional[uuid.UUID] = None
+    task_id: Optional[uuid.UUID] = None
+    task_due_date: Optional[date] = None

@@ -18,6 +18,28 @@ Public MCP access is release-gated and must remain disabled.
 | Public MCP product | **Disabled.** `MCP_PRODUCT_ENABLED=false` is a launch invariant. Do not market, issue, or accept customer MCP keys yet. |
 | Marketing / SEO | Public landing, original artwork, social card, canonical metadata, structured data, sitemap, and private-route `noindex` controls are included. Marketing claims and prices still require commercial-owner approval before publication. |
 
+## Task and customer-data lifecycle
+
+![Task routing and customer-owned document storage](frontend/public/guide-assets/customer-data-task-lifecycle.svg)
+
+LawHand Tasks is the authoritative work record. Outlook and Google calendar
+events are projections, not a second task database. A reviewed email can create
+a task only when its subject begins with `[TASK]` or `[DEADLINE]`; untagged
+body text, replies, forwards, and model-only date guesses do not create work.
+
+For a cloud-bound tenant, durable matter-file bytes live in the tenant-selected
+OneDrive, SharePoint, or Google Drive. Auto binds an active Microsoft 365 tenant
+to OneDrive unless the administrator overrides the provider. Portal originals
+are stored under `{matter}/client_uploads`; reviewed derivatives become new
+documents in the appropriate matter folder. Provider failure is fail-closed and
+does not silently create a durable local copy.
+
+The SaaS still stores its control plane—matters, clients, tasks, assignments,
+cloud object IDs, hashes, indexing metadata, and audit history—so the accurate
+boundary is customer-owned **document content**, not zero customer data. See
+[Task routing and customer-owned document storage](docs/task-and-customer-data-lifecycle.md)
+for the backend contract, recovery checks, and remaining legacy-local migration.
+
 ## What is in the product
 
 | Area | Implemented behavior |

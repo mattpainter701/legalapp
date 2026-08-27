@@ -33,6 +33,12 @@ Before uploading, confirm that the document belongs to the tenant and matter sho
 
 Document automation can create a new draft from an approved template. Open [Document Automation](/templates), choose the right template, review detected fields, and preview the result before saving it to a matter. Generated content is a draft until a qualified person reviews and approves it.
 
+### Client portal uploads
+
+When your administrator has connected customer-owned cloud storage, portal files go to the matter's `client_uploads` folder in that datastore. The original submission stays there as the intake copy. Renaming its category does not move it.
+
+If you revise, redact, or promote a client upload into work product, save the reviewed result as a new matter document in the appropriate documents, pleadings, or correspondence folder. This preserves the provider link and history of the original. If the customer cloud is unavailable, the upload fails and can be retried; a cloud-bound tenant does not receive a successful message for a file saved only on LawHand infrastructure.
+
 ## Correspondence and matter email
 
 The **Correspondence** tab on a matter keeps the email belonging to that file with the rest of the record. It works two ways, and a firm may have either or both available.

@@ -79,6 +79,7 @@ from app.services.workspace_mcp_protocol import (
     workspace_protocol_lifespan,
 )
 from app.services.scheduler import LegalScheduler
+from app.services.matter_file_store import MatterFileStoragePolicyError
 from app.services.host_disk_status import HostDiskStatusError, read_host_disk_status
 from app.services.backup_status import BackupStatusError, read_backup_status
 from app.release_notes import build_release_catalog
@@ -716,6 +717,29 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     if error_id and exc.status_code >= 500:
         content["error_id"] = str(error_id)
     response = JSONResponse(status_code=exc.status_code, content=content)
+    if request_id:
+        response.headers["X-Request-ID"] = request_id
+    return response
+
+
+@app.exception_handler(MatterFileStoragePolicyError)
+async def matter_storage_policy_exception_handler(
+    request: Request, exc: MatterFileStoragePolicyError
+):
+    """Report a retryable customer-storage outage without exposing provider detail."""
+    request_id = getattr(request.state, "request_id", None)
+    error_id = await _capture_exception_to_errorlog(
+        request,
+        exc,
+        503,
+        error_type="storage_policy_error",
+    )
+    content = {"detail": str(exc)}
+    if request_id:
+        content["request_id"] = request_id
+    if error_id:
+        content["error_id"] = str(error_id)
+    response = JSONResponse(status_code=503, content=content)
     if request_id:
         response.headers["X-Request-ID"] = request_id
     return response

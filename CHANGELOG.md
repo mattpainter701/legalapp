@@ -3,6 +3,19 @@
 ## [Unreleased]
 
 ### Added
+- **Reviewed matter email can create a traceable task from an explicit subject
+  tag:** a new message beginning with `[TASK]` or `[DEADLINE]` previews its task
+  title and a bounded, deterministic due date in the Correspondence queue. The
+  reviewer can file the `.eml`, correspondence record, task, and task history
+  atomically, after which existing calendar projection is requested without
+  making provider availability a condition of durable capture.
+- **Cloud-bound matter storage is explicit and fail-closed:** Auto now resolves
+  an active Microsoft 365 tenant to OneDrive (or Google Drive when Google is the
+  connected provider), while an administrator-selected provider remains
+  exclusive. Provider outages return HTTP 503 without a durable local spill.
+  Client portal originals route to the newly provisioned `client_uploads`
+  folder, and the user/admin/backend guides share a lifecycle diagram and
+  operational contract for task routing and customer-owned document content.
 - **E-sign delivery completion:** internal signature requests now email the
   actionable signer, expose delivery and first-view status, support manual
   resend, notify the next signer in sequential workflows, and execute configured
