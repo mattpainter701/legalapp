@@ -15,6 +15,10 @@ name: CI
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   pull_request:
     branches: [main]
@@ -112,6 +116,7 @@ jobs:
   lint-backend:
     name: Backend — Lint (ruff)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
@@ -256,7 +261,7 @@ jobs:
       - name: Run tests
         working-directory: backend
         run: >-
-          pytest tests/ -v --tb=short
+          pytest tests/ -v --tb=short --maxfail=1
           --cov=app --cov-report=term --cov-report=xml:coverage.xml
 
       - name: Require changed backend lines to remain tested
@@ -283,6 +288,7 @@ jobs:
   lint-frontend:
     name: Frontend — Build (Vite)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
@@ -292,6 +298,8 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0 (Node.js 24)
         with:
           node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
         working-directory: frontend
@@ -322,6 +330,7 @@ jobs:
   test-office-addin:
     name: Office add-in - Test and build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
@@ -440,6 +449,14 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      - name: Restore Playwright browser cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+
       # `--with-deps` reported every shared library Chromium needs as "already
       # the newest version" — ubuntu-24.04 ships all of them.  The only thing it
       # actually fetched was 21 MB of CJK, Cyrillic and Thai font packages this
@@ -454,7 +471,11 @@ jobs:
         timeout-minutes: 5
         run: |
           set -euo pipefail
-          npx playwright install chromium
+          if [ -z "$(find "$HOME/.cache/ms-playwright" -maxdepth 1 -type d -name 'chromium*' 2>/dev/null)" ]; then
+            npx playwright install chromium
+          else
+            echo "Playwright Chromium browser cache hit"
+          fi
           node -e '
             const { chromium } = require("@playwright/test");
             chromium.launch()
