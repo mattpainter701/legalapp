@@ -21,16 +21,10 @@ import {
 import { format } from 'date-fns'
 import { useConfirm } from '../components/dialog/ConfirmProvider'
 import PromptAdminPage from './PromptAdminPage'
-import CloudSearchAdmin from './CloudSearchAdmin'
-import MCPPage from './MCPPage'
 import RolesTab from './admin/RolesTab'
 import { UserMcpAccessCell, UserMcpAccessDrawer } from './admin/UserMcpAccess'
-import SmbAdminPage from './SmbAdminPage'
 import LicensingPanel from '../components/LicensingPanel'
-import IntegrationsPanel from '../components/IntegrationsPanel'
-import TeamsPanel from '../components/TeamsPanel'
-import ZoomPanel from '../components/ZoomPanel'
-import QBOPanel from '../components/QBOPanel'
+import IntegrationsHub, { LEGACY_INTEGRATION_TABS } from '../components/IntegrationsHub'
 import FirmBrandingPanel from '../components/FirmBrandingPanel'
 import ReleaseInfoPanel from '../components/ReleaseInfoPanel'
 import BillingPage from './BillingPage'
@@ -66,27 +60,21 @@ const ADMIN_TABS = [
   { id: 'licensing', label: 'Licensing' },
   { id: 'billing', label: 'Subscription' },
   { id: 'usage', label: 'Usage' },
-  { id: 'mcp', label: 'MCP Servers' },
+  { id: 'integrations', label: 'Integrations' },
   { id: 'tenant', label: 'Tenant' },
   { id: 'prompts', label: 'Prompts' },
-  { id: 'cloud-search', label: 'Cloud Search' },
-  { id: 'smb', label: 'File Shares' },
-  { id: 'integrations', label: 'Integrations' },
-  { id: 'teams', label: 'Teams' },
-  { id: 'zoom', label: 'Zoom' },
-  { id: 'qbo', label: 'QuickBooks' },
   { id: 'settings', label: 'Settings' },
 ]
 
 const ACCOUNTANT_TABS = ADMIN_TABS.filter((tab) =>
-  ['licensing', 'billing', 'usage', 'qbo'].includes(tab.id)
+  ['licensing', 'billing', 'usage', 'integrations'].includes(tab.id)
 )
 
 // Keep the standalone intake product focused on the few settings needed to
 // launch and operate a reception team. Unrelated platform integrations remain
 // hidden until the tenant upgrades.
 const INTAKE_ADMIN_TABS = ADMIN_TABS.filter((tab) =>
-  ['users', 'licensing', 'billing', 'usage', 'tenant', 'zoom', 'settings', 'guide'].includes(tab.id)
+  ['users', 'licensing', 'billing', 'usage', 'tenant', 'integrations', 'settings', 'guide'].includes(tab.id)
 )
 const INTAKE_ACCOUNTANT_TABS = INTAKE_ADMIN_TABS.filter((tab) =>
   ['licensing', 'billing', 'usage'].includes(tab.id)
@@ -1289,12 +1277,16 @@ export default function AdminPage() {
   const { user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
   const initialTab = searchParams.get('tab')
+  const normalizedInitialTab = LEGACY_INTEGRATION_TABS[initialTab] ? 'integrations' : initialTab
   const tabs = user?.plan === 'intake-only'
     ? (user?.role === 'accountant' ? INTAKE_ACCOUNTANT_TABS : INTAKE_ADMIN_TABS)
     : (user?.role === 'accountant' ? ACCOUNTANT_TABS : ADMIN_TABS)
   const defaultTab = tabs[0]?.id || 'licensing'
   const [activeTab, setActiveTab] = useState(
-    tabs.some((t) => t.id === initialTab) ? initialTab : defaultTab
+    tabs.some((t) => t.id === normalizedInitialTab) ? normalizedInitialTab : defaultTab
+  )
+  const [integrationSection, setIntegrationSection] = useState(
+    searchParams.get('integration') || LEGACY_INTEGRATION_TABS[initialTab] || 'overview'
   )
   const [billingTier, setBillingTier] = useState('payg')
   const [tabsCollapsed, setTabsCollapsed] = useState(false)
@@ -1308,8 +1300,16 @@ export default function AdminPage() {
 
   useEffect(() => {
     const tab = searchParams.get('tab')
-    if (tab && tabs.some((t) => t.id === tab) && tab !== activeTab) {
-      setActiveTab(tab)
+    const legacySection = LEGACY_INTEGRATION_TABS[tab]
+    if (legacySection && tabs.some((t) => t.id === 'integrations')) {
+      setActiveTab('integrations')
+      setIntegrationSection(legacySection)
+      setSearchParams({ tab: 'integrations', integration: legacySection }, { replace: true })
+    } else if (tab && tabs.some((t) => t.id === tab)) {
+      if (tab !== activeTab) setActiveTab(tab)
+      if (tab === 'integrations') {
+        setIntegrationSection(searchParams.get('integration') || 'overview')
+      }
     } else if (!tabs.some((t) => t.id === activeTab)) {
       setActiveTab(defaultTab)
       setSearchParams(defaultTab === 'users' ? {} : { tab: defaultTab })
@@ -1321,7 +1321,13 @@ export default function AdminPage() {
 
   const selectTab = (tab) => {
     setActiveTab(tab)
-    setSearchParams(tab === 'users' ? {} : { tab })
+    setSearchParams(tab === 'users' ? {} : tab === 'integrations' ? { tab, integration: integrationSection } : { tab })
+  }
+
+  const selectIntegrationSection = (section) => {
+    setActiveTab('integrations')
+    setIntegrationSection(section)
+    setSearchParams({ tab: 'integrations', integration: section })
   }
 
   return (
@@ -1386,21 +1392,17 @@ export default function AdminPage() {
 
         {/* Tab content */}
         <div className="animate-in fade-in duration-300">
-          {activeTab === 'users' && <UsersTab billingTier={billingTier} onNavigateMcp={() => selectTab('mcp')} />}
+          {activeTab === 'users' && <UsersTab billingTier={billingTier} onNavigateMcp={() => selectIntegrationSection('mcp')} />}
           {activeTab === 'roles' && <RolesTab />}
           {activeTab === 'licensing' && <LicensingPanel />}
           {activeTab === 'billing' && <BillingPage embedded />}
           {activeTab === 'usage' && <UsageTab />}
-          {activeTab === 'mcp' && <MCPPage embedded />}
           {activeTab === 'tenant' && <TenantTab />}
           {activeTab === 'settings' && <SettingsTab />}
           {activeTab === 'prompts' && <PromptAdminPage />}
-          {activeTab === 'cloud-search' && <CloudSearchAdmin />}
-          {activeTab === 'smb' && <SmbAdminPage />}
-          {activeTab === 'integrations' && <IntegrationsPanel />}
-          {activeTab === 'teams' && <TeamsPanel />}
-          {activeTab === 'zoom' && <ZoomPanel />}
-          {activeTab === 'qbo' && <QBOPanel />}
+          {activeTab === 'integrations' && (
+            <IntegrationsHub user={user} section={integrationSection} onSectionChange={selectIntegrationSection} />
+          )}
           {activeTab === 'guide' && <GuideViewer documents={ADMINISTRATIVE_GUIDE} audience="admin" embedded />}
         </div>
       </div>

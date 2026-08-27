@@ -9,7 +9,7 @@ icon: network
 
 # MCP server operations
 
-[MCP Servers](/admin?tab=mcp) is the primary administrative home for the tenant's MCP connections. It is the source of truth for tenant-wide enablement, new-user defaults, per-user access, tool visibility, client setup, usage, and revocation. Do not direct administrators to a separate Connected assistants page under Settings.
+[Integrations → MCP](/admin?tab=integrations&integration=mcp) is the primary administrative home for the tenant's MCP connections. It is the source of truth for tenant-wide enablement, new-user defaults, per-user access, tool visibility, client setup, usage, and revocation. Do not direct administrators to a separate Connected assistants page under Settings.
 
 ## Platform MCP (Workspace) — primary
 

@@ -3,6 +3,13 @@
 ## [Unreleased]
 
 ### Added
+- **Admin integrations are consolidated into a single role-aware workspace:**
+  Microsoft and Google cloud accounts, Cloud Search, SMB file shares, Teams,
+  Zoom, QuickBooks, and MCP now share one catalog with focused subsections,
+  explicit data-permission and setup disclosures, and direct operating-guide
+  links. Legacy admin-tab URLs canonicalize to the matching nested section, and
+  Windows analytics imports use explicit component extensions so Vite resolves
+  the intended file despite the adjacent case-colliding analytics helper.
 - **QuickBooks connection and invoice tax handling are production-ready:**
   successful Intuit authorization returns to the LawHand QuickBooks admin tab,
   A/R settings serialize database UUIDs correctly, QBO routes use an isolated

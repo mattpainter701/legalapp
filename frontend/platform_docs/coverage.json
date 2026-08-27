@@ -32,15 +32,18 @@
     { "tab": "licensing", "chapter": "users-roles-and-licensing" },
     { "tab": "billing", "chapter": "subscription-usage-alerts" },
     { "tab": "usage", "chapter": "subscription-usage-alerts" },
-    { "tab": "mcp", "chapter": "mcp-server-operations" },
     { "tab": "tenant", "chapter": "tenant-settings-and-branding" },
     { "tab": "prompts", "chapter": "prompt-management" },
-    { "tab": "cloud-search", "chapter": "cloud-search-operations" },
-    { "tab": "smb", "chapter": "file-share-operations" },
-    { "tab": "integrations", "chapter": "storage-imports-and-readiness" },
-    { "tab": "teams", "chapter": "microsoft-teams-administration" },
-    { "tab": "zoom", "chapter": "zoom-phone-administration" },
-    { "tab": "qbo", "chapter": "quickbooks-administration" },
+    { "tab": "integrations", "chapter": "integrations" },
     { "tab": "settings", "chapter": "tenant-settings-and-branding" }
+  ],
+  "admin_integration_sections": [
+    { "section": "cloud", "chapter": "integrations" },
+    { "section": "cloud-search", "chapter": "cloud-search-operations" },
+    { "section": "file-shares", "chapter": "file-share-operations" },
+    { "section": "teams", "chapter": "microsoft-teams-administration" },
+    { "section": "zoom", "chapter": "zoom-phone-administration" },
+    { "section": "quickbooks", "chapter": "quickbooks-administration" },
+    { "section": "mcp", "chapter": "mcp-server-operations" }
   ]
 }

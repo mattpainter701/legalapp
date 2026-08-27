@@ -13,7 +13,7 @@ An integration extends the tenant's data boundary. Connect only approved organiz
 
 ## Integration readiness
 
-Start at [Integrations](/admin?tab=integrations). Review provider status, permissions, and health before asking users to depend on synchronized content. A connection can be technically present while a required scope, site binding, mailbox, webhook, or provider setting remains incomplete.
+Start at [Integrations](/admin?tab=integrations), then open [Cloud](/admin?tab=integrations&integration=cloud). Review provider status, permissions, and health before asking users to depend on synchronized content. A connection can be technically present while a required scope, site binding, mailbox, webhook, or provider setting remains incomplete.
 
 ## Microsoft and Google
 
@@ -21,15 +21,15 @@ Use an authorized administrator account during consent. Confirm the organization
 
 For Microsoft 365, **Auto** storage binds matter files to the connected identity's OneDrive unless an administrator explicitly selects SharePoint or Google Drive. Use an organization-owned service identity whose ownership will survive staff turnover, or select an approved SharePoint site/drive. The current delegated file permission follows everything that identity can access; connection alone is not proof that the intended matter folders are writable.
 
-For collaboration configuration, use [Teams](/admin?tab=teams). Treat team/channel mappings and notification destinations as data-routing decisions.
+For collaboration configuration, use [Integrations → Teams](/admin?tab=integrations&integration=teams). Treat team/channel mappings and notification destinations as data-routing decisions.
 
 ## Zoom Phone
 
-Use [Zoom](/admin?tab=zoom) for phone integration configuration and health. Confirm the Zoom account, required administrative grant, webhook configuration, and call visibility. Test inbound data using an approved demo call; do not expose unrelated account call history.
+Use [Integrations → Zoom](/admin?tab=integrations&integration=zoom) for phone integration configuration and health. Confirm the Zoom account, required administrative grant, webhook configuration, and call visibility. Test inbound data using an approved demo call; do not expose unrelated account call history.
 
 ## QuickBooks Online
 
-Use [QuickBooks](/admin?tab=qbo) with an Intuit administrator for the intended company. Verify the company identity before any synchronization. Establish ownership for mapping, reconciliation, and error review. LawHand should not become an unexplained alternate ledger.
+Use [Integrations → QuickBooks](/admin?tab=integrations&integration=quickbooks) with an Intuit administrator for the intended company. Verify the company identity before any synchronization. Establish ownership for mapping, reconciliation, and error review. LawHand should not become an unexplained alternate ledger.
 
 ## Connection lifecycle
 

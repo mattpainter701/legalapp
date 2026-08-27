@@ -8,6 +8,7 @@ const publicRoot = join(repositoryRoot, 'frontend', 'public')
 const coveragePath = join(docsRoot, 'coverage.json')
 const appSource = readFileSync(join(repositoryRoot, 'frontend', 'src', 'App.jsx'), 'utf8')
 const adminPageSource = readFileSync(join(repositoryRoot, 'frontend', 'src', 'pages', 'AdminPage.jsx'), 'utf8')
+const integrationsHubSource = readFileSync(join(repositoryRoot, 'frontend', 'src', 'components', 'IntegrationsHub.jsx'), 'utf8')
 const requiredFields = ['slug', 'title', 'description', 'order', 'read_time', 'icon']
 const allowedRouteRoots = new Set([
   'admin', 'calendar', 'chat', 'clients', 'communications', 'conflicts', 'contacts', 'guide', 'intake',
@@ -16,6 +17,8 @@ const allowedRouteRoots = new Set([
 ])
 const adminTabsBlock = adminPageSource.match(/const ADMIN_TABS = \[([\s\S]*?)\n\]/)?.[1] || ''
 const adminTabs = new Set(Array.from(adminTabsBlock.matchAll(/id:\s*'([^']+)'/g), ([, tab]) => tab))
+const integrationSectionsBlock = integrationsHubSource.match(/export const INTEGRATION_SECTIONS = \[([\s\S]*?)\n\]/)?.[1] || ''
+const integrationSections = new Set(Array.from(integrationSectionsBlock.matchAll(/id:\s*'([^']+)'/g), ([, section]) => section))
 
 const errors = []
 const seenSlugs = new Map()
@@ -76,6 +79,10 @@ function parseChapter(file, audience) {
     if (routeRoot === 'admin') {
       const tab = url.searchParams.get('tab') || 'users'
       if (!adminTabs.has(tab)) fail(relativeFile, `unknown admin tab in ${href}`)
+      const integration = url.searchParams.get('integration')
+      if (integration && (tab !== 'integrations' || !integrationSections.has(integration))) {
+        fail(relativeFile, `unknown integration section in ${href}`)
+      }
     }
   }
 
@@ -173,6 +180,38 @@ function validateCoverage() {
   }
   for (const tab of coveredAdminTabs) {
     if (!adminTabs.has(tab)) fail('frontend/platform_docs/coverage.json', `admin tab is not registered in AdminPage.jsx: ${tab}`)
+  }
+
+  const integrationEntries = Array.isArray(coverage.admin_integration_sections)
+    ? coverage.admin_integration_sections
+    : []
+  const coveredIntegrationSections = new Set()
+  for (const entry of integrationEntries) {
+    if (!entry?.section || !entry?.chapter) {
+      fail('frontend/platform_docs/coverage.json', 'every admin integration section needs section and chapter')
+      continue
+    }
+    if (coveredIntegrationSections.has(entry.section)) {
+      fail('frontend/platform_docs/coverage.json', `duplicate admin integration section ${entry.section}`)
+    }
+    coveredIntegrationSections.add(entry.section)
+    const chapter = chapters.get(`admin:${entry.chapter}`)
+    const route = `/admin?tab=integrations&integration=${entry.section}`
+    if (!chapter) {
+      fail('frontend/platform_docs/coverage.json', `integration section ${entry.section} references unknown chapter ${entry.chapter}`)
+    } else if (!chapter.content.includes(`](${route})`)) {
+      fail(chapter.relativeFile, `coverage chapter must link to ${route}`)
+    }
+  }
+  for (const section of integrationSections) {
+    if (!coveredIntegrationSections.has(section)) {
+      fail('frontend/platform_docs/coverage.json', `admin integration section is undocumented: ${section}`)
+    }
+  }
+  for (const section of coveredIntegrationSections) {
+    if (!integrationSections.has(section)) {
+      fail('frontend/platform_docs/coverage.json', `admin integration section is not registered in IntegrationsHub.jsx: ${section}`)
+    }
   }
 }
 

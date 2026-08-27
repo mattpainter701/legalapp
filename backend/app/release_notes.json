@@ -1,7 +1,28 @@
 {
   "recent_release_days": 30,
   "releases": [
-{
+    {
+      "id": "2026.08.27.5",
+      "version": "2026.08.27.5",
+      "title": "Integration administration is organized in one clear workspace",
+      "published_at": "2026-08-27",
+      "summary": "Administrators can now review every connected service from one Integrations workspace with clearer purpose, permissions, setup requirements, and operating guides.",
+      "highlights": [
+        {
+          "title": "Find every connection in Integrations",
+          "description": "Cloud accounts, search, file shares, Teams, Zoom, QuickBooks, and MCP now live under one organized administrative workspace."
+        },
+        {
+          "title": "Understand access before setup",
+          "description": "Each integration explains what it does, the data and permissions it uses, and the prerequisites an administrator should confirm."
+        },
+        {
+          "title": "Move from overview to the right controls",
+          "description": "Focused sections keep configuration close at hand, while expandable notes link directly to the relevant administrative guide."
+        }
+      ]
+    },
+    {
       "id": "2026.08.27.4",
       "version": "2026.08.27.4",
       "title": "QuickBooks invoice sync is smoother and respects tax choices",
@@ -21,7 +42,8 @@
           "description": "An invoice with a zero sales-tax rate sends non-taxable lines to QuickBooks; a positive rate sends taxable lines."
         }
       ]
-    },    {
+    },
+    {
       "id": "2026.08.27.3",
       "version": "2026.08.27.3",
       "title": "Signature requests are easier to deliver and follow through",
