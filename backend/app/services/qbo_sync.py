@@ -657,7 +657,9 @@ class QBOSyncService:
                 invoice.qbo_sync_status = "synced"
             else:
                 invoice.qbo_sync_status = "failed"
-                invoice.qbo_sync_error = "QuickBooks did not accept the invoice after 3 attempts."
+                invoice.qbo_sync_error = (
+                    "QuickBooks did not accept the invoice after 3 attempts."
+                )
             await self.db.commit()
 
         return result

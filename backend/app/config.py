@@ -1028,9 +1028,7 @@ def validate_qbo_settings(settings: Settings) -> None:
         raise ValueError(f"QBO_REDIRECT_URI must be an absolute {requirement} URL")
 
     if environment == "production":
-        expected = (
-            f"{settings.BACKEND_URL.rstrip('/')}/api/integrations/qbo/callback"
-        )
+        expected = f"{settings.BACKEND_URL.rstrip('/')}/api/integrations/qbo/callback"
         if redirect_uri != expected:
             raise ValueError(
                 "QBO_REDIRECT_URI must exactly match "

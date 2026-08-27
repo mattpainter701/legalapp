@@ -1436,7 +1436,6 @@ async def update_invoice(
 
     await db.commit()
 
-
     return await _load_invoice_response(db, invoice_uuid, user.tenant_id)
 
 

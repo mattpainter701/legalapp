@@ -290,9 +290,13 @@ class Invoice(Base):
         String(50), default="pending", server_default="pending"
     )
     qbo_sync_token: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    qbo_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    qbo_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     qbo_sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    billed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    billed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     ledes_exported_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

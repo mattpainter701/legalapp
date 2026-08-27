@@ -47,9 +47,7 @@ _fallback_state_data: dict[str, dict] = {}
 
 # Intuit's discovery document is authoritative. The known endpoints are a
 # resilience fallback for a temporary discovery outage.
-QBO_DISCOVERY_URL = (
-    "https://developer.api.intuit.com/.well-known/openid_configuration"
-)
+QBO_DISCOVERY_URL = "https://developer.api.intuit.com/.well-known/openid_configuration"
 QBO_AUTH_URL = "https://appcenter.intuit.com/connect/oauth2"
 QBO_TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
 QBO_REVOKE_URL = "https://developer.api.intuit.com/v2/oauth2/tokens/revoke"
@@ -115,9 +113,7 @@ async def _get_qbo_oauth_endpoints() -> dict[str, str]:
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            response = await _request_with_auth_retry(
-                client, "GET", QBO_DISCOVERY_URL
-            )
+            response = await _request_with_auth_retry(client, "GET", QBO_DISCOVERY_URL)
         response.raise_for_status()
         document = response.json()
         endpoints = {
@@ -134,9 +130,7 @@ async def _get_qbo_oauth_endpoints() -> dict[str, str]:
             )
         resolved = {key: value for key, value in endpoints.items() if value}
     except Exception as exc:
-        logger.warning(
-            "Intuit OAuth discovery failed; using known endpoints: %s", exc
-        )
+        logger.warning("Intuit OAuth discovery failed; using known endpoints: %s", exc)
         resolved = _fallback_oauth_endpoints()
 
     _oauth_endpoints_cache = (now + _OAUTH_DISCOVERY_TTL_SECONDS, resolved)
@@ -590,13 +584,19 @@ async def qbo_list_ar_accounts(
         resp = await client.get(
             url,
             params={"query": query},
-            headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/json",
+            },
         )
     if resp.status_code != 200:
-        logger.warning(f"QBO account fetch failed: {resp.status_code} {resp.text[:200]}")
+        logger.warning(
+            f"QBO account fetch failed: {resp.status_code} {resp.text[:200]}"
+        )
         raise HTTPException(status_code=502, detail="Failed to fetch QBO accounts")
     accounts = resp.json().get("QueryResponse", {}).get("Account", [])
     return [QBOAccountOption(id=a["Id"], name=a["Name"]) for a in accounts]
+
 
 # ── Item Mappings ─────────────────────────────────────────────────────────────
 
