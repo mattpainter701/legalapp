@@ -225,6 +225,25 @@ async def test_research_asgi_discovery_and_bearer_challenge(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_research_asgi_rejects_apex_mcp_and_oauth_routes(monkeypatch):
+    monkeypatch.setattr(router.settings, "MCP_PRODUCT_ENABLED", True)
+    monkeypatch.setattr(router.settings, "RESEARCH_MCP_OAUTH_ENABLED", True)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport,
+        base_url="https://getlawhand.com",
+    ) as client:
+        transport_response = await client.post(
+            "/api/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+        )
+        jwks_response = await client.get("/api/research-mcp/oauth/jwks")
+
+    assert transport_response.status_code == 404
+    assert jwks_response.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_research_refresh_uses_separate_namespace_and_resource(monkeypatch):
     captured = {}
 

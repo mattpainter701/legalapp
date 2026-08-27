@@ -118,7 +118,7 @@ for numeric_name in DISK_MAX_PERCENT SCHEDULER_MAX_AGE_MINUTES QUEUE_MAX_AGE_MIN
 done
 (( DISK_MAX_PERCENT <= 100 )) || { echo "FAIL: DISK_MAX_PERCENT must be at most 100" >&2; exit 1; }
 (( TLS_MIN_VALID_DAYS <= 3650 )) || { echo "FAIL: TLS_MIN_VALID_DAYS must be at most 3650" >&2; exit 1; }
-[[ "$MCP_PRODUCT_ENABLED" == "false" ]] || { echo "FAIL: MCP_PRODUCT_ENABLED must remain false" >&2; exit 1; }
+[[ "$MCP_PRODUCT_ENABLED" == "true" || "$MCP_PRODUCT_ENABLED" == "false" ]] || { echo "FAIL: MCP_PRODUCT_ENABLED must be explicitly true or false" >&2; exit 1; }
 [[ "$WORKSPACE_MCP_ENABLED" == "true" || "$WORKSPACE_MCP_ENABLED" == "false" ]] || { echo "FAIL: WORKSPACE_MCP_ENABLED must be true or false" >&2; exit 1; }
 [[ "$PLATFORM_LEGACY_BOOTSTRAP_ENABLED" == "false" ]] || { echo "FAIL: PLATFORM_LEGACY_BOOTSTRAP_ENABLED must be explicitly false" >&2; exit 1; }
 [[ "$EMAIL_ENABLED" == "true" || "$EMAIL_ENABLED" == "false" ]] || { echo "FAIL: EMAIL_ENABLED must be true or false" >&2; exit 1; }
@@ -494,21 +494,35 @@ raise SystemExit(
   fail "public readiness must report status=ok, host_disks=ok, and backups=ok"
 fi
 curl -fsS --max-time 15 "https://${DOMAIN}/" >/dev/null || fail "public frontend check failed"
-require_http_status "disabled public MCP transport" "https://${DOMAIN}/api/mcp" 404
-require_http_status "disabled public MCP manifest" "https://${DOMAIN}/api/mcp/manifest" 404
-research_origin="https://research.${DOMAIN}"
-research_status="$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' "$research_origin/api/mcp" || true)"
-if [[ "$research_status" != "000" ]]; then
-  require_http_status "disabled canonical research MCP transport" "$research_origin/api/mcp" 404
-  require_http_status "disabled canonical research MCP manifest" "$research_origin/api/mcp/manifest" 404
-  require_http_status "disabled research MCP root metadata" "$research_origin/.well-known/oauth-protected-resource" 404
-  require_http_status "disabled research MCP path metadata" "$research_origin/.well-known/oauth-protected-resource/api/mcp" 404
-  require_http_status "disabled research OAuth metadata" "$research_origin/.well-known/oauth-authorization-server" 404
-  require_http_status "disabled research MCP JWKS" "$research_origin/api/research-mcp/oauth/jwks" 404
+if [[ "$MCP_PRODUCT_ENABLED" == "true" ]]; then
+  research_origin="https://research.${DOMAIN}"
+  require_http_status "apex MCP transport isolation" "https://${DOMAIN}/api/mcp" 404
+  require_http_status "apex MCP manifest isolation" "https://${DOMAIN}/api/mcp/manifest" 404
+  require_http_status "canonical research MCP bearer challenge" "$research_origin/api/mcp" 401
+  require_http_status "canonical research MCP manifest challenge" "$research_origin/api/mcp/manifest" 401
+  require_http_status "research MCP root metadata" "$research_origin/.well-known/oauth-protected-resource" 200
+  require_http_status "research MCP path metadata" "$research_origin/.well-known/oauth-protected-resource/api/mcp" 200
+  require_http_status "research OAuth metadata" "$research_origin/.well-known/oauth-authorization-server" 200
+  require_http_status "research MCP JWKS" "$research_origin/api/research-mcp/oauth/jwks" 200
   require_http_status "research MCP hostname isolation" "$research_origin/api/version" 404
   require_single_hsts "canonical research MCP transport" "$research_origin/api/mcp"
 else
-  echo "WARNING: canonical research MCP hostname is not routed yet; the public product remains disabled." >&2
+  require_http_status "disabled public MCP transport" "https://${DOMAIN}/api/mcp" 404
+  require_http_status "disabled public MCP manifest" "https://${DOMAIN}/api/mcp/manifest" 404
+  research_origin="https://research.${DOMAIN}"
+  research_status="$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' "$research_origin/api/mcp" || true)"
+  if [[ "$research_status" != "000" ]]; then
+    require_http_status "disabled canonical research MCP transport" "$research_origin/api/mcp" 404
+    require_http_status "disabled canonical research MCP manifest" "$research_origin/api/mcp/manifest" 404
+    require_http_status "disabled research MCP root metadata" "$research_origin/.well-known/oauth-protected-resource" 404
+    require_http_status "disabled research MCP path metadata" "$research_origin/.well-known/oauth-protected-resource/api/mcp" 404
+    require_http_status "disabled research OAuth metadata" "$research_origin/.well-known/oauth-authorization-server" 404
+    require_http_status "disabled research MCP JWKS" "$research_origin/api/research-mcp/oauth/jwks" 404
+    require_http_status "research MCP hostname isolation" "$research_origin/api/version" 404
+    require_single_hsts "canonical research MCP transport" "$research_origin/api/mcp"
+  else
+    echo "WARNING: canonical research MCP hostname is not routed yet; the public product remains disabled." >&2
+  fi
 fi
 
 if [[ "$WORKSPACE_MCP_ENABLED" == "true" ]]; then

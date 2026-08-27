@@ -78,6 +78,17 @@ def _require_enabled() -> None:
         raise HTTPException(status_code=404, detail="Research MCP OAuth is disabled")
 
 
+def _require_canonical_research_host(request: Request) -> None:
+    """Keep OAuth discovery and token endpoints on their declared issuer."""
+
+    expected_host = urlsplit(settings.research_mcp_endpoint).netloc.casefold()
+    if not expected_host or request.url.netloc.casefold() != expected_host:
+        raise HTTPException(status_code=404, detail="Research MCP route is unavailable")
+
+
+router.dependencies.append(Depends(_require_canonical_research_host))
+
+
 def _oauth_error(exc: WorkspaceOAuthError) -> JSONResponse:
     return JSONResponse(
         status_code=exc.status_code,
