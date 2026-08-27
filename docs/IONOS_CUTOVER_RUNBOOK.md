@@ -113,7 +113,9 @@ is green:
    `STAGE-IONOS-CANDIDATE`. This runs the full preflight, backup, data guard,
    sequential image build, migrations, scheduler proof, private-origin checks,
    hostname isolation, and private research manifest probe. It deliberately
-   does not claim public readiness.
+   does not claim public readiness. The one-shot LiteLLM Prisma migrator has a
+   1,280-MiB cgroup allowance because an initial production-data reconciliation
+   can exceed 768 MiB; it exits before the steady-state LiteLLM proxy starts.
 3. Record `IONOS_STAGE_COMMIT`, the off-host backup evidence path, container
    health, private origin TLS result, and `IONOS_PUBLIC_CUTOVER=not-yet-approved`.
 4. Run a bounded load test at two backend workers while watching container RSS,

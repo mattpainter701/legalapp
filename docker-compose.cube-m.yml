@@ -30,10 +30,13 @@ services:
           cpus: "0.30"
 
   litellm-migrator:
+    # Prisma migrate deploy peaked just under 800 MiB while reconciling the
+    # restored production schema. Keep this one-shot allowance above that
+    # observed peak; the service exits before the steady-state proxy starts.
     deploy:
       resources:
         limits:
-          memory: 768M
+          memory: 1280M
           cpus: "0.35"
 
   litellm-schema-migrator:
