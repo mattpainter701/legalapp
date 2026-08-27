@@ -8,11 +8,13 @@ QBO uses OAuth 2.0 with the following flow:
 5. POST /disconnect → revoke tokens
 """
 
+import asyncio
 import logging
 import secrets
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -28,6 +30,7 @@ from app.schemas.qbo import (
     QBOIntegrationResponse,
     QBOIntegrationUpdate,
     QBOItemOption,
+    QBOAccountOption,
     QBOItemMappingResponse,
     QBOItemMappingUpsert,
     QBOSyncStatus,
@@ -42,13 +45,96 @@ _STATE_TTL = 600
 _fallback_states: dict[str, float] = {}
 _fallback_state_data: dict[str, dict] = {}
 
-# QBO OAuth endpoints
+# Intuit's discovery document is authoritative. The known endpoints are a
+# resilience fallback for a temporary discovery outage.
+QBO_DISCOVERY_URL = "https://developer.api.intuit.com/.well-known/openid_configuration"
 QBO_AUTH_URL = "https://appcenter.intuit.com/connect/oauth2"
 QBO_TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
-QBO_REVOKE_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/revoke"
-QBO_SANDBOX_AUTH_URL = "https://appcenter.intuit.com/connect/oauth2"
+QBO_REVOKE_URL = "https://developer.api.intuit.com/v2/oauth2/tokens/revoke"
+_OAUTH_DISCOVERY_TTL_SECONDS = 3600
+_AUTH_MAX_ATTEMPTS = 3
+_oauth_endpoints_cache: tuple[float, dict[str, str]] | None = None
 
 QBO_SCOPES = "com.intuit.quickbooks.accounting openid profile email"
+
+
+def _fallback_oauth_endpoints() -> dict[str, str]:
+    return {
+        "authorization_endpoint": QBO_AUTH_URL,
+        "token_endpoint": QBO_TOKEN_URL,
+        "revocation_endpoint": QBO_REVOKE_URL,
+    }
+
+
+def _trusted_intuit_endpoint(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    parsed = urlparse(value)
+    hostname = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not (
+        hostname == "intuit.com" or hostname.endswith(".intuit.com")
+    ):
+        return None
+    return value
+
+
+async def _request_with_auth_retry(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    **kwargs,
+) -> httpx.Response:
+    """Retry transient OAuth failures; never retry terminal 4xx grant errors."""
+    last_error: Exception | None = None
+    for attempt in range(_AUTH_MAX_ATTEMPTS):
+        try:
+            response = await client.request(method, url, **kwargs)
+            if response.status_code not in {408, 429} and response.status_code < 500:
+                return response
+            last_error = httpx.HTTPStatusError(
+                f"Transient Intuit OAuth response: {response.status_code}",
+                request=response.request,
+                response=response,
+            )
+        except (httpx.TimeoutException, httpx.NetworkError) as exc:
+            last_error = exc
+        if attempt + 1 < _AUTH_MAX_ATTEMPTS:
+            await asyncio.sleep(0.5 * (2**attempt))
+    assert last_error is not None
+    raise last_error
+
+
+async def _get_qbo_oauth_endpoints() -> dict[str, str]:
+    """Resolve and cache endpoints from Intuit's OIDC discovery document."""
+    global _oauth_endpoints_cache
+    now = time.monotonic()
+    if _oauth_endpoints_cache and _oauth_endpoints_cache[0] > now:
+        return _oauth_endpoints_cache[1]
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await _request_with_auth_retry(client, "GET", QBO_DISCOVERY_URL)
+        response.raise_for_status()
+        document = response.json()
+        endpoints = {
+            key: _trusted_intuit_endpoint(document.get(key))
+            for key in (
+                "authorization_endpoint",
+                "token_endpoint",
+                "revocation_endpoint",
+            )
+        }
+        if not all(endpoints.values()):
+            raise ValueError(
+                "Intuit discovery document has missing or untrusted endpoints"
+            )
+        resolved = {key: value for key, value in endpoints.items() if value}
+    except Exception as exc:
+        logger.warning("Intuit OAuth discovery failed; using known endpoints: %s", exc)
+        resolved = _fallback_oauth_endpoints()
+
+    _oauth_endpoints_cache = (now + _OAUTH_DISCOVERY_TTL_SECONDS, resolved)
+    return resolved
 
 
 async def _save_state(request: Request, state: str, data: dict) -> None:
@@ -118,9 +204,12 @@ async def _get_fresh_qbo_token(db: AsyncSession, tenant_id: str) -> str | None:
         return None
 
     refresh_token = decrypt_token(qbo.encrypted_refresh_token)
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            QBO_TOKEN_URL,
+    endpoints = await _get_qbo_oauth_endpoints()
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await _request_with_auth_retry(
+            client,
+            "POST",
+            endpoints["token_endpoint"],
             data={
                 "grant_type": "refresh_token",
                 "refresh_token": refresh_token,
@@ -193,8 +282,9 @@ async def qbo_connect(
         settings.QBO_REDIRECT_URI
         or f"{settings.BACKEND_URL}/api/integrations/qbo/callback"
     )
+    endpoints = await _get_qbo_oauth_endpoints()
     authorize_url = (
-        f"{QBO_AUTH_URL}"
+        f"{endpoints['authorization_endpoint']}"
         f"?client_id={settings.QBO_CLIENT_ID}"
         f"&response_type=code"
         f"&scope={QBO_SCOPES.replace(' ', '+')}"
@@ -229,9 +319,12 @@ async def qbo_callback(
         or f"{settings.BACKEND_URL}/api/integrations/qbo/callback"
     )
 
-    async with httpx.AsyncClient() as client:
-        token_resp = await client.post(
-            QBO_TOKEN_URL,
+    endpoints = await _get_qbo_oauth_endpoints()
+    async with httpx.AsyncClient(timeout=15) as client:
+        token_resp = await _request_with_auth_retry(
+            client,
+            "POST",
+            endpoints["token_endpoint"],
             data={
                 "grant_type": "authorization_code",
                 "code": code,
@@ -330,6 +423,8 @@ async def qbo_status(
         last_sync_at=qbo.last_sync_at,
         last_sync_status=qbo.last_sync_status,
         last_sync_error=qbo.last_sync_error,
+        qbo_ar_account_id=qbo.qbo_ar_account_id,
+        qbo_ar_account_name=qbo.qbo_ar_account_name,
     )
 
 
@@ -354,8 +449,9 @@ async def qbo_update_settings(
 
     if body.sync_frequency_minutes is not None:
         qbo.sync_frequency_minutes = body.sync_frequency_minutes
-    if body.sandbox_mode is not None:
-        qbo.sandbox_mode = body.sandbox_mode
+    if body.qbo_ar_account_id is not None:
+        qbo.qbo_ar_account_id = body.qbo_ar_account_id or None
+        qbo.qbo_ar_account_name = body.qbo_ar_account_name or None
 
     await db.commit()
     await db.refresh(qbo)
@@ -385,9 +481,12 @@ async def qbo_disconnect(
     if qbo.encrypted_refresh_token:
         try:
             refresh_token = decrypt_token(qbo.encrypted_refresh_token)
-            async with httpx.AsyncClient() as client:
-                await client.post(
-                    QBO_REVOKE_URL,
+            endpoints = await _get_qbo_oauth_endpoints()
+            async with httpx.AsyncClient(timeout=15) as client:
+                await _request_with_auth_retry(
+                    client,
+                    "POST",
+                    endpoints["revocation_endpoint"],
                     data={"token": refresh_token},
                     headers={
                         "Authorization": _basic_auth_header(),
@@ -456,6 +555,47 @@ async def qbo_list_items(
 
     items = resp.json().get("QueryResponse", {}).get("Item", [])
     return [QBOItemOption(id=it["Id"], name=it["Name"]) for it in items]
+
+
+@router.get("/accounts")
+async def qbo_list_ar_accounts(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> list[QBOAccountOption]:
+    """Return active accounts-receivable accounts from the connected company."""
+    user = await get_current_user(request, db)
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    await set_tenant_context(db, str(user.tenant_id))
+    access_token = await _get_fresh_qbo_token(db, str(user.tenant_id))
+    qbo = await _get_qbo_integration(db, str(user.tenant_id))
+    if not access_token or not qbo or not qbo.qbo_realm_id:
+        raise HTTPException(status_code=400, detail="QBO not connected")
+
+    base = (
+        "https://sandbox-quickbooks.api.intuit.com"
+        if qbo.sandbox_mode
+        else "https://quickbooks.api.intuit.com"
+    )
+    url = f"{base}/v3/company/{qbo.qbo_realm_id}/query"
+    query = "SELECT * FROM Account WHERE AccountType = 'Accounts Receivable' AND Active = true MAXRESULTS 100"
+    async with httpx.AsyncClient(timeout=20) as client:
+        resp = await client.get(
+            url,
+            params={"query": query},
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/json",
+            },
+        )
+    if resp.status_code != 200:
+        logger.warning(
+            f"QBO account fetch failed: {resp.status_code} {resp.text[:200]}"
+        )
+        raise HTTPException(status_code=502, detail="Failed to fetch QBO accounts")
+    accounts = resp.json().get("QueryResponse", {}).get("Account", [])
+    return [QBOAccountOption(id=a["Id"], name=a["Name"]) for a in accounts]
 
 
 # ── Item Mappings ─────────────────────────────────────────────────────────────
@@ -543,7 +683,14 @@ async def qbo_sync_invoice(
 
     from app.services.qbo_sync import QBOSyncService
 
-    svc = QBOSyncService(db, str(user.tenant_id), access_token, sandbox=sandbox)
+    svc = QBOSyncService(
+        db,
+        str(user.tenant_id),
+        access_token,
+        sandbox=sandbox,
+        ar_account_id=qbo.qbo_ar_account_id if qbo else None,
+        ar_account_name=qbo.qbo_ar_account_name if qbo else None,
+    )
     result = await svc.sync_invoice_with_retry(invoice_id)
 
     if result is None:

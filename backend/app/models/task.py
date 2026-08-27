@@ -252,7 +252,7 @@ class Task(Base):
         Integer, default=1, server_default="1", nullable=False
     )
 
-    # "manual" | "email_agent" | "calendar_sync" | "assistant"
+    # "manual" | "email_agent" | "email_subject_tag" | "calendar_sync" | "assistant"
     source: Mapped[str] = mapped_column(
         String(50), default="manual", server_default="manual"
     )

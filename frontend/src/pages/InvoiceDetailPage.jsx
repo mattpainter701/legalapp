@@ -21,6 +21,7 @@ import {
   createInvoicePaymentLink,
   exportInvoice,
   getInvoice,
+  getQBOStatus,
   recordPayment,
   syncInvoiceToQBO,
   updateInvoice,
@@ -102,6 +103,7 @@ export default function InvoiceDetailPage() {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(null)
   const [busyAction, setBusyAction] = useState(null)
+  const [qboConnected, setQboConnected] = useState(null)
   const [showPayment, setShowPayment] = useState(false)
   const [editingDetails, setEditingDetails] = useState(false)
   const [editError, setEditError] = useState(null)
@@ -145,6 +147,12 @@ export default function InvoiceDetailPage() {
   useEffect(() => {
     loadInvoice()
   }, [loadInvoice])
+
+  useEffect(() => {
+    getQBOStatus()
+      .then((result) => setQboConnected(Boolean(result.connected)))
+      .catch(() => setQboConnected(false))
+  }, [])
 
   const handleStatusChange = async (newStatus) => {
     if (newStatus === 'sent') {
@@ -287,11 +295,13 @@ export default function InvoiceDetailPage() {
     setBusyAction('qbo')
     try {
       await syncInvoiceToQBO(id)
-      toast.success('QuickBooks sync started')
+      toast.success('Invoice synced to QuickBooks and marked billed')
       await loadInvoice()
     } catch (error) {
       reportError('QuickBooks sync failed', error)
-      toast.error('QuickBooks sync failed', { message: 'Make sure QuickBooks is connected in Admin.' })
+      toast.error('QuickBooks sync failed', {
+        message: error?.response?.data?.detail || 'Check the QuickBooks connection and item mappings.',
+      })
     } finally {
       setBusyAction(null)
     }
@@ -635,8 +645,8 @@ export default function InvoiceDetailPage() {
                 <p className="text-sm font-semibold text-brand-ink">QuickBooks Online</p>
                 <p className={`mt-1 text-xs ${qboSynced ? 'text-brand-green' : 'text-brand-muted'}`}>{qboSynced ? `Synced${invoice.qbo_invoice_id ? ` · ${invoice.qbo_invoice_id}` : ''}` : statusLabel(invoice.qbo_sync_status || 'not synced')}</p>
               </div>
-              <button type="button" onClick={handleSyncToQBO} disabled={busyAction === 'qbo' || invoice.status === 'draft'} title={invoice.status === 'draft' ? 'Mark the invoice as sent before syncing' : 'Sync invoice to QuickBooks'} className={`inline-flex min-h-10 items-center gap-2 rounded-xl px-3 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50 ${qboSynced ? 'bg-brand-green text-white' : 'border border-brand-line bg-brand-surface text-brand-ink'}`}>
-                {busyAction === 'qbo' ? <RefreshCw size={14} className="animate-spin" /> : qboSynced ? <Check size={14} /> : <RefreshCw size={14} />}
+              <button type="button" onClick={handleSyncToQBO} disabled={busyAction === 'qbo' || !qboConnected || qboSynced} title={!qboConnected ? 'Connect QuickBooks in Admin first' : qboSynced ? 'Successfully synced to QuickBooks' : 'Sync to QuickBooks and mark billed'} className={`inline-flex min-h-10 items-center gap-2 rounded-xl px-3 text-xs font-semibold disabled:cursor-not-allowed ${qboSynced ? 'bg-brand-green text-white' : 'border border-brand-line bg-brand-surface text-brand-ink'}`}>
+                {busyAction === 'qbo' ? <RefreshCw size={14} className="animate-spin" /> : <span aria-hidden="true" className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-brand-muted text-[9px] font-black text-white">qb</span>}
                 {busyAction === 'qbo' ? 'Syncing' : qboSynced ? 'Synced' : 'Sync'}
               </button>
             </div>

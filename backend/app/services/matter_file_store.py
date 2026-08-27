@@ -16,12 +16,14 @@ import hashlib
 import hmac
 import json
 import logging
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
 
 import httpx
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -49,6 +51,9 @@ DOCUMENT_CATEGORY_FOLDER_MAP = {
     "evidence": "documents",
     "other": "documents",
     "general": "documents",
+    "client-portal": "client_uploads",
+    "client_upload": "client_uploads",
+    "client_uploads": "client_uploads",
 }
 
 
@@ -107,8 +112,77 @@ class MatterFileCleanupError(RuntimeError):
     """A staged matter file could not be safely removed after persistence failed."""
 
 
+class MatterFileStoragePolicyError(ProviderError):
+    """A tenant-cloud-bound write failed without creating a local durable copy."""
+
+
 class MatterFileStore:
     """Store matter files in the customer's connected cloud storage."""
+
+    async def _resolve_provider_policy(
+        self,
+        *,
+        db: AsyncSession,
+        tenant_id: str,
+        preferred_provider: str | None,
+    ) -> tuple[str | None, bool]:
+        """Return the exclusive provider and whether customer-cloud storage is bound.
+
+        An administrator's explicit selection always wins. In Auto mode, an active
+        Microsoft 365 connection binds storage to OneDrive; otherwise an active
+        Google connection binds it to Google Drive. Lightweight unit callers that
+        do not provide a database retain the historical unbound provider cascade.
+        """
+        if str(preferred_provider or "").strip():
+            return _normalize_configured_provider(preferred_provider), True
+        if not hasattr(db, "execute"):
+            return None, False
+
+        try:
+            tenant_uuid = uuid.UUID(str(tenant_id))
+        except (TypeError, ValueError) as exc:
+            raise MatterFileStoragePolicyError(
+                "Tenant storage policy could not be resolved; no durable local copy "
+                "was created."
+            ) from exc
+
+        from app.models.tenant import TenantSettings
+        from app.models.tenant_credential import TenantCredential
+
+        try:
+            settings_result = await db.execute(
+                select(TenantSettings.primary_cloud_provider).where(
+                    TenantSettings.tenant_id == tenant_uuid
+                )
+            )
+            configured = settings_result.scalar_one_or_none()
+            if str(configured or "").strip():
+                return _normalize_configured_provider(configured), True
+
+            credential_result = await db.execute(
+                select(TenantCredential.provider).where(
+                    TenantCredential.tenant_id == tenant_uuid,
+                    TenantCredential.is_active.is_(True),
+                )
+            )
+            connected = {
+                str(provider).strip().lower()
+                for provider in credential_result.scalars().all()
+                if provider
+            }
+        except MatterFileStoragePolicyError:
+            raise
+        except Exception as exc:
+            raise MatterFileStoragePolicyError(
+                "Tenant storage policy could not be resolved; no durable local copy "
+                "was created."
+            ) from exc
+
+        if "microsoft" in connected:
+            return "onedrive", True
+        if "google" in connected:
+            return "google_drive", True
+        return None, False
 
     async def read_matter_file_bytes(
         self,
@@ -447,10 +521,10 @@ class MatterFileStore:
 
         When matter_cloud_folder is provided, uploads directly to the pre-provisioned
         subfolder ID instead of traversing the folder tree.
-        When preferred_provider is set, that configured cloud is exclusive; a
-        failed configured-cloud upload falls back to local storage with an
-        actionable warning in ``StorageResult.error``. With no preference,
-        providers retain their historical first-available cascade.
+        When preferred_provider is set, that configured cloud is exclusive and
+        fails closed. Auto binds active Microsoft 365 and Google connections.
+        Only an unbound tenant retains the legacy provider cascade and local
+        development fallback.
         """
         result = await self.store_matter_file_result(
             db=db,
@@ -509,12 +583,15 @@ class MatterFileStore:
             matter_cloud_folder, "sharepoint", "drive_id"
         )
 
-        explicit_provider = bool(str(preferred_provider or "").strip())
-        configured_provider = _normalize_configured_provider(preferred_provider)
+        configured_provider, policy_bound = await self._resolve_provider_policy(
+            db=db,
+            tenant_id=tenant_id,
+            preferred_provider=preferred_provider,
+        )
         providers = (
             [configured_provider]
-            if explicit_provider and configured_provider
-            else ([] if explicit_provider else _ordered_providers(None))
+            if policy_bound and configured_provider
+            else ([] if policy_bound else _ordered_providers(None))
         )
 
         for provider in providers:
@@ -557,8 +634,8 @@ class MatterFileStore:
                 if result and result.succeeded:
                     return result
 
-        # Fallback: local disk. An explicit primary cloud never spills into a
-        # different cloud provider; surface the configured-provider failure so
+        # A cloud-bound tenant never spills into another provider or onto the
+        # application host. require_cloud callers retain their structured result.
         if require_cloud:
             return StorageResult(
                 provider=configured_provider or "cloud",
@@ -566,34 +643,17 @@ class MatterFileStore:
                 error="Required cloud storage upload failed; local storage is disabled.",
             )
 
-        # callers can warn the user while retaining the locally saved bytes.
+        if policy_bound:
+            raise MatterFileStoragePolicyError(
+                _configured_provider_failure_message(configured_provider)
+            )
+
+        # Legacy development/demo tenants without any cloud binding retain the
+        # historical local path until onboarding makes a provider authoritative.
         local_result = await self._store_local(
             tenant_id, matter_slug, canonical_folder, filename, content
         )
-        if not explicit_provider:
-            return local_result
-
-        warning = _configured_provider_fallback_warning(configured_provider)
-        logger.warning(
-            "Configured cloud upload failed for tenant %s via %s; saved %s locally",
-            tenant_id,
-            configured_provider or "unsupported provider",
-            filename,
-        )
-        return StorageResult(
-            provider=local_result.provider,
-            backend=local_result.backend,
-            storage_path=local_result.storage_path,
-            web_url=local_result.web_url,
-            provider_item_id=local_result.provider_item_id,
-            drive_id=local_result.drive_id,
-            parent_id=local_result.parent_id,
-            provider_etag=local_result.provider_etag,
-            provider_version_id=local_result.provider_version_id,
-            provider_modified_at=local_result.provider_modified_at,
-            provider_checksum=local_result.provider_checksum,
-            error=warning,
-        )
+        return local_result
 
     # Files larger than this use chunked/resumable upload to avoid timeouts.
     _CHUNK_THRESHOLD_ONEDRIVE = 4 * 1024 * 1024  # 4 MiB
@@ -1335,6 +1395,8 @@ def _document_folder_for_category(category: str | None) -> str:
 def _folder_lookup_keys(category: str) -> list[str]:
     """Return compatible subfolder keys across historical matter layouts."""
     keys = [category]
+    if category == "client_uploads":
+        return keys
     if category == "documents":
         keys.append("uploads")
     elif category == "pleadings":
@@ -1366,7 +1428,7 @@ def _normalize_configured_provider(preferred: str | None) -> str | None:
     return None
 
 
-def _configured_provider_fallback_warning(provider: str | None) -> str:
+def _configured_provider_failure_message(provider: str | None) -> str:
     labels = {
         "onedrive": "Microsoft OneDrive",
         "sharepoint": "Microsoft SharePoint",
@@ -1374,14 +1436,14 @@ def _configured_provider_fallback_warning(provider: str | None) -> str:
     }
     if provider is None:
         return (
-            "The configured cloud provider is unsupported; bytes were saved to "
-            "local storage. Select Auto or a supported primary cloud provider, "
-            "then retry."
+            "The configured cloud provider is unsupported. No durable local copy "
+            "was created. Select Auto or a supported primary cloud provider, then "
+            "retry."
         )
     label = labels[provider]
     return (
-        f"Configured {label} upload failed; bytes were saved to local storage. "
-        f"Reconnect {label} or verify its folder permissions, then retry."
+        f"Configured {label} storage is unavailable. No durable local copy was "
+        f"created. Reconnect {label} or verify its folder permissions, then retry."
     )
 
 

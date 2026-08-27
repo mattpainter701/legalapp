@@ -7,6 +7,9 @@ import logging
 from datetime import date
 from decimal import Decimal
 from io import BytesIO
+from xml.sax.saxutils import escape
+
+from app.services.trust_statement_pdf import _fetch_logo_image
 
 logger = logging.getLogger(__name__)
 
@@ -31,17 +34,21 @@ TABLE_ROW_HEIGHT = 18
 TABLE_HEADER_BG = (0.9, 0.9, 0.9)
 TABLE_GRID_COLOR = (0.7, 0.7, 0.7)
 TOTAL_BG = (0.95, 0.95, 0.95)
+LOGO_MAX_W = 160
+LOGO_MAX_H = 60
 
 
 def _format_currency(amount: Decimal) -> str:
     return f"${amount:,.2f}"
 
 
-def generate_invoice_pdf(invoice_response) -> bytes:
+def generate_invoice_pdf(invoice_response, branding: dict | None = None) -> bytes:
     """Generate a professional legal invoice as a PDF.
 
     Args:
         invoice_response: InvoiceResponse Pydantic model from billing schema.
+        branding: Resolved tenant firm branding. Optional for compatibility with
+            internal callers; tenant-facing routes should always provide it.
 
     Returns:
         PDF bytes ready to serve or save.
@@ -65,6 +72,9 @@ def generate_invoice_pdf(invoice_response) -> bytes:
         )
 
     inv = invoice_response
+    branding = branding or {}
+    firm_name = branding.get("firm_name") or "LawHand"
+    balance_due = max(Decimal(inv.balance_due or 0), Decimal("0"))
     buf = BytesIO()
 
     doc = SimpleDocTemplate(
@@ -75,7 +85,7 @@ def generate_invoice_pdf(invoice_response) -> bytes:
         topMargin=MARGIN,
         bottomMargin=MARGIN,
         title=f"Invoice {inv.invoice_number}",
-        author="LawHand",
+        author=firm_name,
     )
 
     styles = getSampleStyleSheet()
@@ -119,8 +129,42 @@ def generate_invoice_pdf(invoice_response) -> bytes:
 
     # ── Header ────────────────────────────────────────────────────────────
 
-    story.append(Paragraph("LAWHAND", style_title))
-    story.append(Paragraph("Attorney at Law", style_body))
+    logo = None
+    if branding.get("firm_logo_url"):
+        logo = _fetch_logo_image(branding["firm_logo_url"], LOGO_MAX_W, LOGO_MAX_H)
+    firm_lines = [Paragraph(escape(firm_name), style_title)]
+    if branding.get("firm_address"):
+        firm_lines.append(
+            Paragraph(
+                escape(branding["firm_address"]).replace("\n", "<br/>"), style_body
+            )
+        )
+    contact_bits = [
+        branding.get(key)
+        for key in ("firm_phone", "firm_email", "firm_website")
+        if branding.get(key)
+    ]
+    if contact_bits:
+        firm_lines.append(Paragraph(escape(" | ".join(contact_bits)), style_body))
+    if logo is not None:
+        header = Table(
+            [[firm_lines, logo]],
+            colWidths=[CONTENT_W - LOGO_MAX_W - 10, LOGO_MAX_W + 10],
+        )
+        header.setStyle(
+            TableStyle(
+                [
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                    ("TOPPADDING", (0, 0), (-1, -1), 0),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+                ]
+            )
+        )
+        story.append(header)
+    else:
+        story.extend(firm_lines)
     story.append(Spacer(1, 6))
 
     story.append(HRFlowable(width="100%", thickness=1.5, color=colors.black))
@@ -140,21 +184,20 @@ def generate_invoice_pdf(invoice_response) -> bytes:
     info_data = [
         [
             Paragraph(
-                f"<b>Invoice:</b> {inv.invoice_number}<br/>"
+                f"<b>Invoice:</b> {escape(inv.invoice_number)}<br/>"
                 f"<b>Issue Date:</b> {inv.issue_date}<br/>"
                 f"<b>Due Date:</b> {inv.due_date}<br/>"
-                f"<b>Terms:</b> {inv.payment_terms or 'Net 30'}",
+                f"<b>Terms:</b> {escape(inv.payment_terms or 'Net 30')}",
                 style_body,
             ),
             Paragraph(
                 f"<b>Status:</b> {status_label}<br/>"
-                f"<b>Matter ID:</b> {inv.matter_id[:8]}...<br/>"
-                f"<b>Tenant ID:</b> {inv.tenant_id[:8]}...",
+                f"<b>Matter:</b> {escape(inv.matter_name or 'Matter billing')}",
                 style_body,
             ),
             Paragraph(
                 f"<b>Amount Due:</b><br/>"
-                f"<font size='16'><b>{_format_currency(inv.total)}</b></font>",
+                f"<font size='16'><b>{_format_currency(balance_due)}</b></font>",
                 style_right,
             ),
         ]
@@ -205,7 +248,7 @@ def generate_invoice_pdf(invoice_response) -> bytes:
             table_data.append(
                 [
                     Paragraph(str(i), style_body),
-                    Paragraph(li.description, style_body),
+                    Paragraph(escape(li.description), style_body),
                     Paragraph(source_label, style_body),
                     Paragraph(str(li.quantity), style_right),
                     Paragraph(_format_currency(li.unit_price), style_right),
@@ -325,7 +368,7 @@ def generate_invoice_pdf(invoice_response) -> bytes:
                 [
                     Paragraph(str(p.payment_date), style_body),
                     Paragraph(p.method.replace("_", " ").title(), style_body),
-                    Paragraph(p.reference_number or "-", style_body),
+                    Paragraph(escape(p.reference_number or "-"), style_body),
                     Paragraph(_format_currency(p.amount), style_right),
                 ]
             )
@@ -377,7 +420,7 @@ def generate_invoice_pdf(invoice_response) -> bytes:
 
     if inv.notes:
         story.append(Paragraph("<b>Notes</b>", style_heading))
-        story.append(Paragraph(inv.notes, style_body))
+        story.append(Paragraph(escape(inv.notes), style_body))
         story.append(Spacer(1, 12))
 
     # ── Footer ────────────────────────────────────────────────────────────
@@ -386,10 +429,23 @@ def generate_invoice_pdf(invoice_response) -> bytes:
         HRFlowable(width="100%", thickness=0.5, color=colors.Color(0.7, 0.7, 0.7))
     )
     story.append(Spacer(1, 6))
+    if branding.get("firm_pdf_footer"):
+        story.append(
+            Paragraph(
+                escape(branding["firm_pdf_footer"]),
+                ParagraphStyle(
+                    "FirmFooter",
+                    parent=style_body,
+                    fontSize=FONT_SIZE_SMALL,
+                    alignment=TA_CENTER,
+                ),
+            )
+        )
+        story.append(Spacer(1, 4))
     story.append(
         Paragraph(
-            f"Generated by LawHand on {date.today().isoformat()} | "
-            f"Invoice {inv.invoice_number} | "
+            f"Generated for {escape(firm_name)} on {date.today().isoformat()} | "
+            f"Invoice {escape(inv.invoice_number)} | "
             f"Page 1 of 1",
             ParagraphStyle(
                 "Footer",

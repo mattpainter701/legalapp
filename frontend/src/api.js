@@ -1192,6 +1192,9 @@ export const downloadClientPortalDocumentUrl = (docId) =>
 export const listClientPortalInvoices = () =>
   clientPortalApi.get('/portal/client/invoices').then((r) => r.data)
 
+export const downloadClientPortalInvoiceUrl = (invoiceId) =>
+  `${BASE_URL}/portal/client/invoices/${invoiceId}/download`
+
 // Firm-side client portal invite management (firm login)
 export const createMatterPortalInvite = (matterId, data) =>
   api.post(`/matters/${matterId}/portal/invite`, data).then((r) => r.data)
@@ -1400,6 +1403,18 @@ export const getContactCommunications = (id, params = {}) =>
 
 export const conflictCheck = (data) =>
   api.post('/contacts/conflict-check', data).then(r => r.data)
+
+export const createConflictCheck = (data) =>
+  api.post('/conflict-checks', data).then(r => r.data)
+
+export const listConflictChecks = (params = {}) =>
+  api.get('/conflict-checks', { params }).then(r => r.data)
+
+export const closeConflictCheck = (id, data) =>
+  api.post(`/conflict-checks/${id}/close`, data).then(r => r.data)
+
+export const downloadConflictCheckReport = (id) =>
+  api.get(`/conflict-checks/${id}/report.pdf`, { responseType: 'blob' }).then(r => r.data)
 
 // ── Clients & CRM ─────────────────────────────────────────────────────────
 
@@ -1914,9 +1929,9 @@ export const getCalendarEvents = (start, end) => {
   return api.get('/calendar/events', { params }).then(r => r.data)
 }
 
-export const syncCalendarDeadlines = (provider = 'microsoft') =>
+export const syncCalendarDeadlines = (provider = 'microsoft', syncDeadlines = true) =>
   api
-    .post('/calendar/sync', { provider, sync_deadlines: true })
+    .post('/calendar/sync', { provider, sync_deadlines: syncDeadlines })
     .then(r => r.data)
 
 export const getCalendarProviders = () =>
@@ -1950,6 +1965,23 @@ export const analyzeTemplateUpload = (formData) =>
   api.post('/templates/intake/analyze', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
   }).then(r => r.data)
+
+export const proposeTemplateFieldsWithAi = (formData) =>
+  api.post('/templates/intake/ai-propose', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then(r => r.data)
+
+export const previewTemplateUploadPdfPage = (formData, pageNumber = 1) =>
+  api.post('/templates/intake/pdf-page-preview', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    params: { page_number: pageNumber },
+    responseType: 'blob',
+  }).then((r) => ({
+    blob: r.data,
+    pageCount: Number(getHeaderValue(r.headers, 'x-pdf-page-count') || 1),
+    pageWidth: Number(getHeaderValue(r.headers, 'x-pdf-page-width')),
+    pageHeight: Number(getHeaderValue(r.headers, 'x-pdf-page-height')),
+  }))
 
 export const createTemplateFromUpload = (formData) =>
   api.post('/templates/intake/create', formData, {
@@ -2168,6 +2200,10 @@ export const disconnectQBO = () =>
   api.post('/integrations/qbo/disconnect').then(r => r.data)
 export const getQBOItems = () =>
   api.get('/integrations/qbo/items').then(r => r.data)
+export const getQBOAccounts = () =>
+  api.get('/integrations/qbo/accounts').then(r => r.data)
+export const updateQBOSettings = (data) =>
+  api.put('/integrations/qbo/settings', data).then(r => r.data)
 export const getQBOMappings = () =>
   api.get('/integrations/qbo/mappings').then(r => r.data)
 export const upsertQBOMapping = (data) =>

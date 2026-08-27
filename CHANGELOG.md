@@ -7,6 +7,37 @@
   actionable signer, expose delivery and first-view status, support manual
   resend, notify the next signer in sequential workflows, and execute configured
   expiration-relative reminders from the tenant-scoped scheduler.
+- **Standalone conflict review now preserves clearance evidence:** the Conflict
+  Search workspace accepts people/aliases, organizations, and email addresses,
+  saves the visibility-aware result snapshot, warns without disclosing a
+  restricted matter, requires review notes and explicit attorney
+  acknowledgement, locks closed decisions, and exports the saved record as PDF.
+- **Client portal invoice PDFs are branded and audit-traceable:** staff and
+  portal invoice exports use tenant firm identity, while the portal authorizes
+  only client-visible invoices on its matter, streams the PDF with private
+  no-store caching, and retains a metadata/hash audit rather than PDF bytes.
+- **Document templates now have a reviewed Prepare Form workflow:** uploaded
+  PDFs and supported images preserve their page design while staff review
+  detected fields, add or adjust fields manually, and create a reusable
+  template. Bounded local OCR, optional configured AI assistance, validation,
+  and clear recovery paths make scans and unfamiliar forms safer to prepare.
+- **Reviewed matter email can create a traceable task from an explicit subject
+  tag:** a new message beginning with `[TASK]` or `[DEADLINE]` previews its task
+  title and a bounded, deterministic due date in the Correspondence queue. The
+  reviewer can file the `.eml`, correspondence record, task, and task history
+  atomically, after which existing calendar projection is requested without
+  making provider availability a condition of durable capture.
+- **Cloud-bound matter storage is explicit and fail-closed:** Auto now resolves
+  an active Microsoft 365 tenant to OneDrive (or Google Drive when Google is the
+  connected provider), while an administrator-selected provider remains
+  exclusive. Provider outages return HTTP 503 without a durable local spill.
+  Client portal originals route to the newly provisioned `client_uploads`
+  folder, and the user/admin/backend guides share a lifecycle diagram and
+  operational contract for task routing and customer-owned document content.
+- **E-sign delivery completion:** internal signature requests now email the
+  actionable signer, expose delivery and first-view status, support manual
+  resend, notify the next signer in sequential workflows, and execute configured
+  expiration-relative reminders from the tenant-scoped scheduler.
 - **File share agents now have operator-grade local diagnostics:** Windows
   services write bounded rotating logs under the protected ProgramData agent
   directory, Linux continues to use journald, and the File Shares console

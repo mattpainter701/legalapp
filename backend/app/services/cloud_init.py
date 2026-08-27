@@ -25,7 +25,14 @@ GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 GOOGLE_DRIVE_BASE = "https://www.googleapis.com/drive/v3"
 
 ROOT_FOLDER_NAME = "claritylegal-records"
-MATTER_SUBFOLDERS = ["emails", "documents", "pleadings", "correspondence", "billing"]
+MATTER_SUBFOLDERS = [
+    "emails",
+    "client_uploads",
+    "documents",
+    "pleadings",
+    "correspondence",
+    "billing",
+]
 
 
 def matter_relative_path(matter_slug: str) -> str:

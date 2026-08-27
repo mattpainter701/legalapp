@@ -30,6 +30,7 @@ required=(
   MIGRATOR_DATABASE_URL APP_DATABASE_URL LITELLM_API_KEY LITELLM_SALT_KEY LITELLM_DB_PASSWORD WORKSPACE_MCP_ENABLED
   LITELLM_DATABASE_URL UPLOADS_HOST_DIR HOST_STATUS_HOST_DIR HOST_DISK_STATUS_FILE HEALTH_HOST_DISK_MAX_AGE_SECONDS BACKUP_STATUS_FILE HEALTH_BACKUP_MAX_AGE_SECONDS OFFSITE_BACKUP_REQUIRED
   EMAIL_ENABLED EMAIL_FROM ORIGIN_TLS_SERVER_NAME ORIGIN_TLS_CA_FILE CLOUDFLARED_CONFIG_FILE CLOUDFLARED_BIN
+  QBO_CLIENT_ID QBO_CLIENT_SECRET QBO_REDIRECT_URI QBO_ENVIRONMENT
 )
 
 for key in "${required[@]}"; do
@@ -94,6 +95,8 @@ if [[ -z "$opencode_zen_key" || "$opencode_zen_lowered" == *change_me* || "$open
   errors+=("OPENCODE_ZEN_API_KEY (or a supported legacy OpenCode key) must be configured with a non-placeholder value")
 fi
 check_nonplaceholder EMAIL_FROM
+check_nonplaceholder QBO_CLIENT_ID
+check_nonplaceholder QBO_CLIENT_SECRET
 
 if [[ "$(get_env LITELLM_SALT_KEY)" == "$(get_env LITELLM_API_KEY)" ]]; then
   errors+=("LITELLM_SALT_KEY must be permanent and distinct from the rotatable LITELLM_API_KEY")
@@ -101,12 +104,13 @@ fi
 
 public_signup_enabled="$(get_env PUBLIC_SIGNUP_ENABLED)"
 vite_public_signup_enabled="$(get_env VITE_PUBLIC_SIGNUP_ENABLED)"
+mcp_product_enabled="$(get_env MCP_PRODUCT_ENABLED)"
 
 [[ "$(get_env DEV_MODE)" == "false" ]] || errors+=("DEV_MODE must be false")
 [[ "$public_signup_enabled" == "false" ]] || errors+=("PUBLIC_SIGNUP_ENABLED must remain false until paid conversion and expiry enforcement are proven")
 [[ "$vite_public_signup_enabled" == "false" ]] || errors+=("VITE_PUBLIC_SIGNUP_ENABLED must remain false until public signup is enabled end to end")
 [[ "$public_signup_enabled" == "$vite_public_signup_enabled" ]] || errors+=("PUBLIC_SIGNUP_ENABLED and VITE_PUBLIC_SIGNUP_ENABLED must match")
-[[ "$(get_env MCP_PRODUCT_ENABLED)" == "false" ]] || errors+=("MCP_PRODUCT_ENABLED must remain false for this launch")
+[[ "$mcp_product_enabled" == "true" || "$mcp_product_enabled" == "false" ]] || errors+=("MCP_PRODUCT_ENABLED must be explicitly true or false")
 [[ "$(get_env PLATFORM_LEGACY_BOOTSTRAP_ENABLED)" == "false" ]] || errors+=("PLATFORM_LEGACY_BOOTSTRAP_ENABLED must be explicitly false for production")
 [[ "$(get_env OFFSITE_BACKUP_REQUIRED)" == "true" ]] || errors+=("OFFSITE_BACKUP_REQUIRED must be true for production deploys")
 email_enabled="$(get_env EMAIL_ENABLED)"
@@ -120,12 +124,17 @@ if [[ "$email_enabled" == "true" ]]; then
 fi
 [[ "$(get_env BACKEND_URL)" == https://* ]] || errors+=("BACKEND_URL must use https")
 [[ "$(get_env FRONTEND_URL)" == https://* ]] || errors+=("FRONTEND_URL must use https")
+qbo_redirect_uri="$(get_env QBO_REDIRECT_URI)"
+expected_qbo_redirect_uri="$(get_env BACKEND_URL)"
+expected_qbo_redirect_uri="${expected_qbo_redirect_uri%/}/api/integrations/qbo/callback"
+[[ "$(get_env QBO_ENVIRONMENT)" == "production" ]] || errors+=("QBO_ENVIRONMENT must be production for production deploys")
+[[ "$qbo_redirect_uri" == "$expected_qbo_redirect_uri" ]] || errors+=("QBO_REDIRECT_URI must exactly match BACKEND_URL/api/integrations/qbo/callback")
 public_site_url="$(get_env VITE_PUBLIC_SITE_URL)"
 normalized_public_site_url="${public_site_url%/}"
 expected_public_site_url="https://$(get_env DOMAIN)"
 [[ "$normalized_public_site_url" == "$expected_public_site_url" ]] \
   || errors+=("VITE_PUBLIC_SITE_URL must exactly match https://DOMAIN (an optional trailing slash is normalized)")
-operator_email="matt@cybersafeadvisor.com"
+operator_email="support@getlawhand.com"
 [[ "$(get_env VITE_CONTACT_URL)" == "mailto:$operator_email" ]] || errors+=("VITE_CONTACT_URL must be mailto:$operator_email")
 [[ "$(get_env DOMAIN)" != *yourdomain* && "$(get_env DOMAIN)" != *localhost* ]] || errors+=("DOMAIN is a placeholder")
 [[ "$(get_env APP_DATABASE_URL)" == *://clarity_app:* ]] || errors+=("APP_DATABASE_URL must use the clarity_app runtime role")
@@ -312,6 +321,46 @@ check_integer_range() {
     errors+=("$key must be an integer from $minimum to $maximum")
   fi
 }
+
+if [[ "$mcp_product_enabled" == "true" ]]; then
+  research_required=(
+    RESEARCH_MCP_PUBLIC_URL RESEARCH_MCP_OAUTH_ENABLED RESEARCH_MCP_AUDIENCE
+    RESEARCH_MCP_ISSUER RESEARCH_MCP_ACCESS_TOKEN_MAX_MINUTES
+    RESEARCH_MCP_AUTH_CODE_TTL_SECONDS RESEARCH_MCP_REFRESH_TOKEN_DAYS
+    RESEARCH_MCP_GRANT_DAYS RESEARCH_MCP_CLIENT_REGISTRATION_DAYS
+    RESEARCH_MCP_DYNAMIC_REGISTRATION_ENABLED
+    WORKSPACE_MCP_SIGNING_PRIVATE_KEY_B64 WORKSPACE_MCP_SIGNING_PUBLIC_KEY_B64
+    WORKSPACE_MCP_SIGNING_KEY_ID WORKSPACE_MCP_PREVIOUS_PUBLIC_KEYS_JSON
+  )
+  for key in "${research_required[@]}"; do
+    [[ -n "$(get_env "$key")" ]] || errors+=("$key is required when the Research MCP product is enabled")
+  done
+
+  expected_research_origin="https://research.$(get_env DOMAIN)"
+  [[ "$(get_env RESEARCH_MCP_PUBLIC_URL)" == "$expected_research_origin/api/mcp" ]] \
+    || errors+=("RESEARCH_MCP_PUBLIC_URL must exactly match https://research.DOMAIN/api/mcp")
+  [[ "$(get_env RESEARCH_MCP_ISSUER)" == "$expected_research_origin" ]] \
+    || errors+=("RESEARCH_MCP_ISSUER must exactly match https://research.DOMAIN")
+  [[ "$(get_env RESEARCH_MCP_OAUTH_ENABLED)" == "true" ]] \
+    || errors+=("RESEARCH_MCP_OAUTH_ENABLED must be true when the Research MCP product is enabled")
+  [[ "$(get_env RESEARCH_MCP_DYNAMIC_REGISTRATION_ENABLED)" == "true" ]] \
+    || errors+=("RESEARCH_MCP_DYNAMIC_REGISTRATION_ENABLED must be true for hosted MCP clients")
+  [[ "$(get_env RESEARCH_MCP_AUDIENCE)" == "lawhand-research-mcp" ]] \
+    || errors+=("RESEARCH_MCP_AUDIENCE must be lawhand-research-mcp")
+  [[ "$(get_env WORKSPACE_MCP_SIGNING_KEY_ID)" =~ ^[A-Za-z0-9._-]{1,80}$ ]] \
+    || errors+=("WORKSPACE_MCP_SIGNING_KEY_ID is invalid")
+
+  check_integer_range RESEARCH_MCP_ACCESS_TOKEN_MAX_MINUTES 5 60
+  check_integer_range RESEARCH_MCP_AUTH_CODE_TTL_SECONDS 60 600
+  check_integer_range RESEARCH_MCP_REFRESH_TOKEN_DAYS 1 90
+  check_integer_range RESEARCH_MCP_GRANT_DAYS 1 365
+  check_integer_range RESEARCH_MCP_CLIENT_REGISTRATION_DAYS 1 90
+  research_refresh_days="$(get_env RESEARCH_MCP_REFRESH_TOKEN_DAYS)"
+  research_grant_days="$(get_env RESEARCH_MCP_GRANT_DAYS)"
+  if [[ "$research_refresh_days" =~ ^[0-9]+$ && "$research_grant_days" =~ ^[0-9]+$ ]] && (( research_grant_days < research_refresh_days )); then
+    errors+=("RESEARCH_MCP_GRANT_DAYS must cover the refresh-token lifetime")
+  fi
+fi
 
 if [[ "$workspace_mcp_enabled" == "true" ]]; then
   workspace_required=(

@@ -15,10 +15,12 @@ from decimal import Decimal
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
 from unittest.mock import AsyncMock, patch
 
 from app.models.billing import Invoice, Payment
 from app.models.client_portal import ClientPortalInvite
+from app.models.conflict_check import PortalInvoiceDownload
 from app.models.communication_log import CommunicationLog
 from app.models.matter_assignment import MatterAssignment
 from app.models.plugin import Matter
@@ -494,6 +496,74 @@ async def test_outstanding_balance_surfaces_on_the_overview(
     ).json()
     assert Decimal(body["outstanding_balance"]) == Decimal("1000.00")
     assert body["open_invoice_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_invoice_pdf_download_is_branded_scoped_and_audited_without_pdf_storage(
+    client,
+    db_session,
+    test_tenant,
+    test_user,
+    portal_matter,
+    portal_invite,
+    portal_cookie,
+):
+    invoice = await _add_invoice(
+        db_session,
+        test_tenant,
+        portal_matter,
+        test_user,
+        invoice_number="INV-BRAND-01",
+    )
+    expected_pdf = b"%PDF-1.4 branded-test-pdf"
+    with patch(
+        "app.routers.client_portal.generate_invoice_pdf",
+        return_value=expected_pdf,
+    ) as generate:
+        response = await client.get(
+            f"{PORTAL}/invoices/{invoice.id}/download",
+            headers=_portal_headers(portal_cookie),
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.content == expected_pdf
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.headers["content-disposition"] == (
+        'attachment; filename="invoice_INV-BRAND-01.pdf"'
+    )
+    branding = generate.call_args.args[1]
+    assert branding["firm_name"] == test_tenant.name
+
+    audit = await db_session.scalar(
+        select(PortalInvoiceDownload).where(
+            PortalInvoiceDownload.invoice_id == invoice.id
+        )
+    )
+    assert audit is not None
+    assert audit.invite_id == portal_invite.id
+    assert audit.recipient_email == portal_invite.email
+    assert audit.content_sha256 == hashlib.sha256(expected_pdf).hexdigest()
+    assert audit.content_length == len(expected_pdf)
+    assert not hasattr(audit, "content")
+
+
+@pytest.mark.asyncio
+async def test_invoice_download_never_exposes_a_draft(
+    client, db_session, test_tenant, test_user, portal_matter, portal_cookie
+):
+    invoice = await _add_invoice(
+        db_session,
+        test_tenant,
+        portal_matter,
+        test_user,
+        invoice_number="INV-HIDDEN-DRAFT",
+        status="draft",
+    )
+    response = await client.get(
+        f"{PORTAL}/invoices/{invoice.id}/download",
+        headers=_portal_headers(portal_cookie),
+    )
+    assert response.status_code == 404
 
 
 # ── Cross-matter scoping ────────────────────────────────────────────────────

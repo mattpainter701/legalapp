@@ -26,6 +26,7 @@ from app.models.billing import TimeEntry, Expense, Invoice, InvoiceLineItem, Pay
 from app.models.contact import Contact
 from app.models.plugin import Matter
 from app.models.tenant import Tenant, TenantSettings
+from app.routers.firm import get_firm_branding
 from app.schemas.billing import (
     TimeEntryCreate,
     TimeEntryUpdate,
@@ -1122,6 +1123,8 @@ async def generate_invoice(
             )
             if entry:
                 entry.invoice_id = invoice.id
+                # Reserve the source entry as soon as it belongs to an invoice.
+                # QBO sync separately controls when the invoice itself is billed.
                 entry.status = "invoiced"
 
         # Link expenses to invoice
@@ -1198,6 +1201,9 @@ async def _load_invoice_response(
         stripe_payment_link=invoice.stripe_payment_link,
         qbo_invoice_id=invoice.qbo_invoice_id,
         qbo_sync_status=invoice.qbo_sync_status,
+        qbo_synced_at=getattr(invoice, "qbo_synced_at", None),
+        qbo_sync_error=getattr(invoice, "qbo_sync_error", None),
+        billed_at=getattr(invoice, "billed_at", None),
         ledes_exported_at=invoice.ledes_exported_at,
         retainer_id=str(invoice.retainer_id) if invoice.retainer_id else None,
         billing_period_start=invoice.billing_period_start,
@@ -1432,27 +1438,6 @@ async def update_invoice(
             exp.invoice_id = None
 
     await db.commit()
-
-    # Trigger QBO sync on status transitions that need it
-    if old_status != new_status and new_status in ("sent", "paid", "partially_paid"):
-        try:
-            from app.models.qbo import QBOIntegration
-
-            qbo_result = await db.execute(
-                select(QBOIntegration).where(
-                    QBOIntegration.tenant_id == user.tenant_id,
-                    QBOIntegration.is_active,
-                )
-            )
-            qbo = qbo_result.scalar_one_or_none()
-            if qbo:
-                invoice.qbo_sync_status = "syncing"
-                await db.commit()
-                asyncio.create_task(
-                    _trigger_qbo_sync_invoice(invoice_id, str(user.tenant_id))
-                )
-        except Exception:
-            logger.warning("QBO invoice sync task failed", exc_info=True)
 
     return await _load_invoice_response(db, invoice_uuid, user.tenant_id)
 
@@ -1737,7 +1722,9 @@ async def export_invoice(
     elif body.format == "pdf":
         from app.services.invoice_pdf import generate_invoice_pdf
 
-        pdf_bytes = generate_invoice_pdf(inv)
+        tenant = await db.scalar(select(Tenant).where(Tenant.id == user.tenant_id))
+        branding = await get_firm_branding(db, tenant)
+        pdf_bytes = generate_invoice_pdf(inv, branding)
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",

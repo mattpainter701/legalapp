@@ -13,6 +13,7 @@
     { "id": "trust-accounting", "route": "/trust", "chapter": "time-billing-and-reports" },
     { "id": "document-automation", "route": "/templates", "chapter": "document-automation-and-esignature" },
     { "id": "contacts", "route": "/contacts", "chapter": "contacts-and-client-relationships" },
+    { "id": "conflict-search", "route": "/conflicts", "chapter": "contacts-and-client-relationships" },
     { "id": "clients", "route": "/clients", "chapter": "contacts-and-client-relationships" },
     { "id": "tasks", "route": "/tasks", "chapter": "tasks-calendar-communications" },
     { "id": "client-intake", "route": "/intake", "chapter": "intake-and-call-reception" },

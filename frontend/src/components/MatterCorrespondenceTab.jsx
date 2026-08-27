@@ -18,6 +18,7 @@ import {
   Inbox,
   ShieldCheck,
   FileCheck,
+  CalendarPlus,
   Receipt,
   Ban,
 } from 'lucide-react'
@@ -42,6 +43,15 @@ function fmtDate(value) {
   if (!value) return '—'
   try {
     return format(parseISO(value), 'MMM d, yyyy · h:mm a')
+  } catch {
+    return value
+  }
+}
+
+function fmtDateOnly(value) {
+  if (!value) return 'No due date'
+  try {
+    return format(parseISO(value), 'MMM d, yyyy')
   } catch {
     return value
   }
@@ -249,7 +259,7 @@ function CaptureRulesPanel({ matterId, onClose }) {
     </div>
   )
 }
-function InboundEmailPanel({ matterId, onFiled }) {
+export function InboundEmailPanel({ matterId, onFiled }) {
   const confirmAction = useConfirm()
   const [aliasState, setAliasState] = useState(null)
   const [pending, setPending] = useState([])
@@ -340,8 +350,10 @@ function InboundEmailPanel({ matterId, onFiled }) {
     setMessage(null)
     try {
       if (action === 'accept') {
-        await acceptMatterInboundEmail(matterId, item.id)
-        setMessage('Email filed to this matter.')
+        const result = await acceptMatterInboundEmail(matterId, item.id)
+        setMessage(result?.task_id
+          ? `Email filed and task created${result.task_due_date ? ` for ${fmtDateOnly(result.task_due_date)}` : ''}.`
+          : 'Email filed to this matter.')
         onFiled()
       } else if (action === 'expense') {
         await createMatterInboundExpenseDraft(matterId, item.id)
@@ -441,6 +453,21 @@ function InboundEmailPanel({ matterId, onFiled }) {
                       {item.body_preview && (
                         <p className="mt-2 text-sm text-brand-ink-2 line-clamp-3">{item.body_preview}</p>
                       )}
+                      {item.task_suggestion && (
+                        <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-950">
+                          <p className="flex items-center gap-1.5 font-semibold">
+                            <CalendarPlus size={14} />
+                            {item.task_suggestion.tag === 'deadline' ? 'Deadline tag' : 'Task tag'} detected
+                          </p>
+                          <p className="mt-1">{item.task_suggestion.title}</p>
+                          <p className="mt-1 text-xs text-blue-800">
+                            Due {fmtDateOnly(item.task_suggestion.due_date)}
+                            {item.task_suggestion.calendar_sync
+                              ? ' · calendar sync will be requested for the reviewer’s connected Outlook or Google calendar'
+                              : ' · no calendar event will be created until a due date is added'}
+                          </p>
+                        </div>
+                      )}
                     </div>
                     <div className="flex shrink-0 flex-wrap gap-2">
                       <button
@@ -455,7 +482,7 @@ function InboundEmailPanel({ matterId, onFiled }) {
                         disabled={busy === item.id}
                         className="inline-flex items-center gap-1.5 rounded-lg bg-brand-ink px-3 py-2 text-xs font-medium text-white disabled:opacity-60"
                       >
-                        <FileCheck size={14} /> File to matter
+                        <FileCheck size={14} /> {item.task_suggestion ? 'File + create task' : 'File to matter'}
                       </button>
                       <button
                         onClick={() => review(item, 'reject')}

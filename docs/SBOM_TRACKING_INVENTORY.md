@@ -12,11 +12,11 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 
 |Manifest|Type|Lockfile present|Lockfiles|Tracked dependency count|
 |-|-|-|-|-|
-|backend/requirements.txt|python requirements|no|none|43|
+|backend/requirements.txt|python requirements|no|none|44|
 |mcp-server/requirements.txt|python requirements|no|none|9|
 |scripts/requirements.txt|python requirements|no|none|7|
 |scripts/tabs3_export/requirements.txt|python requirements|no|none|2|
-|frontend/package.json|npm package|yes|frontend/package-lock.json|30|
+|frontend/package.json|npm package|yes|frontend/package-lock.json|32|
 |office-addin/package.json|npm package|yes|office-addin/package-lock.json|6|
 |agent/pyproject.toml|python project|no|none|14|
 
@@ -29,10 +29,12 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |npm|axios|^1.18.1|dependencies|frontend/package.json|
 |npm|date-fns|^4.1.0|dependencies|frontend/package.json|
 |npm|lucide-react|^0.475.0|dependencies|frontend/package.json|
+|npm|pdfjs-dist|^6.2.108|dependencies|frontend/package.json|
 |npm|react|^18.3.1|dependencies|frontend/package.json|
 |npm|react-dom|^18.3.1|dependencies|frontend/package.json|
 |npm|react-dropzone|^14.3.5|dependencies|frontend/package.json|
 |npm|react-markdown|^9.0.1|dependencies|frontend/package.json|
+|npm|react-rnd|^10.5.3|dependencies|frontend/package.json|
 |npm|react-router-dom|^7.18.2|dependencies|frontend/package.json|
 |npm|remark-gfm|^4.0.1|dependencies|frontend/package.json|
 |npm|@eslint/js|^9.39.5|devDependencies|frontend/package.json|
@@ -95,6 +97,7 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |pypi|openai|==1.58.1|runtime/dev|backend/requirements.txt|
 |pypi|opencv-python|==5.0.0.93|runtime/dev|backend/requirements.txt|
 |pypi|pgvector|==0.3.6|runtime/dev|backend/requirements.txt|
+|pypi|Pillow|==12.3.0|runtime/dev|backend/requirements.txt|
 |pypi|psycopg2-binary|==2.9.10|runtime/dev|backend/requirements.txt|
 |pypi|pydantic|==2.11.10|runtime/dev|backend/requirements.txt|
 |pypi|pydantic-settings|==2.6.1|runtime/dev|backend/requirements.txt|
@@ -144,7 +147,7 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |base|backend/Dockerfile|17|no|yes|
 |base|backend/Dockerfile|23|no|yes|
 |node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293|frontend/Dockerfile|1|yes|no|
-|node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293|frontend/Dockerfile|18|yes|no|
+|node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293|frontend/Dockerfile|28|yes|no|
 |nginx:alpine@sha256:54f2a904c251d5a34adf545a72d32515a15e08418dae0266e23be2e18c66fefa|nginx/Dockerfile|1|yes|no|
 |docker.litellm.ai/berriai/litellm:main-latest@sha256:60f548df23a82b7f83444e2f01d2ccafe00f9f5808c4110a32e397083d09fb17|litellm/Dockerfile|3|yes|no|
 |python:3.12-slim@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf|mcp-server/Dockerfile|1|yes|no|

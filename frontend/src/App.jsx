@@ -4,6 +4,7 @@ import AppShell from './components/AppShell'
 import { ToastProvider } from './components/toast/ToastProvider'
 import { ConfirmProvider } from './components/dialog/ConfirmProvider'
 import SeoHead from './components/SeoHead'
+import GoogleAnalytics from './analytics/GoogleAnalytics'
 import VersionBadge from './components/VersionBadge'
 import ReleaseAnnouncement from './components/ReleaseAnnouncement'
 import AppErrorBoundary from './components/AppErrorBoundary'
@@ -42,6 +43,7 @@ const MediationPortfolioPage = lazy(() => import('./pages/MediationPortfolioPage
 const MediationDetailPage = lazy(() => import('./pages/MediationDetailPage'))
 const PlatformPage = lazy(() => import('./pages/PlatformPage'))
 const ContactsPage = lazy(() => import('./pages/ContactsPage'))
+const ConflictChecksPage = lazy(() => import('./pages/ConflictChecksPage'))
 const ContactDetailPage = lazy(() => import('./pages/ContactDetailPage'))
 const ClientsPage = lazy(() => import('./pages/ClientsPage'))
 const ClientDetailPage = lazy(() => import('./pages/ClientDetailPage'))
@@ -210,6 +212,7 @@ export default function App() {
     <AppErrorBoundary>
     <AuthProvider>
       <SeoHead />
+      <GoogleAnalytics />
       <ToastProvider>
         <ConfirmProvider>
         <VersionBadge />
@@ -317,6 +320,10 @@ export default function App() {
         <Route
           path="/contacts"
           element={<ShellRoute title="Contacts" module="contacts"><ContactsPage /></ShellRoute>}
+        />
+        <Route
+          path="/conflicts"
+          element={<ShellRoute title="Conflict Search" module="contacts"><ConflictChecksPage /></ShellRoute>}
         />
         <Route
           path="/contacts/:id"

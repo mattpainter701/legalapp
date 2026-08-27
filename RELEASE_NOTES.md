@@ -5,6 +5,56 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.27.3 — Signature requests are easier to deliver and follow through
+
+Released August 27, 2026.
+
+Signature requests now provide clearer delivery tracking, safer resend controls, and automatic follow-through for sequential signing.
+
+- **Send the actionable request.** Internal signature requests email the signer who can act next and retain delivery status for staff.
+- **Track and resend safely.** Staff can see delivery and first-view status and manually resend when follow-up is needed.
+- **Keep sequential signing moving.** Completing one signer notifies the next, while configured reminders run before expiration.
+
+## 2026.08.27.2 — Conflict reviews and portal invoice PDFs are traceable
+
+Released August 27, 2026.
+
+Staff can save and close a conflict review, and clients can download a firm-branded invoice PDF from their matter portal.
+
+- **Conflict searches keep their evidence.** The new Conflict Search workspace saves the terms and results the reviewer saw, records notes and a decision, and locks the record after closing.
+- **Restricted matters stay restricted.** A reviewer is warned when a potential match exists on a matter they cannot access without exposing that matter's identity.
+- **Clients can download branded invoices.** A client-visible invoice is rendered with firm branding and streamed as a PDF; LawHand records download metadata and a hash without retaining another PDF copy.
+
+## 2026.08.27.1 — Prepare document templates with a guided review workspace
+
+Released August 27, 2026.
+
+Turn PDFs and supported images into reusable document templates while reviewing every detected field before creation.
+
+- **Review the original form in place.** Prepare Form keeps the uploaded page design visible while you inspect, add, move, rename, and configure fields.
+- **Recover fields from scans and images.** Bounded local OCR and optional configured assistance can suggest fields without making automatic detection a requirement.
+- **Finish safely when detection is imperfect.** Validation, confidence cues, and manual placement let you correct unfamiliar forms before creating the reusable template.
+
+## 2026.08.26.4 — Customer cloud storage is explicit and fail-closed
+
+Released August 26, 2026.
+
+Microsoft 365 tenants now default matter files to OneDrive, and portal uploads keep their original copy in a dedicated customer-cloud folder.
+
+- **Microsoft 365 defaults to OneDrive.** When Cloud Document Storage is Auto, an active Microsoft 365 connection is the authoritative destination unless an administrator selects SharePoint or Google Drive.
+- **Portal originals have a stable home.** Client uploads go to the matter's client_uploads folder. A reviewed or revised output is saved as a new matter document instead of silently moving the original.
+- **Cloud outages fail honestly.** A cloud-bound upload reports a retryable storage error when the customer provider is unavailable; it does not report success after saving a durable local copy.
+
+## 2026.08.26.3 — Tagged matter email can create traceable tasks
+
+Released August 26, 2026.
+
+A reviewed matter email whose subject begins with [TASK] or [DEADLINE] can now be filed and turned into a linked task in one step.
+
+- **Use an explicit subject tag.** Start a new subject with [TASK] or [DEADLINE]. The tag must be the first token, so replies and forwarded subjects do not trigger.
+- **Review the task before filing.** The Correspondence queue previews the task title and any safely parsed due date before the reviewer chooses File + create task.
+- **Keep the source email attached.** The filed email, correspondence record, task, and task history remain linked so the source and resulting work can be audited from the matter.
+
 ## 2026.08.26.2 — Demo workspaces reopen with approved matter-aware AI
 
 Released August 26, 2026.

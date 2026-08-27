@@ -139,6 +139,16 @@ class Settings(BaseSettings):
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com/v1"
     ANTHROPIC_API_KEY: str = ""
 
+    # Template OCR is local by default. Azure is an explicit opt-in because
+    # document bytes may contain privileged client information.
+    TEMPLATE_OCR_PROVIDER: str = "local"
+    AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT: str = ""
+    AZURE_DOCUMENT_INTELLIGENCE_KEY: str = ""
+    AZURE_DOCUMENT_INTELLIGENCE_API_VERSION: str = "2024-11-30"
+    TEMPLATE_OCR_AZURE_TIMEOUT_SECONDS: float = 30.0
+    TEMPLATE_OCR_AZURE_MAX_POLL_SECONDS: float = 75.0
+    TEMPLATE_OCR_AZURE_MAX_POLL_INTERVAL_SECONDS: float = 10.0
+
     # OpenRouter — free model access (OpenAI-compatible)
     OPENROUTER_API_KEY: str = ""
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
@@ -338,7 +348,7 @@ class Settings(BaseSettings):
     EMAIL_PORT: int = 587
     EMAIL_USER: str = ""
     EMAIL_PASS: str = ""
-    EMAIL_FROM: str = "matt@cybersafeadvisor.com"
+    EMAIL_FROM: str = "support@getlawhand.com"
     MARKETING_LEAD_EMAIL: str = "support@getlawhand.com"
     SLACK_WEBHOOK_URL: str = ""  # Optional: Slack incoming webhook URL
 
@@ -981,6 +991,51 @@ def validate_dev_mode_urls(settings: Settings) -> None:
             )
 
 
+def validate_qbo_settings(settings: Settings) -> None:
+    """Validate configured QBO OAuth settings and fail closed in production."""
+    environment = settings.QBO_ENVIRONMENT.strip().lower()
+    if environment not in {"sandbox", "production"}:
+        raise ValueError("QBO_ENVIRONMENT must be 'sandbox' or 'production'")
+
+    configured = any(
+        value.strip()
+        for value in (
+            settings.QBO_CLIENT_ID,
+            settings.QBO_CLIENT_SECRET,
+            settings.QBO_REDIRECT_URI,
+        )
+    )
+    if not configured and environment == "sandbox":
+        return
+
+    if not settings.QBO_CLIENT_ID.strip() or not settings.QBO_CLIENT_SECRET.strip():
+        raise ValueError(
+            "QBO_CLIENT_ID and QBO_CLIENT_SECRET are required when QBO is configured"
+        )
+
+    redirect_uri = settings.QBO_REDIRECT_URI.strip()
+    parsed = urlsplit(redirect_uri)
+    allowed_schemes = {"https"} if environment == "production" else {"http", "https"}
+    if (
+        parsed.scheme not in allowed_schemes
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        requirement = "HTTPS" if environment == "production" else "HTTP(S)"
+        raise ValueError(f"QBO_REDIRECT_URI must be an absolute {requirement} URL")
+
+    if environment == "production":
+        expected = f"{settings.BACKEND_URL.rstrip('/')}/api/integrations/qbo/callback"
+        if redirect_uri != expected:
+            raise ValueError(
+                "QBO_REDIRECT_URI must exactly match "
+                "BACKEND_URL/api/integrations/qbo/callback in production"
+            )
+
+
 def validate_inbound_email_settings(settings: Settings) -> None:
     if not settings.INBOUND_EMAIL_ENABLED:
         return
@@ -1001,6 +1056,44 @@ def validate_inbound_email_settings(settings: Settings) -> None:
         )
 
 
+def validate_template_ocr_settings(settings: Settings) -> None:
+    provider = settings.TEMPLATE_OCR_PROVIDER.strip().lower()
+    if provider not in {"local", "azure"}:
+        raise ValueError("TEMPLATE_OCR_PROVIDER must be 'local' or 'azure'")
+    if provider == "azure":
+        parsed = urlsplit(settings.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT.rstrip("/"))
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT must be an HTTPS URL"
+            )
+        if not settings.AZURE_DOCUMENT_INTELLIGENCE_KEY:
+            raise ValueError(
+                "AZURE_DOCUMENT_INTELLIGENCE_KEY is required for Azure OCR"
+            )
+        if not re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}(?:-preview)?",
+            settings.AZURE_DOCUMENT_INTELLIGENCE_API_VERSION,
+        ):
+            raise ValueError("AZURE_DOCUMENT_INTELLIGENCE_API_VERSION is invalid")
+    if not 5 <= settings.TEMPLATE_OCR_AZURE_TIMEOUT_SECONDS <= 120:
+        raise ValueError("TEMPLATE_OCR_AZURE_TIMEOUT_SECONDS must be between 5 and 120")
+    if not 10 <= settings.TEMPLATE_OCR_AZURE_MAX_POLL_SECONDS <= 180:
+        raise ValueError(
+            "TEMPLATE_OCR_AZURE_MAX_POLL_SECONDS must be between 10 and 180"
+        )
+    if not 1 <= settings.TEMPLATE_OCR_AZURE_MAX_POLL_INTERVAL_SECONDS <= 10:
+        raise ValueError(
+            "TEMPLATE_OCR_AZURE_MAX_POLL_INTERVAL_SECONDS must be between 1 and 10"
+        )
+
+
 @lru_cache()
 def get_settings() -> Settings:
     settings = Settings()
@@ -1011,6 +1104,8 @@ def get_settings() -> Settings:
     validate_platform_secret_key(settings)
     validate_platform_bootstrap_settings(settings)
     validate_mcp_security_settings(settings)
+    validate_qbo_settings(settings)
     validate_inbound_email_settings(settings)
+    validate_template_ocr_settings(settings)
     validate_dev_mode_urls(settings)
     return settings

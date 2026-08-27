@@ -185,7 +185,7 @@
     },
     {
       "image": "node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
-      "line": 18,
+      "line": 28,
       "pinned_by_digest": true,
       "source": "frontend/Dockerfile",
       "stage_reference": false
@@ -250,6 +250,13 @@
     },
     {
       "ecosystem": "npm",
+      "name": "pdfjs-dist",
+      "scope": "dependencies",
+      "source": "frontend/package.json",
+      "specifier": "^6.2.108"
+    },
+    {
+      "ecosystem": "npm",
       "name": "react",
       "scope": "dependencies",
       "source": "frontend/package.json",
@@ -275,6 +282,13 @@
       "scope": "dependencies",
       "source": "frontend/package.json",
       "specifier": "^9.0.1"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "react-rnd",
+      "scope": "dependencies",
+      "source": "frontend/package.json",
+      "specifier": "^10.5.3"
     },
     {
       "ecosystem": "npm",
@@ -709,6 +723,13 @@
       "scope": "runtime/dev",
       "source": "backend/requirements.txt",
       "specifier": "==0.3.6"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "Pillow",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==12.3.0"
     },
     {
       "ecosystem": "pypi",

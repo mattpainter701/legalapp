@@ -13,10 +13,32 @@ Public MCP access is release-gated and must remain disabled.
 | Surface | Current state |
 |---|---|
 | Call Intake, Tasks, Zoom Phone | First-customer release candidate. Ship only after every gate in the [first-customer production runbook](docs/FIRST_CUSTOMER_PRODUCTION_RUNBOOK.md) passes on the deployed revision. |
-| PDF templates | Source-backed AcroForm filling, review preview, flattening, integrity checks, and matter-file output are implemented. See [PDF template operations](docs/PDF_TEMPLATE_OPERATIONS.md) for supported inputs and customer recovery steps. |
+| PDF templates | Adobe-style Prepare Form review, existing AcroForm discovery, OCR-assisted scan/handwriting overlays, manual field placement, flattening, integrity checks, and matter-file output are implemented. See [PDF template operations](docs/PDF_TEMPLATE_OPERATIONS.md) for supported inputs and customer recovery steps. |
 | Full legal platform | Available for controlled tenants; modules are enforced in both navigation and API middleware. |
 | Public MCP product | **Disabled.** `MCP_PRODUCT_ENABLED=false` is a launch invariant. Do not market, issue, or accept customer MCP keys yet. |
-| Marketing / SEO | Public landing, original artwork, social card, canonical metadata, structured data, sitemap, and private-route `noindex` controls are included. Marketing claims and prices still require commercial-owner approval before publication. |
+| Marketing / SEO | Public landing, original artwork, social card, canonical metadata, structured data (organization, software, capability list, breadcrumbs, FAQ, site navigation), sitemap, and private-route `noindex` controls are included. Google Search Console, Analytics 4, and Business Profile setup is in [docs/GOOGLE_SEARCH_AND_BUSINESS_SETUP.md](docs/GOOGLE_SEARCH_AND_BUSINESS_SETUP.md). Marketing claims and prices still require commercial-owner approval before publication. |
+
+## Task and customer-data lifecycle
+
+![Task routing and customer-owned document storage](frontend/public/guide-assets/customer-data-task-lifecycle.svg)
+
+LawHand Tasks is the authoritative work record. Outlook and Google calendar
+events are projections, not a second task database. A reviewed email can create
+a task only when its subject begins with `[TASK]` or `[DEADLINE]`; untagged
+body text, replies, forwards, and model-only date guesses do not create work.
+
+For a cloud-bound tenant, durable matter-file bytes live in the tenant-selected
+OneDrive, SharePoint, or Google Drive. Auto binds an active Microsoft 365 tenant
+to OneDrive unless the administrator overrides the provider. Portal originals
+are stored under `{matter}/client_uploads`; reviewed derivatives become new
+documents in the appropriate matter folder. Provider failure is fail-closed and
+does not silently create a durable local copy.
+
+The SaaS still stores its control plane—matters, clients, tasks, assignments,
+cloud object IDs, hashes, indexing metadata, and audit history—so the accurate
+boundary is customer-owned **document content**, not zero customer data. See
+[Task routing and customer-owned document storage](docs/task-and-customer-data-lifecycle.md)
+for the backend contract, recovery checks, and remaining legacy-local migration.
 
 ## What is in the product
 
@@ -24,9 +46,10 @@ Public MCP access is release-gated and must remain disabled.
 |---|---|
 | Caller intake | Manual and Zoom Phone intake, signed tenant webhook, call-history sync, caller/contact matching, notes, lead/task handoff, partner assignment log, and CSV exports. |
 | Tasks | Tenant-scoped CRUD, assignee and matter/contact links, priorities, deadlines, reminders, assignment notes, viewed/contacted signals, reassignment, and close reasons. |
-| Document templates | DOCX/TXT sample analysis and variable substitution; retained PDF source files with AcroForm discovery, reviewed field mapping, binary preview, default flattened output, and matter storage. |
+| Document templates | DOCX/TXT sample analysis and variable substitution; PDF/image intake with local PDF.js review, AcroForm and OCR-assisted field discovery, manual correction, retained sources, flattened output, and matter storage. |
 | Matters and CRM | Matters, contacts, parties, notes, assignments, budgets, files, timelines, communications, intake, and reports. |
 | Billing | Time, expenses, invoices, payments, retainers, LEDES export, and optional Stripe payment flows. |
+| Conflict review | Standalone tenant-wide search with restricted-matter redaction, saved evidence, attorney review decisions, locked records, and PDF reports. |
 | Research and drafting | Tenant document RAG, public CourtListener context, practice-area workflows, source labels, and attorney-review guardrails. |
 | Cloud integrations | Microsoft and Google OAuth, cloud search/storage paths, Zoom, QuickBooks, Teams, SMTP, and optional Slack/webhook notifications. Each provider still requires its own production consent and ingress proof. |
 | Authentication | Email/password, Microsoft and Google login, short-lived access cookies, rotating Redis-backed refresh tokens, tenant/module authorization, and scoped platform-operator sessions. |
@@ -108,6 +131,8 @@ Production separates schema ownership from runtime access:
 
 The detailed trust boundaries and data flows are in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Saved conflict evidence and metadata-only portal invoice download auditing are
+documented in [the conflict and invoice workflow architecture](docs/conflict-search-and-portal-invoice-architecture.md).
 
 ## Can this run on AWS Lightsail or another VPS?
 

@@ -1,8 +1,23 @@
+import { CORE_CAPABILITY_NAMES } from '../marketing/capabilities.js'
+
 export const SITE_NAME = 'LawHand'
 
-export const HOME_TITLE = 'LawHand | The Whole Matter, in Hand'
+// The category sentence. A search engine, an AI answer engine, and a visitor
+// skimming a result all need to learn what LawHand *is* before they learn what
+// it is called, so every public surface leads with this and not the tagline.
+export const SITE_CATEGORY = 'legal automation platform for law firms'
+export const SITE_TAGLINE = 'The whole matter, in hand.'
+
+// Kept under ~60 characters so Google renders it without truncation, and
+// front-loaded with the product category rather than the brand slogan.
+export const HOME_TITLE = 'LawHand | Legal Automation Platform for Law Firms'
+// Kept under ~160 characters, and names the concrete functions a firm searches
+// for. The home page must visibly contain every function named here.
 export const HOME_DESCRIPTION =
-  'LawHand connects every fact, deadline, document, and decision in one living matter record for modern legal teams.'
+  'LawHand is the legal automation platform for law firms: client and matter CRM, caller intake, document preparation, invoicing, and source-linked AI legal research.'
+
+export const ORGANIZATION_DESCRIPTION =
+  'LawHand builds a legal automation platform that combines client and matter CRM, caller intake, tasks and deadlines, document preparation, time tracking and invoicing, practice-area workflows, and source-linked AI legal research in one tenant-isolated workspace for law firms and legal teams.'
 
 export const PRIVATE_DESCRIPTION =
   'Sign in to the private LawHand workspace for your firm.'
@@ -47,6 +62,63 @@ export const PRICING_FAQ = Object.freeze([
   ]),
 ])
 
+/**
+ * Home-page questions, published verbatim as FAQPage structured data.
+ *
+ * These answer the "what is this product" question a search result cannot fit,
+ * and they are the copy an AI answer engine is most likely to quote, so every
+ * answer must stay inside what README.md substantiates and must state a gate
+ * where one exists.
+ */
+export const HOME_FAQ = Object.freeze([
+  Object.freeze([
+    'What is LawHand?',
+    `LawHand is a ${SITE_CATEGORY}. It combines client and matter CRM, caller intake, tasks and deadlines, document preparation, time tracking and invoicing, practice-area workflows, and source-linked AI legal research in one tenant-isolated workspace.`,
+  ]),
+  Object.freeze([
+    'Does LawHand include CRM and billing, or only AI?',
+    'Both. LawHand runs the firm\u2019s day-to-day record \u2014 matters, contacts, parties, notes, assignments, budgets, and timelines \u2014 alongside time and expense capture, invoices, payments, retainers, LEDES export, and optional Stripe payment flows. AI-assisted research and drafting sit on top of that record rather than replacing it.',
+  ]),
+  Object.freeze([
+    'Can LawHand prepare and automate documents?',
+    'Yes. LawHand analyzes DOCX and TXT templates and substitutes matter variables, and it retains PDF sources with AcroForm field discovery, reviewed field mapping, a binary review preview, flattened output by default, and integrity checks before the finished file is stored on the matter.',
+  ]),
+  Object.freeze([
+    'What is LawHand Research MCP?',
+    `LawHand Research MCP is a Model Context Protocol server that lets an approved assistant such as ChatGPT or Claude, or an API client, retrieve public legal authority through a scoped credential. It is research-only and cannot reach LawHand matters, contacts, tasks, documents, templates, or firm configuration. It is in private preview at an intended public price of $${MCP_TOOL_CALL_PRICE_USD} per tool call.`,
+  ]),
+  Object.freeze([
+    'Can an AI assistant reach our matters through MCP?',
+    'Only through Workspace MCP, which is a separate, release-gated surface. It uses OAuth 2.1 authorization code with PKCE, carries a real tenant, user, scope set, and expiry, and issues a revocable token family, so access stays inside what the firm authorized for that person.',
+  ]),
+  Object.freeze([
+    'Who is LawHand for?',
+    'Law firms and legal teams that want intake, matters, documents, deadlines, billing, and research in one system rather than in separate tools. A firm can begin with a focused caller-intake and task workflow and add the broader platform later.',
+  ]),
+  Object.freeze([
+    'Is AI-assisted output safe to rely on?',
+    'It is presented for attorney review. Every tagged claim in a LawHand answer is labeled cited, verify, or model, and source links point back to the original authority or firm document. These are review aids, not a substitute for professional judgment, and no citation label guarantees that an authority remains good law.',
+  ]),
+  Object.freeze([
+    'Is our firm data isolated from other firms?',
+    'Yes. Firm workspaces are tenant-isolated and enforced in both navigation and API middleware. Storage encryption and model-provider data handling additionally depend on the infrastructure, provider, and tenant policy configured for your deployment.',
+  ]),
+])
+
+/**
+ * The public pages LawHand wants Google to consider for sitelinks, published
+ * as SiteNavigationElement structured data and rendered as real links in both
+ * the app header and the no-JavaScript shells. Structured data alone does not
+ * earn sitelinks; consistent internal linking to the same short list does.
+ */
+export const PRIMARY_NAVIGATION = Object.freeze([
+  Object.freeze({ path: '/product', label: 'Platform', shortLabel: 'Platform' }),
+  Object.freeze({ path: '/product/chat', label: 'AI Chat', shortLabel: 'AI Chat' }),
+  Object.freeze({ path: '/product/mcp', label: 'Legal Research MCP', shortLabel: 'MCP' }),
+  Object.freeze({ path: '/pricing', label: 'Pricing', shortLabel: 'Pricing' }),
+  Object.freeze({ path: '/request-demo', label: 'Book a Demo', shortLabel: 'Book demo' }),
+])
+
 export const PUBLIC_ROUTE_META = Object.freeze({
   '/': {
     title: HOME_TITLE,
@@ -56,9 +128,9 @@ export const PUBLIC_ROUTE_META = Object.freeze({
     priority: '1.0',
   },
   '/product': {
-    title: 'The LawHand Platform for Law Firm Operations',
+    title: 'Legal Automation Platform | LawHand Product Tour',
     description:
-      'See how the LawHand platform connects intake, matters, documents, matter email, deadlines, billing, practice-area skills, matter-aware AI chat, and controlled MCP integrations.',
+      'The LawHand platform in one workspace: client and matter CRM, caller intake, tasks and deadlines, document preparation, time and invoicing, practice-area skills, matter-aware AI chat, and controlled MCP integrations.',
     canonicalPath: '/product',
     indexable: true,
     priority: '0.9',
@@ -67,7 +139,7 @@ export const PUBLIC_ROUTE_META = Object.freeze({
   '/product/chat': {
     title: 'Matter-Aware AI Chat for Legal Teams | LawHand',
     description:
-      'Research, review, summarize, and draft with LawHand AI chat connected to the active matter and the sources your firm authorizes.',
+      'Research, review, summarize, and draft with LawHand AI chat connected to the active matter and the sources your firm authorizes, with every claim labeled cited, verify, or model.',
     canonicalPath: '/product/chat',
     indexable: true,
     priority: '0.8',
@@ -75,9 +147,9 @@ export const PUBLIC_ROUTE_META = Object.freeze({
     parentPath: '/product',
   },
   '/product/mcp': {
-    title: 'LawHand MCP for Controlled Legal Integrations',
+    title: 'Legal Research MCP Server for AI Assistants | LawHand',
     description:
-      'Connect approved assistants to tenant-controlled LawHand workspaces, or retrieve public legal authority through scoped Research MCP OAuth and product keys with bounded usage.',
+      'Retrieve public legal authority in ChatGPT, Claude, or your own API client through the LawHand legal research MCP server, or connect approved assistants to a tenant-scoped LawHand workspace over OAuth.',
     canonicalPath: '/product/mcp',
     indexable: true,
     priority: '0.8',
@@ -85,12 +157,16 @@ export const PUBLIC_ROUTE_META = Object.freeze({
     parentPath: '/product',
   },
   '/request-demo': {
-    title: 'Book a LawHand Demo',
-    description: 'Request a focused LawHand demo built around your firm’s workflows, sources, and review controls.',
-    canonicalPath: '/demo',
+    title: 'Book a LawHand Demo | Legal Automation Platform',
+    description:
+      'Request a focused LawHand demo built around your firm’s intake, matters, documents, billing, and review controls.',
+    canonicalPath: '/request-demo',
     indexable: true,
+    priority: '0.7',
+    breadcrumb: 'Book a Demo',
   },
-  '/pricing': {    title: 'Pricing | LawHand',
+  '/pricing': {
+    title: 'Pricing | LawHand Legal Automation Platform',
     description:
       `LawHand is $${PLATFORM_PRICE_USD} per user per month billed annually. LawHand MCP is in private preview at an intended public price of $${MCP_TOOL_CALL_PRICE_USD} per tool call.`,
     canonicalPath: '/pricing',
@@ -127,6 +203,11 @@ const WORKSPACE_ROUTE_TITLES = [
   ['/portal/client/accept', 'Secure client portal'],
   ['/portal/case', 'Secure case portal'],
   ['/portal/accept', 'Secure case portal'],
+  // Catch-all parent. Every portal URL is token-gated, so the crawl rule must
+  // cover the whole subtree rather than only the four routes shipped today.
+  // The specific entries above still win in getRouteMeta, which matches in
+  // order, so each portal keeps its own title.
+  ['/portal', 'Secure portal'],
   ['/plugins/commercial/renewals', 'Renewal tracker'],
   ['/plugins/trust-estate/estates', 'Trust and estate matters'],
   ['/plugins/domestic/cases', 'Domestic relations matters'],
@@ -244,7 +325,10 @@ export function workspaceCrawlDisallows() {
 }
 
 export function buildRobotsTxt(siteOrigin = '') {
-  const disallows = ['/api/', ...workspaceCrawlDisallows().map((route) => `${route}/`)]
+  // Rules are prefix matches, so `/login` covers both `/login` and
+  // `/login/anything`. Writing `/login/` would have left the sign-in page
+  // itself crawlable, which is exactly the URL that must stay out of results.
+  const disallows = ['/api/', ...workspaceCrawlDisallows()]
   const sitemap = siteOrigin ? `\nSitemap: ${siteOrigin}/sitemap.xml` : ''
   return [
     'User-agent: *',
@@ -263,7 +347,9 @@ export function buildSitemapXml(siteOrigin) {
       '  <url>',
       `    <loc>${siteOrigin}${route.canonicalPath}</loc>`,
       `    <lastmod>${PUBLIC_CONTENT_LASTMOD}</lastmod>`,
-      `    <priority>${route.priority}</priority>`,
+      // Omit the hint entirely rather than publishing `undefined` when a route
+      // does not declare one.
+      ...(route.priority ? [`    <priority>${route.priority}</priority>`] : []),
       '  </url>',
     ].join('\n'))
     .join('\n')
@@ -277,18 +363,85 @@ export function buildSitemapXml(siteOrigin) {
   ].join('\n')
 }
 
-function organizationNode(siteOrigin) {
+/**
+ * Normalize the optional organization identity a deployment supplies.
+ *
+ * `config.js` is imported both by the browser bundle and by `vite.config.js`
+ * running in Node, so it must never read `import.meta.env` itself. Each caller
+ * passes what it knows instead.
+ */
+export function normalizeOrganizationProfile(profile = {}) {
+  const contactUrl = String(profile.contactUrl || '').trim()
+  const email = contactUrl.startsWith('mailto:')
+    ? contactUrl.slice('mailto:'.length).split('?')[0]
+    : ''
+  const telephone = String(profile.telephone || '').trim()
+
+  // Comma-separated authoritative profile URLs: the Google Business Profile
+  // short link, LinkedIn, and similar. `sameAs` is how Google reconciles those
+  // profiles with this site into one entity, so a wrong URL is worse than none.
+  const sameAs = (Array.isArray(profile.sameAs) ? profile.sameAs : String(profile.sameAs || '').split(','))
+    .map((value) => String(value).trim())
+    .filter(Boolean)
+    .filter((value) => {
+      try {
+        return ['http:', 'https:'].includes(new URL(value).protocol)
+      } catch {
+        return false
+      }
+    })
+
+  return { email, telephone, sameAs }
+}
+
+function organizationNode(siteOrigin, profile) {
+  const { email, telephone, sameAs } = normalizeOrganizationProfile(profile)
+  const contactPoint = (email || telephone)
+    ? {
+      '@type': 'ContactPoint',
+      contactType: 'sales',
+      areaServed: 'US',
+      availableLanguage: 'English',
+      ...(email ? { email } : {}),
+      ...(telephone ? { telephone } : {}),
+    }
+    : null
+
   return {
     '@type': 'Organization',
     '@id': `${siteOrigin}/#organization`,
     name: SITE_NAME,
     url: `${siteOrigin}/`,
+    description: ORGANIZATION_DESCRIPTION,
+    slogan: SITE_TAGLINE,
     logo: {
       '@type': 'ImageObject',
       url: `${siteOrigin}/icons/icon-512x512.png`,
       width: 512,
       height: 512,
     },
+    image: `${siteOrigin}/social-card-v2.png`,
+    ...(sameAs.length ? { sameAs } : {}),
+    ...(contactPoint ? { contactPoint } : {}),
+  }
+}
+
+/**
+ * The short public menu, restated for search engines. This is a hint about
+ * which pages deserve sitelinks; the header and footer links are the evidence.
+ */
+function siteNavigationNode(siteOrigin) {
+  return {
+    '@type': 'ItemList',
+    '@id': `${siteOrigin}/#navigation`,
+    name: `${SITE_NAME} site navigation`,
+    itemListElement: PRIMARY_NAVIGATION.map(({ path, label }, index) => ({
+      '@type': 'SiteNavigationElement',
+      position: index + 1,
+      name: label,
+      description: PUBLIC_ROUTE_META[path]?.description,
+      url: `${siteOrigin}${PUBLIC_ROUTE_META[path]?.canonicalPath || path}`,
+    })),
   }
 }
 
@@ -311,7 +464,11 @@ function softwareApplicationNode(siteOrigin) {
     url: `${siteOrigin}/`,
     description: HOME_DESCRIPTION,
     applicationCategory: 'BusinessApplication',
+    applicationSubCategory: 'Legal automation and practice management software',
     operatingSystem: 'Modern web browser',
+    // Every entry is also rendered as visible copy on the home page; structured
+    // data must never claim a capability the page does not show.
+    featureList: CORE_CAPABILITY_NAMES,
     audience: {
       '@type': 'Audience',
       audienceType: 'Law firms and legal professionals',
@@ -370,11 +527,12 @@ function breadcrumbNode(siteOrigin, pathname) {
   }
 }
 
-function faqNode(siteOrigin) {
+function faqNode(siteOrigin, pathname, entries) {
+  const base = pathname === '/' ? `${siteOrigin}/` : `${siteOrigin}${pathname}`
   return {
     '@type': 'FAQPage',
-    '@id': `${siteOrigin}/pricing#faq`,
-    mainEntity: PRICING_FAQ.map(([question, answer]) => ({
+    '@id': `${base}#faq`,
+    mainEntity: entries.map(([question, answer]) => ({
       '@type': 'Question',
       name: question,
       acceptedAnswer: { '@type': 'Answer', text: answer },
@@ -387,17 +545,21 @@ function faqNode(siteOrigin) {
  * organization and website identity so search engines can consolidate the
  * entity; individual pages add the type that describes them.
  */
-export function buildStructuredData(siteOrigin, pathname = '/') {
+export function buildStructuredData(siteOrigin, pathname = '/', profile = {}) {
   if (!siteOrigin) return null
   const path = normalizePathname(pathname)
   const route = PUBLIC_ROUTE_META[path]
   if (!route?.indexable) return null
 
-  const graph = [organizationNode(siteOrigin), websiteNode(siteOrigin)]
+  const graph = [organizationNode(siteOrigin, profile), websiteNode(siteOrigin)]
 
   if (path === '/' || path === '/pricing' || path === '/product') {
     graph.push(softwareApplicationNode(siteOrigin))
   }
+
+  // Sitelink candidates are declared once, on the entry point Google is most
+  // likely to expand.
+  if (path === '/') graph.push(siteNavigationNode(siteOrigin))
 
   if (path !== '/') {
     graph.push({
@@ -415,12 +577,13 @@ export function buildStructuredData(siteOrigin, pathname = '/') {
   const breadcrumb = breadcrumbNode(siteOrigin, path)
   if (breadcrumb) graph.push(breadcrumb)
 
-  if (path === '/pricing') graph.push(faqNode(siteOrigin))
+  if (path === '/') graph.push(faqNode(siteOrigin, '/', HOME_FAQ))
+  if (path === '/pricing') graph.push(faqNode(siteOrigin, '/pricing', PRICING_FAQ))
 
   return { '@context': 'https://schema.org', '@graph': graph }
 }
 
 /** Retained for the home-page shell; delegates to the route-aware builder. */
-export function buildMarketingStructuredData(siteOrigin) {
-  return buildStructuredData(siteOrigin, '/')
+export function buildMarketingStructuredData(siteOrigin, profile = {}) {
+  return buildStructuredData(siteOrigin, '/', profile)
 }
