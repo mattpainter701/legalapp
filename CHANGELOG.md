@@ -3,6 +3,13 @@
 ## [Unreleased]
 
 ### Added
+- **Document automation now scales with an operator-visible safety boundary:**
+  tenant-scoped template search, status/category filters, pagination, readiness
+  summaries, and an independently loaded generation view replace the unbounded
+  library. Local OCR uses separate bounded model sessions, durable work drains
+  unrelated tenants concurrently while preserving per-tenant order, and PDF
+  saves stage outside row locks before exact-contract revalidation, idempotent
+  consumption, compensating cleanup, or durable reconciliation quarantine.
 - **Workspace MCP now covers review-first matter work end to end:** approved
   desktop clients can search and inspect clients, intakes, matters, and tasks;
   load client, party, team, document, event, note, and communication context;
