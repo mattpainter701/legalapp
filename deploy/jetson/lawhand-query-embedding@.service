@@ -13,10 +13,12 @@ Environment=PYTHONPATH=/data/pip_packages:/data/legalapp-embeddings/app
 Environment=HF_HOME=/data/legalapp-embeddings/model-cache
 Environment=TRANSFORMERS_CACHE=/data/legalapp-embeddings/model-cache
 Environment=PYTHONUNBUFFERED=1
+Environment=QUERY_EMBEDDING_BIND=127.0.0.1
+Environment=QUERY_EMBEDDING_PORT=8031
 EnvironmentFile=-/data/legalapp-embeddings/query-embedding.env
 ExecStartPre=/usr/bin/test -x /data/legalapp-embeddings/venv/bin/python3
 ExecStartPre=/usr/bin/test -r /data/legalapp-embeddings/app/mcp_server/embedding_service.py
-ExecStart=/data/legalapp-embeddings/venv/bin/python3 -m uvicorn mcp_server.embedding_service:app --host 0.0.0.0 --port 8031
+ExecStart=/data/legalapp-embeddings/venv/bin/python3 -m uvicorn mcp_server.embedding_service:app --host ${QUERY_EMBEDDING_BIND} --port ${QUERY_EMBEDDING_PORT}
 Restart=always
 RestartSec=10s
 TimeoutStopSec=30s
