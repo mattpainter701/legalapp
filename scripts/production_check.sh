@@ -218,9 +218,12 @@ expected={
     "communications:propose",
     "contacts:read",
     "documents:propose",
+    "documents:read",
     "matters:read",
+    "offline_access",
     "tasks:propose",
     "tasks:read",
+    "templates:read",
 }
 assert payload.get("resource") == resource
 assert payload.get("authorization_servers") == [issuer]

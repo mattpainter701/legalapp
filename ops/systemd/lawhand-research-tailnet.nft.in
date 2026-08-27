@@ -1,0 +1,12 @@
+table inet lawhand_research_tailnet {
+    chain input {
+        type filter hook input priority -10; policy accept;
+
+        # The listener is valid only on the encrypted Tailscale interface.
+        ip daddr @SKYNET_TAILSCALE_IP@ tcp dport 8021 iifname != "tailscale0" counter drop
+
+        # Tailscale cryptographically owns source addresses. Permit the IONOS
+        # core node and drop every other tailnet peer before ts-input accepts it.
+        iifname "tailscale0" ip daddr @SKYNET_TAILSCALE_IP@ tcp dport 8021 ip saddr != @IONOS_TAILSCALE_IP@ counter drop
+    }
+}
