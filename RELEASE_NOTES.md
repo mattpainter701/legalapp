@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.27.6 — Plaintiff and defendant fields are clear and reusable
+
+Released August 27, 2026.
+
+Matter parties now distinguish caption roles from the client relationship, and document templates can Smart Fill reviewed singular or multi-party plaintiff and defendant names.
+
+- **Identify the actual caption role.** The Parties tab now defines plaintiff, defendant, petitioner, and respondent alongside client, counsel, witness, and expert roles.
+- **Choose the primary named party.** For matters with multiple plaintiffs or defendants, staff can mark the primary contact used by a singular template field.
+- **Reuse parties safely in documents.** Templates can use explicit singular and plural plaintiff or defendant fields, with every Smart Fill value still reviewed before preview or save.
+
 ## 2026.08.27.5 — Integration administration is organized in one clear workspace
 
 Released August 27, 2026.

@@ -2,17 +2,25 @@ import { useState, useEffect } from 'react'
 import { getMatterParties, addMatterParty, removeMatterParty, getContacts } from '../api'
 import { Users, Plus, Trash2, Star } from 'lucide-react'
 
-const ROLES = [
-  'client',
-  'opposing_party',
-  'counsel',
-  'witness',
-  'expert',
-  'other',
+const FALLBACK_ROLE_DEFINITIONS = [
+  { value: 'plaintiff', label: 'Plaintiff', description: 'Party asserting a civil claim.' },
+  { value: 'defendant', label: 'Defendant', description: 'Party defending against a civil claim.' },
+  { value: 'petitioner', label: 'Petitioner', description: 'Party requesting relief in a petition-based proceeding.' },
+  { value: 'respondent', label: 'Respondent', description: 'Party responding in a petition-based proceeding.' },
+  { value: 'client', label: 'Client', description: 'Contact represented by the firm; this does not identify the caption side.' },
+  { value: 'opposing_party', label: 'Opposing Party', description: 'Adverse party when a more specific caption role is not known.' },
+  { value: 'counsel', label: 'Counsel', description: 'Attorney or law firm appearing for a party.' },
+  { value: 'witness', label: 'Witness', description: 'Fact or lay witness.' },
+  { value: 'expert', label: 'Expert', description: 'Expert witness or consultant.' },
+  { value: 'other', label: 'Other', description: 'Another participant in the matter.' },
 ]
 
 function RoleBadge({ role }) {
   const colors = {
+    plaintiff: 'bg-blue-100 text-blue-800 border-blue-200',
+    defendant: 'bg-brand-rose/10 text-brand-rose border-brand-rose/20',
+    petitioner: 'bg-blue-100 text-blue-800 border-blue-200',
+    respondent: 'bg-brand-rose/10 text-brand-rose border-brand-rose/20',
     client: 'bg-brand-green/10 text-brand-green border-brand-green/20',
     opposing_party: 'bg-brand-rose/10 text-brand-rose border-brand-rose/20',
     counsel: 'bg-blue-100 text-blue-800 border-blue-200',
@@ -37,6 +45,7 @@ export default function MatterPartiesTab({ matterId }) {
   const [error, setError] = useState(null)
 
   const [contacts, setContacts] = useState([])
+  const [roleDefinitions, setRoleDefinitions] = useState(FALLBACK_ROLE_DEFINITIONS)
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({ contact_id: '', role: 'client', is_primary: false, notes: '' })
   const [adding, setAdding] = useState(false)
@@ -53,6 +62,9 @@ export default function MatterPartiesTab({ matterId }) {
       .then((data) => {
         setParties(data.items || [])
         setTotal(data.total || 0)
+        if (Array.isArray(data.role_definitions) && data.role_definitions.length > 0) {
+          setRoleDefinitions(data.role_definitions)
+        }
       })
       .catch(() => setError('Failed to load parties.'))
       .finally(() => setLoading(false))
@@ -96,6 +108,8 @@ export default function MatterPartiesTab({ matterId }) {
       // silent — user can retry
     }
   }
+
+  const selectedRoleDefinition = roleDefinitions.find(({ value }) => value === form.role)
 
   if (loading) {
     return (
@@ -160,12 +174,15 @@ export default function MatterPartiesTab({ matterId }) {
                 onChange={(e) => setForm((p) => ({ ...p, role: e.target.value }))}
                 className={inputClasses}
               >
-                {ROLES.map((r) => (
-                  <option key={r} value={r}>
-                    {r.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
+                {roleDefinitions.map((role) => (
+                  <option key={role.value} value={role.value}>
+                    {role.label}
                   </option>
                 ))}
               </select>
+              {selectedRoleDefinition?.description && (
+                <p className="mt-1.5 text-xs text-brand-muted">{selectedRoleDefinition.description}</p>
+              )}
             </div>
             <div className="md:col-span-2">
               <label htmlFor="matterpartiestab-notes-optional" className={labelClasses}>Notes (optional)</label>
@@ -177,20 +194,25 @@ export default function MatterPartiesTab({ matterId }) {
                 className={inputClasses}
               />
             </div>
-            <div className="flex items-center gap-3">
-              <input
-                type="checkbox"
-                id="is_primary"
-                checked={form.is_primary}
-                onChange={(e) => setForm((p) => ({ ...p, is_primary: e.target.checked }))}
-                className="w-4 h-4 rounded border-brand-line text-brand-accent focus:ring-brand-accent"
-              />
-              <label
-                htmlFor="is_primary"
-                className="text-[13px] font-sans text-brand-ink-2 cursor-pointer"
-              >
-                Primary party
-              </label>
+            <div className="md:col-span-2">
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  id="is_primary"
+                  checked={form.is_primary}
+                  onChange={(e) => setForm((p) => ({ ...p, is_primary: e.target.checked }))}
+                  className="w-4 h-4 rounded border-brand-line text-brand-accent focus:ring-brand-accent"
+                />
+                <label
+                  htmlFor="is_primary"
+                  className="text-[13px] font-sans text-brand-ink-2 cursor-pointer"
+                >
+                  Primary for this role
+                </label>
+              </div>
+              <p className="mt-1.5 text-xs text-brand-muted">
+                Singular template fields use the primary plaintiff or defendant; otherwise they use the first listed contact.
+              </p>
             </div>
           </div>
           {addError && (
@@ -217,12 +239,16 @@ export default function MatterPartiesTab({ matterId }) {
       )}
 
       <div className="p-6">
+        <div className="mb-5 rounded-lg border border-brand-line bg-brand-bg-soft px-4 py-3 text-xs text-brand-muted">
+          Use <strong className="text-brand-ink">Plaintiff</strong> and <strong className="text-brand-ink">Defendant</strong> for caption parties.
+          <span className="ml-1">Client describes the firm's relationship and does not automatically mean plaintiff.</span>
+        </div>
         {parties.length === 0 ? (
           <div className="text-center py-12">
             <Users size={32} className="mx-auto text-brand-line-2 mb-3" strokeWidth={1.5} />
             <p className="text-brand-ink font-serif text-lg font-bold mb-1">No parties added</p>
             <p className="text-brand-muted text-sm font-sans">
-              Add clients, opposing counsel, witnesses, and experts.
+              Add plaintiffs, defendants, clients, counsel, witnesses, and experts.
             </p>
           </div>
         ) : (

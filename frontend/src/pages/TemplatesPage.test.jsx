@@ -81,6 +81,20 @@ describe('document template workflow', () => {
     expect(screen.queryByRole('button', { name: 'Branding / Settings' })).not.toBeInTheDocument()
   })
 
+  it('documents singular and plural plaintiff and defendant template fields', async () => {
+    const user = userEvent.setup()
+    render(<TemplatesPage />)
+
+    await user.click(await screen.findByRole('button', { name: 'New Template' }))
+    const dialog = screen.getByRole('dialog', { name: 'Create Template' })
+
+    expect(within(dialog).getByText('{{plaintiff_name}}')).toBeInTheDocument()
+    expect(within(dialog).getByText('{{defendant_name}}')).toBeInTheDocument()
+    expect(within(dialog).getByText('{{plaintiff_names}}')).toBeInTheDocument()
+    expect(within(dialog).getByText('{{defendant_names}}')).toBeInTheDocument()
+    expect(within(dialog).getByText(/primary contact for that role/)).toBeInTheDocument()
+  })
+
   it('traps create-modal focus, closes on Escape, and restores the trigger', async () => {
     const user = userEvent.setup()
     render(<TemplatesPage />)

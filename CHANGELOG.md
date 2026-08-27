@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Added
+- **Matter caption parties now drive explicit document fields:** the Parties
+  workspace defines plaintiff and defendant separately from the client
+  relationship and represented side, supports a primary contact per role, and
+  exposes the canonical singular and plural caption fields to document Smart
+  Fill with source provenance and review-required legacy fallback behavior.
 - **Admin integrations are consolidated into a single role-aware workspace:**
   Microsoft and Google cloud accounts, Cloud Search, SMB file shares, Teams,
   Zoom, QuickBooks, and MCP now share one catalog with focused subsections,

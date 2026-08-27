@@ -25,6 +25,17 @@ Within a matter:
 - use tasks and deadlines for work that needs an owner; and
 - record meaningful changes in the matter instead of relying on a private side list.
 
+## Define caption parties
+
+For litigation matters, keep the firm's posture separate from the people or organizations named in the caption:
+
+- **Represented Side / Our Role** describes the firm's side of the case, such as plaintiff's counsel or defense counsel.
+- **Client** identifies the contact represented by the firm. A client is not automatically a plaintiff; the client may be a defendant, petitioner, respondent, insurer, or another interested person.
+- **Plaintiff** and **Defendant** on the **Parties** tab identify the named civil-action parties used by document Smart Fill.
+- **Counterparty Summary** is a quick general label for the opposing side. It is not a substitute for adding the named plaintiff and defendant contacts.
+
+Add each named caption party as a contact and assign the exact role shown in the pleading. A matter can have multiple plaintiffs and defendants. Mark one contact as **Primary for this role** when a template needs a singular plaintiff or defendant name; otherwise the first listed contact is used. Use petitioner/respondent for petition-based proceedings rather than relabeling those parties merely to fill a plaintiff/defendant field.
+
 ## Documents
 
 Use [Document revisions](/matters/documents/revisions) to inspect a document's saved revision history. When the review workflow requests changes, open [Revise a document](/matters/documents/revise) and preserve the original source and reviewed output.

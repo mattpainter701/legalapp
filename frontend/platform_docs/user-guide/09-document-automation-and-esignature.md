@@ -17,6 +17,21 @@ The **Templates** tab lists available templates and their readiness. Before acti
 
 Use clear variable names and stable field meanings. A field such as `client_name` should not alternate between an individual, organization, and billing contact. For PDFs, confirm field placement and appearance on every affected page.
 
+### Plaintiff and defendant field methodology
+
+Caption variables come from contacts assigned the exact **Plaintiff** or **Defendant** role on the matter's **Parties** tab:
+
+| Canonical variable | Meaning |
+| --- | --- |
+| `{{plaintiff_name}}` / `{{defendant_name}}` | The primary contact for that role, or the first listed contact when no primary is marked |
+| `{{plaintiff_names}}` / `{{defendant_names}}` | Every contact for that role, with the primary first and remaining contacts in listed order, separated by semicolons |
+| `{{plaintiff_email}}`, `{{plaintiff_phone}}` and address fields | Contact details for the singular plaintiff selected above |
+| `{{defendant_email}}`, `{{defendant_phone}}` and address fields | Contact details for the singular defendant selected above |
+
+The address suffixes are `street`, `city`, `state`, `zip`, and `country`. For example, use `{{defendant_city}}`. The shorter `{{plaintiff}}` and `{{defendant}}` aliases are accepted, but new templates should use the explicit `_name` variables.
+
+`client_name` always means the matter's client contact; it does not mean plaintiff. `counterparty` is the matter's general counterparty summary and does not mean defendant. For an older matter with no structured caption parties, Smart Fill may infer a plaintiff/defendant pair only when **Represented Side / Our Role** explicitly identifies one side. Those inferred values have reduced confidence, require review, and should be replaced by structured Parties data.
+
 ## Generate and Smart Fill
 
 The **Generate / Smart Fill** tab gathers values and prepares a draft. Select the correct template and matter, review proposed values, resolve missing required fields, and inspect the generated preview.
