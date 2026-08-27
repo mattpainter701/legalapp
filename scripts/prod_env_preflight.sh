@@ -30,6 +30,7 @@ required=(
   MIGRATOR_DATABASE_URL APP_DATABASE_URL LITELLM_API_KEY LITELLM_SALT_KEY LITELLM_DB_PASSWORD WORKSPACE_MCP_ENABLED
   LITELLM_DATABASE_URL UPLOADS_HOST_DIR HOST_STATUS_HOST_DIR HOST_DISK_STATUS_FILE HEALTH_HOST_DISK_MAX_AGE_SECONDS BACKUP_STATUS_FILE HEALTH_BACKUP_MAX_AGE_SECONDS OFFSITE_BACKUP_REQUIRED
   EMAIL_ENABLED EMAIL_FROM ORIGIN_TLS_SERVER_NAME ORIGIN_TLS_CA_FILE CLOUDFLARED_CONFIG_FILE CLOUDFLARED_BIN
+  QBO_CLIENT_ID QBO_CLIENT_SECRET QBO_REDIRECT_URI QBO_ENVIRONMENT
 )
 
 for key in "${required[@]}"; do
@@ -94,6 +95,8 @@ if [[ -z "$opencode_zen_key" || "$opencode_zen_lowered" == *change_me* || "$open
   errors+=("OPENCODE_ZEN_API_KEY (or a supported legacy OpenCode key) must be configured with a non-placeholder value")
 fi
 check_nonplaceholder EMAIL_FROM
+check_nonplaceholder QBO_CLIENT_ID
+check_nonplaceholder QBO_CLIENT_SECRET
 
 if [[ "$(get_env LITELLM_SALT_KEY)" == "$(get_env LITELLM_API_KEY)" ]]; then
   errors+=("LITELLM_SALT_KEY must be permanent and distinct from the rotatable LITELLM_API_KEY")
@@ -121,6 +124,11 @@ if [[ "$email_enabled" == "true" ]]; then
 fi
 [[ "$(get_env BACKEND_URL)" == https://* ]] || errors+=("BACKEND_URL must use https")
 [[ "$(get_env FRONTEND_URL)" == https://* ]] || errors+=("FRONTEND_URL must use https")
+qbo_redirect_uri="$(get_env QBO_REDIRECT_URI)"
+expected_qbo_redirect_uri="$(get_env BACKEND_URL)"
+expected_qbo_redirect_uri="${expected_qbo_redirect_uri%/}/api/integrations/qbo/callback"
+[[ "$(get_env QBO_ENVIRONMENT)" == "production" ]] || errors+=("QBO_ENVIRONMENT must be production for production deploys")
+[[ "$qbo_redirect_uri" == "$expected_qbo_redirect_uri" ]] || errors+=("QBO_REDIRECT_URI must exactly match BACKEND_URL/api/integrations/qbo/callback")
 public_site_url="$(get_env VITE_PUBLIC_SITE_URL)"
 normalized_public_site_url="${public_site_url%/}"
 expected_public_site_url="https://$(get_env DOMAIN)"

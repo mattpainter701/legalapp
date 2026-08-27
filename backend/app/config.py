@@ -991,6 +991,53 @@ def validate_dev_mode_urls(settings: Settings) -> None:
             )
 
 
+def validate_qbo_settings(settings: Settings) -> None:
+    """Validate configured QBO OAuth settings and fail closed in production."""
+    environment = settings.QBO_ENVIRONMENT.strip().lower()
+    if environment not in {"sandbox", "production"}:
+        raise ValueError("QBO_ENVIRONMENT must be 'sandbox' or 'production'")
+
+    configured = any(
+        value.strip()
+        for value in (
+            settings.QBO_CLIENT_ID,
+            settings.QBO_CLIENT_SECRET,
+            settings.QBO_REDIRECT_URI,
+        )
+    )
+    if not configured and environment == "sandbox":
+        return
+
+    if not settings.QBO_CLIENT_ID.strip() or not settings.QBO_CLIENT_SECRET.strip():
+        raise ValueError(
+            "QBO_CLIENT_ID and QBO_CLIENT_SECRET are required when QBO is configured"
+        )
+
+    redirect_uri = settings.QBO_REDIRECT_URI.strip()
+    parsed = urlsplit(redirect_uri)
+    allowed_schemes = {"https"} if environment == "production" else {"http", "https"}
+    if (
+        parsed.scheme not in allowed_schemes
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        requirement = "HTTPS" if environment == "production" else "HTTP(S)"
+        raise ValueError(f"QBO_REDIRECT_URI must be an absolute {requirement} URL")
+
+    if environment == "production":
+        expected = (
+            f"{settings.BACKEND_URL.rstrip('/')}/api/integrations/qbo/callback"
+        )
+        if redirect_uri != expected:
+            raise ValueError(
+                "QBO_REDIRECT_URI must exactly match "
+                "BACKEND_URL/api/integrations/qbo/callback in production"
+            )
+
+
 def validate_inbound_email_settings(settings: Settings) -> None:
     if not settings.INBOUND_EMAIL_ENABLED:
         return
@@ -1059,6 +1106,7 @@ def get_settings() -> Settings:
     validate_platform_secret_key(settings)
     validate_platform_bootstrap_settings(settings)
     validate_mcp_security_settings(settings)
+    validate_qbo_settings(settings)
     validate_inbound_email_settings(settings)
     validate_template_ocr_settings(settings)
     validate_dev_mode_urls(settings)
