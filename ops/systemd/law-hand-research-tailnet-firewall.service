@@ -1,0 +1,14 @@
+[Unit]
+Description=LawHand IONOS-only research tailnet firewall
+Requires=tailscaled.service
+After=tailscaled.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+ExecStartPre=-/usr/sbin/nft delete table inet lawhand_research_tailnet
+ExecStart=/usr/sbin/nft -f /etc/lawhand/lawhand-research-tailnet.nft
+ExecStop=-/usr/sbin/nft delete table inet lawhand_research_tailnet
+
+[Install]
+WantedBy=multi-user.target

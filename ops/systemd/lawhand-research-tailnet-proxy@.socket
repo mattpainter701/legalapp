@@ -1,0 +1,14 @@
+[Unit]
+Description=LawHand private research proxy socket on Tailscale address %i
+Requires=tailscaled.service law-hand-research-tailnet-firewall.service
+After=tailscaled.service law-hand-research-tailnet-firewall.service
+
+[Socket]
+ListenStream=%i:8021
+FreeBind=true
+NoDelay=true
+KeepAlive=true
+Service=lawhand-research-tailnet-proxy@%i.service
+
+[Install]
+WantedBy=sockets.target
