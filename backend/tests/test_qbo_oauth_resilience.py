@@ -36,9 +36,7 @@ async def test_auth_request_retries_transient_response(monkeypatch):
         return None
 
     monkeypatch.setattr(qbo.asyncio, "sleep", no_sleep)
-    response = await qbo._request_with_auth_retry(
-        client, "POST", str(request.url)
-    )
+    response = await qbo._request_with_auth_retry(client, "POST", str(request.url))
 
     assert response.status_code == 200
     assert client.calls == 2
@@ -57,9 +55,7 @@ async def test_auth_request_does_not_retry_invalid_grant():
         ]
     )
 
-    response = await qbo._request_with_auth_retry(
-        client, "POST", str(request.url)
-    )
+    response = await qbo._request_with_auth_retry(client, "POST", str(request.url))
 
     assert response.status_code == 400
     assert client.calls == 1
@@ -152,3 +148,109 @@ async def test_invalid_grant_deactivates_connection(monkeypatch):
     assert integration.last_sync_status == "failed"
     assert "invalid_grant" in integration.last_sync_error
     assert db.committed is True
+
+
+@pytest.mark.asyncio
+async def test_discovery_uses_cache_and_falls_back_for_untrusted_document(monkeypatch):
+    cached = qbo._fallback_oauth_endpoints()
+    qbo._oauth_endpoints_cache = (float("inf"), cached)
+    assert await qbo._get_qbo_oauth_endpoints() == cached
+
+    qbo._oauth_endpoints_cache = None
+    request = httpx.Request("GET", qbo.QBO_DISCOVERY_URL)
+    response = httpx.Response(
+        200,
+        request=request,
+        json={
+            "authorization_endpoint": "https://attacker.example/connect",
+            "token_endpoint": None,
+            "revocation_endpoint": "http://developer.api.intuit.com/revoke",
+        },
+    )
+    client = _FakeClient([response])
+
+    class _ClientContext:
+        async def __aenter__(self):
+            return client
+
+        async def __aexit__(self, *_args):
+            return None
+
+    monkeypatch.setattr(qbo.httpx, "AsyncClient", lambda **_kwargs: _ClientContext())
+
+    assert await qbo._get_qbo_oauth_endpoints() == qbo._fallback_oauth_endpoints()
+    assert qbo._trusted_intuit_endpoint(123) is None
+    assert qbo._trusted_intuit_endpoint("https://notintuit.com/token") is None
+
+
+@pytest.mark.asyncio
+async def test_auth_request_exhausts_network_retries(monkeypatch):
+    request = httpx.Request("POST", qbo.QBO_TOKEN_URL)
+    client = _FakeClient(
+        [
+            httpx.ConnectError("offline", request=request),
+            httpx.ConnectError("offline", request=request),
+            httpx.ConnectError("offline", request=request),
+        ]
+    )
+
+    async def no_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(qbo.asyncio, "sleep", no_sleep)
+    with pytest.raises(httpx.ConnectError):
+        await qbo._request_with_auth_retry(client, "POST", str(request.url))
+    assert client.calls == 3
+
+
+@pytest.mark.asyncio
+async def test_list_ar_accounts_returns_connected_company_accounts(monkeypatch):
+    tenant_id = "tenant-1"
+
+    async def current_user(_request, _db):
+        return SimpleNamespace(role="admin", tenant_id=tenant_id)
+
+    async def no_context(_db, _tenant_id):
+        return None
+
+    async def token(_db, _tenant_id):
+        return "access-token"
+
+    async def integration(_db, _tenant_id):
+        return SimpleNamespace(qbo_realm_id="realm-1", sandbox_mode=False)
+
+    request = httpx.Request(
+        "GET", "https://quickbooks.api.intuit.com/v3/company/realm-1/query"
+    )
+    response = httpx.Response(
+        200,
+        request=request,
+        json={
+            "QueryResponse": {"Account": [{"Id": "12", "Name": "Accounts Receivable"}]}
+        },
+    )
+
+    class _ClientContext:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, url, **kwargs):
+            assert url == str(request.url)
+            assert kwargs["headers"]["Authorization"] == "Bearer access-token"
+            assert "Accounts Receivable" in kwargs["params"]["query"]
+            return response
+
+    monkeypatch.setattr(qbo, "get_current_user", current_user)
+    monkeypatch.setattr(qbo, "set_tenant_context", no_context)
+    monkeypatch.setattr(qbo, "_get_fresh_qbo_token", token)
+    monkeypatch.setattr(qbo, "_get_qbo_integration", integration)
+    monkeypatch.setattr(qbo.httpx, "AsyncClient", lambda **_kwargs: _ClientContext())
+
+    accounts = await qbo.qbo_list_ar_accounts(object(), object())
+
+    assert [(account.id, account.name) for account in accounts] == [
+        ("12", "Accounts Receivable")
+    ]
