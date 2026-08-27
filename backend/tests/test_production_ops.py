@@ -1682,20 +1682,23 @@ def test_cube_m_overlay_bounds_runtime_without_weakening_private_ingress() -> No
     )
     assert total_mib <= 10 * 1024
 
-    # LiteLLM's Prisma migration exceeded a 768 MiB cgroup during the initial
-    # production-data restore even though the 16 GiB host had ample free RAM.
-    # Preserve enough transient headroom without exceeding the Cube M startup
-    # envelope while the application migrator runs concurrently.
-    assert (
-        memory_mib(
-            services["litellm-migrator"]["deploy"]["resources"]["limits"]["memory"]
+    # LiteLLM's Prisma deploy and schema-diff steps each exceeded a 768 MiB
+    # cgroup during production-data reconciliation even though the 16 GiB host
+    # had ample free RAM. They run sequentially, while the application migrator
+    # may overlap either step.
+    litellm_oneshot_services = ("litellm-migrator", "litellm-schema-migrator")
+    for name in litellm_oneshot_services:
+        assert (
+            memory_mib(services[name]["deploy"]["resources"]["limits"]["memory"])
+            >= 1280
         )
-        >= 1280
-    )
-    startup_oneshot_services = ("litellm-migrator", "migrator")
-    startup_total_mib = total_mib + sum(
-        memory_mib(services[name]["deploy"]["resources"]["limits"]["memory"])
-        for name in startup_oneshot_services
+    startup_total_mib = (
+        total_mib
+        + max(
+            memory_mib(services[name]["deploy"]["resources"]["limits"]["memory"])
+            for name in litellm_oneshot_services
+        )
+        + memory_mib(services["migrator"]["deploy"]["resources"]["limits"]["memory"])
     )
     assert startup_total_mib <= 12 * 1024
 
