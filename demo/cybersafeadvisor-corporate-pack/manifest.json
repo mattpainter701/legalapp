@@ -1,6 +1,6 @@
 {
-  "schema_version": 2,
-  "pack_version": "demo-scenario-library-v1",
+  "schema_version": 3,
+  "pack_version": "demo-scenario-library-v2",
   "tenant_domain": "cybersafeadvisor.com",
   "synthetic": true,
   "warning": "SYNTHETIC DEMO - NOT LEGAL ADVICE",
@@ -19,7 +19,8 @@
         "01-northstar-cloud-master-services-agreement.docx",
         "02-northstar-cloud-data-security-addendum.docx",
         "support-northstar-saas-review-intake-and-contact-profile.docx",
-        "support-northstar-saas-review-communications-and-work-plan.docx"
+        "support-northstar-saas-review-communications-and-work-plan.docx",
+        "support-northstar-saas-review-chronology-and-document-index.docx"
       ],
       "demo_prompt": "Review the MSA and data addendum for customer-side risks, cite the source clauses, and propose follow-up tasks for the renewal and data-use issues.",
       "suggested_tasks": [
@@ -40,15 +41,26 @@
           "zip": "60607",
           "country": "US"
         },
+        "client_since": "2019-01-15",
+        "preferred_contact_method": "phone",
+        "preferred_contact_window": "Weekdays, 9:00 a.m.-noon Central",
+        "billing_terms": "Monthly itemized invoice; electronic delivery; client approval required before third-party spend.",
         "primary_contact": {
           "first_name": "Avery",
           "last_name": "Nguyen",
           "title": "Chief Operating Officer",
           "email": "avery.nguyen@example.invalid",
-          "phone": "+1-555-0110"
+          "phone": "+1-202-555-0110"
+        },
+        "secondary_contact": {
+          "first_name": "Dana",
+          "last_name": "Price",
+          "title": "Finance and Billing",
+          "email": "dana.price@example.invalid",
+          "phone": "+1-202-555-0210"
         },
         "opposing_party": {
-          "organization": "Maple Holdings (fictional)",
+          "organization": "BlueHarbor Cloud Systems, Inc. (fictional)",
           "contact_name": "Blake Carter",
           "email": "counterparty-1@example.invalid"
         }
@@ -68,7 +80,8 @@
         "03-harborlight-series-seed-term-sheet.docx",
         "04-harborlight-board-written-consent.docx",
         "support-harborlight-seed-financing-intake-and-contact-profile.docx",
-        "support-harborlight-seed-financing-communications-and-work-plan.docx"
+        "support-harborlight-seed-financing-communications-and-work-plan.docx",
+        "support-harborlight-seed-financing-chronology-and-document-index.docx"
       ],
       "demo_prompt": "Compare the term sheet to the board consent, identify missing approvals and closing conditions, and prepare a prioritized closing checklist.",
       "suggested_tasks": [
@@ -87,15 +100,26 @@
           "zip": "19801",
           "country": "US"
         },
+        "client_since": "2020-02-15",
+        "preferred_contact_method": "email",
+        "preferred_contact_window": "Weekdays, 1:00-4:00 p.m. Eastern",
+        "billing_terms": "Monthly itemized invoice; electronic delivery; client approval required before third-party spend.",
         "primary_contact": {
           "first_name": "Morgan",
           "last_name": "Ellis",
           "title": "Founder and CEO",
           "email": "morgan.ellis@example.invalid",
-          "phone": "+1-555-0111"
+          "phone": "+1-202-555-0111"
+        },
+        "secondary_contact": {
+          "first_name": "Elliot",
+          "last_name": "Shaw",
+          "title": "Board Secretary",
+          "email": "elliot.shaw@example.invalid",
+          "phone": "+1-202-555-0211"
         },
         "opposing_party": {
-          "organization": "Cobalt Partners (fictional)",
+          "organization": "Horizon Seed Ventures, LP (fictional)",
           "contact_name": "Rowan Carter",
           "email": "counterparty-2@example.invalid"
         }
@@ -115,7 +139,8 @@
         "05-redwood-ogc-engagement-letter.docx",
         "06-redwood-monthly-request-and-contract-calendar.docx",
         "support-redwood-ogc-retainer-intake-and-contact-profile.docx",
-        "support-redwood-ogc-retainer-communications-and-work-plan.docx"
+        "support-redwood-ogc-retainer-communications-and-work-plan.docx",
+        "support-redwood-ogc-retainer-chronology-and-document-index.docx"
       ],
       "demo_prompt": "Triage the August legal requests, show the next notice deadlines, and draft the monthly retainer portfolio summary with decisions needed.",
       "suggested_tasks": [
@@ -137,15 +162,26 @@
           "zip": "43215",
           "country": "US"
         },
+        "client_since": "2021-03-15",
+        "preferred_contact_method": "email",
+        "preferred_contact_window": "Weekdays after 3:00 p.m. local time",
+        "billing_terms": "Monthly itemized invoice; electronic delivery; client approval required before third-party spend.",
         "primary_contact": {
           "first_name": "Riley",
           "last_name": "Santos",
           "title": "General Manager",
           "email": "riley.santos@example.invalid",
-          "phone": "+1-555-0112"
+          "phone": "+1-202-555-0112"
+        },
+        "secondary_contact": {
+          "first_name": "Sam",
+          "last_name": "Ortiz",
+          "title": "Operations Coordinator",
+          "email": "sam.ortiz@example.invalid",
+          "phone": "+1-202-555-0212"
         },
         "opposing_party": {
-          "organization": "Lantern Services (fictional)",
+          "organization": "PinePeak Distribution, LLC (fictional)",
           "contact_name": "Hayden Carter",
           "email": "counterparty-3@example.invalid"
         }
@@ -164,7 +200,8 @@
       "documents": [
         "07-sunbeam-rooftop-delivery-demand-response.docx",
         "support-sunbeam-drone-demand-intake-and-contact-profile.docx",
-        "support-sunbeam-drone-demand-communications-and-work-plan.docx"
+        "support-sunbeam-drone-demand-communications-and-work-plan.docx",
+        "support-sunbeam-drone-demand-chronology-and-document-index.docx"
       ],
       "demo_prompt": "Build a claim chronology, identify the preservation steps, and draft a measured response that does not concede the disputed marketing statement.",
       "suggested_tasks": [
@@ -181,15 +218,26 @@
           "zip": "44113",
           "country": "US"
         },
+        "client_since": "2022-04-15",
+        "preferred_contact_method": "phone",
+        "preferred_contact_window": "Weekdays, 9:00 a.m.-noon Central",
+        "billing_terms": "Monthly itemized invoice; electronic delivery; client approval required before third-party spend.",
         "primary_contact": {
           "first_name": "Jamie",
           "last_name": "Patel",
           "title": "Director of Operations",
           "email": "jamie.patel@example.invalid",
-          "phone": "+1-555-0113"
+          "phone": "+1-202-555-0113"
+        },
+        "secondary_contact": {
+          "first_name": "Lee",
+          "last_name": "Wallace",
+          "title": "Risk Manager",
+          "email": "lee.wallace@example.invalid",
+          "phone": "+1-202-555-0213"
         },
         "opposing_party": {
-          "organization": "Summit Group (fictional)",
+          "organization": "Riverside Roof Gardens, LLC (fictional)",
           "contact_name": "Sage Carter",
           "email": "counterparty-4@example.invalid"
         }
@@ -208,7 +256,8 @@
       "documents": [
         "08-pineapple-member-data-request-playbook.docx",
         "support-pineapple-dsar-intake-and-contact-profile.docx",
-        "support-pineapple-dsar-communications-and-work-plan.docx"
+        "support-pineapple-dsar-communications-and-work-plan.docx",
+        "support-pineapple-dsar-chronology-and-document-index.docx"
       ],
       "demo_prompt": "Create a practical DSAR plan, flag the data that needs human review, and prepare the questions for the booking and marketing vendors.",
       "suggested_tasks": [
@@ -225,15 +274,26 @@
           "zip": "48104",
           "country": "US"
         },
+        "client_since": "2023-05-15",
+        "preferred_contact_method": "email",
+        "preferred_contact_window": "Weekdays, 1:00-4:00 p.m. Eastern",
+        "billing_terms": "Monthly itemized invoice; electronic delivery; client approval required before third-party spend.",
         "primary_contact": {
           "first_name": "Casey",
           "last_name": "Morgan",
           "title": "Owner",
           "email": "casey.morgan@example.invalid",
-          "phone": "+1-555-0114"
+          "phone": "+1-202-555-0114"
+        },
+        "secondary_contact": {
+          "first_name": "Ari",
+          "last_name": "Foster",
+          "title": "Office Manager",
+          "email": "ari.foster@example.invalid",
+          "phone": "+1-202-555-0214"
         },
         "opposing_party": {
-          "organization": "Crescent Counsel (fictional)",
+          "organization": "FreshForm Nutrition Partners, Inc. (fictional)",
           "contact_name": "Reese Carter",
           "email": "counterparty-5@example.invalid"
         }
@@ -252,7 +312,8 @@
       "documents": [
         "09-brew-bloom-manager-separation-memo.docx",
         "support-brew-bloom-termination-intake-and-contact-profile.docx",
-        "support-brew-bloom-termination-communications-and-work-plan.docx"
+        "support-brew-bloom-termination-communications-and-work-plan.docx",
+        "support-brew-bloom-termination-chronology-and-document-index.docx"
       ],
       "demo_prompt": "Build an investigation plan that tests the tip allegation and the retaliation risk, then prepare an HR decision checklist.",
       "suggested_tasks": [
@@ -269,16 +330,27 @@
           "zip": "60607",
           "country": "US"
         },
+        "client_since": "2024-06-15",
+        "preferred_contact_method": "email",
+        "preferred_contact_window": "Weekdays after 3:00 p.m. local time",
+        "billing_terms": "Monthly itemized invoice; electronic delivery; client approval required before third-party spend.",
         "primary_contact": {
           "first_name": "Taylor",
           "last_name": "Brooks",
           "title": "Chief of Staff",
           "email": "taylor.brooks@example.invalid",
-          "phone": "+1-555-0115"
+          "phone": "+1-202-555-0115"
+        },
+        "secondary_contact": {
+          "first_name": "Jules",
+          "last_name": "Grant",
+          "title": "HR Business Partner",
+          "email": "jules.grant@example.invalid",
+          "phone": "+1-202-555-0215"
         },
         "opposing_party": {
-          "organization": "Maple Holdings (fictional)",
-          "contact_name": "Blake Carter",
+          "organization": "Morgan Hale (fictional)",
+          "contact_name": "Morgan Hale",
           "email": "counterparty-6@example.invalid"
         }
       }
@@ -296,7 +368,8 @@
       "documents": [
         "10-trailtrack-kids-watch-launch-review.docx",
         "support-trailtrack-kids-watch-intake-and-contact-profile.docx",
-        "support-trailtrack-kids-watch-communications-and-work-plan.docx"
+        "support-trailtrack-kids-watch-communications-and-work-plan.docx",
+        "support-trailtrack-kids-watch-chronology-and-document-index.docx"
       ],
       "demo_prompt": "Turn this launch brief into a prioritized product legal checklist, with specific edits to the battery and location-sharing claims.",
       "suggested_tasks": [
@@ -313,16 +386,27 @@
           "zip": "19801",
           "country": "US"
         },
+        "client_since": "2025-07-15",
+        "preferred_contact_method": "phone",
+        "preferred_contact_window": "Weekdays, 9:00 a.m.-noon Central",
+        "billing_terms": "Monthly itemized invoice; electronic delivery; client approval required before third-party spend.",
         "primary_contact": {
           "first_name": "Jordan",
           "last_name": "Kim",
-          "title": "Director of People",
+          "title": "Vice President of Product",
           "email": "jordan.kim@example.invalid",
-          "phone": "+1-555-0116"
+          "phone": "+1-202-555-0116"
+        },
+        "secondary_contact": {
+          "first_name": "Mina",
+          "last_name": "Park",
+          "title": "Product Counsel Liaison",
+          "email": "mina.park@example.invalid",
+          "phone": "+1-202-555-0216"
         },
         "opposing_party": {
-          "organization": "Cobalt Partners (fictional)",
-          "contact_name": "Rowan Carter",
+          "organization": "CampTrail Retail Group, Inc. (fictional)",
+          "contact_name": "Avery Dawson",
           "email": "counterparty-7@example.invalid"
         }
       }
@@ -340,7 +424,8 @@
       "documents": [
         "11-moonbeam-sparkle-crumb-brand-review.docx",
         "support-moonbeam-trademark-intake-and-contact-profile.docx",
-        "support-moonbeam-trademark-communications-and-work-plan.docx"
+        "support-moonbeam-trademark-communications-and-work-plan.docx",
+        "support-moonbeam-trademark-chronology-and-document-index.docx"
       ],
       "demo_prompt": "Create a brand-risk matrix and a practical next-step plan for the founder before the holiday packaging deadline.",
       "suggested_tasks": [
@@ -357,16 +442,27 @@
           "zip": "43215",
           "country": "US"
         },
+        "client_since": "2019-08-15",
+        "preferred_contact_method": "email",
+        "preferred_contact_window": "Weekdays, 1:00-4:00 p.m. Eastern",
+        "billing_terms": "Monthly itemized invoice; electronic delivery; client approval required before third-party spend.",
         "primary_contact": {
           "first_name": "Robin",
           "last_name": "Flores",
-          "title": "Product Lead",
+          "title": "Founder",
           "email": "robin.flores@example.invalid",
-          "phone": "+1-555-0117"
+          "phone": "+1-202-555-0117"
+        },
+        "secondary_contact": {
+          "first_name": "Noah",
+          "last_name": "Bishop",
+          "title": "Marketing Director",
+          "email": "noah.bishop@example.invalid",
+          "phone": "+1-202-555-0217"
         },
         "opposing_party": {
-          "organization": "Lantern Services (fictional)",
-          "contact_name": "Hayden Carter",
+          "organization": "Sparkle Crumbs Confections, LLC (fictional)",
+          "contact_name": "Devon Price",
           "email": "counterparty-8@example.invalid"
         }
       }
@@ -384,7 +480,8 @@
       "documents": [
         "12-pearl-pixel-ai-recruiter-pilot.docx",
         "support-pearl-pixel-ai-recruiter-intake-and-contact-profile.docx",
-        "support-pearl-pixel-ai-recruiter-communications-and-work-plan.docx"
+        "support-pearl-pixel-ai-recruiter-communications-and-work-plan.docx",
+        "support-pearl-pixel-ai-recruiter-chronology-and-document-index.docx"
       ],
       "demo_prompt": "Assess this AI hiring pilot, identify the controls needed before launch, and draft a concise go/no-go recommendation.",
       "suggested_tasks": [
@@ -401,16 +498,27 @@
           "zip": "44113",
           "country": "US"
         },
+        "client_since": "2020-09-15",
+        "preferred_contact_method": "email",
+        "preferred_contact_window": "Weekdays after 3:00 p.m. local time",
+        "billing_terms": "Monthly itemized invoice; electronic delivery; client approval required before third-party spend.",
         "primary_contact": {
           "first_name": "Cameron",
           "last_name": "Wells",
-          "title": "Privacy Program Manager",
+          "title": "AI Governance Program Manager",
           "email": "cameron.wells@example.invalid",
-          "phone": "+1-555-0118"
+          "phone": "+1-202-555-0118"
+        },
+        "secondary_contact": {
+          "first_name": "Remy",
+          "last_name": "Cole",
+          "title": "People Operations",
+          "email": "remy.cole@example.invalid",
+          "phone": "+1-202-555-0218"
         },
         "opposing_party": {
-          "organization": "Summit Group (fictional)",
-          "contact_name": "Sage Carter",
+          "organization": "RecruitSight AI, Inc. (fictional)",
+          "contact_name": "Marlowe Grant",
           "email": "counterparty-9@example.invalid"
         }
       }
@@ -428,7 +536,8 @@
       "documents": [
         "13-freshnest-sleepy-tea-label-review.docx",
         "support-freshnest-supplement-label-intake-and-contact-profile.docx",
-        "support-freshnest-supplement-label-communications-and-work-plan.docx"
+        "support-freshnest-supplement-label-communications-and-work-plan.docx",
+        "support-freshnest-supplement-label-chronology-and-document-index.docx"
       ],
       "demo_prompt": "Classify the proposed claims, suggest safer alternatives, and build a ten-day approval plan for the label refresh.",
       "suggested_tasks": [
@@ -445,16 +554,27 @@
           "zip": "48104",
           "country": "US"
         },
+        "client_since": "2021-01-15",
+        "preferred_contact_method": "phone",
+        "preferred_contact_window": "Weekdays, 9:00 a.m.-noon Central",
+        "billing_terms": "Monthly itemized invoice; electronic delivery; client approval required before third-party spend.",
         "primary_contact": {
           "first_name": "Drew",
           "last_name": "Hart",
-          "title": "Finance Director",
+          "title": "Director of Brand Compliance",
           "email": "drew.hart@example.invalid",
-          "phone": "+1-555-0119"
+          "phone": "+1-202-555-0119"
+        },
+        "secondary_contact": {
+          "first_name": "Asha",
+          "last_name": "Bell",
+          "title": "Quality Manager",
+          "email": "asha.bell@example.invalid",
+          "phone": "+1-202-555-0219"
         },
         "opposing_party": {
-          "organization": "Crescent Counsel (fictional)",
-          "contact_name": "Reese Carter",
+          "organization": "MarketSquare Grocers, Inc. (fictional)",
+          "contact_name": "Carmen Bell",
           "email": "counterparty-10@example.invalid"
         }
       }
@@ -472,7 +592,8 @@
       "documents": [
         "14-riverstone-parenting-plan-prep.docx",
         "support-riverstone-parenting-plan-intake-and-contact-profile.docx",
-        "support-riverstone-parenting-plan-communications-and-work-plan.docx"
+        "support-riverstone-parenting-plan-communications-and-work-plan.docx",
+        "support-riverstone-parenting-plan-chronology-and-document-index.docx"
       ],
       "demo_prompt": "Turn these facts into a neutral mediation agenda and a child-centered parenting-plan checklist without giving jurisdiction-specific legal advice.",
       "suggested_tasks": [
@@ -489,16 +610,27 @@
           "zip": "60607",
           "country": "US"
         },
+        "client_since": "2022-02-15",
+        "preferred_contact_method": "email",
+        "preferred_contact_window": "Weekdays, 1:00-4:00 p.m. Eastern",
+        "billing_terms": "Monthly itemized invoice; electronic delivery; client approval required before third-party spend.",
         "primary_contact": {
-          "first_name": "Quinn",
-          "last_name": "Rivera",
-          "title": "Client Representative",
-          "email": "quinn.rivera@example.invalid",
-          "phone": "+1-555-0120"
+          "first_name": "Avery",
+          "last_name": "Riverstone",
+          "title": "Client",
+          "email": "avery.riverstone@example.invalid",
+          "phone": "+1-202-555-0120"
+        },
+        "secondary_contact": {
+          "first_name": "Micah",
+          "last_name": "Stone",
+          "title": "Family Coordinator",
+          "email": "micah.stone@example.invalid",
+          "phone": "+1-202-555-0220"
         },
         "opposing_party": {
-          "organization": "Maple Holdings (fictional)",
-          "contact_name": "Blake Carter",
+          "organization": "Morgan Riverstone Household (fictional)",
+          "contact_name": "Morgan Riverstone",
           "email": "counterparty-11@example.invalid"
         }
       }
@@ -516,7 +648,8 @@
       "documents": [
         "15-parker-festival-citation-case-notes.docx",
         "support-parkers-festival-citation-intake-and-contact-profile.docx",
-        "support-parkers-festival-citation-communications-and-work-plan.docx"
+        "support-parkers-festival-citation-communications-and-work-plan.docx",
+        "support-parkers-festival-citation-chronology-and-document-index.docx"
       ],
       "demo_prompt": "Build an initial defense-case checklist that prioritizes evidence preservation, court preparation, and client communications.",
       "suggested_tasks": [
@@ -533,16 +666,27 @@
           "zip": "19801",
           "country": "US"
         },
+        "client_since": "2023-03-15",
+        "preferred_contact_method": "email",
+        "preferred_contact_window": "Weekdays after 3:00 p.m. local time",
+        "billing_terms": "Monthly itemized invoice; electronic delivery; client approval required before third-party spend.",
         "primary_contact": {
-          "first_name": "Parker",
-          "last_name": "Reed",
-          "title": "Operations Lead",
-          "email": "parker.reed@example.invalid",
-          "phone": "+1-555-0121"
+          "first_name": "Jordan",
+          "last_name": "Parker",
+          "title": "Client",
+          "email": "jordan.parker@example.invalid",
+          "phone": "+1-202-555-0121"
+        },
+        "secondary_contact": {
+          "first_name": "Tess",
+          "last_name": "Jordan",
+          "title": "Emergency Contact",
+          "email": "tess.jordan@example.invalid",
+          "phone": "+1-202-555-0221"
         },
         "opposing_party": {
-          "organization": "Cobalt Partners (fictional)",
-          "contact_name": "Rowan Carter",
+          "organization": "Lakeview Municipal Prosecutor (fictional)",
+          "contact_name": "Taylor Brooks",
           "email": "counterparty-12@example.invalid"
         }
       }
@@ -560,7 +704,8 @@
       "documents": [
         "16-lakeside-bakery-lease-review.docx",
         "support-lakeside-bakery-lease-intake-and-contact-profile.docx",
-        "support-lakeside-bakery-lease-communications-and-work-plan.docx"
+        "support-lakeside-bakery-lease-communications-and-work-plan.docx",
+        "support-lakeside-bakery-lease-chronology-and-document-index.docx"
       ],
       "demo_prompt": "Review this first-store lease scenario, identify the top negotiation points, and create a practical due-diligence checklist.",
       "suggested_tasks": [
@@ -577,16 +722,27 @@
           "zip": "43215",
           "country": "US"
         },
+        "client_since": "2024-04-15",
+        "preferred_contact_method": "phone",
+        "preferred_contact_window": "Weekdays, 9:00 a.m.-noon Central",
+        "billing_terms": "Monthly itemized invoice; electronic delivery; client approval required before third-party spend.",
         "primary_contact": {
           "first_name": "Emerson",
           "last_name": "Lane",
           "title": "Managing Member",
           "email": "emerson.lane@example.invalid",
-          "phone": "+1-555-0122"
+          "phone": "+1-202-555-0122"
+        },
+        "secondary_contact": {
+          "first_name": "Ira",
+          "last_name": "Sloan",
+          "title": "Bookkeeper",
+          "email": "ira.sloan@example.invalid",
+          "phone": "+1-202-555-0222"
         },
         "opposing_party": {
-          "organization": "Lantern Services (fictional)",
-          "contact_name": "Hayden Carter",
+          "organization": "Harbor District Properties, LLC (fictional)",
+          "contact_name": "Rene Patel",
           "email": "counterparty-13@example.invalid"
         }
       }
@@ -604,7 +760,8 @@
       "documents": [
         "17-marigold-estate-administration-plan.docx",
         "support-marigold-estate-intake-and-contact-profile.docx",
-        "support-marigold-estate-communications-and-work-plan.docx"
+        "support-marigold-estate-communications-and-work-plan.docx",
+        "support-marigold-estate-chronology-and-document-index.docx"
       ],
       "demo_prompt": "Organize this estate-and-business transition into immediate, near-term, and long-term decisions while flagging questions for local probate counsel.",
       "suggested_tasks": [
@@ -621,16 +778,27 @@
           "zip": "44113",
           "country": "US"
         },
+        "client_since": "2025-05-15",
+        "preferred_contact_method": "email",
+        "preferred_contact_window": "Weekdays, 1:00-4:00 p.m. Eastern",
+        "billing_terms": "Monthly itemized invoice; electronic delivery; client approval required before third-party spend.",
         "primary_contact": {
           "first_name": "Skyler",
           "last_name": "Bennett",
           "title": "Program Director",
           "email": "skyler.bennett@example.invalid",
-          "phone": "+1-555-0123"
+          "phone": "+1-202-555-0123"
+        },
+        "secondary_contact": {
+          "first_name": "Lena",
+          "last_name": "Marsh",
+          "title": "Estate Accountant",
+          "email": "lena.marsh@example.invalid",
+          "phone": "+1-202-555-0223"
         },
         "opposing_party": {
-          "organization": "Summit Group (fictional)",
-          "contact_name": "Sage Carter",
+          "organization": "Marigold Family Beneficiaries (fictional)",
+          "contact_name": "Jamie Marigold",
           "email": "counterparty-14@example.invalid"
         }
       }
@@ -648,7 +816,8 @@
       "documents": [
         "18-neighborly-fence-mediation-brief.docx",
         "support-neighborly-fence-mediation-intake-and-contact-profile.docx",
-        "support-neighborly-fence-mediation-communications-and-work-plan.docx"
+        "support-neighborly-fence-mediation-communications-and-work-plan.docx",
+        "support-neighborly-fence-mediation-chronology-and-document-index.docx"
       ],
       "demo_prompt": "Prepare a constructive mediation agenda, identify the information gaps, and outline settlement terms that let both neighbors enjoy their yards again.",
       "suggested_tasks": [
@@ -665,17 +834,196 @@
           "zip": "48104",
           "country": "US"
         },
+        "client_since": "2019-06-15",
+        "preferred_contact_method": "email",
+        "preferred_contact_window": "Weekdays after 3:00 p.m. local time",
+        "billing_terms": "Monthly itemized invoice; electronic delivery; client approval required before third-party spend.",
         "primary_contact": {
           "first_name": "Alex",
           "last_name": "Monroe",
-          "title": "Business Manager",
+          "title": "Mediation Participant",
           "email": "alex.monroe@example.invalid",
-          "phone": "+1-555-0124"
+          "phone": "+1-202-555-0124"
+        },
+        "secondary_contact": {
+          "first_name": "Owen",
+          "last_name": "Dale",
+          "title": "Mediation Coordinator",
+          "email": "owen.dale@example.invalid",
+          "phone": "+1-202-555-0224"
         },
         "opposing_party": {
-          "organization": "Crescent Counsel (fictional)",
-          "contact_name": "Reese Carter",
+          "organization": "Bell Household (fictional)",
+          "contact_name": "Casey Bell",
           "email": "counterparty-15@example.invalid"
+        }
+      }
+    },
+    {
+      "external_key": "demo-cedar-lane-cyclist-claim",
+      "primary_plugin": "litigation-legal",
+      "matter_type": "personal injury",
+      "jurisdiction": "Illinois",
+      "name": "Cedar Lane - Cyclist Intersection Claim",
+      "practice_area": "Personal Injury / Pre-Suit Investigation",
+      "status": "Open - Records Collection",
+      "client": "Maya Chen (fictional)",
+      "description": "A bicycle commuter is recovering from a fractured wrist after a delivery van turned across a marked bike lane, while the available video and insurance accounts do not yet line up.",
+      "documents": [
+        "19-cedar-lane-cyclist-claim-investigation.docx",
+        "support-cedar-lane-cyclist-claim-intake-and-contact-profile.docx",
+        "support-cedar-lane-cyclist-claim-communications-and-work-plan.docx",
+        "support-cedar-lane-cyclist-claim-chronology-and-document-index.docx"
+      ],
+      "demo_prompt": "Build a pre-suit investigation plan, identify expiring evidence, and organize the medical and insurer follow-up without estimating claim value.",
+      "suggested_tasks": [
+        "Send video, telematics, and dispatch preservation requests",
+        "Build medical treatment, expense, and lost-time chronology",
+        "Prepare carrier communication and authorization review checklist"
+      ],
+      "client_profile": {
+        "organization": "Maya Chen (fictional)",
+        "address": {
+          "street": "184 Lantern Way",
+          "city": "Chicago",
+          "state": "IL",
+          "zip": "60607",
+          "country": "US"
+        },
+        "client_since": "2020-07-15",
+        "preferred_contact_method": "phone",
+        "preferred_contact_window": "Weekdays, 9:00 a.m.-noon Central",
+        "billing_terms": "Monthly itemized invoice; electronic delivery; client approval required before third-party spend.",
+        "primary_contact": {
+          "first_name": "Maya",
+          "last_name": "Chen",
+          "title": "Client",
+          "email": "maya.chen@example.invalid",
+          "phone": "+1-202-555-0125"
+        },
+        "secondary_contact": {
+          "first_name": "Sofia",
+          "last_name": "Lin",
+          "title": "Records Contact",
+          "email": "sofia.lin@example.invalid",
+          "phone": "+1-202-555-0225"
+        },
+        "opposing_party": {
+          "organization": "QuickCrate Delivery, Inc. (fictional)",
+          "contact_name": "Dana Walsh",
+          "email": "counterparty-16@example.invalid"
+        }
+      }
+    },
+    {
+      "external_key": "demo-greenline-patio-permit",
+      "primary_plugin": "regulatory-legal",
+      "matter_type": "administrative",
+      "jurisdiction": "Michigan",
+      "name": "Greenline Kitchen - Sidewalk Patio Permit",
+      "practice_area": "Administrative / Licensing",
+      "status": "Open - Agency Response",
+      "client": "Greenline Kitchen, LLC (fictional)",
+      "description": "A neighborhood restaurant built a small seasonal patio from an approved sketch, then received a notice claiming that planters and a host stand reduce the accessible pedestrian path.",
+      "documents": [
+        "20-greenline-sidewalk-patio-permit.docx",
+        "support-greenline-patio-permit-intake-and-contact-profile.docx",
+        "support-greenline-patio-permit-communications-and-work-plan.docx",
+        "support-greenline-patio-permit-chronology-and-document-index.docx"
+      ],
+      "demo_prompt": "Create an agency-response plan, compare the approved layout to the inspection facts, and draft a concise cure proposal with a deadline calendar.",
+      "suggested_tasks": [
+        "Collect permit, approved plans, measurements, and site photographs",
+        "Draft cure proposal and reinspection request",
+        "Calendar agency response, appeal, and renewal deadlines"
+      ],
+      "client_profile": {
+        "organization": "Greenline Kitchen, LLC (fictional)",
+        "address": {
+          "street": "42 Harbor Loop",
+          "city": "Wilmington",
+          "state": "DE",
+          "zip": "19801",
+          "country": "US"
+        },
+        "client_since": "2021-08-15",
+        "preferred_contact_method": "email",
+        "preferred_contact_window": "Weekdays, 1:00-4:00 p.m. Eastern",
+        "billing_terms": "Monthly itemized invoice; electronic delivery; client approval required before third-party spend.",
+        "primary_contact": {
+          "first_name": "Nico",
+          "last_name": "Alvarez",
+          "title": "Managing Member",
+          "email": "nico.alvarez@example.invalid",
+          "phone": "+1-202-555-0126"
+        },
+        "secondary_contact": {
+          "first_name": "Marco",
+          "last_name": "Diaz",
+          "title": "Restaurant Manager",
+          "email": "marco.diaz@example.invalid",
+          "phone": "+1-202-555-0226"
+        },
+        "opposing_party": {
+          "organization": "Greenline Municipal Licensing Bureau (fictional)",
+          "contact_name": "Elliot Reed",
+          "email": "counterparty-17@example.invalid"
+        }
+      }
+    },
+    {
+      "external_key": "demo-atlas-founder-separation",
+      "primary_plugin": "corporate-legal",
+      "matter_type": "corporate",
+      "jurisdiction": "Delaware",
+      "name": "Atlas Grove - Co-Founder Separation",
+      "practice_area": "Corporate / Founder Dispute",
+      "status": "Open - Board Review",
+      "client": "Atlas Grove Software, Inc. (fictional)",
+      "description": "A venture-backed software company needs a calm plan after its product co-founder announces an immediate departure while retaining board rights, unvested equity, and access to key customer relationships.",
+      "documents": [
+        "21-atlas-grove-founder-separation.docx",
+        "support-atlas-founder-separation-intake-and-contact-profile.docx",
+        "support-atlas-founder-separation-communications-and-work-plan.docx",
+        "support-atlas-founder-separation-chronology-and-document-index.docx"
+      ],
+      "demo_prompt": "Compare the founder's governing documents, identify required approvals and conflicts, and prepare a sequenced board-and-separation checklist.",
+      "suggested_tasks": [
+        "Map charter, voting, equity, and employment approval requirements",
+        "Reconcile vesting, repurchase, and consulting terms",
+        "Prepare board consent and coordinated communication plan"
+      ],
+      "client_profile": {
+        "organization": "Atlas Grove Software, Inc. (fictional)",
+        "address": {
+          "street": "77 Trailhead Avenue",
+          "city": "Columbus",
+          "state": "OH",
+          "zip": "43215",
+          "country": "US"
+        },
+        "client_since": "2022-09-15",
+        "preferred_contact_method": "email",
+        "preferred_contact_window": "Weekdays after 3:00 p.m. local time",
+        "billing_terms": "Monthly itemized invoice; electronic delivery; client approval required before third-party spend.",
+        "primary_contact": {
+          "first_name": "Priya",
+          "last_name": "Raman",
+          "title": "Chief Executive Officer",
+          "email": "priya.raman@example.invalid",
+          "phone": "+1-202-555-0127"
+        },
+        "secondary_contact": {
+          "first_name": "Elena",
+          "last_name": "Voss",
+          "title": "Finance Director",
+          "email": "elena.voss@example.invalid",
+          "phone": "+1-202-555-0227"
+        },
+        "opposing_party": {
+          "organization": "Cameron Vale (fictional)",
+          "contact_name": "Cameron Vale",
+          "email": "counterparty-18@example.invalid"
         }
       }
     }

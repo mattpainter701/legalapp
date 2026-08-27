@@ -58,7 +58,11 @@ LEGACY_SCENARIOS = [
         "client": "Northstar Analytics, Inc. (fictional)",
         "lead": "A customer-side SaaS renewal with AI-training, security, and liability issues.",
         "demo_prompt": "Review the MSA and data addendum for customer-side risks, cite the source clauses, and propose follow-up tasks for the renewal and data-use issues.",
-        "suggested_tasks": ["Negotiate AI training restriction", "Calendar renewal notice", "Resolve security liability carve-out"],
+        "suggested_tasks": [
+            "Negotiate AI training restriction",
+            "Calendar renewal notice",
+            "Resolve security liability carve-out",
+        ],
     },
     {
         "external_key": "demo-harborlight-seed-financing",
@@ -66,7 +70,11 @@ LEGACY_SCENARIOS = [
         "client": "HarborLight Robotics, Inc. (fictional)",
         "lead": "A founder-friendly seed financing with approvals, cap-table, and closing work.",
         "demo_prompt": "Compare the term sheet to the board consent, identify missing approvals and closing conditions, and prepare a prioritized closing checklist.",
-        "suggested_tasks": ["Verify approval thresholds", "Prepare stockholder consent", "Reconcile capitalization certificate"],
+        "suggested_tasks": [
+            "Verify approval thresholds",
+            "Prepare stockholder consent",
+            "Reconcile capitalization certificate",
+        ],
     },
     {
         "external_key": "demo-redwood-ogc-retainer",
@@ -74,7 +82,11 @@ LEGACY_SCENARIOS = [
         "client": "Redwood Outdoor Supply, Inc. (fictional)",
         "lead": "A lively monthly outside-counsel portfolio with contract, product, and governance work.",
         "demo_prompt": "Triage the August legal requests, show the next notice deadlines, and draft the monthly retainer portfolio summary with decisions needed.",
-        "suggested_tasks": ["Review PinePeak exclusivity", "Calendar Evergreen notice", "Prepare September board materials"],
+        "suggested_tasks": [
+            "Review PinePeak exclusivity",
+            "Calendar Evergreen notice",
+            "Prepare September board materials",
+        ],
     },
 ]
 
@@ -85,33 +97,116 @@ def _client_profile(index: int, scenario: dict) -> dict:
     """Return fictional contact details that make each demo matter feel lived in."""
 
     contacts = [
-        ("Avery", "Nguyen", "Chief Operating Officer"), ("Morgan", "Ellis", "Founder and CEO"),
-        ("Riley", "Santos", "General Manager"), ("Jamie", "Patel", "Director of Operations"),
-        ("Casey", "Morgan", "Owner"), ("Taylor", "Brooks", "Chief of Staff"),
-        ("Jordan", "Kim", "Director of People"), ("Robin", "Flores", "Product Lead"),
-        ("Cameron", "Wells", "Privacy Program Manager"), ("Drew", "Hart", "Finance Director"),
-        ("Quinn", "Rivera", "Client Representative"), ("Parker", "Reed", "Operations Lead"),
-        ("Emerson", "Lane", "Managing Member"), ("Skyler", "Bennett", "Program Director"),
-        ("Alex", "Monroe", "Business Manager"),
+        ("Avery", "Nguyen", "Chief Operating Officer"),
+        ("Morgan", "Ellis", "Founder and CEO"),
+        ("Riley", "Santos", "General Manager"),
+        ("Jamie", "Patel", "Director of Operations"),
+        ("Casey", "Morgan", "Owner"),
+        ("Taylor", "Brooks", "Chief of Staff"),
+        ("Jordan", "Kim", "Vice President of Product"),
+        ("Robin", "Flores", "Founder"),
+        ("Cameron", "Wells", "AI Governance Program Manager"),
+        ("Drew", "Hart", "Director of Brand Compliance"),
+        ("Avery", "Riverstone", "Client"),
+        ("Jordan", "Parker", "Client"),
+        ("Emerson", "Lane", "Managing Member"),
+        ("Skyler", "Bennett", "Program Director"),
+        ("Alex", "Monroe", "Mediation Participant"),
+        ("Maya", "Chen", "Client"),
+        ("Nico", "Alvarez", "Managing Member"),
+        ("Priya", "Raman", "Chief Executive Officer"),
+    ]
+    secondary_contacts = [
+        ("Dana", "Price", "Finance and Billing"),
+        ("Elliot", "Shaw", "Board Secretary"),
+        ("Sam", "Ortiz", "Operations Coordinator"),
+        ("Lee", "Wallace", "Risk Manager"),
+        ("Ari", "Foster", "Office Manager"),
+        ("Jules", "Grant", "HR Business Partner"),
+        ("Mina", "Park", "Product Counsel Liaison"),
+        ("Noah", "Bishop", "Marketing Director"),
+        ("Remy", "Cole", "People Operations"),
+        ("Asha", "Bell", "Quality Manager"),
+        ("Micah", "Stone", "Family Coordinator"),
+        ("Tess", "Jordan", "Emergency Contact"),
+        ("Ira", "Sloan", "Bookkeeper"),
+        ("Lena", "Marsh", "Estate Accountant"),
+        ("Owen", "Dale", "Mediation Coordinator"),
+        ("Sofia", "Lin", "Records Contact"),
+        ("Marco", "Diaz", "Restaurant Manager"),
+        ("Elena", "Voss", "Finance Director"),
+    ]
+    counterparties = [
+        ("BlueHarbor Cloud Systems, Inc. (fictional)", "Blake Carter"),
+        ("Horizon Seed Ventures, LP (fictional)", "Rowan Carter"),
+        ("PinePeak Distribution, LLC (fictional)", "Hayden Carter"),
+        ("Riverside Roof Gardens, LLC (fictional)", "Sage Carter"),
+        ("FreshForm Nutrition Partners, Inc. (fictional)", "Reese Carter"),
+        ("Morgan Hale (fictional)", "Morgan Hale"),
+        ("CampTrail Retail Group, Inc. (fictional)", "Avery Dawson"),
+        ("Sparkle Crumbs Confections, LLC (fictional)", "Devon Price"),
+        ("RecruitSight AI, Inc. (fictional)", "Marlowe Grant"),
+        ("MarketSquare Grocers, Inc. (fictional)", "Carmen Bell"),
+        ("Morgan Riverstone Household (fictional)", "Morgan Riverstone"),
+        ("Lakeview Municipal Prosecutor (fictional)", "Taylor Brooks"),
+        ("Harbor District Properties, LLC (fictional)", "Rene Patel"),
+        ("Marigold Family Beneficiaries (fictional)", "Jamie Marigold"),
+        ("Bell Household (fictional)", "Casey Bell"),
+        ("QuickCrate Delivery, Inc. (fictional)", "Dana Walsh"),
+        ("Greenline Municipal Licensing Bureau (fictional)", "Elliot Reed"),
+        ("Cameron Vale (fictional)", "Cameron Vale"),
     ]
     streets = [
-        ("184 Lantern Way", "Chicago", "IL", "60607"), ("42 Harbor Loop", "Wilmington", "DE", "19801"),
-        ("77 Trailhead Avenue", "Columbus", "OH", "43215"), ("310 Juniper Street", "Cleveland", "OH", "44113"),
+        ("184 Lantern Way", "Chicago", "IL", "60607"),
+        ("42 Harbor Loop", "Wilmington", "DE", "19801"),
+        ("77 Trailhead Avenue", "Columbus", "OH", "43215"),
+        ("310 Juniper Street", "Cleveland", "OH", "44113"),
         ("18 Orchard Lane", "Ann Arbor", "MI", "48104"),
     ]
     first, last, title = contacts[index % len(contacts)]
+    secondary_first, secondary_last, secondary_title = secondary_contacts[
+        index % len(secondary_contacts)
+    ]
     street, city, state, postal_code = streets[index % len(streets)]
     local = f"{first}.{last}".lower()
+    secondary_local = f"{secondary_first}.{secondary_last}".lower()
+    counterparty_organization, counterparty_contact = counterparties[
+        index % len(counterparties)
+    ]
     return {
         "organization": scenario["client"],
-        "address": {"street": street, "city": city, "state": state, "zip": postal_code, "country": "US"},
+        "address": {
+            "street": street,
+            "city": city,
+            "state": state,
+            "zip": postal_code,
+            "country": "US",
+        },
+        "client_since": f"20{19 + (index % 7)}-{(index % 9) + 1:02d}-15",
+        "preferred_contact_method": "email" if index % 3 else "phone",
+        "preferred_contact_window": [
+            "Weekdays, 9:00 a.m.-noon Central",
+            "Weekdays, 1:00-4:00 p.m. Eastern",
+            "Weekdays after 3:00 p.m. local time",
+        ][index % 3],
+        "billing_terms": "Monthly itemized invoice; electronic delivery; client approval required before third-party spend.",
         "primary_contact": {
-            "first_name": first, "last_name": last, "title": title,
-            "email": f"{local}@example.invalid", "phone": f"+1-555-01{index + 10:02d}",
+            "first_name": first,
+            "last_name": last,
+            "title": title,
+            "email": f"{local}@example.invalid",
+            "phone": f"+1-202-555-01{index + 10:02d}",
+        },
+        "secondary_contact": {
+            "first_name": secondary_first,
+            "last_name": secondary_last,
+            "title": secondary_title,
+            "email": f"{secondary_local}@example.invalid",
+            "phone": f"+1-202-555-02{index + 10:02d}",
         },
         "opposing_party": {
-            "organization": f"{['Maple', 'Cobalt', 'Lantern', 'Summit', 'Crescent'][index % 5]} {['Holdings', 'Partners', 'Services', 'Group', 'Counsel'][index % 5]} (fictional)",
-            "contact_name": f"{['Blake', 'Rowan', 'Hayden', 'Sage', 'Reese'][index % 5]} Carter",
+            "organization": counterparty_organization,
+            "contact_name": counterparty_contact,
             "email": f"counterparty-{index + 1}@example.invalid",
         },
     }
@@ -595,6 +690,7 @@ def _supporting_document_filenames(external_key: str) -> list[str]:
     return [
         f"support-{stem}-intake-and-contact-profile.docx",
         f"support-{stem}-communications-and-work-plan.docx",
+        f"support-{stem}-chronology-and-document-index.docx",
     ]
 
 
@@ -603,8 +699,9 @@ def _supporting_documents(index: int, scenario: dict) -> list[dict]:
 
     profile = _client_profile(index, scenario)
     contact = profile["primary_contact"]
-    intake_filename, workplan_filename = _supporting_document_filenames(
-        scenario["external_key"]
+    secondary = profile["secondary_contact"]
+    intake_filename, workplan_filename, chronology_filename = (
+        _supporting_document_filenames(scenario["external_key"])
     )
     return [
         {
@@ -615,27 +712,42 @@ def _supporting_documents(index: int, scenario: dict) -> list[dict]:
             "date": "August 18, 2026",
             "lead": scenario["lead"],
             "sections": [
-                ("Client Profile", [
-                    f"Organization: {profile['organization']}",
-                    f"Primary contact: {contact['first_name']} {contact['last_name']}, {contact['title']}",
-                    f"Office: {profile['address']['street']}, {profile['address']['city']}, {profile['address']['state']} {profile['address']['zip']}",
-                    f"Direct line: {contact['phone']} · Email: {contact['email']}",
-                ]),
-                ("Initial Intake", [
-                    scenario["lead"],
-                    "Conflict check recorded as cleared for this fictional demonstration file.",
-                    "Client asked for a practical work plan, source-grounded risk summary, and attorney-reviewed communications.",
-                ]),
-                ("Other Known Parties", [
-                    f"Counterparty or stakeholder: {profile['opposing_party']['organization']}.",
-                    f"Primary outside contact: {profile['opposing_party']['contact_name']} ({profile['opposing_party']['email']}).",
-                    "Party information is fictional and is included solely to demonstrate a complete matter file.",
-                ]),
-                ("Open Questions for Counsel", [
-                    "Confirm governing documents, venue, and jurisdiction-specific requirements before advice or external action.",
-                    "Confirm the client representative's authority and any insurance, notice, or consent obligations.",
-                    "Identify records that require preservation or privilege treatment.",
-                ]),
+                (
+                    "Client Profile",
+                    [
+                        f"Organization: {profile['organization']}",
+                        f"Primary contact: {contact['first_name']} {contact['last_name']}, {contact['title']}",
+                        f"Secondary contact: {secondary['first_name']} {secondary['last_name']}, {secondary['title']}",
+                        f"Office: {profile['address']['street']}, {profile['address']['city']}, {profile['address']['state']} {profile['address']['zip']}",
+                        f"Direct line: {contact['phone']} · Email: {contact['email']}",
+                        f"Client since: {profile['client_since']} · Preferred contact: {profile['preferred_contact_method']} · {profile['preferred_contact_window']}",
+                        f"Billing profile: {profile['billing_terms']}",
+                    ],
+                ),
+                (
+                    "Initial Intake",
+                    [
+                        scenario["lead"],
+                        "Conflict check recorded as cleared for this fictional demonstration file.",
+                        "Client asked for a practical work plan, source-grounded risk summary, and attorney-reviewed communications.",
+                    ],
+                ),
+                (
+                    "Other Known Parties",
+                    [
+                        f"Counterparty or stakeholder: {profile['opposing_party']['organization']}.",
+                        f"Primary outside contact: {profile['opposing_party']['contact_name']} ({profile['opposing_party']['email']}).",
+                        "Party information is fictional and is included solely to demonstrate a complete matter file.",
+                    ],
+                ),
+                (
+                    "Open Questions for Counsel",
+                    [
+                        "Confirm governing documents, venue, and jurisdiction-specific requirements before advice or external action.",
+                        "Confirm the client representative's authority and any insurance, notice, or consent obligations.",
+                        "Identify records that require preservation or privilege treatment.",
+                    ],
+                ),
             ],
             "sources": ["synthetic_design"],
         },
@@ -647,25 +759,84 @@ def _supporting_documents(index: int, scenario: dict) -> list[dict]:
             "date": "August 18, 2026",
             "lead": "A simulated client update, internal analysis, and review-ready next steps for this fictional matter.",
             "sections": [
-                ("Recent Communications", [
-                    f"Client email: {contact['first_name']} {contact['last_name']} asked counsel to prioritize the immediate decision and summarize remaining information gaps.",
-                    "Attorney reply: acknowledged receipt, confirmed that no external communication will be sent without review, and requested the listed records.",
-                    "Internal call note: team agreed to preserve relevant records and return a concise risk-and-options memo.",
-                ]),
-                ("30-Day Work Plan", [
-                    f"Week 1: {scenario['suggested_tasks'][0]}.",
-                    f"Week 2: {scenario['suggested_tasks'][1]}.",
-                    f"Weeks 3–4: {scenario['suggested_tasks'][2]}.",
-                ]),
-                ("Decision Log", [
-                    "Decision pending: confirm client objective, authority, and acceptable risk tolerance.",
-                    "Decision pending: select an attorney-reviewed communication posture.",
-                    "Decision pending: approve the next milestone and accountable owner.",
-                ]),
-                ("Guided Demo Question", [
-                    scenario["demo_prompt"],
-                    "Demonstrate how the assistant connects source documents, communications, tasks, and the matter timeline while leaving legal judgment with counsel.",
-                ]),
+                (
+                    "Recent Communications",
+                    [
+                        f"Client email: {contact['first_name']} {contact['last_name']} asked counsel to prioritize the immediate decision and summarize remaining information gaps.",
+                        f"Follow-up call: {secondary['first_name']} {secondary['last_name']} confirmed the records owner and the preferred review cadence.",
+                        "Attorney reply: acknowledged receipt, confirmed that no external communication will be sent without review, and requested the listed records.",
+                        "Internal call note: team agreed to preserve relevant records and return a concise risk-and-options memo.",
+                    ],
+                ),
+                (
+                    "30-Day Work Plan",
+                    [
+                        f"Week 1: {scenario['suggested_tasks'][0]}.",
+                        f"Week 2: {scenario['suggested_tasks'][1]}.",
+                        f"Weeks 3–4: {scenario['suggested_tasks'][2]}.",
+                    ],
+                ),
+                (
+                    "Decision Log",
+                    [
+                        "Decision pending: confirm client objective, authority, and acceptable risk tolerance.",
+                        "Decision pending: select an attorney-reviewed communication posture.",
+                        "Decision pending: approve the next milestone and accountable owner.",
+                    ],
+                ),
+                (
+                    "Guided Demo Question",
+                    [
+                        scenario["demo_prompt"],
+                        "Demonstrate how the assistant connects source documents, communications, tasks, and the matter timeline while leaving legal judgment with counsel.",
+                    ],
+                ),
+            ],
+            "sources": ["synthetic_design"],
+        },
+        {
+            "filename": chronology_filename,
+            "title": f"{scenario['name']} | Chronology and Document Index",
+            "subtitle": "Synthetic matter chronology · review and production tracker",
+            "matter": scenario["name"],
+            "date": "August 20, 2026",
+            "lead": "A review-ready index that connects the fictional matter's key events, custodians, and source records.",
+            "sections": [
+                (
+                    "Working Chronology",
+                    [
+                        f"Day 0 - Intake opened after {contact['first_name']} {contact['last_name']} reported the central issue: {scenario['lead']}",
+                        f"Day 1 - Counsel requested the first preservation set and assigned {scenario['suggested_tasks'][0].lower()}.",
+                        f"Day 3 - {secondary['first_name']} {secondary['last_name']} confirmed the internal records owner and outstanding information gaps.",
+                        f"Next milestone - Complete {scenario['suggested_tasks'][1].lower()} before the scheduled attorney review.",
+                    ],
+                ),
+                (
+                    "Document and Evidence Index",
+                    [
+                        "INT-001 - Client intake and contact profile; source: primary client contact; status: reviewed.",
+                        "COM-001 - Communications and 30-day work plan; source: matter team; status: working draft.",
+                        "SRC-001 - Primary scenario document; source: synthetic client file; status: indexed for demo search.",
+                        "REQ-001 - Outstanding records request; owner: secondary client contact; status: pending.",
+                    ],
+                ),
+                (
+                    "Custodians and Review Owners",
+                    [
+                        f"Client decision-maker: {contact['first_name']} {contact['last_name']} ({contact['title']}).",
+                        f"Records and billing contact: {secondary['first_name']} {secondary['last_name']} ({secondary['title']}).",
+                        f"External stakeholder: {profile['opposing_party']['contact_name']} for {profile['opposing_party']['organization']}.",
+                        "Matter lead: Jordan Lee (synthetic); final legal conclusions and external communications require attorney approval.",
+                    ],
+                ),
+                (
+                    "Next Review",
+                    [
+                        f"Use the guided question: {scenario['demo_prompt']}",
+                        f"Immediate action: {scenario['suggested_tasks'][0]}.",
+                        "Confirm document completeness, privilege, and governing-law assumptions before reliance or production.",
+                    ],
+                ),
             ],
             "sources": ["synthetic_design"],
         },
@@ -1017,11 +1188,13 @@ def build_manifest():
         for scenario in ADDITIONAL_SCENARIOS
     )
     for index, matter in enumerate(matters):
-        matter["documents"].extend(_supporting_document_filenames(matter["external_key"]))
+        matter["documents"].extend(
+            _supporting_document_filenames(matter["external_key"])
+        )
         matter["client_profile"] = _client_profile(index, matter)
     manifest = {
-        "schema_version": 2,
-        "pack_version": "demo-scenario-library-v1",
+        "schema_version": 3,
+        "pack_version": "demo-scenario-library-v2",
         "tenant_domain": "cybersafeadvisor.com",
         "synthetic": True,
         "warning": DISCLAIMER,
