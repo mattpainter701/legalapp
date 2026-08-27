@@ -427,6 +427,7 @@ async def test_cloud_root_provisions_both_connected_providers(monkeypatch):
     assert root["path"] == "claritylegal-records"
     assert root["subfolders"] == [
         "emails",
+        "client_uploads",
         "documents",
         "pleadings",
         "correspondence",
@@ -493,6 +494,7 @@ async def test_matter_folder_metadata_uses_canonical_layout(monkeypatch):
     assert metadata["path"] == "claritylegal-records/acme-v-smith"
     assert metadata["subfolder_paths"] == {
         "emails": "claritylegal-records/acme-v-smith/emails",
+        "client_uploads": "claritylegal-records/acme-v-smith/client_uploads",
         "documents": "claritylegal-records/acme-v-smith/documents",
         "pleadings": "claritylegal-records/acme-v-smith/pleadings",
         "correspondence": "claritylegal-records/acme-v-smith/correspondence",
