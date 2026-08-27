@@ -101,12 +101,13 @@ fi
 
 public_signup_enabled="$(get_env PUBLIC_SIGNUP_ENABLED)"
 vite_public_signup_enabled="$(get_env VITE_PUBLIC_SIGNUP_ENABLED)"
+mcp_product_enabled="$(get_env MCP_PRODUCT_ENABLED)"
 
 [[ "$(get_env DEV_MODE)" == "false" ]] || errors+=("DEV_MODE must be false")
 [[ "$public_signup_enabled" == "false" ]] || errors+=("PUBLIC_SIGNUP_ENABLED must remain false until paid conversion and expiry enforcement are proven")
 [[ "$vite_public_signup_enabled" == "false" ]] || errors+=("VITE_PUBLIC_SIGNUP_ENABLED must remain false until public signup is enabled end to end")
 [[ "$public_signup_enabled" == "$vite_public_signup_enabled" ]] || errors+=("PUBLIC_SIGNUP_ENABLED and VITE_PUBLIC_SIGNUP_ENABLED must match")
-[[ "$(get_env MCP_PRODUCT_ENABLED)" == "false" ]] || errors+=("MCP_PRODUCT_ENABLED must remain false for this launch")
+[[ "$mcp_product_enabled" == "true" || "$mcp_product_enabled" == "false" ]] || errors+=("MCP_PRODUCT_ENABLED must be explicitly true or false")
 [[ "$(get_env PLATFORM_LEGACY_BOOTSTRAP_ENABLED)" == "false" ]] || errors+=("PLATFORM_LEGACY_BOOTSTRAP_ENABLED must be explicitly false for production")
 [[ "$(get_env OFFSITE_BACKUP_REQUIRED)" == "true" ]] || errors+=("OFFSITE_BACKUP_REQUIRED must be true for production deploys")
 email_enabled="$(get_env EMAIL_ENABLED)"
@@ -312,6 +313,46 @@ check_integer_range() {
     errors+=("$key must be an integer from $minimum to $maximum")
   fi
 }
+
+if [[ "$mcp_product_enabled" == "true" ]]; then
+  research_required=(
+    RESEARCH_MCP_PUBLIC_URL RESEARCH_MCP_OAUTH_ENABLED RESEARCH_MCP_AUDIENCE
+    RESEARCH_MCP_ISSUER RESEARCH_MCP_ACCESS_TOKEN_MAX_MINUTES
+    RESEARCH_MCP_AUTH_CODE_TTL_SECONDS RESEARCH_MCP_REFRESH_TOKEN_DAYS
+    RESEARCH_MCP_GRANT_DAYS RESEARCH_MCP_CLIENT_REGISTRATION_DAYS
+    RESEARCH_MCP_DYNAMIC_REGISTRATION_ENABLED
+    WORKSPACE_MCP_SIGNING_PRIVATE_KEY_B64 WORKSPACE_MCP_SIGNING_PUBLIC_KEY_B64
+    WORKSPACE_MCP_SIGNING_KEY_ID WORKSPACE_MCP_PREVIOUS_PUBLIC_KEYS_JSON
+  )
+  for key in "${research_required[@]}"; do
+    [[ -n "$(get_env "$key")" ]] || errors+=("$key is required when the Research MCP product is enabled")
+  done
+
+  expected_research_origin="https://research.$(get_env DOMAIN)"
+  [[ "$(get_env RESEARCH_MCP_PUBLIC_URL)" == "$expected_research_origin/api/mcp" ]] \
+    || errors+=("RESEARCH_MCP_PUBLIC_URL must exactly match https://research.DOMAIN/api/mcp")
+  [[ "$(get_env RESEARCH_MCP_ISSUER)" == "$expected_research_origin" ]] \
+    || errors+=("RESEARCH_MCP_ISSUER must exactly match https://research.DOMAIN")
+  [[ "$(get_env RESEARCH_MCP_OAUTH_ENABLED)" == "true" ]] \
+    || errors+=("RESEARCH_MCP_OAUTH_ENABLED must be true when the Research MCP product is enabled")
+  [[ "$(get_env RESEARCH_MCP_DYNAMIC_REGISTRATION_ENABLED)" == "true" ]] \
+    || errors+=("RESEARCH_MCP_DYNAMIC_REGISTRATION_ENABLED must be true for hosted MCP clients")
+  [[ "$(get_env RESEARCH_MCP_AUDIENCE)" == "lawhand-research-mcp" ]] \
+    || errors+=("RESEARCH_MCP_AUDIENCE must be lawhand-research-mcp")
+  [[ "$(get_env WORKSPACE_MCP_SIGNING_KEY_ID)" =~ ^[A-Za-z0-9._-]{1,80}$ ]] \
+    || errors+=("WORKSPACE_MCP_SIGNING_KEY_ID is invalid")
+
+  check_integer_range RESEARCH_MCP_ACCESS_TOKEN_MAX_MINUTES 5 60
+  check_integer_range RESEARCH_MCP_AUTH_CODE_TTL_SECONDS 60 600
+  check_integer_range RESEARCH_MCP_REFRESH_TOKEN_DAYS 1 90
+  check_integer_range RESEARCH_MCP_GRANT_DAYS 1 365
+  check_integer_range RESEARCH_MCP_CLIENT_REGISTRATION_DAYS 1 90
+  research_refresh_days="$(get_env RESEARCH_MCP_REFRESH_TOKEN_DAYS)"
+  research_grant_days="$(get_env RESEARCH_MCP_GRANT_DAYS)"
+  if [[ "$research_refresh_days" =~ ^[0-9]+$ && "$research_grant_days" =~ ^[0-9]+$ ]] && (( research_grant_days < research_refresh_days )); then
+    errors+=("RESEARCH_MCP_GRANT_DAYS must cover the refresh-token lifetime")
+  fi
+fi
 
 if [[ "$workspace_mcp_enabled" == "true" ]]; then
   workspace_required=(

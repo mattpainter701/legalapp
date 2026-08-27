@@ -155,6 +155,10 @@ class DocumentTemplateUploadAnalysisResponse(BaseModel):
     body: str
     body_preview: str
     extracted_text: str
+    # Opaque, short-lived handoff from analysis to creation.  Reusing it keeps
+    # an expensive OCR pass from running a second time while the reviewed
+    # schema is still validated against the server-discovered field map.
+    analysis_token: Optional[str] = None
     suggested_variable_schema: dict[str, Any] = Field(default_factory=dict)
     detected_branding_profile: dict[str, Any] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)

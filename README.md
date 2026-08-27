@@ -13,7 +13,7 @@ Public MCP access is release-gated and must remain disabled.
 | Surface | Current state |
 |---|---|
 | Call Intake, Tasks, Zoom Phone | First-customer release candidate. Ship only after every gate in the [first-customer production runbook](docs/FIRST_CUSTOMER_PRODUCTION_RUNBOOK.md) passes on the deployed revision. |
-| PDF templates | Source-backed AcroForm filling, review preview, flattening, integrity checks, and matter-file output are implemented. See [PDF template operations](docs/PDF_TEMPLATE_OPERATIONS.md) for supported inputs and customer recovery steps. |
+| PDF templates | Adobe-style Prepare Form review, existing AcroForm discovery, OCR-assisted scan/handwriting overlays, manual field placement, flattening, integrity checks, and matter-file output are implemented. See [PDF template operations](docs/PDF_TEMPLATE_OPERATIONS.md) for supported inputs and customer recovery steps. |
 | Full legal platform | Available for controlled tenants; modules are enforced in both navigation and API middleware. |
 | Public MCP product | **Disabled.** `MCP_PRODUCT_ENABLED=false` is a launch invariant. Do not market, issue, or accept customer MCP keys yet. |
 | Marketing / SEO | Public landing, original artwork, social card, canonical metadata, structured data, sitemap, and private-route `noindex` controls are included. Marketing claims and prices still require commercial-owner approval before publication. |
@@ -46,7 +46,7 @@ for the backend contract, recovery checks, and remaining legacy-local migration.
 |---|---|
 | Caller intake | Manual and Zoom Phone intake, signed tenant webhook, call-history sync, caller/contact matching, notes, lead/task handoff, partner assignment log, and CSV exports. |
 | Tasks | Tenant-scoped CRUD, assignee and matter/contact links, priorities, deadlines, reminders, assignment notes, viewed/contacted signals, reassignment, and close reasons. |
-| Document templates | DOCX/TXT sample analysis and variable substitution; retained PDF source files with AcroForm discovery, reviewed field mapping, binary preview, default flattened output, and matter storage. |
+| Document templates | DOCX/TXT sample analysis and variable substitution; PDF/image intake with local PDF.js review, AcroForm and OCR-assisted field discovery, manual correction, retained sources, flattened output, and matter storage. |
 | Matters and CRM | Matters, contacts, parties, notes, assignments, budgets, files, timelines, communications, intake, and reports. |
 | Billing | Time, expenses, invoices, payments, retainers, LEDES export, and optional Stripe payment flows. |
 | Conflict review | Standalone tenant-wide search with restricted-matter redaction, saved evidence, attorney review decisions, locked records, and PDF reports. |

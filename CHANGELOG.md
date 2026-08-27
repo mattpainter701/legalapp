@@ -12,6 +12,11 @@
   portal invoice exports use tenant firm identity, while the portal authorizes
   only client-visible invoices on its matter, streams the PDF with private
   no-store caching, and retains a metadata/hash audit rather than PDF bytes.
+- **Document templates now have a reviewed Prepare Form workflow:** uploaded
+  PDFs and supported images preserve their page design while staff review
+  detected fields, add or adjust fields manually, and create a reusable
+  template. Bounded local OCR, optional configured AI assistance, validation,
+  and clear recovery paths make scans and unfamiliar forms safer to prepare.
 - **Reviewed matter email can create a traceable task from an explicit subject
   tag:** a new message beginning with `[TASK]` or `[DEADLINE]` previews its task
   title and a bounded, deterministic due date in the Correspondence queue. The

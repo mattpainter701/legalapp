@@ -1,34 +1,43 @@
 # PDF template operations
 
 This is the customer-support and operator guide for source-backed PDF
-generation. The renderer preserves the uploaded PDF's page design by filling
-real AcroForm fields; it does not guess coordinates from ordinary page text.
+generation. The Prepare Form workspace preserves the uploaded page design,
+detects existing AcroForm fields, proposes fields from printed or handwritten
+samples, and lets an operator correct the result directly on each page before
+creating the template.
 
 ## Supported input
 
-A generation-ready PDF must meet all of these conditions:
+A source can be PDF, DOCX, TXT, PNG, JPEG, TIFF, or WebP. Image sources are
+normalized to PDF so the reviewed page geometry remains stable. A
+generation-ready PDF must meet all of these conditions:
 
 - valid, unencrypted PDF with no password;
 - at most 250 pages and the configured upload limit (50 MB by default);
-- at least one AcroForm widget and at most 200 widgets;
+- no more than 200 reviewed fields;
 - supported text, checkbox, radio, choice, or signature fields;
 - no JavaScript, automatic actions, XFA, embedded files, launch/external
   actions, rich media, or unsupported rotated widget appearance.
 
-Static PDFs, scans, and XFA-only government forms are not generation-ready.
-The upload analysis may extract readable text from them, but creation is
-blocked until an operator adds fillable AcroForm fields with a PDF authoring
-tool and uploads the revised file. OCR is not part of the PDF template
-renderer.
+Static PDFs and scans are supported through local OCR and editable overlay
+fields. The reviewer can move, resize, rename, exclude, or add text, paragraph,
+date, checkbox, and signature fields. XFA remains unsupported. OCR is an
+assistive first pass, not an approval decision: handwriting and low-confidence
+regions must be compared with the source before the template is activated.
 
 ## Customer workflow
 
 1. Sign in as a user with document-management permission and open
    **Document Automation > Templates**.
-2. Choose **Upload Sample**, select the source PDF, and analyze it.
-3. Review every detected field name, label, page, type, required marker, and
-   choice/radio option. Resolve every warning before creating the template.
-4. Choose **Create reviewed template**. New upload-based templates are
+2. Choose **Upload Sample**, then drag a completed source document or select it
+   from the file picker. The analysis can use existing PDF fields, printed text,
+   handwriting, or a mixture of them.
+3. Work through every page in **Prepare Form**. Review highlighted confidence,
+   drag or resize proposed overlays, add any missed fields, remove false
+   positives, and give every included field a unique automation key. Use
+   **Test** mode to type representative values into the page itself.
+4. Confirm that the completed source was compared with the reviewed field map,
+   then choose **Create reviewed template**. New upload-based templates are
    intentionally inactive.
 5. Use **Preview draft** for blank or partial diagnostic renders; it never
    records activation readiness. Enter representative values in every
@@ -36,9 +45,9 @@ renderer.
    activation preview**, and inspect every page. Only that representative,
    flattened action records value-bound activation evidence for the current
    user and unchanged template.
-6. Correct the source PDF if a field is too small or has the wrong type. Source
-   files and field maps cannot be safely replaced in place; recreate the
-   template from the corrected PDF.
+6. If an overlay field is too small or has the wrong type, correct it in
+   Prepare Form before creation. If an existing AcroForm widget itself is
+   defective, correct the source PDF and recreate the template.
 7. Activate the template only after the preview has been reviewed. The API
    rejects activation until a successful preview exists and records the
    approving user and time. Changing a PDF body or field map clears that test
@@ -54,6 +63,41 @@ renderer.
 Smart-fill is a suggestion system. It can populate deterministic matter,
 contact, firm, and user values when available, but every suggested value is
 marked for review. It does not make a legal or factual approval decision.
+
+## OCR provider and privileged documents
+
+`TEMPLATE_OCR_PROVIDER=local` is the production-safe default and keeps source
+bytes on the application host. Local recognition uses RapidOCR and works well
+for clean printed forms; handwriting accuracy varies with scan quality and
+writing style.
+
+For firms that approve external processing, `TEMPLATE_OCR_PROVIDER=azure`
+enables Azure Document Intelligence Read. Configure the HTTPS resource endpoint
+and key with `AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT` and
+`AZURE_DOCUMENT_INTELLIGENCE_KEY`. The backend validates the endpoint, follows
+only same-host HTTPS operation URLs, bounds polling, and does not return provider
+responses or document text in customer-facing errors. Changing the provider
+requires an API restart because settings are loaded at process startup.
+
+Regardless of provider, the analysis response identifies the OCR provider and
+confidence source. Do not describe OCR-created templates as fully accurate
+until a person has reviewed every page and recorded a representative preview.
+
+## Rendering and editing stack
+
+- [PDF.js](https://github.com/mozilla/pdf.js) renders source pages locally in
+  the browser; source bytes are not sent to a PDF-viewer vendor.
+- [react-rnd](https://github.com/bokuweb/react-rnd) provides bounded field
+  movement and resizing over the rendered page.
+- pypdf, ReportLab, and PDFium handle server-side inspection, safe overlays,
+  cleanup, and output rendering.
+- RapidOCR is the private/local recognition path. Azure Document Intelligence
+  Read is the explicit opt-in handwriting tier.
+
+This stack covers the Prepare Form workflow without a proprietary viewer
+license. Re-evaluate a commercial SDK such as Foxit, Apryse, or Nutrient only
+if the product later requires full PDF authoring, advanced annotation editing,
+or provider-managed signing features beyond this reviewed-template workflow.
 
 ## Preview versus final output
 
@@ -111,7 +155,9 @@ approval record.
 
 | Message or symptom | Cause | Recovery |
 |---|---|---|
-| `This PDF has no fillable AcroForm fields` | Static/scanned/XFA-only source | Add AcroForm fields in a PDF authoring tool, save as a standard PDF, then upload again. |
+| No fields were detected | Blank, unusual, low-resolution, or handwriting-heavy source | Add fields manually in Prepare Form, or rescan at higher quality and analyze again. A zero-detection result is recoverable. |
+| Handwriting was assigned to the wrong label | OCR reading order or proximity was ambiguous | Compare the highlighted source region, rename or remove the proposal, and add the correct field manually. |
+| OCR service is unavailable | The configured local engine or opted-in Azure resource failed or timed out | Keep the source, retry after the service is healthy, or switch back to local OCR. Never bypass the review confirmation. |
 | `Password-protected PDFs are not supported` | Encrypted source | Remove the password in an authorized workflow and upload the unencrypted copy. Do not send the password to support. |
 | `Active PDF content ... is not allowed` | Script, action, attachment, XFA, or external behavior | Produce a clean, inert AcroForm copy. Do not bypass the validator. |
 | `The original template file is unavailable` | Legacy PDF row or lost uploads volume | Restore the uploads backup when it matches the database; otherwise recreate from the authorized original. |
@@ -175,8 +221,9 @@ Useful automated coverage:
 
 ```bash
 docker compose exec -T backend \
-  pytest tests/test_document_templates.py tests/test_matter_file_store.py \
-    tests/test_document_template_preview_rls.py -q
+  pytest tests/test_document_templates.py tests/test_template_analysis_token.py \
+    tests/test_template_intake_images.py tests/test_template_ocr_azure.py \
+    tests/test_matter_file_store.py tests/test_document_template_preview_rls.py -q
 
 cd frontend
 npm test -- src/pages/TemplatesPage.test.jsx
@@ -187,6 +234,11 @@ npm test -- src/pages/TemplatesPage.test.jsx
 Before telling a customer the issue is resolved, test at least:
 
 - one text field, multiline field, checkbox, radio group, and choice field;
+- one static/scanned PDF and one standalone image source;
+- one clearly handwritten completed form, with every proposed source region
+  manually compared and corrected where necessary;
+- zero detected fields followed by successful manual field placement;
+- a multi-page source with page navigation and field placement on later pages;
 - required fields and an intentionally blank optional field;
 - a signature field remaining blank;
 - a long value that must shrink/wrap and an overlong value that must fail;

@@ -361,7 +361,7 @@ chunk worker.
 Hypervisor `.env` keys:
 
 ```env
-MCP_QUERY_EMBEDDING_URL=http://<jetson-lan-host>:8031/embed
+MCP_QUERY_EMBEDDING_URL=http://<legalapp-docker-gateway>:18031/embed
 MCP_QUERY_EMBEDDING_MODEL=mixedbread-ai/mxbai-embed-large-v1
 MCP_QUERY_EMBEDDING_TIMEOUT_SECONDS=20
 ```
@@ -373,7 +373,7 @@ PYTHONPATH=/data/pip_packages:/data/legalapp-embeddings/app \
 HF_HOME=/data/legalapp-embeddings/model-cache \
 TRANSFORMERS_CACHE=/data/legalapp-embeddings/model-cache \
 /data/legalapp-embeddings/venv/bin/python3 -m uvicorn \
-  mcp_server.embedding_service:app --host 0.0.0.0 --port 8031
+  mcp_server.embedding_service:app --host 127.0.0.1 --port 8031
 ```
 
 After the regional canary, expand from the already-staged snapshot without
@@ -423,20 +423,24 @@ journalctl -u lawhand-query-embedding@<jetson-user>.service -n 100 --no-pager
 
 The unit restarts an unexpectedly exited process after ten seconds and waits for
 the network before starting. It expects the existing
-`/data/legalapp-embeddings` layout.
-Keep port 8031 restricted to the trusted LAN/firewall zone.
+`/data/legalapp-embeddings` layout. Keep port 8031 on Jetson loopback. Install
+`scripts/install_query_embedding_tunnel.sh` on Skynet to expose it only on the
+LegalApp Docker bridge gateway at port 18031 through the restricted SSH key.
 
 Checks:
 
 ```bash
-curl -sf http://<jetson-lan-host>:8031/health
+curl -sf http://127.0.0.1:8031/health  # on Jetson
+docker exec legalapp-courtlistener-mcp-1 \
+  python -c "import urllib.request; print(urllib.request.urlopen('http://<legalapp-docker-gateway>:18031/health').read().decode())"
 curl -sf http://127.0.0.1:8021/health
 ```
 
 `courtlistener-mcp` reports `"query_embedding":"configured"` when the env is
 present. The first query after model load can take about 18 seconds while the
-model warms up; later calls should be faster. The service is LAN-only and must
-not be exposed publicly.
+model warms up; later calls should be faster. The service has no LAN, tailnet,
+or public listener; only the MCP container's bridge-scoped SSH forward reaches
+it.
 
 ## Scheduler Credential Rotation
 

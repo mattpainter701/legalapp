@@ -2,8 +2,8 @@
   "recent_release_days": 30,
   "releases": [
     {
-      "id": "2026.08.27.1",
-      "version": "2026.08.27.1",
+      "id": "2026.08.27.2",
+      "version": "2026.08.27.2",
       "title": "Conflict reviews and portal invoice PDFs are traceable",
       "published_at": "2026-08-27",
       "summary": "Staff can save and close a conflict review, and clients can download a firm-branded invoice PDF from their matter portal.",
@@ -23,6 +23,26 @@
       ]
     },
     {
+      "id": "2026.08.27.1",
+      "version": "2026.08.27.1",
+      "title": "Prepare document templates with a guided review workspace",
+      "published_at": "2026-08-27",
+      "summary": "Turn PDFs and supported images into reusable document templates while reviewing every detected field before creation.",
+      "highlights": [
+        {
+          "title": "Review the original form in place",
+          "description": "Prepare Form keeps the uploaded page design visible while you inspect, add, move, rename, and configure fields."
+        },
+        {
+          "title": "Recover fields from scans and images",
+          "description": "Bounded local OCR and optional configured assistance can suggest fields without making automatic detection a requirement."
+        },
+        {
+          "title": "Finish safely when detection is imperfect",
+          "description": "Validation, confidence cues, and manual placement let you correct unfamiliar forms before creating the reusable template."
+        }
+      ]
+    },    {
       "id": "2026.08.26.4",
       "version": "2026.08.26.4",
       "title": "Customer cloud storage is explicit and fail-closed",

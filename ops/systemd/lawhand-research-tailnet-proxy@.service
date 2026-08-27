@@ -1,0 +1,21 @@
+[Unit]
+Description=LawHand private research proxy from Tailscale address %i
+Requires=lawhand-research-tailnet-proxy@%i.socket
+After=lawhand-research-tailnet-proxy@%i.socket
+
+[Service]
+Type=simple
+ExecStart=/lib/systemd/systemd-socket-proxyd 127.0.0.1:8021
+DynamicUser=true
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
