@@ -1,0 +1,120 @@
+name: Deploy IONOS candidate
+
+run-name: ${{ inputs.operation }} IONOS main @ ${{ github.sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Verify, privately stage, or publicly accept the IONOS release
+        required: true
+        default: verify
+        type: choice
+        options:
+          - verify
+          - stage
+          - accept
+      confirmation:
+        description: Type the operation-specific confirmation shown in the runbook
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: law-hand-ionos-production
+  cancel-in-progress: false
+
+jobs:
+  release-gate:
+    name: Validate IONOS release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.release.outputs.release_sha }}
+    steps:
+      - name: Require main and explicit mutation confirmation
+        env:
+          RELEASE_REF: ${{ github.ref }}
+          OPERATION: ${{ inputs.operation }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$RELEASE_REF" == refs/heads/main ]] || {
+            echo "::error::IONOS runs must be dispatched from main"
+            exit 1
+          }
+          case "$OPERATION" in
+            verify) ;;
+            stage) [[ "$CONFIRMATION" == STAGE-IONOS-CANDIDATE ]] ;;
+            accept) [[ "$CONFIRMATION" == ACCEPT-IONOS-PRODUCTION ]] ;;
+            *) exit 2 ;;
+          esac
+
+      - name: Pin the exact release commit
+        id: release
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Require successful CI for mutation
+        if: inputs.operation == 'stage'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          conclusion="$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow ci.yml \
+            --commit "$RELEASE_SHA" \
+            --event push \
+            --limit 20 \
+            --json conclusion \
+            --jq '.[0].conclusion // ""')"
+          [[ "$conclusion" == success ]] || {
+            echo "::error::CI for $RELEASE_SHA is '$conclusion'; IONOS was not changed."
+            exit 1
+          }
+
+  ionos:
+    name: ${{ inputs.operation }} on IONOS Cube M
+    needs: release-gate
+    runs-on: [self-hosted, Linux, X64, ionos, lawhand-prod]
+    environment:
+      name: ionos-production
+    timeout-minutes: 60
+    steps:
+      - name: Preflight fixed root-owned entrypoint
+        run: |
+          set -Eeuo pipefail
+          entrypoint=/usr/local/sbin/lawhand-ionos-deploy-from-github
+          test -f "$entrypoint" && test -x "$entrypoint"
+          stat -c '%U:%G %a' "$entrypoint" | grep -Fqx 'root:root 755'
+          grep -Fqx '  verify|stage|deploy|accept) ;;' "$entrypoint"
+
+      - name: Run pinned IONOS operation
+        env:
+          DEPLOY_OPERATION: ${{ inputs.operation }}
+          RELEASE_SHA: ${{ needs.release-gate.outputs.release_sha }}
+        run: |
+          sudo -n /usr/local/sbin/lawhand-ionos-deploy-from-github \
+            "$DEPLOY_OPERATION" "$RELEASE_SHA"
+
+      - name: Record IONOS summary
+        if: always()
+        env:
+          DEPLOY_OPERATION: ${{ inputs.operation }}
+          RELEASE_SHA: ${{ needs.release-gate.outputs.release_sha }}
+        run: |
+          {
+            echo "## LawHand IONOS candidate"
+            echo
+            echo "- Operation: \`$DEPLOY_OPERATION\`"
+            echo "- Commit: \`$RELEASE_SHA\`"
+            echo "- Runner: \`$RUNNER_NAME\`"
+            echo "- Public cutover is a separate, explicitly verified step."
+          } >> "$GITHUB_STEP_SUMMARY"

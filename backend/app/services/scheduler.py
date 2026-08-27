@@ -668,6 +668,15 @@ class LegalScheduler:
             replace_existing=True,
         )
 
+        self.scheduler.add_job(
+            self._guarded("esign-reminder", self._check_esign_reminders),
+            "interval",
+            hours=1,
+            id="esign-reminder",
+            name="E-Sign Reminder",
+            replace_existing=True,
+        )
+
         from app.services.demo_purge import purge_expired_demo_tenants
 
         self.scheduler.add_job(
@@ -697,7 +706,7 @@ class LegalScheduler:
             replace_existing=True,
         )
 
-        agent_count = 9
+        agent_count = 10
 
         # cloud-sync: every CLOUD_METADATA_SYNC_INTERVAL_MIN minutes (if enabled)
         if settings.CLOUD_SEARCH_ENABLED:
@@ -1302,6 +1311,16 @@ class LegalScheduler:
                 await _log_failed(session, log, error_msg)
 
     # ─── Agent: task-reminder ─────────────────────────────────────────────────
+
+    @tenant_scoped_job
+    async def _check_esign_reminders(self) -> None:
+        """Deliver configured reminders and expire overdue signature requests."""
+        from app.services.esign.notifications import process_due_reminders
+
+        async with async_session_maker() as session:
+            await _apply_scheduler_tenant_context(session)
+            sent = await process_due_reminders(session)
+            logger.info("[esign-reminder] Sent %s reminder(s)", sent)
 
     @tenant_scoped_job
     async def _check_task_reminders(self) -> None:

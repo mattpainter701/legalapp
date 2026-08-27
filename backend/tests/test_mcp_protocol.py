@@ -42,6 +42,11 @@ def protocol_app(monkeypatch):
     # DNS-rebinding allow-list.
     monkeypatch.setattr(mcp_protocol.settings, "BACKEND_URL", "http://localhost:8000")
     monkeypatch.setattr(
+        mcp_protocol.settings,
+        "RESEARCH_MCP_PUBLIC_URL",
+        "http://localhost:8000/api/mcp",
+    )
+    monkeypatch.setattr(
         mcp_protocol.protocol_session_manager,
         "security_settings",
         mcp_protocol._transport_security(),
@@ -566,7 +571,7 @@ async def test_tools_call_enforces_product_scope(monkeypatch, protocol_app):
 
 
 @pytest.mark.asyncio
-async def test_sdk_rejects_untrusted_host(monkeypatch, protocol_app):
+async def test_protocol_rejects_noncanonical_research_host(monkeypatch, protocol_app):
     await _allow_identity(monkeypatch, "search_caselaw")
     async with AsyncClient(
         transport=ASGITransport(app=protocol_app),
@@ -587,7 +592,10 @@ async def test_sdk_rejects_untrusted_host(monkeypatch, protocol_app):
             },
         )
 
-    assert response.status_code == 421
+    assert response.status_code == 404
+    assert response.json() == {
+        "detail": "MCP product endpoint is available only from the canonical Research MCP host"
+    }
 
 
 @pytest.mark.asyncio

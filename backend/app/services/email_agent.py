@@ -1,7 +1,6 @@
 import json
 import logging
 import uuid as uuid_mod
-from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
@@ -35,8 +34,12 @@ async def _auto_log_and_task(
         from app.database import set_tenant_context
         from app.models.communication_log import CommunicationLog
         from app.models.matter_note import MatterNote
-        from app.models.task import Task
-        from app.services.task_workflow import append_task_event
+        from app.services.email_task_tags import (
+            add_tagged_email_task,
+            email_received_at,
+            parse_email_task_tag,
+        )
+        from app.services.task_notifications import notify_task_created
 
         await set_tenant_context(db, tenant_id)
         tid = uuid_mod.UUID(tenant_id)
@@ -56,6 +59,7 @@ async def _auto_log_and_task(
         external_ref = email.get("external_ref") or (
             f"{provider}:{message_id}" if provider and message_id else message_id
         )
+        received_at = email_received_at(email)
 
         if external_ref:
             possible_refs = [external_ref]
@@ -81,7 +85,7 @@ async def _auto_log_and_task(
             summary=classification.get("summary"),
             body=email.get("body_preview"),
             created_by_user_id=uid,
-            occurred_at=datetime.now(timezone.utc),
+            occurred_at=received_at,
             external_ref=external_ref,
             matter_id=matched_matter_ids[0] if matched_matter_ids else None,
         )
@@ -98,58 +102,40 @@ async def _auto_log_and_task(
                 content=(
                     f"**From:** {email.get('from', 'Unknown')}\n"
                     f"**To:** {email.get('to', 'Unknown')}\n"
-                    f"**Received:** {email.get('receivedDateTime', '')}\n\n"
+                    f"**Received:** {received_at.isoformat()}\n\n"
                     f"{email.get('body_preview', '')}"
                 ),
                 is_billable=False,
             )
             db.add(note)
 
-        # Create task for deadlines
-        deadline_str = classification.get("deadline_mentioned")
-        if deadline_str:
-            try:
-                from dateutil import parser as dateutil_parser
-
-                due_date = dateutil_parser.parse(str(deadline_str), fuzzy=True).date()
-                task = Task(
-                    tenant_id=tid,
-                    title=f"Deadline from email: {email.get('subject', '')[:200]}",
-                    description=classification.get("action_needed")
-                    or classification.get("summary"),
-                    task_type="deadline",
-                    priority="high"
-                    if classification.get("urgency") in ("critical", "high")
-                    else "medium",
-                    due_date=due_date,
-                    created_by_user_id=uid,
-                    assigned_to_user_id=uid,
-                    source="email_agent",
-                    external_ref=external_ref,
-                    matter_id=matched_matter_ids[0] if matched_matter_ids else None,
-                )
-                db.add(task)
-                await db.flush()
-                append_task_event(
-                    db,
-                    task,
-                    event_type="created",
-                    actor_user_id=uid,
-                    to_status="pending",
-                )
-                append_task_event(
-                    db,
-                    task,
-                    event_type="assigned",
-                    actor_user_id=uid,
-                    metadata={"assigned_to_user_id": str(uid)},
-                )
-            except Exception as parse_err:
-                logger.debug(
-                    "Could not parse deadline '%s': %s", deadline_str, parse_err
-                )
+        # A model may flag arbitrary text as a deadline, so durable work is
+        # created only from an explicit first-token subject tag.  Untagged
+        # classification remains useful transient triage metadata.
+        task = None
+        suggestion = parse_email_task_tag(email.get("subject"), received_at=received_at)
+        if suggestion is not None:
+            task = await add_tagged_email_task(
+                db,
+                suggestion=suggestion,
+                tenant_id=tid,
+                matter_id=matched_matter_ids[0],
+                actor_user_id=uid,
+                external_ref=external_ref,
+                original_subject=email.get("subject") or "(no subject)",
+                received_at=received_at,
+            )
 
         await db.commit()
+        if task is not None:
+            try:
+                await set_tenant_context(db, tenant_id)
+                await notify_task_created(db, task, tenant_id)
+            except Exception:
+                logger.exception(
+                    "Tagged mailbox task %s was created but notification dispatch failed",
+                    task.id,
+                )
     except Exception as exc:
         logger.warning("Auto log/task creation failed: %s", exc)
 

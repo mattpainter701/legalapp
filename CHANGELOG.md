@@ -3,6 +3,28 @@
 ## [Unreleased]
 
 ### Added
+- **Document templates now have a reviewed Prepare Form workflow:** uploaded
+  PDFs and supported images preserve their page design while staff review
+  detected fields, add or adjust fields manually, and create a reusable
+  template. Bounded local OCR, optional configured AI assistance, validation,
+  and clear recovery paths make scans and unfamiliar forms safer to prepare.
+- **Reviewed matter email can create a traceable task from an explicit subject
+  tag:** a new message beginning with `[TASK]` or `[DEADLINE]` previews its task
+  title and a bounded, deterministic due date in the Correspondence queue. The
+  reviewer can file the `.eml`, correspondence record, task, and task history
+  atomically, after which existing calendar projection is requested without
+  making provider availability a condition of durable capture.
+- **Cloud-bound matter storage is explicit and fail-closed:** Auto now resolves
+  an active Microsoft 365 tenant to OneDrive (or Google Drive when Google is the
+  connected provider), while an administrator-selected provider remains
+  exclusive. Provider outages return HTTP 503 without a durable local spill.
+  Client portal originals route to the newly provisioned `client_uploads`
+  folder, and the user/admin/backend guides share a lifecycle diagram and
+  operational contract for task routing and customer-owned document content.
+- **E-sign delivery completion:** internal signature requests now email the
+  actionable signer, expose delivery and first-view status, support manual
+  resend, notify the next signer in sequential workflows, and execute configured
+  expiration-relative reminders from the tenant-scoped scheduler.
 - **File share agents now have operator-grade local diagnostics:** Windows
   services write bounded rotating logs under the protected ProgramData agent
   directory, Linux continues to use journald, and the File Shares console
@@ -26,13 +48,26 @@
   private-detail protection remains enforced.
 
 ### Fixed
+- **Windows agent releases now fail closed on platform trust and stop cleanly
+  for overtop upgrades:** tagged builds use Microsoft Public Trust Artifact
+  Signing for the EXE before it is embedded and for the final MSI, verify both
+  Authenticode signatures before publication, and refuse to release when the
+  OIDC signing configuration is absent. The Windows service now latches early
+  stop requests, cancels its async workers, closes local resources, and uses a
+  bounded last-resort exit so a blocked SMB call cannot outlive the MSI service
+  stop window or start an overlapping agent process.
+- **Production accepts the previously deployed shared OpenCode credential while
+  canonical provider names are migrated:** `OPENCODE_ZEN_API_KEY` remains the
+  preferred Zen credential, but the verified legacy `DEEPSEEK_API_KEY` is a
+  final compatibility fallback for both preflight and the LiteLLM container.
 - **Production deploy checks now distinguish disposable file-share pairing
   reservations from registered agents:** pre/post data protection still fails
   on any registered agent loss, while the intentional cleanup of expired,
   never-registered `pending` reservations no longer produces a false data-loss
   alarm.
-- **File-share operations now report the real tenant state:** production
-  explicitly enables SMB retrieval, while the Status tab always authenticates
+- **File-share operations now report the real tenant state:** both production
+  Compose paths hard-pin SMB retrieval on so a stale host `.env` value cannot
+  silently disable it, while the Status tab always authenticates
   and returns tenant-scoped agent, share, credential, heartbeat, scan, and
   index counts even when retrieval is disabled. The Activity tab now combines
   agent lifecycle and heartbeat, update, share scan/connection-test,

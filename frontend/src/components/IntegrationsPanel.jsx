@@ -409,7 +409,7 @@ export default function IntegrationsPanel() {
       <div className="bg-brand-surface border border-brand-line rounded-xl p-6">
         <h3 className="text-brand-ink font-sans text-base font-bold mb-1">Cloud Document Storage</h3>
         <p className="text-brand-ink-2 font-sans text-xs mb-4">
-          Choose which connected cloud provider stores matter documents and folders. "Auto" uses the first available provider.
+          Choose the customer-owned datastore for matter files. Auto binds Microsoft 365 tenants to OneDrive, otherwise Google Drive. Cloud-bound writes fail instead of saving a durable copy on LawHand infrastructure.
         </p>
         <div className="flex items-center gap-3">
           <select
@@ -418,7 +418,7 @@ export default function IntegrationsPanel() {
             disabled={cloudSaving}
             className="flex-1 max-w-xs px-3 py-2 bg-brand-bg border border-brand-line rounded-lg text-brand-ink font-sans text-sm disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-brand-ink/20"
           >
-            <option value="">Auto (first available)</option>
+            <option value="">Auto (Microsoft 365 → OneDrive)</option>
             <option value="onedrive">Microsoft OneDrive</option>
             <option value="sharepoint">Microsoft SharePoint</option>
             <option value="google_drive">Google Drive</option>

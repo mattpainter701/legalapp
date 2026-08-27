@@ -29,7 +29,10 @@ jobs:
         run: |
           require_single_hsts() {
             local url="$1" headers count value
-            headers="$(curl --fail --silent --show-error --max-time 20 --dump-header - --output /dev/null "$url" | tr -d '\r')"
+            # The two MCP probes intentionally return 401 and 404. curl's
+            # --fail treats those expected isolation responses as transport
+            # failures before their security headers can be inspected.
+            headers="$(curl --silent --show-error --max-time 20 --dump-header - --output /dev/null "$url" | tr -d '\r')"
             count="$(printf '%s\n' "$headers" | awk 'tolower($0) ~ /^strict-transport-security:/ { count++ } END { print count + 0 }')"
             value="$(printf '%s\n' "$headers" | awk 'tolower($0) ~ /^strict-transport-security:/ { sub(/^[^:]*:[[:space:]]*/, ""); print }')"
             [[ "$count" == "1" ]]
@@ -65,18 +68,33 @@ jobs:
             --arg issuer "$PRODUCTION_ORIGIN" \
             '.resource == $resource and .authorization_servers == [$issuer]' >/dev/null
 
-          for disabled_research_path in \
-            /api/mcp \
-            /api/mcp/manifest \
-            /.well-known/oauth-protected-resource \
-            /.well-known/oauth-protected-resource/api/mcp \
-            /.well-known/oauth-authorization-server \
-            /api/research-mcp/oauth/jwks; do
-            research_status="$(curl --silent --show-error --max-time 20 \
-              --output /dev/null --write-out '%{http_code}' \
-              "$RESEARCH_MCP_ORIGIN$disabled_research_path")"
-            [[ "$research_status" == "404" ]]
-          done
+          research_headers="$(curl --silent --show-error --max-time 20 --dump-header - --output /dev/null \
+            --request POST \
+            --header 'Content-Type: application/json' \
+            --header 'Accept: application/json, text/event-stream' \
+            --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"scheduled-health","version":"1"}}}' \
+            "$RESEARCH_MCP_ORIGIN/api/mcp" | tr -d '\r')"
+          research_status="$(printf '%s\n' "$research_headers" | awk 'toupper($1) ~ /^HTTP\// { status=$2 } END { print status }')"
+          research_challenge="$(printf '%s\n' "$research_headers" | awk 'tolower($0) ~ /^www-authenticate:/ { sub(/^[^:]*:[[:space:]]*/, ""); print }')"
+          [[ "$research_status" == "401" ]]
+          [[ "$research_challenge" == *"resource_metadata=\"$RESEARCH_MCP_ORIGIN/.well-known/oauth-protected-resource/api/mcp\""* && "$research_challenge" == *'scope="research:read"'* ]]
+
+          research_metadata="$(curl --fail --silent --show-error --max-time 20 \
+            "$RESEARCH_MCP_ORIGIN/.well-known/oauth-protected-resource")"
+          printf '%s' "$research_metadata" | jq -e \
+            --arg resource "$RESEARCH_MCP_ORIGIN/api/mcp" \
+            --arg issuer "$RESEARCH_MCP_ORIGIN" \
+            '.resource == $resource and .authorization_servers == [$issuer] and (.scopes_supported | index("research:read"))' >/dev/null
+          research_oauth_metadata="$(curl --fail --silent --show-error --max-time 20 \
+            "$RESEARCH_MCP_ORIGIN/.well-known/oauth-authorization-server")"
+          printf '%s' "$research_oauth_metadata" | jq -e \
+            --arg issuer "$RESEARCH_MCP_ORIGIN" \
+            '.issuer == $issuer and .authorization_endpoint == ($issuer + "/api/research-mcp/oauth/authorize") and .token_endpoint == ($issuer + "/api/research-mcp/oauth/token") and .registration_endpoint == ($issuer + "/api/research-mcp/oauth/register") and .code_challenge_methods_supported == ["S256"]' >/dev/null
+          research_jwks="$(curl --fail --silent --show-error --max-time 20 \
+            "$RESEARCH_MCP_ORIGIN/api/research-mcp/oauth/jwks")"
+          printf '%s' "$research_jwks" | jq -e \
+            '.keys | type == "array" and length > 0 and all(.[]; .kty == "RSA" and .alg == "RS256" and .use == "sig")' >/dev/null
+
           for isolated_url in \
             "$WORKSPACE_MCP_ORIGIN/api/version" \
             "$RESEARCH_MCP_ORIGIN/api/version"; do

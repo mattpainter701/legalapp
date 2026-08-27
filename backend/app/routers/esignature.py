@@ -40,6 +40,10 @@ from app.services.esign import (
     record_portal_signature,
     signer_can_act_now,
 )
+from app.services.esign.notifications import (
+    mark_signer_viewed,
+    notify_actionable_signers,
+)
 from app.services.matter_file_store import (
     MatterFileAccessError,
     MatterFileIntegrityError,
@@ -114,6 +118,15 @@ async def _to_response(
                 signed_at=s.signed_at,
                 declined_at=s.declined_at,
                 decline_reason=s.decline_reason,
+                invitation_delivery_status=(s.audit or {}).get(
+                    "invitation_delivery_status"
+                ),
+                invitation_sent_at=(s.audit or {}).get("invitation_sent_at"),
+                reminder_delivery_status=(s.audit or {}).get(
+                    "reminder_delivery_status"
+                ),
+                last_reminder_at=(s.audit or {}).get("reminder_sent_at"),
+                viewed_at=(s.audit or {}).get("viewed_at"),
             )
             for s in sorted(req.signers, key=lambda s: s.sign_order)
         ],
@@ -452,6 +465,31 @@ async def send_signature_request(
         req.provider_envelope_id = envelope_id
     req.status = "sent"
     req.sent_at = datetime.now(timezone.utc)
+    await notify_actionable_signers(req)
+    await db.commit()
+    req = await _load_request(db, request_id, matter_id, user.tenant_id)
+    return await _to_response(db, req)
+
+
+@router.post(
+    "/{matter_id}/signatures/{request_id}/resend",
+    response_model=SignatureRequestResponse,
+)
+async def resend_signature_request(
+    matter_id: str,
+    request_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    req = await _load_request(db, request_id, matter_id, user.tenant_id)
+    await _expire_and_commit_if_needed(db, req)
+    if req.status not in ("sent", "partially_signed"):
+        raise HTTPException(
+            status_code=409, detail="Only an open signature request can be resent"
+        )
+    await notify_actionable_signers(req)
     await db.commit()
     req = await _load_request(db, request_id, matter_id, user.tenant_id)
     return await _to_response(db, req)
@@ -521,6 +559,15 @@ async def portal_list_signatures(
             for s in r.signers
         )
     ]
+    for signature_request in requests:
+        for signer in signature_request.signers:
+            if (
+                _portal_signer_matches_context(signer, ctx)
+                and signer.status == "pending"
+            ):
+                mark_signer_viewed(signer)
+    if requests:
+        await db.commit()
     return [await _to_response(db, r) for r in requests]
 
 
@@ -590,6 +637,8 @@ async def portal_sign(
 
     matter = await db.get(Matter, req.matter_id)
     await complete_request_if_done(db, req, matter)
+    if req.status == "partially_signed":
+        await notify_actionable_signers(req)
     await db.commit()
 
     result = await db.execute(

@@ -1215,6 +1215,9 @@ export const getSignatureRequest = (matterId, requestId) =>
 export const sendSignatureRequest = (matterId, requestId) =>
   api.post(`/matters/${matterId}/signatures/${requestId}/send`).then((r) => r.data)
 
+export const resendSignatureRequest = (matterId, requestId) =>
+  api.post(`/matters/${matterId}/signatures/${requestId}/resend`).then((r) => r.data)
+
 export const voidSignatureRequest = (matterId, requestId, data) =>
   api.post(`/matters/${matterId}/signatures/${requestId}/void`, data).then((r) => r.data)
 
@@ -1911,9 +1914,9 @@ export const getCalendarEvents = (start, end) => {
   return api.get('/calendar/events', { params }).then(r => r.data)
 }
 
-export const syncCalendarDeadlines = (provider = 'microsoft') =>
+export const syncCalendarDeadlines = (provider = 'microsoft', syncDeadlines = true) =>
   api
-    .post('/calendar/sync', { provider, sync_deadlines: true })
+    .post('/calendar/sync', { provider, sync_deadlines: syncDeadlines })
     .then(r => r.data)
 
 export const getCalendarProviders = () =>
@@ -1947,6 +1950,23 @@ export const analyzeTemplateUpload = (formData) =>
   api.post('/templates/intake/analyze', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
   }).then(r => r.data)
+
+export const proposeTemplateFieldsWithAi = (formData) =>
+  api.post('/templates/intake/ai-propose', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then(r => r.data)
+
+export const previewTemplateUploadPdfPage = (formData, pageNumber = 1) =>
+  api.post('/templates/intake/pdf-page-preview', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    params: { page_number: pageNumber },
+    responseType: 'blob',
+  }).then((r) => ({
+    blob: r.data,
+    pageCount: Number(getHeaderValue(r.headers, 'x-pdf-page-count') || 1),
+    pageWidth: Number(getHeaderValue(r.headers, 'x-pdf-page-width')),
+    pageHeight: Number(getHeaderValue(r.headers, 'x-pdf-page-height')),
+  }))
 
 export const createTemplateFromUpload = (formData) =>
   api.post('/templates/intake/create', formData, {

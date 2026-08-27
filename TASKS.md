@@ -1,5 +1,43 @@
 # TASKS.md
 
+## BK27 — Task, Correspondence, Intake, and Portal Follow-through — 2026-08-26
+
+**Goal:** Keep LawHand tasks authoritative while meeting firms in Outlook,
+turning explicit correspondence instructions into traceable work, and defining
+safe follow-ups for document dates, bespoke intake, probate gathering, portal
+storage/invoices, and Workspace MCP search.
+
+Discovery, decisions, current-state evidence, vendor options, and acceptance
+criteria: `docs/task-correspondence-discovery-2026-08-26.md`.
+
+- [x] `TC-01` Add deterministic `[TASK]` / `[DEADLINE]` email subject tags,
+      reviewed inbound preview, atomic correspondence/task creation, received-date
+      relative math, audit lineage, calendar projection, and tests. Remove
+      model-only automatic deadline creation for untagged email.
+- [x] `TC-02` Bind Auto Microsoft 365 tenants to OneDrive, honor explicit
+      admin provider overrides, fail closed for cloud-bound writes, route portal
+      originals to `client_uploads`, and expose provider outages as HTTP 503.
+- [ ] `TC-03` Replace free-form key-date writes with typed, provenance-bearing,
+      reviewable key dates while retaining legacy reads during migration.
+- [ ] `TC-04` Extract cited document date/trigger candidates into review; never
+      auto-promote an extracted date to a legal deadline.
+- [ ] `TC-05` Complete current LawToolBox/CalendarRules partner diligence and a
+      sandbox rules calculation before selecting a legal deadline provider.
+- [ ] `TC-06` Add a standalone Conflict Search and saved attorney clearance
+      evidence on top of the existing shared conflict service.
+- [ ] `TC-07` Build versioned bespoke intake forms/submissions and approved
+      document-variable bindings separate from CRM/matter summary fields.
+- [ ] `TC-08` Build the probate portal questionnaire/checklist on the shared
+      intake answer model and map verified facts to estate records/templates.
+- [ ] `TC-09` Apply tenant branding to invoice PDFs and add audited client-portal
+      invoice PDF downloads.
+- [ ] `TC-10` Add bounded, cited global Workspace MCP search across matters,
+      contacts/clients, documents, correspondence, and tasks.
+- [ ] `TC-11` Detect and review Outlook/Google edits or deletions that diverge
+      from authoritative LawHand tasks.
+- [ ] `TC-12` Add tenant subject-tag help/aliases, metrics, and an ambiguous-date
+      review queue.
+
 ## BK26 — Virtual Assistant Product — 2026-08-26 (IMPLEMENTATION PR IN REVIEW)
 
 **Goal:** Make LawHand Assistant a legitimate, review-first virtual assistant
@@ -1836,15 +1874,15 @@ Generalize the mediation portal (`mediation_portal.py`, `MediationInvite`, `Port
 - [ ] Firm-client login path (role="client") in addition to magic-link (spike is magic-link only)
 - [ ] Integration tests: tenant + matter isolation, expired/revoked invite, cross-matter access
 
-#### 1302. Native E-Signature (P0, MEDIUM) — IN PROGRESS (spike landed)
+#### 1302. Native E-Signature (P0, MEDIUM) — INTERNAL PROVIDER DELIVERED
 - [x] Migration `045_esignature`: `signature_requests` + `signature_signers` (RLS)
 - [x] `services/esign/`: `ESignProvider` interface + `get_provider` factory; `internal` adapter; `dropbox_sign` stub; reportlab certificate generator (HTML fallback)
 - [x] `routers/esignature.py`: firm create/list/get/send/void from a `MatterDocument`; client-portal `GET /signatures` + `POST /signatures/{id}/sign`
 - [x] On complete → executed-copy/audit PDF stored as portal-visible `MatterDocument` + matter timeline event; request status partially_signed→completed
 - [x] Frontend: firm "Request signature" panel in MatterDetail Client Portal tab; Signatures tab + sign action in client portal
 - [ ] Real provider wiring (Dropbox Sign/DocuSign) + webhook reconciliation (stub raises NotImplementedError)
-- [ ] Portal signer-identity binding (spike signs the next pending signer; bind to the portal contact/email)
-- [ ] Decline flow + per-signer email dispatch on send
+- [x] Portal signer-identity binding to the portal contact/email
+- [x] Decline flow + per-signer email dispatch on send, resend, sequential handoff, and scheduled reminders
 
 #### 1303. Trust Accounting — Pooled Ledger & Reconciliation Persistence (Backend) (P0, MEDIUM) — DELIVERED
 

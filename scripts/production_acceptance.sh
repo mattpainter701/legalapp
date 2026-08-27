@@ -7,7 +7,7 @@ umask 077
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env}"
-COMPOSE_FILE="${COMPOSE_FILE:-$ROOT_DIR/docker-compose.hypervisor.yml}"
+COMPOSE_FILES="${COMPOSE_FILES:-${COMPOSE_FILE:-$ROOT_DIR/docker-compose.hypervisor.yml}}"
 EXPECTED_COMMIT="${1:-${GITHUB_DEPLOY_COMMIT:-}}"
 
 [[ -f "$ENV_FILE" ]] || { echo "FAIL: missing production environment file" >&2; exit 1; }
@@ -24,7 +24,7 @@ actual_commit="$(git -C "$ROOT_DIR" rev-parse HEAD)"
 
 echo "ACCEPTANCE_COMMIT=$actual_commit"
 echo "==> Running strict production check"
-ENV_FILE="$ENV_FILE" COMPOSE_FILE="$COMPOSE_FILE" bash "$SCRIPT_DIR/production_check.sh"
+ENV_FILE="$ENV_FILE" COMPOSE_FILES="$COMPOSE_FILES" bash "$SCRIPT_DIR/production_check.sh"
 
 get_env() {
   local key="$1" line

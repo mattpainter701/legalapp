@@ -5,7 +5,9 @@ that match a contact on an active matter become durable firm communications.
 """
 
 import uuid
+from unittest.mock import AsyncMock
 
+from app.models.task import Task
 from app.services import email_agent
 
 
@@ -96,3 +98,100 @@ async def test_copied_contact_does_not_make_an_unknown_sender_matter_mail(monkey
     assert "stranger@unknown.example" in sql
     for copied in ("client@known.example", "paralegal@known.example", "firm@example.com"):
         assert copied not in sql, f"{copied} must not be matched: it is a recipient, not the sender"
+
+
+class _NoExistingResult:
+    def scalar_one_or_none(self):
+        return None
+
+
+class _CaptureDB:
+    def __init__(self):
+        self.added = []
+        self.commits = 0
+
+    async def execute(self, *_args, **_kwargs):
+        return _NoExistingResult()
+
+    def add(self, value):
+        self.added.append(value)
+
+    async def flush(self):
+        value = self.added[-1]
+        if getattr(value, "id", None) is None:
+            value.id = uuid.uuid4()
+
+    async def commit(self):
+        self.commits += 1
+
+
+async def test_model_deadline_without_subject_tag_stays_correspondence_only(monkeypatch):
+    import app.database
+    from app.services import task_notifications
+
+    monkeypatch.setattr(app.database, "set_tenant_context", AsyncMock())
+    notify = AsyncMock()
+    monkeypatch.setattr(task_notifications, "notify_task_created", notify)
+    db = _CaptureDB()
+
+    await email_agent._auto_log_and_task(
+        db=db,
+        tenant_id=str(uuid.uuid4()),
+        user_id=str(uuid.uuid4()),
+        email={
+            "id": "message-untagged",
+            "provider": "microsoft",
+            "from": "client@example.com",
+            "to": "attorney@example.com",
+            "subject": "Can we meet in two weeks?",
+            "body_preview": "Please put this on the calendar.",
+            "received": "2026-08-26T10:00:00-05:00",
+        },
+        classification={
+            "summary": "Client asks for a meeting.",
+            "deadline_mentioned": "2026-09-09",
+            "urgency": "high",
+        },
+        matched_matter_ids=[uuid.uuid4()],
+    )
+
+    assert not any(isinstance(value, Task) for value in db.added)
+    assert db.commits == 1
+    notify.assert_not_awaited()
+
+
+async def test_subject_tag_creates_task_and_mirrors_notification(monkeypatch):
+    import app.database
+    from app.services import task_notifications
+
+    monkeypatch.setattr(app.database, "set_tenant_context", AsyncMock())
+    notify = AsyncMock()
+    monkeypatch.setattr(task_notifications, "notify_task_created", notify)
+    db = _CaptureDB()
+    tenant_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    matter_id = uuid.uuid4()
+
+    await email_agent._auto_log_and_task(
+        db=db,
+        tenant_id=str(tenant_id),
+        user_id=str(user_id),
+        email={
+            "id": "message-tagged",
+            "provider": "microsoft",
+            "from": "client@example.com",
+            "to": "attorney@example.com",
+            "subject": "[TASK] Nigel I need to meet with you in two weeks",
+            "body_preview": "Please put this on the calendar.",
+            "received": "2026-08-26T10:00:00-05:00",
+        },
+        classification={"summary": "Client asks for a meeting."},
+        matched_matter_ids=[matter_id],
+    )
+
+    task = next(value for value in db.added if isinstance(value, Task))
+    assert task.title == "Nigel I need to meet with you"
+    assert task.due_date.isoformat() == "2026-09-09"
+    assert task.matter_id == matter_id
+    assert task.external_ref == "microsoft:message-tagged"
+    notify.assert_awaited_once_with(db, task, str(tenant_id))

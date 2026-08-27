@@ -18,6 +18,7 @@ import asyncio
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 SERVICE_NAME = "LawHandAgent"
@@ -26,6 +27,12 @@ SERVICE_DESCRIPTION = (
     "Indexes approved on-premise file shares and relays document text to "
     "LawHand on request."
 )
+# SCM/MSI commonly gives a service roughly 30 seconds to stop.  Allow normal
+# async cleanup first, then terminate a wedged service before that deadline.
+# The hard exit is deliberately Windows-service-only: a stuck SMB worker can
+# keep asyncio's default executor alive even after its task is cancelled.
+SERVICE_STOP_GRACE_SECONDS = 20
+SERVICE_STOP_HARD_DEADLINE_SECONDS = 25
 SYSTEMD_UNIT_PATH = Path("/etc/systemd/system/lawhand-agent.service")
 
 
@@ -155,14 +162,47 @@ def _windows_service_class():  # pragma: no cover - Windows-only
         def __init__(self, args):
             super().__init__(args)
             self._wait_stop = win32event.CreateEvent(None, 0, 0, None)
+            # SvcStop runs on a pywin32 control-handler thread and may arrive
+            # before SvcDoRun has created its asyncio loop.  Keep the request
+            # in a thread-safe latch so that an early stop cannot be lost.
+            self._stop_requested = threading.Event()
+            self._shutdown_complete = threading.Event()
+            self._watchdog_lock = threading.Lock()
+            self._watchdog_started = False
             self._loop = None
             self._stop_event = None
 
         def SvcStop(self):
             self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
+            self._stop_requested.set()
+            # SCM may dispatch repeated stop controls concurrently. Serialize
+            # the check-and-start so only one watchdog can ever be created.
+            with self._watchdog_lock:
+                if not self._watchdog_started:
+                    self._watchdog_started = True
+                    threading.Thread(
+                        target=self._stop_watchdog,
+                        name="lawhand-service-stop-watchdog",
+                        daemon=True,
+                    ).start()
             if self._loop is not None and self._stop_event is not None:
                 self._loop.call_soon_threadsafe(self._stop_event.set)
             win32event.SetEvent(self._wait_stop)
+
+        def _stop_watchdog(self):
+            # Graceful cancellation and resource cleanup remain the normal
+            # path.  os._exit is only the last resort because Python cannot
+            # interrupt a blocking SMB call running in a worker thread. Exit
+            # successfully: WiX configures SCM failure actions to restart the
+            # agent, and a nonzero intentional-stop exit would recreate the
+            # service overlap this watchdog is preventing.
+            if self._shutdown_complete.wait(SERVICE_STOP_GRACE_SECONDS):
+                return
+            if self._shutdown_complete.wait(
+                SERVICE_STOP_HARD_DEADLINE_SECONDS - SERVICE_STOP_GRACE_SECONDS
+            ):
+                return
+            os._exit(0)
 
         def SvcDoRun(self):
             from clarity_agent.__main__ import run_daemon
@@ -171,9 +211,14 @@ def _windows_service_class():  # pragma: no cover - Windows-only
             async def _main():
                 self._loop = asyncio.get_running_loop()
                 self._stop_event = asyncio.Event()
+                if self._stop_requested.is_set():
+                    self._stop_event.set()
                 await run_daemon(AgentConfig.load(), stop_event=self._stop_event)
 
-            asyncio.run(_main())
+            try:
+                asyncio.run(_main())
+            finally:
+                self._shutdown_complete.set()
 
     return LawHandAgentService
 

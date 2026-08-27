@@ -12,11 +12,11 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 
 |Manifest|Type|Lockfile present|Lockfiles|Tracked dependency count|
 |-|-|-|-|-|
-|backend/requirements.txt|python requirements|no|none|43|
+|backend/requirements.txt|python requirements|no|none|44|
 |mcp-server/requirements.txt|python requirements|no|none|9|
 |scripts/requirements.txt|python requirements|no|none|7|
 |scripts/tabs3_export/requirements.txt|python requirements|no|none|2|
-|frontend/package.json|npm package|yes|frontend/package-lock.json|30|
+|frontend/package.json|npm package|yes|frontend/package-lock.json|32|
 |office-addin/package.json|npm package|yes|office-addin/package-lock.json|6|
 |agent/pyproject.toml|python project|no|none|14|
 
@@ -29,10 +29,12 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |npm|axios|^1.18.1|dependencies|frontend/package.json|
 |npm|date-fns|^4.1.0|dependencies|frontend/package.json|
 |npm|lucide-react|^0.475.0|dependencies|frontend/package.json|
+|npm|pdfjs-dist|^6.2.108|dependencies|frontend/package.json|
 |npm|react|^18.3.1|dependencies|frontend/package.json|
 |npm|react-dom|^18.3.1|dependencies|frontend/package.json|
 |npm|react-dropzone|^14.3.5|dependencies|frontend/package.json|
 |npm|react-markdown|^9.0.1|dependencies|frontend/package.json|
+|npm|react-rnd|^10.5.3|dependencies|frontend/package.json|
 |npm|react-router-dom|^7.18.2|dependencies|frontend/package.json|
 |npm|remark-gfm|^4.0.1|dependencies|frontend/package.json|
 |npm|@eslint/js|^9.39.5|devDependencies|frontend/package.json|
@@ -95,6 +97,7 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |pypi|openai|==1.58.1|runtime/dev|backend/requirements.txt|
 |pypi|opencv-python|==5.0.0.93|runtime/dev|backend/requirements.txt|
 |pypi|pgvector|==0.3.6|runtime/dev|backend/requirements.txt|
+|pypi|Pillow|==12.3.0|runtime/dev|backend/requirements.txt|
 |pypi|psycopg2-binary|==2.9.10|runtime/dev|backend/requirements.txt|
 |pypi|pydantic|==2.11.10|runtime/dev|backend/requirements.txt|
 |pypi|pydantic-settings|==2.6.1|runtime/dev|backend/requirements.txt|

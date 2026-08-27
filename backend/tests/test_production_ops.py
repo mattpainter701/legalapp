@@ -559,6 +559,36 @@ def test_production_preflight_accepts_native_workspace_mcp_oauth(
     assert public_key[:48] not in output
 
 
+def test_production_preflight_accepts_enabled_research_mcp_oauth(
+    tmp_path: Path,
+) -> None:
+    private_key, public_key = _workspace_rsa_pair()
+    research_settings = {
+        "MCP_PRODUCT_ENABLED": "true",
+        "RESEARCH_MCP_PUBLIC_URL": "https://research.ops-test.invalid/api/mcp",
+        "RESEARCH_MCP_OAUTH_ENABLED": "true",
+        "RESEARCH_MCP_AUDIENCE": "lawhand-research-mcp",
+        "RESEARCH_MCP_ISSUER": "https://research.ops-test.invalid",
+        "RESEARCH_MCP_ACCESS_TOKEN_MAX_MINUTES": "15",
+        "RESEARCH_MCP_AUTH_CODE_TTL_SECONDS": "300",
+        "RESEARCH_MCP_REFRESH_TOKEN_DAYS": "30",
+        "RESEARCH_MCP_GRANT_DAYS": "90",
+        "RESEARCH_MCP_CLIENT_REGISTRATION_DAYS": "30",
+        "RESEARCH_MCP_DYNAMIC_REGISTRATION_ENABLED": "true",
+        "WORKSPACE_MCP_SIGNING_PRIVATE_KEY_B64": private_key,
+        "WORKSPACE_MCP_SIGNING_PUBLIC_KEY_B64": public_key,
+        "WORKSPACE_MCP_SIGNING_KEY_ID": "research-test-2026-08",
+        "WORKSPACE_MCP_PREVIOUS_PUBLIC_KEYS_JSON": "[]",
+    }
+
+    result = _run_preflight(tmp_path, _production_env(**research_settings))
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, output
+    assert private_key[:48] not in output
+    assert public_key[:48] not in output
+
+
 def test_production_preflight_rejects_legacy_workspace_signing_secret(
     tmp_path: Path,
 ) -> None:
@@ -768,6 +798,34 @@ def test_host_capacity_gate_rejects_16_gib_and_low_disk_headroom() -> None:
     assert "12.0 GiB free" in output
 
 
+def test_cube_m_capacity_profile_accepts_the_ionos_host_and_rejects_undersizing() -> (
+    None
+):
+    accepted = _validate_capacity(
+        profile="cube-m",
+        cpus=4,
+        memory_gib=15,
+        disk_total_gib=232,
+        disk_free_gib=220,
+    )
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert "Host capacity passed (cube-m)" in accepted.stdout
+
+    rejected = _validate_capacity(
+        profile="cube-m",
+        cpus=2,
+        memory_gib=12,
+        disk_total_gib=180,
+        disk_free_gib=25,
+    )
+    output = rejected.stdout + rejected.stderr
+    assert rejected.returncode != 0
+    assert "2 online CPU(s); at least 4 are required" in output
+    assert "12.0 GiB RAM; at least 14.0 GiB is required" in output
+    assert "180.0 GiB total" in output
+    assert "25.0 GiB free" in output
+
+
 def test_host_capacity_gate_uses_realistic_hypervisor_disk_profile() -> None:
     result = _validate_capacity(
         profile="hypervisor",
@@ -856,6 +914,16 @@ def test_production_preflight_selects_only_known_capacity_profiles(
     vps = _run_preflight(tmp_path, _production_env(), compose_files=base_prod)
     assert vps.returncode == 0, vps.stdout + vps.stderr
     assert "overridden for the vps profile" in vps.stderr
+
+    cube_m = " ".join(
+        (
+            (ROOT / "docker-compose.hypervisor.yml").as_posix(),
+            (ROOT / "docker-compose.cube-m.yml").as_posix(),
+        )
+    )
+    cube = _run_preflight(tmp_path, _production_env(), compose_files=cube_m)
+    assert cube.returncode == 0, cube.stdout + cube.stderr
+    assert "overridden for the cube-m profile" in cube.stderr
 
     hypervisor_file = (ROOT / "docker-compose.hypervisor.yml").as_posix()
     mixed = _run_preflight(
@@ -1065,7 +1133,10 @@ def test_production_preflight_rejects_launch_flags_and_unstaged_credentials(
     output = result.stdout + result.stderr
 
     assert result.returncode != 0
-    assert "MCP_PRODUCT_ENABLED must remain false" in output
+    assert (
+        "RESEARCH_MCP_PUBLIC_URL is required when the Research MCP product is enabled"
+        in output
+    )
     assert "PUBLIC_SIGNUP_ENABLED must remain false" in output
     assert "VITE_PUBLIC_SIGNUP_ENABLED must remain false" in output
     assert "MCP_UPSTREAM_API_KEY must be at least 32 characters" in output
@@ -1149,7 +1220,7 @@ def test_production_check_rejects_mcp_env_file_and_process_drift(
     )
     missing_output = missing.stdout + missing.stderr
     assert missing.returncode != 0
-    assert "MCP_PRODUCT_ENABLED must remain false" in missing_output
+    assert "MCP_PRODUCT_ENABLED must be explicitly true or false" in missing_output
 
     conflict = _run_production_policy_check(
         tmp_path,
@@ -1364,6 +1435,8 @@ def test_production_preflight_rejects_missing_opencode_zen_key(
     result = _run_preflight(
         tmp_path,
         _production_env(
+            DEEPSEEK_API_KEY="",
+            OPENCODE_GO_API_KEY="opencode-go-provider-key-0123456789",
             OPENCODE_ZEN_API_KEY="",
             OPENCODE_API_KEY="",
             OPENCODE_KEY="",
@@ -1372,7 +1445,24 @@ def test_production_preflight_rejects_missing_opencode_zen_key(
     output = result.stdout + result.stderr
 
     assert result.returncode != 0
-    assert "OPENCODE_ZEN_API_KEY (or a legacy OpenCode Zen key)" in output
+    assert "OPENCODE_ZEN_API_KEY (or a supported legacy OpenCode key)" in output
+
+
+def test_production_preflight_accepts_legacy_shared_opencode_key(
+    tmp_path: Path,
+) -> None:
+    result = _run_preflight(
+        tmp_path,
+        _production_env(
+            OPENCODE_GO_API_KEY="",
+            OPENCODE_ZEN_API_KEY="",
+            OPENCODE_API_KEY="",
+            OPENCODE_KEY="",
+            DEEPSEEK_API_KEY="legacy-shared-opencode-key-0123456789",
+        ),
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_production_preflight_rejects_conflicting_inherited_compose_value(
@@ -1498,16 +1588,18 @@ def test_production_feature_flags_are_explicitly_mapped_and_rollback_images_rema
             == "${VITE_PUBLIC_SIGNUP_ENABLED:-false}"
         )
 
-    prod_services = yaml.safe_load(
-        (ROOT / "docker-compose.prod.yml").read_text(encoding="utf-8")
-    )["services"]
-    for service in ("backend", "scheduler"):
-        assert prod_services[service]["environment"]["PUBLIC_SIGNUP_ENABLED"] == (
-            "${PUBLIC_SIGNUP_ENABLED:-false}"
-        )
-        assert prod_services[service]["environment"]["SMB_ENABLED"] == (
-            "${SMB_ENABLED:-true}"
-        )
+    production_models = [
+        yaml.safe_load((ROOT / compose_name).read_text(encoding="utf-8"))["services"]
+        for compose_name in ("docker-compose.hypervisor.yml", "docker-compose.prod.yml")
+    ]
+    for prod_services in production_models:
+        for service in ("backend", "scheduler"):
+            assert prod_services[service]["environment"]["PUBLIC_SIGNUP_ENABLED"] == (
+                "${PUBLIC_SIGNUP_ENABLED:-false}"
+            )
+            # Production intentionally ignores stale host SMB_ENABLED=false values.
+            assert prod_services[service]["environment"]["SMB_ENABLED"] == "true"
+    prod_services = production_models[-1]
     assert (
         prod_services["frontend"]["build"]["args"]["VITE_PUBLIC_SIGNUP_ENABLED"]
         == "${VITE_PUBLIC_SIGNUP_ENABLED:-false}"
@@ -1522,6 +1614,57 @@ def test_production_feature_flags_are_explicitly_mapped_and_rollback_images_rema
     assert "release-$release_tag" in deploy
     assert "rollback_manifest" in deploy
     assert 'APP_COMMIT" == "$git_commit' in deploy
+    assert (
+        "for service in backend scheduler migrator frontend office-addin nginx litellm"
+        in deploy
+    )
+
+
+def test_cube_m_overlay_bounds_runtime_without_weakening_private_ingress() -> None:
+    cube = yaml.safe_load((ROOT / "docker-compose.cube-m.yml").read_text())
+    services = cube["services"]
+    assert cube["name"] == "legalapp"
+    assert services["backend"]["command"].endswith("--workers 2")
+    assert "BACKEND_WORKERS" not in services["backend"]["command"]
+    assert "ports" not in services["nginx"]
+
+    steady_services = (
+        "postgres",
+        "redis",
+        "litellm-postgres",
+        "litellm",
+        "backend",
+        "scheduler",
+        "frontend",
+        "office-addin",
+        "nginx",
+    )
+
+    def memory_mib(value: str) -> int:
+        if value.endswith("G"):
+            return int(value[:-1]) * 1024
+        if value.endswith("M"):
+            return int(value[:-1])
+        raise AssertionError(f"unsupported memory limit {value}")
+
+    total_mib = sum(
+        memory_mib(services[name]["deploy"]["resources"]["limits"]["memory"])
+        for name in steady_services
+    )
+    assert total_mib <= 10 * 1024
+
+
+def test_ionos_stage_gate_is_private_exact_and_fail_closed() -> None:
+    stage = (ROOT / "scripts" / "ionos_stage_check.sh").read_text(encoding="utf-8")
+    assert "https://${origin_server_name}" in stage
+    assert '--resolve "${origin_server_name}:443:127.0.0.1"' in stage
+    assert '-H "Host: $host"' in stage
+    assert "MCP_SERVER_URL" in stage
+    assert 'ipaddress.ip_network("100.64.0.0/10")' in stage
+    assert "X-Clarity-Internal-Key" in stage
+    assert "MCP_SERVER_URL.rstrip('/')}/api/mcp\"" in stage
+    assert "Research MCP must remain disabled" in stage
+    assert "IONOS_PUBLIC_CUTOVER=not-yet-approved" in stage
 
 
 def test_upload_bind_scheduler_and_launch_capability_contracts() -> None:

@@ -10,6 +10,7 @@ import os
 import re
 import secrets
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from email import policy
 from email.message import Message
@@ -27,7 +28,9 @@ from app.models.communication_log import CommunicationLog
 from app.models.inbound_email import InboundEmail
 from app.models.matter_document import MatterDocument
 from app.models.plugin import Matter
+from app.models.task import Task
 from app.models.tenant import TenantSettings
+from app.services.email_task_tags import add_tagged_email_task, parse_email_task_tag
 from app.services.matter_file_store import MatterFileStore, StorageResult
 
 settings = get_settings()
@@ -37,6 +40,14 @@ matter_file_store = MatterFileStore()
 ALIAS_LOCAL_PART_RE = re.compile(r"^m-[a-z2-7]{26}$")
 MAX_HEADER_VALUE_CHARS = 2_000
 MAX_PREVIEW_CHARS = 4_000
+
+
+@dataclass(frozen=True)
+class FiledInboundEmail:
+    """Records created by one atomic inbound-email review decision."""
+
+    communication: CommunicationLog
+    task: Task | None = None
 
 
 class _HTMLTextExtractor(HTMLParser):
@@ -253,8 +264,8 @@ async def file_inbound_email(
     item: InboundEmail,
     matter: Matter,
     reviewed_by_user_id: uuid.UUID,
-) -> CommunicationLog:
-    """Move a reviewed message into matter storage and create its log entry."""
+) -> FiledInboundEmail:
+    """File a reviewed message and any explicit subject-tag task atomically."""
     tenant_id = item.tenant_id
     raw_message = read_quarantined_message(item)
     settings_result = await db.execute(
@@ -313,6 +324,22 @@ async def file_inbound_email(
         )
         db.add(communication)
         await db.flush()
+        suggestion = parse_email_task_tag(
+            item.subject,
+            received_at=item.occurred_at,
+        )
+        task = None
+        if suggestion is not None:
+            task = await add_tagged_email_task(
+                db,
+                suggestion=suggestion,
+                tenant_id=item.tenant_id,
+                matter_id=matter.id,
+                actor_user_id=reviewed_by_user_id,
+                external_ref=f"inbound-email:{item.id}",
+                original_subject=item.subject,
+                received_at=item.occurred_at,
+            )
         item.status = "accepted"
         item.reviewed_by_user_id = reviewed_by_user_id
         item.reviewed_at = datetime.now(timezone.utc)
@@ -340,4 +367,4 @@ async def file_inbound_email(
     except Exception:
         logger.exception("Could not remove accepted inbound email quarantine copy")
         await db.rollback()
-    return communication
+    return FiledInboundEmail(communication=communication, task=task)

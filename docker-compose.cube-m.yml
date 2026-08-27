@@ -1,0 +1,96 @@
+# IONOS Memory Cube M production overlay.
+#
+# Pair this file with docker-compose.hypervisor.yml. The base file retains the
+# private databases, authenticated Redis, single scheduler, loopback-only
+# HTTPS origin, and data-guard topology. This overlay bounds the steady-state
+# stack for the 4-vCPU/16-GB first-customer host without weakening those
+# controls. Research corpus storage and embedding workers remain on Skynet.
+name: legalapp
+
+services:
+  postgres:
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+          cpus: "1.10"
+
+  redis:
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+          cpus: "0.15"
+
+  litellm-postgres:
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "0.30"
+
+  litellm-migrator:
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+          cpus: "0.35"
+
+  litellm-schema-migrator:
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+          cpus: "0.35"
+
+  litellm:
+    deploy:
+      resources:
+        limits:
+          memory: 1280M
+          cpus: "0.50"
+
+  migrator:
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+          cpus: "0.35"
+
+  backend:
+    # Keep this fixed for the reviewed 16-GB profile. A carried-over Skynet
+    # BACKEND_WORKERS value must not silently defeat the Cube M memory model.
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+    deploy:
+      resources:
+        limits:
+          memory: 2560M
+          cpus: "0.80"
+
+  scheduler:
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+          cpus: "0.35"
+
+  frontend:
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+          cpus: "0.15"
+
+  office-addin:
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+          cpus: "0.10"
+
+  nginx:
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.10"

@@ -19,6 +19,8 @@ Start at [Integrations](/admin?tab=integrations). Review provider status, permis
 
 Use an authorized administrator account during consent. Confirm the organization and scope shown by the provider. After connection, test with a non-sensitive record and verify both read and write behavior expected by your workflow.
 
+For Microsoft 365, **Auto** storage binds matter files to the connected identity's OneDrive unless an administrator explicitly selects SharePoint or Google Drive. Use an organization-owned service identity whose ownership will survive staff turnover, or select an approved SharePoint site/drive. The current delegated file permission follows everything that identity can access; connection alone is not proof that the intended matter folders are writable.
+
 For collaboration configuration, use [Teams](/admin?tab=teams). Treat team/channel mappings and notification destinations as data-routing decisions.
 
 ## Zoom Phone

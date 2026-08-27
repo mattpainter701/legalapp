@@ -409,6 +409,20 @@ async def test_alias_lifecycle_and_queue_review_routes(monkeypatch):
     )
     assert listed.total == 1
     assert listed.items[0].id == item.id
+    assert listed.items[0].task_suggestion is None
+
+    item.subject = "[TASK] Meet with Nigel in two weeks"
+    item.occurred_at = datetime(2026, 8, 26, tzinfo=timezone.utc)
+    tagged_list = await routes.list_matter_inbound_email(
+        str(matter.id),
+        request,
+        "pending",
+        FakeDB(FakeResult(1), FakeResult(rows=[item])),
+    )
+    assert tagged_list.items[0].task_suggestion.title == "Meet with Nigel"
+    assert tagged_list.items[0].task_suggestion.due_date.isoformat() == "2026-09-09"
+    assert tagged_list.items[0].task_suggestion.calendar_sync is True
+    item.subject = "Review this"
 
     with pytest.raises(HTTPException) as exc:
         await routes.list_matter_inbound_email(
@@ -421,7 +435,12 @@ async def test_alias_lifecycle_and_queue_review_routes(monkeypatch):
     monkeypatch.setattr(
         routes,
         "file_inbound_email",
-        AsyncMock(return_value=SimpleNamespace(id=communication_id)),
+        AsyncMock(
+            return_value=SimpleNamespace(
+                communication=SimpleNamespace(id=communication_id),
+                task=None,
+            )
+        ),
     )
     accepted = await routes.accept_matter_inbound_email(
         matter.id, item.id, request, FakeDB()
@@ -436,6 +455,42 @@ async def test_alias_lifecycle_and_queue_review_routes(monkeypatch):
     assert rejected.status == "rejected"
     assert item.raw_storage_path is None
     assert rejected_db.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_tagged_accept_returns_durable_task_even_if_notification_fails(
+    monkeypatch,
+):
+    user, matter = user_and_matter()
+    alias = alias_row(user, matter)
+    item = inbound_row(user, matter, alias)
+    task = SimpleNamespace(id=uuid.uuid4(), due_date=datetime(2026, 9, 9).date())
+    communication = SimpleNamespace(id=uuid.uuid4())
+
+    monkeypatch.setattr(routes, "get_current_user", AsyncMock(return_value=user))
+    monkeypatch.setattr(routes, "set_tenant_context", AsyncMock())
+    monkeypatch.setattr(routes, "_get_matter_or_404", AsyncMock(return_value=matter))
+    monkeypatch.setattr(
+        routes, "_pending_inbound_or_404", AsyncMock(return_value=item)
+    )
+    monkeypatch.setattr(
+        routes,
+        "file_inbound_email",
+        AsyncMock(
+            return_value=SimpleNamespace(communication=communication, task=task)
+        ),
+    )
+    notify = AsyncMock(side_effect=RuntimeError("calendar provider unavailable"))
+    monkeypatch.setattr(routes, "notify_task_created", notify)
+
+    response = await routes.accept_matter_inbound_email(
+        matter.id, item.id, object(), FakeDB()
+    )
+
+    assert response.communication_log_id == communication.id
+    assert response.task_id == task.id
+    assert response.task_due_date == task.due_date
+    notify.assert_awaited_once()
 
 
 @pytest.mark.asyncio
