@@ -1914,9 +1914,9 @@ export const getCalendarEvents = (start, end) => {
   return api.get('/calendar/events', { params }).then(r => r.data)
 }
 
-export const syncCalendarDeadlines = (provider = 'microsoft') =>
+export const syncCalendarDeadlines = (provider = 'microsoft', syncDeadlines = true) =>
   api
-    .post('/calendar/sync', { provider, sync_deadlines: true })
+    .post('/calendar/sync', { provider, sync_deadlines: syncDeadlines })
     .then(r => r.data)
 
 export const getCalendarProviders = () =>

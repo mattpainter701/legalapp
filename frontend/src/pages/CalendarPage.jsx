@@ -9,6 +9,7 @@ import {
   getZoomStatus,
   connectZoomIntegration,
   createScheduledEvent,
+  updateScheduledEvent,
   getMattersV2,
 } from '../api'
 import {
@@ -22,6 +23,9 @@ import {
   X,
   Video,
   ExternalLink,
+  List,
+  Clock3,
+  GripVertical,
 } from 'lucide-react'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -46,6 +50,89 @@ function formatDisplayDate(isoStr) {
 
 function monthLabel(d) {
   return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+}
+
+function addDays(d, amount) {
+  const next = new Date(d)
+  next.setDate(next.getDate() + amount)
+  return next
+}
+
+function startOfWeek(d) {
+  const next = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  next.setDate(next.getDate() - next.getDay())
+  return next
+}
+
+function sameDay(a, b) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
+}
+
+function dateLabel(d) {
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+function rangeLabel(view, pivot) {
+  if (view === 'day') return pivot.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
+  if (view === 'week') {
+    const start = startOfWeek(pivot)
+    const end = addDays(start, 6)
+    return start.getMonth() === end.getMonth()
+      ? `${start.toLocaleDateString('en-US', { month: 'long' })} ${start.getDate()}–${end.getDate()}, ${end.getFullYear()}`
+      : `${dateLabel(start)} – ${dateLabel(end)}`
+  }
+  return monthLabel(pivot)
+}
+
+function viewRange(view, pivot) {
+  if (view === 'day') return [pivot, pivot]
+  if (view === 'week') {
+    const start = startOfWeek(pivot)
+    return [start, addDays(start, 6)]
+  }
+  if (view === 'month') {
+    const start = startOfWeek(startOfMonth(pivot))
+    return [start, addDays(start, 41)]
+  }
+  return [startOfMonth(pivot), endOfMonth(new Date(pivot.getFullYear(), pivot.getMonth() + 1, 1))]
+}
+
+function eventHour(event) {
+  if (!event.start || !String(event.start).includes('T')) return null
+  const parsed = new Date(event.start)
+  return Number.isNaN(parsed.getTime()) ? null : parsed.getHours() + parsed.getMinutes() / 60
+}
+
+function eventDuration(event) {
+  const start = new Date(event.start)
+  const end = new Date(event.end)
+  const duration = end.getTime() - start.getTime()
+  return Number.isFinite(duration) && duration > 0 ? duration : 30 * 60 * 1000
+}
+
+function movedEventTimes(event, day, hour = null) {
+  const original = new Date(event.start)
+  const start = new Date(day.getFullYear(), day.getMonth(), day.getDate(), hour ?? original.getHours(), hour == null ? original.getMinutes() : 0)
+  return { start, end: new Date(start.getTime() + eventDuration(event)) }
+}
+
+function mapProviderEvents(provider, rows) {
+  return (rows || []).map((event) => {
+    const date = providerEventDate(event)
+    if (!date) return null
+    return {
+      id: `${provider}-${event.id}`,
+      providerEventId: event.id,
+      title: event.subject || '(No title)',
+      date,
+      start: event.start,
+      end: event.end,
+      event_type: 'external_calendar',
+      url: null,
+      provider,
+      location: event.location || '',
+    }
+  }).filter(Boolean)
 }
 
 function toTimeInput(d) {
@@ -129,7 +216,7 @@ function mergeCalendarEvents(internalEvents, providerEvents) {
   })
 }
 
-function EventChip({ event, onClick }) {
+function EventChip({ event, onClick, onDragStart }) {
   const styles = TYPE_STYLES[event.event_type] || TYPE_STYLES.task_due
   const Icon = styles.icon
   const timeLabel = formatEventTime(event.start)
@@ -142,7 +229,9 @@ function EventChip({ event, onClick }) {
   return (
     <button
       onClick={onClick}
-      className={`w-full text-left flex items-start gap-3 px-3 py-2.5 rounded border ${styles.bg} hover:brightness-95 transition-all group`}
+      draggable={Boolean(onDragStart)}
+      onDragStart={onDragStart}
+      className={`w-full text-left flex items-start gap-3 px-3 py-2.5 rounded border ${styles.bg} hover:brightness-95 transition-all group ${onDragStart ? 'cursor-grab active:cursor-grabbing' : ''}`}
     >
       <div className={`mt-1 w-2 h-2 rounded-full shrink-0 ${styles.dot}`} />
       <div className="flex-1 min-w-0">
@@ -164,8 +253,92 @@ function EventChip({ event, onClick }) {
         )}
       </div>
       <Icon className="w-3.5 h-3.5 text-brand-muted shrink-0 mt-0.5 opacity-60 group-hover:opacity-100 transition-opacity" />
+      {onDragStart && <GripVertical className="w-3.5 h-3.5 text-brand-muted/50 shrink-0 mt-0.5" />}
     </button>
   )
+}
+
+function MonthView({ pivotDate, grouped, onEventClick, onSelectDay, onMoveEvent }) {
+  const gridStart = startOfWeek(startOfMonth(pivotDate))
+  const days = Array.from({ length: 42 }, (_, index) => addDays(gridStart, index))
+  return (
+    <div className="h-full min-w-[720px] grid grid-cols-7 grid-rows-[36px_repeat(6,minmax(96px,1fr))] bg-brand-line gap-px border border-brand-line rounded-xl overflow-hidden shadow-sm">
+      {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
+        <div key={day} className="bg-brand-surface-2 flex items-center justify-center text-[11px] font-semibold uppercase tracking-wider text-brand-muted">{day}</div>
+      ))}
+      {days.map((day) => {
+        const iso = toIso(day)
+        const dayEvents = grouped[iso] || []
+        const muted = day.getMonth() !== pivotDate.getMonth()
+        const today = sameDay(day, new Date())
+        return (
+          <div key={iso} onDragOver={(event) => event.preventDefault()} onDrop={(event) => onMoveEvent(event, day)} className={`bg-brand-surface min-h-0 p-1.5 overflow-hidden transition-colors ${today ? 'ring-2 ring-inset ring-brand-accent/50 bg-brand-accent/5' : ''} ${muted ? 'bg-brand-bg/70' : ''}`}>
+            <button onClick={() => onSelectDay(day)} className={`ml-auto mb-1 flex h-7 w-7 items-center justify-center rounded-full text-xs font-medium ${today ? 'bg-brand-accent text-white shadow-sm' : muted ? 'text-brand-muted/60 hover:bg-brand-line' : 'text-brand-ink hover:bg-brand-line'}`}>{day.getDate()}</button>
+            <div className="space-y-1">
+              {dayEvents.slice(0, 3).map((event) => {
+                const styles = TYPE_STYLES[event.event_type] || TYPE_STYLES.task_due
+                const movable = event.event_type === 'scheduled_event'
+                return <button key={event.id} draggable={movable} onDragStart={movable ? (drag) => drag.dataTransfer.setData('text/calendar-event-id', event.id) : undefined} onClick={() => onEventClick(event)} className={`w-full truncate rounded-md border-l-[3px] px-1.5 py-1 text-left text-[11px] font-medium text-brand-ink shadow-sm ${styles.bg} ${movable ? 'cursor-grab active:cursor-grabbing' : ''}`}>{formatEventTime(event.start) && <span className="mr-1 font-normal text-brand-muted">{formatEventTime(event.start)}</span>}{event.title}</button>
+              })}
+              {dayEvents.length > 3 && <button onClick={() => onSelectDay(day)} className="px-1 text-[10px] font-semibold text-brand-accent hover:underline">+{dayEvents.length - 3} more</button>}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function CurrentTimeLine() {
+  const [now, setNow] = useState(new Date())
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 60 * 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+  const top = (now.getHours() + now.getMinutes() / 60) * 64
+  return <div className="pointer-events-none absolute inset-x-0 z-20 flex items-center" style={{ top }}><span className="-ml-1 h-2.5 w-2.5 rounded-full bg-red-500 shadow-sm" /><span className="h-0.5 flex-1 bg-red-500" /></div>
+}
+
+function TimeGridView({ view, pivotDate, grouped, onEventClick, onMoveEvent }) {
+  const first = view === 'day' ? pivotDate : startOfWeek(pivotDate)
+  const days = Array.from({ length: view === 'day' ? 1 : 7 }, (_, index) => addDays(first, index))
+  const hours = Array.from({ length: 24 }, (_, index) => index)
+  return (
+    <div className="h-full overflow-auto rounded-xl border border-brand-line bg-brand-surface shadow-sm">
+      <div className="sticky top-0 z-20 grid bg-brand-surface-2 border-b border-brand-line" style={{ gridTemplateColumns: `64px repeat(${days.length}, minmax(${view === 'day' ? 520 : 120}px, 1fr))` }}>
+        <div className="border-r border-brand-line" />
+        {days.map((day) => {
+          const today = sameDay(day, new Date())
+          return <div key={toIso(day)} className="h-16 border-r border-brand-line flex flex-col items-center justify-center"><span className="text-[10px] uppercase tracking-wider text-brand-muted">{day.toLocaleDateString('en-US', { weekday: 'short' })}</span><span className={`mt-1 flex h-7 w-7 items-center justify-center rounded-full text-sm font-semibold ${today ? 'bg-brand-accent text-white' : 'text-brand-ink'}`}>{day.getDate()}</span></div>
+        })}
+      </div>
+      <div className="grid relative" style={{ gridTemplateColumns: `64px repeat(${days.length}, minmax(${view === 'day' ? 520 : 120}px, 1fr))` }}>
+        <div>{hours.map((hour) => <div key={hour} className="h-16 border-r border-b border-brand-line pr-2 pt-1 text-right text-[10px] text-brand-muted">{hour === 0 ? '' : new Date(2000, 0, 1, hour).toLocaleTimeString('en-US', { hour: 'numeric' })}</div>)}</div>
+        {days.map((day) => {
+          const dayEvents = grouped[toIso(day)] || []
+          const allDay = dayEvents.filter((event) => eventHour(event) == null)
+          return <div key={toIso(day)} className={`relative border-r border-brand-line ${sameDay(day, new Date()) ? 'bg-brand-accent/[0.035]' : ''}`}>
+            {sameDay(day, new Date()) && <CurrentTimeLine />}
+            {hours.map((hour) => <div key={hour} onDragOver={(event) => event.preventDefault()} onDrop={(event) => onMoveEvent(event, day, hour)} className="h-16 border-b border-brand-line/80 transition-colors hover:bg-brand-accent/5" />)}
+            {allDay.length > 0 && <div className="absolute top-1 inset-x-1 z-10 space-y-1">{allDay.slice(0, 2).map((event) => <EventChip key={event.id} event={event} onClick={() => onEventClick(event)} />)}</div>}
+            {dayEvents.filter((event) => eventHour(event) != null).map((event) => {
+              const styles = TYPE_STYLES[event.event_type] || TYPE_STYLES.task_due
+              const movable = event.event_type === 'scheduled_event'
+              return <button key={event.id} draggable={movable} onDragStart={movable ? (drag) => drag.dataTransfer.setData('text/calendar-event-id', event.id) : undefined} onClick={() => onEventClick(event)} className={`absolute z-10 left-1 right-1 min-h-12 rounded-lg border-l-4 px-2 py-1.5 text-left shadow-sm overflow-hidden ${styles.bg} ${movable ? 'cursor-grab active:cursor-grabbing' : ''}`} style={{ top: `${eventHour(event) * 64 + 2}px` }}><span className="block truncate text-xs font-semibold text-brand-ink">{event.title}</span><span className="text-[10px] text-brand-muted">{formatEventTime(event.start)}</span></button>
+            })}
+          </div>
+        })}
+      </div>
+    </div>
+  )
+}
+
+function MobileAgenda({ events, onEventClick }) {
+  const sorted = [...events].sort((a, b) => `${a.date}${a.start || ''}`.localeCompare(`${b.date}${b.start || ''}`))
+  return <div className="md:hidden space-y-3">
+    {sorted.map((event) => <div key={event.id} className={`rounded-xl ${event.date === toIso(new Date()) ? 'ring-2 ring-brand-accent/40' : ''}`}><div className="mb-1 px-1 text-[10px] font-bold uppercase tracking-wider text-brand-muted">{event.date === toIso(new Date()) ? 'Today' : formatDisplayDate(event.date)}</div><EventChip event={event} onClick={() => onEventClick(event)} /></div>)}
+    {sorted.length === 0 && <div className="py-16 text-center text-sm text-brand-muted">No events in this period.</div>}
+  </div>
 }
 
 // ── main page ─────────────────────────────────────────────────────────────────
@@ -173,6 +346,7 @@ function EventChip({ event, onClick }) {
 export default function CalendarPage() {
   const navigate = useNavigate()
   const [pivotDate, setPivotDate] = useState(new Date())
+  const [view, setView] = useState(() => window.localStorage.getItem('calendar-view') || 'month')
   const [events, setEvents] = useState([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -215,13 +389,11 @@ export default function CalendarPage() {
       .catch(() => {})
   }, [])
 
-  const fetchEvents = useCallback(async (pivot) => {
+  const fetchEvents = useCallback(async (pivot, activeView = view) => {
     setLoading(true)
     setError(null)
     try {
-      const som = startOfMonth(pivot)
-      // Show current month + next month for context
-      const eom = endOfMonth(new Date(pivot.getFullYear(), pivot.getMonth() + 1, 1))
+      const [som, eom] = viewRange(activeView, pivot)
       const data = await getCalendarEvents(toIso(som), toIso(eom))
       const visibleProviderEvents = providerEvents.filter((event) => event.date >= toIso(som) && event.date <= toIso(eom))
       const mergedEvents = mergeCalendarEvents(data.events || [], visibleProviderEvents)
@@ -233,14 +405,38 @@ export default function CalendarPage() {
     } finally {
       setLoading(false)
     }
-  }, [providerEvents])
+  }, [providerEvents, view])
 
   useEffect(() => {
-    fetchEvents(pivotDate)
-  }, [pivotDate, fetchEvents])
+    fetchEvents(pivotDate, view)
+  }, [pivotDate, view, fetchEvents])
 
-  const prevMonth = () => setPivotDate(d => new Date(d.getFullYear(), d.getMonth() - 1, 1))
-  const nextMonth = () => setPivotDate(d => new Date(d.getFullYear(), d.getMonth() + 1, 1))
+  useEffect(() => {
+    if (!calendarProvider) return undefined
+    let active = true
+    const pullProviderChanges = async () => {
+      try {
+        const result = await syncCalendarDeadlines(calendarProvider, false)
+        if (active) setProviderEvents(mapProviderEvents(calendarProvider, result.events))
+      } catch {
+        // Connection health messaging is handled by explicit sync and provider status.
+      }
+    }
+    pullProviderChanges()
+    const timer = window.setInterval(pullProviderChanges, 5 * 60 * 1000)
+    return () => { active = false; window.clearInterval(timer) }
+  }, [calendarProvider])
+
+  const move = (direction) => setPivotDate((date) => {
+    if (view === 'day') return addDays(date, direction)
+    if (view === 'week') return addDays(date, direction * 7)
+    return new Date(date.getFullYear(), date.getMonth() + direction, 1)
+  })
+
+  const changeView = (nextView) => {
+    setView(nextView)
+    window.localStorage.setItem('calendar-view', nextView)
+  }
 
   // Group events by ISO date string
   const grouped = events.reduce((acc, ev) => {
@@ -264,26 +460,30 @@ export default function CalendarPage() {
     if (event.url) navigate(event.url)
   }
 
+  const handleMoveEvent = async (dragEvent, day, hour = null) => {
+    dragEvent.preventDefault()
+    const eventId = dragEvent.dataTransfer.getData('text/calendar-event-id')
+    const event = events.find((candidate) => candidate.id === eventId)
+    if (!event || event.event_type !== 'scheduled_event') return
+    const { start, end } = movedEventTimes(event, day, hour)
+    const previousEvents = events
+    setEvents((current) => current.map((candidate) => candidate.id === eventId ? { ...candidate, date: toIso(start), start: start.toISOString(), end: end.toISOString() } : candidate))
+    try {
+      await updateScheduledEvent(eventId.replace('scheduled-', ''), { start_at: start.toISOString(), end_at: end.toISOString() })
+      setSyncMessage({ type: 'success', text: `Moved “${event.title}” and updated the connected calendar.` })
+      await fetchEvents(pivotDate, view)
+    } catch (err) {
+      setEvents(previousEvents)
+      setSyncMessage({ type: 'error', text: err?.response?.data?.detail || 'The event could not be moved.' })
+    }
+  }
+
   const handleSync = async (provider) => {
     setSyncing(true)
     setSyncMessage(null)
     try {
       const result = await syncCalendarDeadlines(provider)
-      const mappedProviderEvents = (result.events || [])
-        .map((event) => {
-          const date = providerEventDate(event)
-          if (!date) return null
-          return {
-            id: `${provider}-${event.id}`,
-            title: event.subject || '(No title)',
-            date,
-            event_type: 'external_calendar',
-            url: null,
-            provider,
-            location: event.location || '',
-          }
-        })
-        .filter(Boolean)
+      const mappedProviderEvents = mapProviderEvents(provider, result.events)
       setProviderEvents(mappedProviderEvents)
       const mergedEvents = mergeCalendarEvents(
         events.filter((event) => event.event_type !== 'external_calendar'),
@@ -349,11 +549,11 @@ export default function CalendarPage() {
   return (
     <div className="flex flex-col h-full bg-brand-bg">
       {/* Header */}
-      <div className="h-16 flex items-center px-6 border-b border-brand-line bg-brand-surface-2 shrink-0">
+      <div className="min-h-16 flex flex-wrap items-center gap-y-2 px-4 md:px-6 py-3 border-b border-brand-line bg-brand-surface-2 shrink-0">
         <CalendarDays className="w-5 h-5 mr-2 text-brand-accent" strokeWidth={1.5} />
         <h1 className="font-serif font-semibold text-lg text-brand-ink">Deadline Calendar</h1>
         <div className="ml-auto flex items-center gap-3">
-          <span className="text-xs text-brand-muted font-mono">
+          <span className="hidden lg:inline text-xs text-brand-muted font-mono">
             {loading ? 'Loading…' : `${total} event${total !== 1 ? 's' : ''}`}
           </span>
           <div className="flex items-center gap-2">
@@ -363,7 +563,7 @@ export default function CalendarPage() {
               title="Create a scheduled event or online meeting"
             >
               <Plus className="w-3 h-3" />
-              New Event
+              <span className="hidden sm:inline">New Event</span>
             </button>
             {calendarProvider ? (
               <button
@@ -373,7 +573,7 @@ export default function CalendarPage() {
                 title={`Sync matter deadlines to ${calendarProvider === 'google' ? 'Google' : 'Microsoft'} Calendar`}
               >
                 <RefreshCw className={`w-3 h-3 ${syncing ? 'animate-spin' : ''}`} />
-                {syncing ? 'Syncing…' : 'Sync Calendar'}
+                <span className="hidden sm:inline">{syncing ? 'Syncing…' : 'Sync Calendar'}</span>
               </button>
             ) : (
               <button
@@ -382,7 +582,7 @@ export default function CalendarPage() {
                 title="Connect your calendar to sync events"
               >
                 <RefreshCw className="w-3 h-3" />
-                Connect Calendar
+                <span className="hidden sm:inline">Connect Calendar</span>
               </button>
             )}
           </div>
@@ -409,44 +609,41 @@ export default function CalendarPage() {
         </div>
       )}
 
-      {/* Month navigation */}
-      <div className="flex items-center gap-4 px-6 py-4 border-b border-brand-line bg-brand-surface-2 shrink-0">
+      {/* Calendar navigation */}
+      <div className="flex flex-wrap items-center gap-2 px-3 md:px-6 py-3 border-b border-brand-line bg-brand-surface-2 shrink-0">
+        <button onClick={() => setPivotDate(new Date())} className="h-8 px-3 rounded-lg border border-brand-line bg-brand-surface text-xs font-semibold text-brand-ink hover:bg-brand-line/40">Today</button>
         <button
-          onClick={prevMonth}
+          onClick={() => move(-1)}
           className="p-1.5 rounded hover:bg-brand-line transition-colors text-brand-muted hover:text-brand-ink"
-          aria-label="Previous month"
+          aria-label={`Previous ${view}`}
         >
           <ChevronLeft className="w-4 h-4" />
         </button>
-        <span className="font-serif font-semibold text-base text-brand-ink w-48 text-center">
-          {monthLabel(pivotDate)}
+        <span className="order-first w-full md:order-none md:w-auto font-serif font-semibold text-base text-brand-ink md:min-w-56 text-center">
+          {rangeLabel(view, pivotDate)}
         </span>
         <button
-          onClick={nextMonth}
+          onClick={() => move(1)}
           className="p-1.5 rounded hover:bg-brand-line transition-colors text-brand-muted hover:text-brand-ink"
-          aria-label="Next month"
+          aria-label={`Next ${view}`}
         >
           <ChevronRight className="w-4 h-4" />
         </button>
 
-        {/* Legend */}
-        <div className="ml-auto flex items-center gap-4">
-          {Object.entries(TYPE_STYLES).map(([type, s]) => (
-            <span key={type} className="flex items-center gap-1.5 text-xs text-brand-muted">
-              <span className={`w-2 h-2 rounded-full ${s.dot}`} />
-              {TYPE_LABELS[type]}
-            </span>
+        <div className="ml-auto max-w-full overflow-x-auto inline-flex rounded-lg border border-brand-line bg-brand-bg p-0.5" aria-label="Calendar view">
+          {[['day', 'Day', Clock3], ['week', 'Week', CalendarDays], ['month', 'Month', CalendarDays], ['list', 'List', List]].map(([key, label, Icon]) => (
+            <button key={key} onClick={() => changeView(key)} aria-pressed={view === key} className={`flex h-8 items-center gap-1.5 rounded-md px-3 text-xs font-semibold transition-colors ${view === key ? 'bg-brand-surface text-brand-ink shadow-sm' : 'text-brand-muted hover:text-brand-ink'}`}><Icon className="h-3.5 w-3.5" />{label}</button>
           ))}
         </div>
       </div>
 
       {/* Agenda body */}
-      <div className="flex-1 overflow-y-auto px-6 py-6">
+      <div className="flex-1 overflow-y-auto px-3 py-4 md:px-6 md:py-6">
         {error && (
           <div className="text-center py-16 text-brand-rose text-sm">{error}</div>
         )}
 
-        {!error && !loading && sortedDates.length === 0 && (
+        {!error && !loading && sortedDates.length === 0 && view === 'list' && (
           <div className="text-center py-16">
             <CalendarDays className="w-10 h-10 text-brand-muted mx-auto mb-3" strokeWidth={1} />
             <p className="text-brand-muted text-sm">No deadlines in this period.</p>
@@ -459,7 +656,17 @@ export default function CalendarPage() {
           </div>
         )}
 
-        {!error && !loading && sortedDates.length > 0 && (
+        {!error && !loading && view !== 'list' && <MobileAgenda events={events} onEventClick={handleEventClick} />}
+
+        {!error && !loading && view === 'month' && (
+          <div className="hidden md:block h-full"><MonthView pivotDate={pivotDate} grouped={grouped} onEventClick={handleEventClick} onMoveEvent={handleMoveEvent} onSelectDay={(day) => { setPivotDate(day); changeView('day') }} /></div>
+        )}
+
+        {!error && !loading && (view === 'day' || view === 'week') && (
+          <div className="hidden md:block h-full"><TimeGridView view={view} pivotDate={pivotDate} grouped={grouped} onEventClick={handleEventClick} onMoveEvent={handleMoveEvent} /></div>
+        )}
+
+        {!error && !loading && sortedDates.length > 0 && view === 'list' && (
           <div className="max-w-2xl mx-auto space-y-6">
             {sortedDates.map((isoDate) => {
               const dayEvents = grouped[isoDate]

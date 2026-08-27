@@ -134,6 +134,20 @@ def _transport_security() -> TransportSecuritySettings:
     )
 
 
+def _is_canonical_research_host(scope: Scope) -> bool:
+    """Return whether a public request used the configured Research MCP host.
+
+    The product's resource metadata and OAuth issuer are both anchored to the
+    canonical Research MCP origin. Accepting the same transport on the apex
+    would make a client authenticate against one origin and call another.
+    """
+
+    expected_host = urlsplit(settings.research_mcp_endpoint).netloc.casefold()
+    raw_host = dict(scope.get("headers", [])).get(b"host", b"")
+    request_host = raw_host.decode("latin-1").casefold()
+    return bool(expected_host and request_host == expected_host)
+
+
 protocol_server: Server[None, Request] = Server(
     "clarity-legal",
     version=settings.APP_VERSION or "1.0.0",
@@ -536,6 +550,15 @@ class MCPProtocolEndpoint:
         if not settings.MCP_PRODUCT_ENABLED:
             await JSONResponse(
                 {"detail": "MCP product endpoint is disabled"}, status_code=404
+            )(scope, receive, send)
+            return
+
+        if not _is_canonical_research_host(scope):
+            await JSONResponse(
+                {
+                    "detail": "MCP product endpoint is available only from the canonical Research MCP host"
+                },
+                status_code=404,
             )(scope, receive, send)
             return
 
