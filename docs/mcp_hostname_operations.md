@@ -25,6 +25,16 @@ generated configuration use the full transport URLs:
 - Workspace: `https://mcp.getlawhand.com/api/mcp/workspace`
 - Research: `https://research.getlawhand.com/api/mcp`
 
+### Workspace scope monitoring
+
+The production acceptance check validates the complete published Workspace
+scope set: `communications:propose`, `contacts:read`, `documents:propose`,
+`documents:read`, `matters:read`, `offline_access`, `tasks:propose`,
+`tasks:read`, and `templates:read`. When a Workspace MCP feature adds or
+removes a scope, update the protected-resource metadata, this checklist, and
+the production check in the same release. A scope drift is an operator signal,
+not an OAuth failure by itself.
+
 The bare origins remain supported shorthand aliases. Nginx internally routes
 them to the corresponding transport without a client-visible redirect,
 preserving POST bodies and avoiding client-dependent redirect behavior. Nginx
