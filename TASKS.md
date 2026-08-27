@@ -1836,15 +1836,15 @@ Generalize the mediation portal (`mediation_portal.py`, `MediationInvite`, `Port
 - [ ] Firm-client login path (role="client") in addition to magic-link (spike is magic-link only)
 - [ ] Integration tests: tenant + matter isolation, expired/revoked invite, cross-matter access
 
-#### 1302. Native E-Signature (P0, MEDIUM) — IN PROGRESS (spike landed)
+#### 1302. Native E-Signature (P0, MEDIUM) — INTERNAL PROVIDER DELIVERED
 - [x] Migration `045_esignature`: `signature_requests` + `signature_signers` (RLS)
 - [x] `services/esign/`: `ESignProvider` interface + `get_provider` factory; `internal` adapter; `dropbox_sign` stub; reportlab certificate generator (HTML fallback)
 - [x] `routers/esignature.py`: firm create/list/get/send/void from a `MatterDocument`; client-portal `GET /signatures` + `POST /signatures/{id}/sign`
 - [x] On complete → executed-copy/audit PDF stored as portal-visible `MatterDocument` + matter timeline event; request status partially_signed→completed
 - [x] Frontend: firm "Request signature" panel in MatterDetail Client Portal tab; Signatures tab + sign action in client portal
 - [ ] Real provider wiring (Dropbox Sign/DocuSign) + webhook reconciliation (stub raises NotImplementedError)
-- [ ] Portal signer-identity binding (spike signs the next pending signer; bind to the portal contact/email)
-- [ ] Decline flow + per-signer email dispatch on send
+- [x] Portal signer-identity binding to the portal contact/email
+- [x] Decline flow + per-signer email dispatch on send, resend, sequential handoff, and scheduled reminders
 
 #### 1303. Trust Accounting — Pooled Ledger & Reconciliation Persistence (Backend) (P0, MEDIUM) — DELIVERED
 

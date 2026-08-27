@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### Added
+- **E-sign delivery completion:** internal signature requests now email the
+  actionable signer, expose delivery and first-view status, support manual
+  resend, notify the next signer in sequential workflows, and execute configured
+  expiration-relative reminders from the tenant-scoped scheduler.
 - **File share agents now have operator-grade local diagnostics:** Windows
   services write bounded rotating logs under the protected ProgramData agent
   directory, Linux continues to use journald, and the File Shares console
