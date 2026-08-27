@@ -14,6 +14,8 @@ def test_desktop_cuda_supervisor_defaults_to_full_single_worker_coverage():
     assert "main-latest" not in supervisor
     assert r'$GitExe = "$env:ProgramFiles\Git\cmd\git.exe"' in supervisor
     assert "branch --show-current | Out-String" in supervisor
+    assert "[switch]$AllowShardedCoverage" in supervisor
+    assert "$TotalWorkers -ne 1 -and -not $AllowShardedCoverage" in supervisor
     assert "printenv POSTGRES_PASSWORD" in supervisor
     assert "--db-url" not in supervisor
     assert 'default=0' in worker

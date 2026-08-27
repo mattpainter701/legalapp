@@ -101,11 +101,13 @@ def test_analysis_token_rejects_tampering():
         tenant_id=tenant_id,
         user_id=user_id,
     )
-    replacement = "A" if token[-1] != "A" else "B"
+    token_body, signature = token.rsplit(".", 1)
+    replacement = "A" if signature[0] != "A" else "B"
+    tampered_token = f"{token_body}.{replacement}{signature[1:]}"
 
     with pytest.raises(HTTPException) as exc_info:
         document_templates._analysis_from_token(
-            token[:-1] + replacement,
+            tampered_token,
             file_bytes=b"source",
             filename="filled-form.pdf",
             tenant_id=tenant_id,

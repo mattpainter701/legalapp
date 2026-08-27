@@ -7,7 +7,8 @@ param(
     [int]$BatchSize = 128,
     [int]$RestartDelaySeconds = 60,
     [string]$PythonExe = "$env:USERPROFILE\.lawhand-embed-venv\Scripts\python.exe",
-    [string]$GitExe = "$env:ProgramFiles\Git\cmd\git.exe"
+    [string]$GitExe = "$env:ProgramFiles\Git\cmd\git.exe",
+    [switch]$AllowShardedCoverage
 )
 
 $ErrorActionPreference = "Stop"
@@ -29,6 +30,12 @@ $key = if (Test-Path -LiteralPath $preferredKey) {
 
 if ($WorkerId -lt 0 -or $TotalWorkers -le 0 -or $WorkerId -ge $TotalWorkers) {
     throw "WorkerId must be within the configured TotalWorkers range."
+}
+if ($TotalWorkers -ne 1 -and -not $AllowShardedCoverage) {
+    throw (
+        "Sharded embedding coverage requires -AllowShardedCoverage and a " +
+        "separately verified worker for every shard."
+    )
 }
 if ($BatchSize -le 0) {
     throw "BatchSize must be positive."
