@@ -1682,6 +1682,23 @@ def test_cube_m_overlay_bounds_runtime_without_weakening_private_ingress() -> No
     )
     assert total_mib <= 10 * 1024
 
+    # LiteLLM's Prisma migration exceeded a 768 MiB cgroup during the initial
+    # production-data restore even though the 16 GiB host had ample free RAM.
+    # Preserve enough transient headroom without exceeding the Cube M startup
+    # envelope while the application migrator runs concurrently.
+    assert (
+        memory_mib(
+            services["litellm-migrator"]["deploy"]["resources"]["limits"]["memory"]
+        )
+        >= 1280
+    )
+    startup_oneshot_services = ("litellm-migrator", "migrator")
+    startup_total_mib = total_mib + sum(
+        memory_mib(services[name]["deploy"]["resources"]["limits"]["memory"])
+        for name in startup_oneshot_services
+    )
+    assert startup_total_mib <= 12 * 1024
+
 
 def test_ionos_stage_gate_is_private_exact_and_fail_closed() -> None:
     stage = (ROOT / "scripts" / "ionos_stage_check.sh").read_text(encoding="utf-8")
