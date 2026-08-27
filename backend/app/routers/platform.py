@@ -36,7 +36,7 @@ from datetime import datetime, timedelta, timezone
 from typing import AsyncIterator, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -46,6 +46,7 @@ from app.models.conversation import UsageRecord
 from app.models.error_log import ErrorLog
 from app.models.api_access_log import ApiAccessLog
 from app.models.document import Chunk, Document
+from app.models.demo_session import DemoSession
 from app.models.durable_job import DurableJob
 from app.models.integration_sync_run import IntegrationSyncRun
 from app.models.mcp_product import MCPProductKey, MCPUsageEvent
@@ -67,6 +68,10 @@ from app.services.module_visibility import KNOWN_MODULES, normalize_module_name
 from app.services.operator_audit import record_operator_audit
 from app.services.durable_jobs import enqueue_job
 from app.services.corpus_revision import advance_rag_corpus_revision
+from app.services.demo_purge import (
+    DemoPurgeRefused,
+    terminate_demo_tenant as terminate_demo_workspace,
+)
 from app.services.platform_auth import (
     PLATFORM_SCOPES,
     generate_platform_api_key,
@@ -396,6 +401,11 @@ class PlatformDocumentReindexRequest(BaseModel):
     limit: int = 100
 
 
+class DemoWorkspaceTerminateRequest(BaseModel):
+    session_id: uuid.UUID
+    reason: str | None = Field(default=None, max_length=300)
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 
@@ -553,6 +563,104 @@ async def list_tenants(
         "total": total,
         "page": page,
         "limit": limit,
+    }
+
+
+@router.get("/demo-workspaces")
+async def list_demo_workspaces(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Return disposable demo inventory and capacity without exposing fixtures."""
+    _require_platform_key(request)
+    now = datetime.now(timezone.utc)
+    tenants = list(
+        (
+            await db.execute(
+                select(Tenant)
+                .where(
+                    Tenant.billing_tier == "demo",
+                    Tenant.domain.endswith(".demo.invalid"),
+                )
+                .order_by(Tenant.created_at.desc())
+            )
+        ).scalars()
+    )
+    active_count = sum(
+        1
+        for tenant in tenants
+        if tenant.is_active
+        and tenant.expires_at is not None
+        and tenant.expires_at > now
+    )
+    workspaces = []
+    for tenant in tenants:
+        async with _platform_tenant_scope(db, tenant.id):
+            session = await db.scalar(
+                select(DemoSession).where(DemoSession.tenant_id == tenant.id)
+            )
+        if session is None:
+            continue
+        counts_toward_capacity = bool(
+            tenant.is_active
+            and tenant.expires_at is not None
+            and tenant.expires_at > now
+        )
+        display_status = session.status
+        if display_status == "active" and not counts_toward_capacity:
+            display_status = "expired"
+        workspaces.append(
+            {
+                "tenant_id": str(tenant.id),
+                "session_id": str(session.id),
+                "domain": tenant.domain,
+                "prospect_name": session.prospect_name,
+                "prospect_email": session.prospect_email,
+                "status": display_status,
+                "counts_toward_capacity": counts_toward_capacity,
+                "quota": session.quota,
+                "used": session.used,
+                "reserved": session.reserved,
+                "created_at": session.created_at,
+                "expires_at": session.expires_at,
+            }
+        )
+
+    return {
+        "capacity": {
+            "limit": settings.DEMO_MAX_ACTIVE,
+            "active": active_count,
+            "available": max(0, settings.DEMO_MAX_ACTIVE - active_count),
+        },
+        "workspaces": workspaces,
+    }
+
+
+@router.post("/demo-workspaces/{tenant_id}/terminate")
+async def terminate_platform_demo_workspace(
+    tenant_id: str,
+    body: DemoWorkspaceTerminateRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Permanently terminate one explicitly identified disposable demo."""
+    principal = require_platform_token(request, scopes={"platform:write"})
+    parsed_tenant_id = _parse_uuid(tenant_id, "tenant")
+    try:
+        deleted = await terminate_demo_workspace(
+            db,
+            parsed_tenant_id,
+            body.session_id,
+            actor_id=principal.actor_id,
+            reason=body.reason,
+        )
+    except DemoPurgeRefused as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "status": "terminated",
+        "tenant_id": str(parsed_tenant_id),
+        "session_id": str(body.session_id),
+        "deleted_rows": sum(deleted.values()),
     }
 
 
@@ -845,6 +953,17 @@ async def update_tenant(
     tenant = result.scalar_one_or_none()
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
+    if (
+        tenant.billing_tier == "demo"
+        and tenant.domain.endswith(".demo.invalid")
+        and (
+            _field_was_sent(body, "billing_tier") or _field_was_sent(body, "is_active")
+        )
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Use the demo workspace panel to terminate disposable demos",
+        )
 
     # All mutable tenant configuration lives behind ordinary tenant RLS. The
     # platform token authorizes selecting this one context; it never enables a
