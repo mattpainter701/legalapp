@@ -44,6 +44,11 @@ class SignerResponse(BaseModel):
     signed_at: datetime | None = None
     declined_at: datetime | None = None
     decline_reason: str | None = None
+    invitation_delivery_status: str | None = None
+    invitation_sent_at: datetime | None = None
+    reminder_delivery_status: str | None = None
+    last_reminder_at: datetime | None = None
+    viewed_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
