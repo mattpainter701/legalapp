@@ -15,6 +15,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("env_file", type=Path)
     parser.add_argument("--repo", required=True)
+    parser.add_argument(
+        "--environment",
+        help="Optional GitHub Actions environment scope (for example, production)",
+    )
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args()
     values = load_env(args.env_file)
@@ -25,8 +29,11 @@ def main() -> int:
     for key in selected:
         print(f"{key}: {'would upload' if not args.apply else 'uploading'}")
         if args.apply:
+            command = ["gh", "secret", "set", key, "--repo", args.repo]
+            if args.environment:
+                command.extend(["--env", args.environment])
             subprocess.run(
-                ["gh", "secret", "set", key, "--repo", args.repo],
+                command,
                 input=selected[key],
                 text=True,
                 check=True,
