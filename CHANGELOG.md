@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### Added
+- **E-sign delivery completion:** internal signature requests now email the
+  actionable signer, expose delivery and first-view status, support manual
+  resend, notify the next signer in sequential workflows, and execute configured
+  expiration-relative reminders from the tenant-scoped scheduler.
 - **Standalone conflict review now preserves clearance evidence:** the Conflict
   Search workspace accepts people/aliases, organizations, and email addresses,
   saves the visibility-aware result snapshot, warns without disclosing a

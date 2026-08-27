@@ -2,6 +2,27 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.27.3",
+      "version": "2026.08.27.3",
+      "title": "Signature requests are easier to deliver and follow through",
+      "published_at": "2026-08-27",
+      "summary": "Signature requests now provide clearer delivery tracking, safer resend controls, and automatic follow-through for sequential signing.",
+      "highlights": [
+        {
+          "title": "Send the actionable request",
+          "description": "Internal signature requests email the signer who can act next and retain delivery status for staff."
+        },
+        {
+          "title": "Track and resend safely",
+          "description": "Staff can see delivery and first-view status and manually resend when follow-up is needed."
+        },
+        {
+          "title": "Keep sequential signing moving",
+          "description": "Completing one signer notifies the next, while configured reminders run before expiration."
+        }
+      ]
+    },
+    {
       "id": "2026.08.27.2",
       "version": "2026.08.27.2",
       "title": "Conflict reviews and portal invoice PDFs are traceable",

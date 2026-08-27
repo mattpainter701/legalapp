@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.27.3 — Signature requests are easier to deliver and follow through
+
+Released August 27, 2026.
+
+Signature requests now provide clearer delivery tracking, safer resend controls, and automatic follow-through for sequential signing.
+
+- **Send the actionable request.** Internal signature requests email the signer who can act next and retain delivery status for staff.
+- **Track and resend safely.** Staff can see delivery and first-view status and manually resend when follow-up is needed.
+- **Keep sequential signing moving.** Completing one signer notifies the next, while configured reminders run before expiration.
+
 ## 2026.08.27.2 — Conflict reviews and portal invoice PDFs are traceable
 
 Released August 27, 2026.
