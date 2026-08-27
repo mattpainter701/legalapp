@@ -41,6 +41,7 @@ async def test_conflict_search_is_saved_reviewed_and_locked(
             matter_type="litigation",
         )
     )
+    await db_session.flush()
     db_session.add(
         MatterParty(
             id=uuid.uuid4(),
@@ -138,7 +139,11 @@ def test_saved_snapshot_renders_as_pdf_without_a_database():
         label="Smith intake",
         status="closed",
         decision="no_conflict_found",
-        query_snapshot={"names": ["Alice Smith"], "organization_names": [], "emails": []},
+        query_snapshot={
+            "names": ["Alice Smith"],
+            "organization_names": [],
+            "emails": [],
+        },
         result_snapshot=[
             {
                 "display_name": "Alice Smith",
