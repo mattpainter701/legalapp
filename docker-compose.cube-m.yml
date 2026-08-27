@@ -40,10 +40,13 @@ services:
           cpus: "0.35"
 
   litellm-schema-migrator:
+    # Prisma migrate diff has the same production-schema working set as the
+    # preceding deploy step and also peaked just under 800 MiB. This one-shot
+    # reconciler runs after litellm-migrator, so the allowances do not overlap.
     deploy:
       resources:
         limits:
-          memory: 768M
+          memory: 1280M
           cpus: "0.35"
 
   litellm:
