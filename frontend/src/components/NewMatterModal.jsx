@@ -43,6 +43,7 @@ export default function NewMatterModal({ open, onClose, onCreated }) {
     status: 'open',
     case_number: '',
     jurisdiction: '',
+    role: '',
     counterparty: '',
     primary_plugin: '',
   })
@@ -135,6 +136,7 @@ export default function NewMatterModal({ open, onClose, onCreated }) {
         status: form.status,
         case_number: form.case_number.trim() || undefined,
         jurisdiction: form.jurisdiction.trim() || undefined,
+        role: form.role || undefined,
         counterparty: form.counterparty.trim() || undefined,
         primary_plugin: form.primary_plugin || undefined,
       }
@@ -144,7 +146,7 @@ export default function NewMatterModal({ open, onClose, onCreated }) {
         matter_name: '', description: '', practice_area: '', matter_type: '',
         client_contact_id: '', attorney_of_record_id: '', partner_attorney_id: '',
         assigned_user_ids: [], status: 'open', case_number: '', jurisdiction: '',
-        counterparty: '', primary_plugin: '',
+        role: '', counterparty: '', primary_plugin: '',
       })
       onClose()
     } catch (err) {
@@ -400,8 +402,21 @@ export default function NewMatterModal({ open, onClose, onCreated }) {
             </summary>
             <div className="mt-4 space-y-4 pl-1">
               <div>
-                <label htmlFor="newmattermodal-counterparty" className={labelCls}>Counterparty</label>
+                <label htmlFor="newmattermodal-represented-side" className={labelCls}>Represented Side / Our Role</label>
+                <select id="newmattermodal-represented-side" value={form.role} onChange={e => set('role', e.target.value)} className={inputCls}>
+                  <option value="">Not specified</option>
+                  <option value="Plaintiff">Plaintiff / plaintiff's counsel</option>
+                  <option value="Defendant">Defendant / defense counsel</option>
+                  <option value="Petitioner">Petitioner / petitioner's counsel</option>
+                  <option value="Respondent">Respondent / respondent's counsel</option>
+                  <option value="Other">Other</option>
+                </select>
+                <p className="mt-1.5 text-xs text-brand-muted">This describes the firm's side. Add each named caption party under the matter's Parties tab.</p>
+              </div>
+              <div>
+                <label htmlFor="newmattermodal-counterparty" className={labelCls}>Counterparty Summary</label>
                 <input id="newmattermodal-counterparty" type="text" value={form.counterparty} onChange={e => set('counterparty', e.target.value)} placeholder="Opposing party name" className={inputCls} />
+                <p className="mt-1.5 text-xs text-brand-muted">Use this for a quick opposing-side label; templates use structured plaintiff and defendant parties when available.</p>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>

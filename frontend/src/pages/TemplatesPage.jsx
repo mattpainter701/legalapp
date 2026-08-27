@@ -81,6 +81,13 @@ const friendlyVariableLabel = (name) => name
   .replace(/[_-]+/g, ' ')
   .replace(/\b\w/g, (c) => c.toUpperCase())
 
+const CAPTION_VARIABLE_HELP = (
+  <>
+    Caption fields use matter parties: <code>{'{{plaintiff_name}}'}</code> and <code>{'{{defendant_name}}'}</code> use the primary contact for that role;
+    {' '}<code>{'{{plaintiff_names}}'}</code> and <code>{'{{defendant_names}}'}</code> include the primary first, then every remaining listed contact.
+  </>
+)
+
 const formatMatterLabel = (matter) => {
   if (!matter) return ''
   const name = matter.matter_name || matter.title || matter.name || 'Untitled matter'
@@ -304,6 +311,9 @@ function TemplateForm({ initial, onSubmit, onCancel }) {
           />
           <p className="text-xs text-brand-muted mt-1">
             Use {'{{variable_name}}'} for placeholders.
+          </p>
+          <p className="text-xs text-brand-muted mt-2 leading-relaxed">
+            {CAPTION_VARIABLE_HELP}
           </p>
         </div>
       )}
@@ -1464,8 +1474,9 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
             <div>
               <p className="text-sm font-medium text-brand-ink">Smart fill</p>
               <p className="text-xs text-brand-muted">
-                Pull matter-aware values when the backend endpoint is available.
+                Pull matter-aware values, including structured plaintiff and defendant parties. Every value remains reviewable before preview or save.
               </p>
+              <p className="mt-1 text-[11px] text-brand-muted leading-relaxed">{CAPTION_VARIABLE_HELP}</p>
             </div>
             <button
               onClick={handleSmartFill}

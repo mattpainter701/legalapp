@@ -1574,6 +1574,7 @@ async def test_build_variable_suggestions_from_matter_client_and_current_user(
         billing_cycle="monthly",
         hourly_rate=Decimal("250.00"),
         budget_amount=None,
+        role=None,
         counterparty=None,
         client=SimpleNamespace(
             id=client_id,
@@ -1592,8 +1593,14 @@ async def test_build_variable_suggestions_from_matter_client_and_current_user(
     async def fake_load_matter_context(**kwargs):
         return matter
 
+    async def fake_load_matter_parties(**kwargs):
+        return []
+
     monkeypatch.setattr(
         document_templates, "_load_matter_context", fake_load_matter_context
+    )
+    monkeypatch.setattr(
+        document_templates, "_load_matter_parties", fake_load_matter_parties
     )
 
     template = SimpleNamespace(
@@ -1627,6 +1634,137 @@ async def test_build_variable_suggestions_from_matter_client_and_current_user(
     assert by_variable["current_user_email"].suggested_value == "test@example.com"
     assert by_variable["missing_fact"].suggested_value is None
     assert by_variable["missing_fact"].review_required is True
+
+
+def test_smart_fill_uses_structured_plaintiff_and_defendant_parties():
+    matter_id = uuid.uuid4()
+    client_id = uuid.uuid4()
+    matter = SimpleNamespace(
+        id=matter_id,
+        matter_name="Lovelace v. Analytical Engines",
+        matter_type="civil",
+        description=None,
+        status="open",
+        stage="pleadings",
+        jurisdiction="North Dakota",
+        case_number="CV-2026-42",
+        court="Cass County District Court",
+        judge=None,
+        billing_method="hourly",
+        billing_cycle="monthly",
+        hourly_rate=Decimal("250.00"),
+        budget_amount=None,
+        role="Plaintiff's counsel",
+        counterparty="Legacy Defendant Summary",
+        client=SimpleNamespace(
+            id=client_id,
+            display_name="Legacy Client Summary",
+            email="legacy@example.com",
+            phone=None,
+            address=None,
+        ),
+        attorney_of_record=None,
+    )
+    first_plaintiff = SimpleNamespace(
+        id=uuid.uuid4(),
+        role="plaintiff",
+        is_primary=False,
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        contact=SimpleNamespace(
+            id=uuid.uuid4(),
+            display_name="Ada Lovelace",
+            email="ada@example.com",
+            phone="555-0101",
+            address={"city": "Fargo", "state": "ND"},
+        ),
+    )
+    primary_plaintiff = SimpleNamespace(
+        id=uuid.uuid4(),
+        role="Plaintiffs",
+        is_primary=True,
+        created_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        contact=SimpleNamespace(
+            id=uuid.uuid4(),
+            display_name="Charles Babbage",
+            email="charles@example.com",
+            phone="555-0102",
+            address={"city": "West Fargo", "state": "ND"},
+        ),
+    )
+    defendant = SimpleNamespace(
+        id=uuid.uuid4(),
+        role="defendant",
+        is_primary=False,
+        created_at=datetime(2026, 1, 3, tzinfo=timezone.utc),
+        contact=SimpleNamespace(
+            id=uuid.uuid4(),
+            display_name="Analytical Engines LLC",
+            email="service@example.com",
+            phone=None,
+            address={"city": "Bismarck", "state": "ND"},
+        ),
+    )
+
+    candidates = document_templates._collect_smart_fill_candidates(
+        matter=matter,
+        parties=[first_plaintiff, primary_plaintiff, defendant],
+        current_user=SimpleNamespace(id=uuid.uuid4(), full_name=None, email=None),
+    )
+
+    assert candidates["plaintiff_name"].suggested_value == "Charles Babbage"
+    assert (
+        candidates["plaintiff_names"].suggested_value == "Charles Babbage; Ada Lovelace"
+    )
+    assert candidates["plaintiff_email"].suggested_value == "charles@example.com"
+    assert candidates["plaintiff_city"].suggested_value == "West Fargo"
+    assert candidates["defendant_name"].suggested_value == "Analytical Engines LLC"
+    assert candidates["defendants"].suggested_value == "Analytical Engines LLC"
+    assert candidates["defendant_name"].source_type == "matter_party"
+    assert candidates["defendant_name"].review_required is False
+    assert candidates["plaintiff_name"].provenance["selection"] == "primary"
+
+
+def test_smart_fill_legacy_caption_inference_requires_review():
+    matter = SimpleNamespace(
+        id=uuid.uuid4(),
+        matter_name="Legacy matter",
+        matter_type="civil",
+        description=None,
+        status="open",
+        stage=None,
+        jurisdiction=None,
+        case_number=None,
+        court=None,
+        judge=None,
+        billing_method="hourly",
+        billing_cycle="monthly",
+        hourly_rate=None,
+        budget_amount=None,
+        role="Defendant's counsel",
+        counterparty="Inferred Plaintiff",
+        client=SimpleNamespace(
+            id=uuid.uuid4(),
+            display_name="Inferred Defendant",
+            email=None,
+            phone=None,
+            address=None,
+        ),
+        attorney_of_record=None,
+    )
+
+    candidates = document_templates._collect_smart_fill_candidates(
+        matter=matter,
+        current_user=SimpleNamespace(id=uuid.uuid4(), full_name=None, email=None),
+    )
+
+    assert candidates["plaintiff_name"].suggested_value == "Inferred Plaintiff"
+    assert candidates["defendant_name"].suggested_value == "Inferred Defendant"
+    assert candidates["plaintiff_name"].review_required is True
+    assert candidates["defendant_name"].confidence == 0.75
+    assert (
+        candidates["defendant_name"].provenance["selection"]
+        == "legacy_matter_role_inference"
+    )
 
 
 @pytest.mark.asyncio
