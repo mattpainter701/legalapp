@@ -11,9 +11,13 @@ icon: checklist
 
 Tasks answer **who owns the next action**. Calendar answers **when something happens**. Communications preserve **what was said**. Use all three deliberately rather than treating any one of them as a complete case history.
 
+![How task requests become authoritative work and calendar projections](/guide-assets/customer-data-task-lifecycle.svg)
+
 ## Tasks
 
 Open [Tasks](/tasks) to review assigned, upcoming, and overdue work. A useful task has a clear action, one accountable owner, a realistic due date, and a link to the relevant matter when available.
+
+**LawHand Tasks is the source of truth for work state.** Outlook and Google calendar entries are projections that help you work in your usual calendar. Change the owner, due date, or status in LawHand. An edit or deletion made only in Outlook or Google does not currently update the underlying task.
 
 When you finish work, complete the task promptly. If the work cannot be completed, use the supported cancellation or status reason so the history explains what happened. Reassigning a task should be an explicit handoff, not a silent assumption that someone else noticed it.
 
@@ -29,7 +33,7 @@ Open [Communications](/communications) for workspace message history. When integ
 
 Email that belongs to one file lives on that matter's **Correspondence** tab rather than here: open the matter from [My Matters](/matters) to capture mail from a connected mailbox, forward a message to the matter, and review what is waiting to be filed.
 
-To request a task from reviewed matter email, start the subject with `[TASK]` or `[DEADLINE]`. For example, `[TASK] Meet with Nigel in two weeks` previews a task and due date on the inbound review card. Filing the message creates the task and, when a due date is present, mirrors it to the reviewer's connected Outlook or Google calendar. Untagged text, replies, forwards, and AI-only date detection do not create work automatically.
+To request a task from reviewed matter email, start the subject with `[TASK]` or `[DEADLINE]`. For example, `[TASK] Meet with Nigel in two weeks` previews a task and due date on the inbound review card. Filing the message creates the task and, when a due date is present, mirrors it to the reviewer's connected Outlook or Google calendar. Untagged text, replies, forwards, and AI-only date detection do not create work automatically. If a date is missing or ambiguous, open the created task and set the verified date in LawHand.
 
 Before sending any draft:
 

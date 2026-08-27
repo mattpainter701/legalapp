@@ -63,7 +63,7 @@ place for untagged, matter-matched messages.
 | Probate information gathering | Estate/probate workflow and client-portal plans exist. | Implement a portal checklist/questionnaire for parties, fiduciaries, assets, creditors, will/death-certificate uploads, missing facts, and attorney verification. This is a workflow, not one task. |
 | Client portal invoices | Portal lists client-visible invoices and payment totals/links. Firm users can export invoice PDFs. | Clients cannot download a portal-authorized invoice PDF. |
 | Invoice branding | Tenant firm-name/logo/address/contact/footer settings and admin UI already exist. Trust PDFs use them. | `invoice_pdf.py` still renders LawHand defaults and receives no tenant branding. |
-| Portal document storage | Portal uploads use `MatterFileStore`, which can write OneDrive, SharePoint, or Google Drive and records provider IDs. | The portal route does not load `TenantSettings.primary_cloud_provider`; the default cascade can try another cloud and then local storage. A firm promised “OneDrive only” needs an explicit fail-closed policy. |
+| Portal document storage | Portal uploads use the shared `MatterFileStore`, route to `client_uploads`, and record provider IDs. The store now resolves an admin selection or Auto Microsoft 365→OneDrive binding and fails closed for cloud-bound writes. | Inventory and migrate legacy/unbound local documents before claiming the customer-owned-content invariant for an existing tenant. |
 | Workspace MCP | Tenant-scoped `find_matter`, task/document listing, document-text retrieval, and task/email/document proposals exist. | There is no one-call global search across all documents, clients/contacts, matters, correspondence, and tasks with typed result citations. |
 
 ## Deadline-calculator options
@@ -133,15 +133,20 @@ own OneDrive/SharePoint app folder:
 It is a least-privilege option only if firms accept an app-owned storage root;
 it will not transparently cover arbitrary existing matter folders.
 
-Recommended storage policy:
+Implemented storage policy:
 
-- Admin selects `OneDrive`, `SharePoint`, `Google Drive`, `Auto`, or `Local`.
-- Admin separately selects **Require selected cloud** or **Allow encrypted local fallback**.
-- Portal uploads honor that exact setting and display provider/pending/error
-  state to firm users.
-- If “Require selected cloud” is enabled, the client upload fails honestly when
-  the provider cannot accept the bytes; it must not report success after local
-  fallback.
+- Admin selects `OneDrive`, `SharePoint`, `Google Drive`, or `Auto`.
+- Auto binds an active Microsoft 365 tenant to OneDrive, otherwise an active
+  Google tenant to Google Drive.
+- An explicit or inferred cloud binding is exclusive and fail-closed. The
+  upload returns a retryable storage error when the provider cannot accept the
+  bytes; it never reports success after local fallback.
+- Portal originals route to the matter's `client_uploads` folder. Reviewed
+  derivatives are new matter documents; reclassification does not move the
+  original.
+- Local fallback remains only as legacy/development compatibility for unbound
+  tenants. Production onboarding and migration must remove that state before a
+  customer-owned-content claim is made.
 
 ## Product backlog and acceptance criteria
 
@@ -151,9 +156,11 @@ Recommended storage policy:
   reviewed/matter-matched email creates one traceable task; untagged or reply
   subjects do not; received-date math is deterministic; calendar projection is
   invoked only after commit.
-- **TC-02 — Portal storage policy.** Portal uploads load the tenant primary
-  provider, support a fail-closed cloud requirement, expose storage state, and
-  have OneDrive/SharePoint/Google/local and provider-outage tests.
+- **TC-02 — Portal storage policy (implemented here).** Portal uploads use the
+  admin or inferred tenant cloud, route originals to `client_uploads`, fail
+  closed for cloud-bound tenants, and expose provider outages as HTTP 503.
+  Focused tests cover exclusive provider routing, Microsoft Auto binding,
+  provider outage, and strict folder lookup.
 - **TC-03 — Typed key dates and proposals.** Replace the free-form JSON write
   path with typed date records containing label/type/date/time zone, source,
   provenance, verification, owner, reminders, and external IDs. Migrate legacy
@@ -193,8 +200,8 @@ Recommended storage policy:
 
 ## Suggested PR sequence
 
-1. This PR: `TC-01` plus the evidence-backed backlog.
-2. Storage/invoice PR: `TC-02` and `TC-09` (portal trust and customer-visible output).
+1. This PR: `TC-01`, `TC-02`, documentation, and the evidence-backed backlog.
+2. Invoice PR: `TC-09` (portal trust and customer-visible output).
 3. Deadline foundation PR: `TC-03` and `TC-04`, without a vendor commitment.
 4. Partner spike/adapter PR: `TC-05` behind a tenant flag.
 5. Intake/probate PRs: `TC-07` then `TC-08` on the shared answer/binding model.

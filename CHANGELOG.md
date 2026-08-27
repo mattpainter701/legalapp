@@ -9,6 +9,13 @@
   reviewer can file the `.eml`, correspondence record, task, and task history
   atomically, after which existing calendar projection is requested without
   making provider availability a condition of durable capture.
+- **Cloud-bound matter storage is explicit and fail-closed:** Auto now resolves
+  an active Microsoft 365 tenant to OneDrive (or Google Drive when Google is the
+  connected provider), while an administrator-selected provider remains
+  exclusive. Provider outages return HTTP 503 without a durable local spill.
+  Client portal originals route to the newly provisioned `client_uploads`
+  folder, and the user/admin/backend guides share a lifecycle diagram and
+  operational contract for task routing and customer-owned document content.
 - **File share agents now have operator-grade local diagnostics:** Windows
   services write bounded rotating logs under the protected ProgramData agent
   directory, Linux continues to use journald, and the File Shares console

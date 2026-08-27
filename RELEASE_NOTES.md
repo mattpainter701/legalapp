@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.26.4 — Customer cloud storage is explicit and fail-closed
+
+Released August 26, 2026.
+
+Microsoft 365 tenants now default matter files to OneDrive, and portal uploads keep their original copy in a dedicated customer-cloud folder.
+
+- **Microsoft 365 defaults to OneDrive.** When Cloud Document Storage is Auto, an active Microsoft 365 connection is the authoritative destination unless an administrator selects SharePoint or Google Drive.
+- **Portal originals have a stable home.** Client uploads go to the matter's client_uploads folder. A reviewed or revised output is saved as a new matter document instead of silently moving the original.
+- **Cloud outages fail honestly.** A cloud-bound upload reports a retryable storage error when the customer provider is unavailable; it does not report success after saving a durable local copy.
+
 ## 2026.08.26.3 — Tagged matter email can create traceable tasks
 
 Released August 26, 2026.

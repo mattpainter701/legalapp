@@ -14,8 +14,9 @@ criteria: `docs/task-correspondence-discovery-2026-08-26.md`.
       reviewed inbound preview, atomic correspondence/task creation, received-date
       relative math, audit lineage, calendar projection, and tests. Remove
       model-only automatic deadline creation for untagged email.
-- [ ] `TC-02` Make portal uploads honor the tenant primary cloud and an explicit
-      fail-closed cloud-storage policy; expose provider/error state.
+- [x] `TC-02` Bind Auto Microsoft 365 tenants to OneDrive, honor explicit
+      admin provider overrides, fail closed for cloud-bound writes, route portal
+      originals to `client_uploads`, and expose provider outages as HTTP 503.
 - [ ] `TC-03` Replace free-form key-date writes with typed, provenance-bearing,
       reviewable key dates while retaining legacy reads during migration.
 - [ ] `TC-04` Extract cited document date/trigger candidates into review; never

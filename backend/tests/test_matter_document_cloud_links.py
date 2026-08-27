@@ -135,6 +135,8 @@ def test_document_category_maps_to_provisioned_subfolders():
     assert _document_folder_for_category("pleading") == "pleadings"
     assert _document_folder_for_category("contract") == "documents"
     assert _document_folder_for_category("evidence") == "documents"
+    assert _document_folder_for_category("client-portal") == "client_uploads"
+    assert _document_folder_for_category("client_uploads") == "client_uploads"
     assert _document_folder_for_category(None) == "documents"
 
 
@@ -150,6 +152,19 @@ def test_subfolder_lookup_accepts_historical_uploads_key():
     assert (
         _extract_subfolder_id(cloud_folder, "onedrive", "documents") == "folder-uploads"
     )
+
+
+def test_client_uploads_never_fall_back_to_a_general_documents_folder():
+    cloud_folder = {
+        "onedrive": {
+            "subfolders": {
+                "documents": "folder-documents",
+                "uploads": "folder-uploads",
+            }
+        }
+    }
+
+    assert _extract_subfolder_id(cloud_folder, "onedrive", "client_uploads") is None
 
 
 def test_storage_result_document_fields_persist_provider_metadata():
