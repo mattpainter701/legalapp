@@ -1,11 +1,14 @@
 """Handlers and scheduler poller for durable jobs."""
 
+import asyncio
 import hashlib
 import hmac
 import re
 import uuid
+from collections.abc import Awaitable, Callable, Iterable
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from sqlalchemy import case, or_
 from sqlalchemy import select, text
 from app.database import async_session_maker, set_tenant_context
@@ -698,7 +701,8 @@ async def _process_pending_jobs(
     """Drain ready jobs; handlers enforce provider-specific tenant state."""
     async with async_session_maker() as db:
         tenant_ids = list((await db.scalars(select(Tenant.id))).all())
-    for tenant_id in tenant_ids:
+
+    async def drain_tenant(tenant_id: uuid.UUID) -> None:
         async with async_session_maker() as db:
             await set_tenant_context(db, str(tenant_id))
             now = datetime.now(timezone.utc)
@@ -733,6 +737,30 @@ async def _process_pending_jobs(
             job_ids = list((await db.scalars(stmt)).all())
         for job_id in job_ids:
             await process_job(job_id, tenant_id)
+
+    from app.config import get_settings
+
+    await _run_bounded(
+        tenant_ids,
+        drain_tenant,
+        concurrency=get_settings().DURABLE_JOB_TENANT_CONCURRENCY,
+    )
+
+
+async def _run_bounded(
+    items: Iterable[Any],
+    handler: Callable[[Any], Awaitable[None]],
+    *,
+    concurrency: int,
+) -> None:
+    """Run independent work with a fixed number of worker coroutines."""
+    iterator = iter(items)
+
+    async def worker() -> None:
+        for item in iterator:
+            await handler(item)
+
+    await asyncio.gather(*(worker() for _ in range(concurrency)))
 
 
 async def process_pending_jobs() -> None:

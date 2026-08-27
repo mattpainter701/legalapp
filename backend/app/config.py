@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     # to False and a single dedicated scheduler container sets it to True. Jobs
     # also take a Postgres advisory lock so a stray second runner cannot double-fire.
     RUN_SCHEDULER: bool = True
+    # General durable work stays sequential within each tenant, but unrelated
+    # tenants may progress in parallel up to this process-wide bound.
+    DURABLE_JOB_TENANT_CONCURRENCY: int = 4
     HEALTH_DISK_MAX_PERCENT: int = 90
     # Production receives a non-sensitive aggregate from a host timer through
     # one dedicated read-only mount. Empty keeps local/dev readiness unchanged.
@@ -142,6 +145,10 @@ class Settings(BaseSettings):
     # Template OCR is local by default. Azure is an explicit opt-in because
     # document bytes may contain privileged client information.
     TEMPLATE_OCR_PROVIDER: str = "local"
+    # RapidOCR sessions are not shared across concurrent inference. A small
+    # bounded pool prevents one long scan from serializing every intake while
+    # keeping model memory predictable on production hosts.
+    TEMPLATE_OCR_LOCAL_CONCURRENCY: int = 2
     AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT: str = ""
     AZURE_DOCUMENT_INTELLIGENCE_KEY: str = ""
     AZURE_DOCUMENT_INTELLIGENCE_API_VERSION: str = "2024-11-30"
@@ -1060,6 +1067,8 @@ def validate_template_ocr_settings(settings: Settings) -> None:
     provider = settings.TEMPLATE_OCR_PROVIDER.strip().lower()
     if provider not in {"local", "azure"}:
         raise ValueError("TEMPLATE_OCR_PROVIDER must be 'local' or 'azure'")
+    if not 1 <= settings.TEMPLATE_OCR_LOCAL_CONCURRENCY <= 4:
+        raise ValueError("TEMPLATE_OCR_LOCAL_CONCURRENCY must be between 1 and 4")
     if provider == "azure":
         parsed = urlsplit(settings.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT.rstrip("/"))
         if (
@@ -1094,6 +1103,11 @@ def validate_template_ocr_settings(settings: Settings) -> None:
         )
 
 
+def validate_worker_settings(settings: Settings) -> None:
+    if not 1 <= settings.DURABLE_JOB_TENANT_CONCURRENCY <= 16:
+        raise ValueError("DURABLE_JOB_TENANT_CONCURRENCY must be between 1 and 16")
+
+
 @lru_cache()
 def get_settings() -> Settings:
     settings = Settings()
@@ -1107,5 +1121,6 @@ def get_settings() -> Settings:
     validate_qbo_settings(settings)
     validate_inbound_email_settings(settings)
     validate_template_ocr_settings(settings)
+    validate_worker_settings(settings)
     validate_dev_mode_urls(settings)
     return settings

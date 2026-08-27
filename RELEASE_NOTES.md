@@ -5,6 +5,17 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.27.9 — Document automation is faster, safer, and easier to manage
+
+Released August 27, 2026.
+
+Firms can navigate larger template libraries, see readiness at a glance, and keep reviewed document generation moving with stronger recovery controls.
+
+- **Find the right template faster.** Search titles and descriptions, filter by status or category, and move through a paged library without loading every template at once.
+- **See what needs attention.** Library health cards distinguish ready templates, drafts, and binary templates whose original source must be restored before use.
+- **Keep concurrent work moving.** Independent scans and tenant background work can progress within bounded capacity instead of waiting behind one unrelated long-running job.
+- **Save the reviewed PDF—not a surprise.** Final PDF saves recheck the exact reviewed output and clean up or quarantine staged files when storage and database results cannot be proven consistent.
+
 ## 2026.08.27.8 — Connected assistants can prepare complete matter work for review
 
 Released August 27, 2026.

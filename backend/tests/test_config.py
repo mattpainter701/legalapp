@@ -1,4 +1,6 @@
 import os
+from types import SimpleNamespace
+
 import pytest
 from cryptography.fernet import Fernet
 
@@ -10,6 +12,7 @@ from app.config import (
     validate_platform_bootstrap_settings,
     validate_qbo_settings,
     validate_token_encryption_key,
+    validate_worker_settings,
 )
 
 
@@ -22,6 +25,17 @@ def _demo_settings(**overrides):
     }
     values.update(overrides)
     return Settings(**values)
+
+
+def test_durable_worker_concurrency_is_bounded():
+    validate_worker_settings(
+        SimpleNamespace(DURABLE_JOB_TENANT_CONCURRENCY=4)
+    )
+    for concurrency in (0, 17):
+        with pytest.raises(ValueError, match="DURABLE_JOB_TENANT_CONCURRENCY"):
+            validate_worker_settings(
+                SimpleNamespace(DURABLE_JOB_TENANT_CONCURRENCY=concurrency)
+            )
 
 
 def test_demo_settings_are_inert_while_disabled():

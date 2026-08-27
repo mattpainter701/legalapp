@@ -64,3 +64,25 @@ def test_image_ocr_maps_engine_errors(monkeypatch):
     )
     with pytest.raises(ocr.TemplateOcrError, match="could not be read"):
         ocr.ocr_image(_png_bytes())
+
+
+def test_local_ocr_pool_uses_independent_bounded_sessions(monkeypatch):
+    first = object()
+    second = object()
+    created = []
+
+    def create_engine():
+        created.append(second)
+        return second
+
+    monkeypatch.setattr(ocr, "_new_engine", create_engine)
+    pool = ocr._OcrEnginePool(2, first)
+
+    leased_first = pool.acquire()
+    leased_second = pool.acquire()
+    assert {id(leased_first), id(leased_second)} == {id(first), id(second)}
+    assert created == [second]
+
+    pool.release(leased_first)
+    pool.release(leased_second)
+    assert pool.acquire() in {first, second}

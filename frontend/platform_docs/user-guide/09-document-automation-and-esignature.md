@@ -13,9 +13,13 @@ icon: sparkles
 
 ## Template library
 
-The **Templates** tab lists available templates and their readiness. Before activation, verify the name, practice context, source file, detected fields, variable schema, branding, warnings, and preview. Keep inactive templates out of production generation until a responsible reviewer approves them.
+The **Templates** tab lists available templates and their readiness. Search by title or description, narrow the library by status or category, and move through the paged results instead of loading the entire firm library at once. The health cards distinguish templates that are ready, still in draft, or missing a retained source file. A **Needs source** template must be recreated from the original document before it can generate anything.
+
+Before activation, verify the name, practice context, source file, detected fields, variable schema, branding, warnings, and preview. Keep inactive templates out of production generation until a responsible reviewer approves them.
 
 Use clear variable names and stable field meanings. A field such as `client_name` should not alternate between an individual, organization, and billing contact. For PDFs, confirm field placement and appearance on every affected page.
+
+LawHand supports ordinary PDFs, AcroForm controls, scans/images converted to a safe PDF, and supported DOCX sources. It is a controlled template and field-placement workflow, not a general PDF authoring tool. Password-protected files, dynamic XFA forms, PDF scripts/actions, embedded attachments, and other active content are rejected. Export those files to a standard static PDF or DOCX before creating a template.
 
 ### Plaintiff and defendant field methodology
 

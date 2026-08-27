@@ -2,6 +2,31 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.27.9",
+      "version": "2026.08.27.9",
+      "title": "Document automation is faster, safer, and easier to manage",
+      "published_at": "2026-08-27",
+      "summary": "Firms can navigate larger template libraries, see readiness at a glance, and keep reviewed document generation moving with stronger recovery controls.",
+      "highlights": [
+        {
+          "title": "Find the right template faster",
+          "description": "Search titles and descriptions, filter by status or category, and move through a paged library without loading every template at once."
+        },
+        {
+          "title": "See what needs attention",
+          "description": "Library health cards distinguish ready templates, drafts, and binary templates whose original source must be restored before use."
+        },
+        {
+          "title": "Keep concurrent work moving",
+          "description": "Independent scans and tenant background work can progress within bounded capacity instead of waiting behind one unrelated long-running job."
+        },
+        {
+          "title": "Save the reviewed PDF—not a surprise",
+          "description": "Final PDF saves recheck the exact reviewed output and clean up or quarantine staged files when storage and database results cannot be proven consistent."
+        }
+      ]
+    },
+    {
       "id": "2026.08.27.8",
       "version": "2026.08.27.8",
       "title": "Connected assistants can prepare complete matter work for review",
