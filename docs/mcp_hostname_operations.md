@@ -203,6 +203,18 @@ Expected results:
 - all three public origins present HSTS and certificates with at least the
   configured minimum remaining lifetime.
 
+## Production activation
+
+Set only these reviewed values in the protected production environment:
+
+- `MCP_PRODUCT_ENABLED=true`;
+- `RESEARCH_MCP_PUBLIC_URL=https://research.getlawhand.com/api/mcp` and
+  `RESEARCH_MCP_ISSUER=https://research.getlawhand.com`;
+- `RESEARCH_MCP_OAUTH_ENABLED=true`,
+  `RESEARCH_MCP_DYNAMIC_REGISTRATION_ENABLED=true`, and the approved audience;
+- the existing shared RSA signing keyring (private key, public key, key ID, and
+  previous public-key list). Never place those keys in source control.
+
 Use a nonexistent matter query for an authenticated read-only smoke test.
 Never create a proposal merely to test connectivity: proposal calls create
 auditable tenant work.
