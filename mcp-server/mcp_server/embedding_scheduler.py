@@ -93,6 +93,11 @@ def run_scheduler_once(
 
     try:
         unembedded = unembedded_chunk_count(conn)
+        # The scheduler's advisory lock is session-scoped and survives commit.
+        # Close the count transaction before a reverse-tunnel worker keeps the
+        # SSH dispatch call open for hours or days; otherwise PostgreSQL retains
+        # an idle transaction snapshot for the lifetime of the batch.
+        conn.commit()
         if unembedded < config.minimum_unembedded:
             return SchedulerResult(
                 dispatched=False,
