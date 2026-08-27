@@ -314,6 +314,10 @@ def _production_env(**overrides: str) -> str:
         "CLOUDFLARED_BIN": "/bin/true",
         "ZOOM_REQUIRED_TENANT_ID": "00000000-0000-4000-8000-000000000111",
         "ZOOM_REQUIRED_TENANT_PLAN": "intake-only",
+        "QBO_CLIENT_ID": "qbo-client-id-0123456789",
+        "QBO_CLIENT_SECRET": "qbo-client-secret-0123456789",
+        "QBO_REDIRECT_URI": "https://ops-test.invalid/api/integrations/qbo/callback",
+        "QBO_ENVIRONMENT": "production",
     }
     values.update(overrides)
     return "".join(f"{key}={value}\n" for key, value in values.items())
@@ -527,6 +531,28 @@ def test_production_preflight_accepts_staged_keyring_and_dedicated_mcp_auth(
     assert "Production preflight passed" in output
     assert "ops-secret-key-0123456789" not in output
     assert "mcp-upstream-key-0123456789" not in output
+
+
+def test_production_preflight_rejects_nonproduction_qbo_oauth(
+    tmp_path: Path,
+) -> None:
+    playground = _run_preflight(
+        tmp_path,
+        _production_env(
+            QBO_REDIRECT_URI="https://developer.intuit.com/v2/OAuth2Playground/RedirectUrl"
+        ),
+    )
+    playground_output = playground.stdout + playground.stderr
+    assert playground.returncode != 0
+    assert "QBO_REDIRECT_URI must exactly match" in playground_output
+
+    sandbox = _run_preflight(
+        tmp_path,
+        _production_env(QBO_ENVIRONMENT="sandbox"),
+    )
+    sandbox_output = sandbox.stdout + sandbox.stderr
+    assert sandbox.returncode != 0
+    assert "QBO_ENVIRONMENT must be production" in sandbox_output
 
 
 def test_production_preflight_accepts_native_workspace_mcp_oauth(

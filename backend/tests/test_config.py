@@ -8,6 +8,7 @@ from app.config import (
     validate_jwt_algorithm,
     validate_mcp_security_settings,
     validate_platform_bootstrap_settings,
+    validate_qbo_settings,
     validate_token_encryption_key,
 )
 
@@ -194,3 +195,41 @@ def test_platform_bootstrap_requires_identity_scope_expiry_and_distinct_signing_
         PLATFORM_TOKEN_SIGNING_KEY="s" * 48,
     )
     validate_platform_bootstrap_settings(settings)
+
+
+def test_qbo_production_settings_require_exact_backend_callback():
+    settings = _demo_settings(
+        BACKEND_URL="https://getlawhand.com",
+        QBO_CLIENT_ID="production-client-id",
+        QBO_CLIENT_SECRET="production-client-secret",
+        QBO_REDIRECT_URI="https://getlawhand.com/api/integrations/qbo/callback",
+        QBO_ENVIRONMENT="production",
+    )
+    validate_qbo_settings(settings)
+
+    settings.QBO_REDIRECT_URI = (
+        "https://developer.intuit.com/v2/OAuth2Playground/RedirectUrl"
+    )
+    with pytest.raises(ValueError, match="must exactly match"):
+        validate_qbo_settings(settings)
+
+
+def test_qbo_settings_reject_invalid_environment_and_partial_credentials():
+    validate_qbo_settings(
+        _demo_settings(
+            QBO_CLIENT_ID="sandbox-client",
+            QBO_CLIENT_SECRET="sandbox-secret",
+            QBO_REDIRECT_URI="http://localhost:8000/api/integrations/qbo/callback",
+            QBO_ENVIRONMENT="sandbox",
+        )
+    )
+    with pytest.raises(ValueError, match="QBO_ENVIRONMENT"):
+        validate_qbo_settings(_demo_settings(QBO_ENVIRONMENT="live"))
+
+    with pytest.raises(ValueError, match="QBO_CLIENT_ID and QBO_CLIENT_SECRET"):
+        validate_qbo_settings(
+            _demo_settings(
+                QBO_CLIENT_ID="client-only",
+                QBO_REDIRECT_URI="https://getlawhand.com/api/integrations/qbo/callback",
+            )
+        )

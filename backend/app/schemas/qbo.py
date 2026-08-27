@@ -17,6 +17,8 @@ class QBOIntegrationStatus(BaseModel):
     last_sync_at: Optional[datetime] = None
     last_sync_status: Optional[str] = None
     last_sync_error: Optional[str] = None
+    qbo_ar_account_id: Optional[str] = None
+    qbo_ar_account_name: Optional[str] = None
 
 
 class QBOIntegrationResponse(BaseModel):
@@ -31,6 +33,8 @@ class QBOIntegrationResponse(BaseModel):
     last_sync_at: Optional[datetime] = None
     last_sync_status: Optional[str] = None
     last_sync_error: Optional[str] = None
+    qbo_ar_account_id: Optional[str] = None
+    qbo_ar_account_name: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -39,7 +43,8 @@ class QBOIntegrationResponse(BaseModel):
 
 class QBOIntegrationUpdate(BaseModel):
     sync_frequency_minutes: Optional[int] = None
-    sandbox_mode: Optional[bool] = None
+    qbo_ar_account_id: Optional[str] = None
+    qbo_ar_account_name: Optional[str] = None
 
 
 class QBOSyncRequest(BaseModel):
@@ -64,6 +69,13 @@ class QBOSyncStatus(BaseModel):
 
 class QBOItemOption(BaseModel):
     """A single QBO Item (service type) available for mapping."""
+
+    id: str
+    name: str
+
+
+class QBOAccountOption(BaseModel):
+    """A QBO accounts-receivable account available for invoice posting."""
 
     id: str
     name: str

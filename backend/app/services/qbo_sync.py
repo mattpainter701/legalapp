@@ -9,6 +9,7 @@ Maps:
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 
 import httpx
 from sqlalchemy import select
@@ -28,12 +29,20 @@ class QBOSyncService:
     """Sync legal billing entities to QuickBooks Online."""
 
     def __init__(
-        self, db: AsyncSession, tenant_id: str, access_token: str, sandbox: bool = True
+        self,
+        db: AsyncSession,
+        tenant_id: str,
+        access_token: str,
+        sandbox: bool = True,
+        ar_account_id: str | None = None,
+        ar_account_name: str | None = None,
     ):
         self.db = db
         self.tenant_id = tenant_id
         self.access_token = access_token
         self.base_url = QBO_API_BASE if sandbox else QBO_PROD_API_BASE
+        self.ar_account_id = ar_account_id
+        self.ar_account_name = ar_account_name
 
     @staticmethod
     def _safe_qbo_string(value: str | None) -> str:
@@ -104,7 +113,7 @@ class QBOSyncService:
     async def _matter_display_name(self, matter) -> str:
         """QBO Customer DisplayName for a matter: "ClientName — MatterName"."""
         client_name = matter.counterparty
-        if matter.client_contact_id:
+        if getattr(matter, "client_contact_id", None):
             from app.models.contact import Contact
 
             c_res = await self.db.execute(
@@ -280,7 +289,7 @@ class QBOSyncService:
 
     async def sync_invoice(self, invoice_id: str) -> dict | None:
         """Sync an Invoice to QBO Invoice."""
-        from app.models.billing import Invoice, InvoiceLineItem
+        from app.models.billing import Invoice, InvoiceLineItem, TimeEntry
         from app.models.plugin import Matter
 
         await set_tenant_context(self.db, self.tenant_id)
@@ -291,7 +300,7 @@ class QBOSyncService:
             )
         )
         invoice = result.scalar_one_or_none()
-        if not invoice or invoice.status == "draft":
+        if not invoice:
             return None
 
         # Get matter
@@ -400,8 +409,44 @@ class QBOSyncService:
             "DueDate": invoice.due_date.isoformat(),
             "CustomerRef": {"value": customer["Id"]},
             "Line": qbo_lines,
-            "PrivateNote": invoice.notes or "",
+            "PrivateNote": f"LawHand invoice {invoice.invoice_number}; matter {invoice.matter_id}",
         }
+        if self.ar_account_id:
+            invoice_data["ARAccountRef"] = {
+                "value": self.ar_account_id,
+                "name": self.ar_account_name or "",
+            }
+        if invoice.notes:
+            invoice_data["CustomerMemo"] = {"value": invoice.notes[:1000]}
+        if getattr(matter, "case_number", None):
+            invoice_data["PONumber"] = matter.case_number[:15]
+
+        # Include the client's billing contact data when LawHand has it.
+        if getattr(matter, "client_contact_id", None):
+            from app.models.contact import Contact
+
+            contact_result = await self.db.execute(
+                select(Contact).where(Contact.id == matter.client_contact_id)
+            )
+            contact = contact_result.scalar_one_or_none()
+            if contact:
+                if contact.email:
+                    invoice_data["BillEmail"] = {"Address": contact.email}
+                address = contact.address or {}
+                bill_addr = {
+                    key: value
+                    for key, value in {
+                        "Line1": address.get("street") or address.get("line1"),
+                        "Line2": address.get("street2") or address.get("line2"),
+                        "City": address.get("city"),
+                        "CountrySubDivisionCode": address.get("state"),
+                        "PostalCode": address.get("zip") or address.get("postal_code"),
+                        "Country": address.get("country"),
+                    }.items()
+                    if value
+                }
+                if bill_addr:
+                    invoice_data["BillAddr"] = bill_addr
 
         # Check if already synced
         if invoice.qbo_invoice_id:
@@ -422,10 +467,31 @@ class QBOSyncService:
             result = await self._request(
                 "POST", self._api_url(realm_id, "invoice"), json_data=invoice_data
             )
-            if result:
-                invoice.qbo_invoice_id = result.get("Invoice", {}).get("Id")
-                invoice.qbo_sync_status = "synced"
-                await self.db.commit()
+        if result and result.get("Invoice"):
+            qbo_invoice = result["Invoice"]
+            invoice.qbo_invoice_id = qbo_invoice.get("Id") or invoice.qbo_invoice_id
+            invoice.qbo_sync_token = qbo_invoice.get("SyncToken")
+            invoice.qbo_sync_status = "synced"
+            invoice.qbo_synced_at = datetime.now(timezone.utc)
+            invoice.qbo_sync_error = None
+            if getattr(invoice, "billed_at", None) is None:
+                invoice.billed_at = invoice.qbo_synced_at
+            # QBO creation is the accounting/billing event. It makes the
+            # receivable outstanding locally, but does not claim it was emailed.
+            if invoice.status == "draft":
+                invoice.status = "sent"
+            time_entry_ids = [
+                line.source_id
+                for line in line_items
+                if line.source_type == "time_entry" and line.source_id
+            ]
+            if time_entry_ids:
+                entries_result = await self.db.execute(
+                    select(TimeEntry).where(TimeEntry.id.in_(time_entry_ids))
+                )
+                for entry in entries_result.scalars().all():
+                    entry.status = "invoiced"
+            await self.db.commit()
 
         return result
 
@@ -572,6 +638,7 @@ class QBOSyncService:
             return None
 
         invoice.qbo_sync_status = "syncing"
+        invoice.qbo_sync_error = None
         await self.db.commit()
 
         result = await self._retry_with_backoff(
@@ -590,6 +657,9 @@ class QBOSyncService:
                 invoice.qbo_sync_status = "synced"
             else:
                 invoice.qbo_sync_status = "failed"
+                invoice.qbo_sync_error = (
+                    "QuickBooks did not accept the invoice after 3 attempts."
+                )
             await self.db.commit()
 
         return result

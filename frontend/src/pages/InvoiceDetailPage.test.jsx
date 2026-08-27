@@ -8,6 +8,7 @@ const api = vi.hoisted(() => ({
   createInvoicePaymentLink: vi.fn(),
   exportInvoice: vi.fn(),
   getInvoice: vi.fn(),
+  getQBOStatus: vi.fn(() => Promise.resolve({ connected: true })),
   recordPayment: vi.fn(),
   syncInvoiceToQBO: vi.fn(),
   updateInvoice: vi.fn(),
@@ -90,6 +91,29 @@ describe('InvoiceDetailPage billing operations', () => {
     }))
   })
 
+  it('syncs a draft invoice to QuickBooks as an explicit billing action', async () => {
+    api.getInvoice
+      .mockResolvedValueOnce(baseInvoice)
+      .mockResolvedValueOnce({
+        ...baseInvoice,
+        status: "sent",
+        qbo_sync_status: "synced",
+        qbo_invoice_id: "123",
+        billed_at: "2026-08-27T12:00:00Z",
+      })
+    api.syncInvoiceToQBO.mockResolvedValue({ status: "synced" })
+    const user = userEvent.setup()
+    renderPage()
+
+    const syncButton = await screen.findByRole("button", { name: "Sync" })
+    expect(syncButton).toBeEnabled()
+    await user.click(syncButton)
+
+    await waitFor(() => expect(api.syncInvoiceToQBO).toHaveBeenCalledWith("invoice-1"))
+    expect(toast.success).toHaveBeenCalledWith(
+      "Invoice synced to QuickBooks and marked billed",
+    )
+  })
   it('blocks an overpayment before it reaches the API', async () => {
     api.getInvoice.mockResolvedValue({
       ...baseInvoice,
