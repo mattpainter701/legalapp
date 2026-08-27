@@ -480,10 +480,7 @@ async def _load_generation_preview_evidence(
                 "and database outcome, then record a fresh preview."
             ),
         )
-    if (
-        evidence.reconciliation_required_at is not None
-        and evidence.consumed_at is None
-    ):
+    if evidence.reconciliation_required_at is not None and evidence.consumed_at is None:
         raise HTTPException(
             status_code=409,
             detail=(
@@ -3078,18 +3075,16 @@ async def render_template_endpoint(
                     "saving the generated document."
                 ),
             )
-        preview_evidence, existing_document = (
-            await _load_generation_preview_evidence(
-                db,
-                preview_id=payload.preview_id,
-                tenant_id=parsed_tenant_id,
-                template=template,
-                matter=matter,
-                user_id=current_user.id,
-                variables=payload.variables,
-                flatten_pdf=payload.flatten_pdf,
-                lock=False,
-            )
+        preview_evidence, existing_document = await _load_generation_preview_evidence(
+            db,
+            preview_id=payload.preview_id,
+            tenant_id=parsed_tenant_id,
+            template=template,
+            matter=matter,
+            user_id=current_user.id,
+            variables=payload.variables,
+            flatten_pdf=payload.flatten_pdf,
+            lock=False,
         )
         if existing_document:
             return _existing_document_response(existing_document, matter_id=matter.id)
@@ -3230,18 +3225,19 @@ async def render_template_endpoint(
                         ),
                     )
                 template = final_template
-                preview_evidence, existing_document = (
-                    await _load_generation_preview_evidence(
-                        db,
-                        preview_id=payload.preview_id,
-                        tenant_id=parsed_tenant_id,
-                        template=template,
-                        matter=matter,
-                        user_id=current_user.id,
-                        variables=payload.variables,
-                        flatten_pdf=payload.flatten_pdf,
-                        lock=True,
-                    )
+                (
+                    preview_evidence,
+                    existing_document,
+                ) = await _load_generation_preview_evidence(
+                    db,
+                    preview_id=payload.preview_id,
+                    tenant_id=parsed_tenant_id,
+                    template=template,
+                    matter=matter,
+                    user_id=current_user.id,
+                    variables=payload.variables,
+                    flatten_pdf=payload.flatten_pdf,
+                    lock=True,
                 )
                 if not hmac.compare_digest(
                     output_sha256,
