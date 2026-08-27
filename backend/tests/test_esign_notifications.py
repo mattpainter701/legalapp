@@ -17,14 +17,26 @@ def _request(*, ordered=True):
         reminders={"days_before_expiration": [7, 1]},
     )
     request.signers = [
-        SignatureSigner(name="First Client", email="first@example.com", sign_order=0, status="pending"),
-        SignatureSigner(name="Second Client", email="second@example.com", sign_order=1, status="pending"),
+        SignatureSigner(
+            name="First Client",
+            email="first@example.com",
+            sign_order=0,
+            status="pending",
+        ),
+        SignatureSigner(
+            name="Second Client",
+            email="second@example.com",
+            sign_order=1,
+            status="pending",
+        ),
     ]
     return request
 
 
 @pytest.mark.asyncio
-async def test_invitation_notifies_only_actionable_signer_and_records_delivery(monkeypatch):
+async def test_invitation_notifies_only_actionable_signer_and_records_delivery(
+    monkeypatch,
+):
     delivered = []
 
     async def send_email(to, subject, html_body, text_body):

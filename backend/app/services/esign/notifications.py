@@ -20,10 +20,13 @@ def _audit(signer: SignatureSigner) -> dict:
 async def notify_signer(signer, request, *, kind="invitation"):
     document_name = request.source_document_filename or "a document"
     url = f"{get_settings().FRONTEND_URL.rstrip('/')}/client-portal"
-    action = "Reminder: signature requested" if kind == "reminder" else "Signature requested"
+    action = (
+        "Reminder: signature requested" if kind == "reminder" else "Signature requested"
+    )
     result = await email_service.send_email(
-        [signer.email], f"{action}: {document_name}",
-        f"<p>Hello {escape(signer.name)},</p><p>Please review and sign <strong>{escape(document_name)}</strong> in the secure client portal.</p><p><a href=\"{escape(url)}\">Open the client portal</a></p>",
+        [signer.email],
+        f"{action}: {document_name}",
+        f'<p>Hello {escape(signer.name)},</p><p>Please review and sign <strong>{escape(document_name)}</strong> in the secure client portal.</p><p><a href="{escape(url)}">Open the client portal</a></p>',
         f"Hello {signer.name},\n\nPlease review and sign {document_name}:\n{url}\n",
     )
     audit = _audit(signer)
@@ -37,7 +40,10 @@ async def notify_signer(signer, request, *, kind="invitation"):
 
 
 async def notify_actionable_signers(request, *, kind="invitation"):
-    return [await notify_signer(signer, request, kind=kind) for signer in next_pending_signers(request)]
+    return [
+        await notify_signer(signer, request, kind=kind)
+        for signer in next_pending_signers(request)
+    ]
 
 
 def mark_signer_viewed(signer):
@@ -48,15 +54,23 @@ def mark_signer_viewed(signer):
 
 async def process_due_reminders(db: AsyncSession, *, now=None) -> int:
     now = now or datetime.now(timezone.utc)
-    rows = await db.execute(select(SignatureRequest).options(selectinload(SignatureRequest.signers)).where(
-        SignatureRequest.status.in_(["sent", "partially_signed"]), SignatureRequest.expires_at.isnot(None)))
+    rows = await db.execute(
+        select(SignatureRequest)
+        .options(selectinload(SignatureRequest.signers))
+        .where(
+            SignatureRequest.status.in_(["sent", "partially_signed"]),
+            SignatureRequest.expires_at.isnot(None),
+        )
+    )
     sent = 0
     for request in rows.scalars().unique():
         if request.expires_at <= now:
             request.status = "expired"
             continue
         days_left = (request.expires_at.date() - now.date()).days
-        if days_left not in set((request.reminders or {}).get("days_before_expiration", [])):
+        if days_left not in set(
+            (request.reminders or {}).get("days_before_expiration", [])
+        ):
             continue
         key = f"reminder_{days_left}_days_sent_at"
         for signer in next_pending_signers(request):

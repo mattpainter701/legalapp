@@ -118,9 +118,13 @@ async def _to_response(
                 signed_at=s.signed_at,
                 declined_at=s.declined_at,
                 decline_reason=s.decline_reason,
-                invitation_delivery_status=(s.audit or {}).get("invitation_delivery_status"),
+                invitation_delivery_status=(s.audit or {}).get(
+                    "invitation_delivery_status"
+                ),
                 invitation_sent_at=(s.audit or {}).get("invitation_sent_at"),
-                reminder_delivery_status=(s.audit or {}).get("reminder_delivery_status"),
+                reminder_delivery_status=(s.audit or {}).get(
+                    "reminder_delivery_status"
+                ),
                 last_reminder_at=(s.audit or {}).get("reminder_sent_at"),
                 viewed_at=(s.audit or {}).get("viewed_at"),
             )
@@ -482,7 +486,9 @@ async def resend_signature_request(
     req = await _load_request(db, request_id, matter_id, user.tenant_id)
     await _expire_and_commit_if_needed(db, req)
     if req.status not in ("sent", "partially_signed"):
-        raise HTTPException(status_code=409, detail="Only an open signature request can be resent")
+        raise HTTPException(
+            status_code=409, detail="Only an open signature request can be resent"
+        )
     await notify_actionable_signers(req)
     await db.commit()
     req = await _load_request(db, request_id, matter_id, user.tenant_id)
@@ -555,7 +561,10 @@ async def portal_list_signatures(
     ]
     for signature_request in requests:
         for signer in signature_request.signers:
-            if _portal_signer_matches_context(signer, ctx) and signer.status == "pending":
+            if (
+                _portal_signer_matches_context(signer, ctx)
+                and signer.status == "pending"
+            ):
                 mark_signer_viewed(signer)
     if requests:
         await db.commit()
