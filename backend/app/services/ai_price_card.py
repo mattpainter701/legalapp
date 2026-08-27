@@ -77,6 +77,15 @@ class PriceCard:
             raise UnknownModelPrice(model)
         return rate
 
+    def has_rate(self, model: str) -> bool:
+        """True when this card can price the model, without raising."""
+
+        try:
+            self.rate_for(model)
+        except UnknownModelPrice:
+            return False
+        return True
+
     def estimate_max_micros(
         self,
         *,

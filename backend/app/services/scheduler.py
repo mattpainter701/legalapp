@@ -688,6 +688,23 @@ class LegalScheduler:
             replace_existing=True,
         )
 
+        from app.services.background_ai_reconciliation import (
+            reconcile_unknown_reservations,
+        )
+
+        # Background AI reservations whose outcome the provider never confirmed
+        # keep holding their estimated spend against every quota window. This
+        # sweep resolves what it can and ages out what it cannot, so the held
+        # amount stays visible and bounded rather than growing unattended.
+        self.scheduler.add_job(
+            self._guarded("background-ai-reconcile", reconcile_unknown_reservations),
+            "interval",
+            minutes=15,
+            id="background-ai-reconcile",
+            name="Background AI Reservation Reconciliation",
+            replace_existing=True,
+        )
+
         # estate-deadline-watcher: daily 8:05 AM ET
         self.scheduler.add_job(
             self._guarded("estate-deadline-watcher", self.run_estate_deadline_watcher),

@@ -372,9 +372,16 @@ class AIRequestBroker:
             # zero, so an unreported response is never free.
             actual_micros: int | None = None
             if price_card is not None and (result.tokens_in or result.tokens_out):
+                # The gateway reports the underlying provider model, which the
+                # card usually does not price — the route alias is what priced
+                # the reservation, so it is the reliable settlement key. Prefer
+                # the reported model only when it carries its own rate.
+                settle_model = route.gateway_alias
+                if result.raw_model and price_card.has_rate(result.raw_model):
+                    settle_model = result.raw_model
                 try:
                     actual_micros = price_card.actual_micros(
-                        model=result.raw_model or route.gateway_alias,
+                        model=settle_model,
                         tokens_in=result.tokens_in,
                         tokens_out=result.tokens_out,
                     )

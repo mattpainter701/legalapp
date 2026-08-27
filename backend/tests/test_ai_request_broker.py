@@ -172,3 +172,9 @@ async def test_responses_transport_uses_global_background_alias(monkeypatch):
     assert len(seen["reservation"]["idempotency_key"]) == 64
     assert seen["reservation"]["idempotency_key"] != "lead:1:note:v1"
     assert seen["settled"]["provider_request_id"] == "resp_test"
+    # The gateway reported "luna-test", the underlying provider model, which the
+    # price card does not carry. Settlement must fall back to the route alias
+    # that priced the reservation rather than giving up and charging the
+    # worst-case estimate: 8 in at $0.60/M + 5 out at $2.40/M = 16.8 -> 17.
+    assert seen["settled"]["actual_micros"] == 17
+    assert seen["reservation"]["estimated_micros"] > 17

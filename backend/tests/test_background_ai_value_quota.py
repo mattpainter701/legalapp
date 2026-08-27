@@ -494,6 +494,33 @@ async def test_unresolvable_reservations_age_out_but_keep_holding_their_estimate
     assert again.scanned == 0
 
 
+def test_reconciliation_is_registered_on_the_production_scheduler(monkeypatch):
+    """The sweep must actually run somewhere, not only in tests.
+
+    Without a registration, ambiguous reservations are never aged out and the
+    operator panel's held-spend figure only ever grows.
+    """
+
+    from app.services import scheduler as scheduler_module
+
+    registered = []
+
+    class _FakeScheduler:
+        running = False
+
+        def add_job(self, _func, *_args, **kwargs):
+            registered.append(kwargs.get("id"))
+
+        def start(self):
+            pass
+
+    instance = scheduler_module.LegalScheduler()
+    monkeypatch.setattr(instance, "scheduler", _FakeScheduler())
+    instance.start()
+
+    assert "background-ai-reconcile" in registered
+
+
 @pytest.mark.asyncio
 async def test_reconciliation_respects_the_grace_period(test_engine, db_session):
     """A request that may still be in flight is left alone."""
