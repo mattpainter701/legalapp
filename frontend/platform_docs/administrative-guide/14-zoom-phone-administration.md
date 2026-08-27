@@ -9,7 +9,7 @@ icon: plug
 
 # Zoom Phone administration
 
-[Zoom](/admin?tab=zoom) manages Zoom service authorization and Zoom Phone readiness for the call-intake workflow.
+[Integrations → Zoom](/admin?tab=integrations&integration=zoom) manages Zoom service authorization and Zoom Phone readiness for the call-intake workflow.
 
 Zoom Phone and Zoom Meetings are separate grants. Phone reads completed call history and detail for intake. Meetings uses user-profile and meeting read/write permission to create and manage meeting links. Enabling one does not automatically enable the other.
 

@@ -19,8 +19,7 @@ The Administration portal controls tenant-wide access, commercial settings, inte
 - [Licensing](/admin?tab=licensing) — allocate seats and premium AI access.
 - [Subscription](/admin?tab=billing) and [Usage](/admin?tab=usage) — review commercial status and consumption.
 - [Tenant](/admin?tab=tenant) and [Settings](/admin?tab=settings) — maintain firm identity, defaults, branding, alerts, and feature controls.
-- [Integrations](/admin?tab=integrations) — authorize approved cloud services and inspect readiness.
-- [MCP Servers](/admin?tab=mcp), [Prompts](/admin?tab=prompts), [Cloud Search](/admin?tab=cloud-search), and [File Shares](/admin?tab=smb) — govern AI tools and sources.
+- [Integrations](/admin?tab=integrations) — authorize cloud services and manage MCP servers, Cloud Search, file shares, collaboration, communications, and accounting connections in one place; [Prompts](/admin?tab=prompts) governs AI instructions.
 
 Your plan may intentionally hide features that do not apply to the tenant. Accountant access is limited to the finance-oriented administrative tabs.
 

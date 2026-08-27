@@ -17,7 +17,7 @@ beforeEach(async () => {
   delete window.gtag
   delete window.dataLayer
   for (const node of document.querySelectorAll('script[data-google-analytics]')) node.remove()
-  ;({ default: GoogleAnalytics } = await import('./GoogleAnalytics'))
+  ;({ default: GoogleAnalytics } = await import('./GoogleAnalytics.jsx'))
 })
 
 afterEach(() => {

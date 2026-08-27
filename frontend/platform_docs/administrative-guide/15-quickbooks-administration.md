@@ -9,7 +9,7 @@ icon: chart
 
 # QuickBooks administration
 
-[QuickBooks](/admin?tab=qbo) connects LawHand billing data to an approved QuickBooks Online company. The integration supports workflow and transfer; QuickBooks remains an accounting system that requires reconciliation.
+[Integrations → QuickBooks](/admin?tab=integrations&integration=quickbooks) connects LawHand billing data to an approved QuickBooks Online company. The integration supports workflow and transfer; QuickBooks remains an accounting system that requires reconciliation.
 
 ## Permission boundary and current use
 

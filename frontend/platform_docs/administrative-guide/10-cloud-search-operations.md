@@ -9,7 +9,7 @@ icon: network
 
 # Cloud Search operations
 
-[Cloud Search](/admin?tab=cloud-search) exposes connection status, test search, synchronization, indexed metadata, and cache controls for approved cloud sources.
+[Integrations → Cloud Search](/admin?tab=integrations&integration=cloud-search) exposes connection status, test search, synchronization, indexed metadata, and cache controls for approved cloud sources.
 
 ## Establish the source boundary
 
