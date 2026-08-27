@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import threading
+from contextlib import contextmanager
 from io import BytesIO
 import warnings
 from dataclasses import dataclass
@@ -208,7 +209,9 @@ def reconstruct_ocr_text(lines: list[OcrLine] | tuple[OcrLine, ...]) -> str:
 
 _ENGINE = None
 _ENGINE_LOCK = threading.Lock()
-_INFERENCE_LOCK = threading.Lock()
+_ENGINE_POOL = None
+_ENGINE_POOL_CONFIG: tuple[int, int] | None = None
+_ENGINE_POOL_LOCK = threading.Lock()
 _MAX_OCR_PAGES = 25
 _MAX_RENDERED_PIXELS = 80_000_000
 _MAX_PAGE_PIXELS = 10_000_000
@@ -357,26 +360,91 @@ def image_to_pdf(content: bytes) -> NormalizedImagePdf:
     )
 
 
+def _new_engine():
+    try:
+        from rapidocr import RapidOCR
+    except ImportError as exc:  # pragma: no cover - deployment guard
+        raise TemplateOcrError(
+            "OCR is not installed on this server. Ask an administrator to enable the document OCR worker."
+        ) from exc
+    try:
+        return RapidOCR()
+    except Exception as exc:  # pragma: no cover - runtime/model guard
+        raise TemplateOcrError(
+            "The OCR engine could not start. Try again or contact support."
+        ) from exc
+
+
 def _engine():
+    """Return the first local engine for compatibility and pool seeding."""
     global _ENGINE
     if _ENGINE is not None:
         return _ENGINE
     with _ENGINE_LOCK:
-        if _ENGINE is not None:
-            return _ENGINE
-        try:
-            from rapidocr import RapidOCR
-        except ImportError as exc:  # pragma: no cover - deployment guard
-            raise TemplateOcrError(
-                "OCR is not installed on this server. Ask an administrator to enable the document OCR worker."
-            ) from exc
-        try:
-            _ENGINE = RapidOCR()
-        except Exception as exc:  # pragma: no cover - runtime/model guard
-            raise TemplateOcrError(
-                "The OCR engine could not start. Try again or contact support."
-            ) from exc
+        if _ENGINE is None:
+            _ENGINE = _new_engine()
     return _ENGINE
+
+
+class _OcrEnginePool:
+    """Lazily create independent inference sessions up to a fixed bound."""
+
+    def __init__(self, size: int, first_engine: Any):
+        self.size = size
+        self._available = [first_engine]
+        self._created = 1
+        self._condition = threading.Condition()
+
+    def acquire(self):
+        create = False
+        with self._condition:
+            while not self._available:
+                if self._created < self.size:
+                    self._created += 1
+                    create = True
+                    break
+                self._condition.wait()
+            if not create:
+                return self._available.pop()
+        try:
+            return _new_engine()
+        except Exception:
+            with self._condition:
+                self._created -= 1
+                self._condition.notify()
+            raise
+
+    def release(self, engine: Any) -> None:
+        with self._condition:
+            self._available.append(engine)
+            self._condition.notify()
+
+
+def _engine_pool() -> _OcrEnginePool:
+    global _ENGINE_POOL, _ENGINE_POOL_CONFIG
+    concurrency = get_settings().TEMPLATE_OCR_LOCAL_CONCURRENCY
+    # Include the seed identity so tests and controlled runtime resets that
+    # replace _ENGINE cannot accidentally lease a stale model session.
+    config = (concurrency, id(_ENGINE))
+    if _ENGINE_POOL is not None and _ENGINE_POOL_CONFIG == config:
+        return _ENGINE_POOL
+    with _ENGINE_POOL_LOCK:
+        seed = _engine()
+        config = (concurrency, id(seed))
+        if _ENGINE_POOL is None or _ENGINE_POOL_CONFIG != config:
+            _ENGINE_POOL = _OcrEnginePool(concurrency, seed)
+            _ENGINE_POOL_CONFIG = config
+    return _ENGINE_POOL
+
+
+@contextmanager
+def _lease_engine():
+    pool = _engine_pool()
+    engine = pool.acquire()
+    try:
+        yield engine
+    finally:
+        pool.release(engine)
 
 
 def _safe_scale(width: float, height: float, remaining_pixels: int) -> float:
@@ -435,8 +503,6 @@ def ocr_pdf(
     selected_pages = requested_pages[:page_limit]
     remaining_pixels = _MAX_RENDERED_PIXELS
     lines: list[OcrLine] = []
-    engine = _engine()
-
     try:
         for page_index in selected_pages:
             page = document[page_index]
@@ -458,7 +524,7 @@ def ocr_pdf(
                 finally:
                     bitmap.close()
                 remaining_pixels -= image.width * image.height
-                with _INFERENCE_LOCK:
+                with _lease_engine() as engine:
                     result = engine(image)
             except TemplateOcrError:
                 raise
@@ -575,8 +641,8 @@ def ocr_image(content: bytes) -> ImageOcrResult:
         ) from exc
 
     try:
-        with _INFERENCE_LOCK:
-            result = _engine()(image)
+        with _lease_engine() as engine:
+            result = engine(image)
     except TemplateOcrError:
         raise
     except Exception as exc:  # pragma: no cover - engine/runtime guard

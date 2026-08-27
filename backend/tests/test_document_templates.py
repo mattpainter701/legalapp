@@ -2328,6 +2328,222 @@ async def test_pdf_save_rejects_output_that_differs_from_reviewed_preview_before
 
 
 @pytest.mark.asyncio
+async def test_pdf_save_does_not_hold_template_or_preview_locks_during_storage(
+    client,
+    db_session,
+    test_engine,
+    test_tenant,
+    test_user,
+    tmp_path,
+    monkeypatch,
+):
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.database import set_tenant_context
+    from app.models.document_template import DocumentTemplate
+    from app.models.document_template_preview import DocumentTemplatePreview
+
+    template_id, matter, values, preview_id = await _prepare_active_pdf_generation(
+        client=client,
+        db_session=db_session,
+        test_tenant=test_tenant,
+        test_user=test_user,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        slug="storage-lock-window",
+    )
+    original_store = document_templates.matter_file_store.store_matter_file_result
+    observed = {"template": False, "preview": False}
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+
+    async def inspect_locks_then_store(**kwargs):
+        async with session_factory() as probe:
+            await set_tenant_context(probe, str(test_tenant.id))
+            observed["template"] = (
+                await probe.scalar(
+                    select(DocumentTemplate)
+                    .where(DocumentTemplate.id == uuid.UUID(template_id))
+                    .with_for_update(nowait=True)
+                )
+                is not None
+            )
+            observed["preview"] = (
+                await probe.scalar(
+                    select(DocumentTemplatePreview)
+                    .where(DocumentTemplatePreview.id == uuid.UUID(preview_id))
+                    .with_for_update(nowait=True)
+                )
+                is not None
+            )
+            await probe.rollback()
+        return await original_store(**kwargs)
+
+    with monkeypatch.context() as lock_probe:
+        lock_probe.setattr(
+            document_templates.matter_file_store,
+            "store_matter_file_result",
+            inspect_locks_then_store,
+        )
+        saved = await client.post(
+            f"/api/templates/{template_id}/render",
+            json={
+                "variables": values,
+                "matter_id": str(matter.id),
+                "preview_id": preview_id,
+            },
+        )
+
+    assert saved.status_code == 200, saved.text
+    assert observed == {"template": True, "preview": True}
+
+
+@pytest.mark.asyncio
+async def test_pdf_finalization_read_failure_removes_staged_storage(
+    client, db_session, test_tenant, test_user, tmp_path, monkeypatch
+):
+    from pathlib import Path
+
+    from sqlalchemy import func, select
+
+    from app.models.document_template_preview import DocumentTemplatePreview
+    from app.models.matter_document import MatterDocument
+
+    template_id, matter, values, preview_id = await _prepare_active_pdf_generation(
+        client=client,
+        db_session=db_session,
+        test_tenant=test_tenant,
+        test_user=test_user,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        slug="finalization-read-failure",
+    )
+    files_before = {
+        path.resolve() for path in Path(tmp_path).rglob("*") if path.is_file()
+    }
+    original_load = document_templates._load_generation_preview_evidence
+
+    async def fail_final_evidence_read(**kwargs):
+        if kwargs["lock"]:
+            raise RuntimeError("injected final evidence read failure")
+        return await original_load(**kwargs)
+
+    with monkeypatch.context() as failure:
+        failure.setattr(
+            document_templates,
+            "_load_generation_preview_evidence",
+            fail_final_evidence_read,
+        )
+        response = await client.post(
+            f"/api/templates/{template_id}/render",
+            json={
+                "variables": values,
+                "matter_id": str(matter.id),
+                "preview_id": preview_id,
+            },
+        )
+
+    assert response.status_code == 500, response.text
+    assert "staged storage was removed" in response.json()["detail"]
+    files_after = {
+        path.resolve() for path in Path(tmp_path).rglob("*") if path.is_file()
+    }
+    assert files_after == files_before
+    assert (
+        await db_session.scalar(select(func.count()).select_from(MatterDocument)) == 0
+    )
+    evidence = await db_session.scalar(
+        select(DocumentTemplatePreview)
+        .where(DocumentTemplatePreview.id == uuid.UUID(preview_id))
+        .execution_options(populate_existing=True)
+    )
+    assert evidence.consumed_at is None
+    assert evidence.reconciliation_required_at is None
+
+
+@pytest.mark.asyncio
+async def test_consumed_preview_keeps_separate_duplicate_cleanup_marker(
+    client, db_session, test_tenant, test_user, tmp_path, monkeypatch
+):
+    from sqlalchemy import func, select
+
+    from app.models.document_template_preview import DocumentTemplatePreview
+    from app.services.matter_file_store import StorageResult
+
+    template_id, matter, values, preview_id = await _prepare_active_pdf_generation(
+        client=client,
+        db_session=db_session,
+        test_tenant=test_tenant,
+        test_user=test_user,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        slug="consumed-duplicate-cleanup",
+    )
+    saved = await client.post(
+        f"/api/templates/{template_id}/render",
+        json={
+            "variables": values,
+            "matter_id": str(matter.id),
+            "preview_id": preview_id,
+        },
+    )
+    assert saved.status_code == 200, saved.text
+
+    duplicate_document_id = uuid.uuid4()
+    staged = StorageResult(
+        provider="google",
+        backend="google_drive",
+        storage_path="https://display.invalid/not-authoritative",
+        provider_item_id="duplicate-provider-item",
+        drive_id="duplicate-drive",
+    )
+    marker_args = {
+        "tenant_id": test_tenant.id,
+        "preview_id": uuid.UUID(preview_id),
+        "reason": "cleanup_failed",
+        "storage_result": staged,
+        "output_filename": "duplicate.pdf",
+        "output_sha256": "d" * 64,
+        "document_id": duplicate_document_id,
+    }
+    assert await document_templates._mark_preview_reconciliation_required(
+        **marker_args
+    )
+    assert await document_templates._mark_preview_reconciliation_required(
+        **marker_args
+    )
+
+    original = await db_session.scalar(
+        select(DocumentTemplatePreview)
+        .where(DocumentTemplatePreview.id == uuid.UUID(preview_id))
+        .execution_options(populate_existing=True)
+    )
+    assert original.consumed_at is not None
+    assert original.reconciliation_required_at is None
+    marker = await db_session.scalar(
+        select(DocumentTemplatePreview).where(
+            DocumentTemplatePreview.reconciliation_document_id
+            == duplicate_document_id
+        )
+    )
+    assert marker.id != original.id
+    assert marker.consumed_at is None
+    assert marker.reconciliation_reason == "cleanup_failed"
+    assert marker.reconciliation_provider_item_id == "duplicate-provider-item"
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(DocumentTemplatePreview)
+            .where(
+                DocumentTemplatePreview.reconciliation_document_id
+                == duplicate_document_id
+            )
+        )
+        == 1
+    )
+
+
+@pytest.mark.asyncio
 async def test_failed_commit_with_confirmed_absence_removes_local_staged_file(
     client, db_session, test_tenant, test_user, tmp_path, monkeypatch
 ):
@@ -2626,6 +2842,16 @@ async def test_lost_commit_ack_preserves_committed_storage_and_replays_idempoten
     assert (
         await db_session.scalar(select(func.count()).select_from(MatterDocument)) == 1
     )
+
+    from app.models.document_template_preview import DocumentTemplatePreview
+
+    evidence = await db_session.scalar(
+        select(DocumentTemplatePreview).where(
+            DocumentTemplatePreview.id == uuid.UUID(preview_id)
+        )
+    )
+    evidence.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    await db_session.commit()
 
     replay = await client.post(
         f"/api/templates/{template_id}/render",
@@ -2968,6 +3194,107 @@ async def test_manual_only_pdf_can_be_previewed_and_activated(
     )
     assert activated.status_code == 200, activated.text
     assert activated.json()["is_active"] is True
+
+
+@pytest.mark.asyncio
+async def test_template_library_search_filters_and_paginates(
+    client, db_session, test_tenant
+):
+    from app.models.document_template import DocumentTemplate
+
+    templates = [
+        DocumentTemplate(
+            tenant_id=test_tenant.id,
+            title="Automation paging engagement",
+            description="Standard engagement packet",
+            body="Hello {{client_name}}",
+            category="engagement_letter",
+            format="markdown",
+            is_active=True,
+        ),
+        DocumentTemplate(
+            tenant_id=test_tenant.id,
+            title="Automation paging motion",
+            description="Court filing",
+            body="Motion for {{client_name}}",
+            category="motion",
+            format="markdown",
+            is_active=False,
+        ),
+        DocumentTemplate(
+            tenant_id=test_tenant.id,
+            title="Automation paging legacy PDF",
+            description="Source must be restored",
+            body="",
+            category="other",
+            format="pdf",
+            is_active=False,
+        ),
+        DocumentTemplate(
+            tenant_id=test_tenant.id,
+            title="Literal 100% template",
+            body="Literal wildcard test",
+            category="other",
+            format="markdown",
+            is_active=True,
+        ),
+    ]
+    db_session.add_all(templates)
+    await db_session.commit()
+
+    first_page = await client.get(
+        "/api/templates",
+        params={
+            "include_inactive": "true",
+            "query": "Automation paging",
+            "limit": 2,
+            "offset": 0,
+        },
+    )
+    assert first_page.status_code == 200, first_page.text
+    payload = first_page.json()
+    assert payload["total"] == 3
+    assert len(payload["items"]) == 2
+    assert payload["limit"] == 2
+    assert payload["offset"] == 0
+    assert payload["has_more"] is True
+    assert payload["summary"] == {
+        "total": 4,
+        "active": 2,
+        "inactive": 2,
+        "ready": 2,
+        "source_missing": 1,
+    }
+    source_health = await client.get(
+        "/api/templates",
+        params={"include_inactive": "true", "query": "legacy PDF"},
+    )
+    assert source_health.status_code == 200, source_health.text
+    assert source_health.json()["items"][0]["source_ready"] is False
+
+    filtered = await client.get(
+        "/api/templates",
+        params={
+            "include_inactive": "true",
+            "template_status": "inactive",
+            "category": "motion",
+            "limit": 10,
+        },
+    )
+    assert filtered.status_code == 200, filtered.text
+    assert [item["title"] for item in filtered.json()["items"]] == [
+        "Automation paging motion"
+    ]
+    assert filtered.json()["has_more"] is False
+
+    literal_wildcard = await client.get(
+        "/api/templates",
+        params={"include_inactive": "true", "query": "100%"},
+    )
+    assert literal_wildcard.status_code == 200, literal_wildcard.text
+    assert [item["title"] for item in literal_wildcard.json()["items"]] == [
+        "Literal 100% template"
+    ]
 
 
 @pytest.mark.asyncio

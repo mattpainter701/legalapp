@@ -1292,6 +1292,22 @@ def test_production_check_exercises_customer_llm_routes() -> None:
     assert '"Reply with exactly READY."' in production_check
 
 
+def test_production_check_fails_closed_on_document_automation_integrity_gaps() -> None:
+    production_check = PRODUCTION_CHECK.read_text(encoding="utf-8")
+
+    assert "document_template_previews" in production_check
+    assert "reconciliation_required_at IS NOT NULL" in production_check
+    assert "reconciliation_resolved_at IS NULL" in production_check
+    assert "unresolved staged-file reconciliation" in production_check
+    assert "document_templates WHERE is_active" in production_check
+    assert "source_storage_path" in production_check
+    assert "source_sha256" in production_check
+    assert "source_file_size" in production_check
+    assert "active binary template(s) without complete source integrity metadata" in (
+        production_check
+    )
+
+
 def test_skynet_deploy_recreates_litellm_and_bounds_litellm_diagnostics() -> None:
     deploy = (ROOT / "scripts" / "deploy_skynet_runner.sh").read_text(encoding="utf-8")
 

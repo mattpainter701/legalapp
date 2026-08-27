@@ -31,6 +31,13 @@ import {
   Wand2,
   Upload,
   Download,
+  AlertTriangle,
+  ArrowRight,
+  ChevronLeft,
+  ChevronRight,
+  CircleCheck,
+  Layers3,
+  RotateCw,
 } from 'lucide-react'
 
 const CATEGORY_COLORS = {
@@ -53,6 +60,26 @@ const TABS = [
   { key: 'templates', label: 'Templates', icon: FileText },
   { key: 'generate', label: 'Generate / Smart Fill', icon: Wand2 },
 ]
+
+const TEMPLATE_PAGE_SIZE = 12
+const EMPTY_LIBRARY_SUMMARY = {
+  total: 0,
+  active: 0,
+  inactive: 0,
+  ready: 0,
+  source_missing: 0,
+}
+
+const formatUpdatedAt = (value) => {
+  if (!value) return 'Recently updated'
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return 'Recently updated'
+  return `Updated ${new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: parsed.getFullYear() === new Date().getFullYear() ? undefined : 'numeric',
+  }).format(parsed)}`
+}
 
 const normalizeItems = (data) => (Array.isArray(data) ? data : (data?.items || []))
 
@@ -339,7 +366,11 @@ function TemplateForm({ initial, onSubmit, onCancel }) {
 
 const isSourceBackedTemplateMissing = (template) => (
   ['pdf', 'docx'].includes(String(template?.format || '').toLowerCase())
-  && (!template?.source_filename || !template?.source_sha256)
+  && (
+    typeof template?.source_ready === 'boolean'
+      ? !template.source_ready
+      : (!template?.source_filename || !template?.source_sha256)
+  )
 )
 
 export const replaceTemplateVariable = (body, from, to) => {
@@ -776,6 +807,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
               <li>In Word, use a clear label beside the value, a labeled blank, or an explicit placeholder such as {'{{client_name}}'}.</li>
               <li>In PDFs, real form controls work best. For scans, use upright, high-contrast pages and include a filled sample when possible.</li>
               <li>If something is missed, add the exact Word replacement text or place a field directly on the PDF page, then verify it against the source.</li>
+              <li>Password-protected files, dynamic XFA forms, PDF scripts/actions, and embedded attachments are not supported. Export a standard static PDF or DOCX before uploading.</li>
             </ul>
           </details>
           {file && (
@@ -1737,27 +1769,72 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
 export default function TemplatesPage() {
   const [templates, setTemplates] = useState([])
   const [matters, setMatters] = useState([])
+  const [generationTemplates, setGenerationTemplates] = useState([])
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [generationLoading, setGenerationLoading] = useState(false)
   const [matterLoading, setMatterLoading] = useState(true)
   const [error, setError] = useState(null)
   const [activeTab, setActiveTab] = useState('templates')
+  const [searchInput, setSearchInput] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState('all')
+  const [categoryFilter, setCategoryFilter] = useState('all')
+  const [page, setPage] = useState(0)
+  const [libraryMeta, setLibraryMeta] = useState({
+    total: 0,
+    limit: TEMPLATE_PAGE_SIZE,
+    offset: 0,
+    hasMore: false,
+    summary: EMPTY_LIBRARY_SUMMARY,
+  })
   const [showCreate, setShowCreate] = useState(false)
   const [showUpload, setShowUpload] = useState(false)
   const [editTemplate, setEditTemplate] = useState(null)
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [renderTarget, setRenderTarget] = useState(null)
+  const requestIdRef = useRef(0)
 
   const load = useCallback(async () => {
+    const requestId = ++requestIdRef.current
     try {
       setError(null)
-      const res = await getTemplates({ include_inactive: true })
-      setTemplates(res.items || [])
+      setRefreshing(true)
+      const res = await getTemplates({
+        include_inactive: true,
+        query: searchQuery || undefined,
+        template_status: statusFilter === 'all' ? undefined : statusFilter,
+        category: categoryFilter === 'all' ? undefined : categoryFilter,
+        limit: TEMPLATE_PAGE_SIZE,
+        offset: page * TEMPLATE_PAGE_SIZE,
+      })
+      if (requestId !== requestIdRef.current) return
+      const items = res.items || []
+      const fallbackSummary = {
+        total: items.length,
+        active: items.filter((template) => template.is_active).length,
+        inactive: items.filter((template) => !template.is_active).length,
+        ready: items.filter((template) => template.is_active && !isSourceBackedTemplateMissing(template)).length,
+        source_missing: items.filter(isSourceBackedTemplateMissing).length,
+      }
+      setTemplates(items)
+      setLibraryMeta({
+        total: res.total ?? items.length,
+        limit: res.limit ?? TEMPLATE_PAGE_SIZE,
+        offset: res.offset ?? page * TEMPLATE_PAGE_SIZE,
+        hasMore: res.has_more ?? false,
+        summary: { ...fallbackSummary, ...(res.summary || {}) },
+      })
     } catch (err) {
+      if (requestId !== requestIdRef.current) return
       setError(getErrorMessage(err, 'Failed to load templates.'))
     } finally {
-      setLoading(false)
+      if (requestId === requestIdRef.current) {
+        setLoading(false)
+        setRefreshing(false)
+      }
     }
-  }, [])
+  }, [categoryFilter, page, searchQuery, statusFilter])
 
   const loadMatters = useCallback(async () => {
     setMatterLoading(true)
@@ -1775,20 +1852,58 @@ export default function TemplatesPage() {
     }
   }, [])
 
+  const loadGenerationTemplates = useCallback(async () => {
+    setGenerationLoading(true)
+    try {
+      const res = await getTemplates({
+        include_inactive: false,
+        template_status: 'active',
+        limit: 100,
+        offset: 0,
+      })
+      setGenerationTemplates(
+        (res.items || []).filter((template) => template.is_active && !isSourceBackedTemplateMissing(template)),
+      )
+    } catch (err) {
+      setGenerationTemplates([])
+      setError(getErrorMessage(err, 'Failed to load active templates.'))
+    } finally {
+      setGenerationLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setPage(0)
+      setSearchQuery(searchInput.trim())
+    }, 250)
+    return () => window.clearTimeout(timeoutId)
+  }, [searchInput])
+
   useEffect(() => {
     load()
+  }, [load])
+
+  useEffect(() => {
     loadMatters()
-  }, [load, loadMatters])
+  }, [loadMatters])
+
+  useEffect(() => {
+    if (activeTab === 'generate') loadGenerationTemplates()
+  }, [activeTab, loadGenerationTemplates])
 
   const handleCreate = async (data) => {
     await createTemplate(data)
     setShowCreate(false)
     await load()
+    if (activeTab === 'generate') await loadGenerationTemplates()
   }
 
   const handleUploadedTemplate = async () => {
     setShowUpload(false)
+    setPage(0)
     await load()
+    if (activeTab === 'generate') await loadGenerationTemplates()
   }
 
   const handleUpdate = async (data) => {
@@ -1801,6 +1916,10 @@ export default function TemplatesPage() {
     try {
       await deleteTemplate(deleteTarget.id)
       setDeleteTarget(null)
+      if (templates.length === 1 && page > 0) {
+        setPage((current) => current - 1)
+        return
+      }
       await load()
     } catch (err) {
       setError(getErrorMessage(err, 'Failed to delete template.'))
@@ -1816,132 +1935,254 @@ export default function TemplatesPage() {
     }
   }
 
-  const bodyPreview = (body) => {
+  const bodyPreview = (body, description) => {
+    const summary = String(description || '').trim()
+    if (summary) return summary
     const text = String(body || '')
     return text.length > 100 ? `${text.slice(0, 100)}...` : text
   }
 
-  const activeGenerationTemplates = templates.filter((tpl) => tpl.is_active && !isSourceBackedTemplateMissing(tpl))
-  const activeTemplateCount = templates.filter((tpl) => tpl.is_active).length
-  const variableCount = templates.reduce((sum, tpl) => sum + getTemplateVariables(tpl).length, 0)
+  const activeGenerationTemplates = generationTemplates
   const selectedTemplate = activeGenerationTemplates[0] || null
+  const hasFilters = Boolean(searchQuery || statusFilter !== 'all' || categoryFilter !== 'all')
+  const resultStart = libraryMeta.total ? libraryMeta.offset + 1 : 0
+  const resultEnd = Math.min(libraryMeta.offset + templates.length, libraryMeta.total)
+
+  const clearFilters = () => {
+    setSearchInput('')
+    setSearchQuery('')
+    setStatusFilter('all')
+    setCategoryFilter('all')
+    setPage(0)
+  }
+
+  const refreshActiveView = async () => {
+    if (activeTab === 'generate') {
+      await Promise.all([load(), loadGenerationTemplates()])
+      return
+    }
+    await load()
+  }
 
   const renderTemplatesPanel = () => {
-    if (templates.length === 0) {
-      return (
-        <div className="text-center py-16 bg-brand-surface-2 border border-brand-line rounded-lg">
-          <FileText
-            size={48}
-            className="mx-auto text-brand-muted mb-4 opacity-30"
-          />
-          <p className="text-brand-muted">
-            No templates yet. Create the first automation template.
-          </p>
-        </div>
-      )
-    }
-
     return (
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {templates.map((tpl) => {
-          const vars = getTemplateVariables(tpl)
-          const sourceMissing = isSourceBackedTemplateMissing(tpl)
-          return (
-            <div
-              key={tpl.id}
-              className="bg-brand-surface-2 border border-brand-line rounded-lg shadow-sm hover:shadow-md transition-shadow"
-            >
-              <div className="p-4">
-                <div className="flex items-start justify-between mb-2">
-                  <h3 className="font-medium text-brand-ink truncate">
-                    {tpl.title}
-                  </h3>
-                  <span
-                    className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full font-semibold shrink-0 ml-2 ${
-                      CATEGORY_COLORS[tpl.category] || CATEGORY_COLORS.other
-                    }`}
-                  >
-                    {CATEGORY_LABELS[tpl.category] || tpl.category}
-                  </span>
-                </div>
-                <p className="text-xs text-brand-muted font-mono mb-3 min-h-10">
-                  {bodyPreview(tpl.body)}
-                </p>
-
-                {sourceMissing && (
-                  <div role="alert" className="mb-3 border border-brand-amber/40 rounded bg-brand-amber/10 px-3 py-2">
-                    <p className="text-xs font-semibold text-brand-ink">Source missing — recreate this PDF template</p>
-                    <p className="mt-0.5 text-[11px] text-brand-muted">This older record cannot generate documents. Upload the original Word or PDF file again; ordinary PDFs and scans are supported.</p>
-                    <button
-                      type="button"
-                      onClick={() => setShowUpload(true)}
-                      className="mt-2 text-xs font-semibold text-brand-accent-2 underline"
-                    >
-                      Recreate from Upload Sample
-                    </button>
-                  </div>
-                )}
-
-                <div className="flex flex-wrap items-center gap-2 mb-3">
-                  <span className="inline-flex items-center text-xs font-semibold uppercase text-brand-accent-2 border border-brand-line rounded px-2 py-1">
-                    {tpl.format || 'markdown'}
-                  </span>
-                  <span className="inline-flex items-center gap-1 text-xs text-brand-muted border border-brand-line rounded px-2 py-1">
-                    <ClipboardList size={12} />
-                    {vars.length} field{vars.length === 1 ? '' : 's'}
-                  </span>
-                  <button
-                    onClick={() => toggleActive(tpl)}
-                    disabled={sourceMissing}
-                    title={sourceMissing ? 'Recreate the template from its original source document before activating it' : undefined}
-                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-                      tpl.is_active ? 'bg-brand-green' : 'bg-brand-muted/30'
-                    }`}
-                    aria-label={tpl.is_active ? 'Deactivate template' : 'Activate template'}
-                  >
-                    <span
-                      className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                        tpl.is_active ? 'translate-x-4' : 'translate-x-1'
-                      }`}
-                    />
-                  </button>
-                  <span className="text-xs text-brand-muted">
-                    {tpl.is_active ? 'Active' : 'Inactive'}
-                  </span>
-                </div>
-
-                <div className="flex items-center gap-2 pt-2 border-t border-brand-line">
-                  <button
-                    onClick={() => setEditTemplate(tpl)}
-                    className="flex items-center gap-1 px-3 py-1.5 text-xs text-brand-muted hover:text-brand-ink border border-brand-line rounded"
-                  >
-                    <Pencil size={14} />
-                    Edit
-                  </button>
-                  <button
-                    onClick={() => setRenderTarget(tpl)}
-                    disabled={sourceMissing}
-                    title={sourceMissing
-                      ? 'Recreate the template from its original source document before previewing it'
-                      : (tpl.is_active ? 'Generate a document' : 'Preview this draft; activate it before saving to a matter')}
-                    className="flex items-center gap-1 px-3 py-1.5 text-xs text-brand-muted hover:text-brand-ink border border-brand-line rounded disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    {tpl.is_active ? <Sparkles size={14} /> : <Eye size={14} />}
-                    {tpl.is_active ? 'Generate' : 'Preview draft'}
-                  </button>
-                  <button
-                    onClick={() => setDeleteTarget(tpl)}
-                    className="flex items-center gap-1 px-3 py-1.5 text-xs text-brand-rose hover:text-red-800 border border-brand-line rounded ml-auto"
-                  >
-                    <Trash2 size={14} />
-                    Delete
-                  </button>
-                </div>
-              </div>
+      <section aria-label="Template library" className="space-y-4">
+        <div className="rounded-xl border border-brand-line bg-brand-surface-2 p-3 shadow-sm">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+            <label className="relative min-w-0 flex-1">
+              <span className="sr-only">Search templates</span>
+              <Search size={17} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-brand-muted" />
+              <input
+                type="search"
+                value={searchInput}
+                onChange={(event) => setSearchInput(event.target.value)}
+                placeholder="Search title or description"
+                className="w-full rounded-lg border border-brand-line bg-brand-bg py-2.5 pl-10 pr-3 text-sm text-brand-ink outline-none transition focus:border-brand-accent focus:ring-2 focus:ring-brand-accent/15"
+              />
+            </label>
+            <div className="grid grid-cols-2 gap-2 sm:flex">
+              <label>
+                <span className="sr-only">Filter by status</span>
+                <select
+                  value={statusFilter}
+                  onChange={(event) => {
+                    setStatusFilter(event.target.value)
+                    setPage(0)
+                  }}
+                  className="w-full rounded-lg border border-brand-line bg-brand-bg px-3 py-2.5 text-sm text-brand-ink outline-none focus:border-brand-accent sm:w-36"
+                >
+                  <option value="all">All statuses</option>
+                  <option value="active">Active</option>
+                  <option value="inactive">Inactive</option>
+                </select>
+              </label>
+              <label>
+                <span className="sr-only">Filter by category</span>
+                <select
+                  value={categoryFilter}
+                  onChange={(event) => {
+                    setCategoryFilter(event.target.value)
+                    setPage(0)
+                  }}
+                  className="w-full rounded-lg border border-brand-line bg-brand-bg px-3 py-2.5 text-sm text-brand-ink outline-none focus:border-brand-accent sm:w-48"
+                >
+                  <option value="all">All categories</option>
+                  {Object.entries(CATEGORY_LABELS).map(([value, label]) => (
+                    <option key={value} value={value}>{label}</option>
+                  ))}
+                </select>
+              </label>
             </div>
-          )
-        })}
-      </div>
+          </div>
+          <div className="mt-3 flex min-h-5 flex-wrap items-center justify-between gap-2 text-xs text-brand-muted">
+            <p aria-live="polite">
+              {refreshing
+                ? 'Refreshing template library…'
+                : `Showing ${resultStart}–${resultEnd} of ${libraryMeta.total} template${libraryMeta.total === 1 ? '' : 's'}`}
+            </p>
+            {hasFilters && (
+              <button type="button" onClick={clearFilters} className="font-semibold text-brand-accent-2 hover:underline">
+                Clear filters
+              </button>
+            )}
+          </div>
+        </div>
+
+        {templates.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-brand-line bg-brand-surface-2 px-6 py-16 text-center">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-brand-accent/10 text-brand-accent-2">
+              {hasFilters ? <Search size={22} /> : <FileText size={22} />}
+            </div>
+            <h2 className="mt-4 text-base font-semibold text-brand-ink">
+              {hasFilters ? 'No templates match these filters' : 'Build your first reusable template'}
+            </h2>
+            <p className="mx-auto mt-1 max-w-md text-sm text-brand-muted">
+              {hasFilters
+                ? 'Try a broader search, status, or category.'
+                : 'Upload a Word document, fillable PDF, ordinary PDF, or scan to preserve the source layout and map its fields.'}
+            </p>
+            {hasFilters && (
+              <button type="button" onClick={clearFilters} className="mt-4 rounded-lg border border-brand-line px-4 py-2 text-sm font-semibold text-brand-ink hover:bg-brand-bg">
+                Clear filters
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className={`grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3 ${refreshing ? 'opacity-60' : ''}`} aria-busy={refreshing}>
+            {templates.map((tpl) => {
+              const vars = getTemplateVariables(tpl)
+              const sourceMissing = isSourceBackedTemplateMissing(tpl)
+              const status = sourceMissing
+                ? { label: 'Needs source', className: 'bg-brand-amber/10 text-brand-amber' }
+                : tpl.is_active
+                  ? { label: 'Ready', className: 'bg-brand-green/10 text-brand-green' }
+                  : { label: 'Draft', className: 'bg-brand-muted/10 text-brand-muted' }
+              return (
+                <article
+                  key={tpl.id}
+                  className="group flex min-h-64 flex-col overflow-hidden rounded-xl border border-brand-line bg-brand-surface-2 shadow-sm transition hover:-translate-y-0.5 hover:border-brand-accent/35 hover:shadow-md"
+                >
+                  <div className={`h-1 ${sourceMissing ? 'bg-brand-amber' : tpl.is_active ? 'bg-brand-green' : 'bg-brand-muted/30'}`} />
+                  <div className="flex flex-1 flex-col p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${status.className}`}>
+                            {status.label}
+                          </span>
+                          <span className="text-[11px] font-semibold uppercase tracking-wide text-brand-muted">
+                            {tpl.format || 'markdown'}
+                          </span>
+                        </div>
+                        <h3 className="mt-2 truncate text-base font-semibold text-brand-ink" title={tpl.title}>
+                          {tpl.title}
+                        </h3>
+                      </div>
+                      <span
+                        className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${CATEGORY_COLORS[tpl.category] || CATEGORY_COLORS.other}`}
+                      >
+                        {CATEGORY_LABELS[tpl.category] || tpl.category}
+                      </span>
+                    </div>
+
+                    <p className="mt-2 line-clamp-2 min-h-10 text-sm leading-5 text-brand-muted">
+                      {bodyPreview(tpl.body, tpl.description) || 'No description yet. Open the template to review its content and mapped fields.'}
+                    </p>
+
+                    <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 border-y border-brand-line/70 py-3 text-xs text-brand-muted">
+                      <span className="inline-flex items-center gap-1.5">
+                        <ClipboardList size={14} />
+                        {vars.length} field{vars.length === 1 ? '' : 's'}
+                      </span>
+                      <span>{formatUpdatedAt(tpl.updated_at)}</span>
+                    </div>
+
+                    {sourceMissing && (
+                      <div role="alert" className="mt-3 rounded-lg border border-brand-amber/40 bg-brand-amber/10 px-3 py-2.5">
+                        <div className="flex gap-2">
+                          <AlertTriangle size={15} className="mt-0.5 shrink-0 text-brand-amber" />
+                          <div>
+                            <p className="text-xs font-semibold text-brand-ink">Source missing — recreate this PDF template</p>
+                            <p className="mt-0.5 text-[11px] leading-4 text-brand-muted">Re-upload the original file before this template can generate documents.</p>
+                            <button type="button" onClick={() => setShowUpload(true)} className="mt-1.5 text-xs font-semibold text-brand-accent-2 underline">
+                              Recreate from Upload Sample
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="mt-auto flex items-center gap-2 pt-4">
+                      <button
+                        onClick={() => setRenderTarget(tpl)}
+                        disabled={sourceMissing}
+                        title={sourceMissing
+                          ? 'Recreate the template from its original source document before previewing it'
+                          : (tpl.is_active ? 'Generate a document' : 'Preview this draft; activate it before saving to a matter')}
+                        className="inline-flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-lg bg-brand-ink px-3 py-2 text-xs font-semibold text-white hover:bg-brand-ink-2 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        {tpl.is_active ? <Sparkles size={14} /> : <Eye size={14} />}
+                        {tpl.is_active ? 'Generate' : 'Preview draft'}
+                      </button>
+                      <button
+                        onClick={() => setEditTemplate(tpl)}
+                        className="inline-flex items-center justify-center gap-1 rounded-lg border border-brand-line px-3 py-2 text-xs font-semibold text-brand-ink hover:bg-brand-bg"
+                      >
+                        <Pencil size={14} /> Edit
+                      </button>
+                      <button
+                        onClick={() => setDeleteTarget(tpl)}
+                        className="rounded-lg border border-brand-line p-2 text-brand-rose hover:border-brand-rose/40 hover:bg-brand-rose/10"
+                        aria-label="Delete"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+
+                    <div className="mt-3 flex items-center justify-between border-t border-brand-line/70 pt-3">
+                      <span className="text-xs text-brand-muted">{tpl.is_active ? 'Available to your team' : 'Not available for generation'}</span>
+                      <button
+                        onClick={() => toggleActive(tpl)}
+                        disabled={sourceMissing}
+                        title={sourceMissing ? 'Recreate the source document before activating' : undefined}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${tpl.is_active ? 'bg-brand-green' : 'bg-brand-muted/30'}`}
+                        aria-label={tpl.is_active ? 'Deactivate template' : 'Activate template'}
+                      >
+                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${tpl.is_active ? 'translate-x-6' : 'translate-x-1'}`} />
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              )
+            })}
+          </div>
+        )}
+
+        {libraryMeta.total > libraryMeta.limit && (
+          <nav aria-label="Template pages" className="flex flex-col items-center justify-between gap-3 rounded-xl border border-brand-line bg-brand-surface-2 px-4 py-3 sm:flex-row">
+            <p className="text-xs text-brand-muted">Showing {resultStart}–{resultEnd} of {libraryMeta.total}</p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setPage((current) => Math.max(0, current - 1))}
+                disabled={page === 0 || refreshing}
+                className="inline-flex items-center gap-1 rounded-lg border border-brand-line px-3 py-2 text-xs font-semibold text-brand-ink hover:bg-brand-bg disabled:opacity-40"
+              >
+                <ChevronLeft size={15} /> Previous
+              </button>
+              <span className="px-2 text-xs font-semibold text-brand-muted">Page {page + 1}</span>
+              <button
+                type="button"
+                onClick={() => setPage((current) => current + 1)}
+                disabled={!libraryMeta.hasMore || refreshing}
+                className="inline-flex items-center gap-1 rounded-lg border border-brand-line px-3 py-2 text-xs font-semibold text-brand-ink hover:bg-brand-bg disabled:opacity-40"
+              >
+                Next <ChevronRight size={15} />
+              </button>
+            </div>
+          </nav>
+        )}
+      </section>
     )
   }
 
@@ -1957,7 +2198,7 @@ export default function TemplatesPage() {
           </div>
           <button
             onClick={() => selectedTemplate && setRenderTarget(selectedTemplate)}
-            disabled={!selectedTemplate || isSourceBackedTemplateMissing(selectedTemplate)}
+            disabled={generationLoading || !selectedTemplate || isSourceBackedTemplateMissing(selectedTemplate)}
             title={isSourceBackedTemplateMissing(selectedTemplate) ? 'Re-upload the source document before generating' : undefined}
             className="flex items-center justify-center gap-2 px-4 py-2 text-sm text-white bg-brand-ink hover:bg-brand-ink-2 rounded disabled:opacity-50"
           >
@@ -1989,7 +2230,12 @@ export default function TemplatesPage() {
               </button>
             )
           })}
-          {activeGenerationTemplates.length === 0 && (
+          {generationLoading && (
+            <div className="border border-dashed border-brand-line rounded p-6 text-center md:col-span-2">
+              <p className="text-sm text-brand-muted">Loading active templates…</p>
+            </div>
+          )}
+          {!generationLoading && activeGenerationTemplates.length === 0 && (
             <div className="border border-dashed border-brand-line rounded p-6 text-center md:col-span-2">
               <p className="text-sm text-brand-muted">Activate a verified template before generating matter documents.</p>
             </div>
@@ -2027,62 +2273,88 @@ export default function TemplatesPage() {
 
   return (
     <div className="h-full overflow-y-auto bg-brand-bg p-4 md:p-6">
-      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-5">
-        <div>
-          <h1 className="text-xl font-semibold text-brand-ink">
-            Document Automation
-          </h1>
-          <p className="text-sm text-brand-muted mt-1">
-            Build high-fidelity templates, smart-fill matter data, preview the result, and save finalized documents to the matter file.
-          </p>
-        </div>
-        <div className="flex flex-col sm:flex-row gap-2">
+      <div className="mx-auto max-w-[1600px]">
+      <header className="relative overflow-hidden rounded-2xl bg-brand-ink px-5 py-6 text-white shadow-lg md:px-7 md:py-7">
+        <div className="pointer-events-none absolute -right-20 -top-24 h-64 w-64 rounded-full bg-brand-accent/20 blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-28 left-1/3 h-52 w-52 rounded-full bg-brand-green/15 blur-3xl" />
+        <div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+          <div className="max-w-2xl">
+            <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-white/80">
+              <Sparkles size={13} /> Document workspace
+            </div>
+            <h1 className="text-2xl font-semibold tracking-tight text-white md:text-3xl">Document Automation</h1>
+            <p className="mt-2 max-w-xl text-sm leading-6 text-white/70">
+              Turn the documents your firm already trusts into reviewed, matter-aware templates—and keep every final file in the matter record.
+            </p>
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row">
           <button
             onClick={() => setShowUpload(true)}
-            className="flex items-center justify-center gap-2 px-4 py-2 text-sm text-brand-ink border border-brand-line rounded hover:bg-brand-surface-2"
+            className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-white px-4 py-2.5 text-sm font-semibold text-brand-ink shadow-sm hover:bg-white/90"
           >
             <Upload size={18} />
             Upload Sample
+            <ArrowRight size={16} />
           </button>
           <button
             onClick={() => setShowCreate(true)}
-            className="flex items-center justify-center gap-2 px-4 py-2 text-sm text-white bg-brand-ink hover:bg-brand-ink-2 rounded"
+            className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-white/20 bg-white/5 px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/10"
           >
             <Plus size={18} />
             New Template
           </button>
+          </div>
+        </div>
+      </header>
+
+      <div className="relative z-10 -mt-3 grid grid-cols-2 gap-3 px-3 lg:grid-cols-4">
+        <div className="rounded-xl border border-brand-line bg-brand-surface-2 p-4 shadow-sm">
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-brand-muted">Library</p>
+            <Layers3 size={16} className="text-brand-accent-2" />
+          </div>
+          <p className="mt-2 text-2xl font-semibold text-brand-ink">{libraryMeta.summary.total}</p>
+          <p className="mt-0.5 text-xs text-brand-muted">Total templates</p>
+        </div>
+        <div className="rounded-xl border border-brand-line bg-brand-surface-2 p-4 shadow-sm">
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-brand-muted">Ready</p>
+            <CircleCheck size={16} className="text-brand-green" />
+          </div>
+          <p className="mt-2 text-2xl font-semibold text-brand-ink">{libraryMeta.summary.ready}</p>
+          <p className="mt-0.5 text-xs text-brand-muted">Available to generate</p>
+        </div>
+        <div className="rounded-xl border border-brand-line bg-brand-surface-2 p-4 shadow-sm">
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-brand-muted">Drafts</p>
+            <Pencil size={16} className="text-brand-muted" />
+          </div>
+          <p className="mt-2 text-2xl font-semibold text-brand-ink">{libraryMeta.summary.inactive}</p>
+          <p className="mt-0.5 text-xs text-brand-muted">Awaiting activation</p>
+        </div>
+        <div className="rounded-xl border border-brand-line bg-brand-surface-2 p-4 shadow-sm">
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-brand-muted">Attention</p>
+            <AlertTriangle size={16} className="text-brand-amber" />
+          </div>
+          <p className="mt-2 text-2xl font-semibold text-brand-ink">{libraryMeta.summary.source_missing}</p>
+          <p className="mt-0.5 text-xs text-brand-muted">Missing source files</p>
         </div>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
-        <div className="bg-brand-surface-2 border border-brand-line rounded p-4">
-          <p className="text-xs text-brand-muted uppercase tracking-wider">Templates</p>
-          <p className="text-2xl font-semibold text-brand-ink mt-1">{templates.length}</p>
-        </div>
-        <div className="bg-brand-surface-2 border border-brand-line rounded p-4">
-          <p className="text-xs text-brand-muted uppercase tracking-wider">Active</p>
-          <p className="text-2xl font-semibold text-brand-ink mt-1">{activeTemplateCount}</p>
-        </div>
-        <div className="bg-brand-surface-2 border border-brand-line rounded p-4">
-          <p className="text-xs text-brand-muted uppercase tracking-wider">Mapped Fields</p>
-          <p className="text-2xl font-semibold text-brand-ink mt-1">{variableCount}</p>
-        </div>
-        <div className="bg-brand-surface-2 border border-brand-line rounded p-4">
-          <p className="text-xs text-brand-muted uppercase tracking-wider">Recent Matters</p>
-          <p className="text-2xl font-semibold text-brand-ink mt-1">{matters.length}</p>
-        </div>
-      </div>
-
-      <div className="mb-5 overflow-x-auto border-b border-brand-line">
-        <div className="flex min-w-max gap-1">
+      <div className="my-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div role="tablist" aria-label="Document automation views" className="inline-flex w-fit rounded-xl border border-brand-line bg-brand-surface-2 p-1 shadow-sm">
           {TABS.map(({ key, label, icon: Icon }) => (
             <button
               key={key}
+              type="button"
+              role="tab"
+              aria-selected={activeTab === key}
               onClick={() => setActiveTab(key)}
-              className={`flex items-center gap-2 px-4 py-3 text-sm border-b-2 transition-colors ${
+              className={`flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition ${
                 activeTab === key
-                  ? 'border-brand-accent text-brand-ink'
-                  : 'border-transparent text-brand-muted hover:text-brand-ink'
+                  ? 'bg-brand-ink text-white shadow-sm'
+                  : 'text-brand-muted hover:bg-brand-bg hover:text-brand-ink'
               }`}
             >
               <Icon size={16} />
@@ -2090,6 +2362,15 @@ export default function TemplatesPage() {
             </button>
           ))}
         </div>
+        <button
+          type="button"
+          onClick={refreshActiveView}
+          disabled={refreshing || generationLoading}
+          className="inline-flex w-fit items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold text-brand-muted hover:bg-brand-surface-2 hover:text-brand-ink disabled:opacity-50"
+        >
+          <RotateCw size={14} className={refreshing ? 'animate-spin' : ''} />
+          Refresh library
+        </button>
       </div>
 
       {error && (
@@ -2145,6 +2426,7 @@ export default function TemplatesPage() {
           onClose={() => setRenderTarget(null)}
         />
       )}
+      </div>
     </div>
   )
 }

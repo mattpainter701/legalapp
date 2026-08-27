@@ -29,7 +29,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from itsdangerous import BadData, SignatureExpired, URLSafeTimedSerializer
-from sqlalchemy import case, delete, func, select
+from sqlalchemy import and_, case, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -81,6 +81,7 @@ from app.services.template_ocr import TemplateOcrError, image_to_pdf
 from app.services.matter_file_store import MatterFileStore
 from app.services.access_control import require_capability
 from app.utils.text_processing import extract_text
+from app.utils.sql_filters import escape_like
 
 router = APIRouter(prefix="/api/templates", tags=["document-templates"])
 logger = logging.getLogger(__name__)
@@ -405,6 +406,137 @@ async def _load_render_matter(
     return matter
 
 
+def _preview_mismatch_error() -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail=(
+            "The PDF preview expired, or its template, matter, output mode, "
+            "or field values changed. Preview the exact current values again "
+            "before save."
+        ),
+    )
+
+
+def _template_response(template: DocumentTemplate) -> DocumentTemplateResponse:
+    response = DocumentTemplateResponse.model_validate(template)
+    template_format = str(template.format or "").lower()
+    source_ready = template_format not in {"pdf", "docx"} or bool(
+        template.source_storage_path
+        and template.source_filename
+        and template.source_sha256
+        and template.source_file_size
+        and template.source_file_size > 0
+    )
+    return response.model_copy(update={"source_ready": source_ready})
+
+
+async def _load_generation_preview_evidence(
+    db: AsyncSession,
+    *,
+    preview_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    template: DocumentTemplate,
+    matter: Matter,
+    user_id: uuid.UUID,
+    variables: dict[str, str],
+    flatten_pdf: bool,
+    lock: bool,
+) -> tuple[DocumentTemplatePreview, MatterDocument | None]:
+    stmt = select(DocumentTemplatePreview).where(
+        DocumentTemplatePreview.id == preview_id,
+        DocumentTemplatePreview.tenant_id == tenant_id,
+    )
+    if lock:
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
+    evidence = await db.scalar(stmt)
+    if not evidence:
+        raise _preview_mismatch_error()
+
+    expected_contract = _pdf_contract_sha256(template)
+    expected_values = _pdf_values_hmac_sha256(
+        variables=variables,
+        flatten_pdf=flatten_pdf,
+        matter_id=matter.id,
+    )
+    if not (
+        evidence.template_id == template.id
+        and evidence.previewed_by_user_id == user_id
+        and evidence.matter_id == matter.id
+        and evidence.purpose == "generation"
+        and hmac.compare_digest(evidence.contract_sha256, expected_contract)
+        and hmac.compare_digest(evidence.values_hmac_sha256, expected_values)
+        and evidence.flatten_pdf == flatten_pdf
+    ):
+        raise _preview_mismatch_error()
+    if (
+        evidence.reconciliation_required_at is not None
+        and evidence.reconciliation_resolved_at is None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This PDF preview is blocked pending storage reconciliation. "
+                "Do not retry it; an operator must reconcile the staged object "
+                "and database outcome, then record a fresh preview."
+            ),
+        )
+    if (
+        evidence.reconciliation_required_at is not None
+        and evidence.consumed_at is None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This reconciled PDF preview has been retired. Record a fresh "
+                "preview before creating a document."
+            ),
+        )
+    existing_document = None
+    if evidence.consumed_at is not None:
+        if evidence.consumed_by_document_id:
+            existing_document = await db.scalar(
+                select(MatterDocument).where(
+                    MatterDocument.id == evidence.consumed_by_document_id,
+                    MatterDocument.tenant_id == tenant_id,
+                    MatterDocument.matter_id == matter.id,
+                )
+            )
+        if not existing_document:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This PDF preview was already consumed, but its saved "
+                    "document is no longer available. Record a fresh preview "
+                    "before creating another document."
+                ),
+            )
+        # Successful retries remain idempotent even after the short preview
+        # evidence window expires. The original save already established the
+        # reviewed output and the existing document is the authoritative result.
+        return evidence, existing_document
+    if evidence.expires_at <= datetime.now(timezone.utc):
+        raise _preview_mismatch_error()
+    return evidence, existing_document
+
+
+def _existing_document_response(
+    document: MatterDocument, *, matter_id: uuid.UUID
+) -> DocumentTemplateRenderResponse:
+    return DocumentTemplateRenderResponse(
+        rendered=(
+            f'PDF already saved: "{document.filename}"\n'
+            "Returning the document created by the original request."
+        ),
+        matter_document_id=str(document.id),
+        output_format="pdf",
+        output_filename=document.filename,
+        download_url=f"/api/matters/{matter_id}/documents/{document.id}/download",
+        storage_backend=document.storage_backend,
+        storage_provider=document.storage_provider,
+        storage_warning=document.storage_error,
+    )
+
+
 async def _trim_preview_evidence(
     db: AsyncSession,
     *,
@@ -613,7 +745,7 @@ async def _template_commit_outcome(
                     )
                 )
                 if template is not None:
-                    return True, DocumentTemplateResponse.model_validate(template)
+                    return True, _template_response(template)
         except Exception:
             logger.critical(
                 "Unable to resolve template-create commit outcome tenant=%s "
@@ -684,6 +816,16 @@ async def _mark_preview_reconciliation_required(
     try:
         async with async_session_maker() as reconciliation_db:
             await set_tenant_context(reconciliation_db, str(tenant_id))
+            existing_marker = await reconciliation_db.scalar(
+                select(DocumentTemplatePreview).where(
+                    DocumentTemplatePreview.tenant_id == tenant_id,
+                    DocumentTemplatePreview.reconciliation_document_id == document_id,
+                    DocumentTemplatePreview.reconciliation_required_at.is_not(None),
+                    DocumentTemplatePreview.reconciliation_resolved_at.is_(None),
+                )
+            )
+            if existing_marker:
+                return True
             evidence = await reconciliation_db.scalar(
                 select(DocumentTemplatePreview)
                 .where(
@@ -695,31 +837,57 @@ async def _mark_preview_reconciliation_required(
             if not evidence:
                 return False
             if evidence.consumed_at is not None:
-                logger.critical(
-                    "Preview reconciliation marker skipped because evidence is "
-                    "already consumed tenant=%s preview=%s document=%s",
-                    tenant_id,
-                    preview_id,
-                    evidence.consumed_by_document_id,
+                if reason != "cleanup_failed":
+                    logger.warning(
+                        "Preview reconciliation marker skipped because committed "
+                        "consumption is independently visible tenant=%s preview=%s "
+                        "document=%s",
+                        tenant_id,
+                        preview_id,
+                        evidence.consumed_by_document_id,
+                    )
+                    return False
+                # A concurrent retry can stage the same reviewed output before
+                # the original transaction consumes this preview. If deleting
+                # that losing staged object fails, preserve the successful
+                # consumption and create a separate terminal operations record
+                # for the orphan candidate.
+                marker = DocumentTemplatePreview(
+                    tenant_id=tenant_id,
+                    template_id=evidence.template_id,
+                    previewed_by_user_id=evidence.previewed_by_user_id,
+                    matter_id=evidence.matter_id,
+                    purpose=evidence.purpose,
+                    contract_sha256=evidence.contract_sha256,
+                    values_hmac_sha256=evidence.values_hmac_sha256,
+                    output_sha256=evidence.output_sha256,
+                    renderer_version=evidence.renderer_version,
+                    flatten_pdf=evidence.flatten_pdf,
+                    reviewed_field_count=evidence.reviewed_field_count,
+                    nonblank_field_count=evidence.nonblank_field_count,
+                    reviewed_field_names=evidence.reviewed_field_names,
+                    expires_at=evidence.expires_at,
                 )
-                return False
-            if evidence.reconciliation_required_at is not None:
-                return True
-            evidence.reconciliation_required_at = datetime.now(timezone.utc)
-            evidence.reconciliation_reason = reason
-            evidence.reconciliation_storage_backend = backend
-            evidence.reconciliation_provider_item_id = (
+                reconciliation_db.add(marker)
+            else:
+                if evidence.reconciliation_required_at is not None:
+                    return True
+                marker = evidence
+            marker.reconciliation_required_at = datetime.now(timezone.utc)
+            marker.reconciliation_reason = reason
+            marker.reconciliation_storage_backend = backend
+            marker.reconciliation_provider_item_id = (
                 str(storage_result.provider_item_id)[:500]
                 if storage_result.provider_item_id
                 else None
             )
-            evidence.reconciliation_provider_drive_id = (
+            marker.reconciliation_provider_drive_id = (
                 str(storage_result.drive_id)[:500] if storage_result.drive_id else None
             )
-            evidence.reconciliation_local_path = local_path
-            evidence.reconciliation_output_filename = output_filename[:500]
-            evidence.reconciliation_output_sha256 = output_sha256
-            evidence.reconciliation_document_id = document_id
+            marker.reconciliation_local_path = local_path
+            marker.reconciliation_output_filename = output_filename[:500]
+            marker.reconciliation_output_sha256 = output_sha256
+            marker.reconciliation_document_id = document_id
             await reconciliation_db.commit()
             return True
     except Exception:
@@ -785,6 +953,49 @@ async def _compensate_staged_document(
             exc_info=True,
         )
         return False
+
+
+async def _discard_staged_generation(
+    db: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    matter_id: uuid.UUID,
+    preview_id: uuid.UUID,
+    storage_result,
+    output_filename: str,
+    output_sha256: str,
+    document_id: uuid.UUID,
+) -> None:
+    """Release finalization locks and remove a staged-but-uncommitted PDF."""
+    rolled_back = await _rollback_quietly(
+        db,
+        tenant_id=tenant_id,
+        matter_id=matter_id,
+    )
+    cleaned = rolled_back and await _compensate_staged_document(
+        db,
+        tenant_id=str(tenant_id),
+        matter_id=matter_id,
+        storage_result=storage_result,
+    )
+    if cleaned:
+        return
+    await _mark_preview_reconciliation_required(
+        tenant_id=tenant_id,
+        preview_id=preview_id,
+        reason="cleanup_failed",
+        storage_result=storage_result,
+        output_filename=output_filename,
+        output_sha256=output_sha256,
+        document_id=document_id,
+    )
+    raise HTTPException(
+        status_code=500,
+        detail=(
+            "The generated PDF could not be finalized and automatic storage "
+            "cleanup failed. Do not retry until an operator reconciles the staged file."
+        ),
+    )
 
 
 def _reconcile_submitted_ai_fields(
@@ -1793,31 +2004,92 @@ async def build_variable_suggestions(
 @router.get("", response_model=DocumentTemplateListResponse)
 async def list_templates(
     include_inactive: bool = Query(False),
+    query: str | None = Query(None, max_length=120),
+    category: str | None = Query(None),
+    template_status: str | None = Query(None, pattern="^(active|inactive)$"),
+    limit: int = Query(24, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
-    filters = [DocumentTemplate.tenant_id == uuid.UUID(tenant_id)]
-    if not include_inactive:
+    parsed_tenant_id = uuid.UUID(tenant_id)
+    tenant_filter = DocumentTemplate.tenant_id == parsed_tenant_id
+    filters = [tenant_filter]
+    if category is not None:
+        if category not in CATEGORIES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid category. Must be one of: {', '.join(CATEGORIES)}",
+            )
+        filters.append(DocumentTemplate.category == category)
+    normalized_query = " ".join(str(query or "").split()).strip()
+    if normalized_query:
+        search = f"%{escape_like(normalized_query)}%"
+        filters.append(
+            DocumentTemplate.title.ilike(search, escape="\\")
+            | DocumentTemplate.description.ilike(search, escape="\\")
+        )
+    if template_status == "active":
+        filters.append(DocumentTemplate.is_active.is_(True))
+    elif template_status == "inactive":
+        filters.append(DocumentTemplate.is_active.is_(False))
+    elif not include_inactive:
         filters.append(DocumentTemplate.is_active.is_(True))
 
     stmt = (
         select(DocumentTemplate)
         .where(*filters)
         .order_by(DocumentTemplate.created_at.desc())
+        .limit(limit)
+        .offset(offset)
     )
 
-    count_stmt = select(func.count()).select_from(stmt.subquery())
+    count_stmt = select(func.count(DocumentTemplate.id)).where(*filters)
     total = (await db.execute(count_stmt)).scalar_one()
+
+    source_missing_filter = and_(
+        func.lower(func.coalesce(DocumentTemplate.format, "")).in_(["pdf", "docx"]),
+        or_(
+            func.nullif(DocumentTemplate.source_storage_path, "").is_(None),
+            func.nullif(DocumentTemplate.source_filename, "").is_(None),
+            func.nullif(DocumentTemplate.source_sha256, "").is_(None),
+            DocumentTemplate.source_file_size.is_(None),
+            DocumentTemplate.source_file_size <= 0,
+        ),
+    )
+    summary_stmt = select(
+        func.count(DocumentTemplate.id),
+        func.count(DocumentTemplate.id).filter(DocumentTemplate.is_active.is_(True)),
+        func.count(DocumentTemplate.id).filter(DocumentTemplate.is_active.is_(False)),
+        func.count(DocumentTemplate.id).filter(
+            DocumentTemplate.is_active.is_(True),
+            ~source_missing_filter,
+        ),
+        func.count(DocumentTemplate.id).filter(source_missing_filter),
+    ).where(tenant_filter)
+    summary_total, active_total, inactive_total, ready_total, source_missing_total = (
+        await db.execute(summary_stmt)
+    ).one()
 
     result = await db.execute(stmt)
     templates = result.scalars().all()
 
     return DocumentTemplateListResponse(
-        items=[DocumentTemplateResponse.model_validate(t) for t in templates],
+        items=[_template_response(t) for t in templates],
         total=total,
+        limit=limit,
+        offset=offset,
+        has_more=offset + len(templates) < total,
+        summary={
+            "total": summary_total,
+            "active": active_total,
+            "inactive": inactive_total,
+            "ready": ready_total,
+            "source_missing": source_missing_total,
+        },
     )
 
 
@@ -1849,7 +2121,7 @@ async def create_template(
     db.add(template)
     await db.commit()
     await db.refresh(template)
-    return DocumentTemplateResponse.model_validate(template)
+    return _template_response(template)
 
 
 @router.post(
@@ -2271,7 +2543,7 @@ async def create_template_from_sample(
             ),
         ) from exc
     await db.refresh(template)
-    return DocumentTemplateResponse.model_validate(template)
+    return _template_response(template)
 
 
 @router.get("/{template_id}", response_model=DocumentTemplateResponse)
@@ -2292,7 +2564,7 @@ async def get_template(
     template = result.scalar_one_or_none()
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
-    return DocumentTemplateResponse.model_validate(template)
+    return _template_response(template)
 
 
 @router.get("/{template_id}/source")
@@ -2659,7 +2931,7 @@ async def update_template(
 
     await db.commit()
     await db.refresh(template)
-    return DocumentTemplateResponse.model_validate(template)
+    return _template_response(template)
 
 
 @router.delete("/{template_id}", status_code=204)
@@ -2769,16 +3041,15 @@ async def render_template_endpoint(
 
     parsed_tenant_id = uuid.UUID(tenant_id)
     result = await db.execute(
-        select(DocumentTemplate)
-        .where(
+        select(DocumentTemplate).where(
             DocumentTemplate.id == template_id,
             DocumentTemplate.tenant_id == parsed_tenant_id,
         )
-        .with_for_update()
     )
     template = result.scalar_one_or_none()
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
+    template_revision = template.updated_at
     matter = await _load_render_matter(
         db,
         tenant_id=parsed_tenant_id,
@@ -2807,116 +3078,21 @@ async def render_template_endpoint(
                     "saving the generated document."
                 ),
             )
-        expected_contract = _pdf_contract_sha256(template)
-        expected_values = _pdf_values_hmac_sha256(
-            variables=payload.variables,
-            flatten_pdf=payload.flatten_pdf,
-            matter_id=matter.id,
+        preview_evidence, existing_document = (
+            await _load_generation_preview_evidence(
+                db,
+                preview_id=payload.preview_id,
+                tenant_id=parsed_tenant_id,
+                template=template,
+                matter=matter,
+                user_id=current_user.id,
+                variables=payload.variables,
+                flatten_pdf=payload.flatten_pdf,
+                lock=False,
+            )
         )
-        preview_evidence = await db.scalar(
-            select(DocumentTemplatePreview)
-            .where(
-                DocumentTemplatePreview.id == payload.preview_id,
-                DocumentTemplatePreview.tenant_id == parsed_tenant_id,
-            )
-            .with_for_update()
-        )
-        if not preview_evidence:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "The PDF preview expired, or its template, matter, output mode, "
-                    "or field values changed. Preview the exact current values again "
-                    "before save."
-                ),
-            )
-        evidence_contract_matches = (
-            preview_evidence.template_id == template.id
-            and preview_evidence.previewed_by_user_id == current_user.id
-            and preview_evidence.matter_id == matter.id
-            and preview_evidence.purpose == "generation"
-            and hmac.compare_digest(preview_evidence.contract_sha256, expected_contract)
-            and hmac.compare_digest(
-                preview_evidence.values_hmac_sha256, expected_values
-            )
-            and preview_evidence.flatten_pdf == payload.flatten_pdf
-        )
-        if not evidence_contract_matches:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "The PDF preview expired, or its template, matter, output mode, "
-                    "or field values changed. Preview the exact current values again "
-                    "before save."
-                ),
-            )
-        if (
-            preview_evidence.reconciliation_required_at is not None
-            and preview_evidence.reconciliation_resolved_at is None
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "This PDF preview is blocked pending storage reconciliation. "
-                    "Do not retry it; an operator must reconcile the staged object "
-                    "and database outcome, then record a fresh preview."
-                ),
-            )
-        if (
-            preview_evidence.reconciliation_required_at is not None
-            and preview_evidence.consumed_at is None
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "This reconciled PDF preview has been retired. Record a fresh "
-                    "preview before creating a document."
-                ),
-            )
-        if preview_evidence.consumed_at is not None:
-            existing_document = None
-            if preview_evidence.consumed_by_document_id:
-                existing_document = await db.scalar(
-                    select(MatterDocument).where(
-                        MatterDocument.id == preview_evidence.consumed_by_document_id,
-                        MatterDocument.tenant_id == parsed_tenant_id,
-                        MatterDocument.matter_id == matter.id,
-                    )
-                )
-            if not existing_document:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        "This PDF preview was already consumed, but its saved "
-                        "document is no longer available. Record a fresh preview "
-                        "before creating another document."
-                    ),
-                )
-            return DocumentTemplateRenderResponse(
-                rendered=(
-                    f'PDF already saved: "{existing_document.filename}"\n'
-                    "Returning the document created by the original request."
-                ),
-                matter_document_id=str(existing_document.id),
-                output_format="pdf",
-                output_filename=existing_document.filename,
-                download_url=(
-                    f"/api/matters/{matter.id}/documents/"
-                    f"{existing_document.id}/download"
-                ),
-                storage_backend=existing_document.storage_backend,
-                storage_provider=existing_document.storage_provider,
-                storage_warning=existing_document.storage_error,
-            )
-        if preview_evidence.expires_at <= datetime.now(timezone.utc):
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "The PDF preview expired, or its template, matter, output mode, "
-                    "or field values changed. Preview the exact current values again "
-                    "before save."
-                ),
-            )
+        if existing_document:
+            return _existing_document_response(existing_document, matter_id=matter.id)
     output_filename = _safe_generated_filename(
         template.title,
         {"pdf": "pdf", "docx": "docx"}.get(output_format, "md"),
@@ -3011,6 +3187,10 @@ async def render_template_endpoint(
             "pdf": "application/pdf",
             "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         }.get(output_format, "text/markdown")
+        # DOCX/Markdown generation uses the authorized snapshot read at request
+        # start. It has no preview-evidence state to consume, so holding a row
+        # lock across a cloud upload adds contention without making the output
+        # safer. PDF saves revalidate their exact reviewed contract below.
         storage_result = await matter_file_store.store_matter_file_result(
             db=db,
             tenant_id=tenant_id,
@@ -3025,6 +3205,106 @@ async def render_template_endpoint(
         storage_backend = storage_result.backend
         storage_provider = storage_result.provider
         storage_warning = storage_result.error
+
+        if output_format == "pdf":
+            try:
+                final_template = await db.scalar(
+                    select(DocumentTemplate)
+                    .where(
+                        DocumentTemplate.id == template_id,
+                        DocumentTemplate.tenant_id == parsed_tenant_id,
+                    )
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+                if (
+                    not final_template
+                    or not final_template.is_active
+                    or final_template.updated_at != template_revision
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "The template changed while the PDF was being prepared. "
+                            "Preview the current template and values again."
+                        ),
+                    )
+                template = final_template
+                preview_evidence, existing_document = (
+                    await _load_generation_preview_evidence(
+                        db,
+                        preview_id=payload.preview_id,
+                        tenant_id=parsed_tenant_id,
+                        template=template,
+                        matter=matter,
+                        user_id=current_user.id,
+                        variables=payload.variables,
+                        flatten_pdf=payload.flatten_pdf,
+                        lock=True,
+                    )
+                )
+                if not hmac.compare_digest(
+                    output_sha256,
+                    preview_evidence.output_sha256,
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "The freshly rendered PDF does not match the reviewed "
+                            "preview. Preview the exact current values again before saving."
+                        ),
+                    )
+            except HTTPException:
+                await _discard_staged_generation(
+                    db,
+                    tenant_id=parsed_tenant_id,
+                    matter_id=parsed_matter_id,
+                    preview_id=payload.preview_id,
+                    storage_result=storage_result,
+                    output_filename=output_filename,
+                    output_sha256=output_sha256,
+                    document_id=doc_id,
+                )
+                raise
+            except Exception as exc:
+                logger.exception(
+                    "Generated PDF finalization failed after storage for "
+                    "tenant=%s matter=%s; compensating staged storage",
+                    tenant_id,
+                    parsed_matter_id,
+                )
+                await _discard_staged_generation(
+                    db,
+                    tenant_id=parsed_tenant_id,
+                    matter_id=parsed_matter_id,
+                    preview_id=payload.preview_id,
+                    storage_result=storage_result,
+                    output_filename=output_filename,
+                    output_sha256=output_sha256,
+                    document_id=doc_id,
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        "The generated PDF could not be finalized; staged storage "
+                        "was removed. Retry when the database is healthy."
+                    ),
+                ) from exc
+            if existing_document:
+                await _discard_staged_generation(
+                    db,
+                    tenant_id=parsed_tenant_id,
+                    matter_id=parsed_matter_id,
+                    preview_id=payload.preview_id,
+                    storage_result=storage_result,
+                    output_filename=output_filename,
+                    output_sha256=output_sha256,
+                    document_id=doc_id,
+                )
+                return _existing_document_response(
+                    existing_document,
+                    matter_id=parsed_matter_id,
+                )
 
         doc = MatterDocument(
             id=doc_id,

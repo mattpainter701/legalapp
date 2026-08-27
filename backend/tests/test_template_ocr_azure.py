@@ -15,6 +15,7 @@ from app.services.template_ocr import PdfOcrResult, TemplateOcrError
 def _settings(**kwargs):
     values = dict(
         TEMPLATE_OCR_PROVIDER="azure",
+        TEMPLATE_OCR_LOCAL_CONCURRENCY=2,
         AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT=(
             "https://westus.api.cognitive.microsoft.com"
         ),
@@ -44,7 +45,10 @@ def test_local_is_default_and_azure_dispatch_is_explicit(monkeypatch):
     monkeypatch.setattr(
         template_ocr,
         "get_settings",
-        lambda: SimpleNamespace(TEMPLATE_OCR_PROVIDER="local"),
+        lambda: SimpleNamespace(
+            TEMPLATE_OCR_PROVIDER="local",
+            TEMPLATE_OCR_LOCAL_CONCURRENCY=2,
+        ),
     )
     monkeypatch.setattr(template_ocr, "_engine", lambda: EmptyEngine())
     assert template_ocr.ocr_pdf(_blank_pdf()).provider == "local"
@@ -53,7 +57,10 @@ def test_local_is_default_and_azure_dispatch_is_explicit(monkeypatch):
     monkeypatch.setattr(
         template_ocr,
         "get_settings",
-        lambda: SimpleNamespace(TEMPLATE_OCR_PROVIDER="azure"),
+        lambda: SimpleNamespace(
+            TEMPLATE_OCR_PROVIDER="azure",
+            TEMPLATE_OCR_LOCAL_CONCURRENCY=2,
+        ),
     )
     monkeypatch.setattr(azure, "ocr_pdf_azure", lambda _content, max_pages: sentinel)
     assert template_ocr.ocr_pdf(b"cloud dispatch", max_pages=3) is sentinel
@@ -79,6 +86,11 @@ def test_azure_configuration_requires_safe_endpoint_key_and_version():
         validate_template_ocr_settings(
             _settings(AZURE_DOCUMENT_INTELLIGENCE_API_VERSION="latest")
         )
+    for concurrency in (0, 5):
+        with pytest.raises(ValueError, match="TEMPLATE_OCR_LOCAL_CONCURRENCY"):
+            validate_template_ocr_settings(
+                _settings(TEMPLATE_OCR_LOCAL_CONCURRENCY=concurrency)
+            )
 
 
 def test_azure_polling_polygon_and_word_confidence_conversion(monkeypatch):

@@ -72,6 +72,8 @@ Do not upload an unencrypted production export through an unapproved channel. A 
 
 When a capability is unavailable, check provider identity, account tier, admin consent, scopes, credential health, selected storage, site/drive binding, and the last synchronization result. Reconnect only when renewal is necessary; repeated consent attempts can obscure the original fault.
 
+Production acceptance also checks document-automation integrity. It fails when a staged generated file has an unresolved database/storage reconciliation record, or when an active PDF/DOCX template lacks its retained source path, filename, size, or SHA-256 evidence. Resolve the provider object and preview evidence deliberately; do not clear a reconciliation marker merely to make the check green. Recreate an invalid active template from the original source and complete its representative preview before reactivation.
+
 Record provider identifiers and diagnostic timestamps in the restricted operations record, not in this client-delivered guide.
 
 ## Retention and revocation

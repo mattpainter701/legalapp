@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.database import set_tenant_context
 from app.services.durable_jobs import claim_job, enqueue_job, fail_job, serialize_job
+from app.services.durable_job_worker import _run_bounded
 
 
 @pytest.mark.asyncio
@@ -91,3 +92,24 @@ async def test_failure_retries_with_backoff_then_becomes_terminal(
     await fail_job(db_session, claimed, RuntimeError("boom"))
     assert claimed.status == "failed"
     assert claimed.last_error == "boom"
+
+
+@pytest.mark.asyncio
+async def test_bounded_worker_parallelizes_without_exceeding_limit():
+    active = 0
+    peak = 0
+    gate = asyncio.Event()
+
+    async def handle(_item):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        if peak == 2:
+            gate.set()
+        await gate.wait()
+        await asyncio.sleep(0)
+        active -= 1
+
+    await _run_bounded(range(6), handle, concurrency=2)
+    assert peak == 2
+    assert active == 0
