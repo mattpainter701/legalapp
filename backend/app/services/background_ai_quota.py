@@ -8,13 +8,14 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import and_, func, or_, select, text, update
+from sqlalchemy import and_, case, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import async_session_maker
 from app.models.background_ai_usage import BackgroundAIUsageReservation
 from app.models.platform import PlatformSetting
+from app.services.ai_price_card import MICROS_PER_USD, usd
 
 
 settings = get_settings()
@@ -83,6 +84,13 @@ class BackgroundOperationDuplicate(BackgroundQuotaError):
 
 @dataclass(frozen=True)
 class BackgroundQuotaLimits:
+    """Both meters for the shared pool.
+
+    The ``*_micros`` windows are authoritative: the provider bills value, so
+    value is what admission has to respect. The request counts stay enforced as
+    a coarse backstop and a fairness signal, but they are not the budget.
+    """
+
     account_five_hour: int
     account_weekly: int
     account_monthly: int
@@ -90,6 +98,12 @@ class BackgroundQuotaLimits:
     tenant_weekly: int
     tenant_monthly: int
     reservation_ttl_minutes: int
+    account_five_hour_micros: int
+    account_weekly_micros: int
+    account_monthly_micros: int
+    tenant_five_hour_micros: int
+    tenant_weekly_micros: int
+    tenant_monthly_micros: int
 
     def as_dict(self) -> dict[str, int]:
         return asdict(self)
@@ -101,6 +115,18 @@ class BackgroundReservation:
     tenant_id: uuid.UUID
     request_id: str
     pool: str
+    estimated_micros: int = 0
+    price_card_version: str | None = None
+
+
+def _usd_to_micros(value: Any, fallback_usd: float) -> int:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = float(fallback_usd)
+    if parsed <= 0:
+        parsed = float(fallback_usd)
+    return max(1, int(round(parsed * MICROS_PER_USD)))
 
 
 def default_background_quota_limits() -> BackgroundQuotaLimits:
@@ -112,6 +138,24 @@ def default_background_quota_limits() -> BackgroundQuotaLimits:
         tenant_weekly=max(1, settings.BACKGROUND_AI_TENANT_WEEKLY_LIMIT),
         tenant_monthly=max(1, settings.BACKGROUND_AI_TENANT_MONTHLY_LIMIT),
         reservation_ttl_minutes=max(1, settings.BACKGROUND_AI_RESERVATION_TTL_MINUTES),
+        account_five_hour_micros=_usd_to_micros(
+            settings.BACKGROUND_AI_ACCOUNT_FIVE_HOUR_USD, 12.0
+        ),
+        account_weekly_micros=_usd_to_micros(
+            settings.BACKGROUND_AI_ACCOUNT_WEEKLY_USD, 30.0
+        ),
+        account_monthly_micros=_usd_to_micros(
+            settings.BACKGROUND_AI_ACCOUNT_MONTHLY_USD, 60.0
+        ),
+        tenant_five_hour_micros=_usd_to_micros(
+            settings.BACKGROUND_AI_TENANT_FIVE_HOUR_USD, 3.0
+        ),
+        tenant_weekly_micros=_usd_to_micros(
+            settings.BACKGROUND_AI_TENANT_WEEKLY_USD, 8.0
+        ),
+        tenant_monthly_micros=_usd_to_micros(
+            settings.BACKGROUND_AI_TENANT_MONTHLY_USD, 15.0
+        ),
     )
 
 
@@ -157,6 +201,26 @@ async def get_background_quota_limits(
             configured.get("reservation_ttl_minutes"),
             defaults.reservation_ttl_minutes,
         ),
+        account_five_hour_micros=_positive_int(
+            configured.get("account_five_hour_micros"),
+            defaults.account_five_hour_micros,
+        ),
+        account_weekly_micros=_positive_int(
+            configured.get("account_weekly_micros"), defaults.account_weekly_micros
+        ),
+        account_monthly_micros=_positive_int(
+            configured.get("account_monthly_micros"), defaults.account_monthly_micros
+        ),
+        tenant_five_hour_micros=_positive_int(
+            configured.get("tenant_five_hour_micros"),
+            defaults.tenant_five_hour_micros,
+        ),
+        tenant_weekly_micros=_positive_int(
+            configured.get("tenant_weekly_micros"), defaults.tenant_weekly_micros
+        ),
+        tenant_monthly_micros=_positive_int(
+            configured.get("tenant_monthly_micros"), defaults.tenant_monthly_micros
+        ),
     )
 
 
@@ -195,6 +259,47 @@ async def _usage_count(
     return int(await db.scalar(query) or 0)
 
 
+def _spend_expression():
+    """Provider value a reservation currently holds against the budget.
+
+    A settled row costs what the provider actually reported. An in-flight or
+    ambiguous row holds its worst-case estimate, because assuming zero for work
+    that may well have been billed is how a pool silently overspends. A released
+    row cost nothing — that status is only set when the provider rejected the
+    request before doing any work.
+    """
+
+    return case(
+        (
+            BackgroundAIUsageReservation.status == "settled",
+            BackgroundAIUsageReservation.actual_micros,
+        ),
+        (
+            BackgroundAIUsageReservation.status.in_(("reserved", "unknown")),
+            BackgroundAIUsageReservation.estimated_micros,
+        ),
+        else_=0,
+    )
+
+
+async def _usage_micros(
+    db: AsyncSession,
+    *,
+    pool: str,
+    since: datetime,
+    counted_predicate,
+    tenant_id: uuid.UUID | None = None,
+) -> int:
+    query = select(func.coalesce(func.sum(_spend_expression()), 0)).where(
+        BackgroundAIUsageReservation.pool == pool,
+        BackgroundAIUsageReservation.created_at >= since,
+        counted_predicate,
+    )
+    if tenant_id is not None:
+        query = query.where(BackgroundAIUsageReservation.tenant_id == tenant_id)
+    return int(await db.scalar(query) or 0)
+
+
 class BackgroundQuotaLedger:
     """Reserve globally and per tenant before making a provider request.
 
@@ -213,6 +318,8 @@ class BackgroundQuotaLedger:
         request_id: str,
         surface: str,
         route_alias: str,
+        estimated_micros: int,
+        price_card_version: str | None = None,
         pool: str | None = None,
     ) -> BackgroundReservation:
         selected_pool = (pool or settings.BACKGROUND_AI_POOL).strip()
@@ -220,6 +327,13 @@ class BackgroundQuotaLedger:
             raise BackgroundQuotaError("Background pool is not configured")
         if not idempotency_key or len(idempotency_key) > 200:
             raise BackgroundQuotaError("A bounded idempotency key is required")
+        # An unpriced request is not a free request. The caller must price the
+        # work before it can hold pool capacity.
+        estimate = int(estimated_micros)
+        if estimate <= 0:
+            raise BackgroundQuotaError(
+                "A positive provider-value estimate is required to reserve capacity"
+            )
 
         now = datetime.now(timezone.utc)
         async with self.session_factory() as db:
@@ -297,6 +411,60 @@ class BackgroundQuotaLedger:
                     limits.tenant_monthly,
                 ),
             )
+            # Provider value is the real budget, so it is checked first and its
+            # exhaustion is the one reported when both meters would refuse.
+            value_windows = (
+                (
+                    "account five-hour spend",
+                    now - timedelta(hours=5),
+                    None,
+                    limits.account_five_hour_micros,
+                ),
+                (
+                    "account weekly spend",
+                    now - timedelta(days=7),
+                    None,
+                    limits.account_weekly_micros,
+                ),
+                (
+                    "account monthly spend",
+                    _month_start(now),
+                    None,
+                    limits.account_monthly_micros,
+                ),
+                (
+                    "tenant five-hour spend",
+                    now - timedelta(hours=5),
+                    tenant_id,
+                    limits.tenant_five_hour_micros,
+                ),
+                (
+                    "tenant weekly spend",
+                    now - timedelta(days=7),
+                    tenant_id,
+                    limits.tenant_weekly_micros,
+                ),
+                (
+                    "tenant monthly spend",
+                    _month_start(now),
+                    tenant_id,
+                    limits.tenant_monthly_micros,
+                ),
+            )
+            for window, since, scoped_tenant_id, limit_micros in value_windows:
+                spent = await _usage_micros(
+                    db,
+                    pool=selected_pool,
+                    since=since,
+                    counted_predicate=counted,
+                    tenant_id=scoped_tenant_id,
+                )
+                # Admission must fit this request's worst case inside the
+                # window, not merely find the window not yet full.
+                if spent + estimate > limit_micros:
+                    await db.rollback()
+                    raise BackgroundQuotaExceeded(window)
+
             for window, since, scoped_tenant_id, limit in windows:
                 used = await _usage_count(
                     db,
@@ -317,6 +485,8 @@ class BackgroundQuotaLedger:
                 surface=surface[:80],
                 route_alias=route_alias[:200],
                 status="reserved",
+                estimated_micros=estimate,
+                price_card_version=(price_card_version or None),
             )
             db.add(row)
             await db.flush()
@@ -325,6 +495,8 @@ class BackgroundQuotaLedger:
                 tenant_id=tenant_id,
                 request_id=request_id,
                 pool=selected_pool,
+                estimated_micros=estimate,
+                price_card_version=price_card_version,
             )
             await db.commit()
             return reservation
@@ -337,6 +509,7 @@ class BackgroundQuotaLedger:
         provider_request_id: str | None = None,
         tokens_in: int = 0,
         tokens_out: int = 0,
+        actual_micros: int = 0,
         error_code: str | None = None,
     ) -> None:
         async with self.session_factory() as db:
@@ -355,6 +528,7 @@ class BackgroundQuotaLedger:
                     provider_request_id=(provider_request_id or None),
                     tokens_in=max(0, int(tokens_in)),
                     tokens_out=max(0, int(tokens_out)),
+                    actual_micros=max(0, int(actual_micros)),
                     error_code=error_code,
                     settled_at=datetime.now(timezone.utc),
                 )
@@ -368,13 +542,22 @@ class BackgroundQuotaLedger:
         provider_request_id: str | None,
         tokens_in: int,
         tokens_out: int,
+        actual_micros: int | None = None,
     ) -> None:
+        # Without a priced settlement the reservation keeps holding its
+        # estimate, so an unpriced response can never look cheaper than it was.
+        settled_micros = (
+            int(actual_micros)
+            if actual_micros is not None
+            else int(reservation.estimated_micros)
+        )
         await self._finish(
             reservation,
             status="settled",
             provider_request_id=provider_request_id,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
+            actual_micros=settled_micros,
         )
 
     async def mark_unknown(
@@ -426,6 +609,47 @@ async def background_quota_snapshot(
             since=_month_start(now),
             counted_predicate=counted,
         )
+        five_hour_micros = await _usage_micros(
+            db,
+            pool=selected_pool,
+            since=now - timedelta(hours=5),
+            counted_predicate=counted,
+        )
+        weekly_micros = await _usage_micros(
+            db,
+            pool=selected_pool,
+            since=now - timedelta(days=7),
+            counted_predicate=counted,
+        )
+        monthly_micros = await _usage_micros(
+            db,
+            pool=selected_pool,
+            since=_month_start(now),
+            counted_predicate=counted,
+        )
+        # Ambiguous reservations still holding capacity. A rising number here is
+        # the operator's signal that reconciliation is falling behind or that a
+        # provider is timing out after accepting work.
+        unreconciled = await db.scalar(
+            select(
+                func.count(BackgroundAIUsageReservation.id),
+            ).where(
+                BackgroundAIUsageReservation.pool == selected_pool,
+                BackgroundAIUsageReservation.status == "unknown",
+                BackgroundAIUsageReservation.reconciled_at.is_(None),
+            )
+        )
+        unreconciled_micros = await db.scalar(
+            select(
+                func.coalesce(
+                    func.sum(BackgroundAIUsageReservation.estimated_micros), 0
+                )
+            ).where(
+                BackgroundAIUsageReservation.pool == selected_pool,
+                BackgroundAIUsageReservation.status == "unknown",
+                BackgroundAIUsageReservation.reconciled_at.is_(None),
+            )
+        )
         tenant_rows = (
             await db.execute(
                 select(
@@ -465,9 +689,48 @@ async def background_quota_snapshot(
         100.0,
         100.0 * elapsed.total_seconds() / (days_in_month * 86400),
     )
+
+    def _value_window(spent: int, limit_micros: int) -> dict[str, Any]:
+        return {
+            "spent_usd": usd(spent),
+            "limit_usd": usd(limit_micros),
+            "remaining_usd": usd(max(0, limit_micros - spent)),
+            "spent_micros": spent,
+            "limit_micros": limit_micros,
+            "percent": round(100 * spent / limit_micros, 2) if limit_micros else 0.0,
+        }
+
+    monthly_value = _value_window(monthly_micros, limits.account_monthly_micros)
+    # Straight-line projection of this month's spend to the reset date.
+    projected_month_micros = int(
+        monthly_micros / max(month_elapsed_percent / 100, 0.01)
+    )
+    monthly_value.update(
+        {
+            "month_elapsed_percent": round(month_elapsed_percent, 2),
+            "projected_month_usd": usd(projected_month_micros),
+            "projected_over_budget": projected_month_micros
+            > limits.account_monthly_micros,
+        }
+    )
+
     return {
         "pool": selected_pool,
         "limits": limits.as_dict(),
+        # Provider value is the enforced budget.
+        "value": {
+            "five_hour": _value_window(
+                five_hour_micros, limits.account_five_hour_micros
+            ),
+            "weekly": _value_window(weekly_micros, limits.account_weekly_micros),
+            "monthly": monthly_value,
+            "unreconciled": {
+                "requests": int(unreconciled or 0),
+                "held_usd": usd(int(unreconciled_micros or 0)),
+            },
+        },
+        # Request counts remain a coarse backstop and a planning metric. They
+        # are not the provider's limit and must not be read as one.
         "five_hour": {
             "used": five_hour_used,
             "remaining": max(0, limits.account_five_hour - five_hour_used),

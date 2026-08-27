@@ -146,7 +146,7 @@ async def test_broker_execute_maps_reservation_errors_and_validation(monkeypatch
             return_value=LLMRoute(
                 requested_route="background",
                 resolved_route="background",
-                gateway_alias="bg",
+                gateway_alias="clarity-background",
             )
         ),
     )
@@ -207,7 +207,7 @@ async def test_broker_provider_failures_release_or_mark_unknown(monkeypatch):
             return_value=LLMRoute(
                 requested_route="background",
                 resolved_route="background",
-                gateway_alias="bg",
+                gateway_alias="clarity-background",
             )
         ),
     )
@@ -398,6 +398,7 @@ async def test_quota_rejects_missing_pool_or_key(monkeypatch):
             request_id="r",
             surface="s",
             route_alias="a",
+            estimated_micros=1_000,
         )
     monkeypatch.setattr(quota_module.settings, "BACKGROUND_AI_POOL", "pool")
     with pytest.raises(quota_module.BackgroundQuotaError, match="idempotency"):
@@ -407,4 +408,5 @@ async def test_quota_rejects_missing_pool_or_key(monkeypatch):
             request_id="r",
             surface="s",
             route_alias="a",
+            estimated_micros=1_000,
         )

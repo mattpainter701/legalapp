@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -13,6 +14,7 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -41,6 +43,17 @@ class BackgroundAIUsageReservation(Base):
         CheckConstraint(
             "tokens_in >= 0 AND tokens_out >= 0",
             name="ck_background_ai_usage_tokens_nonnegative",
+        ),
+        CheckConstraint(
+            "estimated_micros >= 0 AND actual_micros >= 0",
+            name="ck_background_ai_usage_micros_nonnegative",
+        ),
+        Index(
+            # Drives the reconciliation sweep for ambiguous reservations.
+            "ix_background_ai_usage_unreconciled",
+            "status",
+            "created_at",
+            postgresql_where=text("status = 'unknown' AND reconciled_at IS NULL"),
         ),
         Index(
             "ix_background_ai_usage_pool_created",
@@ -85,6 +98,28 @@ class BackgroundAIUsageReservation(Base):
         Integer, nullable=False, default=0, server_default="0"
     )
     tokens_out: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    # Provider value in USD micros (1 USD == 1_000_000). The pool's real limits
+    # are dollar windows, so admission reasons in money and treats request
+    # counts as a secondary backstop.
+    #
+    # ``estimated_micros`` is the worst case priced at reservation time and is
+    # what an in-flight or ambiguous reservation holds against the budget.
+    # ``actual_micros`` replaces it once the provider reports real usage.
+    estimated_micros: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    actual_micros: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    price_card_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # Set when reconciliation has resolved this row or given up on it, so the
+    # sweep never reprocesses the same ambiguous reservation forever.
+    reconciled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    reconcile_attempts: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
     error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)

@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["136_qbo_invoice_billing"]
+    assert heads == ["137_background_ai_value_quota"]
 
 
 def test_smb_agent_lifecycle_indexes_cover_auth_and_cleanup_paths():

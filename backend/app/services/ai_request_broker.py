@@ -22,6 +22,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.models.tenant import TenantSettings
+from app.services.ai_price_card import (
+    PriceCard,
+    UnknownModelPrice,
+    estimate_tokens_from_text,
+    get_price_card,
+)
 from app.services.background_ai_quota import (
     BackgroundOperationDuplicate,
     BackgroundQuotaExceeded,
@@ -291,7 +297,22 @@ class AIRequestBroker:
             ),
         )
         reservation: BackgroundReservation | None = None
+        price_card: PriceCard | None = None
         if tier is RouteTier.BACKGROUND:
+            # Price the worst case before reserving. An unpriced model cannot
+            # hold pool capacity, so an unknown rate denies admission rather
+            # than silently costing nothing.
+            price_card = await get_price_card(db)
+            try:
+                estimated_micros = price_card.estimate_max_micros(
+                    model=route.gateway_alias,
+                    input_tokens=self._estimate_input_tokens(request),
+                    max_output_tokens=request.max_output_tokens,
+                )
+            except UnknownModelPrice as exc:
+                raise AIRequestDenied(
+                    "Background route has no price card entry; admission denied"
+                ) from exc
             try:
                 reservation = await self.quota_ledger.reserve(
                     tenant_id=uuid.UUID(str(request.tenant_id)),
@@ -299,6 +320,8 @@ class AIRequestBroker:
                     request_id=request_id,
                     surface=request.surface,
                     route_alias=route.gateway_alias,
+                    estimated_micros=estimated_micros,
+                    price_card_version=price_card.version,
                 )
             except BackgroundQuotaExceeded as exc:
                 raise AIQuotaExceeded(str(exc)) from exc
@@ -344,13 +367,45 @@ class AIRequestBroker:
             ) from exc
 
         if reservation:
+            # Settle at real reported usage. If the provider returned no usage
+            # numbers the reservation keeps its estimate rather than dropping to
+            # zero, so an unreported response is never free.
+            actual_micros: int | None = None
+            if price_card is not None and (result.tokens_in or result.tokens_out):
+                try:
+                    actual_micros = price_card.actual_micros(
+                        model=result.raw_model or route.gateway_alias,
+                        tokens_in=result.tokens_in,
+                        tokens_out=result.tokens_out,
+                    )
+                except UnknownModelPrice:
+                    actual_micros = None
             await self.quota_ledger.settle(
                 reservation,
                 provider_request_id=result.provider_request_id,
                 tokens_in=result.tokens_in,
                 tokens_out=result.tokens_out,
+                actual_micros=actual_micros,
             )
         return result
+
+    @staticmethod
+    def _estimate_input_tokens(request: AIRequest) -> int:
+        """Bound the prompt's token count for pricing the reservation."""
+
+        parts = [request.system_prompt or ""]
+        for message in request.messages:
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, str):
+                    parts.append(content)
+                elif isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, dict) and isinstance(item.get("text"), str):
+                            parts.append(item["text"])
+            elif isinstance(message, str):
+                parts.append(message)
+        return estimate_tokens_from_text("".join(parts))
 
     async def _execute_chat(
         self,
