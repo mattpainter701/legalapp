@@ -157,12 +157,17 @@ curl -sS https://mcp.getlawhand.com/.well-known/oauth-protected-resource/api/mcp
 curl -i https://mcp.getlawhand.com/
 curl -i https://research.getlawhand.com/
 
-# The research product remains unavailable until explicitly released.
+# Research MCP is the public hosted-client endpoint. It must return an OAuth
+# Bearer challenge, not a product-key prompt or a successful anonymous call.
 curl -i https://research.getlawhand.com/api/mcp
 curl -i https://research.getlawhand.com/api/mcp/manifest
 curl -i https://research.getlawhand.com/.well-known/oauth-protected-resource/api/mcp
 curl -i https://research.getlawhand.com/.well-known/oauth-authorization-server
+curl -i https://research.getlawhand.com/api/research-mcp/oauth/jwks
 
+# The apex is not a second Research MCP origin.
+curl -i https://getlawhand.com/api/mcp
+curl -i https://getlawhand.com/api/mcp/manifest
 # Neither dedicated hostname exposes an ordinary portal/API route.
 curl -i https://mcp.getlawhand.com/api/version
 curl -i https://research.getlawhand.com/api/version
@@ -184,12 +189,31 @@ Expected results:
 - workspace metadata reports the canonical resource and the apex authorization
   server;
 - Research transport, manifest, OAuth discovery, registration, and token paths
-  return 404 while `MCP_PRODUCT_ENABLED=false`;
+  are available only on `https://research.getlawhand.com`; the transport and
+  manifest return a `401` Bearer challenge without a token, while the metadata
+  documents and JWKS return `200`;
+- Research authorization metadata advertises the registration endpoint and
+  `S256` PKCE; configure ChatGPT or Claude with
+  `https://research.getlawhand.com/api/mcp`;
+- the apex Research transport and manifest return `404` so clients cannot mix
+  the OAuth issuer and resource origins;
 - unrelated paths on both dedicated hosts return 404;
 - every response from both dedicated hosts carries
   `X-Robots-Tag: noindex, nofollow, noarchive`;
 - all three public origins present HSTS and certificates with at least the
   configured minimum remaining lifetime.
+
+## Production activation
+
+Set only these reviewed values in the protected production environment:
+
+- `MCP_PRODUCT_ENABLED=true`;
+- `RESEARCH_MCP_PUBLIC_URL=https://research.getlawhand.com/api/mcp` and
+  `RESEARCH_MCP_ISSUER=https://research.getlawhand.com`;
+- `RESEARCH_MCP_OAUTH_ENABLED=true`,
+  `RESEARCH_MCP_DYNAMIC_REGISTRATION_ENABLED=true`, and the approved audience;
+- the existing shared RSA signing keyring (private key, public key, key ID, and
+  previous public-key list). Never place those keys in source control.
 
 Use a nonexistent matter query for an authenticated read-only smoke test.
 Never create a proposal merely to test connectivity: proposal calls create
@@ -197,11 +221,11 @@ auditable tenant work.
 
 ## Rollback
 
-If hostname routing or isolation fails, remove only the two MCP tunnel ingress
-rules and proxied DNS records. Preserve the existing apex and `www` tunnel
-entries and the final catch-all. The bounded apex MCP compatibility routes let
-existing workspace clients continue while the dedicated hosts are repaired.
+If Research OAuth discovery, registration, JWKS, or the Bearer challenge fails,
+set `MCP_PRODUCT_ENABLED=false` in the protected production environment and
+run the normal production deployment workflow. The research transport and
+OAuth routes then fail closed with `404`; do not redirect clients to the apex.
 
-Do not enable the research product as a rollback action. Do not publish the
-private sidecar, weaken tenant/product-key checks, or redirect one MCP product
-to the other.
+Preserve the existing apex and `www` tunnel entries, dedicated hostname routing,
+and the final catch-all while investigating. Do not publish the private sidecar,
+weaken tenant/product-key checks, or redirect one MCP product to the other.
