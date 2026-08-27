@@ -91,8 +91,8 @@ router = APIRouter(prefix="/platform", tags=["platform"])
 # ── Auth ───────────────────────────────────────────────────────────────────────
 
 
-def _require_platform_key(request: Request) -> None:
-    require_platform_token(request)
+def _require_platform_key(request: Request):
+    return require_platform_token(request)
 
 
 def _require_platform_debug(request: Request):
@@ -644,7 +644,7 @@ async def terminate_platform_demo_workspace(
     db: AsyncSession = Depends(get_db),
 ):
     """Permanently terminate one explicitly identified disposable demo."""
-    principal = require_platform_token(request, scopes={"platform:write"})
+    principal = _require_platform_key(request)
     parsed_tenant_id = _parse_uuid(tenant_id, "tenant")
     try:
         deleted = await terminate_demo_workspace(
