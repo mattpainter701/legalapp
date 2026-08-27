@@ -75,6 +75,7 @@ async def test_matter_parties_endpoint_exposes_caption_roles(
     later_primary = Contact(
         id=uuid.uuid4(),
         tenant_id=test_tenant.id,
+        entity_type="organization",
         organization_name="Acme Holdings",
     )
     db_session.add(later_primary)
