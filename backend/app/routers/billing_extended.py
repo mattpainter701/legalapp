@@ -1123,6 +1123,9 @@ async def generate_invoice(
             )
             if entry:
                 entry.invoice_id = invoice.id
+                # Reserve the source entry as soon as it belongs to an invoice.
+                # QBO sync separately controls when the invoice itself is billed.
+                entry.status = "invoiced"
 
         # Link expenses to invoice
         if li_data["source_type"] == "expense":
