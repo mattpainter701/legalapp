@@ -9,7 +9,7 @@ icon: users
 
 # Microsoft Teams administration
 
-[Teams](/admin?tab=teams) manages matter-to-channel links and shows existing mappings. The Teams configuration surface may also be opened inside Microsoft Teams after administrator consent.
+[Integrations → Teams](/admin?tab=integrations&integration=teams) manages matter-to-channel links and shows existing mappings. The Teams configuration surface may also be opened inside Microsoft Teams after administrator consent.
 
 ## Prerequisites
 
@@ -50,7 +50,7 @@ After authorization or a mapping change, verify the grant owner, displayed scope
 
 ## Notification routing
 
-Beyond per-matter channel links, [Teams](/admin?tab=teams) carries firm-wide routing: each notification event LawHand can raise may be pointed at one team and channel. A matter linked to its own channel always posts there instead, so a matter-specific link overrides the firm-wide default for that matter.
+Beyond per-matter channel links, [Integrations → Teams](/admin?tab=integrations&integration=teams) carries firm-wide routing: each notification event LawHand can raise may be pointed at one team and channel. A matter linked to its own channel always posts there instead, so a matter-specific link overrides the firm-wide default for that matter.
 
 Only events LawHand actually raises can be routed. A route saved against an unrecognized event is rejected rather than stored, because a stored route that can never fire is indistinguishable to an administrator from a broken integration.
 

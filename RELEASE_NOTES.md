@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.27.5 — Integration administration is organized in one clear workspace
+
+Released August 27, 2026.
+
+Administrators can now review every connected service from one Integrations workspace with clearer purpose, permissions, setup requirements, and operating guides.
+
+- **Find every connection in Integrations.** Cloud accounts, search, file shares, Teams, Zoom, QuickBooks, and MCP now live under one organized administrative workspace.
+- **Understand access before setup.** Each integration explains what it does, the data and permissions it uses, and the prerequisites an administrator should confirm.
+- **Move from overview to the right controls.** Focused sections keep configuration close at hand, while expandable notes link directly to the relevant administrative guide.
+
 ## 2026.08.27.4 — QuickBooks invoice sync is smoother and respects tax choices
 
 Released August 27, 2026.

@@ -19,19 +19,19 @@ Do not place secrets, customer-specific facts, or instructions that bypass revie
 
 ## Cloud Search
 
-[Cloud Search](/admin?tab=cloud-search) shows connection, binding, synchronization, and search metadata. Bind only approved sites and drives. Search results must respect provider and tenant permissions; unexpected cross-site results are a stop-work issue.
+[Integrations → Cloud Search](/admin?tab=integrations&integration=cloud-search) shows connection, binding, synchronization, and search metadata. Bind only approved sites and drives. Search results must respect provider and tenant permissions; unexpected cross-site results are a stop-work issue.
 
 After a binding or permission change, run a narrow test with accounts that represent the intended roles. Clearing a cache or forcing synchronization can affect availability and load, so use those controls deliberately.
 
 ## File shares
 
-Use [File Shares](/admin?tab=smb) to configure approved sources and agents. Confirm the share path, display name, responsible agent, file types, and access model. Avoid indexing broad shares simply because they are convenient.
+Use [Integrations → File shares](/admin?tab=integrations&integration=file-shares) to configure approved sources and agents. Confirm the share path, display name, responsible agent, file types, and access model. Avoid indexing broad shares simply because they are convenient.
 
 ## MCP servers
 
 LawHand exposes two separate MCP surfaces. Keep them distinct when you approve access, because they authenticate differently and reach different data.
 
-**Product keys** for the research surface are managed in [MCP Servers](/admin?tab=mcp): a named system connects through a scoped key with allowlisted capabilities and bounded usage. Grant only tools required by the use case. Review key activity, returned results, errors, and consumption. Rotate or revoke a key when its owner, scope, or environment changes.
+**Product keys** for the research surface are managed in [Integrations → MCP](/admin?tab=integrations&integration=mcp): a named system connects through a scoped key with allowlisted capabilities and bounded usage. Grant only tools required by the use case. Review key activity, returned results, errors, and consumption. Rotate or revoke a key when its owner, scope, or environment changes.
 
 **Workspace MCP** lets an individual connect an external assistant to their own workspace after an explicit consent step. There is no shared key: the assistant acts as that user, within that user's permissions, for the scopes they approved. Decide who may do this in the **Connected assistants** column of [Users](/admin?tab=users), and set the default for new accounts under [Settings](/admin?tab=settings). Users see and revoke their own connections from their profile; you can end them by turning the user's access off.
 

@@ -9,7 +9,7 @@ icon: briefcase
 
 # File Share operations
 
-[File Shares](/admin?tab=smb) connects approved network file sources through registered agents. It is built for shares that stay on your network — large, long-lived document stores that are not moving to the cloud — so their contents can be searched and pulled into matter context and research without being copied wholesale. Only metadata and a short snippet per file are synced on a schedule; full document text is fetched on request and recorded in the access log.
+[Integrations → File shares](/admin?tab=integrations&integration=file-shares) connects approved network file sources through registered agents. It is built for shares that stay on your network — large, long-lived document stores that are not moving to the cloud — so their contents can be searched and pulled into matter context and research without being copied wholesale. Only metadata and a short snippet per file are synced on a schedule; full document text is fetched on request and recorded in the access log.
 
 ## Install and register an agent
 
