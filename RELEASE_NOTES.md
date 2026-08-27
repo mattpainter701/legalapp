@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.27.1 — Prepare document templates with a guided review workspace
+
+Released August 27, 2026.
+
+Turn PDFs and supported images into reusable document templates while reviewing every detected field before creation.
+
+- **Review the original form in place.** Prepare Form keeps the uploaded page design visible while you inspect, add, move, rename, and configure fields.
+- **Recover fields from scans and images.** Bounded local OCR and optional configured assistance can suggest fields without making automatic detection a requirement.
+- **Finish safely when detection is imperfect.** Validation, confidence cues, and manual placement let you correct unfamiliar forms before creating the reusable template.
+
 ## 2026.08.26.4 — Customer cloud storage is explicit and fail-closed
 
 Released August 26, 2026.
