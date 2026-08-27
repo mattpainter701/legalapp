@@ -147,7 +147,7 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |base|backend/Dockerfile|17|no|yes|
 |base|backend/Dockerfile|23|no|yes|
 |node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293|frontend/Dockerfile|1|yes|no|
-|node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293|frontend/Dockerfile|18|yes|no|
+|node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293|frontend/Dockerfile|28|yes|no|
 |nginx:alpine@sha256:54f2a904c251d5a34adf545a72d32515a15e08418dae0266e23be2e18c66fefa|nginx/Dockerfile|1|yes|no|
 |docker.litellm.ai/berriai/litellm:main-latest@sha256:60f548df23a82b7f83444e2f01d2ccafe00f9f5808c4110a32e397083d09fb17|litellm/Dockerfile|3|yes|no|
 |python:3.12-slim@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf|mcp-server/Dockerfile|1|yes|no|

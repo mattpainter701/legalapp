@@ -3,9 +3,42 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import HomePage from './HomePage'
+import { CORE_CAPABILITIES } from '../marketing/capabilities'
+import { HOME_FAQ } from '../seo/config'
 
 describe('HomePage launch routing and claims', () => {
   afterEach(() => cleanup())
+
+  it('shows every capability and question it publishes as structured data', () => {
+    // Google's structured-data policy requires marked-up content to be visible
+    // on the page. HOME_FAQ and CORE_CAPABILITIES are published as FAQPage and
+    // SoftwareApplication featureList, so both must render here.
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <HomePage />
+      </MemoryRouter>,
+    )
+
+    for (const { name, summary } of CORE_CAPABILITIES) {
+      expect(screen.getByRole('heading', { name, level: 3 })).toBeInTheDocument()
+      expect(screen.getByText(summary)).toBeInTheDocument()
+    }
+    for (const [question, answer] of HOME_FAQ) {
+      expect(screen.getByText(question)).toBeInTheDocument()
+      expect(screen.getByText(answer)).toBeInTheDocument()
+    }
+  })
+
+  it('says what LawHand is, not only how it feels', () => {
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <HomePage />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByRole('heading', { name: /legal automation platform for law firms/i }))
+      .toBeInTheDocument()
+  })
 
   it('routes the launch CTA to verified contact and avoids unsupported trial claims', () => {
     render(

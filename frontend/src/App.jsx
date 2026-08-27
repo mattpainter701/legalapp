@@ -4,6 +4,7 @@ import AppShell from './components/AppShell'
 import { ToastProvider } from './components/toast/ToastProvider'
 import { ConfirmProvider } from './components/dialog/ConfirmProvider'
 import SeoHead from './components/SeoHead'
+import GoogleAnalytics from './analytics/GoogleAnalytics'
 import VersionBadge from './components/VersionBadge'
 import ReleaseAnnouncement from './components/ReleaseAnnouncement'
 import AppErrorBoundary from './components/AppErrorBoundary'
@@ -211,6 +212,7 @@ export default function App() {
     <AppErrorBoundary>
     <AuthProvider>
       <SeoHead />
+      <GoogleAnalytics />
       <ToastProvider>
         <ConfirmProvider>
         <VersionBadge />

@@ -1,4 +1,12 @@
-import { buildStructuredData, getRouteMeta } from './config.js'
+import {
+  CORE_CAPABILITIES,
+} from '../marketing/capabilities.js'
+import {
+  PRIMARY_NAVIGATION,
+  PUBLIC_ROUTE_META,
+  buildStructuredData,
+  getRouteMeta,
+} from './config.js'
 
 const LEGAL_SHELLS = Object.freeze({
   '/privacy': {
@@ -15,7 +23,7 @@ const LEGAL_SHELLS = Object.freeze({
       { id: 'sharing', heading: 'Sharing and disclosures', body: 'Information may be disclosed to service providers supporting hosting, security, communications, payments, and enabled integrations; to the subscribing organization and its authorized administrators; or when required for legal compliance, safety, or a business transaction. Provider-specific processing is also governed by the provider’s terms and the configuration selected by the organization.' },
       { id: 'retention-security', heading: 'Retention and security', body: 'Retention depends on the type of information, tenant settings, contractual requirements, and legal obligations. LawHand uses administrative, technical, and organizational safeguards, including tenant isolation, but no system can guarantee absolute security.' },
       { id: 'choices', heading: 'Choices and privacy requests', body: 'Users may update certain account information through the service. Requests concerning workspace content should usually be directed to the subscribing organization. Other access, correction, deletion, or objection rights may apply based on location and can be submitted using the contact information below.' },
-      { id: 'changes-contact', heading: 'Changes and contact', body: 'We may update this policy as the service or applicable requirements change and will post the revised date here. Questions or privacy requests may be sent to matt@cybersafeadvisor.com.' },
+      { id: 'changes-contact', heading: 'Changes and contact', body: 'We may update this policy as the service or applicable requirements change and will post the revised date here. Questions or privacy requests may be sent to support@getlawhand.com.' },
     ],
   },
   '/terms': {
@@ -32,16 +40,17 @@ const LEGAL_SHELLS = Object.freeze({
       { id: 'content-integrations', heading: 'Content, AI features, and integrations', body: 'The subscribing organization retains its rights in submitted content and grants the permissions needed to operate the service. Outputs may be incomplete or incorrect and require review. Third-party services and AI providers are governed by their own terms and the organization\u2019s configuration.' },
       { id: 'availability', heading: 'Availability and changes', body: 'Features may evolve, and access may be limited for maintenance, security, legal compliance, nonpayment, or misuse. Subscription fees, support commitments, service levels, and termination rights are governed by the applicable subscription agreement.' },
       { id: 'disclaimers', heading: 'Disclaimers and liability', body: 'Except for express commitments in an applicable organization agreement, the public website and service are provided on an “as available” basis to the extent permitted by law. AI-assisted output, third-party content, citations, integrations, and connected services are not guaranteed to be error-free, complete, current, or continuously available.' },
-      { id: 'changes-contact', heading: 'Changes and contact', body: 'We may update these terms and will post the revised date here. Changes to an organization’s controlling subscription or data-processing terms are handled under those agreements. Questions may be sent to matt@cybersafeadvisor.com.' },
+      { id: 'changes-contact', heading: 'Changes and contact', body: 'We may update these terms and will post the revised date here. Changes to an organization’s controlling subscription or data-processing terms are handled under those agreements. Questions may be sent to support@getlawhand.com.' },
     ],
   },
 })
 
 const MARKETING_SHELLS = Object.freeze({
   '/product': {
-    heading: 'One workspace for the whole matter.',
-    lead: 'LawHand holds intake, matters, documents, deadlines, billing, and source-aware research in a single tenant-isolated workspace for law firms and legal teams.',
+    heading: 'The legal automation platform for law firms.',
+    lead: 'LawHand holds client and matter CRM, caller intake, tasks and deadlines, document preparation, time and invoicing, and source-linked legal research in a single tenant-isolated workspace.',
     sections: [
+      { heading: 'Core capabilities', body: CORE_CAPABILITIES.map((capability) => capability.name).join(' \u00b7 ') },
       { heading: 'The core workspace', body: 'Intake and tasks, matters and contacts, calendar and deadlines, documents and automation, time, billing, trust accounting, reporting, client portal, and signature routing.' },
       { heading: 'Practice-area library', body: 'Skill libraries add the document patterns, checks, and terminology of a practice area to the shared matter record. Trust and estate, family and domestic relations, and mediation add dedicated workspaces with their own records and roles.' },
       { heading: 'Connected sources', body: 'Supported Microsoft 365, Google Workspace, Microsoft Teams, Zoom Phone, QuickBooks Online, and enterprise file-share connections are enabled by a firm administrator and can be disconnected at any time.' },
@@ -66,6 +75,15 @@ const MARKETING_SHELLS = Object.freeze({
       { heading: 'Private preview', body: 'Public access remains gated while production release checks are completed. The intended public price is $0.45 per tool call.' },
     ],
   },
+  '/request-demo': {
+    heading: 'Book a LawHand demo.',
+    lead: 'See the legal automation platform against your firm\u2019s own intake, matters, documents, billing, and review controls rather than a generic script.',
+    sections: [
+      { heading: 'What the demo covers', body: 'A walkthrough of client and matter CRM, caller intake, document preparation, time and invoicing, and source-linked legal research, using workflows that match how your firm already works.' },
+      { heading: 'Bring your questions', body: 'Tenant isolation, integrations with Microsoft 365, Google Workspace, Zoom Phone, and QuickBooks Online, attorney review controls, and rollout scope are all fair game.' },
+      { heading: 'No obligation', body: 'Pricing, onboarding scope, and any specialized service commitments are confirmed in writing before a firm commits.' },
+    ],
+  },
   '/pricing': {
     heading: 'One clear platform price. Controlled expansion.',
     lead: 'LawHand is $89 per user per month, billed annually. Begin with the full platform, add specialized workflows deliberately, and evaluate MCP through the private preview.',
@@ -81,7 +99,7 @@ const PUBLIC_SHELLS = Object.freeze({ ...LEGAL_SHELLS, ...MARKETING_SHELLS })
 
 const LAST_UPDATED = 'July 27, 2026'
 
-const FALLBACK_CONTACT_URL = 'mailto:matt@cybersafeadvisor.com'
+const FALLBACK_CONTACT_URL = 'mailto:support@getlawhand.com'
 
 /** Render the address a mailto: contact URL points at, for link text. */
 function contactLabel(contactUrl) {
@@ -158,6 +176,18 @@ ${sections}
       </main>`
 }
 
+/**
+ * The same short menu the app header renders. Repeating one consistent set of
+ * internal links across every public page is what actually makes a page a
+ * sitelink candidate; the structured data only describes the intent.
+ */
+function navigationLinks(currentPath) {
+  return PRIMARY_NAVIGATION
+    .filter(({ path }) => path !== currentPath)
+    .map(({ path, label }) => `              <li><a href="${escapeHtml(PUBLIC_ROUTE_META[path]?.canonicalPath || path)}">${escapeHtml(label)}</a></li>`)
+    .join('\n')
+}
+
 function marketingShellMarkup(pathname, contactUrl) {
   const route = MARKETING_SHELLS[pathname]
   const sections = route.sections
@@ -176,10 +206,7 @@ function marketingShellMarkup(pathname, contactUrl) {
           <nav class="server-legal__contents" aria-label="LawHand product pages">
             <h2>Explore LawHand</h2>
             <ol>
-              <li><a href="/product">Platform</a></li>
-              <li><a href="/product/chat">AI Chat</a></li>
-              <li><a href="/product/mcp">MCP</a></li>
-              <li><a href="/pricing">Pricing</a></li>
+${navigationLinks(pathname)}
             </ol>
           </nav>
 ${sections}
@@ -196,9 +223,9 @@ ${sections}
  * home page; removing it outright would leave the crawler-visible copy of the
  * page with no structured data at all.
  */
-function replaceStructuredData(html, siteOrigin, pathname) {
+function replaceStructuredData(html, siteOrigin, pathname, organizationProfile) {
   const pattern = /<script[^>]*data-seo-structured-data[^>]*>[\s\S]*?<\/script>\s*/gi
-  const data = buildStructuredData(siteOrigin, pathname)
+  const data = buildStructuredData(siteOrigin, pathname, organizationProfile)
   if (!data) return html.replace(pattern, '')
 
   const payload = JSON.stringify(data).replace(/</g, '\\u003c')
@@ -211,7 +238,13 @@ function replaceStructuredData(html, siteOrigin, pathname) {
 }
 
 /** Derive a crawl-correct, no-JavaScript shell from Vite's final SPA index. */
-export function buildPublicRouteHtml(baseHtml, pathname, siteOrigin = '', contactUrl = FALLBACK_CONTACT_URL) {
+export function buildPublicRouteHtml(
+  baseHtml,
+  pathname,
+  siteOrigin = '',
+  contactUrl = FALLBACK_CONTACT_URL,
+  organizationProfile = {},
+) {
   if (!Object.hasOwn(PUBLIC_SHELLS, pathname)) {
     throw new Error(`No public server shell is defined for ${pathname}`)
   }
@@ -224,7 +257,7 @@ export function buildPublicRouteHtml(baseHtml, pathname, siteOrigin = '', contac
       `<link rel="canonical" href="${escapeHtml(canonical)}" />`,
     )
 
-  html = replaceStructuredData(html, siteOrigin, pathname)
+  html = replaceStructuredData(html, siteOrigin, pathname, organizationProfile)
 
   html = replaceMeta(html, 'name', 'description', meta.description)
   html = replaceMeta(html, 'name', 'robots', 'index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1')

@@ -2,6 +2,7 @@ import { render, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import SeoHead from './SeoHead'
+import { HOME_DESCRIPTION, HOME_TITLE } from '../seo/config'
 
 function renderAt(path) {
   return render(
@@ -22,7 +23,11 @@ describe('SeoHead', () => {
     vi.stubEnv('VITE_PUBLIC_SITE_URL', 'https://clarity.example')
     renderAt('/?campaign=ignored')
 
-    await waitFor(() => expect(document.title).toContain('The Whole Matter, in Hand'))
+    await waitFor(() => expect(document.title).toBe(HOME_TITLE))
+    // The result a firm sees in Google must say what LawHand is.
+    expect(document.title).toContain('Legal Automation Platform')
+    expect(document.querySelector('meta[name="description"]'))
+      .toHaveAttribute('content', HOME_DESCRIPTION)
     expect(document.querySelector('meta[name="robots"]')).toHaveAttribute('content', expect.stringContaining('index, follow'))
     expect(document.querySelector('link[rel="canonical"]')).toHaveAttribute('href', 'https://clarity.example/')
     expect(document.querySelector('meta[property="og:image"]')).toHaveAttribute('content', 'https://clarity.example/social-card-v2.png')
@@ -32,6 +37,8 @@ describe('SeoHead', () => {
       'Organization',
       'WebSite',
       'SoftwareApplication',
+      'ItemList',
+      'FAQPage',
     ])
     // Ratings and reviews would be fabricated social proof; the published
     // seat price is a claim the pricing page already makes.
@@ -45,7 +52,7 @@ describe('SeoHead', () => {
     vi.stubEnv('VITE_PUBLIC_SITE_URL', 'https://clarity.example')
     renderAt('/pricing')
 
-    await waitFor(() => expect(document.title).toBe('Pricing | LawHand'))
+    await waitFor(() => expect(document.title).toBe('Pricing | LawHand Legal Automation Platform'))
     expect(document.querySelector('link[rel="canonical"]')).toHaveAttribute('href', 'https://clarity.example/pricing')
 
     const structured = JSON.parse(document.querySelector('script[data-seo-structured-data]').textContent)

@@ -12,8 +12,12 @@ import {
   PUBLIC_SERVER_SHELL_PATHS,
   buildPublicRouteHtml,
 } from './src/seo/serverShell.js'
+import {
+  normalizeMeasurementId,
+  normalizeVerificationToken,
+} from './src/analytics/googleAnalytics.js'
 
-const DEFAULT_CONTACT_URL = 'mailto:matt@cybersafeadvisor.com'
+const DEFAULT_CONTACT_URL = 'mailto:support@getlawhand.com'
 
 /**
  * The no-JavaScript shell inside index.html is what a crawler and a visitor on
@@ -25,7 +29,7 @@ function demoContactHref(contactUrl) {
   return contactUrl.includes('?') ? contactUrl : `${contactUrl}?subject=LawHand%20Demo`
 }
 
-function seoAssets(siteOrigin, contactUrl) {
+function seoAssets(siteOrigin, contactUrl, organizationProfile, verificationToken) {
   return {
     name: 'lawhand-seo-assets',
     apply: 'build',
@@ -34,7 +38,16 @@ function seoAssets(siteOrigin, contactUrl) {
         `href="${DEFAULT_CONTACT_URL}?subject=LawHand%20Demo"`,
         `href="${demoContactHref(contactUrl)}"`,
       )
-      if (!siteOrigin) return withContact
+      // Search Console's HTML-tag method has to be present in the served
+      // document before verification, and it must stay there afterwards.
+      const verificationTag = verificationToken
+        ? [{
+          tag: 'meta',
+          attrs: { name: 'google-site-verification', content: verificationToken },
+          injectTo: 'head',
+        }]
+        : []
+      if (!siteOrigin) return { html: withContact, tags: verificationTag }
       const transformed = withContact
         .replace('<link rel="canonical" href="/" />', `<link rel="canonical" href="${siteOrigin}/" />`)
         .replace('<meta property="og:url" content="/" />', `<meta property="og:url" content="${siteOrigin}/" />`)
@@ -43,12 +56,15 @@ function seoAssets(siteOrigin, contactUrl) {
 
       return {
         html: transformed,
-        tags: [{
-          tag: 'script',
-          attrs: { type: 'application/ld+json', 'data-seo-structured-data': '' },
-          children: JSON.stringify(buildStructuredData(siteOrigin, '/')),
-          injectTo: 'head',
-        }],
+        tags: [
+          ...verificationTag,
+          {
+            tag: 'script',
+            attrs: { type: 'application/ld+json', 'data-seo-structured-data': '' },
+            children: JSON.stringify(buildStructuredData(siteOrigin, '/', organizationProfile)),
+            injectTo: 'head',
+          },
+        ],
       }
     },
     writeBundle(options) {
@@ -59,7 +75,7 @@ function seoAssets(siteOrigin, contactUrl) {
         mkdirSync(routeDirectory, { recursive: true })
         writeFileSync(
           path.join(routeDirectory, 'index.html'),
-          buildPublicRouteHtml(indexHtml, pathname, siteOrigin, contactUrl),
+          buildPublicRouteHtml(indexHtml, pathname, siteOrigin, contactUrl, organizationProfile),
           'utf8',
         )
       }
@@ -85,9 +101,18 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const siteOrigin = normalizeSiteOrigin(env.VITE_PUBLIC_SITE_URL)
   const contactUrl = env.VITE_CONTACT_URL?.trim() || DEFAULT_CONTACT_URL
+  const organizationProfile = {
+    contactUrl,
+    telephone: env.VITE_ORG_TELEPHONE,
+    sameAs: env.VITE_ORG_SAME_AS,
+  }
+  // Validate at build time so a malformed id or token fails here rather than
+  // silently collecting nothing in production.
+  normalizeMeasurementId(env.VITE_GA_MEASUREMENT_ID)
+  const verificationToken = normalizeVerificationToken(env.VITE_GOOGLE_SITE_VERIFICATION)
 
   return {
-    plugins: [react(), seoAssets(siteOrigin, contactUrl)],
+    plugins: [react(), seoAssets(siteOrigin, contactUrl, organizationProfile, verificationToken)],
     test: {
       environment: 'jsdom',
       setupFiles: './src/test/setup.js',

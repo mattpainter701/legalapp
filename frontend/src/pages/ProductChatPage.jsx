@@ -25,7 +25,7 @@ const CAPABILITIES = [
 ]
 
 export default function ProductChatPage() {
-  const contactUrl = import.meta.env.VITE_CONTACT_URL || 'mailto:matt@cybersafeadvisor.com'
+  const contactUrl = import.meta.env.VITE_CONTACT_URL || 'mailto:support@getlawhand.com'
 
   return (
     <MarketingPageLayout>

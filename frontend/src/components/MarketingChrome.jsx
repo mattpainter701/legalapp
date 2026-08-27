@@ -1,13 +1,13 @@
 import { Link } from 'react-router-dom'
 import { ArrowRight } from 'lucide-react'
 import LawHandLogo from './LawHandLogo'
+import { PRIMARY_NAVIGATION } from '../seo/config'
 
+// Derived from the one list that also drives the SiteNavigationElement
+// structured data and the no-JavaScript shells, so the internal links Google
+// weighs for sitelinks stay identical everywhere they are rendered.
 const NAV_ITEMS = [
-  { label: 'Platform', to: '/product' },
-  { label: 'AI Chat', to: '/product/chat' },
-  { label: 'MCP', to: '/product/mcp' },
-  { label: 'Pricing', to: '/pricing' },
-  { label: 'Book demo', to: '/request-demo' },
+  ...PRIMARY_NAVIGATION.map(({ path, shortLabel }) => ({ label: shortLabel, to: path })),
   // Rendered as a router link so a visitor arriving from another marketing
   // page still lands on the home section; HomePage honours the hash on mount.
   { label: 'Security', to: '/#security', section: 'security' },
@@ -65,7 +65,7 @@ export function MarketingFooter() {
         <nav aria-label="Footer" className="flex flex-wrap items-center gap-x-5 gap-y-2 font-sans text-[12.5px] text-brand-muted sm:justify-end">
           <Link to="/product" className="inline-flex min-h-11 items-center hover:text-brand-ink">Platform</Link>
           <Link to="/product/chat" className="inline-flex min-h-11 items-center hover:text-brand-ink">AI Chat</Link>
-          <Link to="/product/mcp" className="inline-flex min-h-11 items-center hover:text-brand-ink">MCP</Link>
+          <Link to="/product/mcp" className="inline-flex min-h-11 items-center hover:text-brand-ink">Legal Research MCP</Link>
           <Link to="/pricing" className="inline-flex min-h-11 items-center hover:text-brand-ink">Pricing</Link>
           <Link to="/privacy" className="inline-flex min-h-11 items-center hover:text-brand-ink">Privacy</Link>
           <Link to="/terms" className="inline-flex min-h-11 items-center hover:text-brand-ink">Terms</Link>

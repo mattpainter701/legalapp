@@ -1,3 +1,5 @@
+import { trackAnalyticsEvent } from './analytics/googleAnalytics'
+
 const SESSION_KEY = 'lawhand.marketing.session'
 const EVENT_NAMES = new Set(['demo_cta_clicked', 'demo_form_started', 'demo_form_submitted'])
 
@@ -46,6 +48,9 @@ export function trackMarketingEvent(name, properties = {}) {
   }
 
   window.dataLayer?.push?.({ event: name, ...properties })
+  // The first-party endpoint above stays the system of record. GA4 receives the
+  // same conversion so the funnel can be read next to acquisition channels.
+  trackAnalyticsEvent(name, { ...campaignProperties(), ...properties })
   window.dispatchEvent(new CustomEvent('lawhand:marketing', { detail: payload }))
 
   const body = JSON.stringify(payload)

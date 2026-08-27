@@ -28,8 +28,8 @@ Set `NEW_HOST` below to the final hostname, without a scheme or path.
    FRONTEND_URL=https://NEW_HOST
    BACKEND_URL=https://NEW_HOST
    VITE_PUBLIC_SITE_URL=https://NEW_HOST
-   VITE_CONTACT_URL=mailto:matt@cybersafeadvisor.com
-   EMAIL_FROM=matt@cybersafeadvisor.com
+   VITE_CONTACT_URL=mailto:support@getlawhand.com
+   EMAIL_FROM=support@getlawhand.com
    ZOOM_REDIRECT_URI=https://NEW_HOST/api/integrations/zoom/callback
    ZOOM_PHONE_REDIRECT_URI=https://NEW_HOST/api/integrations/zoom-phone/callback
    QBO_REDIRECT_URI=https://NEW_HOST/api/integrations/qbo/callback
