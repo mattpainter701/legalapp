@@ -23,6 +23,7 @@ from typing import Any
 
 from sqlalchemy import and_, func, or_, select
 
+from app.config import get_settings
 from app.models.contact import Contact
 from app.models.document import Chunk, Document
 from app.models.matter_assignment import MatterAssignment
@@ -42,6 +43,7 @@ from app.schemas.chat_action import (
     ResolvedRecipientBinding,
     normalize_single_mailbox,
 )
+from app.schemas.workspace_mcp import ProposeDocumentFromTemplateArgs
 from app.schemas.task import OPEN_TASK_STATUSES
 from app.services.automation_capabilities import CapabilityContext, CapabilityError
 from app.services.corpus_revision import advance_rag_corpus_revision
@@ -54,14 +56,25 @@ from app.services.cloud_artifact_materialization import (
     CloudArtifactMaterializationError,
     cloud_artifact_materializer,
 )
+from app.services.document_template_workspace import render_workspace_template
 from app.services.rbac_service import get_user_capabilities
 
 # Re-exported names are resolved dynamically from CapabilitySpec.handler_name.
 from app.services.matter_workspace_capabilities import (
+    get_document_template_text,  # noqa: F401
     get_matter_document_text,  # noqa: F401
     get_matter_context,  # noqa: F401
     list_document_templates,  # noqa: F401
     list_matter_documents,  # noqa: F401
+)
+from app.services.workspace_lifecycle_capabilities import (
+    get_client,  # noqa: F401
+    get_intake,  # noqa: F401
+    get_task,  # noqa: F401
+    search_clients,  # noqa: F401
+    search_intakes,  # noqa: F401
+    search_matters,  # noqa: F401
+    search_tasks,  # noqa: F401
 )
 from app.services.task_workflow import (
     TaskWorkflowError,
@@ -73,6 +86,7 @@ from app.services.task_workflow import (
 # firm's whole matter list into a prompt.
 _MAX_MATTER_RESULTS = 8
 _MAX_TASK_RESULTS = 20
+settings = get_settings()
 
 
 def _normalize_task_title(value: str) -> str:
@@ -504,33 +518,29 @@ async def find_matter(context: ChatToolContext, args: FindMatterArgs) -> dict[st
     pattern = f"%{escaped}%"
     client_name = func.concat_ws(" ", Contact.first_name, Contact.last_name)
     rows = (
-        (
-            await context.db.execute(
-                select(Matter)
-                .outerjoin(
-                    Contact,
-                    and_(
-                        Contact.id == Matter.client_contact_id,
-                        Contact.tenant_id == context.tenant_id,
-                    ),
-                )
-                .where(
-                    Matter.tenant_id == context.tenant_id,
-                    or_(
-                        Matter.matter_name.ilike(pattern, escape="\\"),
-                        Matter.counterparty.ilike(pattern, escape="\\"),
-                        Contact.organization_name.ilike(pattern, escape="\\"),
-                        client_name.ilike(pattern, escape="\\"),
-                        Contact.email.ilike(pattern, escape="\\"),
-                    ),
-                )
-                .order_by(Matter.updated_at.desc())
-                .limit(_MAX_MATTER_RESULTS)
+        await context.db.execute(
+            select(Matter, Contact)
+            .outerjoin(
+                Contact,
+                and_(
+                    Contact.id == Matter.client_contact_id,
+                    Contact.tenant_id == context.tenant_id,
+                ),
             )
+            .where(
+                Matter.tenant_id == context.tenant_id,
+                or_(
+                    Matter.matter_name.ilike(pattern, escape="\\"),
+                    Matter.counterparty.ilike(pattern, escape="\\"),
+                    Contact.organization_name.ilike(pattern, escape="\\"),
+                    client_name.ilike(pattern, escape="\\"),
+                    Contact.email.ilike(pattern, escape="\\"),
+                ),
+            )
+            .order_by(Matter.updated_at.desc())
+            .limit(_MAX_MATTER_RESULTS)
         )
-        .scalars()
-        .all()
-    )
+    ).all()
     return {
         "matters": [
             {
@@ -538,9 +548,11 @@ async def find_matter(context: ChatToolContext, args: FindMatterArgs) -> dict[st
                 "matter_name": matter.matter_name,
                 "matter_type": matter.matter_type,
                 "status": matter.status,
-                "client": matter.counterparty,
+                "client_id": str(client.id) if client else None,
+                "client": client.display_name if client else None,
+                "counterparty": matter.counterparty,
             }
-            for matter in rows
+            for matter, client in rows
         ]
     }
 
@@ -766,6 +778,52 @@ async def propose_task(
     }
 
 
+async def propose_matter_document(
+    context: ChatToolContext, args: ProposeMatterDocumentArgs
+) -> dict[str, Any]:
+    """Create a LawHand-rendered DOCX and route its exact cloud bytes to review."""
+
+    return await _propose_matter_document(context, args)
+
+
+async def propose_document_from_template(
+    context: ChatToolContext, args: ProposeDocumentFromTemplateArgs
+) -> dict[str, Any]:
+    """Render a firm template into the same staged cloud-review lifecycle."""
+
+    rendered = await render_workspace_template(
+        context,
+        matter_id=args.matter_id,
+        template_id=args.template_id,
+        variables=args.variables,
+        title=args.title,
+    )
+    proposal = ProposeMatterDocumentArgs(
+        matter_id=args.matter_id,
+        client_request_id=args.client_request_id,
+        title=rendered.title,
+        document_kind=rendered.document_kind,
+        body=rendered.review_text,
+        due_date=args.due_date,
+        source_ids=args.source_ids,
+        staff_reviewer_user_id=args.staff_reviewer_user_id,
+        attorney_reviewer_user_id=args.attorney_reviewer_user_id,
+    )
+    result = await _propose_matter_document(
+        context,
+        proposal,
+        source_docx_bytes=rendered.source_docx_bytes,
+        template_id=rendered.template.id,
+        template_sha256=rendered.template_sha256,
+        template_format=rendered.template_format,
+        variable_snapshot=rendered.variable_snapshot,
+        document_preview_truncated=rendered.preview_truncated,
+    )
+    result["template_title"] = rendered.template.title
+    result["filled_variables"] = sorted(rendered.variable_snapshot)
+    return result
+
+
 async def propose_client_email(
     context: ChatToolContext, args: ProposeClientEmailArgs
 ) -> dict[str, Any]:
@@ -876,8 +934,16 @@ async def propose_client_email(
     }
 
 
-async def propose_matter_document(
-    context: ChatToolContext, args: ProposeMatterDocumentArgs
+async def _propose_matter_document(
+    context: ChatToolContext,
+    args: ProposeMatterDocumentArgs,
+    *,
+    source_docx_bytes: bytes | None = None,
+    template_id: uuid.UUID | None = None,
+    template_sha256: str | None = None,
+    template_format: str | None = None,
+    variable_snapshot: dict[str, Any] | None = None,
+    document_preview_truncated: bool = False,
 ) -> dict[str, Any]:
     """Create a verified tenant-cloud working copy and place it in Review."""
     matter = await _require_matter(context, args.matter_id)
@@ -909,6 +975,10 @@ async def propose_matter_document(
             "source_ids": args.source_ids[:10],
             "staff_reviewer_user_id": staff_reviewer_user_id,
             "attorney_reviewer_user_id": attorney_reviewer_user_id,
+            "template_id": template_id,
+            "template_sha256": template_sha256,
+            "template_format": template_format,
+            "variable_snapshot": variable_snapshot or {},
         }
         try:
             artifact_result = await create_initial_generated_artifact(
@@ -924,6 +994,11 @@ async def propose_matter_document(
                 client_request_id=client_request_id,
                 request_payload=request_payload,
                 sources=chips,
+                template_id=template_id,
+                template_sha256=template_sha256,
+                template_format=template_format,
+                variable_snapshot=variable_snapshot,
+                unresolved_variables=[],
             )
         except GeneratedArtifactError as exc:
             raise ChatToolError(exc.code, exc.message) from exc
@@ -1023,6 +1098,7 @@ async def propose_matter_document(
                 revision_id=revision.id,
                 task_id=task.id,
                 uploaded_by_user_id=context.actor_user_id,
+                source_docx_bytes=source_docx_bytes,
             )
         except CloudArtifactMaterializationError as exc:
             raise ChatToolError(
@@ -1045,6 +1121,7 @@ async def propose_matter_document(
             document_storage_backend=document.storage_backend,
             document_provider_etag=document.provider_etag,
             document_provider_version_id=document.provider_version_id,
+            document_preview_truncated=document_preview_truncated,
             source_ids=args.source_ids[:10],
             sources=chips,
         )
@@ -1067,6 +1144,7 @@ async def propose_matter_document(
         "staff_reviewer_user_id": str(task.staff_reviewer_user_id),
         "attorney_reviewer_user_id": str(task.attorney_reviewer_user_id),
         "matter_id": str(task.matter_id),
+        "task_url": f"{settings.FRONTEND_URL.rstrip('/')}/tasks/{task.id}",
         "due_date": task.due_date.isoformat() if task.due_date else None,
         "action_type": action.type,
         "document_id": str(document.id),
@@ -1079,6 +1157,17 @@ async def propose_matter_document(
         "document_download_url": (
             f"/api/matters/{task.matter_id}/documents/{document.id}/download"
         ),
+        "document_absolute_open_url": (
+            f"{settings.BACKEND_URL.rstrip('/')}/api/matters/"
+            f"{task.matter_id}/documents/{document.id}/open"
+        ),
+        "document_absolute_download_url": (
+            f"{settings.BACKEND_URL.rstrip('/')}/api/matters/"
+            f"{task.matter_id}/documents/{document.id}/download"
+        ),
+        "template_id": str(template_id) if template_id else None,
+        "template_sha256": template_sha256,
+        "template_format": template_format,
         "approval_effect": (
             "The editable DOCX is already stored in the tenant cloud. Staff review "
             "advances this exact revision to attorney review; attorney approval "

@@ -90,7 +90,11 @@ async def test_list_tools_and_call_tool_cover_success_denial_and_errors(monkeypa
     current = identity(scopes={"matters:read", "tasks:propose"})
     monkeypatch.setattr(protocol, "_request_and_identity", lambda: (request, current))
     tools = await protocol.list_workspace_tools()
-    assert {item.name for item in tools} == {"find_matter", "propose_task"}
+    assert {item.name for item in tools} == {
+        "find_matter",
+        "search_matters",
+        "propose_task",
+    }
 
     async def successful(**kwargs):
         return {

@@ -98,7 +98,7 @@ grants and clients.
 Official OpenAI documentation confirms that Codex clients can connect to
 Streamable HTTP MCP servers using bearer-token or OAuth authentication, and
 that desktop, CLI, and IDE clients can share the same MCP configuration:
-<https://learn.chatgpt.com/docs/extend/mcp?surface=cli>.
+<https://developers.openai.com/codex/mcp/>.
 
 ## Capability policy
 
@@ -134,15 +134,26 @@ Initial workspace scopes are intentionally narrow:
 - `matters:read`
 - `tasks:read`
 - `contacts:read`
+- `intakes:read`
 - `documents:read`
 - `templates:read`
 - `tasks:propose`
 - `communications:propose`
 - `documents:propose`
 
-A connected coding agent can therefore search a user's firm matters, inspect
-work, and prepare a task, email, or Word-document draft. It cannot silently send
-to a client or file a document as final.
+A connected coding agent can therefore search clients, intakes, matters, and
+tasks; load client/party/team/event/note/communication context; read bounded
+uploaded-document and template text; and prepare a task, email, fresh DOCX, or
+template-rendered DOCX for LawHand review. It cannot silently approve, send to
+a client, or file a document as final.
+
+Approved DOCX templates preserve their source layout and bind the retained
+template hash and filled-variable snapshot to the immutable artifact revision.
+The exact rendered bytes are written and read-back verified in tenant cloud
+before a staged staff → attorney Review task is returned. Markdown templates
+use the same artifact lifecycle. PDF templates remain visual-preview-gated in
+LawHand and are refused through MCP until that exact preview evidence can be
+bound to the review task.
 
 ## Artifact model
 

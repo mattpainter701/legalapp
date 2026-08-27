@@ -3,6 +3,16 @@
 ## [Unreleased]
 
 ### Added
+- **Workspace MCP now covers review-first matter work end to end:** approved
+  desktop clients can search and inspect clients, intakes, matters, and tasks;
+  load client, party, team, document, event, note, and communication context;
+  read bounded uploaded-document and raw-template text; and render approved DOCX
+  or Markdown templates into the existing immutable artifact and tenant-cloud
+  workflow. Fresh and template-rendered documents return authenticated open and
+  download routes plus a LawHand task deep link and always enter staged staff →
+  attorney Review. OAuth discovery now requests the complete current scope set,
+  including `intakes:read`; existing narrow grants remain unchanged and require
+  explicit reconnection rather than silent scope expansion.
 - **Matter caption parties now drive explicit document fields:** the Parties
   workspace defines plaintiff and defendant separately from the client
   relationship and represented side, supports a primary contact per role, and

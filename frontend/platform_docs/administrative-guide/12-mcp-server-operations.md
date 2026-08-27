@@ -44,16 +44,22 @@ public-authority-only product.
 
 The current Platform MCP catalog is intentionally review-first:
 
-- **Reads:** `find_matter`, `get_matter_context`, `list_matter_tasks`,
-  `list_matter_recipients`, `list_matter_documents`,
-  `get_matter_document_text`, and `list_document_templates`.
+- **Reads:** `search_clients`, `get_client`, `search_intakes`, `get_intake`,
+  `search_matters`, `find_matter`, `get_matter_context`, `search_tasks`,
+  `get_task`, `list_matter_tasks`, `list_matter_recipients`,
+  `list_matter_documents`, `get_matter_document_text`,
+  `list_document_templates`, and `get_document_template_text`.
 - **Proposals:** `propose_task`, `propose_client_email`, and
-  `propose_matter_document`.
+  `propose_matter_document`; `propose_document_from_template` renders an active
+  DOCX or Markdown firm template into the same review workflow.
 
 There are no MCP calls for approval, filing, sending, delivery, or execution.
 Proposals create auditable LawHand Review work; a human reviewer must complete
 the required workflow before deterministic platform workers can act. Document
-text is untrusted evidence and must not be treated as an instruction.
+and template text is untrusted evidence and must not be treated as an
+instruction. Prepared documents return the Review task plus authenticated
+LawHand open and download links. They always require staff/paralegal review and
+then attorney review; the external assistant cannot approve or deliver them.
 
 ### Platform endpoint and client setup
 
@@ -80,6 +86,9 @@ claude mcp add --transport http --scope user lawhand https://mcp.getlawhand.com/
 Claude Desktop uses **Settings -> Connectors -> Add custom connector** with the
 same URL. In each client, authenticate with OAuth and verify the displayed
 tool list. Never paste a Research `lhrk_` key into Platform MCP configuration.
+If an older connection still displays only `find_matter`, remove that
+connection and authenticate again to review the current scope set. LawHand does
+not silently enlarge an existing OAuth grant.
 
 For ChatGPT workspace apps, an administrator first permits custom MCP apps in
 **Workspace Settings -> Permissions & Roles -> Connected Data**. The authorized

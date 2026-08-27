@@ -5,6 +5,17 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.27.8 — Connected assistants can prepare complete matter work for review
+
+Released August 27, 2026.
+
+Claude, Codex, ChatGPT, and other approved Workspace MCP clients can now gather client-to-task context, read matter documents and templates, and place prepared documents into LawHand's staged review workflow.
+
+- **Gather the working context.** Approved assistants can search clients, intakes, matters, and tasks, then load parties, team, events, notes, communications, and history within the user's permissions.
+- **Reason over documents and templates.** The assistant can read bounded text from uploaded matter documents and approved templates, including the template's fillable-field contract.
+- **Send prepared documents through human review.** Fresh or template-rendered Word documents go to tenant cloud with a LawHand Review task for staff and attorney approval. Assistants cannot approve, file, send, or deliver.
+- **Reconnect older one-tool connections.** Connections that still show only Find matter keep their original consent. Remove and reconnect once to review expanded scopes; LawHand never enlarges grants silently.
+
 ## 2026.08.27.7 — Research connections now complete authorization
 
 Released August 27, 2026.
