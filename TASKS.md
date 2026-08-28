@@ -1,5 +1,98 @@
 # TASKS.md
 
+## BK28 — Workspace Ecosystem, Controlled Trials, and Operator Onboarding — 2026-08-27 (PLANNED)
+
+**Goal:** Meet attorneys inside Microsoft 365 and Google Workspace while
+keeping LawHand authoritative for matter identity, permissions, review, audit,
+and deterministic execution; make extended evaluations enforceable; provide an
+operator-only tenant/import path; and provision governed SharePoint matter
+workspaces in the customer's tenant.
+
+Architecture, product decisions, current-state evidence, vendor constraints,
+delivery order, and acceptance gates:
+`docs/workspace-ecosystem-trials-onboarding-plan-2026-08-27.md`.
+
+### P0 — trial and provisioning control plane
+
+- [ ] `ECO-01` Replace split trial metadata with a revisioned canonical tenant
+      access policy covering lifecycle, stable capability grants, modules, named
+      seats, integrations, actions, storage, expiry/grace, and conversion.
+- [ ] `ECO-02` Enforce the resolved policy on every protected API, durable job,
+      and session/navigation contract; direct API calls must not bypass a hidden
+      view, route, or disabled action.
+- [ ] `ECO-03` Reuse atomic AI reservation/settlement patterns to enforce daily,
+      rolling-window, and lifetime Standard, Premium, and Background Automation
+      budgets before provider spend.
+- [ ] `ECO-04` Add audited operator issue/extend/narrow/revoke/convert controls,
+      read-only grace, truthful expiry UX, retention/purge decisions, and
+      qualified-usage/conversion reporting.
+- [ ] `ECO-05` Keep public signup disabled until tenant expiry, queued-work stop,
+      AI exhaustion, extension, conversion, export/grace, and retention pass an
+      end-to-end rehearsal.
+- [ ] `ECO-06` Add deny-by-default `platform:provision` authorization and an
+      idempotent operator `POST /api/platform/tenants` contract that creates the
+      tenant, initial access policy, plan/modules, RBAC, audit receipt, and
+      founding-admin invitation without accepting provider secrets.
+- [ ] `ECO-07` Add durable onboarding-run status and retry/recovery around admin
+      invitation, provider-consent handoff, directory applicability, cloud
+      storage selection, import, review, and completion.
+- [ ] `ECO-08` Generalize the external import spine for versioned, checksummed
+      client/contact/matter bundles with immutable staging, exact/ambiguous match
+      review, approval-bound reconciliation, idempotent promotion, and
+      `external_record_links`; keep billing/trust/history provider-specific.
+
+### P1 — Microsoft Matter Agent and SharePoint pilot
+
+- [ ] `ECO-09` Certify Copilot Studio against the production-shaped Workspace
+      MCP discovery/DCR flow, scoped consent, revocation, Privacy Mode, and
+      tenant/user kill switches in one Microsoft development tenant.
+- [ ] `ECO-10` Add bounded artifact-to-matter resolution with exact match
+      evidence, candidate confirmation, source citations, LawHand deep links,
+      and no proposal creation on an ambiguous matter.
+- [ ] `ECO-11` Add review-first artifact-link, meeting-note, matter-attention,
+      and authorized portfolio-attention capabilities without automatic send,
+      deadline creation, conflict clearance, filing, or direct file replacement.
+- [ ] `ECO-12` Package the LawHand Matter Agent for three jobs: brief this
+      matter, analyze this message/document, and prepare the next event from
+      Outlook, Teams, Word, or Microsoft 365 Copilot.
+- [ ] `ECO-13` Build a 50+ case agent evaluation set covering wrong/no/ambiguous
+      matter, unauthorized access, stale sources, prompt injection, revoked
+      consent, citations, proposal truthfulness, latency, usage, and acceptance.
+- [ ] `ECO-14` Create a versioned, tenant-installed SharePoint Matter Hub site
+      template with a Matter Documents library, Matter Directory, metadata and
+      content types, landing pages, navigation, group recipe, sharing default,
+      LawHand deep links, and provisioning receipt.
+- [ ] `ECO-15` Provision one idempotent Document Set/folder and landing-page
+      workspace per routine matter inside the hub; reserve dedicated private
+      sites for approved isolation/data-room cases to avoid site sprawl.
+- [ ] `ECO-16` Reconcile matter access and lifecycle without privilege
+      broadening or automatic deletion; verify rename, close/archive,
+      disconnect, retry, template upgrade, provider outage, and permission-drift
+      behavior in a Microsoft development tenant.
+
+### P2 — Google channel and repeatable commercial rollout
+
+- [ ] `ECO-17` Split Google connection UX and behavior into personal Google and
+      Google Workspace modes; personal accounts must skip Admin SDK/directory
+      sync while retaining explicitly consented per-user Gmail, Calendar, and
+      Drive capabilities.
+- [ ] `ECO-18` Minimize and justify Google scopes; complete production consent
+      configuration, privacy/deletion controls, verification, required security
+      assessment, and allowlisted live proof before general personal Gmail use.
+- [ ] `ECO-19` Build a contextual LawHand Google Workspace add-on for
+      Gmail/Calendar/Drive/Docs that confirms the matter, shows a cited brief,
+      and stages review-first task, correspondence, or document proposals.
+- [ ] `ECO-20` Treat Gemini API as approved API-key/Cloud-Billing capacity behind
+      LiteLLM, never as a Google One/Google AI subscription benefit or an
+      unmetered tenant route.
+- [ ] `ECO-21` Pilot Workspace MCP/A2A in Gemini Enterprise only after the
+      Microsoft agent meets matter-match, citation, review, and margin gates;
+      do not represent this as a personal Gemini feature.
+- [ ] `ECO-22` Run one controlled customer pilot and record time-to-first-matter,
+      import exceptions, wrong-matter rate, citation coverage, proposal edits,
+      AI value units/margin, SharePoint failures/drift, qualified trial usage,
+      extension, and paid conversion before setting packaging or price.
+
 ## BK27 — Task, Correspondence, Intake, and Portal Follow-through — 2026-08-26
 
 **Goal:** Keep LawHand tasks authoritative while meeting firms in Outlook,
