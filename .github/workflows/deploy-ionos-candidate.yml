@@ -6,14 +6,13 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Verify, privately stage, or publicly accept the IONOS release
+        description: Verify or privately stage the IONOS release
         required: true
         default: verify
         type: choice
         options:
           - verify
           - stage
-          - accept
       confirmation:
         description: Type the operation-specific confirmation shown in the runbook
         required: false
@@ -49,7 +48,6 @@ jobs:
           case "$OPERATION" in
             verify) ;;
             stage) [[ "$CONFIRMATION" == STAGE-IONOS-CANDIDATE ]] ;;
-            accept) [[ "$CONFIRMATION" == ACCEPT-IONOS-PRODUCTION ]] ;;
             *) exit 2 ;;
           esac
 
@@ -61,24 +59,27 @@ jobs:
           [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
 
-      - name: Require successful CI for mutation
+      - name: Require successful CI and CodeQL for mutation
         if: inputs.operation == 'stage'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ github.sha }}
         run: |
-          conclusion="$(gh run list \
-            --repo "$GITHUB_REPOSITORY" \
-            --workflow ci.yml \
-            --commit "$RELEASE_SHA" \
-            --event push \
-            --limit 20 \
-            --json conclusion \
-            --jq '.[0].conclusion // ""')"
-          [[ "$conclusion" == success ]] || {
-            echo "::error::CI for $RELEASE_SHA is '$conclusion'; IONOS was not changed."
-            exit 1
-          }
+          set -Eeuo pipefail
+          for workflow in ci.yml codeql.yml; do
+            conclusion="$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow "$workflow" \
+              --commit "$RELEASE_SHA" \
+              --event push \
+              --limit 20 \
+              --json conclusion \
+              --jq '.[0].conclusion // ""')"
+            [[ "$conclusion" == success ]] || {
+              echo "::error::$workflow for $RELEASE_SHA is '$conclusion'; IONOS was not changed."
+              exit 1
+            }
+          done
 
   ionos:
     name: ${{ inputs.operation }} on IONOS Cube M
