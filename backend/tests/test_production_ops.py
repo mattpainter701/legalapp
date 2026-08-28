@@ -1912,6 +1912,25 @@ def test_skynet_installers_separate_runner_from_runtime_owner() -> None:
         assert 'id -u "$runner_user" >/dev/null' in installer
         assert '"$runner_user ALL=(root) NOPASSWD:' in installer
         assert '"$deploy_user ALL=(root) NOPASSWD:' not in installer
+    rehearsal = (ROOT / "scripts" / "skynet_dr_rehearsal.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "install -m 0755 -o root -g root" in dr
+    assert "/usr/local/libexec/lawhand-dr" in dr
+    assert "runuser -u varta" not in dr
+    assert "DR_ENV_FILE=/etc/lawhand/skynet-dr.env" in dr
+    assert "DR_ENV_FILE=/home/varta/.config/lawhand/dr.env" not in dr
+    assert 'install -m 0600 -o root -g root "$password_source"' in dr
+    assert 'install -m 0600 -o root -g root "$credential_tmp"' in dr
+    assert "RESTIC_PASSWORD_FILE=$password_file" in dr
+    assert 'DR_STATE_DIR="$STATE_DIR"' in dr
+    assert 'DR_RELEASE_SHA="$RELEASE_SHA"' in dr
+    assert 'chown root:varta "$STATE_DIR"' in dr
+    assert 'chmod 0750 "$STATE_DIR"' in dr
+    assert 'chown root:varta "$STATUS_FILE"' in dr
+    assert "systemctl restart lawhand-skynet-status.service" in dr
+    assert "DR_RELEASE_SHA" in rehearsal
+    assert 'release_sha="$(git -C "$APP_DIR" rev-parse HEAD)"' in rehearsal
 
 
 def test_tls_and_recurring_backup_ops_support_multi_compose() -> None:
