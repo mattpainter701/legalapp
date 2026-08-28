@@ -172,6 +172,23 @@ async def test_background_activation_prices_primary_alternates_and_fallbacks(
     assert "provider/unpriced" in raised.value.detail
 
 
+@pytest.mark.asyncio
+async def test_background_price_guard_ignores_policy_only_unset_route(monkeypatch):
+    async def unexpected_price_card(_db):
+        raise AssertionError("an unset Background route does not need pricing")
+
+    monkeypatch.setattr(router, "get_price_card", unexpected_price_card)
+    config = {"background": {"allow_matter_context": False}}
+
+    await router._require_background_route_prices(object(), config)
+
+    with pytest.raises(router.HTTPException) as raised:
+        await router._require_background_route_prices(object(), config, required=True)
+
+    assert raised.value.status_code == 409
+    assert "no executable target" in raised.value.detail
+
+
 def test_route_audit_payload_contains_background_without_secrets():
     payload = router._route_audit_payload(
         {

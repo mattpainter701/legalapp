@@ -1502,7 +1502,15 @@ async def _require_background_route_prices(
     """Reject a Background graph that cannot be conservatively admitted."""
 
     route = config.get("background")
-    if not isinstance(route, dict) or not route:
+    has_target = isinstance(route, dict) and (
+        any(
+            _clean_optional(route.get(field))
+            for field in ("provider_id", "key_id", "model")
+        )
+        or bool(route.get("alternates"))
+        or bool(route.get("fallbacks"))
+    )
+    if not has_target:
         if required:
             raise HTTPException(
                 status_code=409,
@@ -1513,6 +1521,7 @@ async def _require_background_route_prices(
                 ),
             )
         return
+    assert isinstance(route, dict)
     price_card = await get_price_card(db)
     pricing_models = background_pricing_models(route)
     unpriced = [model for model in pricing_models if not price_card.has_rate(model)]
