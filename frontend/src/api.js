@@ -1261,11 +1261,24 @@ const platformApi = (platformToken) =>
     headers: { Authorization: `Bearer ${platformToken}` },
   })
 
+// Tenant compliance (agreement evidence and retention controls)
+export const getComplianceAgreements = () => api.get('/compliance/agreements').then((r) => r.data)
+export const acceptComplianceAgreement = (kind, data) => api.post(`/compliance/agreements/${encodeURIComponent(kind)}/accept`, data).then((r) => r.data)
+export const getRetentionInventory = () => api.get('/compliance/retention').then((r) => r.data)
+export const updateRetentionPolicy = (data) => api.put('/compliance/retention', data).then((r) => r.data)
+export const executeRetention = (dryRun = true) => api.post('/compliance/retention/execute', {}, { params: { dry_run: dryRun } }).then((r) => r.data)
+
 export const getPlatformTenants = (key, page = 1) =>
   platformApi(key).get(`/platform/tenants?page=${page}`).then((r) => r.data)
 
 export const getPlatformTenant = (key, id) =>
   platformApi(key).get(`/platform/tenants/${id}`).then((r) => r.data)
+export const getPlatformTenantCompliance = (key, id) =>
+  platformApi(key).get(`/platform/tenants/${id}/compliance`).then((r) => r.data)
+export const getPlatformAgreementDefinitions = (key) =>
+  platformApi(key).get('/platform/agreements').then((r) => r.data)
+export const publishPlatformAgreementDefinition = (key, data) =>
+  platformApi(key).post('/platform/agreements', data).then((r) => r.data)
 
 export const updatePlatformTenant = (key, id, data) =>
   platformApi(key).put(`/platform/tenants/${id}`, data).then((r) => r.data)

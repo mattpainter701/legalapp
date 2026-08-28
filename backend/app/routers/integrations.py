@@ -51,6 +51,7 @@ from app.services.zoom_phone import (
     zoom_phone_webhook_jobs,
     zoom_webhook_validation_response,
 )
+from app.services.compliance import agreement_status
 from app.utils.oauth_security import (
     generate_pkce_pair,
     is_oauth_client_configured,
@@ -371,6 +372,12 @@ async def microsoft_connect(
         raise HTTPException(status_code=501, detail="Microsoft OAuth not configured")
 
     user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    if (await agreement_status(db, user.tenant_id))["blocking"]:
+        raise HTTPException(
+            status_code=428,
+            detail="Accept the current tenant agreements before connecting an integration",
+        )
     if intent == "admin" and user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
 
@@ -594,6 +601,12 @@ async def google_connect(
         raise HTTPException(status_code=501, detail="Google OAuth not configured")
 
     user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    if (await agreement_status(db, user.tenant_id))["blocking"]:
+        raise HTTPException(
+            status_code=428,
+            detail="Accept the current tenant agreements before connecting an integration",
+        )
     if intent == "admin" and user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
 

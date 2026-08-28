@@ -30,6 +30,7 @@ from app.routers.mcp import router as mcp_router
 from app.routers.workspace_mcp_oauth import router as workspace_mcp_oauth_router
 from app.routers.research_mcp_oauth import router as research_mcp_oauth_router
 from app.routers.platform import router as platform_router
+from app.routers.platform_compliance import router as platform_compliance_router
 from app.routers.plugins import router as plugins_router
 from app.routers.scheduler import router as scheduler_router
 from app.routers.dev import router as dev_router
@@ -73,6 +74,7 @@ from app.routers.client_portal import firm_router as client_portal_firm_router
 from app.routers.esignature import router as esignature_router
 from app.routers.esignature import portal_router as esignature_portal_router
 from app.routers.onboarding import router as onboarding_router
+from app.routers.compliance import router as compliance_router
 from app.routers.licensing import router as licensing_router
 from app.services.mcp_protocol import protocol_endpoint, protocol_lifespan
 from app.services.workspace_mcp_protocol import (
@@ -398,6 +400,7 @@ app.include_router(admin_router, prefix="/api")
 app.include_router(billing_router, prefix="/api")
 app.include_router(mcp_router, prefix="/api")
 app.include_router(platform_router, prefix="/api")
+app.include_router(platform_compliance_router, prefix="/api")
 app.include_router(platform_llm_router, prefix="/api")
 app.include_router(platform_assistant_router, prefix="/api")
 # Dedicated plugin-subpath routers MUST be registered before the generic
@@ -447,6 +450,7 @@ app.include_router(esignature_router)
 app.include_router(esignature_portal_router)
 app.include_router(document_templates_router)
 app.include_router(onboarding_router)
+app.include_router(compliance_router)
 app.include_router(licensing_router)
 app.include_router(smb_router)
 app.include_router(portfolio_router)

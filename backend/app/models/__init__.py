@@ -119,6 +119,12 @@ from app.models.prospect_follow_through import (
     ProspectFollowThroughEvent,
 )
 from app.models.background_ai_usage import BackgroundAIUsageReservation
+from app.models.compliance import (
+    AgreementDefinition,
+    TenantAgreementAcceptance,
+    RetentionPolicy,
+    RetentionAction,
+)
 
 __all__ = [
     "Tenant",
@@ -239,4 +245,8 @@ __all__ = [
     "ProspectContactEvent",
     "ProspectFollowThroughEvent",
     "BackgroundAIUsageReservation",
+    "AgreementDefinition",
+    "TenantAgreementAcceptance",
+    "RetentionPolicy",
+    "RetentionAction",
 ]
