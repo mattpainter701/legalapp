@@ -10,6 +10,12 @@
   Skynet research upstream without exposing its credential.
 
 ### Added
+- **Platform tenant inventory distinguishes lifecycle from billing:** operator
+  tenant summaries now include an explicit `demo` or `platform` type and the
+  existing tenant expiry. The console labels and filters that type, renders a
+  demo expiration (including expired state), and keeps disposable workspaces
+  behind their dedicated termination controls rather than generic tenant
+  controls.
 - **Marketing now shows the platform as an end-to-end legal workflow:** the
   public product tour follows one illustrative matter from caller intake and
   saved conflict review through matter setup, document and AI-assisted review,

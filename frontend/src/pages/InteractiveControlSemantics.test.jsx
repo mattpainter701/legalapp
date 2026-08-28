@@ -21,6 +21,7 @@ describe('interactive control semantics', () => {
               name: 'Northwind Legal',
               domain: 'northwind.example',
               billing_tier: 'flat',
+              tenant_type: 'platform',
               user_count: 4,
               requests_30d: 200,
               cost_usd_30d: 18,
@@ -46,6 +47,33 @@ describe('interactive control semantics', () => {
     await user.keyboard('{Enter}')
     expect(onToggle).toHaveBeenCalledOnce()
     expect(onToggle).toHaveBeenCalledWith('tenant-1')
+  })
+
+  it('labels demo tenants and shows their expiration in the platform inventory', () => {
+    render(
+      <table>
+        <tbody>
+          <PlatformTenantRow
+            tenant={{
+              id: 'demo-tenant',
+              name: 'Demo workspace',
+              domain: 'demo.example.invalid',
+              billing_tier: 'demo',
+              tenant_type: 'demo',
+              expires_at: '2030-01-01T00:00:00Z',
+              user_count: 1,
+              requests_30d: 2,
+              cost_usd_30d: 0,
+              is_active: true,
+            }}
+            expanded={false}
+          />
+        </tbody>
+      </table>,
+    )
+
+    expect(screen.getAllByText('Demo')).toHaveLength(2)
+    expect(document.querySelector('time')).toHaveAttribute('datetime', '2030-01-01T00:00:00Z')
   })
 
   it('keeps intake result selection separate from its assignment action', async () => {

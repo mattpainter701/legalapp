@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.28.2 — Demo workspaces are clearly identified for operators
+
+Released August 28, 2026.
+
+Platform operators can now distinguish disposable demo workspaces from regular platform tenants in the tenant inventory.
+
+- **See the tenant type.** The platform tenant list labels each workspace as Demo or Platform without using the billing tier as the visible grouping.
+- **See demo expiry at a glance.** Demo rows show their expiration and clearly flag workspaces that have already expired.
+- **Filter the inventory.** Operators can focus the tenant list on demo workspaces or regular platform tenants while the dedicated demo controls remain protected.
+
 ## 2026.08.28.1 — The platform tour now follows a matter end to end
 
 Released August 28, 2026.
