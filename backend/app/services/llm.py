@@ -368,8 +368,16 @@ class LLMService:
                             "model": getattr(response, "model", None) or candidate,
                             "tokens_in": tokens_in,
                             "tokens_out": tokens_out,
-                            "cached_read_tokens": cached_read_tokens,
-                            "cached_write_tokens": cached_write_tokens,
+                            **(
+                                {"cached_read_tokens": cached_read_tokens}
+                                if cached_read_tokens
+                                else {}
+                            ),
+                            **(
+                                {"cached_write_tokens": cached_write_tokens}
+                                if cached_write_tokens
+                                else {}
+                            ),
                             **(
                                 {"provider_request_id": response.id}
                                 if getattr(response, "id", None)
