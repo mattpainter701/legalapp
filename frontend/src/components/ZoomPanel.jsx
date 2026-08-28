@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle,
   CheckCircle2,
@@ -33,6 +33,20 @@ const PHONE_SCOPE_LABELS = {
 
 const PHONE_SCOPE_DOCS_URL = 'https://developers.zoom.us/docs/integrations/oauth-scopes-granular/#call-logs'
 
+const PHONE_OAUTH_ERRORS = {
+  app_credentials_invalid: 'Zoom rejected the saved Client ID or Client Secret. Copy both current values from the same Zoom app environment, save them here, then reconnect.',
+  authorization_code_invalid: 'That Zoom authorization expired or was already used. Start again with Connect Zoom Phone.',
+  invalid_state: 'That authorization request expired or was not started from LawHand. Start again with Connect Zoom Phone.',
+  authorization_revoked: 'Your LawHand administrator session or tenant access changed during authorization. Sign in again and retry.',
+  app_credentials_missing: 'Save the Zoom app Client ID, Client Secret, and webhook Secret Token before connecting.',
+  app_credentials_changed: 'The saved Zoom app changed during authorization. Start again with Connect Zoom Phone.',
+  account_mapping_mismatch: 'Zoom returned an account that does not match this tenant’s verified app binding. Confirm you authorized the intended Zoom account.',
+  phone_api_probe_failed: 'Zoom authorized the app, but the Phone call-history check failed. Confirm the Zoom Phone license and both Call Logs scopes, then reconnect.',
+  no_access_token: 'Zoom did not return an access token. Start the connection again from LawHand.',
+  refresh_token_missing: 'Zoom did not return a refresh token. Re-authorize the app from LawHand.',
+  token_exchange_failed: 'Zoom could not complete authorization. Verify the app environment, callback URL, and current credentials, then retry.',
+}
+
 export default function ZoomPanel() {
   const [status, setStatus] = useState(null)
   const [phoneStatus, setPhoneStatus] = useState(null)
@@ -40,6 +54,7 @@ export default function ZoomPanel() {
   const [busy, setBusy] = useState(false)
   const [phoneBusy, setPhoneBusy] = useState(false)
   const [flash, setFlash] = useState(null)
+  const flashTimer = useRef(null)
   const [appForm, setAppForm] = useState({
     client_id: '',
     client_secret: '',
@@ -47,9 +62,14 @@ export default function ZoomPanel() {
   })
 
   const showFlash = (text, type = 'success') => {
+    if (flashTimer.current) clearTimeout(flashTimer.current)
     setFlash({ text, type })
-    setTimeout(() => setFlash(null), 4000)
+    flashTimer.current = setTimeout(() => setFlash(null), type === 'error' ? 12000 : 6000)
   }
+
+  useEffect(() => () => {
+    if (flashTimer.current) clearTimeout(flashTimer.current)
+  }, [])
 
   const loadPanel = async () => {
     const [zoomData, zoomPhoneData] = await Promise.all([
@@ -64,6 +84,25 @@ export default function ZoomPanel() {
     loadPanel()
       .catch(() => showFlash('Failed to load Zoom integration status.', 'error'))
       .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const provider = params.get('provider')
+    const connectedProvider = params.get('connected')
+    const error = params.get('error')
+    if (provider === 'zoom_phone' && error) {
+      showFlash(PHONE_OAUTH_ERRORS[error] || PHONE_OAUTH_ERRORS.token_exchange_failed, 'error')
+    } else if (connectedProvider === 'zoom_phone') {
+      showFlash('Zoom Phone is authorized. LawHand verified access to Phone call history.')
+    } else {
+      return
+    }
+    params.delete('provider')
+    params.delete('connected')
+    params.delete('error')
+    const query = params.toString()
+    window.history.replaceState({}, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`)
   }, [])
 
   const handleDisconnect = async () => {
@@ -109,10 +148,12 @@ export default function ZoomPanel() {
     event.preventDefault()
     setPhoneBusy(true)
     try {
-      await saveZoomPhoneAppCredentials(appForm)
+      const result = await saveZoomPhoneAppCredentials(appForm)
       setAppForm({ client_id: '', client_secret: '', webhook_secret_token: '' })
       await loadPanel()
-      showFlash('Zoom Phone app credentials saved.')
+      showFlash(result?.grant_invalidated
+        ? 'Zoom app credentials saved. The previous grant was disconnected; click Connect Zoom Phone to authorize the current app.'
+        : 'Zoom Phone app credentials saved.')
     } catch (err) {
       showFlash(err?.response?.data?.detail || 'Failed to save Zoom Phone app credentials.', 'error')
     } finally {
@@ -231,6 +272,12 @@ export default function ZoomPanel() {
           ] : []}
           footer={phoneConnected ? 'Phone API access refreshes automatically during history sync and connection tests.' : null}
         >
+          <ZoomPhoneSetupProgress
+            appSaved={tenantPhoneAppSaved}
+            connected={phoneConnected}
+            scopesReady={phoneConnected && phoneMissingScopes.length === 0}
+            webhookVerified={phoneWebhookVerified}
+          />
           {!phoneConfigured && (
             <SetupNotice
               tone="info"
@@ -344,13 +391,48 @@ function isPhoneWebhookVerified(phoneStatus) {
 }
 
 function FlashMessage({ flash }) {
+  const tone = flash.type === 'success'
+    ? 'bg-green-50 border border-green-200 text-green-700'
+    : flash.type === 'warning'
+      ? 'bg-amber-50 border border-amber-200 text-amber-800'
+      : 'bg-red-50 border border-red-200 text-red-700'
   return (
-    <div className={`px-4 py-3 rounded-xl text-xs font-medium ${
-      flash.type === 'success'
-        ? 'bg-green-50 border border-green-200 text-green-700'
-        : 'bg-red-50 border border-red-200 text-red-700'
-    }`}>
+    <div role={flash.type === 'error' ? 'alert' : 'status'} className={`px-4 py-3 rounded-xl text-xs font-medium ${tone}`}>
       {flash.text}
+    </div>
+  )
+}
+
+function ZoomPhoneSetupProgress({ appSaved, connected, scopesReady, webhookVerified }) {
+  const steps = [
+    { label: 'Save app credentials', complete: appSaved },
+    { label: 'Authorize Zoom account', complete: connected },
+    { label: 'Verify Phone API scopes', complete: scopesReady },
+    { label: 'Verify real-time calls', complete: webhookVerified },
+  ]
+  const currentIndex = steps.findIndex((step) => !step.complete)
+
+  return (
+    <div className="rounded-lg border border-brand-line bg-brand-surface p-3">
+      <div className="text-[11px] font-bold uppercase tracking-wider text-brand-muted mb-3">Zoom Phone setup progress</div>
+      <ol className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {steps.map((step, index) => {
+          const current = index === currentIndex
+          return (
+            <li key={step.label} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold ${
+              step.complete
+                ? 'border-green-200 bg-green-50 text-green-700'
+                : current
+                  ? 'border-amber-200 bg-amber-50 text-amber-800'
+                  : 'border-brand-line bg-brand-bg text-brand-muted'
+            }`}>
+              {step.complete ? <CheckCircle2 size={15} /> : <span className="w-[15px] text-center">{index + 1}</span>}
+              <span>{step.label}</span>
+              {current && <span className="ml-auto text-[10px] uppercase tracking-wide">Next</span>}
+            </li>
+          )
+        })}
+      </ol>
     </div>
   )
 }

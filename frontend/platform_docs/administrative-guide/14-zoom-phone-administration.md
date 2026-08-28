@@ -34,7 +34,11 @@ Webhook secret tokens and client credentials are secrets. Enter them only in the
 
 ## Authorize and test
 
-Complete the provider grant, then review displayed status for authorization, scopes, webhook configuration, credential health, and account alignment. Make an approved demo call and verify:
+Use the four-stage progress row to finish setup in order: save app credentials, authorize the Zoom account, verify the Phone API scopes, and verify real-time calls. Each stage is independent. A saved app is not yet authorized, and working history sync does not prove webhook delivery.
+
+Complete the provider grant from **Connect Zoom Phone**. LawHand returns to this Zoom panel with either a verified success or a specific recovery message. If Zoom rejects the Client ID or Client Secret, copy both current values from the same Development or Production environment and save them together before reconnecting. Replacing that pair intentionally disconnects the prior grant.
+
+Then review displayed status for authorization, scopes, webhook configuration, credential health, and account alignment. Make an approved demo call and verify:
 
 - the call appears in [Call Intake](/intake/dashboard);
 - caller and direction metadata are correct;
