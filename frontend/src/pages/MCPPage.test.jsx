@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   getMcpProductKeys: vi.fn(),
   revokeMcpProductKey: vi.fn(),
   updateAdminSettings: vi.fn(),
+  updateMcpProductKey: vi.fn(),
   confirmAction: vi.fn(),
 }))
 
@@ -18,6 +19,7 @@ vi.mock('../api', () => ({
   getMcpProductKeys: mocks.getMcpProductKeys,
   revokeMcpProductKey: mocks.revokeMcpProductKey,
   updateAdminSettings: mocks.updateAdminSettings,
+  updateMcpProductKey: mocks.updateMcpProductKey,
 }))
 
 vi.mock('../App', () => ({
@@ -77,6 +79,7 @@ beforeEach(() => {
   mocks.updateAdminSettings.mockResolvedValue({})
   mocks.createMcpProductKey.mockResolvedValue({ api_key: 'lhrk_test_secret' })
   mocks.revokeMcpProductKey.mockResolvedValue({})
+  mocks.updateMcpProductKey.mockResolvedValue({ updated: true })
 })
 
 afterEach(cleanup)
@@ -198,5 +201,47 @@ describe('Admin MCP servers page', () => {
     const form = screen.getByRole('button', { name: 'Create key' }).closest('form')
     expect(within(form).queryByText('search_caselaw')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Create key' })).toBeDisabled()
+  })
+
+  it('shows per-key portal charges and lets an admin update lifecycle controls', async () => {
+    mocks.getMcpProductKeys.mockResolvedValue(researchData({
+      product_enabled: true,
+      billing: { unit_price_usd: 0.45 },
+      staff: [{ id: 'staff-1', name: 'Jamie Researcher', email: 'jamie@example.com', is_active: true }],
+      keys: [{
+        id: 'key-1',
+        name: 'Litigation team',
+        purpose: 'Trial research',
+        api_key_masked: 'lhrk_abc...1234',
+        assigned_to_user_id: 'staff-1',
+        assigned_to: { id: 'staff-1', name: 'Jamie Researcher', email: 'jamie@example.com' },
+        allowed_tools: ['search_caselaw', 'get_case_details'],
+        monthly_call_limit: 100,
+        monthly_budget_usd: 45,
+        budget_remaining_usd: 40.5,
+        burst_limit_per_minute: 20,
+        expires_at: '2026-12-31T23:59:59Z',
+        status: 'active',
+        is_active: true,
+        usage: { successful_calls: 10, failed_calls: 2, charge_usd: 4.5 },
+      }],
+    }))
+    const user = userEvent.setup()
+
+    renderPage()
+
+    expect(await screen.findByText('$4.50 · 2 failed')).toBeInTheDocument()
+    expect(screen.getAllByText('Jamie Researcher')).not.toHaveLength(0)
+    await user.click(screen.getByRole('button', { name: 'Manage Litigation team' }))
+    const controls = screen.getByRole('form', { name: 'Manage Research product key' })
+    const budget = within(controls).getByLabelText('Monthly budget (USD)')
+    await user.clear(budget)
+    await user.type(budget, '90')
+    await user.click(within(controls).getByRole('button', { name: 'Save controls' }))
+
+    await waitFor(() => expect(mocks.updateMcpProductKey).toHaveBeenCalledWith('key-1', expect.objectContaining({
+      monthly_budget_cents: 9000,
+      assigned_to_user_id: 'staff-1',
+    })))
   })
 })

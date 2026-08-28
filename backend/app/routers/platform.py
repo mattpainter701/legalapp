@@ -57,7 +57,7 @@ from app.models.platform_api_key import PlatformApiKey
 from app.models.llm_routing_profile import LLMRoutingProfile
 from app.models.tenant import Tenant, TenantSettings
 from app.models.user import User
-from app.services.mcp_product import DEFAULT_ALLOWED_TOOLS, mask_key
+from app.services.mcp_product import DEFAULT_ALLOWED_TOOLS, mask_key, product_key_status
 from app.services.llm_routing import (
     VALID_LLM_PROVIDERS,
     default_platform_llm_config,
@@ -1307,6 +1307,7 @@ async def platform_mcp_overview(
     tenants = list((await db.scalars(select(Tenant).order_by(Tenant.id))).all())
     keys: list[tuple[MCPProductKey, Tenant]] = []
     usage_by_key: dict[str, dict] = {}
+    staff_by_id: dict[uuid.UUID, User] = {}
     for tenant in tenants:
         async with _platform_tenant_scope(db, tenant.id):
             tenant_keys = list(
@@ -1319,6 +1320,16 @@ async def platform_mcp_overview(
                 ).all()
             )
             keys.extend((key, tenant) for key in tenant_keys)
+            staff_by_id.update(
+                {
+                    staff.id: staff
+                    for staff in (
+                        await db.scalars(
+                            select(User).where(User.tenant_id == tenant.id)
+                        )
+                    ).all()
+                }
+            )
             key_ids = [key.id for key in tenant_keys]
             if not key_ids:
                 continue
@@ -1383,7 +1394,7 @@ async def platform_mcp_overview(
         tenant_row["calls_30d"] += calls
         tenant_row["errors_30d"] += errors
         tenant_row["results_30d"] += results
-        if key.is_active and key.revoked_at is None:
+        if product_key_status(key) == "active":
             tenant_row["active_keys"] += 1
         last_used = key.last_used_at.isoformat() if key.last_used_at else None
         if last_used and (
@@ -1398,11 +1409,27 @@ async def platform_mcp_overview(
                 "tenant_name": tenant.name,
                 "domain": tenant.domain,
                 "name": key.name,
+                "purpose": key.purpose,
+                "assigned_to": (
+                    {
+                        "id": str(key.assigned_to_user_id),
+                        "name": staff_by_id[key.assigned_to_user_id].full_name,
+                        "email": staff_by_id[key.assigned_to_user_id].email,
+                    }
+                    if key.assigned_to_user_id in staff_by_id
+                    else None
+                ),
                 "api_key_masked": mask_key(key.key_prefix, key.key_hash[-4:]),
                 "allowed_tools": key.allowed_tools or DEFAULT_ALLOWED_TOOLS,
                 "monthly_call_limit": key.monthly_call_limit,
-                "is_active": key.is_active and key.revoked_at is None,
+                "monthly_budget_cents": key.monthly_budget_cents,
+                "unit_price_cents": key.unit_price_cents,
+                "estimated_charge_cents_30d": max(0, calls - errors)
+                * key.unit_price_cents,
+                "status": product_key_status(key),
+                "is_active": product_key_status(key) == "active",
                 "revoked_at": key.revoked_at.isoformat() if key.revoked_at else None,
+                "expires_at": key.expires_at.isoformat() if key.expires_at else None,
                 "last_used_at": last_used,
                 "created_at": key.created_at.isoformat() if key.created_at else None,
                 "billing": {
@@ -1418,7 +1445,7 @@ async def platform_mcp_overview(
     overview = PlatformMCPOverview(
         tenants_with_keys=len(tenant_summary),
         active_keys=sum(
-            1 for key, _tenant in keys if key.is_active and key.revoked_at is None
+            1 for key, _tenant in keys if product_key_status(key) == "active"
         ),
         total_keys=len(keys),
         calls_30d=sum(row.get("calls_30d", 0) for row in usage_by_key.values()),
@@ -1441,7 +1468,8 @@ async def platform_mcp_overview(
             "shorthand": settings.research_mcp_shorthand,
             "streamable_http": settings.research_mcp_endpoint,
             "rest_compatibility": f"{settings.research_mcp_endpoint}/tools/call",
-            "auth_header": "X-MCP-API-Key",
+            "auth_header": "Authorization",
+            "auth_scheme": "Bearer",
         },
         "product_enabled": settings.MCP_PRODUCT_ENABLED,
     }

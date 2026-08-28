@@ -12,8 +12,9 @@ Workspace MCP and research MCP are separate products and identities:
   token revocation are revalidated before tool execution.
 - `research.getlawhand.com/api/mcp` accepts either an individual,
   audience/resource-bound Research OAuth token or a scoped tenant Research API
-  token. Hosted clients use OAuth 2.1; header-capable clients use
-  `X-MCP-API-Key: lhrk_...`. OAuth grants, users, tenants, entitlement, and
+  token. Hosted clients use OAuth 2.1; API clients use
+  `Authorization: Bearer lhrk_...`, while `X-MCP-API-Key` remains a
+  compatibility header. OAuth grants, users, tenants, entitlement, and
   billing are revalidated before execution. Protocol request limits are
   separate from per-tool burst and monthly quotas, so JSON-RPC batching does
   not bypass metering.

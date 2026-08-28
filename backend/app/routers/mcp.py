@@ -10,6 +10,7 @@ issued.
 import logging
 import time
 import uuid
+from datetime import datetime
 from types import SimpleNamespace
 from urllib.parse import urlsplit
 
@@ -38,9 +39,12 @@ from app.services.mcp_product import (
     list_product_keys,
     mask_key,
     metering_outbox_summary,
+    monthly_key_usage,
+    product_key_status,
     record_mcp_usage,
     resolve_product_key,
     revoke_product_key,
+    update_product_key,
     usage_summary,
 )
 
@@ -294,13 +298,42 @@ class ToolCallRequest(BaseModel):
 
 class ProductKeyCreateRequest(BaseModel):
     name: str = "MCP API key"
+    purpose: str | None = None
+    assigned_to_user_id: uuid.UUID | None = None
     monthly_call_limit: int | None = None
+    monthly_budget_cents: int | None = None
     burst_limit_per_minute: int | None = None
+    expires_at: datetime | None = None
+    allowed_tools: list[str] | None = None
+
+
+class ProductKeyUpdateRequest(BaseModel):
+    name: str | None = None
+    purpose: str | None = None
+    assigned_to_user_id: uuid.UUID | None = None
+    monthly_call_limit: int | None = None
+    monthly_budget_cents: int | None = None
+    burst_limit_per_minute: int | None = None
+    expires_at: datetime | None = None
     allowed_tools: list[str] | None = None
 
 
 def _request_ip(request: Request) -> str | None:
     return _trusted_client_ip(request)
+
+
+def _product_key_credential(request: Request) -> str:
+    header_key = request.headers.get("X-MCP-API-Key", "")
+    authorization = request.headers.get("Authorization", "")
+    scheme, _, value = authorization.partition(" ")
+    bearer_key = (
+        value.strip()
+        if scheme.casefold() == "bearer" and value.strip().startswith("lhrk_")
+        else ""
+    )
+    if header_key and bearer_key:
+        raise HTTPException(status_code=400, detail="Multiple MCP credentials supplied")
+    return header_key or bearer_key
 
 
 def _result_count(payload: dict) -> int:
@@ -414,7 +447,7 @@ async def _call_tool_with_product_key(
     else:
         product_key, tenant = await resolve_product_key(
             db,
-            request.headers.get("X-MCP-API-Key", ""),
+            _product_key_credential(request),
         )
     await set_tenant_context(db, str(tenant.id))
     app = getattr(request, "app", None)
@@ -492,7 +525,7 @@ async def call_tool(
     db: AsyncSession = Depends(get_db),
 ):
     """Execute an MCP tool call."""
-    if request.headers.get("X-MCP-API-Key"):
+    if _product_key_credential(request):
         return await _call_tool_with_product_key(body, request, db)
 
     user, tenant = await _require_mcp_identity(request, db)
@@ -666,30 +699,96 @@ async def list_mcp_product_keys(
         raise HTTPException(status_code=404, detail="Tenant not found")
     keys = await list_product_keys(db, user.tenant_id)
     summary = await usage_summary(db, user.tenant_id)
-    usage_by_key = {
-        row["product_key_id"]: row
-        for row in summary.get("by_key", [])
-        if row.get("product_key_id")
-    }
+    usage_by_key = await monthly_key_usage(db, user.tenant_id)
+    staff_rows = (
+        (await db.execute(select(User).where(User.tenant_id == user.tenant_id)))
+        .scalars()
+        .all()
+    )
+    staff_by_id = {staff.id: staff for staff in staff_rows}
     mcp_url = settings.research_mcp_endpoint
-    return {
-        "keys": [
+
+    def key_payload(key):
+        key_usage = usage_by_key.get(
+            str(key.id),
             {
-                "id": str(key.id),
-                "name": key.name,
-                "api_key_masked": mask_key(key.key_prefix, key.key_hash[-4:]),
-                "allowed_tools": effective_allowed_tools(key),
-                "monthly_call_limit": key.monthly_call_limit,
-                "burst_limit_per_minute": key.burst_limit_per_minute,
-                "is_active": key.is_active,
-                "revoked_at": key.revoked_at.isoformat() if key.revoked_at else None,
-                "last_used_at": key.last_used_at.isoformat()
-                if key.last_used_at
-                else None,
-                "created_at": key.created_at.isoformat() if key.created_at else None,
-                "usage": usage_by_key.get(str(key.id), {"calls": 0, "results": 0}),
+                "calls": 0,
+                "successful_calls": 0,
+                "failed_calls": 0,
+                "results": 0,
+                "charge_cents": 0,
+                "charge_usd": 0.0,
+            },
+        )
+        assigned = staff_by_id.get(key.assigned_to_user_id)
+        creator = staff_by_id.get(key.created_by_user_id)
+        budget_remaining_cents = (
+            max(0, key.monthly_budget_cents - int(key_usage["charge_cents"]))
+            if key.monthly_budget_cents is not None
+            else None
+        )
+        return {
+            "id": str(key.id),
+            "name": key.name,
+            "purpose": key.purpose,
+            "api_key_masked": mask_key(key.key_prefix, key.key_hash[-4:]),
+            "assigned_to_user_id": (
+                str(key.assigned_to_user_id) if key.assigned_to_user_id else None
+            ),
+            "assigned_to": (
+                {
+                    "id": str(assigned.id),
+                    "name": assigned.full_name,
+                    "email": assigned.email,
+                }
+                if assigned
+                else None
+            ),
+            "created_by": (
+                {
+                    "id": str(creator.id),
+                    "name": creator.full_name,
+                    "email": creator.email,
+                }
+                if creator
+                else None
+            ),
+            "allowed_tools": effective_allowed_tools(key),
+            "monthly_call_limit": key.monthly_call_limit,
+            "monthly_budget_cents": key.monthly_budget_cents,
+            "monthly_budget_usd": (
+                key.monthly_budget_cents / 100
+                if key.monthly_budget_cents is not None
+                else None
+            ),
+            "budget_remaining_cents": budget_remaining_cents,
+            "budget_remaining_usd": (
+                budget_remaining_cents / 100
+                if budget_remaining_cents is not None
+                else None
+            ),
+            "unit_price_cents": key.unit_price_cents,
+            "unit_price_usd": key.unit_price_cents / 100,
+            "burst_limit_per_minute": key.burst_limit_per_minute,
+            "status": product_key_status(key),
+            "is_active": product_key_status(key) == "active",
+            "revoked_at": key.revoked_at.isoformat() if key.revoked_at else None,
+            "expires_at": key.expires_at.isoformat() if key.expires_at else None,
+            "last_used_at": key.last_used_at.isoformat() if key.last_used_at else None,
+            "created_at": key.created_at.isoformat() if key.created_at else None,
+            "usage": key_usage,
+        }
+
+    return {
+        "keys": [key_payload(key) for key in keys],
+        "staff": [
+            {
+                "id": str(staff.id),
+                "name": staff.full_name,
+                "email": staff.email,
+                "is_active": staff.is_active,
             }
-            for key in keys
+            for staff in staff_rows
         ],
         "usage": summary,
         "metering_outbox": await metering_outbox_summary(db, user.tenant_id),
@@ -709,11 +808,17 @@ async def list_mcp_product_keys(
             if settings.MCP_PRODUCT_ENABLED
             else {}
         ),
-        "auth_header": "X-MCP-API-Key",
+        "auth_header": "Authorization",
+        "auth_scheme": "Bearer",
+        "legacy_auth_header": "X-MCP-API-Key",
         "billing": {
             "mode": "metered_usage",
             "meter": "mcp_product_key_calls",
             "line_item": "MCP usage",
+            "billable_status": "successful_calls_only",
+            "unit_price_cents": settings.MCP_PRODUCT_CALL_PRICE_CENTS,
+            "unit_price_usd": settings.MCP_PRODUCT_CALL_PRICE_CENTS / 100,
+            "currency": "USD",
         },
     }
 
@@ -740,8 +845,12 @@ async def create_mcp_product_key(
         tenant_id=user.tenant_id,
         user_id=user.id,
         name=body.name,
+        purpose=body.purpose,
+        assigned_to_user_id=body.assigned_to_user_id,
         monthly_call_limit=body.monthly_call_limit,
+        monthly_budget_cents=body.monthly_budget_cents,
         burst_limit_per_minute=body.burst_limit_per_minute,
+        expires_at=body.expires_at,
         allowed_tools=body.allowed_tools or None,
     )
     return {
@@ -749,11 +858,42 @@ async def create_mcp_product_key(
         "api_key": raw_key,
         "api_key_masked": mask_key(raw_key),
         "name": key.name,
+        "purpose": key.purpose,
+        "assigned_to_user_id": (
+            str(key.assigned_to_user_id) if key.assigned_to_user_id else None
+        ),
         "allowed_tools": effective_allowed_tools(key),
         "monthly_call_limit": key.monthly_call_limit,
+        "monthly_budget_cents": key.monthly_budget_cents,
+        "unit_price_cents": key.unit_price_cents,
         "burst_limit_per_minute": key.burst_limit_per_minute,
+        "expires_at": key.expires_at.isoformat() if key.expires_at else None,
         "is_active": key.is_active,
     }
+
+
+@router.patch("/product-keys/{key_id}")
+async def update_mcp_product_key(
+    key_id: uuid.UUID,
+    body: ProductKeyUpdateRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    user = await get_current_user(request, db)
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    changes = body.model_dump(include=body.model_fields_set)
+    if not changes:
+        raise HTTPException(status_code=400, detail="No key changes supplied")
+    key = await update_product_key(
+        db,
+        tenant_id=user.tenant_id,
+        key_id=key_id,
+        changes=changes,
+    )
+    if key is None:
+        raise HTTPException(status_code=404, detail="MCP API key not found")
+    return {"updated": True, "id": str(key.id), "status": product_key_status(key)}
 
 
 @router.delete("/product-keys/{key_id}")

@@ -272,6 +272,10 @@ class Settings(BaseSettings):
     MCP_UPSTREAM_API_KEY: str = ""
     MCP_DEFAULT_MONTHLY_CALL_LIMIT: int = 1000
     MCP_MAX_MONTHLY_CALL_LIMIT: int = 100000
+    # Customer-facing Research price. Stripe owns invoice calculation, while
+    # this value snapshots the price onto each key for budgets and portal
+    # estimates. One successful tool call is currently $0.45.
+    MCP_PRODUCT_CALL_PRICE_CENTS: int = 45
     MCP_DEFAULT_BURST_LIMIT_PER_MINUTE: int = 60
     MCP_MAX_BURST_LIMIT_PER_MINUTE: int = 600
     # Protocol lifecycle traffic is limited independently from per-tool burst

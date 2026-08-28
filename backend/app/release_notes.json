@@ -2,6 +2,31 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.27.10",
+      "version": "2026.08.27.10",
+      "title": "Research API keys put staff access and spend under firm control",
+      "published_at": "2026-08-27",
+      "summary": "Firm administrators can provision LawHand Research keys for staff, bound their lifetime and budget, and see usage and charges from the MCP portal.",
+      "highlights": [
+        {
+          "title": "Issue keys with clear custody",
+          "description": "Name each key, record its purpose, assign it to a LawHand staff profile, and choose exactly which Research tools it may use."
+        },
+        {
+          "title": "Bound time and spend",
+          "description": "Set an expiration, monthly dollar budget, call cap, and burst limit; the gateway stops successful calls before they exceed either hard monthly boundary."
+        },
+        {
+          "title": "See the complete key ledger",
+          "description": "The portal shows active, expired, and revoked keys with creator, custodian, last use, successful and failed calls, current-month charges, and remaining budget."
+        },
+        {
+          "title": "Connect standard API clients",
+          "description": "LawHand Research keys work as standard Bearer credentials while the existing custom header remains supported for compatible clients."
+        }
+      ]
+    },
+    {
       "id": "2026.08.27.9",
       "version": "2026.08.27.9",
       "title": "Document automation is faster, safer, and easier to manage",

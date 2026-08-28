@@ -79,6 +79,12 @@ async def billing_status(
         await db.execute(
             select(
                 func.count(MCPUsageEvent.id).label("calls"),
+                func.count(MCPUsageEvent.id)
+                .filter(MCPUsageEvent.status_code < 400)
+                .label("successful_calls"),
+                func.count(MCPUsageEvent.id)
+                .filter(MCPUsageEvent.status_code >= 400)
+                .label("failed_calls"),
                 func.coalesce(func.sum(MCPUsageEvent.result_count), 0).label("results"),
             ).where(
                 MCPUsageEvent.tenant_id == tenant.id,
@@ -103,7 +109,15 @@ async def billing_status(
             "line_item": "MCP usage",
             "meter": "mcp_product_key_calls",
             "calls_30d": int(mcp_usage.calls or 0),
+            "successful_calls_30d": int(mcp_usage.successful_calls or 0),
+            "failed_calls_30d": int(mcp_usage.failed_calls or 0),
             "results_30d": int(mcp_usage.results or 0),
+            "unit_price_usd": settings.MCP_PRODUCT_CALL_PRICE_CENTS / 100,
+            "estimated_charges_usd_30d": (
+                int(mcp_usage.successful_calls or 0)
+                * settings.MCP_PRODUCT_CALL_PRICE_CENTS
+                / 100
+            ),
         },
     }
 

@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -531,9 +532,14 @@ async def test_tenant_admin_can_create_product_key(monkeypatch):
     created_key = SimpleNamespace(
         id=uuid.uuid4(),
         name="Partner API",
+        purpose=None,
+        assigned_to_user_id=None,
         allowed_tools=["search_caselaw"],
         monthly_call_limit=250,
+        monthly_budget_cents=None,
+        unit_price_cents=45,
         burst_limit_per_minute=30,
+        expires_at=None,
         is_active=True,
     )
 
@@ -566,6 +572,21 @@ async def test_tenant_admin_can_create_product_key(monkeypatch):
     assert result["burst_limit_per_minute"] == 30
 
 
+def test_product_key_status_distinguishes_active_expired_and_revoked():
+    now = datetime.now(timezone.utc)
+    active = SimpleNamespace(
+        is_active=True, revoked_at=None, expires_at=now + timedelta(days=1)
+    )
+    expired = SimpleNamespace(
+        is_active=True, revoked_at=None, expires_at=now - timedelta(seconds=1)
+    )
+    revoked = SimpleNamespace(is_active=False, revoked_at=now, expires_at=None)
+
+    assert mcp_product.product_key_status(active, now=now) == "active"
+    assert mcp_product.product_key_status(expired, now=now) == "expired"
+    assert mcp_product.product_key_status(revoked, now=now) == "revoked"
+
+
 @pytest.mark.asyncio
 async def test_tenant_admin_can_revoke_product_key(monkeypatch):
     tenant_id = uuid.uuid4()
@@ -589,3 +610,46 @@ async def test_tenant_admin_can_revoke_product_key(monkeypatch):
 
     assert result == {"revoked": True}
     assert calls[0] == {"tenant_id": tenant_id, "key_id": key_id}
+
+
+@pytest.mark.asyncio
+async def test_tenant_admin_can_update_key_controls_and_clear_expiration(monkeypatch):
+    tenant_id = uuid.uuid4()
+    key_id = uuid.uuid4()
+    user = SimpleNamespace(id=uuid.uuid4(), tenant_id=tenant_id, role="admin")
+    calls = []
+
+    async def current_user(*args, **kwargs):
+        return user
+
+    async def update_key(*args, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(
+            id=key_id,
+            is_active=True,
+            revoked_at=None,
+            expires_at=None,
+        )
+
+    monkeypatch.setattr(mcp, "get_current_user", current_user)
+    monkeypatch.setattr(mcp, "update_product_key", update_key)
+
+    result = await mcp.update_mcp_product_key(
+        key_id,
+        mcp.ProductKeyUpdateRequest(
+            monthly_budget_cents=9000,
+            assigned_to_user_id=None,
+            expires_at=None,
+        ),
+        SimpleNamespace(headers={}),
+        object(),
+    )
+
+    assert result == {"updated": True, "id": str(key_id), "status": "active"}
+    assert calls[0]["tenant_id"] == tenant_id
+    assert calls[0]["key_id"] == key_id
+    assert calls[0]["changes"] == {
+        "monthly_budget_cents": 9000,
+        "assigned_to_user_id": None,
+        "expires_at": None,
+    }

@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -44,7 +45,9 @@ def test_product_access_is_globally_fail_closed(monkeypatch):
         ({"stripe_customer_id": None}, 402),
     ],
 )
-def test_product_access_rechecks_tenant_and_billing(monkeypatch, overrides, status_code):
+def test_product_access_rechecks_tenant_and_billing(
+    monkeypatch, overrides, status_code
+):
     _enable_product(monkeypatch)
     with pytest.raises(HTTPException) as exc:
         mcp_product.ensure_mcp_product_access(_tenant(**overrides))
@@ -144,6 +147,105 @@ async def test_failed_product_call_does_not_consume_monthly_quota(
 
 
 @pytest.mark.asyncio
+async def test_successful_calls_stop_at_key_dollar_budget(
+    db_session, test_tenant, test_user
+):
+    key = MCPProductKey(
+        tenant_id=test_tenant.id,
+        name="budget",
+        key_hash=mcp_product.hash_key("lhrk_budget_security"),
+        key_prefix="lhrk_budget_",
+        allowed_tools=["search_caselaw"],
+        monthly_call_limit=100,
+        monthly_budget_cents=45,
+        unit_price_cents=45,
+        burst_limit_per_minute=10,
+        created_by_user_id=test_user.id,
+    )
+    db_session.add(key)
+    await db_session.flush()
+    db_session.add(
+        MCPUsageEvent(
+            tenant_id=test_tenant.id,
+            product_key_id=key.id,
+            auth_type="product_key",
+            transport="rest",
+            tool_name="search_caselaw",
+            status_code=200,
+        )
+    )
+    await db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        await mcp_product.enforce_product_key_quota(db_session, key)
+    assert exc.value.status_code == 429
+    assert "budget" in exc.value.detail.lower()
+
+
+@pytest.mark.asyncio
+async def test_expired_product_key_is_rejected(
+    db_session, test_tenant, test_user, monkeypatch
+):
+    _enable_product(monkeypatch)
+    test_tenant.is_active = True
+    test_tenant.mcp_entitlement_status = "enabled"
+    test_tenant.mcp_billing_status = "active"
+    test_tenant.stripe_customer_id = "cus_expired"
+    raw_key = "lhrk_expired_security"
+    db_session.add(
+        MCPProductKey(
+            tenant_id=test_tenant.id,
+            name="expired",
+            key_hash=mcp_product.hash_key(raw_key),
+            key_prefix="lhrk_expired",
+            allowed_tools=["search_caselaw"],
+            monthly_call_limit=100,
+            burst_limit_per_minute=10,
+            expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+            created_by_user_id=test_user.id,
+        )
+    )
+    await db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        await mcp_product.resolve_product_key(db_session, raw_key)
+    assert exc.value.status_code == 401
+    assert "expired" in exc.value.detail.lower()
+
+
+@pytest.mark.asyncio
+async def test_key_assigned_to_inactive_staff_is_rejected(
+    db_session, test_tenant, test_user, monkeypatch
+):
+    _enable_product(monkeypatch)
+    test_tenant.is_active = True
+    test_tenant.mcp_entitlement_status = "enabled"
+    test_tenant.mcp_billing_status = "active"
+    test_tenant.stripe_customer_id = "cus_inactive_assignee"
+    test_user.is_active = False
+    raw_key = "lhrk_inactive_assignee"
+    db_session.add(
+        MCPProductKey(
+            tenant_id=test_tenant.id,
+            name="assigned",
+            key_hash=mcp_product.hash_key(raw_key),
+            key_prefix="lhrk_inactiv",
+            allowed_tools=["search_caselaw"],
+            monthly_call_limit=100,
+            burst_limit_per_minute=10,
+            assigned_to_user_id=test_user.id,
+            created_by_user_id=test_user.id,
+        )
+    )
+    await db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        await mcp_product.resolve_product_key(db_session, raw_key)
+    assert exc.value.status_code == 401
+    assert "assignee" in exc.value.detail.lower()
+
+
+@pytest.mark.asyncio
 async def test_resolved_key_is_denied_immediately_when_tenant_deactivates(
     db_session, test_tenant, test_user, monkeypatch
 ):
@@ -179,9 +281,7 @@ async def test_resolved_key_is_denied_immediately_when_tenant_deactivates(
 
 def test_upstream_headers_never_forward_user_credentials(monkeypatch):
     monkeypatch.setattr(mcp.settings, "MCP_UPSTREAM_API_KEY", "service-secret")
-    assert mcp._upstream_auth_headers() == {
-        "X-Clarity-Internal-Key": "service-secret"
-    }
+    assert mcp._upstream_auth_headers() == {"X-Clarity-Internal-Key": "service-secret"}
 
 
 @pytest.mark.asyncio
