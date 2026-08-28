@@ -488,7 +488,7 @@ export default function HomePage() {
             <div className="relative flex h-full flex-col">
               <div className="flex items-start justify-between gap-3">
                 <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-white/10"><Braces size={22} /></div>
-                <span className="rounded-full border border-brand-gold/30 bg-brand-gold/10 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.12em] text-brand-gold">Private preview</span>
+                <span className="rounded-full border border-brand-gold/30 bg-brand-gold/10 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.12em] text-brand-gold">Available</span>
               </div>
               <h3 className="font-serif font-bold text-[25px] leading-tight mt-5 text-white">LawHand MCP</h3>
               <p className="text-white/65 font-sans text-[14.5px] leading-relaxed mt-3">
@@ -508,7 +508,7 @@ export default function HomePage() {
                 ))}
               </div>
               <Link to="/product/mcp" className="inline-flex items-center gap-2 mt-auto pt-7 text-[13.5px] font-sans font-bold text-white hover:text-brand-gold">
-                Explore the MCP preview <ArrowRight size={15} />
+                Explore Research MCP <ArrowRight size={15} />
               </Link>
             </div>
           </article>
@@ -720,7 +720,7 @@ export default function HomePage() {
                 <div className="flex flex-wrap items-center gap-3">
                   <KeyRound size={20} className="text-brand-gold" />
                   <h3 className="font-serif text-[21px] font-bold text-white">LawHand MCP</h3>
-                  <span className="rounded-full border border-white/15 bg-white/10 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.12em] text-white/65">Private preview</span>
+                  <span className="rounded-full border border-white/15 bg-white/10 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.12em] text-white/65">Available</span>
                 </div>
                 <p className="mt-3 max-w-2xl text-[13.5px] leading-relaxed text-white/65">
                   Connect approved external tools with scoped keys, explicit tool access, bounded usage, and administrative visibility.
@@ -728,7 +728,7 @@ export default function HomePage() {
               </div>
               <div className="md:text-right">
                 <div className="flex items-baseline gap-1.5 md:justify-end"><span className="font-serif text-[38px] font-bold">$0.45</span><span className="text-[12px] text-white/55">/ tool call</span></div>
-                <Link to="/product/mcp" className="mt-2 inline-flex items-center gap-2 text-[12.5px] font-bold text-brand-gold hover:underline">Preview details <ArrowRight size={14} /></Link>
+                <Link to="/product/mcp" className="mt-2 inline-flex items-center gap-2 text-[12.5px] font-bold text-brand-gold hover:underline">Research details <ArrowRight size={14} /></Link>
               </div>
             </div>
           </div>

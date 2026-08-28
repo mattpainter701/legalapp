@@ -6,7 +6,7 @@ const DESTINATIONS = [
   { to: '/product', title: 'The platform', body: 'Intake, matters, documents, deadlines, billing, and practice-area skills in one workspace.' },
   { to: '/product/chat', title: 'Matter-aware AI chat', body: 'Research, review, summarize, and draft against the active matter and authorized sources.' },
   { to: '/product/mcp', title: 'LawHand MCP', body: 'Controlled integrations with scoped keys, allowlisted tools, and bounded usage.' },
-  { to: '/pricing', title: 'Pricing', body: 'One platform seat price, the MCP preview price, and answers to rollout questions.' },
+  { to: '/pricing', title: 'Pricing', body: 'One platform seat price, metered Research MCP pricing, and answers to rollout questions.' },
 ]
 
 export default function NotFoundPage() {

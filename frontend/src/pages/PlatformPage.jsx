@@ -314,7 +314,7 @@ export function ResearchMcpReleaseControls({ platformKey, onAuthError }) {
               {[
                 ['Official MCP URL', connection.streamable_http || 'https://research.getlawhand.com/api/mcp'],
                 ['Supported shorthand', connection.shorthand || 'https://research.getlawhand.com'],
-                ['Auth header', `${connection.auth_header || 'X-MCP-API-Key'}: lhrk_...`],
+                ['Auth header', `${connection.auth_header || 'Authorization'}: ${connection.auth_scheme || 'Bearer'} lhrk_...`],
               ].map(([label, value]) => (
                 <div key={label} className="rounded-lg border border-brand-line bg-brand-bg px-3 py-2">
                   <p className="text-[10px] font-bold uppercase tracking-wider text-brand-muted">{label}</p>
@@ -355,9 +355,11 @@ export function ResearchMcpReleaseControls({ platformKey, onAuthError }) {
                         <td className="px-5 py-3">
                           <p className="text-sm font-medium text-brand-ink font-sans">{key.name}</p>
                           <p className="text-xs text-brand-muted font-mono">{key.api_key_masked}</p>
+                          {key.purpose && <p className="mt-1 text-xs text-brand-muted">{key.purpose}</p>}
+                          <p className="mt-1 text-xs text-brand-muted">{key.assigned_to?.name || key.assigned_to?.email || 'Shared / unassigned'}</p>
                         </td>
-                        <td className="px-5 py-3 text-center text-sm text-brand-ink-2 font-sans">{(key.calls_30d || 0).toLocaleString()}</td>
-                        <td className="px-5 py-3 text-center text-sm text-brand-muted font-sans">{key.monthly_call_limit ?? 'Not configured'}</td>
+                        <td className="px-5 py-3 text-center text-sm text-brand-ink-2 font-sans"><p>{(key.calls_30d || 0).toLocaleString()}</p><p className="text-xs text-brand-muted">${((key.estimated_charge_cents_30d || 0) / 100).toFixed(2)}</p></td>
+                        <td className="px-5 py-3 text-center text-sm text-brand-muted font-sans"><p>{key.monthly_call_limit ?? 'Not configured'} calls</p><p className="text-xs">{key.monthly_budget_cents == null ? 'No dollar cap' : `$${(key.monthly_budget_cents / 100).toFixed(2)}`}</p><p className="text-xs">Expires {key.expires_at ? new Date(key.expires_at).toLocaleDateString() : 'never'}</p></td>
                         <td className="px-5 py-3">
                           <TierBadge tier={key.billing?.mode} />
                           <p className="mt-1 text-[11px] text-brand-muted font-mono">{key.billing?.line_item || 'MCP usage'}</p>
@@ -368,7 +370,7 @@ export function ResearchMcpReleaseControls({ platformKey, onAuthError }) {
                         <td className="px-5 py-3 text-center">
                           <span className={`inline-flex items-center gap-1.5 text-xs font-medium font-sans ${key.is_active ? 'text-brand-accent' : 'text-brand-rose'}`}>
                             <span className={`w-2 h-2 rounded-full ${key.is_active ? 'bg-brand-accent' : 'bg-brand-rose'}`} />
-                            {key.is_active ? 'Active' : 'Revoked'}
+                            {key.status === 'active' ? 'Active' : key.status === 'expired' ? 'Expired' : 'Revoked'}
                           </span>
                         </td>
                       </tr>

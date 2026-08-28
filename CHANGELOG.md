@@ -3,6 +3,15 @@
 ## [Unreleased]
 
 ### Added
+- **Research API keys now have a complete tenant-admin lifecycle:** firm admins
+  can record purpose and staff custody, set an expiration, scope allowed tools,
+  enforce monthly call and dollar budgets at the snapshotted $0.45 successful-
+  call price, and edit controls without exposing the raw secret again. The
+  tenant and operator portals show active, expired, and revoked keys with
+  creator, last use, billable and failed calls, estimated charges, and remaining
+  budget. Standard `Authorization: Bearer lhrk_...` clients are supported while
+  `X-MCP-API-Key` remains backward compatible; failed calls remain observable
+  but are neither quota-consuming nor billable.
 - **Document automation now scales with an operator-visible safety boundary:**
   tenant-scoped template search, status/category filters, pagination, readiness
   summaries, and an independently loaded generation view replace the unbounded

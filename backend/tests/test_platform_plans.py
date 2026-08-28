@@ -227,4 +227,6 @@ async def test_platform_mcp_overview(
     assert payload["overview"]["calls_30d"] == 1
     assert payload["keys"][0]["name"] == "Claude Desktop"
     assert payload["keys"][0]["billing"]["line_item"] == "MCP usage"
-    assert payload["connection"]["auth_header"] == "X-MCP-API-Key"
+    assert payload["keys"][0]["estimated_charge_cents_30d"] == 45
+    assert payload["connection"]["auth_header"] == "Authorization"
+    assert payload["connection"]["auth_scheme"] == "Bearer"

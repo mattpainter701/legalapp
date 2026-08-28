@@ -16,9 +16,11 @@ billing-gated, and this contract does not by itself enable
 - External product path: clients use the official endpoint
   `https://research.getlawhand.com/api/mcp`. The shorthand host
   `https://research.getlawhand.com` is also supported.
-- Hosted ChatGPT and Claude clients authenticate with OAuth 2.1. Clients that
-  support request headers use a LawHand Research API token, currently carried
-  as `X-MCP-API-Key: lhrk_...`. Existing hashed `clmcp_...` credentials remain
+- Hosted ChatGPT and Claude clients authenticate with OAuth 2.1. API clients
+  use a LawHand Research token as the standard
+  `Authorization: Bearer lhrk_...` credential. The existing
+  `X-MCP-API-Key: lhrk_...` header remains supported for compatibility, and
+  existing hashed `clmcp_...` credentials remain
   valid until they are rotated or revoked. These are two authentication modes for
   the same research-only product, not workspace credentials.
 - CourtListener engine: `courtlistener-mcp` remains private to the app network
@@ -81,17 +83,26 @@ on entitlement, billing, quota, and metering configuration.
 ## Tenant Admin Controls
 
 The `/mcp` admin surface can list historical keys and show disabled state while
-the release flag is off. Creation remains fail-closed. After a future approved
-release, tenant admins can:
+the release flag is off. Creation remains fail-closed. When the product is
+enabled, tenant admins can:
 
 - create named LawHand Research API tokens (`lhrk_` format)
-- choose allowed tools
-- set bounded monthly and per-minute limits (neither can be unlimited)
-- view 30-day usage totals and per-key usage
-- revoke keys
+- record a purpose and assign custody to an active LawHand staff profile
+- choose allowed tools and edit them after creation
+- set an expiration date, a hard monthly dollar budget, a monthly call limit,
+  and a per-minute limit
+- view every key's masked identifier, custodian, creator, lifecycle status,
+  last use, successful and failed calls, current-month charge, and remaining
+  budget
+- revoke keys permanently
 
 Raw keys are shown only once. The database stores `key_hash` and `key_prefix`,
-not raw secrets.
+not raw secrets. Staff assignment is custody metadata for administrators; the
+token remains a bearer credential and must be delivered through an approved
+secret manager. A key assigned to a staff profile stops working if that profile
+is deactivated, but possession of the secret is still sufficient while the
+profile is active. Use Research OAuth when access must be cryptographically
+bound to an individual LawHand profile.
 
 ## Tool Catalog
 
@@ -151,6 +162,13 @@ enforces the corresponding credential/principal burst limit. Tool scope,
 tenant activity, explicit MCP entitlement, billing state and Stripe metering
 configuration are checked before proxying.
 
+The current customer price is **$0.45 per successful tool call**. Each new key
+snapshots that unit price so its portal estimates and hard dollar budget remain
+stable if the default price changes later. Before a call, the gateway applies
+the lower of the key's monthly call limit and dollar budget. Failed calls remain
+visible for troubleshooting but consume neither allowance and do not enqueue a
+Stripe meter unit.
+
 Stripe subscription/payment webhooks update the MCP billing state. Past-due,
 unpaid, canceled, deleted, disabled, or suspended state is denied before tool
 execution. Redis failure also denies product traffic in production rather than
@@ -173,6 +191,8 @@ Migration `070_mcp_product_gateway.py` creates product keys and usage. Migration
 `087_mcp_product_security.py` invalidates legacy keys, adds mandatory key limits,
 and adds explicit tenant entitlement/billing states. Migration
 `127_research_mcp_oauth_usage.py` correlates OAuth usage with its durable grant.
+Migration `138_research_key_controls.py` adds staff custody, purpose, expiration,
+dollar budgets, and per-key price snapshots.
 
 ### Required configuration and topology
 
@@ -188,6 +208,8 @@ and adds explicit tenant entitlement/billing states. Migration
   `MCP_SERVER_URL=http://courtlistener-mcp:8021`.
 - Keep the diagnostic database and MCP listeners loopback-only. Their defaults
   are `127.0.0.1:5434` and `127.0.0.1:8021`, respectively.
+- `MCP_PRODUCT_CALL_PRICE_CENTS` defaults to `45`. Keep it aligned with the
+  active Stripe meter price before issuing keys at a new price.
 
 Start the two base services with:
 

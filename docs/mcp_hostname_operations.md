@@ -16,8 +16,9 @@ authorization endpoints remain on `https://getlawhand.com`.
 Research uses its dedicated origin for both resource and issuer. Hosted
 ChatGPT and Claude clients discover OAuth 2.1 at
 `https://research.getlawhand.com/.well-known/oauth-authorization-server` and
-use dynamic client registration plus PKCE. Header-capable clients may instead
-send a LawHand Research API token as `X-MCP-API-Key: lhrk_...`.
+use dynamic client registration plus PKCE. API clients may instead send a
+LawHand Research token as `Authorization: Bearer lhrk_...`;
+`X-MCP-API-Key` remains supported for existing clients.
 
 The Research authorization endpoint starts on the dedicated issuer and then
 redirects the user to the signed-in portal for consent. The portal page reads

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from types import SimpleNamespace
 
 import mcp.types as mcp_types
 import pytest
@@ -147,6 +148,45 @@ async def _allow_identity(monkeypatch, *tools: str) -> None:
     monkeypatch.setattr(mcp_protocol, "authenticate_product_request", authenticate)
     monkeypatch.setattr(mcp_protocol, "get_tool_catalog", catalog)
     monkeypatch.setattr(mcp_protocol.settings, "MCP_PRODUCT_ENABLED", True)
+
+
+@pytest.mark.asyncio
+async def test_lawhand_product_key_is_accepted_as_standard_bearer(monkeypatch):
+    key_id = uuid.uuid4()
+    tenant_id = uuid.uuid4()
+    captured = []
+
+    class SessionContext:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *args):
+            return None
+
+    async def resolve_key(_db, raw_key):
+        captured.append(raw_key)
+        return (
+            SimpleNamespace(id=key_id, allowed_tools=["search_caselaw"]),
+            SimpleNamespace(id=tenant_id),
+        )
+
+    async def allow_request(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(mcp_protocol, "async_session_maker", SessionContext)
+    monkeypatch.setattr(mcp_protocol, "resolve_product_key", resolve_key)
+    monkeypatch.setattr(mcp_protocol, "enforce_research_request_limit", allow_request)
+    scope = dict(_request().scope)
+    scope["headers"] = [
+        (b"host", b"localhost:8000"),
+        (b"authorization", b"Bearer lhrk_standard_client_key"),
+    ]
+
+    identity = await mcp_protocol.authenticate_product_request(scope)
+
+    assert captured == ["lhrk_standard_client_key"]
+    assert identity.product_key_id == str(key_id)
+    assert identity.tenant_id == str(tenant_id)
 
 
 def _complete_upstream_manifest() -> dict:
