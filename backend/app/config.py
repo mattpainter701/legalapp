@@ -239,6 +239,12 @@ class Settings(BaseSettings):
     STRIPE_SUCCESS_URL: str = ""  # e.g. https://yourdomain.com/billing?success=1
     STRIPE_CANCEL_URL: str = ""  # e.g. https://yourdomain.com/billing?cancel=1
 
+    # Certified e-sign provider. Empty means external signing is unavailable;
+    # the API must fail closed instead of silently using the internal flow.
+    DROPBOX_SIGN_API_KEY: str = ""
+    ESIGN_WEBHOOK_SECRET: str = ""
+    ESIGN_PROVIDER_BASE_URL: str = "https://api.hellosign.com/v3"
+
     # Super-admin platform key — set a long random token; never commit
     # Leave unset on new deployments; this only backs the time-boxed legacy
     # bootstrap bridge when explicitly enabled below.

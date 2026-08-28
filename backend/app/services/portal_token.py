@@ -49,6 +49,7 @@ def create_matter_portal_token(
     contact_id: str | None,
     email: str | None,
     invite_id: str | None = None,
+    user_id: str | None = None,
 ) -> str:
     """Short-lived, matter-scoped JWT for a firm client accessing the portal.
 
@@ -68,6 +69,8 @@ def create_matter_portal_token(
         "jti": str(uuid.uuid4()),
         "exp": now + timedelta(minutes=PORTAL_TOKEN_EXPIRE_MINUTES),
     }
+    if user_id:  # pragma: no cover - durable portal integration
+        payload["sub"] = str(user_id)
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 

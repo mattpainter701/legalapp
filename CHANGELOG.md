@@ -18,6 +18,11 @@
   Skynet research upstream without exposing its credential.
 
 ### Added
+- **Client portal switching bundle:** clients can activate durable, revocable
+  portal accounts, pay sent invoices through hosted Stripe Checkout, and use
+  authenticated, idempotent Dropbox Sign webhook reconciliation. Portal
+  payments, signatures, conflicts, roles, imports, receipts, and closeout
+  remain tenant-scoped and auditable.
 - **Platform tenant inventory distinguishes lifecycle from billing:** operator
   tenant summaries now include an explicit `demo` or `platform` type and the
   existing tenant expiry. The console labels and filters that type, renders a

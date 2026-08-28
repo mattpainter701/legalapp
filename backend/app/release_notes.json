@@ -2,6 +2,27 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.28.4",
+      "version": "2026.08.28.4",
+      "title": "Client portal payments and durable sign-in",
+      "published_at": "2026-08-28",
+      "summary": "Clients can activate a durable portal account, pay an invoice through hosted Stripe Checkout, and complete certified Dropbox Sign requests when the firm configures the provider.",
+      "highlights": [
+        {
+          "title": "Pay invoices securely",
+          "description": "The portal opens a hosted Stripe Checkout session for the current invoice balance; payment status updates only after verified provider reconciliation."
+        },
+        {
+          "title": "Return with durable sign-in",
+          "description": "Clients can activate a password-backed account and sign into an explicitly selected matter while invitation revocation remains authoritative."
+        },
+        {
+          "title": "Use certified e-signature providers",
+          "description": "Dropbox Sign dispatch and signed or declined webhook events are authenticated, tenant-bound, and idempotently reconciled."
+        }
+      ]
+    },
+    {
       "id": "2026.08.28.3",
       "version": "2026.08.28.3",
       "title": "Zoom Phone setup now shows the exact authorization path",

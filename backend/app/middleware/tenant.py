@@ -21,6 +21,7 @@ SKIP_PATHS = {
     "/openapi.json",
     "/redoc",
     "/api/billing/webhook",
+    "/api/matters/esign/webhooks",
 }
 
 SKIP_PREFIXES = (

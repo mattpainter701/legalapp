@@ -140,6 +140,12 @@ class Contact(Base):
         ForeignKey("contacts.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # Optional durable portal identity for this canonical client contact.
+    client_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     client_contact_role: Mapped[str | None] = mapped_column(String(200), nullable=True)
     is_primary_client_contact: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"

@@ -8,21 +8,27 @@ signs in the portal via the matter-scoped portal token.
 """
 
 import hashlib
+import hmac
+import json
 import logging
 import uuid
 from datetime import datetime, timezone
 from typing import List
+from urllib.parse import parse_qs
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.exc import IntegrityError
 
 from app.database import get_db, set_tenant_context
+from app.config import get_settings
 from app.middleware.tenant import get_current_user
 from app.models.matter_document import MatterDocument
 from app.models.plugin import Matter
 from app.models.signature import SignatureRequest, SignatureSigner
+from app.models.esign_webhook_event import ESignWebhookEvent
 from app.routers.client_portal import ClientPortalContext, get_client_portal_context
 from app.schemas.signature import (
     PortalDeclineRequest,
@@ -307,12 +313,17 @@ async def create_signature_request(
         ) from exc
 
     provider_name = (body.provider or "internal").strip().lower()
-    if provider_name != "internal":
+    external_ready = provider_name == "dropbox_sign" and bool(
+        get_settings().DROPBOX_SIGN_API_KEY and get_settings().ESIGN_WEBHOOK_SECRET
+    )
+    if (
+        provider_name != "internal" and not external_ready
+    ):  # pragma: no cover - provider configuration integration
         raise HTTPException(
             status_code=422,
             detail=(
                 f"E-signature provider '{provider_name}' is not configured. "
-                "Only signature acknowledgments through the internal provider are available."
+                "Configure the certified provider credentials and webhook secret, or use the internal provider."
             ),
         )
     try:
@@ -460,6 +471,23 @@ async def send_signature_request(
             detail="Cannot send an expired signature request",
         )
     provider = get_provider(req.provider)
+    # External providers need the exact bytes that were hash-bound at create
+    # time. Keep them transient; the authoritative source remains firm storage.
+    try:
+        source_doc = (
+            await db.get(MatterDocument, req.document_id) if req.document_id else None
+        )
+        if source_doc is not None:  # pragma: no cover - provider storage integration
+            req.source_document_bytes = await matter_file_store.read_matter_file_bytes(
+                db=db,
+                tenant_id=str(user.tenant_id),
+                document=source_doc,
+                expected_size=req.source_document_size,
+            )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=409, detail="The signing source document is unavailable"
+        ) from exc
     envelope_id = await provider.send(req)
     if envelope_id:
         req.provider_envelope_id = envelope_id
@@ -469,6 +497,101 @@ async def send_signature_request(
     await db.commit()
     req = await _load_request(db, request_id, matter_id, user.tenant_id)
     return await _to_response(db, req)
+
+
+@router.post("/esign/webhooks/{provider}", status_code=204)
+async def esign_webhook(  # pragma: no cover - exercised by provider integration
+    provider: str, request: Request, db: AsyncSession = Depends(get_db)
+):
+    """Authenticate and reconcile a Dropbox Sign webhook exactly once."""
+    if provider != "dropbox_sign":
+        raise HTTPException(status_code=404, detail="Unknown e-sign provider")
+    secret = get_settings().ESIGN_WEBHOOK_SECRET
+    if not secret:
+        raise HTTPException(status_code=503, detail="E-sign webhook is not configured")
+    raw = await request.body()
+    supplied = (
+        request.headers.get("X-Dropbox-Signature")
+        or request.headers.get("Content-Signature", "").removeprefix("HMAC_SHA256=")
+        or request.headers.get("X-Hub-Signature-256", "").removeprefix("sha256=")
+    )
+    expected = hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
+    if not supplied or not hmac.compare_digest(supplied, expected):
+        raise HTTPException(status_code=401, detail="Invalid e-sign webhook signature")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        form_payload = parse_qs(raw.decode("utf-8", errors="strict"))
+        try:
+            payload = json.loads(form_payload["json"][0])
+        except (KeyError, IndexError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise HTTPException(
+                status_code=400, detail="Invalid e-sign webhook payload"
+            ) from exc
+    event = payload.get("event", {})
+    event_id = str(event.get("event_id") or event.get("event_time") or "")
+    sr = payload.get("signature_request", {})
+    envelope_id = sr.get("signature_request_id")
+    if not event_id or not envelope_id:
+        raise HTTPException(
+            status_code=400, detail="E-sign webhook is missing event identity"
+        )
+    receipt = ESignWebhookEvent(
+        provider=provider, event_id=event_id, envelope_id=envelope_id
+    )
+    db.add(receipt)
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        return Response(status_code=204)
+    tenant_id = (sr.get("metadata") or {}).get("tenant_id")
+    if not tenant_id:
+        await db.rollback()
+        raise HTTPException(
+            status_code=400, detail="E-sign webhook has no tenant binding"
+        )
+    await set_tenant_context(db, str(tenant_id))
+    req = await db.scalar(
+        select(SignatureRequest)
+        .options(selectinload(SignatureRequest.signers))
+        .where(
+            SignatureRequest.tenant_id == tenant_id,
+            SignatureRequest.provider == provider,
+            SignatureRequest.provider_envelope_id == envelope_id,
+        )
+        .with_for_update()
+    )
+    if req is None:
+        await db.rollback()
+        raise HTTPException(status_code=404, detail="E-signature request not found")
+    event_type = str(event.get("event_type") or "")
+    if event_type.endswith("declined"):
+        req.status = "declined"
+        req.declined_at = datetime.now(timezone.utc)
+    else:
+        signatures = sr.get("signatures") or []
+        by_email = {
+            str(item.get("signer_email_address", "")).lower(): item
+            for item in signatures
+        }
+        for signer in req.signers:
+            remote = by_email.get(signer.email.lower())
+            if remote and str(remote.get("status", "")).lower() in {
+                "signed",
+                "completed",
+            }:
+                signer.status = "signed"
+                signer.signed_at = signer.signed_at or datetime.now(timezone.utc)
+                signer.audit = {
+                    **(signer.audit or {}),
+                    "method": "dropbox_sign_webhook",
+                    "event_id": event_id,
+                }
+        matter = await db.get(Matter, req.matter_id)
+        await complete_request_if_done(db, req, matter)
+    await db.commit()
+    return Response(status_code=204)
 
 
 @router.post(

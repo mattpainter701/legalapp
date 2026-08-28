@@ -220,6 +220,10 @@ PUBLIC_ROUTES: dict[tuple[frozenset[str], str], str] = {
     ): "verifies Stripe-Signature header",
     (
         frozenset({"POST"}),
+        "/api/matters/esign/webhooks/{provider}",
+    ): "verifies provider HMAC signature and tenant binding",
+    (
+        frozenset({"POST"}),
         "/api/integrations/zoom-phone/webhook",
     ): "verifies per-tenant webhook secret",
     (
@@ -248,6 +252,14 @@ PUBLIC_ROUTES: dict[tuple[frozenset[str], str], str] = {
     ): "authenticated by the invite token hash",
     (
         frozenset({"POST"}),
+        "/api/portal/client/activate",
+    ): "authenticated by the invite token hash and bounded password activation",
+    (
+        frozenset({"POST"}),
+        "/api/portal/client/login",
+    ): "authenticated by client credentials plus explicit matter scope",
+    (
+        frozenset({"POST"}),
         "/api/portal/mediation/accept",
     ): "authenticated by the invite token hash",
     # Client-portal data routes — authenticated by get_client_portal_context,
@@ -273,6 +285,10 @@ PUBLIC_ROUTES: dict[tuple[frozenset[str], str], str] = {
         "/api/portal/client/documents/{doc_id}/download",
     ): "get_client_portal_context",
     (frozenset({"GET"}), "/api/portal/client/invoices"): "get_client_portal_context",
+    (
+        frozenset({"POST"}),
+        "/api/portal/client/invoices/{invoice_id}/pay",
+    ): "get_client_portal_context",
     (
         frozenset({"GET"}),
         "/api/portal/client/invoices/{invoice_id}/download",

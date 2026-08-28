@@ -62,6 +62,7 @@ AUTH_GET_LIMITS = {
 SKIP_PREFIXES = (
     "/api/auth/",
     "/api/billing/webhook",
+    "/api/matters/esign/webhooks",
     "/api/integrations/zoom-phone/webhook",
     "/api/integrations/teams/voice/webhook",
     "/api/platform/",  # handled by the dedicated operator limiter below
