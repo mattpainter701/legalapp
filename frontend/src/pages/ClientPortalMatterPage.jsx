@@ -1107,14 +1107,14 @@ function InvoicesTab({ onSessionError }) {
                       <Download size={14} /> PDF
                     </a>
                     {Number(inv.balance_due) > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => pay(inv.id)}
-                        disabled={paying === inv.id}
+                      <a
+                        href={inv.stripe_payment_link || '#'}
+                        onClick={(event) => { event.preventDefault(); pay(inv.id) }}
+                        aria-disabled={paying === inv.id}
                         className="px-3 py-1.5 bg-brand-green text-white rounded-lg hover:opacity-90 transition-all whitespace-nowrap"
                       >
                         <CreditCard size={14} className="inline mr-1" /> {paying === inv.id ? 'Opening…' : 'Pay now'}
-                      </button>
+                      </a>
                     )}
                   </div>
                 </div>
