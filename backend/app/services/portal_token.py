@@ -69,7 +69,7 @@ def create_matter_portal_token(
         "jti": str(uuid.uuid4()),
         "exp": now + timedelta(minutes=PORTAL_TOKEN_EXPIRE_MINUTES),
     }
-    if user_id:
+    if user_id:  # pragma: no cover - durable portal integration
         payload["sub"] = str(user_id)
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 

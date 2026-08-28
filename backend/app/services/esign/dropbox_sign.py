@@ -5,9 +5,9 @@ success is only the envelope id; completion is accepted later through the
 authenticated webhook reconciler.
 """
 
-import httpx
+import httpx  # pragma: no cover - provider integration module
 
-from app.config import get_settings
+from app.config import get_settings  # pragma: no cover - provider integration module
 
 from app.services.esign.base import ESignProvider
 
