@@ -1343,6 +1343,7 @@ async def test_failed_route_activation_does_not_publish_candidate_config(
                         "key_ids": [str(standard_key.id)],
                         "legal_eligible": True,
                         "route_compatible": True,
+                        "confidential_data_allowed": True,
                     },
                     {
                         "id": "deepseek-v4-pro",
@@ -1350,6 +1351,7 @@ async def test_failed_route_activation_does_not_publish_candidate_config(
                         "key_ids": [str(premium_key.id)],
                         "legal_eligible": True,
                         "route_compatible": True,
+                        "confidential_data_allowed": True,
                     },
                 ]
             },
