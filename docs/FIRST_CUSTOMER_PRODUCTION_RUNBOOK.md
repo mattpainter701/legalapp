@@ -59,9 +59,9 @@ Set these non-secret relationships in `.env`:
 - When Restic is not configured, `OFFSITE_RESTORE_PUBLIC_KEY_FILE` points to the
   pinned public half of a dedicated recovery-evidence signing key. Keep the
   private half only in the encrypted off-host recovery environment.
-- `ZOOM_REQUIRED_TENANT_ID` is the sold tenant UUID and
-  `ZOOM_REQUIRED_TENANT_PLAN=intake-only`. Strict checks are bound to that exact
-  active tenant and plan; another configured/demo tenant cannot satisfy launch.
+- `ZOOM_REQUIRED_TENANT_ID` is the sold tenant UUID. Strict checks are bound to
+  that exact active tenant and its Zoom configuration, independent of the
+  tenant's commercial plan; another configured/demo tenant cannot satisfy launch.
 - `EMAIL_ENABLED=false` is the intentional production policy. LawHand does not
   operate an SMTP sender. Assignment alerts are logged as unavailable and
   explicit reminder requests return a clear service-unavailable error; tasks
@@ -487,8 +487,8 @@ runner's root-owned `lawhand-deploy-from-github` entrypoint must include its
 `accept` operation before dispatching the workflow.
 
 `ZOOM_REQUIRED=true` is the validated default. It requires
-`ZOOM_REQUIRED_TENANT_ID` to be active, configured, healthy, and on the expected
-`intake-only` plan. This strict command must pass
+`ZOOM_REQUIRED_TENANT_ID` to be active, configured, and healthy. The commercial
+tenant plan is not a Zoom readiness signal. This strict command must pass
 after tenant Zoom setup and before go-live, even when the host was created with
 `BOOTSTRAP_MODE=true`.
 

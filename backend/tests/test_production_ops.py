@@ -313,7 +313,6 @@ def _production_env(**overrides: str) -> str:
         "CLOUDFLARED_CONFIG_FILE": "__TEST_CLOUDFLARED_CONFIG__",
         "CLOUDFLARED_BIN": "/bin/true",
         "ZOOM_REQUIRED_TENANT_ID": "00000000-0000-4000-8000-000000000111",
-        "ZOOM_REQUIRED_TENANT_PLAN": "intake-only",
         "QBO_CLIENT_ID": "qbo-client-id-0123456789",
         "QBO_CLIENT_SECRET": "qbo-client-secret-0123456789",
         "QBO_REDIRECT_URI": "https://ops-test.invalid/api/integrations/qbo/callback",
@@ -531,6 +530,19 @@ def test_production_preflight_accepts_staged_keyring_and_dedicated_mcp_auth(
     assert "Production preflight passed" in output
     assert "ops-secret-key-0123456789" not in output
     assert "mcp-upstream-key-0123456789" not in output
+
+
+def test_production_preflight_does_not_gate_zoom_on_commercial_plan(
+    tmp_path: Path,
+) -> None:
+    result = _run_preflight(
+        tmp_path,
+        _production_env(ZOOM_REQUIRED_TENANT_PLAN="full-platform"),
+    )
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, output
+    assert "Production preflight passed" in output
 
 
 def test_production_preflight_rejects_nonproduction_qbo_oauth(
@@ -1786,7 +1798,6 @@ def test_upload_bind_scheduler_and_launch_capability_contracts() -> None:
     assert "billing_tier <> 'demo'" in production_check
     assert "t.billing_tier <> 'demo'" in production_check
     assert "ZOOM_REQUIRED_TENANT_ID" in production_check
-    assert "ZOOM_REQUIRED_TENANT_PLAN" in production_check
 
 
 def test_demo_tenants_are_excluded_from_scheduler_health_gates() -> None:
@@ -1801,7 +1812,6 @@ def test_demo_tenants_are_excluded_from_scheduler_health_gates() -> None:
     assert "billing_tier <> 'demo'" in deploy
     assert "billing_tier <> 'demo'" in production_check
     assert "billing_tier <> 'demo' ORDER BY id" in main
-    assert "custom_config->>'plan'" in production_check
     assert '--tenant-id "$ZOOM_REQUIRED_TENANT_ID"' in production_check
     assert "SMTP no-delivery capability probe" in production_check
     assert "client.starttls" in production_check
@@ -1813,6 +1823,26 @@ def test_demo_tenants_are_excluded_from_scheduler_health_gates() -> None:
         "backend and scheduler runtime SMTP configurations differ" in production_check
     )
     assert "inherited EMAIL_ENABLED conflicts" in production_check
+
+
+def test_zoom_production_gate_is_independent_of_commercial_plan() -> None:
+    preflight = (ROOT / "scripts" / "prod_env_preflight.sh").read_text(encoding="utf-8")
+    production_check = (ROOT / "scripts" / "production_check.sh").read_text(
+        encoding="utf-8"
+    )
+    env_example = (ROOT / ".env.prod.example").read_text(encoding="utf-8")
+
+    for source in (preflight, production_check, env_example):
+        assert "ZOOM_REQUIRED_TENANT_PLAN" not in source
+    assert "custom_config->>'plan'" not in production_check
+    assert "required Zoom tenant is inactive or missing" in production_check
+    assert "a.encrypted_webhook_secret_token IS NOT NULL" in production_check
+    assert "c.encrypted_refresh_token IS NOT NULL" in production_check
+    assert "c.service_account_email = a.zoom_account_id" in production_check
+    assert "c.health = 'healthy'" in production_check
+    assert "phone:read:list_call_logs:admin" in production_check
+    assert "phone:read:call_log:admin" in production_check
+    assert '--tenant-id "$ZOOM_REQUIRED_TENANT_ID"' in production_check
 
 
 def test_production_guards_cover_litellm_data_and_schema() -> None:
