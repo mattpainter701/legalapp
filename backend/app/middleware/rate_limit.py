@@ -248,13 +248,21 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             key = f"rate:public-intake:{_client_ip(request)}"
             limit, window_seconds = PUBLIC_INTAKE_LIMIT
             try:
-                count = await self._redis.incr(key) if self._redis else _fallback_auth_increment(key, window_seconds)
+                count = (
+                    await self._redis.incr(key)
+                    if self._redis
+                    else _fallback_auth_increment(key, window_seconds)
+                )
                 if self._redis and count == 1:
                     await self._redis.expire(key, window_seconds)
             except aioredis.RedisError:
                 count = _fallback_auth_increment(key, window_seconds)
             if count > limit:
-                return JSONResponse(status_code=429, content={"detail": "Public intake rate limit exceeded"}, headers={"Retry-After": str(window_seconds)})
+                return JSONResponse(
+                    status_code=429,
+                    content={"detail": "Public intake rate limit exceeded"},
+                    headers={"Retry-After": str(window_seconds)},
+                )
         if method_limits is not None:
             for auth_path, (limit, window_seconds) in method_limits.items():
                 if path == auth_path:

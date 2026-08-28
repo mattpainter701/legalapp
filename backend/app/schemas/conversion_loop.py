@@ -6,7 +6,9 @@ from pydantic import BaseModel, Field
 
 
 class IntakeFormCreate(BaseModel):
-    slug: str = Field(min_length=3, max_length=120, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    slug: str = Field(
+        min_length=3, max_length=120, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    )
     name: str = Field(min_length=1, max_length=200)
     form_schema: dict[str, Any] = Field(default_factory=dict, alias="schema_json")
     is_active: bool = True
