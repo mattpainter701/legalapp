@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ZoomPanel from './ZoomPanel'
 import {
+  connectZoomPhoneIntegration,
   getZoomPhoneStatus,
   getZoomStatus,
   saveZoomPhoneAppCredentials,
@@ -48,6 +49,13 @@ describe('Zoom Phone tenant app setup', () => {
     render(<ZoomPanel />)
 
     expect(await screen.findByText('Customer Zoom app')).toBeInTheDocument()
+    expect(screen.getAllByText('Get account’s call history')).not.toHaveLength(0)
+    expect(screen.getAllByText('Get call history detail and call element')).not.toHaveLength(0)
+    expect(screen.getAllByText('phone:read:list_call_logs:admin')).not.toHaveLength(0)
+    expect(screen.getAllByText('phone:read:call_log:admin')).not.toHaveLength(0)
+    expect(screen.getByText('Start authorization from LawHand')).toBeInTheDocument()
+    expect(screen.getByText(/Do not use the Add button or generated OAuth link in Zoom Marketplace/i)).toBeInTheDocument()
+    expect(screen.getByText(/Development or Production, never a mix/i)).toBeInTheDocument()
     expect(screen.queryByLabelText(/Zoom Account ID/i)).not.toBeInTheDocument()
     const saveButton = screen.getByRole('button', { name: 'Save Zoom app' })
     expect(saveButton).toBeDisabled()
@@ -64,6 +72,24 @@ describe('Zoom Phone tenant app setup', () => {
       client_secret: 'secret-123',
       webhook_secret_token: 'webhook-123',
     }))
+  })
+
+  it('directs tenant authorization through the LawHand connect action', async () => {
+    getZoomPhoneStatus.mockResolvedValue({
+      ...emptyPhoneStatus,
+      configured: true,
+      tenant_app_configured: true,
+      webhook_secret_configured: true,
+      app_credentials: { configured: true, client_id_hint: 'clie…123' },
+    })
+    const user = userEvent.setup()
+    render(<ZoomPanel />)
+
+    const connectButton = await screen.findByRole('button', { name: 'Connect Zoom Phone' })
+    expect(connectButton).toBeEnabled()
+    await user.click(connectButton)
+
+    expect(connectZoomPhoneIntegration).toHaveBeenCalledTimes(1)
   })
 
   it('does not repopulate saved secrets and permits rotating only the webhook secret', async () => {

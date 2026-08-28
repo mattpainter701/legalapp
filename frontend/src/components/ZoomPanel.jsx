@@ -27,9 +27,11 @@ import {
 } from '../api'
 
 const PHONE_SCOPE_LABELS = {
-  'phone:read:list_call_logs:admin': 'Read account call history',
-  'phone:read:call_log:admin': 'Read call details',
+  'phone:read:list_call_logs:admin': 'Get account’s call history',
+  'phone:read:call_log:admin': 'Get call history detail and call element',
 }
+
+const PHONE_SCOPE_DOCS_URL = 'https://developers.zoom.us/docs/integrations/oauth-scopes-granular/#call-logs'
 
 export default function ZoomPanel() {
   const [status, setStatus] = useState(null)
@@ -233,7 +235,7 @@ export default function ZoomPanel() {
             <SetupNotice
               tone="info"
               title="Add your firm’s Zoom OAuth app"
-              body="Create a Zoom OAuth app for this tenant, add the callback and webhook URLs below, save its app credentials, then connect Zoom Phone."
+              body="Create a private, admin-managed Zoom General App for this tenant, add the two Zoom Phone > Call Logs scopes and URLs shown below, save its credentials here, then start authorization with LawHand’s Connect Zoom Phone button."
             />
           )}
           <ZoomPhoneAppSetup
@@ -366,6 +368,7 @@ function ZoomPhoneAppSetup({
 }) {
   const callbackUrl = status?.redirect_uri || status?.app_credentials?.redirect_uri
   const webhookUrl = status?.webhook_url || status?.app_credentials?.webhook_url
+  const phoneScopes = Object.keys(PHONE_SCOPE_LABELS).join('\n')
   const webhookEvents = 'phone.callee_call_element_completed\nphone.caller_call_element_completed'
   const clientIdHint = status?.app_credentials?.client_id_hint
   const hasOAuthPair = form.client_id.trim() && form.client_secret.trim()
@@ -421,6 +424,54 @@ function ZoomPhoneAppSetup({
             </div>
           </div>
         )}
+        <div>
+          <div className="flex items-center justify-between gap-3 mb-1">
+            <p className="block text-[11px] font-bold uppercase tracking-wider text-brand-muted">
+              Required Zoom Phone OAuth API scopes
+            </p>
+            <a
+              href={PHONE_SCOPE_DOCS_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="text-[11px] font-semibold text-brand-ink underline underline-offset-2"
+            >
+              Zoom Phone → Call Logs reference
+            </a>
+          </div>
+          <div className="flex gap-2">
+            <div className="flex-1 min-w-0 rounded-lg bg-brand-surface border border-brand-line divide-y divide-brand-line">
+              {Object.entries(PHONE_SCOPE_LABELS).map(([scope, label]) => (
+                <div key={scope} className="px-3 py-2">
+                  <div className="text-[11px] font-semibold text-brand-ink">{label}</div>
+                  <code className="block mt-0.5 text-[11px] text-brand-ink-2 break-all">{scope}</code>
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => onCopy(phoneScopes, 'Required Phone scope list')}
+              className="w-10 h-10 inline-flex items-center justify-center rounded-lg border border-brand-line text-brand-ink hover:bg-brand-surface"
+              title="Copy required Phone scopes"
+            >
+              <Copy size={15} />
+            </button>
+          </div>
+          <p className="mt-1 text-[11px] text-brand-muted">
+            In Zoom, choose both account/admin granular permissions under Zoom Phone → Call Logs. Do not add classic, write, delete, or manage scopes.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-amber-900">
+          <div className="flex gap-2">
+            <ShieldCheck size={16} className="mt-0.5 shrink-0" />
+            <div>
+              <div className="text-xs font-bold">Start authorization from LawHand</div>
+              <div className="text-xs mt-0.5 opacity-90">
+                After saving the app below, return to this panel and click Connect Zoom Phone. Do not use the Add button or generated OAuth link in Zoom Marketplace; those paths do not start LawHand’s tenant-bound request with the required state value.
+              </div>
+            </div>
+          </div>
+        </div>
         {webhookUrl && (
           <div>
             <p className="block text-[11px] font-bold uppercase tracking-wider text-brand-muted mb-1">
@@ -504,6 +555,9 @@ function ZoomPhoneAppSetup({
               <span className="mt-1 block text-[11px] font-semibold text-green-700">Webhook signing is configured.</span>
             )}
           </label>
+          <p className="lg:col-span-2 text-[11px] text-brand-muted">
+            Copy the client ID and client secret from the same Zoom environment tab used for the callback, scopes, and webhook—Development or Production, never a mix. If Zoom regenerated the secret, enter both current values here and save before reconnecting.
+          </p>
           <div className="lg:col-span-2 flex flex-wrap gap-2">
             <button
               type="submit"
@@ -658,7 +712,10 @@ function ScopeChecklist({ required, missing }) {
             <div key={scope} className="flex items-center gap-2 px-3 py-2 bg-brand-bg">
               <Icon size={15} className={isMissing ? 'text-red-600' : 'text-green-600'} />
               <span className={`text-xs ${isMissing ? 'text-red-700' : 'text-brand-ink'}`}>
-                {PHONE_SCOPE_LABELS[scope] || scope}
+                <span className="block">{PHONE_SCOPE_LABELS[scope] || scope}</span>
+                {PHONE_SCOPE_LABELS[scope] && (
+                  <code className="block mt-0.5 text-[10px] text-brand-muted break-all">{scope}</code>
+                )}
               </span>
               {isMissing && <span className="ml-auto text-[10px] font-bold uppercase text-red-600">Missing</span>}
             </div>

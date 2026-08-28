@@ -2,6 +2,23 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.28.3",
+      "version": "2026.08.28.3",
+      "title": "Zoom Phone setup now shows the exact authorization path",
+      "published_at": "2026-08-28",
+      "summary": "Tenant administrators can configure Zoom Phone with the exact required permissions and start authorization from the correct LawHand control.",
+      "highlights": [
+        {
+          "title": "Choose only the required Phone access",
+          "description": "The Zoom setup panel names both account call-history permissions, shows their exact identifiers, and links directly to Zoom's Call Logs reference."
+        },
+        {
+          "title": "Start the secure tenant connection correctly",
+          "description": "LawHand now warns administrators to use Connect Zoom Phone instead of Marketplace Add or generated authorization links, preserving the tenant-bound authorization check."
+        }
+      ]
+    },
+    {
       "id": "2026.08.28.2",
       "version": "2026.08.28.2",
       "title": "Demo workspaces are clearly identified for operators",
