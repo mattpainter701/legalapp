@@ -52,7 +52,7 @@ class InfrastructureOverview(BaseModel):
     alerts: list[InfrastructureAlert]
 
 
-def _require_platform_read(request: Request) -> Any:
+def _require_platform_key(request: Request) -> Any:
     return require_platform_token(request, scopes={"platform:read"})
 
 
@@ -156,7 +156,7 @@ async def _probe(
 
 @router.get("", response_model=InfrastructureOverview)
 async def infrastructure_overview(
-    _auth: Any = Depends(_require_platform_read),
+    _auth: Any = Depends(_require_platform_key),
 ) -> InfrastructureOverview:
     targets = _load_targets()
     checked_at = datetime.now(timezone.utc)
