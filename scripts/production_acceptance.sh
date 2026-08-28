@@ -23,8 +23,11 @@ actual_commit="$(git -C "$ROOT_DIR" rev-parse HEAD)"
 }
 
 echo "ACCEPTANCE_COMMIT=$actual_commit"
-echo "==> Running strict production check"
-ENV_FILE="$ENV_FILE" COMPOSE_FILES="$COMPOSE_FILES" bash "$SCRIPT_DIR/production_check.sh"
+echo "==> Running platform production check"
+# Zoom Phone is a tenant-owned provider pilot and has its own explicit gate.
+# Global release acceptance must not depend on one customer's provider grant.
+ENV_FILE="$ENV_FILE" COMPOSE_FILES="$COMPOSE_FILES" ZOOM_REQUIRED=false \
+  bash "$SCRIPT_DIR/production_check.sh"
 
 get_env() {
   local key="$1" line

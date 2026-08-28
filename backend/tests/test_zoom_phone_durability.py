@@ -1798,7 +1798,7 @@ def test_production_gate_runs_backend_zoom_api_probe():
     assert '--tenant-id "$ZOOM_REQUIRED_TENANT_ID"' in production_check
 
 
-def test_zoom_shell_gates_are_strict_by_default_and_bootstrap_is_explicit():
+def test_zoom_shell_gate_is_explicit_and_bootstrap_is_explicit():
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[2]
@@ -1808,13 +1808,16 @@ def test_zoom_shell_gates_are_strict_by_default_and_bootstrap_is_explicit():
     deploy = deploy_path.read_text(encoding="utf-8")
     bash_bin = os.environ.get("BASH", "bash")
 
-    assert 'ZOOM_REQUIRED="${ZOOM_REQUIRED:-true}"' in production
+    assert 'ZOOM_REQUIRED="${ZOOM_REQUIRED:-false}"' in production
     assert 'if [[ "$ZOOM_REQUIRED" == true ]]; then' in production
-    assert "NOT GO-LIVE" in production
-    assert production.count('if [[ "$ZOOM_REQUIRED" == true ]]; then') >= 3
+    assert "Zoom Phone provider validation was not requested" in production
+    assert production.count('if [[ "$ZOOM_REQUIRED" == true ]]; then') >= 1
+    assert "optional Zoom provider gate was not requested" in production
     assert 'printf \'%s\' "$state" > "$STATE_FILE"' in production
     assert 'BOOTSTRAP_MODE="${BOOTSTRAP_MODE:-false}"' in deploy
     assert 'if [[ "$BOOTSTRAP_MODE" == true ]]; then' in deploy
+    assert 'ZOOM_REQUIRED="${ZOOM_REQUIRED:-false}"' in deploy
+    assert 'zoom_required="$ZOOM_REQUIRED"' in deploy
     assert 'ZOOM_REQUIRED="$zoom_required" bash scripts/production_check.sh' in deploy
     assert deploy.index("prod_data_guard.sh post") < deploy.index(
         "bash scripts/production_check.sh"

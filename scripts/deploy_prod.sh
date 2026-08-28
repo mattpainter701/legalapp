@@ -10,6 +10,15 @@ case "$BOOTSTRAP_MODE" in
   *) echo "ERROR: BOOTSTRAP_MODE must be true or false" >&2; exit 2 ;;
 esac
 
+# Zoom Phone remains a dedicated, opt-in provider acceptance gate while the
+# integration pilot is being completed. It must not block unrelated platform
+# releases unless an operator explicitly requests the Zoom check.
+ZOOM_REQUIRED="${ZOOM_REQUIRED:-false}"
+case "$ZOOM_REQUIRED" in
+  true|false) ;;
+  *) echo "ERROR: ZOOM_REQUIRED must be true or false" >&2; exit 2 ;;
+esac
+
 DEPLOY_VERIFICATION_MODE="${DEPLOY_VERIFICATION_MODE:-full}"
 case "$DEPLOY_VERIFICATION_MODE" in
   full|cutover-stage) ;;
@@ -338,10 +347,10 @@ echo "==> Verifying that no existing table or tenant count decreased"
 COMPOSE_FILES="$compose_guard_files" BACKUP_DIR=backups bash scripts/prod_data_guard.sh post "$data_guard_counts" "$litellm_data_guard_counts"
 
 echo "==> Running release verification gates"
-zoom_required=true
+zoom_required="$ZOOM_REQUIRED"
 if [[ "$BOOTSTRAP_MODE" == true ]]; then
   zoom_required=false
-  echo "WARNING: BOOTSTRAP MODE — deployment is NOT GO-LIVE until tenant Zoom setup and a strict production check pass." >&2
+  echo "WARNING: BOOTSTRAP MODE — deployment is NOT GO-LIVE until the full platform production check passes." >&2
 fi
 if [[ "$DEPLOY_VERIFICATION_MODE" == cutover-stage ]]; then
   echo "WARNING: CUTOVER STAGE — the IONOS origin is not public production until the full post-DNS production check passes." >&2

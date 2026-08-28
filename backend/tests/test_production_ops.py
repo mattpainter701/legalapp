@@ -1831,6 +1831,10 @@ def test_zoom_production_gate_is_independent_of_commercial_plan() -> None:
         encoding="utf-8"
     )
     env_example = (ROOT / ".env.prod.example").read_text(encoding="utf-8")
+    acceptance = (ROOT / "scripts" / "production_acceptance.sh").read_text(
+        encoding="utf-8"
+    )
+    deploy = (ROOT / "scripts" / "deploy_prod.sh").read_text(encoding="utf-8")
 
     for source in (preflight, production_check, env_example):
         assert "ZOOM_REQUIRED_TENANT_PLAN" not in source
@@ -1843,6 +1847,25 @@ def test_zoom_production_gate_is_independent_of_commercial_plan() -> None:
     assert "phone:read:list_call_logs:admin" in production_check
     assert "phone:read:call_log:admin" in production_check
     assert '--tenant-id "$ZOOM_REQUIRED_TENANT_ID"' in production_check
+    assert 'ZOOM_REQUIRED="${ZOOM_REQUIRED:-false}"' in production_check
+    assert "ZOOM_REQUIRED=false" in acceptance
+    assert 'ZOOM_REQUIRED="${ZOOM_REQUIRED:-false}"' in deploy
+    assert 'zoom_required="$ZOOM_REQUIRED"' in deploy
+
+
+def test_production_preflight_allows_zoom_selector_to_be_omitted(
+    tmp_path: Path,
+) -> None:
+    env_text = "\n".join(
+        line
+        for line in _production_env().splitlines()
+        if not line.startswith("ZOOM_REQUIRED_TENANT_ID=")
+    )
+    result = _run_preflight(tmp_path, env_text + "\n")
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, output
+    assert "optional Zoom provider gate cannot be requested" in output
 
 
 def test_production_guards_cover_litellm_data_and_schema() -> None:
