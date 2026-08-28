@@ -22,7 +22,10 @@ inconsistent integrations:
 5. use a firm's existing SharePoint entitlement for governed matter
    workspaces without making one unmanaged site per matter the default; and
 6. provide consented, auditable customer alerts and two-way SMS communication
-   in the same matter timeline as email, calls, meetings, and portal activity.
+   in the same matter timeline as email, calls, meetings, and portal activity;
+   and
+7. watch approved public court case pages for reviewable docket changes when a
+   court offers no suitable API, feed, or notification service.
 
 The first commercial wedge should be the Microsoft **LawHand Matter Agent** and
 the controlled-trial control plane. The same Workspace MCP and review-first
@@ -41,6 +44,10 @@ contracts can later power a Google Workspace add-on and Gemini Enterprise agent.
 - SMS is a client-service channel, not an emergency service or marketing blast
   tool. Consent, quiet hours, opt-out, sender registration, delivery state, and
   matter matching are enforced independently of any generated message text.
+- Court monitoring is source-specific and deny-by-default, not a generic URL
+  scraper. LawHand does not bypass authentication, CAPTCHA, fees, technical
+  controls, robots directives, or court terms, and never converts a detected
+  date or filing into a legal deadline or external action automatically.
 - Trial restrictions are enforced by APIs and durable policy. Hiding a route or
   button is presentation, not authorization.
 - Tenant provisioning and legacy import are platform-operator functions. They
@@ -60,6 +67,7 @@ contracts can later power a Google Workspace add-on and Gemini Enterprise agent.
 | Operator onboarding | scoped platform bearer tokens, tenant listing/update, onboarding wizard, external import staging, Tabs3 bundle validation | no operator tenant-create contract, onboarding saga, generic client/matter import contract, invitation handoff, or idempotent reconciliation/promotion orchestration |
 | SharePoint | tenant SharePoint site/library binding, root and matter folder creation, durable drive/item IDs, upload/delete/sync/search | no tenant-installed site template, matter landing page, metadata/content types, governed permissions recipe, template version tracking, or dedicated-site exception workflow |
 | SMS | shared `CommunicationLog`, matter/client timelines, normalized client phone fields, preferred contact method/window/timezone, and a basic `sms_opt_in` flag | no consent provenance, provider/number ownership, registered sender, signed inbound/status callbacks, delivery reconciliation, STOP/HELP handling, quiet hours, two-way thread, templates, or review-first agent proposal |
+| Court docket watch | CourtListener research corpus/tools, durable tenant-scoped jobs, matter timeline, key dates/tasks, email and Teams notifications, and an existing internal deadline reminder named `docket-watcher` | no case-specific source registry, public-page adapter, canonical URL binding, polite fetch policy, source snapshots, semantic diff, parser-health monitoring, change review, or customer-facing court alert; the existing job name could falsely imply live court coverage |
 
 ## 1. Google account and Gemini strategy
 
@@ -526,6 +534,155 @@ fallback.
   campaign registration, retention, quiet hours, and customer responsibilities
   before general availability.
 
+## 7. Court Docket Watch for legacy public case pages
+
+### Decision: source adapters, not arbitrary scraping
+
+Add a **Court Docket Watch** panel to a matter. Staff select an approved court,
+enter or confirm the case number and caption, and bind the matter to a verified
+canonical case URL. LawHand periodically checks that source, detects meaningful
+docket changes, preserves evidence, and creates a review item. It does not treat
+the web page as authoritative LawHand data until a user reviews the candidate.
+
+This is distinct from the existing scheduler job named `docket-watcher`, which
+only scans LawHand's own `Matter.key_dates` for approaching dates. Before launch,
+rename that customer-facing label to **LawHand Deadline Reminder** or otherwise
+make the distinction explicit. A green internal reminder must never imply that
+the associated court page was checked successfully.
+
+Use this source preference order:
+
+1. an official court API, feed, email notification, or webhook;
+2. CourtListener/RECAP alert or API coverage under an appropriate membership or
+   commercial agreement;
+3. a reviewed adapter for a stable, public, unauthenticated court case page; and
+4. manual document/page import when the source does not permit safe automation.
+
+CourtListener supports RECAP search alerts for new cases and filings and can
+deliver webhook events, subject to membership or commercial throttles. That is
+preferable to polling where its coverage is sufficient.
+[CourtListener alert API](https://wiki.free.law/c/courtlistener/help/api/rest/v4/alerts).
+
+PACER is not an HTML-adapter target. PACER charges for access and its policy
+expressly identifies repeated automated access to non-fee portions as misuse.
+Use an approved provider/RECAP route or a deliberate user-driven PACER workflow,
+with cost and license handling, instead of background page polling.
+[PACER policy and procedures](https://pacer.uscourts.gov/policy-procedures),
+[PACER access and fees](https://pacer.uscourts.gov/).
+
+### Reviewed source registry
+
+No customer-supplied URL is fetched merely because it looks like a court host.
+Each active source requires a versioned registry entry containing:
+
+- jurisdiction, court, official domain and allowed path pattern;
+- access method, canonical URL rules, parser/adapter version, and responsible
+  owner;
+- documented terms, robots behavior, attribution, data classes, retention,
+  expected update cadence, and approved polling ceiling;
+- whether authentication, CAPTCHA, fees, or restricted records can appear;
+- parser fixtures, live canary, last compliance and layout review, and support
+  state; and
+- court-wide and adapter-version kill switches.
+
+Terms and permission are source-specific. A public page is not automatically an
+approved automated source. Compliance counsel and the product owner approve the
+first adapter for each court, and the registry pauses rather than silently
+changing behavior when terms, access controls, or page structure change.
+
+### Matter binding and fetch safety
+
+The matter panel records the registry source, canonical URL, case number,
+caption, court, monitor frequency, selected event categories, creator, and
+verification evidence. Exact parsing or staff confirmation must show that the
+page represents the intended matter; a URL alone is insufficient.
+
+The fetcher is a dedicated server-side service, isolated from model/tool
+execution. It must:
+
+- allow only registered HTTPS hosts and paths; validate every DNS resolution,
+  IP address, port, and redirect; deny private, loopback, link-local, metadata,
+  and non-HTTP destinations;
+- use a descriptive user agent/contact, hard response-size and time limits,
+  per-host concurrency and rate limits, jitter, exponential backoff, conditional
+  requests where supported, and a circuit breaker for 403/429/5xx responses;
+- stop on login, CAPTCHA, paywall, unexpected download, redirect outside the
+  adapter allowlist, access restriction, or material layout mismatch;
+- fetch once per approved public source URL where safe, then fan out the same
+  source result to subscribed tenants without exposing who else watches it; and
+- keep page text untrusted. Court content cannot issue agent instructions,
+  choose tools, change a matter, or expand access.
+
+Polling frequency is a product and source-policy setting, not a user-controlled
+free-form interval. Add per-tenant watch count, per-source fetch, bytes/storage,
+alert, and optional AI quotas. Do deterministic parsing and hashing on every
+fetch; invoke AI only on a material candidate and only after reserving its normal
+LawHand AI budget.
+
+### Evidence and semantic change review
+
+Store a tenant-isolated fetch receipt with source, canonical URL, requested and
+final URL, checked/received timestamps, status, safe response metadata, content
+hash, normalized docket hash, adapter/parser version, and failure category.
+Retention of raw page bodies or screenshots is configurable and minimized, but
+the normalized before/after evidence needed to explain an alert is immutable.
+
+Adapters extract stable docket concepts rather than diffing the entire page:
+
+- docket entry number, filed/entered date, title/type, filer, and document link;
+- hearing/event date and status;
+- case status or disposition;
+- judge or assignment change; and
+- source correction, withdrawal, or removal when the source exposes it.
+
+Reordered rows, page navigation, timestamps, banners, advertisements, CSRF
+tokens, and other chrome must not create alerts. Each meaningful delta becomes
+an idempotent `CourtDocketChangeCandidate` with exact before/after fields, source
+link, confidence/parser status, and first/last seen timestamps. A material
+unparseable change pauses the watch and raises an adapter-health alert instead
+of pretending that nothing changed.
+
+Review can promote a confirmed event into the matter timeline and may separately
+open the typed key-date/task workflow planned in `TC-03`/`TC-04`. A scraped or
+model-inferred date never becomes a deadline, calendar event, filing action,
+message, or completed task automatically. Filing and document-download actions
+remain outside the monitor.
+
+### Alerts and customer experience
+
+- Show `healthy`, `delayed`, `source changed`, `paused`, or `failed` status with
+  last attempted check, last successful check, and last semantic change.
+- Send in-app/email notifications for new review items according to tenant and
+  user preferences. SMS uses the consent and quiet-hour controls in section 6,
+  contains minimal content, and links to authenticated LawHand review.
+- Deduplicate notifications by watch, normalized change, channel, recipient, and
+  template version. Retry delivery without recreating the underlying candidate.
+- Never send a “no change” assurance after a failed, blocked, stale, or
+  unparseable fetch. Surface source freshness honestly.
+- Permit pause, resume, frequency reduction, source replacement, and removal
+  without deleting the matter's reviewed event history.
+
+### Court Docket Watch acceptance gates
+
+- Start with two expressly approved, unauthenticated public court sources plus a
+  CourtListener alert-path proof; record fixtures and run low-frequency live
+  canaries before accepting customer watches.
+- Test tenant isolation, unauthorized matter access, canonicalization, DNS
+  rebinding, private/link-local/metadata destinations, hostile redirects,
+  oversized/slow responses, active content, and prompt injection in page text.
+- Test unchanged, reordered, inserted, edited, withdrawn, and duplicated docket
+  rows; multiple dates/timezones; wrong/stale case pages; and source pages that
+  return login, CAPTCHA, 403, 404, 429, 5xx, or new markup.
+- Prove fetch and alert idempotency, missed-run reconciliation, bounded backlog,
+  source-wide pause, parser rollback, subscription removal, retention, and no
+  cross-tenant watcher disclosure.
+- Compare live candidates against a clerk/source-confirmed sample during a
+  time-boxed pilot. Record missed-change rate, false-positive rate, change-to-alert
+  latency, parser failures, stale watches, 403/429 rate, bytes/storage, AI use,
+  review time, and promoted/rejected candidates.
+- Complete court-by-court terms/privacy/compliance review, accessibility review,
+  incident response, and an operational owner/runbook before general availability.
+
 ## Delivery sequence
 
 ### Phase 0 — control plane and proof harness
@@ -536,6 +693,8 @@ fallback.
 3. Operator `platform:provision` scope and idempotent tenant creation.
 4. SMS provider ownership decision, consent schema, campaign/sender readiness,
    and communications/compliance review.
+5. Court-source registry, URL/SSRF boundary, source-policy review, and recorded
+   adapter fixtures before any live polling.
 
 ### Phase 1 — Microsoft customer wedge
 
@@ -545,6 +704,8 @@ fallback.
 4. Use the controlled extended trial for the pilot tenant.
 5. Ship signed messaging callbacks, delivery reconciliation, versioned customer
    alerts, consent/quiet-hour enforcement, and a staff-reviewed send action.
+6. Rename or relabel the current internal `docket-watcher` so it cannot imply
+   live court coverage.
 
 ### Phase 2 — repeatable migration and conversion
 
@@ -554,6 +715,8 @@ fallback.
    evidence.
 4. Add the two-way SMS thread, ambiguous inbound review queue, and review-first
    `propose_client_sms` agent capability.
+5. Pilot two approved public Court Docket Watch adapters and CourtListener alert
+   integration; keep every detected event in review.
 
 ### Phase 3 — Google channel
 
@@ -571,6 +734,9 @@ Possible packaging:
   offered only where the customer licenses and governs it;
 - **LawHand Client Communications:** consented customer alerts and two-way SMS
   with delivery usage billed or limited separately from AI; and
+- **LawHand Court Docket Watch:** a limited number of approved court watches,
+  source checks, evidence retention, and change alerts, with paid/provider access
+  and optional AI usage accounted separately; and
 - **Migration Services:** operator-provisioned tenant plus reconciled import and
   customer sign-off.
 
@@ -585,6 +751,9 @@ Do not set pricing until pilot usage is measured. Record:
 - SharePoint provisioning failures and permission drift;
 - SMS delivery/undelivered rates, opt-outs, replies, segments, provider cost,
   response time, and complaints; and
+- Court Docket Watch source coverage, freshness, missed/false change rate,
+  change-to-alert latency, parser health, 403/429 rate, review disposition,
+  bytes/storage, and cost per active watch; and
 - trial activation, qualified usage, expiry, extension, and paid conversion.
 
 ## Explicit non-goals for the first implementation PRs
@@ -596,6 +765,9 @@ Do not set pricing until pilot usage is measured. Record:
 - one SharePoint site per routine matter;
 - marketing campaigns, mass SMS, MMS/document delivery, emergency messaging, or
   agent-autonomous customer communication;
+- arbitrary website monitoring, automated PACER polling, authentication/CAPTCHA/
+  paywall bypass, sealed or restricted record access, filing, document purchase,
+  or treating a detected docket date as a calculated legal deadline;
 - broad mailbox ingestion or a second shadow matter database in Microsoft or
   Google; and
 - enabling public signup before expiry, conversion, quota, and retention are

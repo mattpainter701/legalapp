@@ -7,7 +7,8 @@ keeping LawHand authoritative for matter identity, permissions, review, audit,
 and deterministic execution; make extended evaluations enforceable; provide an
 operator-only tenant/import path; and provision governed SharePoint matter
 workspaces in the customer's tenant. Add consented customer alerts and two-way
-SMS to the same audited matter communication timeline.
+SMS to the same audited matter communication timeline. Add a review-first Court
+Docket Watch for approved public case pages that lack a usable API or alert feed.
 
 Architecture, product decisions, current-state evidence, vendor constraints,
 delivery order, and acceptance gates:
@@ -123,6 +124,39 @@ delivery order, and acceptance gates:
       recipient-change, delivery-cost, retention, telemetry, and counsel-review
       release gates; keep group, marketing, mass, MMS, and emergency messaging
       out of the first release.
+
+### P1/P2 — Court Docket Watch for legacy public case pages
+
+- [ ] `ECO-30` Create a reviewed court-source registry and adapter contract that
+      prefers official APIs, RSS/email alerts, or CourtListener/RECAP before HTML;
+      record court-specific terms, access method, polling ceiling, data classes,
+      attribution, retention, owner, approval, and kill switch before activation.
+- [ ] `ECO-31` Add a matter Court Docket Watch panel for an approved jurisdiction,
+      court, case number, caption, and verified canonical case URL; require an
+      exact or staff-confirmed matter/case match and show status, last successful
+      check, last semantic change, source link, and parser health.
+- [ ] `ECO-32` Build a server-side, deny-by-default fetch scheduler with an
+      allowlisted host/path adapter, HTTPS/DNS/IP/redirect SSRF defenses, per-host
+      rate limits, conditional requests, jitter, backoff, circuit breakers, hard
+      byte/time limits, and automatic pause on login, CAPTCHA, block, fee, terms,
+      or unexpected-layout responses; do not automate PACER page polling.
+- [ ] `ECO-33` Store tenant-isolated, provenance-bearing fetch receipts and
+      versioned normalized docket snapshots; produce idempotent semantic change
+      candidates with before/after evidence, content hashes, parser version, and
+      immutable source timestamps while suppressing reorder and page-chrome noise.
+- [ ] `ECO-34` Route new filings, hearing/status changes, assignments, and other
+      detected events to human review before matter-timeline promotion; reuse the
+      typed key-date/task workflow and never turn a scraped date into a deadline,
+      calendar event, filing action, or client communication automatically.
+- [ ] `ECO-35` Deliver tenant-configured in-app/email/SMS alerts only after a
+      semantic change candidate exists; use minimal SMS content and portal links,
+      deterministic diffing before optional AI summarization, and separate watch,
+      fetch, storage, alert, and AI budgets with duplicate suppression.
+- [ ] `ECO-36` Pilot two approved public court adapters plus the CourtListener
+      alert path against recorded fixtures and live canaries; pass isolation,
+      SSRF, prompt-injection, 403/429/5xx, layout drift, duplicate/reordered row,
+      stale/wrong case, sealed/restricted content, missed-change reconciliation,
+      accessibility, counsel, telemetry, rollback, and source-revocation gates.
 
 ## BK27 — Task, Correspondence, Intake, and Portal Follow-through — 2026-08-26
 
