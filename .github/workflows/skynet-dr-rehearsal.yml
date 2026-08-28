@@ -1,0 +1,49 @@
+name: Skynet DR restore rehearsal
+
+on:
+  schedule:
+    - cron: "17 8 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: law-hand-skynet-dr-rehearsal
+  cancel-in-progress: false
+
+jobs:
+  rehearse:
+    if: vars.LAWHAND_SKYNET_DR_ENABLED == 'true'
+    runs-on: [self-hosted, Linux, X64, skynet, lawhand-prod]
+    environment: skynet-disaster-recovery
+    timeout-minutes: 60
+    steps:
+      - name: Run isolated restore rehearsal from pinned host checkout
+        id: restore
+        continue-on-error: true
+        run: sudo -n /usr/local/sbin/lawhand-dr-rehearsal
+
+      - name: Reconcile DR alert issue
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          RESTORE_OUTCOME: ${{ steps.restore.outcome }}
+        with:
+          script: |
+            const title = '[dr-alert] Skynet restore rehearsal failure';
+            const failed = process.env.RESTORE_OUTCOME !== 'success';
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo, state: 'open', per_page: 100,
+            });
+            const existing = issues.find((issue) => issue.title === title);
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            if (failed && existing) {
+              await github.rest.issues.update({ owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number, body: `The latest isolated DR restore rehearsal failed.\n\nRun: ${runUrl}` });
+            } else if (failed) {
+              await github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title, body: `The isolated DR restore rehearsal failed.\n\nRun: ${runUrl}` });
+            } else if (existing) {
+              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number, body: `Restore rehearsal recovered: ${runUrl}` });
+              await github.rest.issues.update({ owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number, state: 'closed' });
+            }
+            if (failed) core.setFailed('Skynet DR restore rehearsal failed.');

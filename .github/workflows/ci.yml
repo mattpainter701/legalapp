@@ -142,6 +142,9 @@ jobs:
       - name: Render and verify host disk systemd units
         run: bash scripts/test_host_disk_systemd_units.sh
 
+      - name: Verify isolated Skynet dev1 topology
+        run: bash scripts/test_dev1_topology.sh
+
       - name: Validate production TLS and certificate scripts
         run: >-
           bash -n
@@ -151,6 +154,11 @@ jobs:
           scripts/prod_env_preflight.sh
           scripts/production_check.sh
           nginx/init-letsencrypt.sh
+          scripts/deploy_dev1.sh
+          scripts/install_dev1_deploy_entrypoint.sh
+          scripts/skynet_dr_rehearsal.sh
+          scripts/install_skynet_dr_services.sh
+          scripts/test_dev1_topology.sh
           nginx/renew-cert.sh
 
   # ─── Backend: Tests ─────────────────────────────────────────────────────────

@@ -136,10 +136,10 @@ def test_ci_exposes_named_tenant_data_safety_gate() -> None:
         encoding="utf-8"
     )
     assert "refs/tags/production:refs/tags/production" in workflow_text
-    assert 'MIGRATION_DIFF_BASE=$migration_diff_base' in workflow_text
+    assert "MIGRATION_DIFF_BASE=$migration_diff_base" in workflow_text
 
 
-def test_production_deploy_pins_commit_and_requires_its_ci_run() -> None:
+def test_retired_skynet_workflow_is_verification_only_and_pins_commit() -> None:
     deploy = (ROOT / ".github" / "workflows" / "deploy.yml").read_text(encoding="utf-8")
     host_entrypoint = (ROOT / "scripts" / "lawhand-deploy-from-github").read_text(
         encoding="utf-8"
@@ -148,16 +148,15 @@ def test_production_deploy_pins_commit_and_requires_its_ci_run() -> None:
         encoding="utf-8"
     )
 
-    assert "Require successful CI for exact release commit" in deploy
-    assert '[[ "$RELEASE_REF" != refs/heads/main ]]' in deploy
-    assert 'head_sha="$RELEASE_SHA"' in deploy
-    assert '[[ "$conclusion" != success ]]' in deploy
+    assert "Verify retired Skynet production runner" in deploy
+    assert "Runner verification must be dispatched from main" in deploy
+    assert "Pin the exact commit" in deploy
     assert "runs-on: [self-hosted, linux, x64, skynet, lawhand-prod]" in deploy
-    assert "environment:" in deploy
     assert "actions/checkout" not in deploy
-    assert "sudo -n /usr/local/sbin/lawhand-deploy-from-github" in deploy
-    assert "Advance production release marker" in deploy
-    assert "git/refs/tags/production" in deploy
+    assert 'lawhand-deploy-from-github verify "$RELEASE_SHA"' in deploy
+    assert "lawhand-deploy-from-github deploy" not in deploy
+    assert "Advance production release marker" not in deploy
+    assert "git/refs/tags/production" not in deploy
 
     assert "rev-parse 'origin/main^{commit}'" in host_entrypoint
     assert '[[ "$requested_sha" == "$main_sha" ]]' in host_entrypoint
@@ -165,7 +164,10 @@ def test_production_deploy_pins_commit_and_requires_its_ci_run() -> None:
     assert '[[ "$checked_out_sha" == "$requested_sha" ]]' in host_entrypoint
     assert 'readonly DEPLOY_UID="$(id -u "$DEPLOY_USER")"' in host_entrypoint
     assert 'XDG_RUNTIME_DIR="$DEPLOY_RUNTIME_DIR"' in host_entrypoint
-    assert 'DBUS_SESSION_BUS_ADDRESS="unix:path=$DEPLOY_RUNTIME_DIR/bus"' in host_entrypoint
+    assert (
+        'DBUS_SESSION_BUS_ADDRESS="unix:path=$DEPLOY_RUNTIME_DIR/bus"'
+        in host_entrypoint
+    )
 
     # ENV_FILE is the child preflight's public input. Keeping a readonly local
     # with that name makes Bash reject the per-command environment assignment.
@@ -175,19 +177,22 @@ def test_production_deploy_pins_commit_and_requires_its_ci_run() -> None:
 
 
 def test_production_acceptance_preflights_root_entrypoint_capability() -> None:
-    workflow = (
-        ROOT / ".github" / "workflows" / "production-acceptance.yml"
-    ).read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "production-acceptance.yml").read_text(
+        encoding="utf-8"
+    )
     entrypoint = (ROOT / "scripts" / "lawhand-deploy-from-github").read_text(
         encoding="utf-8"
     )
 
     assert "Preflight root-owned acceptance entrypoint" in workflow
-    assert "if ! test -f \"$entrypoint\" || ! test -x \"$entrypoint\"" in workflow
+    assert 'if ! test -f "$entrypoint" || ! test -x "$entrypoint"' in workflow
     assert "if ! stat -c '%U:%G %a' \"$entrypoint\"" in workflow
     assert "root:root 755" in workflow
     assert "if ! grep -Fqx '  verify|deploy|accept) ;;' \"$entrypoint\"" in workflow
-    assert "Operator action: install the versioned scripts/lawhand-deploy-from-github" in workflow
+    assert (
+        "Operator action: install the versioned scripts/lawhand-deploy-from-github"
+        in workflow
+    )
     assert "sudo -n /usr/local/sbin/lawhand-deploy-from-github accept" in workflow
     assert "  verify|deploy|accept) ;;" in entrypoint
 
