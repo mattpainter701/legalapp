@@ -1899,6 +1899,13 @@ def test_skynet_installers_separate_runner_from_runtime_owner() -> None:
     dr = (ROOT / "scripts" / "install_skynet_dr_services.sh").read_text(
         encoding="utf-8"
     )
+    deploy = (ROOT / "scripts" / "deploy_dev1.sh").read_text(encoding="utf-8")
+    assert "host_ip: 127.0.0.1" in deploy
+    assert 'published: "18443"' in deploy
+    assert 'published: "443"' in deploy
+    assert "127.0.0.1:18443" not in deploy
+    assert "127\\.0\\.0\\.1:443" not in deploy
+
     for installer in (dev1, dr):
         assert 'deploy_user="${DEPLOY_USER:-varta}"' in installer
         assert 'runner_user="${RUNNER_USER:-lawhand-runner}"' in installer
