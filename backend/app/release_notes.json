@@ -2,6 +2,27 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.28.5",
+      "version": "2026.08.28.5",
+      "title": "Zoom Phone setup now shows exactly what needs attention",
+      "published_at": "2026-08-28",
+      "summary": "Tenant administrators can follow Zoom Phone setup stage by stage and recover from authorization failures without leaving the integration panel.",
+      "highlights": [
+        {
+          "title": "See each setup stage",
+          "description": "The Zoom panel separately tracks saved app credentials, account authorization, Phone API permissions, and verified real-time call delivery."
+        },
+        {
+          "title": "Recover from the actual authorization problem",
+          "description": "Zoom authorization returns to the integration panel with specific guidance for rejected credentials, expired requests, missing permissions, and account mismatches."
+        },
+        {
+          "title": "Know when reconnecting is required",
+          "description": "Replacing an OAuth client pair now clearly reports that the previous grant was disconnected and directs the administrator to authorize the current app."
+        }
+      ]
+    },
+    {
       "id": "2026.08.28.4",
       "version": "2026.08.28.4",
       "title": "Client portal payments and durable sign-in",

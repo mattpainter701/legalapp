@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### Fixed
+- **Zoom Phone setup reports each independent connection stage:** tenant
+  administrators now return from Phone OAuth to the Zoom integration panel,
+  see actionable recovery for rejected credentials and other safe provider
+  failures, and can distinguish saved app credentials, authorized API access,
+  verified scopes, and real-time webhook proof. Replacing the OAuth pair
+  explicitly reports that the old grant was invalidated and requires a new
+  LawHand-initiated authorization. Provider errors are logged only as bounded
+  error codes without raw response details.
 - **Zoom Phone setup prevents state-less Marketplace authorization:** the
   tenant admin panel now lists the exact account call-history and call-detail
   granular scopes, their Zoom Phone > Call Logs location, and a copy action.
