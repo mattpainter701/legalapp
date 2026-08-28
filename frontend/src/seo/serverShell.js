@@ -72,7 +72,7 @@ const MARKETING_SHELLS = Object.freeze({
     sections: [
       { heading: 'Research-only boundary', body: 'Search approved public legal authority without exposing workspace matters, documents, tasks, or client files.' },
       { heading: 'OAuth or API token', body: 'Hosted ChatGPT and Claude clients use OAuth 2.1. Header-capable API clients use a scoped LawHand Research token.' },
-      { heading: 'Private preview', body: 'Public access remains gated while production release checks are completed. The intended public price is $0.45 per tool call.' },
+      { heading: 'Available with a LawHand account', body: 'Enabled customers can use OAuth or managed Research API keys at $0.45 per successful tool call.' },
     ],
   },
   '/request-demo': {
@@ -86,10 +86,10 @@ const MARKETING_SHELLS = Object.freeze({
   },
   '/pricing': {
     heading: 'One clear platform price. Controlled expansion.',
-    lead: 'LawHand is $89 per user per month, billed annually. Begin with the full platform, add specialized workflows deliberately, and evaluate MCP through the private preview.',
+    lead: 'LawHand is $89 per user per month, billed annually. Research MCP is available to enabled customers at $0.45 per successful tool call.',
     sections: [
       { heading: 'LawHand platform', body: 'The core seat includes the firm workspace, matter-aware AI chat, firm operations, source-aware workflows, and role-aware access within the licensed scope.' },
-      { heading: 'LawHand MCP', body: 'The intended public price is $0.45 per tool call. MCP remains in private preview until its public release gates are complete.' },
+      { heading: 'LawHand Research MCP', body: 'Enabled customers pay $0.45 per successful tool call, with administrator-managed keys, budgets, expiration, and usage visibility.' },
       { heading: 'Call Intake', body: 'Firms may begin with a focused caller-intake and task workflow, with optional verified Zoom Phone integration.' },
     ],
   },

@@ -33,7 +33,7 @@ export const PLATFORM_PRICE_USD = '89'
 export const MCP_TOOL_CALL_PRICE_USD = '0.45'
 
 // Bumped whenever public marketing copy changes; feeds sitemap <lastmod>.
-export const PUBLIC_CONTENT_LASTMOD = '2026-08-26'
+export const PUBLIC_CONTENT_LASTMOD = '2026-08-27'
 
 export const PRICING_FAQ = Object.freeze([
   Object.freeze([
@@ -41,8 +41,8 @@ export const PRICING_FAQ = Object.freeze([
     'The LawHand platform seat covers the firm workspace and its licensed modules. Enabled integrations, onboarding scope, premium model usage, and specialized service commitments are confirmed in your order.',
   ]),
   Object.freeze([
-    'Is MCP generally available?',
-    `Not yet. LawHand Research MCP is in private preview while its public product, billing, monitoring, and recovery gates are completed. It is research-only, with no workspace or matter access. The intended public price is $${MCP_TOOL_CALL_PRICE_USD} per tool call.`,
+    'Is Research MCP available?',
+    `Yes. LawHand Research MCP is available to LawHand customers with Research billing enabled. It is research-only, with no workspace or matter access, and costs $${MCP_TOOL_CALL_PRICE_USD} per successful tool call.`,
   ]),
   Object.freeze([
     'Do administrators count as licensed users?',
@@ -85,7 +85,7 @@ export const HOME_FAQ = Object.freeze([
   ]),
   Object.freeze([
     'What is LawHand Research MCP?',
-    `LawHand Research MCP is a Model Context Protocol server that lets an approved assistant such as ChatGPT or Claude, or an API client, retrieve public legal authority through a scoped credential. It is research-only and cannot reach LawHand matters, contacts, tasks, documents, templates, or firm configuration. It is in private preview at an intended public price of $${MCP_TOOL_CALL_PRICE_USD} per tool call.`,
+    `LawHand Research MCP is a Model Context Protocol server that lets an approved assistant such as ChatGPT or Claude, or an API client, retrieve public legal authority through a scoped credential. It is research-only and cannot reach LawHand matters, contacts, tasks, documents, templates, or firm configuration. It is available to enabled LawHand customers at $${MCP_TOOL_CALL_PRICE_USD} per successful tool call.`,
   ]),
   Object.freeze([
     'Can an AI assistant reach our matters through MCP?',
@@ -168,7 +168,7 @@ export const PUBLIC_ROUTE_META = Object.freeze({
   '/pricing': {
     title: 'Pricing | LawHand Legal Automation Platform',
     description:
-      `LawHand is $${PLATFORM_PRICE_USD} per user per month billed annually. LawHand MCP is in private preview at an intended public price of $${MCP_TOOL_CALL_PRICE_USD} per tool call.`,
+      `LawHand is $${PLATFORM_PRICE_USD} per user per month billed annually. LawHand Research MCP is $${MCP_TOOL_CALL_PRICE_USD} per successful tool call for enabled customers.`,
     canonicalPath: '/pricing',
     indexable: true,
     priority: '0.9',
