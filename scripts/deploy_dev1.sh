@@ -5,6 +5,7 @@ umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(dirname "$SCRIPT_DIR")"
+cd "$APP_DIR"
 ENV_FILE="${DEV1_ENV_FILE:-/home/varta/.config/lawhand/dev1.env}"
 COMPOSE_PROJECT_NAME="law-hand-dev1"
 COMPOSE_FILES=(
