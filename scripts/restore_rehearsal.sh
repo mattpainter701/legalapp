@@ -13,6 +13,21 @@ command -v restic >/dev/null || { echo "restic is required" >&2; exit 2; }
 command -v docker >/dev/null || { echo "docker is required" >&2; exit 2; }
 command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 2; }
 
+wait_for_final_postgres() {
+  local container="$1" database="$2"
+  for _ in $(seq 1 30); do
+    if docker exec "$container" sh -ec \
+        '[ "$(cat /proc/1/comm)" = postgres ]' >/dev/null 2>&1 &&
+       docker exec "$container" pg_isready -U postgres -d "$database" \
+        >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "PostgreSQL did not reach its final ready process in $container" >&2
+  return 1
+}
+
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/legalapp-restore.XXXXXX")"
 CONTAINER="legalapp-restore-$RANDOM-$$"
 LITELLM_CONTAINER="litellm-restore-$RANDOM-$$"
@@ -84,11 +99,7 @@ docker run -d --name "$CONTAINER" --network none \
   -e POSTGRES_PASSWORD="$PASSWORD" -e POSTGRES_DB=legalapp_restore \
   "$RESTORE_IMAGE" >/dev/null
 
-for _ in $(seq 1 30); do
-  docker exec "$CONTAINER" pg_isready -U postgres -d legalapp_restore >/dev/null 2>&1 && break
-  sleep 1
-done
-docker exec "$CONTAINER" pg_isready -U postgres -d legalapp_restore >/dev/null
+wait_for_final_postgres "$CONTAINER" legalapp_restore
 
 docker exec -i "$CONTAINER" pg_restore \
   -U postgres -d legalapp_restore --no-owner --no-acl --exit-on-error < "$BACKUP_FILE"
@@ -116,11 +127,7 @@ done < "$COUNTS_FILE"
 docker run -d --name "$LITELLM_CONTAINER" --network none \
   -e POSTGRES_PASSWORD="$PASSWORD" -e POSTGRES_DB=litellm_restore \
   "$LITELLM_RESTORE_IMAGE" >/dev/null
-for _ in $(seq 1 30); do
-  docker exec "$LITELLM_CONTAINER" pg_isready -U postgres -d litellm_restore >/dev/null 2>&1 && break
-  sleep 1
-done
-docker exec "$LITELLM_CONTAINER" pg_isready -U postgres -d litellm_restore >/dev/null
+wait_for_final_postgres "$LITELLM_CONTAINER" litellm_restore
 docker exec -i "$LITELLM_CONTAINER" pg_restore \
   -U postgres -d litellm_restore --no-owner --no-acl --exit-on-error < "$LITELLM_BACKUP_FILE"
 

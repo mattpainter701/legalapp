@@ -1874,6 +1874,11 @@ def test_production_guards_cover_litellm_data_and_schema() -> None:
     assert "escrow_has_value LITELLM_SALT_KEY" in restore
     assert "escrow_has_value TOKEN_ENCRYPTION_KEYS" in restore
     assert "isolated-clean-host-restore" in manual_restore
+    assert "wait_for_final_postgres" in restore
+    assert '[ "$(cat /proc/1/comm)" = postgres ]' in restore
+    assert restore.count('wait_for_final_postgres "$') == 2
+    assert "pg_isready" in restore
+    assert "pg_isready -U postgres -d legalapp_restore >/dev/null 2>&1 && break" not in restore
     assert "legalapp-restored.counts.tsv" in manual_restore
     assert "litellm-restored.counts.tsv" in manual_restore
     assert "upload_backup_artifact.py" in manual_restore
