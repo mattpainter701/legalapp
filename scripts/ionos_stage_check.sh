@@ -116,8 +116,32 @@ raise SystemExit(0 if p.get("commit") == os.environ["EXPECTED_COMMIT"] else 1)
 ' || { echo "FAIL: local IONOS version does not match the release" >&2; exit 1; }
 origin_get "$domain" / >/dev/null
 
+research_enabled="$(get_env MCP_PRODUCT_ENABLED)"
 research_status="$(origin_status "research.$domain" /api/mcp)"
-[[ "$research_status" == 404 ]] || { echo "FAIL: Research MCP must remain disabled during core cutover" >&2; exit 1; }
+case "$research_enabled" in
+  true)
+    [[ "$research_status" == 401 ]] || {
+      echo "FAIL: enabled Research MCP did not require authentication" >&2
+      exit 1
+    }
+    research_headers="$("${origin_curl[@]}" --dump-header - --output /dev/null \
+      -H "Host: research.$domain" "https://${origin_server_name}/api/mcp")"
+    printf '%s' "$research_headers" | grep -Eqi '^www-authenticate:[[:space:]]*Bearer' || {
+      echo "FAIL: enabled Research MCP did not advertise Bearer authentication" >&2
+      exit 1
+    }
+    ;;
+  false)
+    [[ "$research_status" == 404 ]] || {
+      echo "FAIL: disabled Research MCP did not fail closed" >&2
+      exit 1
+    }
+    ;;
+  *)
+    echo "FAIL: MCP_PRODUCT_ENABLED must be true or false" >&2
+    exit 1
+    ;;
+esac
 [[ "$(origin_status "research.$domain" /api/version)" == 404 ]] || { echo "FAIL: research hostname exposes the platform API" >&2; exit 1; }
 [[ "$(origin_status "mcp.$domain" /api/version)" == 404 ]] || { echo "FAIL: workspace MCP hostname exposes the platform API" >&2; exit 1; }
 

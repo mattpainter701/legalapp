@@ -1290,7 +1290,9 @@ def test_production_check_exercises_customer_llm_routes() -> None:
     assert "python -m app.services.llm_availability" in production_check
     assert '"${compose[@]}" exec -T backend' in production_check
     assert "timeout --kill-after=10s 140s" in production_check
-    assert 'for model in ("clarity-standard", "clarity-premium"):' not in production_check
+    assert (
+        'for model in ("clarity-standard", "clarity-premium"):' not in production_check
+    )
 
 
 def test_production_check_fails_closed_on_document_automation_integrity_gaps() -> None:
@@ -1732,7 +1734,13 @@ def test_ionos_stage_gate_is_private_exact_and_fail_closed() -> None:
     assert 'ipaddress.ip_network("100.64.0.0/10")' in stage
     assert "X-Clarity-Internal-Key" in stage
     assert "MCP_SERVER_URL.rstrip('/')}/api/mcp\"" in stage
-    assert "Research MCP must remain disabled" in stage
+    assert 'research_enabled="$(get_env MCP_PRODUCT_ENABLED)"' in stage
+    assert '[[ "$research_status" == 401 ]]' in stage
+    assert "enabled Research MCP did not require authentication" in stage
+    assert "enabled Research MCP did not advertise Bearer authentication" in stage
+    assert '[[ "$research_status" == 404 ]]' in stage
+    assert "disabled Research MCP did not fail closed" in stage
+    assert "MCP_PRODUCT_ENABLED must be true or false" in stage
     assert "IONOS_PUBLIC_CUTOVER=not-yet-approved" in stage
 
 
