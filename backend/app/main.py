@@ -30,11 +30,8 @@ from app.routers.mcp import router as mcp_router
 from app.routers.workspace_mcp_oauth import router as workspace_mcp_oauth_router
 from app.routers.research_mcp_oauth import router as research_mcp_oauth_router
 from app.routers.platform import router as platform_router
-<<<<<<< HEAD
 from app.routers.platform_compliance import router as platform_compliance_router
-=======
 from app.routers.platform_infrastructure import router as platform_infrastructure_router
->>>>>>> f8c6126c (feat: add Skynet dev and DR controls)
 from app.routers.plugins import router as plugins_router
 from app.routers.scheduler import router as scheduler_router
 from app.routers.dev import router as dev_router
@@ -404,11 +401,8 @@ app.include_router(admin_router, prefix="/api")
 app.include_router(billing_router, prefix="/api")
 app.include_router(mcp_router, prefix="/api")
 app.include_router(platform_router, prefix="/api")
-<<<<<<< HEAD
 app.include_router(platform_compliance_router, prefix="/api")
-=======
 app.include_router(platform_infrastructure_router, prefix="/api")
->>>>>>> f8c6126c (feat: add Skynet dev and DR controls)
 app.include_router(platform_llm_router, prefix="/api")
 app.include_router(platform_assistant_router, prefix="/api")
 # Dedicated plugin-subpath routers MUST be registered before the generic
