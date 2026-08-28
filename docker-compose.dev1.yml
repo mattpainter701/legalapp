@@ -77,6 +77,10 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
+    # Nginx resolves every declared upstream at startup. Keep the intentionally
+    # disabled Office route fail-closed without preventing the private edge.
+    extra_hosts:
+      - "office-addin=127.0.0.1"
     volumes:
       - ${DEV1_ORIGIN_TLS_HOST_DIR:?Set DEV1_ORIGIN_TLS_HOST_DIR}:/etc/nginx/ssl:ro
       - ${DEV1_WEBROOT_HOST_DIR:?Set DEV1_WEBROOT_HOST_DIR}:/var/www/certbot:ro
