@@ -180,21 +180,37 @@ def test_production_acceptance_preflights_root_entrypoint_capability() -> None:
     workflow = (ROOT / ".github" / "workflows" / "production-acceptance.yml").read_text(
         encoding="utf-8"
     )
-    entrypoint = (ROOT / "scripts" / "lawhand-deploy-from-github").read_text(
+    entrypoint = (ROOT / "scripts" / "lawhand-ionos-deploy-from-github").read_text(
         encoding="utf-8"
     )
 
+    assert "Run acceptance on IONOS" in workflow
+    assert "runs-on: [self-hosted, Linux, X64, ionos, lawhand-prod]" in workflow
+    assert "group: law-hand-ionos-production" in workflow
+    assert "release_sha is not a forward update from the production tag" in workflow
     assert "Preflight root-owned acceptance entrypoint" in workflow
     assert 'if ! test -f "$entrypoint" || ! test -x "$entrypoint"' in workflow
     assert "if ! stat -c '%U:%G %a' \"$entrypoint\"" in workflow
     assert "root:root 755" in workflow
-    assert "if ! grep -Fqx '  verify|deploy|accept) ;;' \"$entrypoint\"" in workflow
     assert (
-        "Operator action: install the versioned scripts/lawhand-deploy-from-github"
+        "if ! grep -Fqx '  verify|stage|deploy|accept) ;;' \"$entrypoint\""
         in workflow
     )
-    assert "sudo -n /usr/local/sbin/lawhand-deploy-from-github accept" in workflow
-    assert "  verify|deploy|accept) ;;" in entrypoint
+    assert (
+        "Operator action: install the versioned scripts/lawhand-ionos-deploy-from-github"
+        in workflow
+    )
+    assert (
+        "sudo -n /usr/local/sbin/lawhand-ionos-deploy-from-github accept"
+        in workflow
+    )
+    assert "Advance production release marker" in workflow
+    assert "needs: [release-gate, production]" in workflow
+    assert "contents: write" in workflow
+    assert "main moved during acceptance; production tag was not changed" in workflow
+    assert "production tag moved during acceptance" in workflow
+    assert "git/refs/tags/production" in workflow
+    assert "  verify|stage|deploy|accept) ;;" in entrypoint
 
 
 def test_ionos_candidate_uses_pinned_main_without_runner_checkout_or_release_tag() -> (
@@ -213,6 +229,8 @@ def test_ionos_candidate_uses_pinned_main_without_runner_checkout_or_release_tag
     assert "Require successful CI for mutation" in workflow
     assert "runs-on: [self-hosted, Linux, X64, ionos, lawhand-prod]" in workflow
     assert "environment:" in workflow and "ionos-production" in workflow
+    assert "- accept" not in workflow
+    assert "ACCEPT-IONOS-PRODUCTION" not in workflow
     assert "actions/checkout" not in workflow
     assert "git/refs/tags/production" not in workflow
     assert "sudo -n /usr/local/sbin/lawhand-ionos-deploy-from-github" in workflow

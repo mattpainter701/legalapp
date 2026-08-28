@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: law-hand-production
+  group: law-hand-ionos-production
   cancel-in-progress: false
 
 jobs:
@@ -23,6 +23,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       release_sha: ${{ steps.release.outputs.release_sha }}
+      recorded_sha: ${{ steps.release.outputs.recorded_sha }}
     steps:
       - name: Require the default branch
         env:
@@ -48,27 +49,32 @@ jobs:
             echo "::error::release_sha is not the current main commit"
             exit 1
           }
-          recorded_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/production" --jq '.object.sha')"
-          [[ "$recorded_sha" == "$RELEASE_SHA" ]] || {
-            echo "::error::production tag does not identify release_sha"
+          recorded_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/production" --jq '.sha')"
+          comparison_status="$(
+            gh api "repos/$GITHUB_REPOSITORY/compare/$recorded_sha...$RELEASE_SHA" \
+              --jq '.status'
+          )"
+          [[ "$comparison_status" == ahead || "$comparison_status" == identical ]] || {
+            echo "::error::release_sha is not a forward update from the production tag"
             exit 1
           }
           echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "recorded_sha=$recorded_sha" >> "$GITHUB_OUTPUT"
 
   production:
-    name: Run acceptance on Skynet
+    name: Run acceptance on IONOS
     needs: release-gate
-    runs-on: [self-hosted, linux, x64, skynet, lawhand-prod]
+    runs-on: [self-hosted, Linux, X64, ionos, lawhand-prod]
     environment:
-      name: production
+      name: ionos-production
       url: https://getlawhand.com
     timeout-minutes: 30
     steps:
       - name: Preflight root-owned acceptance entrypoint
         run: |
           set -Eeuo pipefail
-          entrypoint=/usr/local/sbin/lawhand-deploy-from-github
-          remediation='Operator action: install the versioned scripts/lawhand-deploy-from-github at /usr/local/sbin/lawhand-deploy-from-github as root (owner root:root, mode 0755), then rerun Production acceptance.'
+          entrypoint=/usr/local/sbin/lawhand-ionos-deploy-from-github
+          remediation='Operator action: install the versioned scripts/lawhand-ionos-deploy-from-github at /usr/local/sbin/lawhand-ionos-deploy-from-github as root (owner root:root, mode 0755), then rerun Production acceptance.'
 
           # These checks intentionally run without sudo. The file is
           # world-readable/executable at the required 0755 mode; the runner's
@@ -88,7 +94,7 @@ jobs:
             exit 1
           fi
 
-          if ! grep -Fqx '  verify|deploy|accept) ;;' "$entrypoint"; then
+          if ! grep -Fqx '  verify|stage|deploy|accept) ;;' "$entrypoint"; then
             echo "::error title=Acceptance operation unavailable::$entrypoint does not advertise the accept operation. $remediation"
             exit 1
           fi
@@ -97,7 +103,7 @@ jobs:
         env:
           RELEASE_SHA: ${{ needs.release-gate.outputs.release_sha }}
         run: |
-          sudo -n /usr/local/sbin/lawhand-deploy-from-github accept "$RELEASE_SHA"
+          sudo -n /usr/local/sbin/lawhand-ionos-deploy-from-github accept "$RELEASE_SHA"
 
       - name: Record acceptance summary
         if: always()
@@ -112,3 +118,40 @@ jobs:
             echo "- Site: https://getlawhand.com"
             echo "- Gate: strict host production check plus public health/readiness/version checks"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  record-release:
+    name: Advance production release marker
+    needs: [release-gate, production]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Move the production tag after successful acceptance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ needs.release-gate.outputs.release_sha }}
+          RECORDED_SHA: ${{ needs.release-gate.outputs.recorded_sha }}
+        run: |
+          set -Eeuo pipefail
+          main_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq '.sha')"
+          [[ "$main_sha" == "$RELEASE_SHA" ]] || {
+            echo "::error::main moved during acceptance; production tag was not changed"
+            exit 1
+          }
+          current_recorded_sha="$(
+            gh api "repos/$GITHUB_REPOSITORY/commits/production" --jq '.sha'
+          )"
+          [[ "$current_recorded_sha" == "$RECORDED_SHA" ]] || {
+            echo "::error::production tag moved during acceptance; refusing to overwrite it"
+            exit 1
+          }
+          gh api --method PATCH \
+            "repos/$GITHUB_REPOSITORY/git/refs/tags/production" \
+            -f sha="$RELEASE_SHA" \
+            -F force=true >/dev/null
+          recorded_sha="$(
+            gh api "repos/$GITHUB_REPOSITORY/commits/production" --jq '.sha'
+          )"
+          [[ "$recorded_sha" == "$RELEASE_SHA" ]]
+          echo "Production release marker advanced to $RELEASE_SHA" >> "$GITHUB_STEP_SUMMARY"

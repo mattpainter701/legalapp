@@ -7,9 +7,9 @@ The IONOS Memory Cube M is the reviewed first-customer core host. It is a
 stack with `docker-compose.cube-m.yml` layered over
 `docker-compose.hypervisor.yml`.
 
-This document is a cutover procedure, not evidence that cutover has happened.
-Until every gate below passes, Skynet remains the public production origin and
-the `production` Git tag continues to describe that public deployment.
+IONOS is the public production origin. This document preserves the original
+cutover evidence and defines the continuing release procedure. The `production`
+Git tag identifies the last IONOS revision that passed formal acceptance.
 
 The placement is intentionally split:
 
@@ -150,25 +150,28 @@ Use a scheduled maintenance window even before the first paying tenant.
    rerun `ionos_stage_check.sh`. Abort on a count decrease or checksum mismatch.
 5. Change only the apex, `www`, `mcp`, and `research` proxied CNAME targets from
    the old Tunnel to the new IONOS Tunnel. Preserve the final ingress catch-all.
-6. Run **Deploy IONOS candidate** with `operation=accept` and confirmation
-   `ACCEPT-IONOS-PRODUCTION`. Then run the scheduled public-health workflow and
-   verify exact `/api/version`, readiness, OAuth challenge/metadata, hostname
-   isolation, the configured Research 401/404 behavior, HSTS, and public TLS.
-7. Advance the `production` tag only after public acceptance identifies the
-   exact IONOS SHA. Update the normal production deployment and acceptance
-   workflows to the IONOS runner in the immediately following protected change.
+6. Run **Production acceptance** from `main` with the exact staged SHA. The
+   workflow runs the strict host and public gate on IONOS and advances the
+   `production` tag only after acceptance succeeds. Then run the scheduled
+   public-health workflow and verify exact `/api/version`, readiness, OAuth
+   challenge/metadata, hostname isolation, the configured Research 401/404
+   behavior, HSTS, and public TLS.
+7. Verify that the accepted SHA, public `/api/version`, IONOS checkout, and
+   `production` tag all match. A mismatch is a release-control failure even when
+   public readiness remains green.
 8. Keep Skynet's core containers stopped but its database volumes and previous
    Tunnel credentials intact for the rollback window. Keep the research
    database, sidecar, sync, backup, and embedding services running.
 
 ## Rollback
 
-If public acceptance fails, restore the four CNAMEs to the recorded Skynet
-Tunnel target, restart the stopped Skynet core services, and run the Skynet
-production acceptance gate. Stop the IONOS scheduler before restoring Skynet so
-only one scheduler can own durable work. Do not copy partially written IONOS
-state back automatically; reconcile any writes that reached IONOS during the
-window from audit/provider evidence.
+If public acceptance fails after an ordinary release, leave the `production`
+tag on the last accepted SHA and use the IONOS rollback procedure for that
+known-good revision. Skynet is disaster-recovery infrastructure, not the normal
+production deployment target; invoking its recovery workflow requires an
+explicit DR decision. Ensure only one scheduler owns durable work. Do not copy
+partially written state between hosts automatically; reconcile writes from
+audit/provider evidence.
 
 Do not change Research MCP enablement, broaden the Tailscale ACL, expose port
 8021, or move the corpus as a cutover recovery action. Roll back the application

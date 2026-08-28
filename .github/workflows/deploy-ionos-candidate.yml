@@ -6,14 +6,13 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Verify, privately stage, or publicly accept the IONOS release
+        description: Verify or privately stage the IONOS release
         required: true
         default: verify
         type: choice
         options:
           - verify
           - stage
-          - accept
       confirmation:
         description: Type the operation-specific confirmation shown in the runbook
         required: false
@@ -49,7 +48,6 @@ jobs:
           case "$OPERATION" in
             verify) ;;
             stage) [[ "$CONFIRMATION" == STAGE-IONOS-CANDIDATE ]] ;;
-            accept) [[ "$CONFIRMATION" == ACCEPT-IONOS-PRODUCTION ]] ;;
             *) exit 2 ;;
           esac
 
