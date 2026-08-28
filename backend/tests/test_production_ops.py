@@ -1287,9 +1287,10 @@ def test_production_check_exercises_customer_llm_routes() -> None:
     production_check = PRODUCTION_CHECK.read_text(encoding="utf-8")
 
     assert "LiteLLM customer-route completion probe failed" in production_check
-    assert 'for model in ("clarity-standard", "clarity-premium"):' in production_check
-    assert '"http://127.0.0.1:4000/v1/chat/completions"' in production_check
-    assert '"Reply with exactly READY."' in production_check
+    assert "python -m app.services.llm_availability" in production_check
+    assert '"${compose[@]}" exec -T backend' in production_check
+    assert "timeout --kill-after=10s 140s" in production_check
+    assert 'for model in ("clarity-standard", "clarity-premium"):' not in production_check
 
 
 def test_production_check_fails_closed_on_document_automation_integrity_gaps() -> None:
