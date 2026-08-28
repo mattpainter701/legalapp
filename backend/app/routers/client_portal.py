@@ -42,7 +42,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.services.upload_guard import reject_oversized_request
-from app.database import bind_tenant_context, get_db, set_tenant_context
+from app.database import bind_tenant_context, enable_rls_bypass, get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.billing import Invoice, Payment
 from app.models.client_portal import ClientPortalInvite
@@ -564,6 +564,10 @@ async def login_portal_account(
 ):
     """Authenticate a client account into one explicitly selected matter."""
     email = body.email.lower().strip()
+    # Email is the only tenant-independent login locator; keep this lookup
+    # within the auth-only, transaction-local users-table bypass, then bind the
+    # discovered tenant before reading any portal data.
+    await enable_rls_bypass(db)
     user = await db.scalar(
         select(User).where(
             User.email == email, User.role == "client", User.is_active.is_(True)
