@@ -75,7 +75,6 @@ if [[ -n "${PLATFORM_LEGACY_BOOTSTRAP_ENABLED+x}" && "$PLATFORM_LEGACY_BOOTSTRAP
 fi
 PLATFORM_LEGACY_BOOTSTRAP_ENABLED="$legacy_platform_from_file"
 ZOOM_REQUIRED_TENANT_ID="${ZOOM_REQUIRED_TENANT_ID:-$(get_env ZOOM_REQUIRED_TENANT_ID)}"
-ZOOM_REQUIRED_TENANT_PLAN="${ZOOM_REQUIRED_TENANT_PLAN:-$(get_env ZOOM_REQUIRED_TENANT_PLAN)}"
 email_enabled_from_file="$(get_env EMAIL_ENABLED)"
 if [[ -n "${EMAIL_ENABLED+x}" && "$EMAIL_ENABLED" != "$email_enabled_from_file" ]]; then
   echo "FAIL: inherited EMAIL_ENABLED conflicts with the deployed production environment" >&2
@@ -125,10 +124,6 @@ done
 if [[ "$ZOOM_REQUIRED" == true ]]; then
   [[ "$ZOOM_REQUIRED_TENANT_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]] || {
     echo "FAIL: ZOOM_REQUIRED_TENANT_ID must be the sold tenant UUID" >&2
-    exit 1
-  }
-  [[ "$ZOOM_REQUIRED_TENANT_PLAN" == "intake-only" ]] || {
-    echo "FAIL: ZOOM_REQUIRED_TENANT_PLAN must be intake-only for this launch" >&2
     exit 1
   }
 fi
@@ -390,9 +385,9 @@ if [[ "$invalid_active_templates" =~ ^[0-9]+$ ]] && (( invalid_active_templates 
 
 if [[ "$ZOOM_REQUIRED" == true ]]; then
   zoom_predicate="t.is_active AND a.encrypted_webhook_secret_token IS NOT NULL AND NULLIF(a.zoom_account_id, '') IS NOT NULL AND c.encrypted_refresh_token IS NOT NULL AND c.service_account_email = a.zoom_account_id AND c.health = 'healthy' AND c.scopes LIKE '%phone:read:list_call_logs:admin%' AND c.scopes LIKE '%phone:read:call_log:admin%'"
-  tenant_contract="$(sql "SELECT count(*) FROM tenants t JOIN tenant_settings s ON s.tenant_id=t.id WHERE t.id='${ZOOM_REQUIRED_TENANT_ID}'::uuid AND t.is_active AND COALESCE(s.custom_config->>'plan','')='${ZOOM_REQUIRED_TENANT_PLAN}'" || echo error)"
-  zoom_ready="$(sql "SELECT count(DISTINCT t.id) FROM tenants t JOIN tenant_settings s ON s.tenant_id=t.id JOIN tenant_oauth_apps a ON a.tenant_id=t.id AND a.provider='zoom_phone' AND a.is_active JOIN tenant_credentials c ON c.tenant_id=t.id AND c.provider='zoom_phone' AND c.is_active WHERE t.id='${ZOOM_REQUIRED_TENANT_ID}'::uuid AND COALESCE(s.custom_config->>'plan','')='${ZOOM_REQUIRED_TENANT_PLAN}' AND ${zoom_predicate}" || echo error)"
-  [[ "$tenant_contract" == "1" ]] || fail "required Zoom tenant is inactive, missing, or not on the intake-only launch plan"
+  tenant_contract="$(sql "SELECT count(*) FROM tenants t WHERE t.id='${ZOOM_REQUIRED_TENANT_ID}'::uuid AND t.is_active" || echo error)"
+  zoom_ready="$(sql "SELECT count(DISTINCT t.id) FROM tenants t JOIN tenant_oauth_apps a ON a.tenant_id=t.id AND a.provider='zoom_phone' AND a.is_active JOIN tenant_credentials c ON c.tenant_id=t.id AND c.provider='zoom_phone' AND c.is_active WHERE t.id='${ZOOM_REQUIRED_TENANT_ID}'::uuid AND ${zoom_predicate}" || echo error)"
+  [[ "$tenant_contract" == "1" ]] || fail "required Zoom tenant is inactive or missing"
   [[ "$zoom_ready" == "1" ]] || fail "required Zoom tenant configuration is incomplete"
 
   zoom_crc="$(curl -fsS --max-time 15 -H 'Content-Type: application/json' \

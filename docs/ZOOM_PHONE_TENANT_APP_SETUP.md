@@ -270,13 +270,16 @@ Complete every check before marking the tenant ready.
 8. Re-run the same history window or redeliver a test event and confirm LawHand
    does not create a duplicate call/task.
 
-For the sold production tenant, set only the non-secret selectors in the
+For the sold production tenant, set the non-secret selector in the
 deployment `.env`:
 
 ```dotenv
 ZOOM_REQUIRED_TENANT_ID=<lawhand-tenant-uuid>
-ZOOM_REQUIRED_TENANT_PLAN=intake-only
 ```
+
+The tenant's commercial plan is managed separately and does not participate in
+Zoom readiness. Acceptance binds to this exact active tenant UUID and verifies
+its tenant-owned Zoom app, grant, scopes, account binding, CRC, and live API.
 
 Then run the production gate on the host:
 
