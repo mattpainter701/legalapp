@@ -1192,6 +1192,15 @@ export const downloadClientPortalDocumentUrl = (docId) =>
 export const listClientPortalInvoices = () =>
   clientPortalApi.get('/portal/client/invoices').then((r) => r.data)
 
+export const createClientPortalInvoicePayment = (invoiceId) =>
+  clientPortalApi.post(`/portal/client/invoices/${invoiceId}/pay`).then((r) => r.data)
+
+export const activateClientPortalAccount = (token, password) =>
+  clientPortalApi.post('/portal/client/activate', { token, password }).then((r) => r.data)
+
+export const loginClientPortalAccount = (email, password, matterId) =>
+  clientPortalApi.post('/portal/client/login', { email, password, matter_id: matterId }).then((r) => r.data)
+
 export const downloadClientPortalInvoiceUrl = (invoiceId) =>
   `${BASE_URL}/portal/client/invoices/${invoiceId}/download`
 
