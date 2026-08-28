@@ -472,13 +472,20 @@ async def send_signature_request(
     # External providers need the exact bytes that were hash-bound at create
     # time. Keep them transient; the authoritative source remains firm storage.
     try:
-        source_doc = await db.get(MatterDocument, req.document_id) if req.document_id else None
+        source_doc = (
+            await db.get(MatterDocument, req.document_id) if req.document_id else None
+        )
         if source_doc is not None:
             req.source_document_bytes = await matter_file_store.read_matter_file_bytes(
-                db=db, tenant_id=str(user.tenant_id), document=source_doc, expected_size=req.source_document_size
+                db=db,
+                tenant_id=str(user.tenant_id),
+                document=source_doc,
+                expected_size=req.source_document_size,
             )
     except Exception as exc:
-        raise HTTPException(status_code=409, detail="The signing source document is unavailable") from exc
+        raise HTTPException(
+            status_code=409, detail="The signing source document is unavailable"
+        ) from exc
     envelope_id = await provider.send(req)
     if envelope_id:
         req.provider_envelope_id = envelope_id
@@ -491,7 +498,9 @@ async def send_signature_request(
 
 
 @router.post("/esign/webhooks/{provider}", status_code=204)
-async def esign_webhook(provider: str, request: Request, db: AsyncSession = Depends(get_db)):
+async def esign_webhook(
+    provider: str, request: Request, db: AsyncSession = Depends(get_db)
+):
     """Authenticate and reconcile a Dropbox Sign webhook exactly once."""
     if provider != "dropbox_sign":
         raise HTTPException(status_code=404, detail="Unknown e-sign provider")
@@ -514,14 +523,20 @@ async def esign_webhook(provider: str, request: Request, db: AsyncSession = Depe
         try:
             payload = json.loads(form_payload["json"][0])
         except (KeyError, IndexError, json.JSONDecodeError, UnicodeDecodeError) as exc:
-            raise HTTPException(status_code=400, detail="Invalid e-sign webhook payload") from exc
+            raise HTTPException(
+                status_code=400, detail="Invalid e-sign webhook payload"
+            ) from exc
     event = payload.get("event", {})
     event_id = str(event.get("event_id") or event.get("event_time") or "")
     sr = payload.get("signature_request", {})
     envelope_id = sr.get("signature_request_id")
     if not event_id or not envelope_id:
-        raise HTTPException(status_code=400, detail="E-sign webhook is missing event identity")
-    receipt = ESignWebhookEvent(provider=provider, event_id=event_id, envelope_id=envelope_id)
+        raise HTTPException(
+            status_code=400, detail="E-sign webhook is missing event identity"
+        )
+    receipt = ESignWebhookEvent(
+        provider=provider, event_id=event_id, envelope_id=envelope_id
+    )
     db.add(receipt)
     try:
         await db.flush()
@@ -531,9 +546,20 @@ async def esign_webhook(provider: str, request: Request, db: AsyncSession = Depe
     tenant_id = (sr.get("metadata") or {}).get("tenant_id")
     if not tenant_id:
         await db.rollback()
-        raise HTTPException(status_code=400, detail="E-sign webhook has no tenant binding")
+        raise HTTPException(
+            status_code=400, detail="E-sign webhook has no tenant binding"
+        )
     await set_tenant_context(db, str(tenant_id))
-    req = await db.scalar(select(SignatureRequest).options(selectinload(SignatureRequest.signers)).where(SignatureRequest.tenant_id == tenant_id, SignatureRequest.provider == provider, SignatureRequest.provider_envelope_id == envelope_id).with_for_update())
+    req = await db.scalar(
+        select(SignatureRequest)
+        .options(selectinload(SignatureRequest.signers))
+        .where(
+            SignatureRequest.tenant_id == tenant_id,
+            SignatureRequest.provider == provider,
+            SignatureRequest.provider_envelope_id == envelope_id,
+        )
+        .with_for_update()
+    )
     if req is None:
         await db.rollback()
         raise HTTPException(status_code=404, detail="E-signature request not found")
@@ -543,13 +569,23 @@ async def esign_webhook(provider: str, request: Request, db: AsyncSession = Depe
         req.declined_at = datetime.now(timezone.utc)
     else:
         signatures = sr.get("signatures") or []
-        by_email = {str(item.get("signer_email_address", "")).lower(): item for item in signatures}
+        by_email = {
+            str(item.get("signer_email_address", "")).lower(): item
+            for item in signatures
+        }
         for signer in req.signers:
             remote = by_email.get(signer.email.lower())
-            if remote and str(remote.get("status", "")).lower() in {"signed", "completed"}:
+            if remote and str(remote.get("status", "")).lower() in {
+                "signed",
+                "completed",
+            }:
                 signer.status = "signed"
                 signer.signed_at = signer.signed_at or datetime.now(timezone.utc)
-                signer.audit = {**(signer.audit or {}), "method": "dropbox_sign_webhook", "event_id": event_id}
+                signer.audit = {
+                    **(signer.audit or {}),
+                    "method": "dropbox_sign_webhook",
+                    "event_id": event_id,
+                }
         matter = await db.get(Matter, req.matter_id)
         await complete_request_if_done(db, req, matter)
     await db.commit()

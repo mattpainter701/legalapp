@@ -11,14 +11,26 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("contacts", sa.Column("client_user_id", postgresql.UUID(as_uuid=True), nullable=True))
-    op.create_foreign_key(
-        "fk_contacts_client_user_id_users", "contacts", "users", ["client_user_id"], ["id"], ondelete="SET NULL"
+    op.add_column(
+        "contacts",
+        sa.Column("client_user_id", postgresql.UUID(as_uuid=True), nullable=True),
     )
-    op.create_index("idx_contacts_tenant_client_user", "contacts", ["tenant_id", "client_user_id"])
+    op.create_foreign_key(
+        "fk_contacts_client_user_id_users",
+        "contacts",
+        "users",
+        ["client_user_id"],
+        ["id"],
+        ondelete="SET NULL",
+    )
+    op.create_index(
+        "idx_contacts_tenant_client_user", "contacts", ["tenant_id", "client_user_id"]
+    )
 
 
 def downgrade() -> None:
     op.drop_index("idx_contacts_tenant_client_user", table_name="contacts")
-    op.drop_constraint("fk_contacts_client_user_id_users", "contacts", type_="foreignkey")
+    op.drop_constraint(
+        "fk_contacts_client_user_id_users", "contacts", type_="foreignkey"
+    )
     op.drop_column("contacts", "client_user_id")

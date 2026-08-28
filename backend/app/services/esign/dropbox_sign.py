@@ -35,7 +35,13 @@ class DropboxSignProvider(ESignProvider):
             data[f"signers[{index}][email_address]"] = signer.email
             data[f"signers[{index}][name]"] = signer.name
             data[f"signers[{index}][order]"] = str(signer.sign_order)
-        files = {"file[0]": (request.source_document_filename or "document.pdf", source, "application/pdf")}
+        files = {
+            "file[0]": (
+                request.source_document_filename or "document.pdf",
+                source,
+                "application/pdf",
+            )
+        }
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(
                 f"{settings.ESIGN_PROVIDER_BASE_URL.rstrip('/')}/signature_request/send",

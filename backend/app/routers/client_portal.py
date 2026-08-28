@@ -485,32 +485,75 @@ async def activate_portal_account(
     """
     token_hash = hashlib.sha256(body.token.encode("utf-8")).hexdigest()
     invite = await resolve_active_portal_invite(db, ClientPortalInvite, token_hash)
-    if invite is None or invite.revoked or _aware(invite.expires_at) < datetime.now(timezone.utc):
+    if (
+        invite is None
+        or invite.revoked
+        or _aware(invite.expires_at) < datetime.now(timezone.utc)
+    ):
         raise HTTPException(status_code=410, detail=PORTAL_INVITE_UNAVAILABLE_DETAIL)
-    matter = await db.scalar(select(Matter).where(Matter.id == invite.matter_id, Matter.tenant_id == invite.tenant_id))
+    matter = await db.scalar(
+        select(Matter).where(
+            Matter.id == invite.matter_id, Matter.tenant_id == invite.tenant_id
+        )
+    )
     if matter is None or not matter.portal_enabled:
         raise HTTPException(status_code=404, detail="Matter not found")
     contact = None
     if invite.contact_id:
-        contact = await db.scalar(select(Contact).where(Contact.id == invite.contact_id, Contact.tenant_id == invite.tenant_id))
+        contact = await db.scalar(
+            select(Contact).where(
+                Contact.id == invite.contact_id, Contact.tenant_id == invite.tenant_id
+            )
+        )
     if contact is None and invite.email:
-        contact = await db.scalar(select(Contact).where(Contact.tenant_id == invite.tenant_id, func.lower(Contact.email) == invite.email.lower()))
+        contact = await db.scalar(
+            select(Contact).where(
+                Contact.tenant_id == invite.tenant_id,
+                func.lower(Contact.email) == invite.email.lower(),
+            )
+        )
     if contact is None:
-        raise HTTPException(status_code=409, detail="A client contact is required before activation")
-    user = await db.scalar(select(User).where(User.tenant_id == invite.tenant_id, User.email == (invite.email or contact.email).lower()))
+        raise HTTPException(
+            status_code=409, detail="A client contact is required before activation"
+        )
+    user = await db.scalar(
+        select(User).where(
+            User.tenant_id == invite.tenant_id,
+            User.email == (invite.email or contact.email).lower(),
+        )
+    )
     if user is None:
-        user = User(id=uuid.uuid4(), tenant_id=invite.tenant_id, email=(invite.email or contact.email).lower(), full_name=contact.full_name or "Client", role="client", is_active=True)
+        user = User(
+            id=uuid.uuid4(),
+            tenant_id=invite.tenant_id,
+            email=(invite.email or contact.email).lower(),
+            full_name=contact.full_name or "Client",
+            role="client",
+            is_active=True,
+        )
         db.add(user)
         await db.flush()
     if user.role != "client" or not user.is_active:
-        raise HTTPException(status_code=403, detail="This account is not eligible for client portal access")
+        raise HTTPException(
+            status_code=403,
+            detail="This account is not eligible for client portal access",
+        )
     user.password_hash = _portal_password_hash(body.password)
     contact.client_user_id = user.id
     invite.accepted_at = datetime.now(timezone.utc)
-    token = create_matter_portal_token(tenant_id=str(invite.tenant_id), matter_id=str(invite.matter_id), contact_id=str(contact.id), email=user.email, invite_id=str(invite.id), user_id=str(user.id))
+    token = create_matter_portal_token(
+        tenant_id=str(invite.tenant_id),
+        matter_id=str(invite.matter_id),
+        contact_id=str(contact.id),
+        email=user.email,
+        invite_id=str(invite.id),
+        user_id=str(user.id),
+    )
     await db.commit()
     _set_cookie(response, token)
-    return ClientPortalLoginResponse(matter_id=str(matter.id), matter_name=matter.matter_name, email=user.email)
+    return ClientPortalLoginResponse(
+        matter_id=str(matter.id), matter_name=matter.matter_name, email=user.email
+    )
 
 
 @router.post("/login", response_model=ClientPortalLoginResponse)
@@ -521,7 +564,11 @@ async def login_portal_account(
 ):
     """Authenticate a client account into one explicitly selected matter."""
     email = body.email.lower().strip()
-    user = await db.scalar(select(User).where(User.email == email, User.role == "client", User.is_active.is_(True)))
+    user = await db.scalar(
+        select(User).where(
+            User.email == email, User.role == "client", User.is_active.is_(True)
+        )
+    )
     if user is None or not _portal_password_matches(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     try:
@@ -529,14 +576,55 @@ async def login_portal_account(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid matter id") from exc
     await bind_tenant_context(db, str(user.tenant_id))
-    contact = await db.scalar(select(Contact).where(Contact.tenant_id == user.tenant_id, Contact.client_user_id == user.id))
-    invite = await db.scalar(select(ClientPortalInvite).where(ClientPortalInvite.tenant_id == user.tenant_id, ClientPortalInvite.matter_id == matter_id, ClientPortalInvite.contact_id == (contact.id if contact else None), ClientPortalInvite.revoked.is_(False))) if contact else None
-    matter = await db.scalar(select(Matter).where(Matter.id == matter_id, Matter.tenant_id == user.tenant_id, Matter.client_contact_id == (contact.id if contact else None), Matter.portal_enabled.is_(True))) if contact else None
-    if matter is None or invite is None or _aware(invite.expires_at) < datetime.now(timezone.utc):
-        raise HTTPException(status_code=403, detail="You do not have portal access to that matter")
-    token = create_matter_portal_token(tenant_id=str(user.tenant_id), matter_id=str(matter.id), contact_id=str(contact.id), email=user.email, invite_id=str(invite.id), user_id=str(user.id))
+    contact = await db.scalar(
+        select(Contact).where(
+            Contact.tenant_id == user.tenant_id, Contact.client_user_id == user.id
+        )
+    )
+    invite = (
+        await db.scalar(
+            select(ClientPortalInvite).where(
+                ClientPortalInvite.tenant_id == user.tenant_id,
+                ClientPortalInvite.matter_id == matter_id,
+                ClientPortalInvite.contact_id == (contact.id if contact else None),
+                ClientPortalInvite.revoked.is_(False),
+            )
+        )
+        if contact
+        else None
+    )
+    matter = (
+        await db.scalar(
+            select(Matter).where(
+                Matter.id == matter_id,
+                Matter.tenant_id == user.tenant_id,
+                Matter.client_contact_id == (contact.id if contact else None),
+                Matter.portal_enabled.is_(True),
+            )
+        )
+        if contact
+        else None
+    )
+    if (
+        matter is None
+        or invite is None
+        or _aware(invite.expires_at) < datetime.now(timezone.utc)
+    ):
+        raise HTTPException(
+            status_code=403, detail="You do not have portal access to that matter"
+        )
+    token = create_matter_portal_token(
+        tenant_id=str(user.tenant_id),
+        matter_id=str(matter.id),
+        contact_id=str(contact.id),
+        email=user.email,
+        invite_id=str(invite.id),
+        user_id=str(user.id),
+    )
     _set_cookie(response, token)
-    return ClientPortalLoginResponse(matter_id=str(matter.id), matter_name=matter.matter_name, email=user.email)
+    return ClientPortalLoginResponse(
+        matter_id=str(matter.id), matter_name=matter.matter_name, email=user.email
+    )
 
 
 # ── Session ─────────────────────────────────────────────────────────────────
@@ -1201,12 +1289,30 @@ async def portal_create_invoice_payment(
     transitions invoice status.
     """
     if not settings.STRIPE_SECRET_KEY:
-        raise HTTPException(status_code=501, detail="Stripe payment processing is not configured")
+        raise HTTPException(
+            status_code=501, detail="Stripe payment processing is not configured"
+        )
     ctx, _matter = resolved
-    invoice = await db.scalar(select(Invoice).where(Invoice.id == invoice_id, Invoice.matter_id == ctx.matter_id, Invoice.tenant_id == ctx.tenant_id, Invoice.status.in_(("sent", "partially_paid"))))
+    invoice = await db.scalar(
+        select(Invoice).where(
+            Invoice.id == invoice_id,
+            Invoice.matter_id == ctx.matter_id,
+            Invoice.tenant_id == ctx.tenant_id,
+            Invoice.status.in_(("sent", "partially_paid")),
+        )
+    )
     if invoice is None:
         raise HTTPException(status_code=404, detail="Invoice not found")
-    paid = Decimal(str(await db.scalar(select(func.coalesce(func.sum(Payment.amount), 0)).where(Payment.invoice_id == invoice.id)) or 0))
+    paid = Decimal(
+        str(
+            await db.scalar(
+                select(func.coalesce(func.sum(Payment.amount), 0)).where(
+                    Payment.invoice_id == invoice.id
+                )
+            )
+            or 0
+        )
+    )
     balance_due = Decimal(invoice.total) - paid
     if balance_due <= 0:
         raise HTTPException(status_code=409, detail="Invoice has no balance due")
@@ -1214,19 +1320,44 @@ async def portal_create_invoice_payment(
 
     stripe.api_key = settings.STRIPE_SECRET_KEY
     try:
-        metadata = {"invoice_id": str(invoice.id), "tenant_id": ctx.tenant_id, "matter_id": ctx.matter_id, "portal_invite_id": ctx.invite_id or ""}
+        metadata = {
+            "invoice_id": str(invoice.id),
+            "tenant_id": ctx.tenant_id,
+            "matter_id": ctx.matter_id,
+            "portal_invite_id": ctx.invite_id or "",
+        }
         checkout = stripe.checkout.Session.create(
             mode="payment",
-            line_items=[{"price_data": {"currency": "usd", "unit_amount": int(balance_due * 100), "product_data": {"name": f"Invoice {invoice.invoice_number}"}}, "quantity": 1}],
+            line_items=[
+                {
+                    "price_data": {
+                        "currency": "usd",
+                        "unit_amount": int(balance_due * 100),
+                        "product_data": {"name": f"Invoice {invoice.invoice_number}"},
+                    },
+                    "quantity": 1,
+                }
+            ],
             metadata=metadata,
-            payment_intent_data={"metadata": metadata, "description": f"LawHand invoice {invoice.invoice_number}"},
+            payment_intent_data={
+                "metadata": metadata,
+                "description": f"LawHand invoice {invoice.invoice_number}",
+            },
             success_url=f"{settings.FRONTEND_URL.rstrip('/')}/portal/client/matter?payment=success",
             cancel_url=f"{settings.FRONTEND_URL.rstrip('/')}/portal/client/matter?payment=cancelled",
         )
     except Exception as exc:
         logger.warning("Portal Stripe PaymentIntent creation failed", exc_info=True)
-        raise HTTPException(status_code=502, detail="Payment provider unavailable") from exc
-    return PortalInvoicePaymentResponse(invoice_id=str(invoice.id), amount=balance_due, payment_intent_id=str(checkout.payment_intent or ""), checkout_url=checkout.url, checkout_session_id=checkout.id)
+        raise HTTPException(
+            status_code=502, detail="Payment provider unavailable"
+        ) from exc
+    return PortalInvoicePaymentResponse(
+        invoice_id=str(invoice.id),
+        amount=balance_due,
+        payment_intent_id=str(checkout.payment_intent or ""),
+        checkout_url=checkout.url,
+        checkout_session_id=checkout.id,
+    )
 
 
 @router.get("/invoices/{invoice_id}/download")
@@ -1351,11 +1482,29 @@ async def create_portal_invite(
         if contact is not None:
             email = contact.email
     if contact_id or matter.client_contact_id:
-        contact = contact if 'contact' in locals() else await db.get(Contact, uuid.UUID(contact_id or str(matter.client_contact_id)))
+        contact = (
+            contact
+            if "contact" in locals()
+            else await db.get(
+                Contact, uuid.UUID(contact_id or str(matter.client_contact_id))
+            )
+        )
         if contact is not None and email:
-            client_user = await db.scalar(select(User).where(User.tenant_id == user.tenant_id, User.email == email.lower().strip()))
+            client_user = await db.scalar(
+                select(User).where(
+                    User.tenant_id == user.tenant_id,
+                    User.email == email.lower().strip(),
+                )
+            )
             if client_user is None:
-                client_user = User(id=uuid.uuid4(), tenant_id=user.tenant_id, email=email.lower().strip(), full_name=contact.full_name or email, role="client", is_active=True)
+                client_user = User(
+                    id=uuid.uuid4(),
+                    tenant_id=user.tenant_id,
+                    email=email.lower().strip(),
+                    full_name=contact.full_name or email,
+                    role="client",
+                    is_active=True,
+                )
                 db.add(client_user)
                 await db.flush()
             if client_user.role == "client":
