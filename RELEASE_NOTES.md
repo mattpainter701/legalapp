@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.28.6 — Attributed intake and safer lead follow-through
+
+Released August 28, 2026.
+
+Firms can capture attributed public inquiries, triage conflicts, book consultations, and follow up with explicit consent while keeping the conversion trail auditable.
+
+- **Capture inquiries safely.** Conditional forms accept only validated answers, resist simple spam, preserve source attribution, and deduplicate retries.
+- **Review before conversion.** Public leads require an explicit conflict decision before they can become matters; appointment booking and reminder state remain durable.
+- **Respect communication choices.** Authored email follow-up checks current consent and reports provider failure truthfully; SMS remains unavailable until its compliance controls are ready.
+
 ## 2026.08.28.5 — Zoom Phone setup now shows exactly what needs attention
 
 Released August 28, 2026.

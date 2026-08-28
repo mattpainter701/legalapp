@@ -26,6 +26,14 @@
   Skynet research upstream without exposing its credential.
 
 ### Added
+- **Bounded COMP-03 lead conversion loop:** firms can publish tenant-scoped,
+  conditional intake forms with attributed, honeypot-protected, idempotent
+  public submissions; book only published consultation slots; record explicit
+  conflict triage, channel consent, appointment/reminder state, and funnel
+  events; and send authored email follow-up only when consent and provider
+  delivery succeed. Public leads remain blocked from conversion until a clear
+  conflict decision is recorded. SMS stays fail-closed until the ECO-23–29
+  provider and opt-out/reconciliation gates are complete.
 - **Client portal switching bundle:** clients can activate durable, revocable
   portal accounts, pay sent invoices through hosted Stripe Checkout, and use
   authenticated, idempotent Dropbox Sign webhook reconciliation. Portal

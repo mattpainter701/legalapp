@@ -56,6 +56,7 @@ from app.routers.intake_dashboard import router as intake_dashboard_router
 from app.routers.plan import router as plan_router
 from app.routers.intake import router as intake_router
 from app.routers.intake_assistant import router as intake_assistant_router
+from app.routers.conversion_loop import router as conversion_loop_router
 from app.routers.engagement_packets import router as engagement_packets_router
 from app.routers.matter_parties import router as matter_parties_router
 from app.routers.matter_documents import router as matter_documents_router
@@ -437,6 +438,7 @@ app.include_router(tasks_router)
 app.include_router(communications_router)
 app.include_router(intake_dashboard_router)
 app.include_router(plan_router, prefix="/api")
+app.include_router(conversion_loop_router)
 app.include_router(intake_router)
 app.include_router(intake_assistant_router)
 app.include_router(engagement_packets_router)

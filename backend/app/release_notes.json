@@ -2,6 +2,18 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.28.6",
+      "version": "2026.08.28.6",
+      "title": "Attributed intake and safer lead follow-through",
+      "published_at": "2026-08-28",
+      "summary": "Firms can capture attributed public inquiries, triage conflicts, book consultations, and follow up with explicit consent while keeping the conversion trail auditable.",
+      "highlights": [
+        {"title": "Capture inquiries safely", "description": "Conditional forms accept only validated answers, resist simple spam, preserve source attribution, and deduplicate retries."},
+        {"title": "Review before conversion", "description": "Public leads require an explicit conflict decision before they can become matters; appointment booking and reminder state remain durable."},
+        {"title": "Respect communication choices", "description": "Authored email follow-up checks current consent and reports provider failure truthfully; SMS remains unavailable until its compliance controls are ready."}
+      ]
+    },
+    {
       "id": "2026.08.28.5",
       "version": "2026.08.28.5",
       "title": "Zoom Phone setup now shows exactly what needs attention",

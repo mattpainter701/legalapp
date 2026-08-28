@@ -1755,6 +1755,17 @@ export const updateLead = (id, data) =>
 export const convertLead = (id, data) =>
   api.post(`/intake/${id}/convert`, data).then(r => r.data)
 
+// COMP-03 public intake and conversion-loop controls.
+export const getIntakeForms = () => api.get('/intake/forms').then(r => r.data)
+export const createIntakeForm = (data) => api.post('/intake/forms', data).then(r => r.data)
+export const getPublicIntakeForm = (slug) => api.get(`/public/intake/${slug}`).then(r => r.data)
+export const submitPublicIntake = (slug, data) => api.post(`/public/intake/${slug}/submissions`, data).then(r => r.data)
+export const getPublicIntakeAvailability = (slug) => api.get(`/public/intake/${slug}/availability`).then(r => r.data)
+export const bookPublicIntakeAppointment = (slug, data) => api.post(`/public/intake/${slug}/book`, data).then(r => r.data)
+export const updateLeadConsent = (leadId, data) => api.post(`/intake/leads/${leadId}/consent`, data).then(r => r.data)
+export const triageLead = (leadId, data) => api.post(`/intake/leads/${leadId}/triage`, data).then(r => r.data)
+export const getLeadFunnel = () => api.get('/intake/funnel').then(r => r.data)
+
 // After-call assistant APIs stay isolated here while the backend contract is
 // finalized. The server remains authoritative for permissions and audit.
 export const getLeadFollowThrough = (leadId) =>

@@ -105,6 +105,25 @@ PUBLIC_ROUTES: dict[tuple[frozenset[str], str], str] = {
         frozenset({"POST"}),
         "/api/demo/session",
     ): "pre-auth demo entry; access-code guarded, feature-gated, and rate-limited",
+    # Public lead-conversion intake. The form slug, schema validation, consent
+    # checks, honeypot, attribution bounds, idempotency, and rate limiting are
+    # the authentication model for this pre-account entry point.
+    (
+        frozenset({"GET"}),
+        "/api/public/intake/{slug}",
+    ): "public active form definition; no tenant data",
+    (
+        frozenset({"GET"}),
+        "/api/public/intake/{slug}/availability",
+    ): "public published appointment slots only",
+    (
+        frozenset({"POST"}),
+        "/api/public/intake/{slug}/submissions",
+    ): "public intake; honeypot, rate limit, validation, and idempotency enforced",
+    (
+        frozenset({"POST"}),
+        "/api/public/intake/{slug}/book",
+    ): "public booking; published-slot, rate-limit, and idempotency checks enforced",
     (frozenset({"GET"}), "/api/auth/google/login"): "redirects to Google; no app data",
     (
         frozenset({"GET"}),

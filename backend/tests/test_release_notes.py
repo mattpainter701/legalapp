@@ -6,7 +6,7 @@ from app.release_notes import RECENT_RELEASE_DAYS, build_release_catalog
 from app.main import app_version
 
 
-LATEST_RELEASE_ID = "2026.08.28.5"
+LATEST_RELEASE_ID = "2026.08.28.6"
 LATEST_RELEASE_DATE = date(2026, 8, 28)
 
 
@@ -18,7 +18,7 @@ def test_release_catalog_returns_latest_release_and_history():
     assert latest["version"] == LATEST_RELEASE_ID
     assert latest["is_recent"] is True
     assert len(latest["highlights"]) == 3
-    assert latest["highlights"][-1]["title"] == "Know when reconnecting is required"
+    assert latest["highlights"][-1]["title"] == "Respect communication choices"
     assert catalog["release_notes"][0] == latest
 
 
