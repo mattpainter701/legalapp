@@ -31,5 +31,7 @@ fail-closed until ECO-23–29 provider/compliance gates are complete.
 
 - [ ] MCP documentation updated
 - [x] MCP documentation not needed
-- MCP area: none
-- Wiki handoff note: none
+- MCP area: no MCP contract changed; `backend/app/main.py` only registers the
+  conversion-loop router alongside existing routes.
+- Wiki handoff note: no MCP endpoint, tool, protocol, authorization, or tenant
+  boundary changed; no MCP documentation update is required.
