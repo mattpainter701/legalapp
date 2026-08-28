@@ -14,7 +14,7 @@
         },
         {
           "title": "Start the secure tenant connection correctly",
-          "description": "LawHand now warns administrators to use Connect Zoom Phone instead of the private Marketplace listing's Add action, preserving the tenant-bound authorization check."
+          "description": "LawHand now warns administrators to use Connect Zoom Phone instead of Marketplace Add or generated authorization links, preserving the tenant-bound authorization check."
         }
       ]
     },

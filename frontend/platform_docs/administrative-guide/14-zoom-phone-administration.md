@@ -28,7 +28,7 @@ Create a private, admin-managed Zoom General App. Under **Zoom Phone → Call Lo
 - `phone:read:list_call_logs:admin` for account call-history lists; and
 - `phone:read:call_log:admin` for call-history detail and call-element reads.
 
-Do not add classic, write, delete, or manage scopes. After saving the app credentials in LawHand, start authorization with **Connect Zoom Phone** in the LawHand panel. Do not use **Add** from the Zoom Marketplace private listing; it does not start LawHand's tenant-bound OAuth request with the required `state` value.
+Do not add classic, write, delete, or manage scopes. Copy the client ID and client secret from the same Zoom environment tab used for the callback, scopes, and webhook—Development or Production, never a mix. After saving the app credentials in LawHand, start authorization with **Connect Zoom Phone** in the LawHand panel. Do not use **Add** or the generated OAuth URL from Zoom Marketplace; neither starts LawHand's tenant-bound OAuth request with the required `state` value.
 
 Webhook secret tokens and client credentials are secrets. Enter them only in the designated protected fields and store recovery material in the approved secret manager.
 

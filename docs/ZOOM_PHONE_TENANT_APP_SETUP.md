@@ -230,9 +230,10 @@ For an existing app:
 ## Authorize the customer account
 
 Start this step from LawHand. Do **not** select **Add** from the private app
-listing in Zoom Marketplace. That listing action does not originate LawHand's
-tenant-bound authorization request and therefore does not include the required
-OAuth `state` value. LawHand intentionally rejects a callback without `state`.
+listing or open Zoom's generated OAuth URL. Those actions do not originate
+LawHand's tenant-bound authorization request and therefore do not include the
+required OAuth `state` value. LawHand intentionally rejects a callback without
+`state`.
 
 1. Select **Connect Zoom Phone**, or **Re-authorize Phone** for an existing
    connection.

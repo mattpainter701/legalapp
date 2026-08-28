@@ -467,7 +467,7 @@ function ZoomPhoneAppSetup({
             <div>
               <div className="text-xs font-bold">Start authorization from LawHand</div>
               <div className="text-xs mt-0.5 opacity-90">
-                After saving the app below, return to this panel and click Connect Zoom Phone. Do not use the Add button in Zoom Marketplace’s private listing; it does not start LawHand’s tenant-bound OAuth request with the required state value.
+                After saving the app below, return to this panel and click Connect Zoom Phone. Do not use the Add button or generated OAuth link in Zoom Marketplace; those paths do not start LawHand’s tenant-bound request with the required state value.
               </div>
             </div>
           </div>
@@ -555,6 +555,9 @@ function ZoomPhoneAppSetup({
               <span className="mt-1 block text-[11px] font-semibold text-green-700">Webhook signing is configured.</span>
             )}
           </label>
+          <p className="lg:col-span-2 text-[11px] text-brand-muted">
+            Copy the client ID and client secret from the same Zoom environment tab used for the callback, scopes, and webhook—Development or Production, never a mix. If Zoom regenerated the secret, enter both current values here and save before reconnecting.
+          </p>
           <div className="lg:col-span-2 flex flex-wrap gap-2">
             <button
               type="submit"
