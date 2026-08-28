@@ -3,6 +3,13 @@
 ## [Unreleased]
 
 ### Fixed
+- **Zoom Phone setup prevents state-less Marketplace authorization:** the
+  tenant admin panel now lists the exact account call-history and call-detail
+  granular scopes, their Zoom Phone > Call Logs location, and a copy action.
+  It explicitly requires starting OAuth from LawHand's Connect Zoom Phone
+  action instead of the private Marketplace listing's Add action, which cannot
+  supply LawHand's tenant-bound `state`. The operator and in-product guides
+  document the same fail-closed recovery path.
 - **IONOS release validation now recognizes the launched Research gateway:**
   the stage gate requires an enabled Research MCP to return an unauthenticated
   `401` with a Bearer challenge, still requires disabled deployments to return

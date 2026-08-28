@@ -229,6 +229,11 @@ For an existing app:
 
 ## Authorize the customer account
 
+Start this step from LawHand. Do **not** select **Add** from the private app
+listing in Zoom Marketplace. That listing action does not originate LawHand's
+tenant-bound authorization request and therefore does not include the required
+OAuth `state` value. LawHand intentionally rejects a callback without `state`.
+
 1. Select **Connect Zoom Phone**, or **Re-authorize Phone** for an existing
    connection.
 2. Sign in to the customer Zoom account that owns the app. Do not switch to a
@@ -339,6 +344,7 @@ and run the full call proof.
 | Symptom | Likely cause | Resolution |
 |---|---|---|
 | `4700 Invalid redirect url` | Callback differs from the selected Zoom environment, a legacy domain remains, or the allowlist did not update | Compare the LawHand callback byte-for-byte with Redirect URL and Allow Lists on the tab whose client ID is stored. Click outside the field and inspect the generated OAuth URL. |
+| Callback returns `Field required` for query `state` | Authorization was started with **Add** from the Zoom Marketplace private listing instead of from LawHand | Do not retry or reuse the callback URL. Return to **LawHand > Administration > Zoom** and select **Connect Zoom Phone** so LawHand creates a fresh tenant-bound OAuth request with `state`. |
 | Zoom Microsoft login ends with `Oops ... (300)` | The Microsoft identity is not yet linked to the existing Zoom account, or the login attempt used stale social-login state | Sign in to Zoom cleanly, link the Microsoft identity when Zoom offers **Link and Sign In**, then reopen Marketplace. Do not create a duplicate Zoom account. |
 | Wrong email/password | The Zoom account uses federated/social sign-in or the password is stale | Stop repeated password attempts. Use the customer's configured identity provider or have the customer owner reset the Zoom password. |
 | `token_exchange_failed` after Allow | Stored client secret does not match the client ID/environment, often after Regenerate | Save the matching client ID and new client secret together, then restart authorization. |

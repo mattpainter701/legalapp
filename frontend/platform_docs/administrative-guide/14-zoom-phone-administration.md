@@ -23,6 +23,13 @@ LawHand normalizes this into a tenant communication record that can be matched t
 
 Use the firm's approved Zoom administrator and account. Verify the account identifier, application type, redirect configuration, required administrative scopes, active status, and intended call population.
 
+Create a private, admin-managed Zoom General App. Under **Zoom Phone → Call Logs**, add both account/admin granular scopes:
+
+- `phone:read:list_call_logs:admin` for account call-history lists; and
+- `phone:read:call_log:admin` for call-history detail and call-element reads.
+
+Do not add classic, write, delete, or manage scopes. After saving the app credentials in LawHand, start authorization with **Connect Zoom Phone** in the LawHand panel. Do not use **Add** from the Zoom Marketplace private listing; it does not start LawHand's tenant-bound OAuth request with the required `state` value.
+
 Webhook secret tokens and client credentials are secrets. Enter them only in the designated protected fields and store recovery material in the approved secret manager.
 
 ## Authorize and test
