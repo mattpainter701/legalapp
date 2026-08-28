@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import func, literal, or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -249,17 +249,13 @@ async def retention_inventory(db: AsyncSession, tenant_id: uuid.UUID) -> dict[st
     provider_rows = (
         await db.execute(
             select(
-                func.coalesce(MatterDocument.storage_provider, literal("unknown")),
+                MatterDocument.storage_provider,
                 func.count(MatterDocument.id),
                 func.coalesce(func.sum(MatterDocument.file_size), 0),
             )
             .where(MatterDocument.tenant_id == tenant_id)
-            .group_by(
-                func.coalesce(MatterDocument.storage_provider, literal("unknown"))
-            )
-            .order_by(
-                func.coalesce(MatterDocument.storage_provider, literal("unknown"))
-            )
+            .group_by(MatterDocument.storage_provider)
+            .order_by(MatterDocument.storage_provider)
         )
     ).all()
 
@@ -351,7 +347,7 @@ async def retention_inventory(db: AsyncSession, tenant_id: uuid.UUID) -> dict[st
         "categories": categories,
         "matter_file_providers": [
             {
-                "provider": str(provider),
+                "provider": str(provider or "unknown"),
                 "record_count": int(count or 0),
                 "bytes": int(size or 0),
             }
