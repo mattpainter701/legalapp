@@ -1874,6 +1874,14 @@ def test_production_guards_cover_litellm_data_and_schema() -> None:
     assert "escrow_has_value LITELLM_SALT_KEY" in restore
     assert "escrow_has_value TOKEN_ENCRYPTION_KEYS" in restore
     assert "isolated-clean-host-restore" in manual_restore
+    assert "wait_for_final_postgres" in restore
+    assert '[ "$(cat /proc/1/comm)" = postgres ]' in restore
+    assert restore.count('wait_for_final_postgres "$') == 2
+    assert "pg_isready" in restore
+    assert (
+        "pg_isready -U postgres -d legalapp_restore >/dev/null 2>&1 && break"
+        not in restore
+    )
     assert "legalapp-restored.counts.tsv" in manual_restore
     assert "litellm-restored.counts.tsv" in manual_restore
     assert "upload_backup_artifact.py" in manual_restore
@@ -1882,6 +1890,28 @@ def test_production_guards_cover_litellm_data_and_schema() -> None:
     assert "OFFSITE_RESTORE_SIGNING_KEY_FILE" in manual_restore
     assert "openssl dgst -sha256 -sign" in manual_restore
     assert nullable_tenant_metric in manual_restore
+
+
+def test_skynet_installers_separate_runner_from_runtime_owner() -> None:
+    dev1 = (ROOT / "scripts" / "install_dev1_deploy_entrypoint.sh").read_text(
+        encoding="utf-8"
+    )
+    dr = (ROOT / "scripts" / "install_skynet_dr_services.sh").read_text(
+        encoding="utf-8"
+    )
+    deploy = (ROOT / "scripts" / "deploy_dev1.sh").read_text(encoding="utf-8")
+    assert "host_ip: 127.0.0.1" in deploy
+    assert 'published: "18443"' in deploy
+    assert 'published: "443"' in deploy
+    assert "127.0.0.1:18443" not in deploy
+    assert "127\\.0\\.0\\.1:443" not in deploy
+
+    for installer in (dev1, dr):
+        assert 'deploy_user="${DEPLOY_USER:-varta}"' in installer
+        assert 'runner_user="${RUNNER_USER:-lawhand-runner}"' in installer
+        assert 'id -u "$runner_user" >/dev/null' in installer
+        assert '"$runner_user ALL=(root) NOPASSWD:' in installer
+        assert '"$deploy_user ALL=(root) NOPASSWD:' not in installer
 
 
 def test_tls_and_recurring_backup_ops_support_multi_compose() -> None:

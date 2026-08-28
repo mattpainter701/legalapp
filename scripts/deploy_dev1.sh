@@ -85,8 +85,9 @@ done
 echo "==> Validating isolated dev1 Compose topology"
 rendered="$("${compose[@]}" config)"
 grep -Fq 'name: law-hand-dev1' <<<"$rendered"
-grep -Fq '127.0.0.1:18443' <<<"$rendered"
-if grep -Eq '/data/legalapp|127\.0\.0\.1:443' <<<"$rendered"; then
+grep -Fq 'host_ip: 127.0.0.1' <<<"$rendered"
+grep -Fq 'published: "18443"' <<<"$rendered"
+if grep -Eq 'source: /data/legalapp|published: "443"' <<<"$rendered"; then
   echo "ERROR: dev1 rendered configuration references a production data path or port" >&2
   exit 3
 fi
