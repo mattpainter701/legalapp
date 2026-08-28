@@ -10,6 +10,15 @@
   Skynet research upstream without exposing its credential.
 
 ### Added
+- **Competitive claims now have an evidence and maturity gate:** the public
+  capability catalog records implemented, controlled-pilot, planned, and
+  partner-dependent states with claim ownership and review dates. Pricing,
+  demo, SEO, and no-JavaScript copy consistently present Research MCP as a
+  controlled pilot; the dated Clio and Thomson Reuters register preserves
+  LawHand's unified matter operating-system positioning while prohibiting
+  unsupported AI-superiority, Westlaw-replacement, coverage, good-law, SLA,
+  certification, and service-level claims. Focused backend and frontend tests
+  keep those boundaries from silently drifting.
 - **Tenant agreement evidence and bounded retention controls:** platform
   operators publish immutable counsel-owned document identities; tenant admins
   accept the exact version/hash with authority, signer, request, and optional

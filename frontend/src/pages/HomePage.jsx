@@ -14,7 +14,7 @@ import secureArchiveSmallImg from '../assets/home/secure-source-archive-cta-v1-7
 import { MarketingFooter, MarketingHeader } from '../components/MarketingChrome'
 import MarketingChatWorkspace from '../components/MarketingChatWorkspace'
 import { PRACTICE_SKILLS, WORKSPACE_MODULES } from '../marketing/catalog'
-import { CORE_CAPABILITIES } from '../marketing/capabilities'
+import { CAPABILITY_STATES, CORE_CAPABILITIES } from '../marketing/capabilities'
 import { HOME_FAQ, SITE_CATEGORY } from '../seo/config'
 
 const CATALOG_ICONS = {
@@ -437,13 +437,19 @@ export default function HomePage() {
             </p>
           </div>
           <ul className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
-            {CAPABILITIES.map(({ id, icon: Icon, name, summary }) => (
+            {CAPABILITIES.map(({ id, icon: Icon, name, summary, availability, availabilityNote }) => (
               <li key={id} className="bg-brand-surface border border-brand-line rounded-2xl p-6 hover:shadow-md hover:border-brand-line-2 transition-all">
-                <div className="w-11 h-11 rounded-xl bg-brand-bg-soft border border-brand-line flex items-center justify-center text-brand-ink mb-4">
-                  <Icon size={22} strokeWidth={1.5} aria-hidden="true" />
+                <div className="mb-4 flex items-start justify-between gap-3">
+                  <div className="w-11 h-11 rounded-xl bg-brand-bg-soft border border-brand-line flex items-center justify-center text-brand-ink">
+                    <Icon size={22} strokeWidth={1.5} aria-hidden="true" />
+                  </div>
+                  <span className="rounded-full border border-brand-line bg-brand-bg-soft px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.1em] text-brand-muted">
+                    {CAPABILITY_STATES[availability]}
+                  </span>
                 </div>
                 <h3 className="font-serif font-bold text-[17px] mb-1.5">{name}</h3>
                 <p className="text-brand-ink-2 font-sans text-[13.5px] leading-relaxed">{summary}</p>
+                <p className="mt-3 border-t border-brand-line pt-3 text-[11.5px] leading-relaxed text-brand-muted">{availabilityNote}</p>
               </li>
             ))}
           </ul>
@@ -488,7 +494,7 @@ export default function HomePage() {
             <div className="relative flex h-full flex-col">
               <div className="flex items-start justify-between gap-3">
                 <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-white/10"><Braces size={22} /></div>
-                <span className="rounded-full border border-brand-gold/30 bg-brand-gold/10 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.12em] text-brand-gold">Available</span>
+                <span className="rounded-full border border-brand-gold/30 bg-brand-gold/10 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.12em] text-brand-gold">Controlled pilot</span>
               </div>
               <h3 className="font-serif font-bold text-[25px] leading-tight mt-5 text-white">LawHand MCP</h3>
               <p className="text-white/65 font-sans text-[14.5px] leading-relaxed mt-3">
@@ -720,7 +726,7 @@ export default function HomePage() {
                 <div className="flex flex-wrap items-center gap-3">
                   <KeyRound size={20} className="text-brand-gold" />
                   <h3 className="font-serif text-[21px] font-bold text-white">LawHand MCP</h3>
-                  <span className="rounded-full border border-white/15 bg-white/10 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.12em] text-white/65">Available</span>
+                  <span className="rounded-full border border-white/15 bg-white/10 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.12em] text-white/65">Controlled pilot</span>
                 </div>
                 <p className="mt-3 max-w-2xl text-[13.5px] leading-relaxed text-white/65">
                   Connect approved external tools with scoped keys, explicit tool access, bounded usage, and administrative visibility.

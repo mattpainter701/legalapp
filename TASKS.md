@@ -49,7 +49,7 @@ and [Westlaw docket coverage](https://legal.thomsonreuters.com/en/products/westl
 
 ### P0 — remove switching and research-trust blockers
 
-- [ ] `COMP-01` Refresh `docs/competitive-gap-analysis.md`, README, pricing/demo
+- [x] `COMP-01` Refresh `docs/competitive-gap-analysis.md`, README, pricing/demo
       claims, and the marketing capability catalog against dated official vendor
       evidence. Retire “ahead of every incumbent on AI,” distinguish implemented,
       controlled-pilot, planned, and partner-dependent capabilities, identify an
