@@ -17,10 +17,13 @@ from app.models.platform import PlatformSetting
 from app.models.tenant import Tenant
 from app.services.ai_price_card import (
     MICROS_PER_USD,
+    PRICE_CARD_SETTING_KEY,
     PriceCard,
     UnknownModelPrice,
+    _coerce_rates,
     default_price_card,
     estimate_tokens_from_text,
+    get_price_card,
     usd,
 )
 from app.services.background_ai_quota import (
@@ -120,6 +123,78 @@ def test_unknown_model_raises_rather_than_costing_nothing():
         card.estimate_max_micros(
             model="some-unpriced-model", input_tokens=10, max_output_tokens=10
         )
+
+
+def test_empty_model_and_route_graph_fail_price_admission_closed():
+    card = default_price_card()
+
+    with pytest.raises(UnknownModelPrice):
+        card.rate_for("")
+    with pytest.raises(UnknownModelPrice):
+        card.estimate_max_for_models(models=[], input_tokens=10, max_output_tokens=10)
+
+
+def test_operator_price_overrides_accept_only_finite_positive_rates():
+    rates = _coerce_rates(
+        {
+            123: {"input": 1, "output": 2},
+            "not-a-rate": "invalid",
+            "missing-output": {"input": 1},
+            "zero-input": {"input": 0, "output": 2},
+            "bad-cache": {"input": 1, "output": 2, "cached_read": "invalid"},
+            "negative-cache": {"input": 1, "output": 2, "cached_read": -1},
+            "valid": {
+                "input": 1,
+                "output": 2,
+                "cached_read": 0.25,
+                "threshold_tokens": 100,
+                "input_over_threshold": 3,
+                "output_over_threshold": 4,
+            },
+        }
+    )
+
+    assert rates == {
+        "valid": {
+            "input": 1.0,
+            "output": 2.0,
+            "cached_read": 0.25,
+            "threshold_tokens": 100.0,
+            "input_over_threshold": 3.0,
+            "output_over_threshold": 4.0,
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_price_card_database_failure_uses_safe_builtin_fallback():
+    class FailingDB:
+        async def scalar(self, _query):
+            raise RuntimeError("database unavailable")
+
+    card = await get_price_card(FailingDB())
+
+    assert card.version == default_price_card().version
+    assert card.has_rate("opencode-go/gpt-5.6-luna") is True
+
+
+@pytest.mark.asyncio
+async def test_operator_price_override_merges_with_builtin_card():
+    class DB:
+        async def scalar(self, _query):
+            return PlatformSetting(
+                key=PRICE_CARD_SETTING_KEY,
+                value={
+                    "version": "operator-test",
+                    "rates": {"provider/custom": {"input": 1, "output": 2}},
+                },
+            )
+
+    card = await get_price_card(DB())
+
+    assert card.version == "operator-test"
+    assert card.has_rate("provider/custom") is True
+    assert card.has_rate("opencode-go/gpt-5.6-luna") is True
 
 
 def test_route_reservation_prices_every_provider_target_and_uses_the_maximum():
