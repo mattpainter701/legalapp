@@ -67,6 +67,7 @@ class DocumentTemplateResponse(BaseModel):
     source_content_type: Optional[str] = None
     source_sha256: Optional[str] = None
     source_file_size: Optional[int] = None
+    source_ready: bool = True
     last_test_rendered_at: Optional[datetime] = None
     approved_at: Optional[datetime] = None
     approved_by_user_id: Optional[str] = None
@@ -83,9 +84,21 @@ class DocumentTemplateResponse(BaseModel):
         from_attributes = True
 
 
+class DocumentTemplateLibrarySummary(BaseModel):
+    total: int
+    active: int
+    inactive: int
+    ready: int
+    source_missing: int
+
+
 class DocumentTemplateListResponse(BaseModel):
     items: list[DocumentTemplateResponse]
     total: int
+    limit: int
+    offset: int
+    has_more: bool
+    summary: DocumentTemplateLibrarySummary
 
 
 class DocumentTemplateRenderRequest(BaseModel):

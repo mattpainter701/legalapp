@@ -41,7 +41,7 @@ export default function FeeAgreementPacket({ lead, initialValue, onSave, onAppro
 
   useEffect(() => {
     let cancelled = false
-    getTemplates({ include_inactive: false })
+    getTemplates({ include_inactive: false, limit: 100 })
       .then((result) => {
         if (cancelled) return
         const approvedTemplates = (result?.items || []).filter(template => (

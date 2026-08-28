@@ -71,14 +71,64 @@ describe('document template workflow', () => {
   it('shows only working document automation tabs', async () => {
     render(<TemplatesPage />)
 
-    expect(await screen.findByRole('button', { name: 'Templates' })).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: 'Generate / Smart Fill' }))
+    expect(await screen.findByRole('tab', { name: 'Templates' })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('tab', { name: 'Generate / Smart Fill' }))
+    await waitFor(() => expect(getTemplates).toHaveBeenLastCalledWith(expect.objectContaining({
+      include_inactive: false,
+      template_status: 'active',
+      limit: 100,
+      offset: 0,
+    })))
     expect(screen.getByRole('heading', { name: 'Reliable template workflow' })).toBeInTheDocument()
     expect(screen.getByText(/Word or PDF document your team already uses/)).toBeInTheDocument()
     expect(screen.queryByText('Integration Hooks')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'E-Sign Queue' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Approvals' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Branding / Settings' })).not.toBeInTheDocument()
+  })
+
+  it('searches and paginates the template library on the server', async () => {
+    getTemplates
+      .mockResolvedValueOnce({
+        items: [{ id: 'first-page', title: 'First page template', body: 'First', category: 'other', is_active: true }],
+        total: 13,
+        limit: 12,
+        offset: 0,
+        has_more: true,
+        summary: { total: 13, active: 9, inactive: 4, source_missing: 1 },
+      })
+      .mockResolvedValueOnce({
+        items: [{ id: 'second-page', title: 'Second page template', body: 'Second', category: 'motion', is_active: false }],
+        total: 13,
+        limit: 12,
+        offset: 12,
+        has_more: false,
+        summary: { total: 13, active: 9, inactive: 4, source_missing: 1 },
+      })
+      .mockResolvedValueOnce({
+        items: [{ id: 'search-result', title: 'Retainer result', body: 'Match', category: 'retainer', is_active: true }],
+        total: 1,
+        limit: 12,
+        offset: 0,
+        has_more: false,
+        summary: { total: 13, active: 9, inactive: 4, source_missing: 1 },
+      })
+    const user = userEvent.setup()
+    render(<TemplatesPage />)
+
+    expect(await screen.findByText('First page template')).toBeInTheDocument()
+    expect(screen.getByText('Showing 1–1 of 13 templates')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    expect(await screen.findByText('Second page template')).toBeInTheDocument()
+    expect(getTemplates).toHaveBeenNthCalledWith(2, expect.objectContaining({ limit: 12, offset: 12 }))
+
+    await user.type(screen.getByRole('searchbox', { name: 'Search templates' }), '  Retainer  ')
+    await waitFor(() => expect(getTemplates).toHaveBeenNthCalledWith(3, expect.objectContaining({
+      query: 'Retainer',
+      limit: 12,
+      offset: 0,
+    })))
+    expect(await screen.findByText('Retainer result')).toBeInTheDocument()
   })
 
   it('documents singular and plural plaintiff and defendant template fields', async () => {
@@ -731,7 +781,7 @@ describe('document template workflow', () => {
   })
 
   it('previews drafts but prevents saving them to a matter', async () => {
-    getTemplates.mockResolvedValueOnce({ items: [{ id: 'draft-template', title: 'Draft Letter', body: 'Dear {{client_name}}', category: 'other', is_active: false }] })
+    getTemplates.mockResolvedValue({ items: [{ id: 'draft-template', title: 'Draft Letter', body: 'Dear {{client_name}}', category: 'other', is_active: false }] })
     renderTemplate.mockResolvedValue({ rendered: 'Dear Jane' })
     const user = userEvent.setup()
     render(<TemplatesPage />)
@@ -744,7 +794,7 @@ describe('document template workflow', () => {
     await waitFor(() => expect(renderTemplate).toHaveBeenCalledWith('draft-template', expect.objectContaining({ matter_id: null })))
 
     await user.click(screen.getByRole('button', { name: 'Close' }))
-    await user.click(screen.getByRole('button', { name: 'Generate / Smart Fill' }))
+    await user.click(screen.getByRole('tab', { name: 'Generate / Smart Fill' }))
     expect(screen.getByText('Activate a verified template before generating matter documents.')).toBeInTheDocument()
   })
 

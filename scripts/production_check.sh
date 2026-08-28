@@ -402,6 +402,19 @@ stale_queue="$(sql "SELECT count(*) FROM durable_jobs WHERE (status='pending' AN
 [[ "$stale_queue" =~ ^[0-9]+$ ]] || fail "durable queue query failed"
 if [[ "$stale_queue" =~ ^[0-9]+$ ]] && (( stale_queue > 0 )); then fail "durable queue has $stale_queue stale/exhausted job(s)"; fi
 
+# Document generation deliberately preserves staged provider objects when a
+# database commit outcome or cleanup cannot be proven. Those terminal records
+# require an operator decision before another deployment is accepted. Active
+# binary templates must also retain every piece of source-integrity metadata
+# required by the fail-closed renderer.
+template_reconciliation="$(sql "SELECT count(*) FROM document_template_previews WHERE reconciliation_required_at IS NOT NULL AND reconciliation_resolved_at IS NULL" || echo error)"
+[[ "$template_reconciliation" =~ ^[0-9]+$ ]] || fail "document-template reconciliation query failed"
+if [[ "$template_reconciliation" =~ ^[0-9]+$ ]] && (( template_reconciliation > 0 )); then fail "document automation has $template_reconciliation unresolved staged-file reconciliation record(s)"; fi
+
+invalid_active_templates="$(sql "SELECT count(*) FROM document_templates WHERE is_active AND lower(COALESCE(format, '')) IN ('pdf', 'docx') AND (NULLIF(source_storage_path, '') IS NULL OR NULLIF(source_filename, '') IS NULL OR NULLIF(source_sha256, '') IS NULL OR COALESCE(source_file_size, 0) <= 0)" || echo error)"
+[[ "$invalid_active_templates" =~ ^[0-9]+$ ]] || fail "active document-template integrity query failed"
+if [[ "$invalid_active_templates" =~ ^[0-9]+$ ]] && (( invalid_active_templates > 0 )); then fail "document automation has $invalid_active_templates active binary template(s) without complete source integrity metadata"; fi
+
 if [[ "$ZOOM_REQUIRED" == true ]]; then
   zoom_predicate="t.is_active AND a.encrypted_webhook_secret_token IS NOT NULL AND NULLIF(a.zoom_account_id, '') IS NOT NULL AND c.encrypted_refresh_token IS NOT NULL AND c.service_account_email = a.zoom_account_id AND c.health = 'healthy' AND c.scopes LIKE '%phone:read:list_call_logs:admin%' AND c.scopes LIKE '%phone:read:call_log:admin%'"
   tenant_contract="$(sql "SELECT count(*) FROM tenants t JOIN tenant_settings s ON s.tenant_id=t.id WHERE t.id='${ZOOM_REQUIRED_TENANT_ID}'::uuid AND t.is_active AND COALESCE(s.custom_config->>'plan','')='${ZOOM_REQUIRED_TENANT_PLAN}'" || echo error)"

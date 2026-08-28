@@ -71,6 +71,11 @@ bytes on the application host. Local recognition uses RapidOCR and works well
 for clean printed forms; handwriting accuracy varies with scan quality and
 writing style.
 
+`TEMPLATE_OCR_LOCAL_CONCURRENCY` controls the bounded local model pool (1-4,
+default 2). Each slot owns an independent RapidOCR session and its model memory;
+use 1 on a memory-constrained host and raise it only after observing real intake
+latency and memory headroom. Changing it requires an API restart.
+
 For firms that approve external processing, `TEMPLATE_OCR_PROVIDER=azure`
 enables Azure Document Intelligence Read. Configure the HTTPS resource endpoint
 and key with `AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT` and
@@ -124,6 +129,10 @@ The final render must also have the exact SHA-256 recorded for the reviewed
 preview. Generation evidence is consumed atomically with its MatterDocument and
 MatterEvent. A lost or retried response returns that existing document
 idempotently; it never creates a second file from the same preview.
+
+If two in-flight saves race and deletion of the losing staged object fails, the
+successful consumed evidence remains intact while a separate unconsumed
+reconciliation record identifies that exact duplicate object for operators.
 
 Consumed evidence follows the saved document's records lifecycle and survives
 template deletion (its template reference becomes null). Recent generation
