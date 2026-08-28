@@ -329,6 +329,12 @@ class TenantSummary(BaseModel):
     domain: str
     company_name: Optional[str]
     billing_tier: str
+    # Tenant type is intentionally separate from commercial billing.  Demo
+    # workspaces retain a demo billing tier today, but the operator console
+    # needs a clear lifecycle distinction rather than inferring it from a
+    # price label.
+    tenant_type: str
+    expires_at: datetime | None
     flat_seat_count: int
     is_active: bool
     stripe_customer_id: Optional[str]
@@ -432,6 +438,18 @@ def _validate_provider(provider: str | None, field: str = "provider") -> None:
 
 def _field_was_sent(model: BaseModel, field: str) -> bool:
     return field in getattr(model, "model_fields_set", set())
+
+
+def _tenant_type(tenant: Tenant) -> str:
+    """Return the lifecycle classification presented to platform operators.
+
+    ``billing_tier`` remains the authoritative legacy marker for disposable
+    demos and is deliberately not changed by this presentation field.  Keeping
+    the conversion here makes every platform tenant response classify the same
+    way while existing demo safety checks continue to work unchanged.
+    """
+
+    return "demo" if tenant.billing_tier == "demo" else "platform"
 
 
 def _validate_modules(values: list[str] | None) -> list[str] | None:
@@ -546,6 +564,8 @@ async def list_tenants(
                 domain=t.domain,
                 company_name=t.company_name,
                 billing_tier=t.billing_tier,
+                tenant_type=_tenant_type(t),
+                expires_at=t.expires_at,
                 flat_seat_count=t.flat_seat_count,
                 is_active=t.is_active,
                 stripe_customer_id=_mask(t.stripe_customer_id),
@@ -849,6 +869,8 @@ async def get_tenant_detail(
             domain=tenant.domain,
             company_name=tenant.company_name,
             billing_tier=tenant.billing_tier,
+            tenant_type=_tenant_type(tenant),
+            expires_at=tenant.expires_at,
             flat_seat_count=tenant.flat_seat_count,
             is_active=tenant.is_active,
             stripe_customer_id=_mask(tenant.stripe_customer_id),
@@ -954,7 +976,7 @@ async def update_tenant(
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
     if (
-        tenant.billing_tier == "demo"
+        _tenant_type(tenant) == "demo"
         and tenant.domain.endswith(".demo.invalid")
         and (
             _field_was_sent(body, "billing_tier") or _field_was_sent(body, "is_active")

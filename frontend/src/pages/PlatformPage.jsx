@@ -39,6 +39,29 @@ function TierBadge({ tier }) {
   )
 }
 
+function TenantTypeBadge({ type }) {
+  const isDemo = type === 'demo'
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${isDemo ? 'bg-brand-ink/10 text-brand-ink border-brand-ink/20' : 'bg-brand-accent/10 text-brand-accent border-brand-accent/20'}`}>
+      {isDemo ? 'Demo' : 'Platform'}
+    </span>
+  )
+}
+
+const tenantType = (tenant) => tenant.tenant_type || (tenant.billing_tier === 'demo' ? 'demo' : 'platform')
+
+function TenantExpiry({ tenant }) {
+  if (tenantType(tenant) !== 'demo') return <span className="text-brand-muted">—</span>
+  if (!tenant.expires_at) return <span className="text-brand-rose">Missing</span>
+  const expiresAt = new Date(tenant.expires_at)
+  const expired = expiresAt.getTime() <= Date.now()
+  return (
+    <time dateTime={tenant.expires_at} className={expired ? 'text-brand-rose' : 'text-brand-ink-2'}>
+      {expired ? 'Expired ' : ''}{expiresAt.toLocaleString()}
+    </time>
+  )
+}
+
 function LoginScreen({ onLogin }) {
   const [key, setKey] = useState('')
   const [error, setError] = useState(null)
@@ -1250,7 +1273,7 @@ function routeIssues(route, allKeys) {
   return issues
 }
 
-function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, compact = false, allowResponses = false }) {
+function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, compact = false, allowResponses = false, allowBackgroundFreeModels = false }) {
   const selectedPreset = presets.find((p) => p.id === value.provider_id)
   const keysForPreset = value.provider_id ? allKeys.filter((k) => k.provider_id === value.provider_id) : allKeys
   const placeholder = selectedPreset?.model_placeholder || 'model-id'
@@ -1335,9 +1358,9 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
               <option
                 key={model.id}
                 value={model.id}
-                disabled={!endpointSupported(model) || model.confidential_data_allowed === false}
+                disabled={!endpointSupported(model) || (!allowBackgroundFreeModels && model.confidential_data_allowed === false)}
               >
-                {model.name || model.id}{model.is_free ? ' — Free' : ' — Paid'}{!endpointSupported(model) ? ' — Unsupported endpoint' : ''}{model.confidential_data_allowed === false ? ' — Not approved for client data' : ''}
+                {model.name || model.id}{model.is_free ? ' — Free' : ' — Paid'}{!endpointSupported(model) ? ' — Unsupported endpoint' : ''}{model.confidential_data_allowed === false ? (allowBackgroundFreeModels ? ' — Background-only' : ' — Not approved for client data') : ''}
               </option>
             ))}
           </select>
@@ -1345,7 +1368,7 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
         {!compact && suggestedModels.length > 0 && (
           <p className="text-[11px] text-brand-muted mt-1 font-sans">
             {allowResponses
-              ? 'Provider/key-specific Responses models are supported on this Background route; incompatible endpoint families stay disabled.'
+              ? 'Provider/key-specific Responses models and OpenCode Zen free models are supported on this Background route; matter context remains disabled and incompatible endpoint families stay disabled.'
               : 'All provider/key-specific catalog models, ranked for legal work and latency. Unsupported endpoints are visible but cannot be activated on the Chat Completions route.'}
           </p>
         )}
@@ -1582,6 +1605,7 @@ function RouteCard({ label, routeName, alias: activeAlias, route, allKeys, prese
             models={modelsFor(route)}
             modelListId={`models-${routeKey}-primary`}
             allowResponses={routeKey === 'background'}
+            allowBackgroundFreeModels={routeKey === 'background'}
             onChange={(next) => updateRoute({ ...next, alternates: route.alternates || [], fallbacks: route.fallbacks || [] })}
           />
         </div>
@@ -1620,6 +1644,7 @@ function RouteCard({ label, routeName, alias: activeAlias, route, allKeys, prese
                   models={modelsFor(alt)}
                   modelListId={`models-${routeKey}-alternate-${i}`}
                   allowResponses={routeKey === 'background'}
+                  allowBackgroundFreeModels={routeKey === 'background'}
                   compact
                   onChange={(next) => updateAlternate(i, next)}
                 />
@@ -1670,6 +1695,7 @@ function RouteCard({ label, routeName, alias: activeAlias, route, allKeys, prese
                   models={modelsFor(fb)}
                   modelListId={`models-${routeKey}-fallback-${i}`}
                   allowResponses={routeKey === 'background'}
+                  allowBackgroundFreeModels={routeKey === 'background'}
                   compact
                   onChange={(next) => updateFallback(i, next)}
                 />
@@ -3273,9 +3299,11 @@ export function PlatformTenantRow({ tenant: t, expanded, onToggle }) {
         <p className="text-xs text-brand-muted">{t.domain}</p>
       </td>
       <td className="px-5 py-3"><TierBadge tier={t.billing_tier} /></td>
+      <td className="px-5 py-3"><TenantTypeBadge type={tenantType(t)} /></td>
       <td className="px-5 py-3 text-center text-sm text-brand-ink-2 font-sans">{t.user_count}</td>
       <td className="px-5 py-3 text-center text-sm text-brand-ink-2 font-sans">{t.requests_30d?.toLocaleString()}</td>
       <td className="px-5 py-3 text-right text-sm text-brand-ink-2 font-mono">${t.cost_usd_30d?.toFixed(2)}</td>
+      <td className="px-5 py-3 text-xs text-brand-muted"><TenantExpiry tenant={t} /></td>
       <td className="px-5 py-3 text-center">
         <span className={`inline-flex items-center gap-1.5 text-xs font-medium font-sans ${t.is_active ? 'text-brand-accent' : 'text-brand-rose'}`}>
           <span className={`w-2 h-2 rounded-full ${t.is_active ? 'bg-brand-accent' : 'bg-brand-rose'}`} />
@@ -3307,6 +3335,7 @@ export default function PlatformPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [search, setSearch] = useState('')
+  const [tenantTypeFilter, setTenantTypeFilter] = useState('all')
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [expandedTenant, setExpandedTenant] = useState(null)
@@ -3391,7 +3420,8 @@ export default function PlatformPage() {
   }
 
   const filtered = tenants.filter((t) =>
-    !search || t.name.toLowerCase().includes(search.toLowerCase()) || t.domain.toLowerCase().includes(search.toLowerCase())
+    (tenantTypeFilter === 'all' || tenantType(t) === tenantTypeFilter) &&
+    (!search || t.name.toLowerCase().includes(search.toLowerCase()) || t.domain.toLowerCase().includes(search.toLowerCase()))
   )
 
   if (!platformKey) return <LoginScreen onLogin={handleLogin} />
@@ -3510,6 +3540,12 @@ export default function PlatformPage() {
                 <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-brand-muted" />
                 <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by name or domain…" className="w-full pl-9 pr-4 py-2 border border-brand-line rounded-lg text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface" />
               </div>
+              <label className="sr-only" htmlFor="tenant-type-filter">Tenant type</label>
+              <select id="tenant-type-filter" value={tenantTypeFilter} onChange={(e) => setTenantTypeFilter(e.target.value)} className="rounded-lg border border-brand-line bg-brand-surface px-3 py-2 text-sm font-sans text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-accent">
+                <option value="all">All tenant types</option>
+                <option value="platform">Platform tenants</option>
+                <option value="demo">Demo tenants</option>
+              </select>
               <button onClick={loadData} disabled={loading} className="text-xs text-brand-muted hover:text-brand-ink font-sans transition-colors">
                 {loading ? 'Loading…' : 'Refresh'}
               </button>
@@ -3529,9 +3565,11 @@ export default function PlatformPage() {
                         <th className="text-left px-5 py-3"></th>
                         <th className="text-left px-5 py-3">Tenant</th>
                         <th className="text-left px-5 py-3">Tier</th>
+                        <th className="text-left px-5 py-3">Type</th>
                         <th className="text-center px-5 py-3">Users</th>
                         <th className="text-center px-5 py-3">Requests (30d)</th>
                         <th className="text-right px-5 py-3">Cost (30d)</th>
+                        <th className="text-left px-5 py-3">Demo expiration</th>
                         <th className="text-center px-5 py-3">Status</th>
                         <th className="text-center px-5 py-3">Action</th>
                       </tr>
@@ -3547,7 +3585,7 @@ export default function PlatformPage() {
                           {/* Expanded detail row */}
                           {expandedTenant === t.id && (
                             <tr key={`detail-${t.id}`} id={`tenant-details-${t.id}`}>
-                              <td colSpan={8} className="px-5 py-4 bg-brand-bg-soft">
+                              <td colSpan={10} className="px-5 py-4 bg-brand-bg-soft">
                                 {loadingDetail ? (
                                   <div className="flex justify-center py-4"><div className="w-6 h-6 border-2 border-brand-accent border-t-transparent rounded-full animate-spin" /></div>
                                 ) : tenantDetail ? (
@@ -3558,6 +3596,8 @@ export default function PlatformPage() {
                                       <dl className="space-y-2 text-sm">
                                         <div className="flex justify-between"><dt className="text-brand-muted font-sans">Company</dt><dd className="text-brand-ink font-sans">{tenantDetail.company_name || '—'}</dd></div>
                                         <div className="flex justify-between"><dt className="text-brand-muted font-sans">Domain</dt><dd className="text-brand-ink font-sans">{tenantDetail.domain}</dd></div>
+                                        <div className="flex justify-between"><dt className="text-brand-muted font-sans">Type</dt><dd><TenantTypeBadge type={tenantType(tenantDetail)} /></dd></div>
+                                        <div className="flex justify-between"><dt className="text-brand-muted font-sans">Demo expiration</dt><dd className="text-brand-ink font-sans"><TenantExpiry tenant={tenantDetail} /></dd></div>
                                         <div className="flex justify-between"><dt className="text-brand-muted font-sans">Stripe ID</dt><dd className="text-brand-ink font-mono text-xs">{tenantDetail.stripe_customer_id ? '✓' : '—'}</dd></div>
                                         <div className="flex justify-between"><dt className="text-brand-muted font-sans">Seats</dt><dd className="text-brand-ink font-sans">{tenantDetail.flat_seat_count || '—'}</dd></div>
                                         <div className="flex justify-between"><dt className="text-brand-muted font-sans">Created</dt><dd className="text-brand-ink font-sans">{new Date(tenantDetail.created_at).toLocaleDateString()}</dd></div>
@@ -3581,7 +3621,7 @@ export default function PlatformPage() {
                                     </div>
                                     <div>
                                       <h4 className="text-xs font-bold text-brand-ink uppercase tracking-wider mb-3 font-sans">Actions</h4>
-                                      {t.billing_tier === 'demo' ? (
+                                      {tenantType(t) === 'demo' ? (
                                         <p className="rounded-lg border border-brand-line bg-brand-bg px-3 py-2 text-xs leading-5 text-brand-muted">
                                           Use the Demos tab to terminate this disposable workspace. Generic tenant controls are disabled so an ongoing demo cannot be interrupted accidentally.
                                         </p>

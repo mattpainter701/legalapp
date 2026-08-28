@@ -280,6 +280,38 @@ describe('platform AI routing', () => {
     expect(luna).not.toHaveTextContent('Unsupported endpoint')
   })
 
+  it('allows OpenCode Zen free models on the Background route only', async () => {
+    const user = userEvent.setup()
+    getLLMProviderKeys.mockResolvedValue({
+      keys: [{ id: 'key-zen', name: 'Zen', provider_id: 'opencode-zen', key_hint: '1234' }],
+    })
+    getLLMProviderPresets.mockResolvedValue({
+      providers: [{ id: 'opencode-zen', name: 'OpenCode Zen', description: 'Free evaluation models' }],
+    })
+    getLLMModelCatalog.mockResolvedValue({
+      models: [{
+        id: 'nemotron-3-ultra-free',
+        name: 'Nemotron 3 Ultra',
+        provider_id: 'opencode-zen',
+        key_id: 'key-zen',
+        key_ids: ['key-zen'],
+        is_free: true,
+        confidential_data_allowed: false,
+      }],
+    })
+    renderRouting()
+
+    await waitFor(() => expect(document.getElementById('models-background-primary-provider')).not.toBeNull())
+    await user.selectOptions(document.getElementById('models-background-primary-provider'), 'opencode-zen')
+    await user.selectOptions(document.getElementById('models-background-primary-key'), 'key-zen')
+    const model = document.getElementById('models-background-primary-model')
+    await waitFor(() => expect(model.querySelector('option[value="nemotron-3-ultra-free"]')).not.toBeNull())
+
+    const zenFree = model.querySelector('option[value="nemotron-3-ultra-free"]')
+    expect(zenFree).not.toBeDisabled()
+    expect(zenFree).toHaveTextContent('Background-only')
+  })
+
   it('validates and activates both complete routes as one operation', async () => {
     const user = userEvent.setup()
     renderRouting()

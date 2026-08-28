@@ -2,6 +2,31 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.28.2",
+      "version": "2026.08.28.2",
+      "title": "Demo workspaces are clearly identified for operators",
+      "published_at": "2026-08-28",
+      "summary": "Platform operators can now distinguish disposable demo workspaces from regular platform tenants in the tenant inventory.",
+      "highlights": [
+        {
+          "title": "See the tenant type",
+          "description": "The platform tenant list labels each workspace as Demo or Platform without using the billing tier as the visible grouping."
+        },
+        {
+          "title": "See demo expiry at a glance",
+          "description": "Demo rows show their expiration and clearly flag workspaces that have already expired."
+        },
+        {
+          "title": "Filter the inventory",
+          "description": "Operators can focus the tenant list on demo workspaces or regular platform tenants while the dedicated demo controls remain protected."
+        },
+        {
+          "title": "Use Zen free background capacity",
+          "description": "Platform operators can assign OpenCode Zen free models to the Background Automations route while Standard and Premium keep their confidential-data safeguards."
+        }
+      ]
+    },
+    {
       "id": "2026.08.28.1",
       "version": "2026.08.28.1",
       "title": "The platform tour now follows a matter end to end",
