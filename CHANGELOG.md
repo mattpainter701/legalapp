@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed
+- **IONOS release validation now recognizes the launched Research gateway:**
+  the stage gate requires an enabled Research MCP to return an unauthenticated
+  `401` with a Bearer challenge, still requires disabled deployments to return
+  `404`, preserves hostname isolation, and continues to probe the private
+  Skynet research upstream without exposing its credential.
+
 ### Added
 - **Tenant agreement evidence and bounded retention controls:** platform
   operators publish immutable counsel-owned document identities; tenant admins

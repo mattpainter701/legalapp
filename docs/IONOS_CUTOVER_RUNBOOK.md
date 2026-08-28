@@ -17,7 +17,7 @@ The placement is intentionally split:
 | --- | --- | --- |
 | Portal, API, tenant database, Redis, LiteLLM, scheduler, public MCP gateways | IONOS Cube M | Customer identity, entitlement, billing, and audit source of truth |
 | CourtListener/vector database, source corpus, authority sync, embedding workers, private research sidecar | Skynet | No public listener; IONOS-only tailnet path plus `MCP_UPSTREAM_API_KEY` |
-| `getlawhand.com`, `mcp.getlawhand.com`, `research.getlawhand.com` | One new IONOS Cloudflare Tunnel | Nginx hostname/path isolation; Research remains 404 while disabled |
+| `getlawhand.com`, `mcp.getlawhand.com`, `research.getlawhand.com` | One new IONOS Cloudflare Tunnel | Nginx hostname/path isolation; Research returns 401 with a Bearer challenge when enabled and 404 when disabled |
 
 Current corpus placement is not optional for this cut: the vector database is
 about 129 GB and the staged source corpus about 58 GB. Moving those volumes to
@@ -43,7 +43,8 @@ Do not move DNS when any item below is true:
   sidecar on a public/LAN interface;
 - the new Tunnel lacks pinned private-origin TLS or its final
   `http_status:404` rule;
-- Research MCP is anything other than disabled/404;
+- Research MCP does not match its configured state: authenticated 401 with a
+  Bearer challenge when enabled, or fail-closed 404 when disabled;
 - rollback CNAME targets, Skynet service state, and an operator are not ready.
 
 ## One-time host preparation
@@ -87,7 +88,9 @@ Do not move DNS when any item below is true:
    host transfer, and change host paths to `/srv/lawhand/uploads` and
    `/srv/lawhand/host-status`. Set
    `APP_ENV_FILE=/etc/lawhand/core.env` so container `env_file` mounts resolve
-   outside the checkout. Keep `MCP_PRODUCT_ENABLED=false`. Point Restic at an
+   outside the checkout. Keep `MCP_PRODUCT_ENABLED=false` until the separately
+   authenticated Research product has passed its release gates; once approved,
+   the same stage check validates its 401 Bearer challenge. Point Restic at an
    actual second host or object store. The first-customer topology uses a
    key-only, chrooted SFTP account on Skynet over Tailscale; its private key is
    dedicated to IONOS backups and the authorized key is source-restricted to
@@ -150,7 +153,7 @@ Use a scheduled maintenance window even before the first paying tenant.
 6. Run **Deploy IONOS candidate** with `operation=accept` and confirmation
    `ACCEPT-IONOS-PRODUCTION`. Then run the scheduled public-health workflow and
    verify exact `/api/version`, readiness, OAuth challenge/metadata, hostname
-   isolation, Research 404 behavior, HSTS, and public TLS.
+   isolation, the configured Research 401/404 behavior, HSTS, and public TLS.
 7. Advance the `production` tag only after public acceptance identifies the
    exact IONOS SHA. Update the normal production deployment and acceptance
    workflows to the IONOS runner in the immediately following protected change.
@@ -167,5 +170,6 @@ only one scheduler can own durable work. Do not copy partially written IONOS
 state back automatically; reconcile any writes that reached IONOS during the
 window from audit/provider evidence.
 
-Do not enable Research MCP, broaden the Tailscale ACL, expose port 8021, or
-move the corpus as a cutover recovery action.
+Do not change Research MCP enablement, broaden the Tailscale ACL, expose port
+8021, or move the corpus as a cutover recovery action. Roll back the application
+revision or use the documented Research product rollback independently.
