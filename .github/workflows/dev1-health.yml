@@ -1,0 +1,54 @@
+name: Skynet dev1 health
+
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: law-hand-dev1-public-health
+  cancel-in-progress: true
+
+jobs:
+  health:
+    if: vars.LAWHAND_DEV1_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe readiness and TLS
+        id: probe
+        continue-on-error: true
+        run: |
+          set -Eeuo pipefail
+          curl --fail --silent --show-error --max-time 20 \
+            https://dev1.getlawhand.com/health/readiness \
+            | jq -e '.status == "ok"' >/dev/null
+          timeout 20 openssl s_client \
+            -connect dev1.getlawhand.com:443 \
+            -servername dev1.getlawhand.com </dev/null 2>/dev/null \
+            | openssl x509 -checkend 1209600 -noout
+
+      - name: Reconcile dev1 alert issue
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          PROBE_OUTCOME: ${{ steps.probe.outcome }}
+        with:
+          script: |
+            const title = '[dev1-alert] Skynet development health failure';
+            const failed = process.env.PROBE_OUTCOME !== 'success';
+            const { data: issues } = await github.rest.issues.listForRepo({ owner: context.repo.owner, repo: context.repo.repo, state: 'open', per_page: 100 });
+            const existing = issues.find((issue) => issue.title === title);
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            if (failed && existing) {
+              await github.rest.issues.update({ owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number, body: `Dev1 readiness or TLS failed.\n\nRun: ${runUrl}` });
+            } else if (failed) {
+              await github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title, body: `Dev1 readiness or TLS failed.\n\nRun: ${runUrl}` });
+            } else if (existing) {
+              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number, body: `Dev1 recovered: ${runUrl}` });
+              await github.rest.issues.update({ owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number, state: 'closed' });
+            }
+            if (failed) core.setFailed('Dev1 readiness or TLS failed.');

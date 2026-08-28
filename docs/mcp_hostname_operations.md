@@ -98,8 +98,8 @@ Create proxied CNAME records for both MCP hosts targeting the existing
 LawHand Tunnel:
 
 ```text
-mcp.getlawhand.com      CNAME  1d780272-f71d-4b23-9381-bbfa0ff94388.cfargotunnel.com
-research.getlawhand.com CNAME  1d780272-f71d-4b23-9381-bbfa0ff94388.cfargotunnel.com
+mcp.getlawhand.com      CNAME  b4e85d87-80ba-432c-a360-20adcd24716f.cfargotunnel.com
+research.getlawhand.com CNAME  b4e85d87-80ba-432c-a360-20adcd24716f.cfargotunnel.com
 ```
 
 In the Cloudflare dashboard, use `CNAME`, names `mcp` and `research`, the

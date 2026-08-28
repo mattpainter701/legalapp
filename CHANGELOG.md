@@ -36,6 +36,12 @@
   budget. Standard `Authorization: Bearer lhrk_...` clients are supported while
   `X-MCP-API-Key` remains backward compatible; failed calls remain observable
   but are neither quota-consuming nor billable.
+- **Skynet development and disaster-recovery controls:** an isolated
+  `dev1.getlawhand.com` Compose project and pinned-SHA runner workflow keep test
+  data, writers, email, signup, and MCP surfaces separate from IONOS production.
+  Daily network-isolated restore rehearsals create durable alerts, while a new
+  operator-only infrastructure page shows primary, dev, DR fencing, release,
+  and research gateway health without exposing credentials or raw errors.
 - **Document automation now scales with an operator-visible safety boundary:**
   tenant-scoped template search, status/category filters, pagination, readiness
   summaries, and an independently loaded generation view replace the unbounded
