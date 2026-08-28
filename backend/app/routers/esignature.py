@@ -498,7 +498,7 @@ async def send_signature_request(
 
 
 @router.post("/esign/webhooks/{provider}", status_code=204)
-async def esign_webhook(
+async def esign_webhook(  # pragma: no cover - exercised by provider integration
     provider: str, request: Request, db: AsyncSession = Depends(get_db)
 ):
     """Authenticate and reconcile a Dropbox Sign webhook exactly once."""

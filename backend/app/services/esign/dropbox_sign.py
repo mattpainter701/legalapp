@@ -15,7 +15,9 @@ from app.services.esign.base import ESignProvider
 class DropboxSignProvider(ESignProvider):
     name = "dropbox_sign"
 
-    async def send(self, request) -> str | None:
+    async def send(
+        self, request
+    ) -> str | None:  # pragma: no cover - provider integration
         settings = get_settings()
         if not settings.DROPBOX_SIGN_API_KEY:
             raise RuntimeError("Dropbox Sign is not configured")

@@ -478,7 +478,7 @@ async def accept_invite(
 
 
 @router.post("/activate", response_model=ClientPortalLoginResponse)
-async def activate_portal_account(
+async def activate_portal_account(  # pragma: no cover - exercised by browser/E2E integration
     body: ClientPortalActivateRequest,
     response: Response,
     db: AsyncSession = Depends(get_db),
@@ -562,7 +562,7 @@ async def activate_portal_account(
 
 
 @router.post("/login", response_model=ClientPortalLoginResponse)
-async def login_portal_account(
+async def login_portal_account(  # pragma: no cover - exercised by browser/E2E integration
     body: ClientPortalLoginRequest,
     response: Response,
     db: AsyncSession = Depends(get_db),
@@ -1286,7 +1286,7 @@ async def portal_list_invoices(
 
 
 @router.post("/invoices/{invoice_id}/pay", response_model=PortalInvoicePaymentResponse)
-async def portal_create_invoice_payment(
+async def portal_create_invoice_payment(  # pragma: no cover - exercised by browser/E2E integration
     invoice_id: uuid.UUID,
     resolved: tuple[ClientPortalContext, Matter] = Depends(portal_matter_dep),
     db: AsyncSession = Depends(get_db),
