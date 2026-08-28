@@ -44,7 +44,7 @@ from app.services.chat_tools.handlers import (
     propose_task,
 )
 from app.services.chat_tools.registry import ChatToolError
-from app.services.scheduler import _lock_expired_chat_attachments
+from app.services.compliance import execute_chat_attachment_retention
 
 
 settings = get_settings()
@@ -865,10 +865,14 @@ async def test_cleanup_skips_attachment_locked_for_action_source_promotion(
 
     async with async_session_maker() as cleanup_db:
         await set_tenant_context(cleanup_db, str(test_tenant.id))
-        claimed = await _lock_expired_chat_attachments(
-            cleanup_db, datetime.now(timezone.utc)
+        result = await execute_chat_attachment_retention(
+            cleanup_db,
+            test_tenant.id,
+            dry_run=True,
+            actor_user_id=test_user.id,
+            actor_type="test",
         )
-        assert claimed == []
+        assert result["eligible_records"] == 0
         await cleanup_db.rollback()
 
     await db_session.rollback()
