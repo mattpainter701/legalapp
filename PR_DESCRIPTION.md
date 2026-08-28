@@ -23,7 +23,7 @@ fail-closed until ECO-23–29 provider/compliance gates are complete.
 
 - [x] Documentation updated
 - [ ] No documentation impact
-- [x] Customer release notes updated (`2026.08.28.5`)
+- [x] Customer release notes updated (`2026.08.28.6`)
 - [ ] No customer-facing release note
 - [x] Security and privacy impact reviewed
 

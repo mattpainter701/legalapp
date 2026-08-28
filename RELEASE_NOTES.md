@@ -24,6 +24,7 @@ Tenant administrators can follow Zoom Phone setup stage by stage and recover fro
 - **See each setup stage.** The Zoom panel separately tracks saved app credentials, account authorization, Phone API permissions, and verified real-time call delivery.
 - **Recover from the actual authorization problem.** Zoom authorization returns to the integration panel with specific guidance for rejected credentials, expired requests, missing permissions, and account mismatches.
 - **Know when reconnecting is required.** Replacing an OAuth client pair now clearly reports that the previous grant was disconnected and directs the administrator to authorize the current app.
+
 ## 2026.08.28.4 — Client portal payments and durable sign-in
 
 Released August 28, 2026.
