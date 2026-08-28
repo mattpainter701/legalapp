@@ -28,11 +28,16 @@ set +a
 bash "$APP_DIR/scripts/restore_rehearsal.sh"
 result=$?
 set -e
+release_sha="${DR_RELEASE_SHA:-}"
+if [[ -z "$release_sha" ]]; then
+  release_sha="$(git -C "$APP_DIR" rev-parse HEAD)"
+fi
+[[ "$release_sha" =~ ^[0-9a-f]{40}$ ]]
 
 completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 status=healthy
 [[ "$result" -eq 0 ]] || status=failed
-python3 - "$tmp" "$status" "$started_at" "$completed_at" "$(git -C "$APP_DIR" rev-parse HEAD)" <<'PY'
+python3 - "$tmp" "$status" "$started_at" "$completed_at" "$release_sha" <<'PY'
 import json, os, sys
 path, status, started, completed, commit = sys.argv[1:]
 with open(path, "w", encoding="utf-8") as handle:

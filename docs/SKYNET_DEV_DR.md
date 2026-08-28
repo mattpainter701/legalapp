@@ -65,7 +65,12 @@ before it contains any non-public feature or test data. Preserve the terminal
 IONOS must write encrypted off-host Restic snapshots at least hourly. A Skynet
 rehearsal runs daily and calls the existing network-isolated
 `restore_rehearsal.sh`; it validates hashes, exact row counts, uploads, LiteLLM,
-and key escrow without attaching to running volumes. The result is exposed only
+and key escrow without attaching to running volumes. It executes only
+through a root-owned, argument-free wrapper. The installer pins root-owned
+helper and credential copies under `/usr/local/libexec` and `/etc/lawhand`.
+They read the local repository without granting the runner or `varta` persistent
+access. The sanitized result is returned as a root-owned, group-readable file
+for the private status service and is exposed only
 on Skynet's Tailscale address at port `19090` and creates or resolves a GitHub
 `[dr-alert]` issue.
 
