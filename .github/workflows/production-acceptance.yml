@@ -61,6 +61,27 @@ jobs:
           echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
           echo "recorded_sha=$recorded_sha" >> "$GITHUB_OUTPUT"
 
+      - name: Require successful CI and CodeQL for accepted release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          set -Eeuo pipefail
+          for workflow in ci.yml codeql.yml; do
+            conclusion="$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow "$workflow" \
+              --commit "$RELEASE_SHA" \
+              --event push \
+              --limit 20 \
+              --json conclusion \
+              --jq '.[0].conclusion // ""')"
+            [[ "$conclusion" == success ]] || {
+              echo "::error::$workflow for $RELEASE_SHA is '$conclusion'; production was not accepted."
+              exit 1
+            }
+          done
+
   production:
     name: Run acceptance on IONOS
     needs: release-gate

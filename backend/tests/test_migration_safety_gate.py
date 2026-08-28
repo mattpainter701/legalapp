@@ -188,6 +188,10 @@ def test_production_acceptance_preflights_root_entrypoint_capability() -> None:
     assert "runs-on: [self-hosted, Linux, X64, ionos, lawhand-prod]" in workflow
     assert "group: law-hand-ionos-production" in workflow
     assert "release_sha is not a forward update from the production tag" in workflow
+    assert "Require successful CI and CodeQL for accepted release" in workflow
+    assert "for workflow in ci.yml codeql.yml" in workflow
+    assert '--commit "$RELEASE_SHA"' in workflow
+    assert "--event push" in workflow
     assert "Preflight root-owned acceptance entrypoint" in workflow
     assert 'if ! test -f "$entrypoint" || ! test -x "$entrypoint"' in workflow
     assert "if ! stat -c '%U:%G %a' \"$entrypoint\"" in workflow
@@ -226,7 +230,10 @@ def test_ionos_candidate_uses_pinned_main_without_runner_checkout_or_release_tag
         encoding="utf-8"
     )
 
-    assert "Require successful CI for mutation" in workflow
+    assert "Require successful CI and CodeQL for mutation" in workflow
+    assert "for workflow in ci.yml codeql.yml" in workflow
+    assert '--commit "$RELEASE_SHA"' in workflow
+    assert "--event push" in workflow
     assert "runs-on: [self-hosted, Linux, X64, ionos, lawhand-prod]" in workflow
     assert "environment:" in workflow and "ionos-production" in workflow
     assert "- accept" not in workflow
