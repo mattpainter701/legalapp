@@ -133,7 +133,9 @@ async def test_platform_tenant_inventory_identifies_demos_and_their_expiration(
     assert response.status_code == 200
     tenants = {row["id"]: row for row in response.json()["tenants"]}
     assert tenants[str(demo.id)]["tenant_type"] == "demo"
-    assert tenants[str(demo.id)]["expires_at"] == expires_at.isoformat()
+    assert tenants[str(demo.id)]["expires_at"] == expires_at.isoformat().replace(
+        "+00:00", "Z"
+    )
     assert tenants[str(test_tenant.id)]["tenant_type"] == "platform"
     assert tenants[str(test_tenant.id)]["expires_at"] is None
 
