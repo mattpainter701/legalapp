@@ -1910,6 +1910,11 @@ def test_skynet_installers_separate_runner_from_runtime_owner() -> None:
     assert 'chmod 0644 -- "$postgres_init_script"' in deploy
     assert '[[ -f "$postgres_init_script" && ! -L "$postgres_init_script" ]]' in deploy
 
+    dev1_compose = (ROOT / "docker-compose.dev1.yml").read_text(encoding="utf-8")
+    assert 'profiles: ["office-addin-disabled-on-dev1"]' in dev1_compose
+    assert 'extra_hosts:' in dev1_compose
+    assert '- "office-addin=127.0.0.1"' in dev1_compose
+
     for installer in (dev1, dr):
         assert 'deploy_user="${DEPLOY_USER:-varta}"' in installer
         assert 'runner_user="${RUNNER_USER:-lawhand-runner}"' in installer
