@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.28.1 — The platform tour now follows a matter end to end
+
+Released August 28, 2026.
+
+The LawHand platform tour now shows how legal work moves from intake and conflict review through preparation, client action, signature, billing, and follow-through.
+
+- **Follow the matter.** Step through a visual workflow from the first call to an opened matter, attorney review, client delivery, and accounting.
+- **See every role's handoff.** Compare what attorneys, paralegals, intake staff, billing staff, and clients need from the same matter record.
+- **Evaluate the complete platform.** Review expanded capability, practice-area, integration, and control sections with clear rollout labels and concrete workflow details.
+
 ## 2026.08.27.12 — Product claims now show rollout and research boundaries
 
 Released August 27, 2026.

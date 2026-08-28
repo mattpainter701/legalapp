@@ -50,6 +50,15 @@ export const CAPABILITY_CATALOG = Object.freeze([
     availabilityNote: 'Selected-tenant rollout; Zoom requires a verified provider connection.',
   }),
   reviewedCapability({
+    id: 'conflicts',
+    icon: 'FileSearch',
+    name: 'Saved conflict reviews',
+    availability: 'controlled-pilot',
+    summary:
+      'Search clients, contacts, and matters; preserve the terms and results the reviewer saw; record notes and a decision; and warn on restricted matches without exposing the protected matter.',
+    availabilityNote: 'Selected-tenant rollout; a saved search supports review but does not replace the firm\'s conflicts policy.',
+  }),
+  reviewedCapability({
     id: 'tasks',
     icon: 'ListChecks',
     name: 'Tasks, deadlines, and calendar',
@@ -59,6 +68,24 @@ export const CAPABILITY_CATALOG = Object.freeze([
     availabilityNote: 'Stores and projects reviewed deadlines; it does not calculate court-rule deadlines.',
   }),
   reviewedCapability({
+    id: 'communications',
+    icon: 'Inbox',
+    name: 'Matter communications and email',
+    availability: 'controlled-pilot',
+    summary:
+      'Keep communication history on the matter, review forwarded mail before filing it, and turn explicitly tagged email into a traceable task or reviewed deadline handoff.',
+    availabilityNote: 'Selected-tenant rollout; mailbox and forwarding behavior depends on the configured connection.',
+  }),
+  reviewedCapability({
+    id: 'client-portal',
+    icon: 'UserCheck',
+    name: 'Client portal',
+    availability: 'controlled-pilot',
+    summary:
+      'Give clients a focused view of unread messages, shared documents, upcoming dates, signature requests, invoices, balances, and the actions that need them.',
+    availabilityNote: 'Selected-tenant rollout with matter-scoped invitations and access controls.',
+  }),
+  reviewedCapability({
     id: 'documents',
     icon: 'FileText',
     name: 'Document preparation and automation',
@@ -66,6 +93,15 @@ export const CAPABILITY_CATALOG = Object.freeze([
     summary:
       'DOCX and TXT template analysis with variable substitution, retained PDF sources with AcroForm field mapping, review preview, flattened output, and filing back to the matter.',
     availabilityNote: 'Selected-tenant rollout with review and supported-input gates.',
+  }),
+  reviewedCapability({
+    id: 'signature',
+    icon: 'FileSignature',
+    name: 'Signature routing and follow-through',
+    availability: 'controlled-pilot',
+    summary:
+      'Route internal signature requests, track delivery and first view, progress sequential signers, schedule reminders, and resend manually when follow-up is needed.',
+    availabilityNote: 'Selected-tenant rollout; signature scope and enforceability remain subject to the firm\'s workflow and applicable law.',
   }),
   reviewedCapability({
     id: 'billing',

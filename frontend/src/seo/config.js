@@ -14,10 +14,10 @@ export const HOME_TITLE = 'LawHand | Legal Automation Platform for Law Firms'
 // Kept under ~160 characters, and names the concrete functions a firm searches
 // for. The home page must visibly contain every function named here.
 export const HOME_DESCRIPTION =
-  'LawHand is the legal automation platform for law firms: client and matter CRM, caller intake, document preparation, invoicing, and source-linked AI legal research.'
+  'LawHand unifies intake, matters, conflict review, documents, client action, billing, and source-linked AI legal research in one review-first legal workspace.'
 
 export const ORGANIZATION_DESCRIPTION =
-  'LawHand builds a legal automation platform that combines client and matter CRM, caller intake, tasks and deadlines, document preparation, time tracking and invoicing, practice-area workflows, and source-linked AI legal research in one tenant-isolated workspace for law firms and legal teams.'
+  'LawHand builds a legal automation platform that connects client and matter CRM, intake, conflict review, tasks and deadlines, document preparation, client portal and signature workflows, time and invoicing, practice-area skills, and source-linked AI legal research in one tenant-isolated workspace.'
 
 export const PRIVATE_DESCRIPTION =
   'Sign in to the private LawHand workspace for your firm.'
@@ -33,7 +33,7 @@ export const PLATFORM_PRICE_USD = '89'
 export const MCP_TOOL_CALL_PRICE_USD = '0.45'
 
 // Bumped whenever public marketing copy changes; feeds sitemap <lastmod>.
-export const PUBLIC_CONTENT_LASTMOD = '2026-08-27'
+export const PUBLIC_CONTENT_LASTMOD = '2026-08-28'
 
 export const PRICING_FAQ = Object.freeze([
   Object.freeze([
@@ -130,7 +130,7 @@ export const PUBLIC_ROUTE_META = Object.freeze({
   '/product': {
     title: 'Legal Automation Platform | LawHand Product Tour',
     description:
-      'The LawHand platform in one workspace: client and matter CRM, caller intake, tasks and deadlines, document preparation, time and invoicing, practice-area skills, matter-aware AI chat, and controlled MCP integrations.',
+      'Follow a legal matter from intake and conflict review through tasks, documents, attorney review, client action, signature, billing, and connected systems in LawHand.',
     canonicalPath: '/product',
     indexable: true,
     priority: '0.9',
