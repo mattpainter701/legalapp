@@ -12,6 +12,7 @@ import hashlib
 import json
 import uuid
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation, ROUND_CEILING
 from enum import Enum
 from typing import Any
 
@@ -23,9 +24,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.models.tenant import TenantSettings
 from app.services.ai_price_card import (
+    MICROS_PER_USD,
     PriceCard,
     UnknownModelPrice,
-    estimate_tokens_from_text,
     get_price_card,
 )
 from app.services.background_ai_quota import (
@@ -33,8 +34,9 @@ from app.services.background_ai_quota import (
     BackgroundQuotaExceeded,
     BackgroundQuotaLedger,
     BackgroundReservation,
+    get_active_background_pricing_models,
 )
-from app.services.gateway_privacy import gateway_metadata as sanitized_gateway_metadata
+from app.services.gateway_privacy import litellm_metadata as sanitized_gateway_metadata
 from app.services.llm import LLMService
 from app.services.llm_routing import (
     LLMRoute,
@@ -115,11 +117,28 @@ class AIResult:
     tokens_in: int
     tokens_out: int
     raw_model: str | None = None
+    cached_read_tokens: int = 0
+    cached_write_tokens: int = 0
+    provider_spend_micros: int | None = None
 
 
 def _responses_url(base_url: str) -> str:
     base = base_url.rstrip("/")
     return f"{base}/responses" if base.endswith("/v1") else f"{base}/v1/responses"
+
+
+def _spend_header_micros(value: str | None, *, has_usage: bool) -> int | None:
+    """Parse LiteLLM's dollar-cost header without trusting its known false zero."""
+
+    if not value:
+        return None
+    try:
+        dollars = Decimal(value)
+    except (InvalidOperation, ValueError):
+        return None
+    if not dollars.is_finite() or dollars < 0 or (dollars == 0 and has_usage):
+        return None
+    return int((dollars * MICROS_PER_USD).to_integral_value(rounding=ROUND_CEILING))
 
 
 def _extract_responses_text(payload: dict[str, Any]) -> str:
@@ -252,7 +271,9 @@ class AIRequestBroker:
             raise AIRequestDenied("Unsupported Assistant provider transport") from exc
 
     @staticmethod
-    def _gateway_metadata(request: AIRequest, tier: RouteTier) -> dict[str, Any]:
+    def _gateway_metadata(
+        request: AIRequest, tier: RouteTier, *, request_id: str | None = None
+    ) -> dict[str, Any]:
         # Protected routing/tenant fields are written last so surface-specific
         # metadata can never spoof them.
         return sanitized_gateway_metadata(
@@ -262,6 +283,7 @@ class AIRequestBroker:
                 "operation_type": request.surface,
                 "route_tier": tier.value,
                 "actor_type": request.actor_type,
+                "request_id": request_id,
             }
         )
 
@@ -298,15 +320,25 @@ class AIRequestBroker:
         )
         reservation: BackgroundReservation | None = None
         price_card: PriceCard | None = None
+        pricing_models: list[str] = []
         if tier is RouteTier.BACKGROUND:
             # Price the worst case before reserving. An unpriced model cannot
             # hold pool capacity, so an unknown rate denies admission rather
             # than silently costing nothing.
             price_card = await get_price_card(db)
+            pricing_models = await get_active_background_pricing_models(
+                db, route_alias=route.gateway_alias
+            )
             try:
-                estimated_micros = price_card.estimate_max_micros(
-                    model=route.gateway_alias,
-                    input_tokens=self._estimate_input_tokens(request),
+                estimated_micros, pricing_model = price_card.estimate_max_for_models(
+                    models=pricing_models,
+                    input_tokens=self._estimate_input_tokens(
+                        request,
+                        route=route,
+                        tier=tier,
+                        transport=transport,
+                        request_id=request_id,
+                    ),
                     max_output_tokens=request.max_output_tokens,
                 )
             except UnknownModelPrice as exc:
@@ -322,6 +354,7 @@ class AIRequestBroker:
                     route_alias=route.gateway_alias,
                     estimated_micros=estimated_micros,
                     price_card_version=price_card.version,
+                    pricing_model=pricing_model,
                 )
             except BackgroundQuotaExceeded as exc:
                 raise AIQuotaExceeded(str(exc)) from exc
@@ -371,48 +404,103 @@ class AIRequestBroker:
             # numbers the reservation keeps its estimate rather than dropping to
             # zero, so an unreported response is never free.
             actual_micros: int | None = None
-            if price_card is not None and (result.tokens_in or result.tokens_out):
-                # The gateway reports the underlying provider model, which the
-                # card usually does not price — the route alias is what priced
-                # the reservation, so it is the reliable settlement key. Prefer
-                # the reported model only when it carries its own rate.
-                settle_model = route.gateway_alias
-                if result.raw_model and price_card.has_rate(result.raw_model):
-                    settle_model = result.raw_model
+            if result.provider_spend_micros is not None:
+                actual_micros = result.provider_spend_micros
+            elif price_card is not None and (result.tokens_in or result.tokens_out):
+                matching_models = self._matching_pricing_models(
+                    pricing_models, result.raw_model
+                )
                 try:
-                    actual_micros = price_card.actual_micros(
-                        model=settle_model,
-                        tokens_in=result.tokens_in,
-                        tokens_out=result.tokens_out,
+                    actual_micros = max(
+                        price_card.estimate_max_micros(
+                            model=model,
+                            input_tokens=result.tokens_in,
+                            max_output_tokens=result.tokens_out,
+                        )
+                        for model in matching_models
                     )
-                except UnknownModelPrice:
+                except (UnknownModelPrice, ValueError):
+                    # A successful response with an uncorrelated model keeps the
+                    # conservative reservation estimate until spend logs can be
+                    # consulted; it never falls back to an unrelated alias rate.
                     actual_micros = None
-            await self.quota_ledger.settle(
-                reservation,
-                provider_request_id=result.provider_request_id,
-                tokens_in=result.tokens_in,
-                tokens_out=result.tokens_out,
-                actual_micros=actual_micros,
-            )
+            if actual_micros is None:
+                # The work succeeded, but neither an authoritative cost nor an
+                # exact provider-qualified model was available. Keep the safe
+                # estimate held and let the spend-ledger sweep replace it.
+                await self.quota_ledger.mark_unknown(
+                    reservation,
+                    provider_request_id=result.provider_request_id,
+                    tokens_in=result.tokens_in,
+                    tokens_out=result.tokens_out,
+                    error_code="successful_cost_unconfirmed",
+                )
+            else:
+                await self.quota_ledger.settle(
+                    reservation,
+                    provider_request_id=result.provider_request_id,
+                    tokens_in=result.tokens_in,
+                    tokens_out=result.tokens_out,
+                    actual_micros=actual_micros,
+                )
         return result
 
     @staticmethod
-    def _estimate_input_tokens(request: AIRequest) -> int:
-        """Bound the prompt's token count for pricing the reservation."""
+    def _matching_pricing_models(
+        pricing_models: list[str], raw_model: str | None
+    ) -> list[str]:
+        raw = str(raw_model or "").strip().lower()
+        for prefix in ("openai/", "opencode-go/"):
+            if raw.startswith(prefix):
+                raw = raw[len(prefix) :]
+        if not raw:
+            return []
+        return [
+            model for model in pricing_models if model.rsplit("/", 1)[-1].lower() == raw
+        ]
 
-        parts = [request.system_prompt or ""]
-        for message in request.messages:
-            if isinstance(message, dict):
-                content = message.get("content")
-                if isinstance(content, str):
-                    parts.append(content)
-                elif isinstance(content, list):
-                    for item in content:
-                        if isinstance(item, dict) and isinstance(item.get("text"), str):
-                            parts.append(item["text"])
-            elif isinstance(message, str):
-                parts.append(message)
-        return estimate_tokens_from_text("".join(parts))
+    @classmethod
+    def _estimate_input_tokens(
+        cls,
+        request: AIRequest,
+        *,
+        route: LLMRoute,
+        tier: RouteTier,
+        transport: AITransport,
+        request_id: str | None = None,
+    ) -> int:
+        """Conservatively bound the complete provider-visible JSON payload.
+
+        One UTF-8 byte per token is intentionally pessimistic but safe for byte
+        fallback tokenizers. It covers schemas, roles, wrappers, metadata,
+        Unicode, and non-text message parts that a text-only concatenation omits.
+        """
+
+        payload = {
+            "transport": transport.value,
+            "model": route.gateway_alias,
+            "instructions": request.system_prompt,
+            "input": request.messages,
+            "max_output_tokens": max(1, int(request.max_output_tokens)),
+            "json_schema": {
+                "name": request.schema_name,
+                "schema": request.schema,
+                "strict": True,
+            },
+            "litellm_metadata": cls._gateway_metadata(
+                request, tier, request_id=request_id
+            ),
+        }
+        encoded = json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+            default=str,
+        ).encode("utf-8")
+        # Include a small fixed envelope allowance for endpoint-specific JSON
+        # keys LiteLLM/OpenAI clients add around the semantic payload.
+        return max(1, len(encoded) + 256)
 
     async def _execute_chat(
         self,
@@ -444,7 +532,9 @@ class AIRequestBroker:
                     customer_api_key=route.customer_api_key,
                     customer_provider=route.customer_provider,
                     customer_endpoint=route.customer_endpoint,
-                    gateway_metadata=self._gateway_metadata(request, tier),
+                    gateway_metadata=self._gateway_metadata(
+                        request, tier, request_id=request_id
+                    ),
                     system_prompt_override=request.system_prompt,
                     usage_sink=usage,
                     max_output_tokens=request.max_output_tokens,
@@ -468,6 +558,9 @@ class AIRequestBroker:
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             raw_model=usage.get("model"),
+            cached_read_tokens=int(usage.get("cached_read_tokens") or 0),
+            cached_write_tokens=int(usage.get("cached_write_tokens") or 0),
+            provider_spend_micros=usage.get("provider_spend_micros"),
         )
 
     async def _execute_responses(
@@ -479,7 +572,7 @@ class AIRequestBroker:
         timeout: float,
         tier: RouteTier,
     ) -> AIResult:
-        metadata = self._gateway_metadata(request, tier)
+        metadata = self._gateway_metadata(request, tier, request_id=request_id)
         body: dict[str, Any] = {
             "model": route.gateway_alias,
             "instructions": request.system_prompt,
@@ -500,6 +593,7 @@ class AIRequestBroker:
             "Authorization": f"Bearer {settings.LITELLM_API_KEY or 'sk-local-litellm'}",
             "Content-Type": "application/json",
             "x-request-id": request_id,
+            "x-litellm-call-id": request_id,
             "Idempotency-Key": request_id,
         }
         owns_client = self.http_client is None
@@ -517,6 +611,15 @@ class AIRequestBroker:
                 "Assistant request failed after possible provider acceptance"
             ) from exc
         except httpx.HTTPStatusError as exc:
+            if exc.response.status_code >= 500 or exc.response.status_code in {
+                408,
+                409,
+                425,
+                429,
+            }:
+                raise AIRequestUnknown(
+                    "Assistant gateway failed after possible provider acceptance"
+                ) from exc
             raise AIRequestError(
                 f"Assistant gateway rejected the request ({exc.response.status_code})"
             ) from exc
@@ -528,14 +631,29 @@ class AIRequestBroker:
         text = _extract_responses_text(payload)
         value = _parse_and_validate(text, request.schema)
         usage = payload.get("usage") or {}
+        input_details = usage.get("input_tokens_details") or {}
+        cache_details = usage.get("cache_creation_input_tokens_details") or {}
+        tokens_in = int(usage.get("input_tokens") or 0)
+        tokens_out = int(usage.get("output_tokens") or 0)
         return AIResult(
             value=value,
             request_id=request_id,
-            provider_request_id=payload.get("id")
+            provider_request_id=response.headers.get("x-litellm-call-id")
+            or payload.get("id")
             or response.headers.get("x-request-id"),
             route=route,
             transport=AITransport.RESPONSES,
-            tokens_in=int(usage.get("input_tokens") or 0),
-            tokens_out=int(usage.get("output_tokens") or 0),
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
             raw_model=payload.get("model"),
+            cached_read_tokens=int(input_details.get("cached_tokens") or 0),
+            cached_write_tokens=int(
+                usage.get("cache_creation_input_tokens")
+                or cache_details.get("cache_creation_input_tokens")
+                or 0
+            ),
+            provider_spend_micros=_spend_header_micros(
+                response.headers.get("x-litellm-response-cost"),
+                has_usage=bool(tokens_in or tokens_out),
+            ),
         )

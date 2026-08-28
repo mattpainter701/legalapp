@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import math
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import and_, case, func, or_, select, text, update
+from sqlalchemy import case, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -20,8 +21,60 @@ from app.services.ai_price_card import MICROS_PER_USD, usd
 
 settings = get_settings()
 BACKGROUND_ROUTE_CONFIG_KEY = "llm_background_route_v1"
-COUNTED_STATUSES = ("settled", "unknown")
+COUNTED_STATUSES = ("reserved", "settled", "unknown")
 BACKGROUND_QUOTA_SCOPE_GUC = "app.background_ai_quota_scope"
+
+
+def pricing_model_key(provider_id: Any, model: Any) -> str:
+    """Canonical provider/model key used by the Background price card."""
+
+    provider = str(provider_id or "").strip().lower()
+    model_id = str(model or "").strip().lower()
+    return f"{provider}/{model_id}" if provider and model_id else ""
+
+
+def background_pricing_models(route: Any) -> list[str]:
+    """Return every primary, balanced, and fallback model that may execute."""
+
+    if not isinstance(route, dict):
+        return []
+    targets = [route]
+    for field in ("alternates", "fallbacks"):
+        values = route.get(field)
+        if isinstance(values, list):
+            targets.extend(value for value in values if isinstance(value, dict))
+    keys = [
+        pricing_model_key(target.get("provider_id"), target.get("model"))
+        for target in targets
+    ]
+    return list(dict.fromkeys(key for key in keys if key))
+
+
+async def get_active_background_pricing_models(
+    db: AsyncSession, *, route_alias: str
+) -> list[str]:
+    """Load the exact activated route graph behind a versioned alias.
+
+    A route edit creates a new alias. Refusing an alias mismatch prevents a
+    request from pricing the newest saved graph while LiteLLM is still serving
+    an older graph (or vice versa).
+    """
+
+    row = await db.scalar(
+        select(PlatformSetting).where(
+            PlatformSetting.key == BACKGROUND_ROUTE_CONFIG_KEY
+        )
+    )
+    raw_value = getattr(row, "value", None)
+    value = raw_value if isinstance(raw_value, dict) else {}
+    activation = value.get("activation")
+    aliases = activation.get("aliases") if isinstance(activation, dict) else {}
+    active_alias = (
+        aliases.get("background") if isinstance(aliases, dict) else None
+    ) or value.get("model")
+    if str(active_alias or "").strip() != str(route_alias or "").strip():
+        return []
+    return background_pricing_models(value.get("route"))
 
 
 async def _enable_background_quota_scope(db: AsyncSession) -> None:
@@ -117,6 +170,7 @@ class BackgroundReservation:
     pool: str
     estimated_micros: int = 0
     price_card_version: str | None = None
+    pricing_model: str | None = None
 
 
 def _usd_to_micros(value: Any, fallback_usd: float) -> int:
@@ -124,7 +178,7 @@ def _usd_to_micros(value: Any, fallback_usd: float) -> int:
         parsed = float(value)
     except (TypeError, ValueError):
         parsed = float(fallback_usd)
-    if parsed <= 0:
+    if not math.isfinite(parsed) or parsed <= 0:
         parsed = float(fallback_usd)
     return max(1, int(round(parsed * MICROS_PER_USD)))
 
@@ -231,14 +285,12 @@ def _month_start(now: datetime) -> datetime:
 
 
 def _counted_predicate(now: datetime, limits: BackgroundQuotaLimits):
-    active_reservation_cutoff = now - timedelta(minutes=limits.reservation_ttl_minutes)
-    return or_(
-        BackgroundAIUsageReservation.status.in_(COUNTED_STATUSES),
-        and_(
-            BackgroundAIUsageReservation.status == "reserved",
-            BackgroundAIUsageReservation.created_at >= active_reservation_cutoff,
-        ),
-    )
+    del now, limits
+    # A crashed worker can leave a reservation behind after the provider has
+    # accepted and billed the call. Time alone is therefore never proof that a
+    # reservation is free. The TTL determines when reconciliation takes over;
+    # it does not remove the spend hold.
+    return BackgroundAIUsageReservation.status.in_(COUNTED_STATUSES)
 
 
 async def _usage_count(
@@ -320,6 +372,7 @@ class BackgroundQuotaLedger:
         route_alias: str,
         estimated_micros: int,
         price_card_version: str | None = None,
+        pricing_model: str | None = None,
         pool: str | None = None,
     ) -> BackgroundReservation:
         selected_pool = (pool or settings.BACKGROUND_AI_POOL).strip()
@@ -487,6 +540,7 @@ class BackgroundQuotaLedger:
                 status="reserved",
                 estimated_micros=estimate,
                 price_card_version=(price_card_version or None),
+                pricing_model=(pricing_model or None),
             )
             db.add(row)
             await db.flush()
@@ -497,6 +551,7 @@ class BackgroundQuotaLedger:
                 pool=selected_pool,
                 estimated_micros=estimate,
                 price_card_version=price_card_version,
+                pricing_model=pricing_model,
             )
             await db.commit()
             return reservation
@@ -561,11 +616,20 @@ class BackgroundQuotaLedger:
         )
 
     async def mark_unknown(
-        self, reservation: BackgroundReservation, *, error_code: str
+        self,
+        reservation: BackgroundReservation,
+        *,
+        error_code: str,
+        provider_request_id: str | None = None,
+        tokens_in: int = 0,
+        tokens_out: int = 0,
     ) -> None:
         await self._finish(
             reservation,
             status="unknown",
+            provider_request_id=provider_request_id,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
             error_code=error_code,
         )
 
@@ -627,16 +691,18 @@ async def background_quota_snapshot(
             since=_month_start(now),
             counted_predicate=counted,
         )
-        # Ambiguous reservations still holding capacity. A rising number here is
-        # the operator's signal that reconciliation is falling behind or that a
-        # provider is timing out after accepting work.
+        # Every ambiguous reservation still holding capacity remains visible,
+        # including rows whose lookup aged out and will no longer be retried.
+        # Once it has left both the seven-day and current-month windows it is
+        # still retained for audit, but no longer described as held budget.
+        active_hold_cutoff = min(now - timedelta(days=7), _month_start(now))
         unreconciled = await db.scalar(
             select(
                 func.count(BackgroundAIUsageReservation.id),
             ).where(
                 BackgroundAIUsageReservation.pool == selected_pool,
                 BackgroundAIUsageReservation.status == "unknown",
-                BackgroundAIUsageReservation.reconciled_at.is_(None),
+                BackgroundAIUsageReservation.created_at >= active_hold_cutoff,
             )
         )
         unreconciled_micros = await db.scalar(
@@ -647,7 +713,27 @@ async def background_quota_snapshot(
             ).where(
                 BackgroundAIUsageReservation.pool == selected_pool,
                 BackgroundAIUsageReservation.status == "unknown",
-                BackgroundAIUsageReservation.reconciled_at.is_(None),
+                BackgroundAIUsageReservation.created_at >= active_hold_cutoff,
+            )
+        )
+        aged_out_unknown = await db.scalar(
+            select(func.count(BackgroundAIUsageReservation.id)).where(
+                BackgroundAIUsageReservation.pool == selected_pool,
+                BackgroundAIUsageReservation.status == "unknown",
+                BackgroundAIUsageReservation.reconciled_at.is_not(None),
+                BackgroundAIUsageReservation.created_at >= active_hold_cutoff,
+            )
+        )
+        aged_out_unknown_micros = await db.scalar(
+            select(
+                func.coalesce(
+                    func.sum(BackgroundAIUsageReservation.estimated_micros), 0
+                )
+            ).where(
+                BackgroundAIUsageReservation.pool == selected_pool,
+                BackgroundAIUsageReservation.status == "unknown",
+                BackgroundAIUsageReservation.reconciled_at.is_not(None),
+                BackgroundAIUsageReservation.created_at >= active_hold_cutoff,
             )
         )
         tenant_rows = (
@@ -727,6 +813,8 @@ async def background_quota_snapshot(
             "unreconciled": {
                 "requests": int(unreconciled or 0),
                 "held_usd": usd(int(unreconciled_micros or 0)),
+                "aged_out_requests": int(aged_out_unknown or 0),
+                "aged_out_held_usd": usd(int(aged_out_unknown_micros or 0)),
             },
         },
         # Request counts remain a coarse backstop and a planning metric. They

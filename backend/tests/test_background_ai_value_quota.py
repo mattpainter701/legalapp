@@ -122,6 +122,81 @@ def test_unknown_model_raises_rather_than_costing_nothing():
         )
 
 
+def test_route_reservation_prices_every_provider_target_and_uses_the_maximum():
+    card = default_price_card()
+
+    estimated, model = card.estimate_max_for_models(
+        models=["opencode-go/gpt-5.6-luna", "opencode-go/kimi-k3"],
+        input_tokens=100,
+        max_output_tokens=100,
+    )
+
+    assert estimated == 1_800
+    assert model == "opencode-go/kimi-k3"
+
+
+def test_one_unpriced_fallback_fails_the_whole_route_closed():
+    card = default_price_card()
+
+    with pytest.raises(UnknownModelPrice, match="unpriced-fallback"):
+        card.estimate_max_for_models(
+            models=[
+                "opencode-go/gpt-5.6-luna",
+                "another-provider/unpriced-fallback",
+            ],
+            input_tokens=100,
+            max_output_tokens=100,
+        )
+
+
+def test_long_context_tier_includes_the_possible_output_tokens():
+    card = PriceCard(
+        version="t",
+        rates={
+            "provider/model": {
+                "input": 1.0,
+                "output": 2.0,
+                "threshold_tokens": 100,
+                "input_over_threshold": 3.0,
+                "output_over_threshold": 4.0,
+            }
+        },
+    )
+
+    # The prompt is below the threshold, but the full request context is not.
+    assert (
+        card.estimate_max_micros(
+            model="provider/model", input_tokens=90, max_output_tokens=20
+        )
+        == 350
+    )
+
+
+def test_actual_price_accounts_for_cached_read_and_write_tokens():
+    card = PriceCard(
+        version="t",
+        rates={
+            "provider/model": {
+                "input": 2.0,
+                "output": 4.0,
+                "cached_read": 0.5,
+                "cached_write": 3.0,
+            }
+        },
+    )
+
+    assert (
+        card.actual_micros(
+            model="provider/model",
+            tokens_in=100,
+            tokens_out=10,
+            cached_read_tokens=20,
+            cached_write_tokens=30,
+        )
+        == 240
+    )
+
+
 def test_token_estimate_is_conservative():
     # Must round up: an underestimate here becomes real overspend.
     assert estimate_tokens_from_text("") == 0
@@ -357,6 +432,48 @@ async def _age_reservation(factory, reservation_id, *, minutes: int) -> None:
 
 
 @pytest.mark.asyncio
+async def test_stale_reserved_request_becomes_unknown_without_losing_its_hold(
+    test_engine, db_session
+):
+    """A worker crash after provider acceptance must not make spend disappear."""
+
+    tenant_id = uuid.uuid4()
+    db_session.add(_tenant(tenant_id, "recon-stale-reserved.invalid"))
+    await db_session.flush()
+    await _configure_value_limits(db_session, account_usd=10.00, tenant_usd=10.00)
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    ledger = BackgroundQuotaLedger(session_factory=factory)
+    reservation = await ledger.reserve(
+        tenant_id=tenant_id,
+        idempotency_key="stale-reserved",
+        request_id=str(uuid.uuid4()),
+        surface="background_test",
+        route_alias="clarity-background",
+        estimated_micros=int(0.40 * MICROS_PER_USD),
+    )
+    await _age_reservation(factory, reservation.id, minutes=30)
+
+    async def lookup(provider_request_id, route_alias):
+        return None
+
+    async with factory() as db:
+        report = await reconcile_unknown_reservations(db, lookup=lookup)
+    assert report.still_unknown == 1
+
+    async with factory() as db:
+        snapshot = await background_quota_snapshot(db)
+        row = await db.scalar(
+            select(BackgroundAIUsageReservation).where(
+                BackgroundAIUsageReservation.id == reservation.id
+            )
+        )
+    assert snapshot["value"]["monthly"]["spent_usd"] == 0.40
+    assert snapshot["value"]["unreconciled"]["requests"] == 1
+    assert row.status == "unknown"
+    assert row.error_code == "reconcile_pending"
+
+
+@pytest.mark.asyncio
 async def test_reconciliation_settles_a_confirmed_billed_request(
     test_engine, db_session
 ):
@@ -477,8 +594,11 @@ async def test_unresolvable_reservations_age_out_but_keep_holding_their_estimate
         snapshot = await background_quota_snapshot(db)
         # Spend is retained...
         assert snapshot["value"]["monthly"]["spent_usd"] == 0.60
-        # ...but it no longer shows as awaiting reconciliation.
-        assert snapshot["value"]["unreconciled"]["requests"] == 0
+        # ...and remains visible after retries stop, rather than disappearing
+        # from the operator's accounting view.
+        assert snapshot["value"]["unreconciled"]["requests"] == 1
+        assert snapshot["value"]["unreconciled"]["aged_out_requests"] == 1
+        assert snapshot["value"]["unreconciled"]["aged_out_held_usd"] == 0.60
         row = await db.scalar(
             select(BackgroundAIUsageReservation).where(
                 BackgroundAIUsageReservation.id == reservation.id

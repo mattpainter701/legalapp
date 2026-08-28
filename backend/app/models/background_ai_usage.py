@@ -53,7 +53,10 @@ class BackgroundAIUsageReservation(Base):
             "ix_background_ai_usage_unreconciled",
             "status",
             "created_at",
-            postgresql_where=text("status = 'unknown' AND reconciled_at IS NULL"),
+            postgresql_where=text(
+                "status IN ('reserved', 'unknown') "
+                "AND (status = 'reserved' OR reconciled_at IS NULL)"
+            ),
         ),
         Index(
             "ix_background_ai_usage_pool_created",
@@ -114,6 +117,10 @@ class BackgroundAIUsageReservation(Base):
         BigInteger, nullable=False, default=0, server_default="0"
     )
     price_card_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # Provider-qualified model that produced the largest reservation estimate.
+    # The full active graph is versioned by ``route_alias``; this field makes the
+    # conservative pricing decision independently auditable.
+    pricing_model: Mapped[str | None] = mapped_column(String(200), nullable=True)
     # Set when reconciliation has resolved this row or given up on it, so the
     # sweep never reprocesses the same ambiguous reservation forever.
     reconciled_at: Mapped[datetime | None] = mapped_column(

@@ -2610,7 +2610,10 @@ function BackgroundQuotaPanel({ usage, quota, onChange, saving, onSave }) {
           <AlertTriangle size={14} className="text-brand-amber mt-0.5 shrink-0" />
           <p className="text-xs text-brand-ink font-sans">
             <span className="font-medium">{unreconciled.requests} unconfirmed {unreconciled.requests === 1 ? 'request holds' : 'requests hold'} {money(unreconciled.held_usd)}.</span>{' '}
-            The provider never confirmed whether these were billed, so they keep their estimated cost against the budget until reconciliation resolves them.
+            The provider never confirmed whether these were billed, so they keep their estimated cost against the budget.
+            {Number(unreconciled.aged_out_requests ?? 0) > 0 && (
+              <> {unreconciled.aged_out_requests} could not be resolved before the retry deadline and permanently retain {money(unreconciled.aged_out_held_usd)} until their quota windows expire or an operator backfills provider spend.</>
+            )}
           </p>
         </div>
       )}
@@ -2874,9 +2877,13 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
   }
 
   const handleSaveBackgroundQuota = async () => {
-    const invalid = Object.entries(backgroundQuota).find(([, value]) => !Number.isFinite(value) || value < 1)
+    const invalid = Object.entries(backgroundQuota).find(([field, value]) => {
+      const minimum = field.endsWith('_usd') ? 0.01 : 1
+      return !Number.isFinite(value) || value < minimum
+    })
     if (invalid) {
-      setSaveResult({ ok: false, error: `${invalid[0].replaceAll('_', ' ')} must be at least 1.` })
+      const minimum = invalid[0].endsWith('_usd') ? '0.01' : '1'
+      setSaveResult({ ok: false, error: `${invalid[0].replaceAll('_', ' ')} must be at least ${minimum}.` })
       return
     }
     setSavingBackgroundQuota(true)

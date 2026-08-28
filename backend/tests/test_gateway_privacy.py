@@ -1,6 +1,7 @@
 from app.config import get_settings
 from app.services.gateway_privacy import (
     gateway_metadata,
+    litellm_metadata,
     retained_debug_text,
     retained_gateway_query_text,
 )
@@ -26,6 +27,7 @@ def test_gateway_metadata_excludes_prompt_and_response_content():
         plugin="contracts",
         skill="summarize",
         premium=True,
+        request_id="opaque-request-id",
         prompt="do not retain this prompt",
         response="do not retain this response",
     )
@@ -39,6 +41,7 @@ def test_gateway_metadata_excludes_prompt_and_response_content():
         "plugin": "contracts",
         "skill": "summarize",
         "premium": True,
+        "request_id": "opaque-request-id",
     }
 
 
@@ -48,3 +51,20 @@ def test_gateway_retention_windows_have_privacy_defaults():
     assert settings.GATEWAY_LOG_RETENTION_DAYS == 30
     assert settings.GATEWAY_DEBUG_LOG_RETENTION_DAYS == 7
     assert settings.GATEWAY_SPEND_LOG_RETENTION_DAYS == 365
+
+
+def test_litellm_spend_metadata_contains_only_sanitized_correlation_fields():
+    metadata = litellm_metadata(
+        tenant_id="tenant-1",
+        request_id="opaque-request-id",
+        prompt="privileged facts",
+    )
+
+    assert metadata == {
+        "tenant_id": "tenant-1",
+        "request_id": "opaque-request-id",
+        "spend_logs_metadata": {
+            "tenant_id": "tenant-1",
+            "request_id": "opaque-request-id",
+        },
+    }

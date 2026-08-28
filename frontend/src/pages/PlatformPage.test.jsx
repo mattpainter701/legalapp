@@ -210,6 +210,42 @@ describe('platform AI routing', () => {
     expect(await screen.findByText(/7 unconfirmed requests hold \$3\.20/)).toBeInTheDocument()
   })
 
+  it('keeps aged-out unknown spend visible to operators', async () => {
+    getBackgroundAssistantUsage.mockResolvedValue({
+      limits: { account_monthly: 10250, reservation_ttl_minutes: 15 },
+      five_hour: { used: 0 }, weekly: { used: 0 }, monthly: { used: 0 },
+      value: {
+        five_hour: { spent_usd: 0.6, limit_usd: 12, remaining_usd: 11.4, percent: 5 },
+        weekly: { spent_usd: 0.6, limit_usd: 30, remaining_usd: 29.4, percent: 2 },
+        monthly: { spent_usd: 0.6, limit_usd: 60, remaining_usd: 59.4, percent: 1, month_elapsed_percent: 40, projected_month_usd: 1.5, projected_over_budget: false },
+        unreconciled: { requests: 1, held_usd: 0.6, aged_out_requests: 1, aged_out_held_usd: 0.6 },
+      },
+    })
+    renderRouting()
+
+    expect(await screen.findByText(/1 unconfirmed request holds \$0\.60/)).toBeInTheDocument()
+    expect(screen.getByText(/could not be resolved before the retry deadline/)).toBeInTheDocument()
+  })
+
+  it('accepts sub-dollar background spend limits shown by the input', async () => {
+    const user = userEvent.setup()
+    renderRouting()
+
+    const fiveHour = await screen.findByLabelText('Pool / 5 hours', {
+      selector: 'input[step="0.01"]',
+    })
+    await user.clear(fiveHour)
+    await user.type(fiveHour, '0.50')
+    await user.click(screen.getByRole('button', { name: 'Save budget' }))
+
+    await waitFor(() => {
+      expect(updateBackgroundAssistantQuota).toHaveBeenCalledWith(
+        'platform-token',
+        expect.objectContaining({ account_five_hour_usd: 0.5 }),
+      )
+    })
+  })
+
   it('allows Responses-only Luna on the Background route', async () => {
     const user = userEvent.setup()
     getLLMProviderKeys.mockResolvedValue({

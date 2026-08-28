@@ -19,12 +19,14 @@ depends_on = None
 
 
 TABLE = "background_ai_usage_reservations"
+LEGACY_UNKNOWN_MICROS = 1_000_000_000_000
 
 
 def upgrade() -> None:
-    # Existing rows predate value metering. They keep 0 micros, which makes them
-    # invisible to the value windows while their request counts still apply —
-    # the correct read, because no price was ever recorded for them.
+    # Existing rows predate value metering, so their cost is genuinely unknown.
+    # Treating them as zero could admit a second full provider window on deploy.
+    # A deliberately oversized hold fails closed until those rows leave every
+    # active window or an operator backfills authoritative provider spend.
     op.add_column(
         TABLE,
         sa.Column(
@@ -49,8 +51,32 @@ def upgrade() -> None:
     )
     op.add_column(
         TABLE,
+        sa.Column("pricing_model", sa.String(200), nullable=True),
+    )
+    op.add_column(
+        TABLE,
         sa.Column("reconciled_at", sa.DateTime(timezone=True), nullable=True),
     )
+    # Migration 134 FORCEs RLS on this shared ledger. Use the same narrowly
+    # scoped transaction-local selector as the quota service so the cutover
+    # actually reaches every tenant's pre-existing rows.
+    op.execute("SELECT set_config('app.background_ai_quota_scope', 'on', true)")
+    op.execute(
+        sa.text(
+            f"""
+            UPDATE {TABLE}
+            SET estimated_micros = :legacy_hold,
+                actual_micros = CASE
+                    WHEN status = 'settled' THEN :legacy_hold
+                    ELSE actual_micros
+                END,
+                price_card_version = 'legacy-cutover-unknown',
+                error_code = COALESCE(error_code, 'value_cutover_unknown')
+            WHERE status IN ('reserved', 'settled', 'unknown')
+            """
+        ).bindparams(legacy_hold=LEGACY_UNKNOWN_MICROS)
+    )
+    op.execute("SELECT set_config('app.background_ai_quota_scope', 'off', true)")
     op.add_column(
         TABLE,
         sa.Column(
@@ -70,7 +96,10 @@ def upgrade() -> None:
         "ix_background_ai_usage_unreconciled",
         TABLE,
         ["status", "created_at"],
-        postgresql_where=sa.text("status = 'unknown' AND reconciled_at IS NULL"),
+        postgresql_where=sa.text(
+            "status IN ('reserved', 'unknown') "
+            "AND (status = 'reserved' OR reconciled_at IS NULL)"
+        ),
     )
 
 
@@ -81,6 +110,7 @@ def downgrade() -> None:
     )
     op.drop_column(TABLE, "reconcile_attempts")
     op.drop_column(TABLE, "reconciled_at")
+    op.drop_column(TABLE, "pricing_model")
     op.drop_column(TABLE, "price_card_version")
     op.drop_column(TABLE, "actual_micros")
     op.drop_column(TABLE, "estimated_micros")

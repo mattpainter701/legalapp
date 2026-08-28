@@ -157,6 +157,11 @@ async def test_broker_execute_maps_reservation_errors_and_validation(monkeypatch
     monkeypatch.setattr(
         broker_module.settings, "LITELLM_BACKGROUND_TRANSPORT", "chat_completions"
     )
+    monkeypatch.setattr(
+        broker_module,
+        "get_active_background_pricing_models",
+        AsyncMock(return_value=["clarity-background"]),
+    )
 
     class Quota:
         async def reserve(self, **_kwargs):
@@ -217,6 +222,11 @@ async def test_broker_provider_failures_release_or_mark_unknown(monkeypatch):
     )
     monkeypatch.setattr(
         broker_module.settings, "LITELLM_BACKGROUND_TRANSPORT", "chat_completions"
+    )
+    monkeypatch.setattr(
+        broker_module,
+        "get_active_background_pricing_models",
+        AsyncMock(return_value=["clarity-background"]),
     )
     reservation = BackgroundReservation(uuid.uuid4(), uuid.uuid4(), "r", "pool")
 

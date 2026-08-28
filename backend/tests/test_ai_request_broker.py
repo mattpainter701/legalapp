@@ -11,6 +11,7 @@ from app.services.ai_request_broker import (
     AIRequest,
     AIRequestBroker,
     AIRequestDenied,
+    AIRequestUnknown,
     AITransport,
 )
 from app.services.llm_routing import LLMRoute, RouteTier
@@ -124,11 +125,16 @@ async def test_responses_transport_uses_global_background_alias(monkeypatch):
         seen["path"] = request.url.path
         seen["body"] = json.loads(request.content)
         seen["idempotency"] = request.headers.get("Idempotency-Key")
+        seen["call_id"] = request.headers.get("x-litellm-call-id")
         return httpx.Response(
             200,
+            headers={
+                "x-litellm-call-id": "call_test",
+                "x-litellm-response-cost": "0.0000076",
+            },
             json={
                 "id": "resp_test",
-                "model": "luna-test",
+                "model": "gpt-5.6-luna",
                 "output_text": json.dumps({"brief": "Follow-up draft"}),
                 "usage": {"input_tokens": 8, "output_tokens": 5},
             },
@@ -144,6 +150,11 @@ async def test_responses_transport_uses_global_background_alias(monkeypatch):
     )
     monkeypatch.setattr(broker_module.settings, "LITELLM_BASE_URL", "http://gateway")
     monkeypatch.setattr(broker_module, "resolve_llm_route", fake_route)
+    monkeypatch.setattr(
+        broker_module,
+        "get_active_background_pricing_models",
+        lambda *_args, **_kwargs: _async_value(["opencode-go/gpt-5.6-luna"]),
+    )
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     try:
         result = await AIRequestBroker(
@@ -164,17 +175,71 @@ async def test_responses_transport_uses_global_background_alias(monkeypatch):
     assert seen["body"]["text"]["format"]["schema"] == SCHEMA
     assert seen["body"]["litellm_metadata"]["route_tier"] == "background"
     assert seen["body"]["litellm_metadata"]["tenant_id"] != "spoofed"
+    assert (
+        seen["body"]["litellm_metadata"]["spend_logs_metadata"]["request_id"]
+        == result.request_id
+    )
     assert seen["idempotency"] == result.request_id
-    assert result.provider_request_id == "resp_test"
+    assert seen["call_id"] == result.request_id
+    assert result.provider_request_id == "call_test"
     assert result.value == {"brief": "Follow-up draft"}
     assert (result.tokens_in, result.tokens_out) == (8, 5)
     assert seen["reservation"]["route_alias"] == "clarity-background-r2"
     assert len(seen["reservation"]["idempotency_key"]) == 64
     assert seen["reservation"]["idempotency_key"] != "lead:1:note:v1"
-    assert seen["settled"]["provider_request_id"] == "resp_test"
-    # The gateway reported "luna-test", the underlying provider model, which the
-    # price card does not carry. Settlement must fall back to the route alias
-    # that priced the reservation rather than giving up and charging the
-    # worst-case estimate: 8 in at $0.60/M + 5 out at $2.40/M = 16.8 -> 17.
-    assert seen["settled"]["actual_micros"] == 17
-    assert seen["reservation"]["estimated_micros"] > 17
+    assert seen["settled"]["provider_request_id"] == "call_test"
+    assert seen["settled"]["actual_micros"] == 8
+    assert seen["reservation"]["pricing_model"] == "opencode-go/gpt-5.6-luna"
+    assert seen["reservation"]["estimated_micros"] > 8
+
+
+async def _async_value(value):
+    return value
+
+
+def test_input_estimate_includes_schema_wrappers_and_unicode():
+    request = _request(
+        messages=[{"role": "user", "content": "x"}],
+        schema={
+            "type": "object",
+            "properties": {"brief": {"type": "string", "description": "😀" * 2500}},
+        },
+    )
+    route = LLMRoute(
+        requested_route="background",
+        resolved_route="background",
+        gateway_alias="clarity-background-r2",
+    )
+
+    estimated = AIRequestBroker._estimate_input_tokens(
+        request,
+        route=route,
+        tier=RouteTier.BACKGROUND,
+        transport=AITransport.RESPONSES,
+    )
+
+    assert estimated > 10_000
+
+
+@pytest.mark.asyncio
+async def test_responses_5xx_is_ambiguous_not_released():
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(502, json={"error": "upstream failed"})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    route = LLMRoute(
+        requested_route="background",
+        resolved_route="background",
+        gateway_alias="clarity-background-r2",
+    )
+    try:
+        with pytest.raises(AIRequestUnknown):
+            await AIRequestBroker(http_client=client)._execute_responses(
+                request=_request(route_tier=RouteTier.BACKGROUND),
+                route=route,
+                request_id="call-id",
+                timeout=5,
+                tier=RouteTier.BACKGROUND,
+            )
+    finally:
+        await client.aclose()
