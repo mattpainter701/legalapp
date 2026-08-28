@@ -868,7 +868,7 @@ async def test_cleanup_skips_attachment_locked_for_action_source_promotion(
         result = await execute_chat_attachment_retention(
             cleanup_db,
             test_tenant.id,
-            dry_run=True,
+            dry_run=False,
             actor_user_id=test_user.id,
             actor_type="test",
         )

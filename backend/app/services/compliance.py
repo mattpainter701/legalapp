@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from hashlib import blake2b
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -374,9 +375,17 @@ async def retention_inventory(db: AsyncSession, tenant_id: uuid.UUID) -> dict[st
 
 
 async def lock_tenant_for_retention(db: AsyncSession, tenant_id: uuid.UUID) -> None:
-    exists = await db.scalar(
-        select(Tenant.id).where(Tenant.id == tenant_id).with_for_update()
+    # Serialize retention policy changes and cleanup for one tenant without
+    # locking the tenant row itself. Other workflows legitimately update that
+    # row (for example, advancing the RAG corpus revision) while cleanup must
+    # still be able to reach Document's SKIP LOCKED boundary.
+    lock_key = int.from_bytes(
+        blake2b(f"retention:{tenant_id}".encode(), digest_size=8).digest(),
+        byteorder="big",
+        signed=True,
     )
+    await db.execute(select(func.pg_advisory_xact_lock(lock_key)))
+    exists = await db.scalar(select(Tenant.id).where(Tenant.id == tenant_id))
     if not exists:
         raise LookupError("Tenant not found")
 
