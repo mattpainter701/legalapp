@@ -14,6 +14,7 @@ Platform operators can now distinguish disposable demo workspaces from regular p
 - **See the tenant type.** The platform tenant list labels each workspace as Demo or Platform without using the billing tier as the visible grouping.
 - **See demo expiry at a glance.** Demo rows show their expiration and clearly flag workspaces that have already expired.
 - **Filter the inventory.** Operators can focus the tenant list on demo workspaces or regular platform tenants while the dedicated demo controls remain protected.
+- **Use Zen free background capacity.** Platform operators can assign OpenCode Zen free models to the Background Automations route while Standard and Premium keep their confidential-data safeguards.
 
 ## 2026.08.28.1 — The platform tour now follows a matter end to end
 

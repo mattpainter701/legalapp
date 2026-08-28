@@ -508,7 +508,13 @@ def _confidential_data_unsafe_targets(
                 }
             )
 
-    for route_name in ("standard", "premium", "background"):
+    # Standard and Premium handle interactive customer work and must always
+    # use providers approved for confidential legal traffic. Background is a
+    # distinct, platform-global route that categorically forbids matter
+    # context. Operators may deliberately use OpenCode Zen's free evaluation
+    # models there for bounded background automations; do not let that
+    # exception weaken the customer-route policy.
+    for route_name in ("standard", "premium"):
         route = config.get(route_name, {})
         if not isinstance(route, dict):
             continue
@@ -519,6 +525,26 @@ def _confidential_data_unsafe_targets(
         for index, fallback in enumerate(route.get("fallbacks", []) or []):
             if isinstance(fallback, dict):
                 _inspect(route_name, f"fallback[{index}]", fallback)
+
+    background = config.get("background", {})
+    if isinstance(background, dict):
+
+        def _inspect_background(placement: str, target: dict[str, Any]) -> None:
+            provider_id = _clean_optional(target.get("provider_id"))
+            model_id = _clean_optional(target.get("model"))
+            if provider_id == "opencode-zen" and model_id:
+                row = catalog_index.get((provider_id, model_id), {})
+                if _is_free_model(model_id, row, provider_id):
+                    return
+            _inspect("background", placement, target)
+
+        _inspect_background("primary", background)
+        for index, alternate in enumerate(background.get("alternates", []) or []):
+            if isinstance(alternate, dict):
+                _inspect_background(f"alternate[{index}]", alternate)
+        for index, fallback in enumerate(background.get("fallbacks", []) or []):
+            if isinstance(fallback, dict):
+                _inspect_background(f"fallback[{index}]", fallback)
 
     return blocked
 

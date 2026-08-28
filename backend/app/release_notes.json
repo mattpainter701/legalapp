@@ -19,6 +19,10 @@
         {
           "title": "Filter the inventory",
           "description": "Operators can focus the tenant list on demo workspaces or regular platform tenants while the dedicated demo controls remain protected."
+        },
+        {
+          "title": "Use Zen free background capacity",
+          "description": "Platform operators can assign OpenCode Zen free models to the Background Automations route while Standard and Premium keep their confidential-data safeguards."
         }
       ]
     },

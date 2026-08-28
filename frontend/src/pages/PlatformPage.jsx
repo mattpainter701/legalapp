@@ -1273,7 +1273,7 @@ function routeIssues(route, allKeys) {
   return issues
 }
 
-function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, compact = false, allowResponses = false }) {
+function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, compact = false, allowResponses = false, allowBackgroundFreeModels = false }) {
   const selectedPreset = presets.find((p) => p.id === value.provider_id)
   const keysForPreset = value.provider_id ? allKeys.filter((k) => k.provider_id === value.provider_id) : allKeys
   const placeholder = selectedPreset?.model_placeholder || 'model-id'
@@ -1358,9 +1358,9 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
               <option
                 key={model.id}
                 value={model.id}
-                disabled={!endpointSupported(model) || model.confidential_data_allowed === false}
+                disabled={!endpointSupported(model) || (!allowBackgroundFreeModels && model.confidential_data_allowed === false)}
               >
-                {model.name || model.id}{model.is_free ? ' — Free' : ' — Paid'}{!endpointSupported(model) ? ' — Unsupported endpoint' : ''}{model.confidential_data_allowed === false ? ' — Not approved for client data' : ''}
+                {model.name || model.id}{model.is_free ? ' — Free' : ' — Paid'}{!endpointSupported(model) ? ' — Unsupported endpoint' : ''}{model.confidential_data_allowed === false ? (allowBackgroundFreeModels ? ' — Background-only' : ' — Not approved for client data') : ''}
               </option>
             ))}
           </select>
@@ -1368,7 +1368,7 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
         {!compact && suggestedModels.length > 0 && (
           <p className="text-[11px] text-brand-muted mt-1 font-sans">
             {allowResponses
-              ? 'Provider/key-specific Responses models are supported on this Background route; incompatible endpoint families stay disabled.'
+              ? 'Provider/key-specific Responses models and OpenCode Zen free models are supported on this Background route; matter context remains disabled and incompatible endpoint families stay disabled.'
               : 'All provider/key-specific catalog models, ranked for legal work and latency. Unsupported endpoints are visible but cannot be activated on the Chat Completions route.'}
           </p>
         )}
@@ -1605,6 +1605,7 @@ function RouteCard({ label, routeName, alias: activeAlias, route, allKeys, prese
             models={modelsFor(route)}
             modelListId={`models-${routeKey}-primary`}
             allowResponses={routeKey === 'background'}
+            allowBackgroundFreeModels={routeKey === 'background'}
             onChange={(next) => updateRoute({ ...next, alternates: route.alternates || [], fallbacks: route.fallbacks || [] })}
           />
         </div>
@@ -1643,6 +1644,7 @@ function RouteCard({ label, routeName, alias: activeAlias, route, allKeys, prese
                   models={modelsFor(alt)}
                   modelListId={`models-${routeKey}-alternate-${i}`}
                   allowResponses={routeKey === 'background'}
+                  allowBackgroundFreeModels={routeKey === 'background'}
                   compact
                   onChange={(next) => updateAlternate(i, next)}
                 />
@@ -1693,6 +1695,7 @@ function RouteCard({ label, routeName, alias: activeAlias, route, allKeys, prese
                   models={modelsFor(fb)}
                   modelListId={`models-${routeKey}-fallback-${i}`}
                   allowResponses={routeKey === 'background'}
+                  allowBackgroundFreeModels={routeKey === 'background'}
                   compact
                   onChange={(next) => updateFallback(i, next)}
                 />

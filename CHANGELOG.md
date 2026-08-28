@@ -16,6 +16,10 @@
   demo expiration (including expired state), and keeps disposable workspaces
   behind their dedicated termination controls rather than generic tenant
   controls.
+- **Background automation can use OpenCode Zen free capacity:** operators can
+  assign Zen free models to the global Background route while Standard and
+  Premium still require confidential-data approval; Background matter context
+  remains disabled.
 - **Marketing now shows the platform as an end-to-end legal workflow:** the
   public product tour follows one illustrative matter from caller intake and
   saved conflict review through matter setup, document and AI-assisted review,
