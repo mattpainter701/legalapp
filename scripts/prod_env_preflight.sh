@@ -243,10 +243,10 @@ disk_max_percent="${disk_max_percent:-85}"
 [[ "$(get_env EMAIL_FROM)" == "$operator_email" ]] || errors+=("EMAIL_FROM must be $operator_email")
 
 zoom_required_tenant_id="$(get_env ZOOM_REQUIRED_TENANT_ID)"
-if [[ "${BOOTSTRAP_MODE:-false}" == "true" && -z "$zoom_required_tenant_id" ]]; then
-  warnings+=("ZOOM_REQUIRED_TENANT_ID is omitted for bootstrap; strict go-live checks remain blocked")
+if [[ -z "$zoom_required_tenant_id" ]]; then
+  warnings+=("ZOOM_REQUIRED_TENANT_ID is omitted; the optional Zoom provider gate cannot be requested")
 elif [[ ! "$zoom_required_tenant_id" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]]; then
-  errors+=("ZOOM_REQUIRED_TENANT_ID must be the sold tenant UUID outside bootstrap mode")
+  errors+=("ZOOM_REQUIRED_TENANT_ID must be a tenant UUID when configured")
 fi
 if [[ "$email_enabled" == "false" ]]; then
   warnings+=("EMAIL_ENABLED=false by design; outbound application email is disabled and GitHub production-health issues are the primary operator alert channel")

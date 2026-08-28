@@ -2,7 +2,7 @@
 # Operator release/monitoring gate. Sends one alert on state transitions.
 set -euo pipefail
 
-ZOOM_REQUIRED="${ZOOM_REQUIRED:-true}"
+ZOOM_REQUIRED="${ZOOM_REQUIRED:-false}"
 case "$ZOOM_REQUIRED" in
   true|false) ;;
   *) echo "FAIL: ZOOM_REQUIRED must be true or false" >&2; exit 2 ;;
@@ -398,7 +398,7 @@ if [[ "$ZOOM_REQUIRED" == true ]]; then
   "${compose[@]}" exec -T backend python -m scripts.check_zoom_phone \
     --tenant-id "$ZOOM_REQUIRED_TENANT_ID" >/dev/null 2>&1 || fail "Zoom Phone live API probe failed for the required tenant"
 else
-  echo "WARNING: NOT GO-LIVE — Zoom Phone launch gates were skipped for fresh-host bootstrap." >&2
+  echo "INFO: Zoom Phone provider validation was not requested."
 fi
 
 if [[ "$EMAIL_ENABLED" == "true" ]]; then
@@ -622,15 +622,13 @@ else
   state="healthy"
 fi
 
-if [[ "$ZOOM_REQUIRED" == true ]]; then
-  previous="$(cat "$STATE_FILE" 2>/dev/null || true)"
-  if [[ "$state" != "$previous" && -n "${ALERT_WEBHOOK_URL:-}" ]]; then
-    escaped="$(printf '%s' "$message" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-    curl -fsS --max-time 10 -H 'Content-Type: application/json' \
-      --data "{\"text\":\"$escaped\"}" "$ALERT_WEBHOOK_URL" >/dev/null || true
-  fi
-  printf '%s' "$state" > "$STATE_FILE"
+previous="$(cat "$STATE_FILE" 2>/dev/null || true)"
+if [[ "$state" != "$previous" && -n "${ALERT_WEBHOOK_URL:-}" ]]; then
+  escaped="$(printf '%s' "$message" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+  curl -fsS --max-time 10 -H 'Content-Type: application/json' \
+    --data "{\"text\":\"$escaped\"}" "$ALERT_WEBHOOK_URL" >/dev/null || true
 fi
+printf '%s' "$state" > "$STATE_FILE"
 
 if [[ "$state" == "failed" ]]; then
   echo "$message" >&2
@@ -639,5 +637,5 @@ fi
 if [[ "$ZOOM_REQUIRED" == true ]]; then
   echo "Production check passed: disk, containers, PostgreSQL, Redis, scheduler, queue, Zoom, email-delivery policy, HTTP, and TLS."
 else
-  echo "Bootstrap infrastructure check passed. NOT GO-LIVE until strict Zoom production_check passes." >&2
+  echo "Platform production check passed; the optional Zoom provider gate was not requested."
 fi

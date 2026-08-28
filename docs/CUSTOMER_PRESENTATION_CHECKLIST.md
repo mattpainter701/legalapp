@@ -76,9 +76,10 @@ attestation from [`scripts/backup_db.sh`](../scripts/backup_db.sh) and
 [`scripts/restore_rehearsal.sh`](../scripts/restore_rehearsal.sh), prove the
 host disk timer acceptance in
 [`docs/FIRST_CUSTOMER_PRODUCTION_RUNBOOK.md`](FIRST_CUSTOMER_PRODUCTION_RUNBOOK.md),
-and verify the public production-health issue workflow. The strict production
-check requires the configured launch tenant and Zoom Phone proof when
-`ZOOM_REQUIRED=true` (the default).
+and verify the public production-health issue workflow. The global production
+check does not require a customer Zoom grant. Certify the provider separately
+with `ZOOM_REQUIRED=true` and the selected tenant UUID when Zoom Phone is part
+of the presentation.
 
 ## Credentialed gates still blocking a live claim
 

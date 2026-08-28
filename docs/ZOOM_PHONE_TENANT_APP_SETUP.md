@@ -270,37 +270,30 @@ Complete every check before marking the tenant ready.
 8. Re-run the same history window or redeliver a test event and confirm LawHand
    does not create a duplicate call/task.
 
-For the sold production tenant, set the non-secret selector in the
-deployment `.env`:
+To run the dedicated provider check for a production tenant, set the non-secret
+selector in the deployment `.env`:
 
 ```dotenv
 ZOOM_REQUIRED_TENANT_ID=<lawhand-tenant-uuid>
 ```
 
 The tenant's commercial plan is managed separately and does not participate in
-Zoom readiness. Acceptance binds to this exact active tenant UUID and verifies
-its tenant-owned Zoom app, grant, scopes, account binding, CRC, and live API.
+Zoom readiness. The optional provider gate binds to this exact active tenant
+UUID and verifies its tenant-owned Zoom app, grant, scopes, account binding,
+CRC, and live API.
 
 Then run the production gate on the host:
 
 ```bash
-ENV_FILE=.env COMPOSE_FILE=docker-compose.hypervisor.yml \
+ENV_FILE=.env COMPOSE_FILE=docker-compose.hypervisor.yml ZOOM_REQUIRED=true \
   bash scripts/production_check.sh
 ```
 
-After the exact main revision is deployed, dispatch the acceptance workflow:
-
-```bash
-gh workflow run production-acceptance.yml \
-  --repo <owner>/<repository> \
-  --ref main \
-  -f release_sha=<full-deployed-main-sha>
-```
-
-The production gate requires the exact tenant and plan, active encrypted app
+The dedicated provider gate requires the exact tenant, active encrypted app
 and webhook secrets, a refreshable healthy grant, both read scopes, a provider-
 verified account binding, successful public CRC ingress, and a live Zoom Phone
-API probe.
+API probe. The global production acceptance workflow does not run this
+customer-specific gate.
 
 ## Rotation and recovery
 
