@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.28.6 — Attributed intake and safer lead follow-through
+
+Released August 28, 2026.
+
+Firms can capture attributed public inquiries, triage conflicts, book consultations, and follow up with explicit consent while keeping the conversion trail auditable.
+
+- **Capture inquiries safely.** Conditional forms accept only validated answers, resist simple spam, preserve source attribution, and deduplicate retries.
+- **Review before conversion.** Public leads require an explicit conflict decision before they can become matters; appointment booking and reminder state remain durable.
+- **Respect communication choices.** Authored email follow-up checks current consent and reports provider failure truthfully; SMS remains unavailable until its compliance controls are ready.
+
 ## 2026.08.28.5 — Zoom Phone setup now shows exactly what needs attention
 
 Released August 28, 2026.
@@ -14,7 +24,6 @@ Tenant administrators can follow Zoom Phone setup stage by stage and recover fro
 - **See each setup stage.** The Zoom panel separately tracks saved app credentials, account authorization, Phone API permissions, and verified real-time call delivery.
 - **Recover from the actual authorization problem.** Zoom authorization returns to the integration panel with specific guidance for rejected credentials, expired requests, missing permissions, and account mismatches.
 - **Know when reconnecting is required.** Replacing an OAuth client pair now clearly reports that the previous grant was disconnected and directs the administrator to authorize the current app.
-
 ## 2026.08.28.4 — Client portal payments and durable sign-in
 
 Released August 28, 2026.

@@ -119,6 +119,13 @@ from app.models.prospect_follow_through import (
     ProspectContactEvent,
     ProspectFollowThroughEvent,
 )
+from app.models.conversion_loop import (
+    IntakeForm,
+    IntakeSubmission,
+    LeadChannelConsent,
+    LeadAppointment,
+    LeadFunnelEvent,
+)
 from app.models.background_ai_usage import BackgroundAIUsageReservation
 from app.models.compliance import (
     AgreementDefinition,
