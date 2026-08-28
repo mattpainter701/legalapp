@@ -104,7 +104,10 @@ services:
       interval: 15s
       timeout: 10s
       retries: 5
-      start_period: 90s
+      # A first boot may spend roughly three minutes initializing Prisma before
+      # the HTTP listener opens. Keep cold starts inside the grace period so
+      # Compose does not fail a healthy deployment prematurely.
+      start_period: 240s
 
   migrator:
     build:
