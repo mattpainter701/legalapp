@@ -4,7 +4,9 @@ set -Eeuo pipefail
 
 [[ "$(id -u)" -eq 0 ]] || { echo "Run with sudo" >&2; exit 2; }
 deploy_user="${DEPLOY_USER:-varta}"
+runner_user="${RUNNER_USER:-lawhand-runner}"
 app_dir="${APP_DIR:-/home/varta/legalapp}"
+id -u "$runner_user" >/dev/null
 tailscale_ip="$(tailscale ip -4 | head -n 1)"
 [[ "$tailscale_ip" =~ ^100\. ]] || { echo "No Tailscale IPv4 address" >&2; exit 2; }
 
@@ -18,7 +20,7 @@ exec runuser -u varta -- env HOME=/home/varta USER=varta LOGNAME=varta \
   bash /home/varta/legalapp/scripts/skynet_dr_rehearsal.sh
 WRAPPER
 install -m 0755 -o root -g root "$tmp" "$wrapper"
-printf '%s\n' "$deploy_user ALL=(root) NOPASSWD: $wrapper" >/etc/sudoers.d/lawhand-dr-rehearsal
+printf '%s\n' "$runner_user ALL=(root) NOPASSWD: $wrapper" >/etc/sudoers.d/lawhand-dr-rehearsal
 chmod 0440 /etc/sudoers.d/lawhand-dr-rehearsal
 visudo -cf /etc/sudoers.d/lawhand-dr-rehearsal
 

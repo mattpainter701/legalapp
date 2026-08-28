@@ -4,9 +4,11 @@ set -Eeuo pipefail
 
 [[ "$(id -u)" -eq 0 ]] || { echo "Run with sudo" >&2; exit 2; }
 deploy_user="${DEPLOY_USER:-varta}"
+runner_user="${RUNNER_USER:-lawhand-runner}"
 app_dir="${DEV1_APP_DIR:-/home/varta/legalapp-dev1}"
 entrypoint=/usr/local/sbin/lawhand-dev1-deploy-from-github
 sudoers_file=/etc/sudoers.d/lawhand-dev1-deploy
+id -u "$runner_user" >/dev/null
 
 install -d -m 0750 -o "$deploy_user" -g "$deploy_user" "$app_dir"
 if [[ ! -d "$app_dir/.git" ]]; then
@@ -55,7 +57,7 @@ as_deploy_user env GITHUB_DEPLOY_COMMIT="$requested_sha" \
   bash "$APP_DIR/scripts/deploy_dev1.sh"
 ENTRYPOINT
 install -m 0755 -o root -g root "$tmp" "$entrypoint"
-printf '%s\n' "$deploy_user ALL=(root) NOPASSWD: $entrypoint" >"$sudoers_file"
+printf '%s\n' "$runner_user ALL=(root) NOPASSWD: $entrypoint" >"$sudoers_file"
 chmod 0440 "$sudoers_file"
 visudo -cf "$sudoers_file"
 echo "Installed $entrypoint and its exact-command sudo rule."

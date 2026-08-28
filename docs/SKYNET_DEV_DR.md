@@ -23,7 +23,8 @@ workspace MCP, and research MCP product surfaces are disabled.
 2. Install the dev entrypoint once:
    `sudo bash scripts/install_dev1_deploy_entrypoint.sh`.
 3. Add the exact entrypoint and DR wrapper sudo rules created by the installers;
-   do not grant the runner general passwordless sudo.
+   they authorize the dedicated `lawhand-runner` account while keeping the checkout
+   and containers owned by `varta`. Do not grant general passwordless sudo.
 4. Create a separately credentialed Restic configuration at
    `/home/varta/.config/lawhand/dr.env` with mode `600`, then run
    `sudo bash scripts/install_skynet_dr_services.sh`.
