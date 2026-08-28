@@ -1907,6 +1907,8 @@ def test_skynet_installers_separate_runner_from_runtime_owner() -> None:
     assert "127.0.0.1:18443" not in deploy
     assert "127\\.0\\.0\\.1:443" not in deploy
     assert 'cd "$APP_DIR"' in deploy
+    assert 'chmod 0644 -- "$postgres_init_script"' in deploy
+    assert '[[ -f "$postgres_init_script" && ! -L "$postgres_init_script" ]]' in deploy
 
     for installer in (dev1, dr):
         assert 'deploy_user="${DEPLOY_USER:-varta}"' in installer
