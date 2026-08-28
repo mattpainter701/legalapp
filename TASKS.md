@@ -1,5 +1,181 @@
 # TASKS.md
 
+## BK29 — Competitive Parity and Research Trust — 2026-08-27 (PLANNED)
+
+**Goal:** Remove the remaining reasons a small or midsize firm would reject
+LawHand in favor of Clio, while building the research-trust capabilities needed
+to complement—not falsely imitate—Westlaw. Finish switchability and operational
+depth first; license or partner for proprietary editorial content and court
+access where building would be incomplete, unsafe, or uneconomic.
+
+This epic is a ranked execution overlay. Where a canonical implementation task
+already exists, the `COMP` item is a release/coordination gate and does not
+authorize a duplicate implementation. `BK28` remains canonical for ecosystem,
+trial, SMS, and Court Docket Watch work; `TC-03–TC-05` remain canonical for
+reviewed dates and court-rules provider diligence; tasks 1301–1309 and BK17
+remain canonical for core practice-management implementation.
+
+**Scoring:** value impact is `5` (switching/research-trust blocker) to `1`
+(polish). Complexity is `XS`, `S`, `M`, `L`, or `XL` and includes product,
+engineering, data/licensing, security, operations, and release proof. Rank is
+recommended execution order, not permission to skip a prerequisite or release
+gate.
+
+| Rank | ID | Competitive gap | Value | Complexity | Canonical dependencies |
+| ---: | --- | --- | :---: | :---: | --- |
+| 1 | `COMP-01` | truthful competitive baseline and claims | 5 | S | marketing capability catalog, README, competitive memo |
+| 2 | `COMP-02` | production-grade switching bundle | 5 | M | 1301, 1302, 1309, conflict/invoice architecture |
+| 3 | `COMP-03` | client-acquisition and conversion loop | 5 | L | 1304, BK26, `ECO-23–ECO-29` |
+| 4 | `COMP-04` | operational trust, service, and migration credibility | 5 | L | BK28 provisioning/import, production runbooks |
+| 5 | `COMP-05` | brief, quotation, and citation quality control | 5 | L | `BK20`, research MCP, document review |
+| 6 | `COMP-06` | authoritative-law coverage and currentness | 5 | XL | `AIP-17–AIP-21`, research source registry |
+| 7 | `COMP-07` | citator-grade status, history, and alerts | 5 | XL | `COMP-06`, `BK20` |
+| 8 | `COMP-08` | collaborative research workspace | 4 | M | research MCP, citation annotations |
+| 9 | `COMP-09` | configurable workflows, documents, and matter data | 4 | L | 1307, 1308a, 1308c, 1308d, BK16, BK17 |
+| 10 | `COMP-10` | operating accounting and payment depth | 4 | L | trust ledger, billing, Stripe, QBO |
+| 11 | `COMP-11` | maintained secondary guidance and form content | 4 | L | template index, source-rights registry |
+| 12 | `COMP-12` | court rules, e-filing, e-service, and returned-copy lifecycle | 4 | L | `TC-03–TC-05`, `ECO-30–ECO-36` |
+| 13 | `COMP-13` | repeatable competitive acceptance harness | 4 | M | all selected P0/P1 slices |
+| 14 | `COMP-14` | bounded integration ecosystem | 3 | L | Workspace MCP, OAuth integrations, outbox |
+| 15 | `COMP-15` | docket-derived litigation analytics | 3 | XL | `COMP-06`, `ECO-30–ECO-36` |
+| 16 | `COMP-16` | native staff/client mobile experience | 3 | XL | stable portal, communications, payments, offline policy |
+
+Current comparison references: [Clio platform](https://www.clio.com/features/),
+[Clio Work and Library](https://www.clio.com/work/ai-legal-research/),
+[Westlaw KeyCite](https://legal.thomsonreuters.com/en/products/westlaw/keycite),
+[Westlaw Quick Check](https://legal.thomsonreuters.com/en/products/westlaw-edge/quick-check),
+[Practical Law](https://legal.thomsonreuters.com/en/products/practical-law/features),
+and [Westlaw docket coverage](https://legal.thomsonreuters.com/en/products/westlaw/dockets-coverage).
+
+### P0 — remove switching and research-trust blockers
+
+- [ ] `COMP-01` Refresh `docs/competitive-gap-analysis.md`, README, pricing/demo
+      claims, and the marketing capability catalog against dated official vendor
+      evidence. Retire “ahead of every incumbent on AI,” distinguish implemented,
+      controlled-pilot, planned, and partner-dependent capabilities, identify an
+      owner/review date for every comparative claim, and prohibit “Westlaw
+      replacement,” comprehensive coverage, good-law, SLA, certification, or
+      support claims until their acceptance evidence exists.
+- [ ] `COMP-02` Complete one production-shaped **switching bundle** without
+      duplicating canonical tasks: finish portal invoice payment and durable
+      client login, portal isolation/revocation tests, real e-sign provider and
+      webhook reconciliation, saved conflict clearance, branded portal invoice
+      receipts, custom-role enforcement, import reconciliation, and one rehearsed
+      matter lifecycle from imported client through payment and signed closeout.
+- [ ] `COMP-03` Complete the lead-to-client conversion loop: public spam-resistant
+      intake, conditional forms, conflict-safe triage, source attribution,
+      appointment availability/booking, reminders, consented email/SMS follow-up,
+      fee-agreement generation/signature, lead-to-matter promotion, abandonment
+      recovery, and funnel reporting. Reuse 1304, BK26, and BK28 communications;
+      keep website builder, mass marketing, and autonomous engagement out of v1.
+- [ ] `COMP-04` Define and prove the customer operating contract: supported
+      deployment topology, service objectives without unearned SLA promises,
+      support hours/severity/escalation, public status and incident communication,
+      backup/restore and tenant export, onboarding/migration acceptance receipt,
+      offboarding/deletion, DPA/BAA applicability, subprocessors, security-review
+      packet, penetration-test cadence, and certification roadmap. Never present
+      a planned control or audit as an attained certification.
+- [ ] `COMP-05` Ship a review-first **Brief Check** that parses an uploaded brief
+      or selected Word document, normalizes and resolves citations, verifies
+      quotations and pin cites against accessible source text, reports missing or
+      ambiguous sources, applies available treatment/currentness evidence, finds
+      potentially omitted contrary/supporting authority with transparent recall
+      limits, compares opposing briefs, and exports a linked review report and
+      table-of-authorities draft. Never label a result good law solely because no
+      negative record was found.
+- [ ] `COMP-06` Build a versioned authority coverage/currentness control plane for
+      cases, statutes, regulations, rules, and administrative materials: rights
+      decision, jurisdiction/content type, official/source tier, temporal coverage,
+      last successful ingest, effective/as-of date, expected cadence, completeness
+      caveats, stale/failed state, corpus version, rollback, and customer-visible
+      coverage UI. Expand only through reviewed official/open/licensed sources and
+      pass sampled completeness/freshness audits before broad coverage claims.
+- [ ] `COMP-07` Extend `BK20` into an evaluated citator strategy: direct history,
+      negative/positive/distinguished treatment, citing references, depth and
+      issue context, later history, statute/regulation amendment or repeal, and
+      saved change alerts. Separate deterministic source facts from machine-derived
+      treatment; label incomplete/provisional results; test against a licensed or
+      attorney-reviewed benchmark; and use a partner/license when authoritative
+      completeness cannot be established from permitted sources.
+
+### P1 — deepen daily practice and research workflows
+
+- [ ] `COMP-08` Add a tenant/matter-scoped research workspace with saved issues,
+      searches, authorities, folders, highlights, annotations, exclusion reasons,
+      research history, shared trails, source/treatment alerts, outline and memo
+      assembly, Bluebook-ready citation export, review assignment, and immutable
+      research snapshots. Preserve exact source links and the `cited`/`verify`/
+      `model` distinction through collaboration and export.
+- [ ] `COMP-09` Unpark and consolidate the highest-demand customization slice:
+      firm-defined contact/matter fields and relationships, matter templates,
+      stage/checklist workflows, relative tasks, bounded trigger/action runs,
+      native DOCX generation, approved smart fill, and reviewed email-to-matter
+      filing. Start from five interviewed workflows; ship run history, preview,
+      idempotency, rollback, and permission tests before a general no-code builder.
+- [ ] `COMP-10` Make an explicit finance product decision before adding scattered
+      features: either (A) keep QBO as operating-accounting system of record and
+      deepen reconciliation/error recovery, or (B) fund a native GL/AP/AR/bank-feed/
+      vendor/tax-report program. In either path, close customer-payment gaps for
+      payment plans, recurring/autocharge authorization, stored-method lifecycle,
+      eCheck/wallet support where the provider allows, refunds/chargebacks,
+      evergreen retainers, trust deposits, fee allocation, and audit receipts.
+- [ ] `COMP-11` Complete a make/buy/partner and rights review for maintained
+      practice notes, jurisdiction guides, checklists, standard documents, clauses,
+      court forms, and update alerts. Pilot licensed content in one practice area
+      with provenance, effective date, editor/source identity, versioning, tenant
+      entitlement, quotation limits, and withdrawal. Do not copy or embed Westlaw,
+      KeyCite, Practical Law, proprietary headnotes, Key Numbers, or treatises
+      without explicit contractual rights.
+- [ ] `COMP-12` Define a partner-first court-operations slice for selected target
+      jurisdictions: reviewed trigger event, licensed court-rules calculation,
+      generated deadline candidates, approved filing package, e-sign/court-form
+      readiness, e-file/e-serve submission, fee/expense receipt, submitted/
+      accepted/rejected status, rejection remediation, and returned stamped-copy
+      storage. Filing is always explicit and human-approved; Court Docket Watch is
+      a reconciler/alert source, never proof that a filing succeeded.
+- [ ] `COMP-13` Build a versioned competitive acceptance suite around real customer
+      jobs rather than vendor marketing: imported-client onboarding, portal and
+      signature, intake-to-retainer, trust/payment, matter attention, document
+      generation, source-backed research, Brief Check, Court Docket Watch, and
+      offboarding. Record completion, time, errors, review edits, source coverage,
+      accessibility, support load, provider/AI cost, and customer acceptance; rerun
+      the same fixtures before changing comparative claims or commercial packaging.
+
+### P2 — conditional breadth after measured demand
+
+- [ ] `COMP-14` Preserve internal-only provisioning/import APIs while creating a
+      bounded integration surface: curated OAuth connectors, signed outbound
+      domain-event webhooks, Workspace MCP read/propose tools, per-integration
+      scopes and quotas, install/revoke receipts, replay/idempotency, sandbox
+      fixtures, and partner review. Do not expose generic tenant CRUD, operator
+      provisioning, bulk import promotion, raw database access, or unrestricted
+      customer webhooks merely to imitate Clio's app marketplace.
+- [ ] `COMP-15` Pilot transparent litigation analytics only after lawful docket
+      coverage is sufficient: judge/court/attorney/firm experience, motion type and
+      disposition, duration, damages, appeal history, and coverage/sample caveats.
+      Publish denominators, time windows, missing-data bias, jurisdiction coverage,
+      reproducible source links, and “not predictive of outcome” warnings; prohibit
+      sensitive-trait inference, judge scoring, and strategy claims unsupported by
+      the underlying sample.
+- [ ] `COMP-16` Revisit native iOS/Android only when the existing demand trigger is
+      met. Scope the first mobile release to secure matter/contact/task/calendar
+      access, push notifications, biometric re-entry, camera scan-to-PDF, offline
+      encrypted queue with conflict handling, time capture, portal messaging, and
+      approved payment handoff; require remote logout/wipe semantics, device tests,
+      accessibility, app-store privacy disclosures, and mobile incident support.
+
+### Explicit competitive non-goals
+
+- Do not recreate or scrape proprietary Westlaw/KeyCite editorial enhancements,
+  Key Numbers, treatises, Practical Law content, or licensed docket documents.
+- Do not market a comprehensive citator, nationwide research coverage, guaranteed
+  good-law determination, or outcome prediction from an incomplete open corpus.
+- Do not expose the operator onboarding/import API as a public practice-management
+  CRUD API; add only bounded integration contracts backed by real partner demand.
+- Do not build native GL, a 250-app marketplace, nationwide e-filing, litigation
+  analytics, or native mobile simultaneously. Each requires an explicit customer
+  trigger, commercial owner, support model, and independently reviewable cut line.
+
 ## BK28 — Workspace Ecosystem, Controlled Trials, and Operator Onboarding — 2026-08-27 (PLANNED)
 
 **Goal:** Meet attorneys inside Microsoft 365 and Google Workspace while
