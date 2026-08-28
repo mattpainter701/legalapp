@@ -42,6 +42,7 @@ const DomesticDetailPage = lazy(() => import('./pages/DomesticDetailPage'))
 const MediationPortfolioPage = lazy(() => import('./pages/MediationPortfolioPage'))
 const MediationDetailPage = lazy(() => import('./pages/MediationDetailPage'))
 const PlatformPage = lazy(() => import('./pages/PlatformPage'))
+const PlatformInfrastructurePage = lazy(() => import('./pages/PlatformInfrastructurePage'))
 const ContactsPage = lazy(() => import('./pages/ContactsPage'))
 const ConflictChecksPage = lazy(() => import('./pages/ConflictChecksPage'))
 const ContactDetailPage = lazy(() => import('./pages/ContactDetailPage'))
@@ -419,6 +420,7 @@ export default function App() {
 
         {/* Platform admin — standalone auth */}
         <Route path="/platform" element={<PlatformPage />} />
+        <Route path="/platform/infrastructure" element={<PlatformInfrastructurePage />} />
         <Route path="*" element={<NotFoundPage />} />
         </Routes>
         </Suspense>
