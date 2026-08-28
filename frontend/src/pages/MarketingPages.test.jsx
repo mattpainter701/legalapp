@@ -34,7 +34,7 @@ describe('public LawHand product marketing', () => {
     expect(screen.queryByText('3 sources connected')).not.toBeInTheDocument()
   })
 
-  it('markets Research MCP truthfully as an available metered product', () => {
+  it('markets Research MCP truthfully as a controlled metered pilot', () => {
     renderPage(McpProductPage)
 
     expect(screen.getByRole('heading', { level: 1, name: /Bring approved public legal authority/i })).toBeInTheDocument()
@@ -42,7 +42,7 @@ describe('public LawHand product marketing', () => {
     expect(screen.getByText(/Research-only scope/i)).toBeInTheDocument()
     expect(screen.getByText(/workspace matters, documents, or client files/i)).toBeInTheDocument()
     expect(screen.getAllByText(/research\.getlawhand\.com\/api\/mcp/i)).not.toHaveLength(0)
-    expect(screen.getAllByText('Available')).not.toHaveLength(0)
+    expect(screen.getAllByText('Controlled pilot')).not.toHaveLength(0)
     expect(screen.getByText('$0.45')).toBeInTheDocument()
     expect(screen.getByText(/Firm administrators issue keys/i)).toBeInTheDocument()
   })
@@ -54,7 +54,7 @@ describe('public LawHand product marketing', () => {
     expect(screen.getByText('$89')).toBeInTheDocument()
     expect(screen.getByText('$0.45')).toBeInTheDocument()
     expect(screen.getByText('Billed annually')).toBeInTheDocument()
-    expect(screen.getByText(/Per successful tool call\. Scoped keys/i)).toBeInTheDocument()
+    expect(screen.getByText(/Pilot price per successful tool call\. Scoped keys/i)).toBeInTheDocument()
   })
 
   it('lists the whole shipped practice-area catalog on the platform page', () => {

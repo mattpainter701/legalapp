@@ -164,7 +164,7 @@ export default function ProductPage() {
           </div>
 
           <p className="mt-6 font-sans text-[13px] leading-relaxed text-brand-ink-2">
-            Practice areas are enabled per firm during onboarding.{' '}
+            Practice areas are enabled for selected firms during controlled onboarding.{' '}
             <a href={contactUrl} className="font-bold text-brand-accent-2 hover:underline">Tell us which ones you need</a>.
           </p>
         </div>
@@ -198,7 +198,7 @@ export default function ProductPage() {
                 <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-brand-line bg-brand-bg-soft text-brand-accent-2">
                   <Braces size={21} aria-hidden="true" />
                 </div>
-                <span className="rounded-full border border-brand-gold/30 bg-brand-gold/10 px-2.5 py-1 font-sans text-[9px] font-bold uppercase tracking-[0.12em] text-brand-gold">Available</span>
+                <span className="rounded-full border border-brand-gold/30 bg-brand-gold/10 px-2.5 py-1 font-sans text-[9px] font-bold uppercase tracking-[0.12em] text-brand-gold">Controlled pilot</span>
               </div>
               <h3 className="mt-5 font-serif text-[19px] font-bold">LawHand MCP</h3>
               <p className="mt-2 font-sans text-[13.5px] leading-relaxed text-brand-ink-2">

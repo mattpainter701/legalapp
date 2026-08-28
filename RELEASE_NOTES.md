@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.27.12 — Product claims now show rollout and research boundaries
+
+Released August 27, 2026.
+
+LawHand product and pricing pages now distinguish shipped behavior, controlled pilots, planned work, and provider-dependent connections.
+
+- **See the rollout state.** Capability cards identify implemented behavior, controlled pilots, and connections that require a separate provider account or approval.
+- **Evaluate Research MCP as a pilot.** Research MCP pricing and product pages now state the controlled-pilot gate and the configured public-authority coverage boundary.
+- **Keep research claims precise.** LawHand explains that source links support attorney review without claiming Westlaw replacement, comprehensive coverage, or a good-law determination.
+
 ## 2026.08.27.11 — Agreement evidence and safer retention controls
 
 Released August 27, 2026.

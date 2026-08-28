@@ -1,4 +1,5 @@
 import {
+  CAPABILITY_STATES,
   CORE_CAPABILITIES,
 } from '../marketing/capabilities.js'
 import {
@@ -50,7 +51,7 @@ const MARKETING_SHELLS = Object.freeze({
     heading: 'The legal automation platform for law firms.',
     lead: 'LawHand holds client and matter CRM, caller intake, tasks and deadlines, document preparation, time and invoicing, and source-linked legal research in a single tenant-isolated workspace.',
     sections: [
-      { heading: 'Core capabilities', body: CORE_CAPABILITIES.map((capability) => capability.name).join(' \u00b7 ') },
+      { heading: 'Core capabilities', body: CORE_CAPABILITIES.map((capability) => `${capability.name} (${CAPABILITY_STATES[capability.availability]})`).join(' \u00b7 ') },
       { heading: 'The core workspace', body: 'Intake and tasks, matters and contacts, calendar and deadlines, documents and automation, time, billing, trust accounting, reporting, client portal, and signature routing.' },
       { heading: 'Practice-area library', body: 'Skill libraries add the document patterns, checks, and terminology of a practice area to the shared matter record. Trust and estate, family and domestic relations, and mediation add dedicated workspaces with their own records and roles.' },
       { heading: 'Connected sources', body: 'Supported Microsoft 365, Google Workspace, Microsoft Teams, Zoom Phone, QuickBooks Online, and enterprise file-share connections are enabled by a firm administrator and can be disconnected at any time.' },
@@ -68,11 +69,11 @@ const MARKETING_SHELLS = Object.freeze({
   },
   '/product/mcp': {
     heading: 'Bring approved public legal authority into the tools you already use.',
-    lead: 'LawHand Research MCP connects ChatGPT, Claude, and API clients through OAuth or a scoped API token for research-only retrieval, PAYG metering, and administrative visibility.',
+    lead: 'LawHand Research MCP is a controlled pilot connecting approved ChatGPT, Claude, and API clients through OAuth or a scoped API token for research-only retrieval, PAYG metering, and administrative visibility.',
     sections: [
       { heading: 'Research-only boundary', body: 'Search approved public legal authority without exposing workspace matters, documents, tasks, or client files.' },
       { heading: 'OAuth or API token', body: 'Hosted ChatGPT and Claude clients use OAuth 2.1. Header-capable API clients use a scoped LawHand Research token.' },
-      { heading: 'Available with a LawHand account', body: 'Enabled customers can use OAuth or managed Research API keys at $0.45 per successful tool call.' },
+      { heading: 'Controlled pilot', body: 'Approved pilot customers can use OAuth or managed Research API keys at a pilot price of $0.45 per successful tool call. Coverage depends on the configured public-authority corpus.' },
     ],
   },
   '/request-demo': {
@@ -86,10 +87,10 @@ const MARKETING_SHELLS = Object.freeze({
   },
   '/pricing': {
     heading: 'One clear platform price. Controlled expansion.',
-    lead: 'LawHand is $89 per user per month, billed annually. Research MCP is available to enabled customers at $0.45 per successful tool call.',
+    lead: 'LawHand is $89 per user per month, billed annually. Research MCP is a controlled pilot for approved customers at a pilot price of $0.45 per successful tool call.',
     sections: [
       { heading: 'LawHand platform', body: 'The core seat includes the firm workspace, matter-aware AI chat, firm operations, source-aware workflows, and role-aware access within the licensed scope.' },
-      { heading: 'LawHand Research MCP', body: 'Enabled customers pay $0.45 per successful tool call, with administrator-managed keys, budgets, expiration, and usage visibility.' },
+      { heading: 'LawHand Research MCP', body: 'Approved pilot customers pay $0.45 per successful tool call, with administrator-managed keys, budgets, expiration, and usage visibility.' },
       { heading: 'Call Intake', body: 'Firms may begin with a focused caller-intake and task workflow, with optional verified Zoom Phone integration.' },
     ],
   },
