@@ -8,8 +8,8 @@
 
 ## Outcome
 
-Build one controlled ecosystem layer around LawHand rather than five unrelated
-integrations:
+Build one controlled ecosystem layer around LawHand rather than separate,
+inconsistent integrations:
 
 1. let attorneys reach LawHand matter context from Microsoft 365 and Google
    Workspace;
@@ -18,9 +18,11 @@ integrations:
 3. issue functional trials with server-enforced views, actions, seats, and AI
    budgets;
 4. provision tenants and stage legacy client/matter imports through an
-   operator-only API; and
+   operator-only API;
 5. use a firm's existing SharePoint entitlement for governed matter
-   workspaces without making one unmanaged site per matter the default.
+   workspaces without making one unmanaged site per matter the default; and
+6. provide consented, auditable customer alerts and two-way SMS communication
+   in the same matter timeline as email, calls, meetings, and portal activity.
 
 The first commercial wedge should be the Microsoft **LawHand Matter Agent** and
 the controlled-trial control plane. The same Workspace MCP and review-first
@@ -36,6 +38,9 @@ contracts can later power a Google Workspace add-on and Gemini Enterprise agent.
 - Agent tools may read and propose. Sending email, promoting deadlines, filing,
   clearing conflicts, changing permissions, and other consequential actions stay
   deterministic and human-approved in LawHand.
+- SMS is a client-service channel, not an emergency service or marketing blast
+  tool. Consent, quiet hours, opt-out, sender registration, delivery state, and
+  matter matching are enforced independently of any generated message text.
 - Trial restrictions are enforced by APIs and durable policy. Hiding a route or
   button is presentation, not authorization.
 - Tenant provisioning and legacy import are platform-operator functions. They
@@ -54,6 +59,7 @@ contracts can later power a Google Workspace add-on and Gemini Enterprise agent.
 | Trials | demo expiry/quota, tenant `expires_at`, plugin trial expiry, module resolution, user licensing, and atomic AI reservation foundations | public-plan signup stores `trial_ends_at` as metadata but the tenant gate reads `Tenant.expires_at`; no unified tenant trial policy, view/action grants, conversion, or operator extension workflow |
 | Operator onboarding | scoped platform bearer tokens, tenant listing/update, onboarding wizard, external import staging, Tabs3 bundle validation | no operator tenant-create contract, onboarding saga, generic client/matter import contract, invitation handoff, or idempotent reconciliation/promotion orchestration |
 | SharePoint | tenant SharePoint site/library binding, root and matter folder creation, durable drive/item IDs, upload/delete/sync/search | no tenant-installed site template, matter landing page, metadata/content types, governed permissions recipe, template version tracking, or dedicated-site exception workflow |
+| SMS | shared `CommunicationLog`, matter/client timelines, normalized client phone fields, preferred contact method/window/timezone, and a basic `sms_opt_in` flag | no consent provenance, provider/number ownership, registered sender, signed inbound/status callbacks, delivery reconciliation, STOP/HELP handling, quiet hours, two-way thread, templates, or review-first agent proposal |
 
 ## 1. Google account and Gemini strategy
 
@@ -397,6 +403,129 @@ external sharing](https://learn.microsoft.com/en-us/sharepoint/modern-experience
   integration and a SharePoint-only user does not gain LawHand access.
 - Export a provisioning/permission receipt suitable for customer sign-off.
 
+## 6. SMS customer alerts and two-way communication
+
+### Decision: one consented matter communication channel
+
+SMS should appear in the same client and matter communication timeline as
+email, calls, meetings, and portal activity. It should not become a separate
+contact database, campaign product, or AI-autonomous delivery path.
+
+Start with Twilio behind a provider-neutral messaging interface. Before coding,
+choose and document whether the pilot uses a tenant-owned Messaging Service or a
+LawHand platform/ISV account with strongly partitioned subaccounts and numbers.
+For US application-to-person traffic over ten-digit long codes, Twilio requires
+A2P 10DLC registration, including a verified brand, campaign use case, and
+documented opt-in, opt-out, and help behavior. [Twilio A2P 10DLC](https://www.twilio.com/docs/messaging/compliance/a2p-10dlc).
+
+The first release is one-to-one SMS only. Group messages, marketing campaigns,
+mass broadcasts, MMS/document delivery, emergency alerts, and WhatsApp/RCS are
+out of scope.
+
+### Consent and recipient identity
+
+Replace the current boolean-only `sms_opt_in` contract with channel-specific,
+provenance-bearing consent while retaining the boolean as a compatibility
+projection during migration. Record:
+
+- normalized destination number and whether staff verified it as mobile;
+- state: `unknown`, `opted_in`, `opted_out`, `blocked`, or `invalid`;
+- consent source, disclosure/template version, purpose, actor, timestamp, and
+  permitted message categories;
+- preferred contact method, language, timezone, and quiet-hour window; and
+- opt-out/invalid/delivery-failure reason and provider evidence.
+
+An inbound STOP-equivalent must suppress subsequent sends before any queued or
+agent-proposed content is delivered. START and HELP behavior must follow the
+registered campaign and customer language. Twilio Messaging Services can report
+an `OptOutType` on inbound webhooks and support configurable opt-in, opt-out, and
+help keywords. LawHand must reconcile that provider signal into its own durable
+consent record rather than relying only on a provider-side block.
+[Twilio Advanced Opt-Out](https://www.twilio.com/docs/messaging/tutorials/advanced-opt-out).
+
+Never choose a recipient from generated text or fuzzy matching. The destination
+must come from a verified client/contact record visible to the acting user. One
+phone number matching multiple contacts or matters goes to a review queue; it is
+never silently attached to the newest or most active matter.
+
+### Provider and delivery lifecycle
+
+- Bind each inbound number or Messaging Service to exactly one LawHand tenant.
+  Store credentials encrypted and support disconnect/rotation without losing
+  communication history.
+- Queue outbound delivery with an idempotency key before calling the provider.
+  Store provider message ID, sender/destination, segment count, initial status,
+  error category, template/version, actor/reviewer, matter/contact, and timestamps
+  in `CommunicationLog` plus a linked delivery record where transport history
+  does not fit cleanly in the timeline row.
+- Validate the exact externally visible callback URL and the
+  `X-Twilio-Signature` on inbound messages and status callbacks using the
+  provider SDK. Twilio signs webhook requests and recommends SDK validation.
+  [Twilio webhook security](https://www.twilio.com/docs/usage/webhooks/getting-started-twilio-webhooks).
+- Deduplicate callbacks and accept forward-compatible parameter additions.
+  Reconcile queued, sent, delivered, undelivered, and failed states without
+  changing an earlier delivered message back to a non-terminal state.
+- Use bounded reconciliation for uncertain delivery after callback outages.
+  Twilio status callbacks provide lifecycle and error-code updates, but receipt
+  ordering and availability must not be assumed.
+  [Twilio delivery status callbacks](https://www.twilio.com/docs/messaging/guides/track-outbound-message-status).
+
+### Customer alerts
+
+Start with tenant-enabled, versioned templates for:
+
+- appointment/consult reminders and changes;
+- a portal item or approved document being ready;
+- signature-request reminders and status;
+- invoice/payment reminders and receipts; and
+- a staff-authored matter update or requested follow-up.
+
+Every alert must resolve the verified recipient, consent, quiet hours, matter,
+template version, variables, and duplicate-suppression key before queuing.
+Templates should keep lock-screen text minimal and link to the authenticated
+client portal for confidential detail. Do not put legal strategy, document
+contents, health/financial detail, or other unnecessarily sensitive matter facts
+in an SMS body.
+
+Scheduled reminders require a previewable rule, cancellation when the source
+event changes or closes, and a durable receipt showing why the message was sent.
+Failure does not silently fall back to another channel unless the client has
+separately consented to that channel and the workflow explicitly defines the
+fallback.
+
+### Two-way staff communication and agent use
+
+- Add a matter/client SMS thread with delivery states, inbound/outbound
+  direction, staff ownership, unread state, and explicit reassignment.
+- An unmatched inbound message goes to a tenant-scoped communication review
+  queue. Staff confirm the contact and matter before it becomes matter context.
+- Staff can compose or select an approved template, preview exact recipient/body,
+  and send through an explicit action with RBAC and audit.
+- Add a review-first `propose_client_sms` capability for LawHand, Copilot, and
+  Gemini agents. The recipient must come from an allowlisted matter recipient
+  tool and the result must enter LawHand Review. The agent cannot send, schedule,
+  alter consent, or override quiet hours.
+- AI budgets apply only to generation/reasoning. Provider message segments and
+  carrier cost use a separate tenant delivery quota and usage ledger.
+
+### SMS acceptance gates
+
+- Prove campaign/sender readiness, tenant/number isolation, credential rotation,
+  and disconnect in a paid provider sandbox/test setup suitable for A2P review.
+- Test valid and invalid webhook signatures, duplicate/out-of-order callbacks,
+  provider timeouts, uncertain send results, reconciliation, and number reuse.
+- Test no consent, revoked consent, STOP/START/HELP, invalid number, quiet hours,
+  wrong tenant, multiple contact/matter matches, deleted/closed matter, and a
+  recipient changed after proposal review.
+- Prove an agent can only create a source-cited pending proposal and cannot send
+  or modify consent through Workspace MCP.
+- Record delivery success/failure, opt-out rate, response time, message segments,
+  provider cost, template usage, staff edits, and customer complaints without
+  exposing message bodies in platform-level telemetry.
+- Complete communications/compliance counsel review of consent language,
+  campaign registration, retention, quiet hours, and customer responsibilities
+  before general availability.
+
 ## Delivery sequence
 
 ### Phase 0 — control plane and proof harness
@@ -405,6 +534,8 @@ external sharing](https://learn.microsoft.com/en-us/sharepoint/modern-experience
    operator trial controls.
 2. Generic agent evaluation fixtures and matter-match/citation metrics.
 3. Operator `platform:provision` scope and idempotent tenant creation.
+4. SMS provider ownership decision, consent schema, campaign/sender readiness,
+   and communications/compliance review.
 
 ### Phase 1 — Microsoft customer wedge
 
@@ -412,6 +543,8 @@ external sharing](https://learn.microsoft.com/en-us/sharepoint/modern-experience
 2. Ship matter brief, current-artifact analysis, and event preparation.
 3. Package and pilot the SharePoint Matter Hub template.
 4. Use the controlled extended trial for the pilot tenant.
+5. Ship signed messaging callbacks, delivery reconciliation, versioned customer
+   alerts, consent/quiet-hour enforcement, and a staff-reviewed send action.
 
 ### Phase 2 — repeatable migration and conversion
 
@@ -419,6 +552,8 @@ external sharing](https://learn.microsoft.com/en-us/sharepoint/modern-experience
 2. Founding-admin invitation and onboarding-run operator workflow.
 3. Trial extension, conversion, read-only grace, retention, and commercial usage
    evidence.
+4. Add the two-way SMS thread, ambiguous inbound review queue, and review-first
+   `propose_client_sms` agent capability.
 
 ### Phase 3 — Google channel
 
@@ -433,7 +568,9 @@ Possible packaging:
 - **LawHand Evaluation:** selected views, named seats, fixed term, bounded AI;
 - **LawHand for Microsoft 365:** Matter Agent plus SharePoint Matter Hub;
 - **LawHand for Google Workspace:** contextual add-on, with Gemini Enterprise
-  offered only where the customer licenses and governs it; and
+  offered only where the customer licenses and governs it;
+- **LawHand Client Communications:** consented customer alerts and two-way SMS
+  with delivery usage billed or limited separately from AI; and
 - **Migration Services:** operator-provisioned tenant plus reconciled import and
   customer sign-off.
 
@@ -445,7 +582,9 @@ Do not set pricing until pilot usage is measured. Record:
 - wrong-matter rate and source citation coverage;
 - proposal acceptance, edit, and rejection rates;
 - Standard/Premium/background AI value units and gross margin;
-- SharePoint provisioning failures and permission drift; and
+- SharePoint provisioning failures and permission drift;
+- SMS delivery/undelivered rates, opt-outs, replies, segments, provider cost,
+  response time, and complaints; and
 - trial activation, qualified usage, expiry, extension, and paid conversion.
 
 ## Explicit non-goals for the first implementation PRs
@@ -455,6 +594,8 @@ Do not set pricing until pilot usage is measured. Record:
 - using personal Copilot/Google One subscriptions as shared LawHand capacity;
 - public tenant provisioning or a customer-visible bulk-create API;
 - one SharePoint site per routine matter;
+- marketing campaigns, mass SMS, MMS/document delivery, emergency messaging, or
+  agent-autonomous customer communication;
 - broad mailbox ingestion or a second shadow matter database in Microsoft or
   Google; and
 - enabling public signup before expiry, conversion, quota, and retention are

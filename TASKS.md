@@ -6,7 +6,8 @@
 keeping LawHand authoritative for matter identity, permissions, review, audit,
 and deterministic execution; make extended evaluations enforceable; provide an
 operator-only tenant/import path; and provision governed SharePoint matter
-workspaces in the customer's tenant.
+workspaces in the customer's tenant. Add consented customer alerts and two-way
+SMS to the same audited matter communication timeline.
 
 Architecture, product decisions, current-state evidence, vendor constraints,
 delivery order, and acceptance gates:
@@ -92,6 +93,36 @@ delivery order, and acceptance gates:
       import exceptions, wrong-matter rate, citation coverage, proposal edits,
       AI value units/margin, SharePoint failures/drift, qualified trial usage,
       extension, and paid conversion before setting packaging or price.
+
+### P1/P2 — SMS customer alerts and two-way communication
+
+- [ ] `ECO-23` Select the provider/ownership model and prove paid campaign and
+      sender readiness: start with Twilio behind a provider-neutral interface,
+      decide tenant-owned versus platform/ISV subaccounts, bind each number or
+      Messaging Service to one tenant, and complete A2P/compliance diligence.
+- [ ] `ECO-24` Replace boolean-only SMS consent with provenance-bearing channel
+      consent, verified mobile destination, allowed categories, disclosure
+      version, language/timezone/quiet hours, and durable STOP/START/HELP,
+      blocked, invalid, and revoked states while retaining compatibility reads.
+- [ ] `ECO-25` Build idempotent outbound delivery and signed inbound/status
+      webhooks with encrypted credentials, provider message IDs, segment/cost
+      usage, ordered state reconciliation, bounded uncertain-send recovery,
+      retry controls, and `CommunicationLog` matter/client audit linkage.
+- [ ] `ECO-26` Ship tenant-enabled, versioned customer alerts for appointments,
+      portal/document readiness, signatures, invoices/payments, and staff-authored
+      matter updates with verified recipients, consent, quiet hours, minimal
+      lock-screen content, duplicate suppression, cancellation, and exact receipts.
+- [ ] `ECO-27` Add a two-way staff SMS thread and ambiguous inbound review queue;
+      exact phone/contact/matter matches may route automatically, while multiple
+      or missing matches require confirmation before becoming matter context.
+- [ ] `ECO-28` Add review-first `propose_client_sms` for LawHand, Copilot, and
+      Gemini using allowlisted matter recipients; agents cannot send, schedule,
+      change consent, override quiet hours, or select a number from generated text.
+- [ ] `ECO-29` Pass provider, isolation, signature, duplicate/out-of-order,
+      consent, opt-out, quiet-hour, wrong-tenant, ambiguous-match, closed-matter,
+      recipient-change, delivery-cost, retention, telemetry, and counsel-review
+      release gates; keep group, marketing, mass, MMS, and emergency messaging
+      out of the first release.
 
 ## BK27 — Task, Correspondence, Intake, and Portal Follow-through — 2026-08-26
 
@@ -2014,7 +2045,12 @@ Generalize the mediation portal (`mediation_portal.py`, `MediationInvite`, `Port
 
 **DROPPED (2026-06-13):** LawToolBox path abandoned. No customer demand pull; not pursuing commercial deadline-engine integration at this time. Revisit only if litigation firms explicitly cite court-rules deadlines as a blocker. Research artifacts retained in `docs/research/1305-*.md` for reference.
 
-#### 1306. Two-Way SMS / Text (P1, SMALL–MEDIUM) — PENDING
+#### 1306. Two-Way SMS / Text (P1, SMALL–MEDIUM) — REPLANNED IN BK28
+
+Canonical execution, compliance, customer-alert, delivery, two-way-thread, and
+agent-review work is now `BK28 / ECO-23–ECO-29`. The original implementation
+sketch is retained below for history and must not be shipped without those gates.
+
 - [ ] Migration `049_sms`: SMS fields on `communication_log` (`external_id`, `direction`, `from_number`, `to_number`); tenant Twilio config
 - [ ] `services/sms.py` (Twilio) send + inbound webhook → `CommunicationLog` matched by phone; `routers/communications.py` send + webhook
 - [ ] Frontend: SMS thread + composer on `CommunicationsPage` + `MatterDetailPage`
