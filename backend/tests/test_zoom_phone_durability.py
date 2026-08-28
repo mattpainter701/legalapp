@@ -245,6 +245,10 @@ async def test_zoom_callback_without_token_account_id_enables_api_test_and_sync(
 
     assert response.status_code == 302
     assert "error=" not in response.headers["location"]
+    assert (
+        "/admin?tab=integrations&integration=zoom&connected=zoom_phone"
+        in response.headers["location"]
+    )
     await db_session.refresh(credential)
     await db_session.refresh(app)
     assert decrypt_token(credential.encrypted_access_token) == "callback-access"
@@ -280,6 +284,59 @@ async def test_zoom_callback_without_token_account_id_enables_api_test_and_sync(
 
 
 @pytest.mark.asyncio
+async def test_zoom_callback_surfaces_invalid_app_credentials_without_logging_reason(
+    client,
+    db_session,
+    test_redis,
+    test_tenant,
+    test_user,
+    monkeypatch,
+    caplog,
+):
+    await _configure_zoom(db_session, test_tenant, test_user)
+
+    class RejectingZoomClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, url, **_kwargs):
+            return httpx.Response(
+                400,
+                json={
+                    "error": "invalid_client",
+                    "reason": "do-not-log-provider-detail",
+                },
+                request=httpx.Request("POST", url),
+            )
+
+    monkeypatch.setattr(
+        integrations_router.httpx,
+        "AsyncClient",
+        lambda *_args, **_kwargs: RejectingZoomClient(),
+    )
+    state = await _seed_zoom_phone_oauth_state(test_redis, test_tenant, test_user)
+
+    with caplog.at_level("WARNING"):
+        response = await client.get(
+            "/api/integrations/zoom-phone/callback",
+            params={"code": "sensitive-code", "state": state},
+        )
+
+    assert response.status_code == 302
+    assert (
+        "/admin?tab=integrations&integration=zoom"
+        "&error=app_credentials_invalid&provider=zoom_phone"
+        in response.headers["location"]
+    )
+    assert "provider_error=invalid_client" in caplog.text
+    assert "do-not-log-provider-detail" not in caplog.text
+    assert "sensitive-code" not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_zoom_app_partial_update_preserves_provider_binding_and_ignores_manual_id(
     client, db_session, test_tenant, test_user
 ):
@@ -295,6 +352,8 @@ async def test_zoom_app_partial_update_preserves_provider_binding_and_ignores_ma
         json={"webhook_secret_token": "rotated-webhook-secret"},
     )
     assert secret_only.status_code == 200, secret_only.text
+    assert secret_only.json()["reauthorization_required"] is False
+    assert secret_only.json()["grant_invalidated"] is False
     await db_session.refresh(app)
     await db_session.refresh(credential)
     assert app.zoom_account_id == "original-account-123"
@@ -332,6 +391,8 @@ async def test_new_zoom_app_does_not_require_or_trust_manual_account_id(
         json=payload,
     )
     assert saved.status_code == 200, saved.text
+    assert saved.json()["reauthorization_required"] is True
+    assert saved.json()["grant_invalidated"] is False
     assert saved.json()["app_credentials"]["zoom_account_id"] is None
     app = await db_session.scalar(
         select(TenantOAuthApp).where(TenantOAuthApp.tenant_id == test_tenant.id)
@@ -1772,6 +1833,8 @@ async def test_changing_tenant_zoom_client_invalidates_existing_grant(
         },
     )
     assert response.status_code == 200, response.text
+    assert response.json()["reauthorization_required"] is True
+    assert response.json()["grant_invalidated"] is True
     await db_session.refresh(credential)
     assert credential.is_active is False
     assert credential.health == "reauthorization_required"
