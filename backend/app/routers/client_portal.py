@@ -42,7 +42,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.services.upload_guard import reject_oversized_request
-from app.database import bind_tenant_context, enable_rls_bypass, get_db, set_tenant_context
+from app.database import (
+    bind_tenant_context,
+    enable_rls_bypass,
+    get_db,
+    set_tenant_context,
+)
 from app.middleware.tenant import get_current_user
 from app.models.billing import Invoice, Payment
 from app.models.client_portal import ClientPortalInvite
