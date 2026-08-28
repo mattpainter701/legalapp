@@ -46,7 +46,11 @@ from app.services.llm_routing import (
     get_platform_llm_config,
     upsert_platform_llm_config,
 )
-from app.services.background_ai_quota import BACKGROUND_ROUTE_CONFIG_KEY
+from app.services.ai_price_card import get_price_card
+from app.services.background_ai_quota import (
+    BACKGROUND_ROUTE_CONFIG_KEY,
+    background_pricing_models,
+)
 from app.services.operator_audit import record_operator_audit
 from app.services.platform_auth import require_platform_token
 from app.services.token_vault import decrypt_token, encrypt_token
@@ -1487,6 +1491,50 @@ def _background_activation_alias(config: dict[str, Any]) -> str | None:
             if alias:
                 return alias
     return _clean_optional(config.get("background_model"))
+
+
+async def _require_background_route_prices(
+    db: AsyncSession,
+    config: dict[str, Any],
+    *,
+    required: bool = False,
+) -> None:
+    """Reject a Background graph that cannot be conservatively admitted."""
+
+    route = config.get("background")
+    has_target = isinstance(route, dict) and (
+        any(
+            _clean_optional(route.get(field))
+            for field in ("provider_id", "key_id", "model")
+        )
+        or bool(route.get("alternates"))
+        or bool(route.get("fallbacks"))
+    )
+    if not has_target:
+        if required:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Background route activation requires a provider price for "
+                    "every primary, alternate, and fallback target. Missing: "
+                    "no executable target."
+                ),
+            )
+        return
+    assert isinstance(route, dict)
+    price_card = await get_price_card(db)
+    pricing_models = background_pricing_models(route)
+    unpriced = [model for model in pricing_models if not price_card.has_rate(model)]
+    if not pricing_models or unpriced:
+        missing = ", ".join(unpriced) if unpriced else "no executable target"
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Background route activation requires a provider price for "
+                "every primary, alternate, and fallback target. "
+                f"Missing: {missing}."
+            ),
+        )
 
 
 async def _save_background_route_config(
@@ -3180,6 +3228,9 @@ async def save_routes(
             else dict(global_config.get("background") or {})
         ),
     }
+    await _require_background_route_prices(
+        db, config, required=body.background is not None
+    )
     await _enforce_customer_route_data_policy(request, db, config)
     aliases = _managed_route_aliases(config)
     if body.background is None:
@@ -3349,6 +3400,7 @@ async def reload_routes(
         if profile
         else global_config
     )
+    await _require_background_route_prices(db, config)
     await _enforce_customer_route_data_policy(request, db, config)
     keys_result = await db.execute(select(LLMProviderKey))
     keys_by_id = {str(k.id): k for k in keys_result.scalars().all()}

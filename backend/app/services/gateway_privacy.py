@@ -15,6 +15,9 @@ METADATA_FIELDS = (
     "premium",
     "route_tier",
     "actor_type",
+    # Opaque broker-generated correlation id. It contains no customer content
+    # and lets spend-log reconciliation survive a missing provider response.
+    "request_id",
 )
 
 
@@ -44,3 +47,18 @@ def gateway_metadata(**values: Any) -> dict[str, Any]:
             continue
         metadata[field] = str(value) if field != "premium" else bool(value)
     return metadata
+
+
+def litellm_metadata(**values: Any) -> dict[str, Any]:
+    """Sanitize metadata and retain the opaque id in LiteLLM spend logs.
+
+    LiteLLM intentionally filters arbitrary request metadata before persisting
+    spend rows. ``spend_logs_metadata`` is its documented, typed escape hatch
+    for metadata-only cost correlation. Callers cannot inject that container:
+    it is created only after the allowlist above has been applied.
+    """
+
+    metadata = gateway_metadata(**values)
+    if "request_id" not in metadata:
+        return metadata
+    return {**metadata, "spend_logs_metadata": dict(metadata)}

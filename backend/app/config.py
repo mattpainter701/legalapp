@@ -207,6 +207,20 @@ class Settings(BaseSettings):
     BACKGROUND_AI_TENANT_WEEKLY_LIMIT: int = 750
     BACKGROUND_AI_TENANT_MONTHLY_LIMIT: int = 1500
     BACKGROUND_AI_RESERVATION_TTL_MINUTES: int = 15
+    # Authoritative pool budget. The provider meters value, not calls, so these
+    # windows are what admission enforces; the request limits above remain a
+    # coarse backstop. Defaults mirror the published OpenCode Go value windows.
+    BACKGROUND_AI_ACCOUNT_FIVE_HOUR_USD: float = 12.0
+    BACKGROUND_AI_ACCOUNT_WEEKLY_USD: float = 30.0
+    BACKGROUND_AI_ACCOUNT_MONTHLY_USD: float = 60.0
+    BACKGROUND_AI_TENANT_FIVE_HOUR_USD: float = 3.0
+    BACKGROUND_AI_TENANT_WEEKLY_USD: float = 8.0
+    BACKGROUND_AI_TENANT_MONTHLY_USD: float = 15.0
+    # Reconciliation of reservations whose outcome the provider never confirmed.
+    BACKGROUND_AI_RECONCILE_GRACE_MINUTES: int = 10
+    BACKGROUND_AI_RECONCILE_MAX_AGE_HOURS: int = 24
+    BACKGROUND_AI_RECONCILE_BATCH: int = 100
+    BACKGROUND_AI_RECONCILE_LOOKUP_TIMEOUT_SECONDS: float = 10.0
 
     # QuickBooks Online OAuth2
     QBO_CLIENT_ID: str = ""

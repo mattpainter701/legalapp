@@ -59,6 +59,33 @@ paid capacity, canary both customer aliases, and retain a tested rollback revisi
 Models with missing or ambiguous price metadata still require operator review;
 strict unknown-price qualification is tracked in BK24 `AIP-04`.
 
+### Background Automation Value Budget
+
+Background Automations use a separate, global dollar budget in addition to the
+request-count fairness limits. Before dispatch, LegalApp serializes the complete
+provider-visible payload, reserves the highest possible cost across the active
+primary, alternate, and fallback targets, and rejects an activation if any
+target lacks a provider-qualified price. Long-context and cache-write tiers are
+included in the reservation. Operators configure the six rolling/monthly dollar
+limits in **Platform > AI Routing > Background pool budget**.
+
+Successful requests settle from LiteLLM's authoritative response-cost header
+when present, otherwise from reported usage and the exact provider/model price.
+Timeouts, retryable HTTP failures, and invalid responses remain held as unknown
+until the scheduled reconciliation sweep finds the metadata-only LiteLLM spend
+row. The sweep queries `/spend/logs` first and then `LITELLM_DATABASE_URL` by
+native request id or protected metadata, which covers Responses API versions
+that replace the native id. A reservation left behind by a crashed worker also
+keeps holding spend; its TTL determines when the sweep converts it to an unknown
+outcome, never when the budget silently forgets it. An unresolved row remains
+charged at its conservative estimate after retries stop and stays visible to
+operators until its quota windows expire or provider spend is backfilled; it is
+never assumed free.
+
+Keep `BACKGROUND_AI_RECONCILE_LOOKUP_TIMEOUT_SECONDS` short enough that one sweep
+cannot overlap the next. The default is 10 seconds per lookup. Investigate any
+non-zero aged-out count before raising a pool limit.
+
 ## Gateway Profiles
 
 `litellm_config.yaml` defines these operator-selectable aliases:
@@ -90,8 +117,9 @@ exception.
 LegalApp gateway telemetry is metadata-only by default. `LLMService` accepts a
 `gateway_metadata` dict and strips it to these fields before sending it to
 LiteLLM: `tenant_id`, `user_id`, `conversation_id`, `operation_type`,
-`matter_id`, `plugin`, `skill`, and `premium`. Do not add prompt, response,
-message, context, attachment text, or document content to this metadata.
+`matter_id`, `plugin`, `skill`, `premium`, `route_tier`, `actor_type`, and an
+opaque broker-generated `request_id`. Do not add prompt, response, message,
+context, attachment text, or document content to this metadata.
 
 App-side usage and debug tables also suppress raw prompt text by default:
 

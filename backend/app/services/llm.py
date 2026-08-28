@@ -7,7 +7,7 @@ from openai import APIConnectionError, APIError, AsyncOpenAI
 
 from app.config import get_settings
 from app.services.byok_security import normalize_customer_llm_endpoint
-from app.services.gateway_privacy import gateway_metadata as sanitized_gateway_metadata
+from app.services.gateway_privacy import litellm_metadata as sanitized_gateway_metadata
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -327,6 +327,7 @@ class LLMService:
                 max_tokens=max(1, int(max_output_tokens)),
                 extra_headers={
                     "x-request-id": candidate_request_id,
+                    "x-litellm-call-id": candidate_request_id,
                     "Idempotency-Key": candidate_request_id,
                 },
             )
@@ -347,6 +348,19 @@ class LLMService:
                 response_text = response.choices[0].message.content or ""
                 tokens_in = response.usage.prompt_tokens if response.usage else 0
                 tokens_out = response.usage.completion_tokens if response.usage else 0
+                prompt_details = (
+                    getattr(response.usage, "prompt_tokens_details", None)
+                    if response.usage
+                    else None
+                )
+                cached_read_tokens = int(
+                    getattr(prompt_details, "cached_tokens", 0) or 0
+                )
+                cached_write_tokens = (
+                    int(getattr(response.usage, "cache_creation_input_tokens", 0) or 0)
+                    if response.usage
+                    else 0
+                )
                 if usage_sink is not None:
                     usage_sink.update(
                         {
@@ -354,6 +368,16 @@ class LLMService:
                             "model": getattr(response, "model", None) or candidate,
                             "tokens_in": tokens_in,
                             "tokens_out": tokens_out,
+                            **(
+                                {"cached_read_tokens": cached_read_tokens}
+                                if cached_read_tokens
+                                else {}
+                            ),
+                            **(
+                                {"cached_write_tokens": cached_write_tokens}
+                                if cached_write_tokens
+                                else {}
+                            ),
                             **(
                                 {"provider_request_id": response.id}
                                 if getattr(response, "id", None)

@@ -64,6 +64,7 @@ async def test_concurrent_final_background_pool_slot_has_one_winner(
             request_id=str(uuid.uuid4()),
             surface="background_test",
             route_alias="clarity-background-test",
+            estimated_micros=1_000,
         )
 
     outcomes = await asyncio.gather(
@@ -97,6 +98,7 @@ async def test_account_pool_limit_is_shared_across_tenants(test_engine, db_sessi
         request_id=str(uuid.uuid4()),
         surface="background_test",
         route_alias="clarity-background-test",
+        estimated_micros=1_000,
     )
     with pytest.raises(BackgroundQuotaExceeded, match="account five-hour"):
         await ledger.reserve(
@@ -105,6 +107,7 @@ async def test_account_pool_limit_is_shared_across_tenants(test_engine, db_sessi
             request_id=str(uuid.uuid4()),
             surface="background_test",
             route_alias="clarity-background-test",
+            estimated_micros=1_000,
         )
     assert first.tenant_id == tenant_a
 
@@ -128,6 +131,7 @@ async def test_tenant_fairness_does_not_consume_another_firms_capacity(
         request_id=str(uuid.uuid4()),
         surface="background_test",
         route_alias="clarity-background-test",
+        estimated_micros=1_000,
     )
     with pytest.raises(BackgroundQuotaExceeded, match="tenant five-hour"):
         await ledger.reserve(
@@ -136,6 +140,7 @@ async def test_tenant_fairness_does_not_consume_another_firms_capacity(
             request_id=str(uuid.uuid4()),
             surface="background_test",
             route_alias="clarity-background-test",
+            estimated_micros=1_000,
         )
     second_firm = await ledger.reserve(
         tenant_id=tenant_b,
@@ -143,6 +148,7 @@ async def test_tenant_fairness_does_not_consume_another_firms_capacity(
         request_id=str(uuid.uuid4()),
         surface="background_test",
         route_alias="clarity-background-test",
+        estimated_micros=1_000,
     )
     assert first.tenant_id == tenant_a
     assert second_firm.tenant_id == tenant_b
@@ -165,6 +171,7 @@ async def test_release_restores_capacity_but_idempotency_stays_consumed(
         request_id=str(uuid.uuid4()),
         surface="background_test",
         route_alias="clarity-background-test",
+        estimated_micros=1_000,
     )
     await ledger.release(reservation, error_code="provider_rejected")
     with pytest.raises(BackgroundOperationDuplicate):
@@ -174,6 +181,7 @@ async def test_release_restores_capacity_but_idempotency_stays_consumed(
             request_id=str(uuid.uuid4()),
             surface="background_test",
             route_alias="clarity-background-test",
+            estimated_micros=1_000,
         )
     replacement = await ledger.reserve(
         tenant_id=tenant_id,
@@ -181,6 +189,7 @@ async def test_release_restores_capacity_but_idempotency_stays_consumed(
         request_id=str(uuid.uuid4()),
         surface="background_test",
         route_alias="clarity-background-test",
+        estimated_micros=1_000,
     )
     await ledger.settle(
         replacement,
