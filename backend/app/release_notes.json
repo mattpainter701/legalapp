@@ -2,6 +2,27 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.28.1",
+      "version": "2026.08.28.1",
+      "title": "The platform tour now follows a matter end to end",
+      "published_at": "2026-08-28",
+      "summary": "The LawHand platform tour now shows how legal work moves from intake and conflict review through preparation, client action, signature, billing, and follow-through.",
+      "highlights": [
+        {
+          "title": "Follow the matter",
+          "description": "Step through a visual workflow from the first call to an opened matter, attorney review, client delivery, and accounting."
+        },
+        {
+          "title": "See every role's handoff",
+          "description": "Compare what attorneys, paralegals, intake staff, billing staff, and clients need from the same matter record."
+        },
+        {
+          "title": "Evaluate the complete platform",
+          "description": "Review expanded capability, practice-area, integration, and control sections with clear rollout labels and concrete workflow details."
+        }
+      ]
+    },
+    {
       "id": "2026.08.27.12",
       "version": "2026.08.27.12",
       "title": "Product claims now show rollout and research boundaries",

@@ -10,6 +10,15 @@
   Skynet research upstream without exposing its credential.
 
 ### Added
+- **Marketing now shows the platform as an end-to-end legal workflow:** the
+  public product tour follows one illustrative matter from caller intake and
+  saved conflict review through matter setup, document and AI-assisted review,
+  client action, signature, billing, and follow-through. Role switchers show
+  attorney, paralegal, intake, billing, and client handoffs; the expanded
+  capability catalog adds conflict review, matter communications, client
+  portal, and signature routing with the existing rollout-state boundaries.
+  Server-rendered search copy, structured data, and focused interaction tests
+  stay aligned with the visible React experience.
 - **Competitive claims now have an evidence and maturity gate:** the public
   capability catalog records implemented, controlled-pilot, planned, and
   partner-dependent states with claim ownership and review dates. Pricing,

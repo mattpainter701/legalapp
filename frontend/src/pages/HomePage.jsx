@@ -6,6 +6,7 @@ import {
   ArrowRight, Search, FileText, Plug, Sparkles,
   PhoneIncoming, ListChecks, CheckCircle2, Clock3, ChevronDown,
   MessageSquareText, KeyRound, Braces, AlertTriangle, Layers3, Receipt,
+  FileSearch, Inbox, UserCheck, FileSignature,
 } from 'lucide-react'
 import balancedAccessImg from '../assets/home/lawhand-controlled-handoff-editorial-v2-1280.webp'
 import balancedAccessSmallImg from '../assets/home/lawhand-controlled-handoff-editorial-v2-720.webp'
@@ -25,6 +26,7 @@ const CATALOG_ICONS = {
 const CAPABILITY_ICONS = {
   Users, PhoneIncoming, ListChecks, FileText, Receipt, Search,
   MessageSquareText, Layers3, Plug, Braces, ShieldCheck,
+  FileSearch, Inbox, UserCheck, FileSignature,
 }
 
 const CAPABILITIES = CORE_CAPABILITIES.map((capability) => ({

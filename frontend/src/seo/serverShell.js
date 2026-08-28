@@ -48,14 +48,15 @@ const LEGAL_SHELLS = Object.freeze({
 
 const MARKETING_SHELLS = Object.freeze({
   '/product': {
-    heading: 'The legal automation platform for law firms.',
-    lead: 'LawHand holds client and matter CRM, caller intake, tasks and deadlines, document preparation, time and invoicing, and source-linked legal research in a single tenant-isolated workspace.',
+    heading: 'See the entire matter move.',
+    lead: 'LawHand follows the work from the first call through conflict review, matter organization, drafting, attorney review, client action, signature, billing, and follow-up.',
     sections: [
       { heading: 'Core capabilities', body: CORE_CAPABILITIES.map((capability) => `${capability.name} (${CAPABILITY_STATES[capability.availability]})`).join(' \u00b7 ') },
-      { heading: 'The core workspace', body: 'Intake and tasks, matters and contacts, calendar and deadlines, documents and automation, time, billing, trust accounting, reporting, client portal, and signature routing.' },
+      { heading: 'The matter flow', body: 'Capture and match a caller, preserve conflict review, open the matter, assign work, prepare documents and source-linked analysis, route attorney review, collect client action, and account for the work.' },
+      { heading: 'Views by responsibility', body: 'Attorneys, paralegals, intake staff, billing staff, and clients work from the same matter record while roles and permissions keep each view and action appropriately bounded.' },
       { heading: 'Practice-area library', body: 'Skill libraries add the document patterns, checks, and terminology of a practice area to the shared matter record. Trust and estate, family and domestic relations, and mediation add dedicated workspaces with their own records and roles.' },
       { heading: 'Connected sources', body: 'Supported Microsoft 365, Google Workspace, Microsoft Teams, Zoom Phone, QuickBooks Online, and enterprise file-share connections are enabled by a firm administrator and can be disconnected at any time.' },
-      { heading: 'Controls', body: 'Firm workspaces are tenant-isolated, module roles decide what each participant can see or approve, and AI-assisted work carries source links for attorney review before reliance.' },
+      { heading: 'Controls in the workflow', body: 'Firm workspaces are tenant-isolated, module roles decide what each participant can see or approve, and AI-assisted work carries source links and review states before reliance or delivery.' },
     ],
   },
   '/product/chat': {
