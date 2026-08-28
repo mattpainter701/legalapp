@@ -81,6 +81,7 @@ from app.utils.guardrails import (
 )
 from app.services.error_tracker import capture_chat_error
 from app.services.usage_limits import check_token_budget
+from app.services.compliance import chat_attachment_ttl_days
 
 logger = logging.getLogger(__name__)
 
@@ -1975,9 +1976,10 @@ async def upload_chat_attachment(
                 str(conversation_id),
                 str(document_id),
             )
-            expires_at = datetime.now(timezone.utc) + timedelta(
-                days=settings.CHAT_ATTACHMENT_TTL_DAYS
+            retention_days = await chat_attachment_ttl_days(
+                locked_db, locked_user.tenant_id
             )
+            expires_at = datetime.now(timezone.utc) + timedelta(days=retention_days)
 
         os.makedirs(storage_dir, exist_ok=True)
         storage_path = os.path.join(storage_dir, safe_filename)

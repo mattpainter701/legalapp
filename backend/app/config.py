@@ -353,6 +353,10 @@ class Settings(BaseSettings):
     # Rolling retention window for misc-chat (non-matter) attachments stored in
     # UPLOAD_DIR/{tenant_id}/chat-temp/. Matter-linked chat attachments persist.
     CHAT_ATTACHMENT_TTL_DAYS: int = 7
+    # Roll out only after counsel-owned agreement definitions are published and
+    # existing tenants have had an acceptance window. When disabled, status and
+    # evidence collection remain available without blocking onboarding/OAuth.
+    TENANT_AGREEMENT_GATE_ENABLED: bool = False
 
     RAG_TOP_K: int = 8
     EMBEDDING_MODEL: str = "text-embedding-3-small"

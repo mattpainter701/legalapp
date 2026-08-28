@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.27.11 — Agreement evidence and safer retention controls
+
+Released August 27, 2026.
+
+Firms can review current agreement acceptance evidence and preview safe expiry cleanup with legal-hold protection.
+
+- **Know what was accepted.** Tenant admins can review counsel-owned agreement versions and record signer, authority, and immutable document evidence.
+- **Retention with guardrails.** Review tenant data-store inventory, configure retention, preview cleanup, and protect held or matter data from deletion.
+
 ## 2026.08.27.10 — Research API keys put staff access and spend under firm control
 
 Released August 27, 2026.

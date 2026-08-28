@@ -2,6 +2,23 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.27.11",
+      "version": "2026.08.27.11",
+      "title": "Agreement evidence and safer retention controls",
+      "published_at": "2026-08-27",
+      "summary": "Firms can review current agreement acceptance evidence and preview safe expiry cleanup with legal-hold protection.",
+      "highlights": [
+        {
+          "title": "Know what was accepted",
+          "description": "Tenant admins can review counsel-owned agreement versions and record signer, authority, and immutable document evidence."
+        },
+        {
+          "title": "Retention with guardrails",
+          "description": "Review tenant data-store inventory, configure retention, preview cleanup, and protect held or matter data from deletion."
+        }
+      ]
+    },
+    {
       "id": "2026.08.27.10",
       "version": "2026.08.27.10",
       "title": "Research API keys put staff access and spend under firm control",

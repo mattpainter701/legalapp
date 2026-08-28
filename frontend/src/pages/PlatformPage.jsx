@@ -3,6 +3,7 @@ import { createPlatformSession, getPlatformTenants, getPlatformUsage, getPlatfor
 import { Activity, AlertTriangle, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3, FileText, Globe, Key, Plus, Trash2, RefreshCw, CheckCircle, XCircle, Cpu, ArrowDown, ArrowUp, Save, Settings2, PhoneCall, Video } from 'lucide-react'
 import { useConfirm } from '../components/dialog/ConfirmProvider'
 import { getPlatformDemoWorkspaces, terminatePlatformDemoWorkspace } from '../api'
+import PlatformComplianceCard from '../components/PlatformComplianceCard'
 
 const apiErrorMessage = (error, fallback) => {
   const detail = error?.response?.data?.detail
@@ -3628,6 +3629,9 @@ export default function PlatformPage() {
                                       onUpdate={handleUpdate}
                                       onError={(message) => setError(message)}
                                     />
+                                  </div>
+                                  <div className="mt-4 pt-4 border-t border-brand-line">
+                                    <PlatformComplianceCard platformKey={platformKey} tenantId={t.id} />
                                   </div>
                                   </>
                                 ) : (

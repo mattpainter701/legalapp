@@ -8,6 +8,7 @@ import {
   updateOnboardingStep,
   API_BASE_URL,
 } from '../api'
+import { AgreementAcceptancePanel } from '../components/CompliancePanel'
 
 const STEPS = [
   { id: 0, label: 'Welcome' },
@@ -26,6 +27,7 @@ export default function OnboardingWizard() {
   const [error, setError] = useState(null)
   const [syncing, setSyncing] = useState(false)
   const [completing, setCompleting] = useState(false)
+  const [agreementStatus, setAgreementStatus] = useState(null)
 
   useEffect(() => {
     loadStatus()
@@ -121,6 +123,7 @@ export default function OnboardingWizard() {
   const msConnected = status?.integrations?.microsoft?.connected
   const googleConnected = status?.integrations?.google?.connected
   const hasIntegration = msConnected || googleConnected
+  const agreementReady = agreementStatus !== null && !agreementStatus.blocking
   const syncedUsers = status?.synced_users || {}
   const totalSynced = (syncedUsers.microsoft || 0) + (syncedUsers.google || 0)
 
@@ -250,6 +253,10 @@ export default function OnboardingWizard() {
                 and sync email. This requires admin consent.
               </p>
 
+              <div className="mb-8 rounded-xl border border-brand-line bg-brand-bg-soft p-4">
+                <AgreementAcceptancePanel compact onStatusChange={setAgreementStatus} />
+              </div>
+
               <div className="space-y-4 mb-8">
                 {/* Microsoft */}
                 <div className={`p-5 rounded-xl border transition-colors ${msConnected ? 'border-green-300 bg-green-50' : 'border-brand-line bg-brand-bg'}`}>
@@ -263,7 +270,8 @@ export default function OnboardingWizard() {
                     ) : (
                       <button
                         onClick={handleConnectMicrosoft}
-                        className="px-4 py-2 bg-brand-ink text-white font-sans text-xs font-semibold rounded-lg hover:opacity-90 transition-opacity"
+                        disabled={!agreementReady}
+                        className="px-4 py-2 bg-brand-ink text-white font-sans text-xs font-semibold rounded-lg hover:opacity-90 transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         Connect
                       </button>
@@ -286,7 +294,8 @@ export default function OnboardingWizard() {
                     ) : (
                       <button
                         onClick={handleConnectGoogle}
-                        className="px-4 py-2 bg-brand-ink text-white font-sans text-xs font-semibold rounded-lg hover:opacity-90 transition-opacity"
+                        disabled={!agreementReady}
+                        className="px-4 py-2 bg-brand-ink text-white font-sans text-xs font-semibold rounded-lg hover:opacity-90 transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         Connect
                       </button>
@@ -307,7 +316,7 @@ export default function OnboardingWizard() {
                 </button>
                 <button
                   onClick={() => handleSyncUsers()}
-                  disabled={syncing || !hasIntegration}
+                  disabled={syncing || !hasIntegration || !agreementReady}
                   className="flex-1 py-2.5 px-4 bg-brand-ink text-white font-sans text-sm font-semibold rounded-xl hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   {syncing ? 'Syncing...' : 'Sync Users'}

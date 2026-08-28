@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### Added
+- **Tenant agreement evidence and bounded retention controls:** platform
+  operators publish immutable counsel-owned document identities; tenant admins
+  accept the exact version/hash with authority, signer, request, and optional
+  e-sign evidence. Onboarding enforcement is dark-launched behind an explicit
+  flag. Admin and Platform dashboards expose metadata-only data inventories,
+  policy versions, legal holds, and audit actions. The existing scheduler now
+  enforces tenant-configurable expiry only for non-matter chat attachments,
+  committing database deletion before path-confined local byte cleanup.
 - **Research API keys now have a complete tenant-admin lifecycle:** firm admins
   can record purpose and staff custody, set an expiration, scope allowed tools,
   enforce monthly call and dollar budgets at the snapshotted $0.45 successful-

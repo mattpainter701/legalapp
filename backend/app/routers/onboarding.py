@@ -24,6 +24,7 @@ from app.schemas.onboarding import (
     OnboardingCompleteResponse,
     IntegrationConnectionStatus,
 )
+from app.services.compliance import agreement_status
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/admin/onboarding", tags=["onboarding"])
@@ -145,6 +146,15 @@ async def complete_onboarding(
         raise HTTPException(status_code=404, detail="Tenant not found")
 
     # Verify at least one integration is connected
+    agreement_gate = await agreement_status(db, user.tenant_id)
+    if agreement_gate["blocking"]:
+        raise HTTPException(
+            status_code=428,
+            detail={
+                "message": "Current tenant agreements must be accepted before onboarding activation.",
+                "agreements": agreement_gate["agreements"],
+            },
+        )
     integrations = await _get_integration_status(db, str(user.tenant_id))
     has_any = any(s.connected for s in integrations.values())
 
@@ -186,6 +196,12 @@ async def skip_onboarding(
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
 
+    agreement_gate = await agreement_status(db, user.tenant_id)
+    if agreement_gate["blocking"]:
+        raise HTTPException(
+            status_code=428,
+            detail="Current tenant agreements must be accepted before skipping onboarding.",
+        )
     tenant.onboarding_completed = True
     tenant.onboarding_step = 4
     await db.commit()
