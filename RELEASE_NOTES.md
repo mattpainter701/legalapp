@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.28.4 — Client portal payments and durable sign-in
+
+Released August 28, 2026.
+
+Clients can activate a durable portal account, pay an invoice through hosted Stripe Checkout, and complete certified Dropbox Sign requests when the firm configures the provider.
+
+- **Pay invoices securely.** The portal opens a hosted Stripe Checkout session for the current invoice balance; payment status updates only after verified provider reconciliation.
+- **Return with durable sign-in.** Clients can activate a password-backed account and sign into an explicitly selected matter while invitation revocation remains authoritative.
+- **Use certified e-signature providers.** Dropbox Sign dispatch and signed or declined webhook events are authenticated, tenant-bound, and idempotently reconciled.
+
 ## 2026.08.28.3 — Zoom Phone setup now shows the exact authorization path
 
 Released August 28, 2026.
