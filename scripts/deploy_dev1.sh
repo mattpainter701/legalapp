@@ -78,6 +78,16 @@ export APP_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 export APP_ENV_FILE="$ENV_FILE"
 export COMPOSE_PROJECT_NAME
 
+# The checkout is created under umask 077, but Postgres sources this bind mount
+# as its unprivileged container user during first-volume initialization. This
+# file contains code only; keep every secret in the mode-0600 environment file.
+postgres_init_script="$APP_DIR/scripts/init_clarity_app_role.sh"
+[[ -f "$postgres_init_script" && ! -L "$postgres_init_script" ]] || {
+  echo "ERROR: Postgres role init script must be a regular file" >&2
+  exit 3
+}
+chmod 0644 -- "$postgres_init_script"
+
 compose=(docker compose --env-file "$ENV_FILE")
 for compose_file in "${COMPOSE_FILES[@]}"; do
   compose+=( -f "$compose_file" )
