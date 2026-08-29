@@ -26,6 +26,12 @@
   Skynet research upstream without exposing its credential.
 
 ### Added
+- **Versioned customer operating contract:** a public-safe contract registry now
+  distinguishes implemented, verified, policy-committed, provider-dependent,
+  planned, and unavailable controls across topology, support, incidents,
+  backup/restore, lifecycle, subprocessors, security review, penetration
+  testing, and certification. It links to existing evidence without exposing
+  secrets or making SLA, DPA/BAA, audit, or certification claims.
 - **Bounded COMP-03 lead conversion loop:** firms can publish tenant-scoped,
   conditional intake forms with attributed, honeypot-protected, idempotent
   public submissions; book only published consultation slots; record explicit

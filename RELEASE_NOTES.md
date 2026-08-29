@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.28.7 — Operating contract and trust boundaries
+
+Released August 28, 2026.
+
+Customers and operators can review one versioned statement of LawHand service scope, evidence, lifecycle safeguards, and assurance boundaries.
+
+- **See the current contract.** The public operating contract identifies supported behavior, provider dependencies, policy commitments, planned work, and unavailable claims.
+- **Understand lifecycle safeguards.** Onboarding acceptance, migration checks, backup and restore evidence, tenant export limits, legal holds, and deletion boundaries are documented together.
+- **Keep assurance claims honest.** DPA or BAA applicability, subprocessors, penetration testing, and certifications are clearly marked as customer-specific, provider-dependent, planned, or unclaimed.
+
 ## 2026.08.28.6 — Attributed intake and safer lead follow-through
 
 Released August 28, 2026.

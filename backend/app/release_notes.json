@@ -2,6 +2,18 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.28.7",
+      "version": "2026.08.28.7",
+      "title": "Operating contract and trust boundaries",
+      "published_at": "2026-08-28",
+      "summary": "Customers and operators can review one versioned statement of LawHand service scope, evidence, lifecycle safeguards, and assurance boundaries.",
+      "highlights": [
+        {"title": "See the current contract", "description": "The public operating contract identifies supported behavior, provider dependencies, policy commitments, planned work, and unavailable claims."},
+        {"title": "Understand lifecycle safeguards", "description": "Onboarding acceptance, migration checks, backup and restore evidence, tenant export limits, legal holds, and deletion boundaries are documented together."},
+        {"title": "Keep assurance claims honest", "description": "DPA or BAA applicability, subprocessors, penetration testing, and certifications are clearly marked as customer-specific, provider-dependent, planned, or unclaimed."}
+      ]
+    },
+    {
       "id": "2026.08.28.6",
       "version": "2026.08.28.6",
       "title": "Attributed intake and safer lead follow-through",
