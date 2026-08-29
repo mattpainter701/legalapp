@@ -6,7 +6,7 @@ import pytest
 pytest.importorskip("smbclient")
 
 from clarity_agent import smb_scanner  # noqa: E402
-from clarity_agent.smb_scanner import SmbScanner  # noqa: E402
+from clarity_agent.smb_scanner import SmbScanner, _normalized_extensions  # noqa: E402
 
 
 class _FileEntry:
@@ -120,3 +120,39 @@ async def test_unchanged_directory_detects_changed_child_metadata(monkeypatch):
 
 async def _async_value(value):
     return value
+
+
+def test_configured_extensions_are_normalized_and_empty_stays_empty():
+    assert _normalized_extensions(["PDF", " .DoCx "]) == {".pdf", ".docx"}
+    assert _normalized_extensions([]) == set()
+
+
+@pytest.mark.asyncio
+async def test_change_detection_uses_size_and_mtime_not_only_prefix_hash():
+    class ChangeLedger:
+        async def get_all_paths(self, share_id):
+            return {r"\\FS\Legal\changed.txt"}
+
+        async def get_files(self, paths):
+            return {
+                r"\\FS\Legal\changed.txt": {
+                    "path": r"\\FS\Legal\changed.txt",
+                    "content_hash": "same-prefix",
+                    "size_bytes": 10,
+                    "modified_time": "2026-08-27T00:00:00+00:00",
+                    "is_deleted": False,
+                }
+            }
+
+    scanner = SmbScanner(SimpleNamespace(), ChangeLedger())
+    current = {
+        "path": r"\\FS\Legal\changed.txt",
+        "content_hash": "same-prefix",
+        "size_bytes": 20,
+        "modified_time": "2026-08-28T00:00:00+00:00",
+    }
+
+    changes = await scanner._detect_changes("share-1", [current])
+
+    assert changes.changed_files == [current]
+    assert changes.unchanged_files == []

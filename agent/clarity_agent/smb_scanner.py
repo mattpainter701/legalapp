@@ -26,6 +26,18 @@ logger = logging.getLogger("clarity_agent.scanner")
 
 LEGAL_EXTENSIONS = {".pdf", ".docx", ".doc", ".docm", ".rtf", ".txt", ".wpd", ".odt"}
 
+
+def _normalized_extensions(values: list[str] | None) -> set[str]:
+    if values is None:
+        return set(LEGAL_EXTENSIONS)
+    normalized: set[str] = set()
+    for extension in values:
+        value = str(extension).strip().lower()
+        if value:
+            normalized.add(value if value.startswith(".") else "." + value)
+    return normalized
+
+
 _MIME_MAP = {
     ".pdf": "application/pdf",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -110,7 +122,7 @@ class SmbScanner:
             # A share may be scoped to a subfolder rather than the whole export.
             root = format_smb_path(server, share, share_config.get("root_path") or "")
             current_files = []
-            allowed_exts = set(file_extensions) if file_extensions else LEGAL_EXTENSIONS
+            allowed_exts = _normalized_extensions(file_extensions)
             exclude_patterns = share_config.get("exclude_patterns") or []
 
             walker = self._walk_directory(
@@ -220,9 +232,12 @@ class SmbScanner:
             existing = existing_files.get(finfo["path"])
             if existing is None:
                 cs.new_files.append(finfo)
-            elif existing.get("content_hash") != finfo.get(
-                "content_hash"
-            ) or existing.get("is_deleted"):
+            elif (
+                existing.get("content_hash") != finfo.get("content_hash")
+                or existing.get("size_bytes") != finfo.get("size_bytes")
+                or existing.get("modified_time") != finfo.get("modified_time")
+                or existing.get("is_deleted")
+            ):
                 cs.changed_files.append(finfo)
             else:
                 cs.unchanged_files.append(finfo)
@@ -280,7 +295,9 @@ class _AsyncFileIterator:
         self.session = session
         self.path = path
         self.max_depth = max_depth
-        self.allowed_extensions = allowed_extensions or LEGAL_EXTENSIONS
+        self.allowed_extensions = (
+            set(LEGAL_EXTENSIONS) if allowed_extensions is None else allowed_extensions
+        )
         self.exclude_patterns = exclude_patterns or []
         self.share_id = share_id
         self.operation_kwargs = operation_kwargs or {}
