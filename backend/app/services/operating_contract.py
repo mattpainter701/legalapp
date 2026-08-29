@@ -10,6 +10,9 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+# The registry is intentionally one control per literal record so reviewers can
+# compare each customer claim with its boundary and evidence in one place.
+# fmt: off
 CONTRACT_VERSION = "2026-08-28.1"
 
 # Public-safe evidence paths.  Do not add secrets, hostnames, customer data, or
@@ -167,3 +170,4 @@ def validate_operating_contract(contract: dict[str, Any] | None = None) -> list[
         if not control.get("evidence"):
             errors.append(f"evidence missing for {control_id}")
     return errors
+# fmt: on
