@@ -18,9 +18,11 @@ discussions. The machine-readable copy is served at
 - **Unavailable** — intentionally not offered in the current release.
 
 The registry is the source of truth for public trust material, security-review
-responses, support conversations, and onboarding receipts. Evidence links point
-to sanitized repository/runbook material; secrets, customer records, internal
-hostnames, and credentials are never included.
+responses, support conversations, and onboarding receipts. The public endpoint
+returns opaque evidence identifiers only; internal repository paths, secrets,
+customer records, hostnames, and credentials are never included. The current
+release intentionally leaves several acceptance outcomes planned because their
+supporting workflows and evidence packets do not yet exist.
 
 ## Customer lifecycle
 

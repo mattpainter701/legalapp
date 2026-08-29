@@ -68,7 +68,7 @@ and [Westlaw docket coverage](https://legal.thomsonreuters.com/en/products/westl
       fee-agreement generation/signature, lead-to-matter promotion, abandonment
       recovery, and funnel reporting. Reuse 1304, BK26, and BK28 communications;
       keep website builder, mass marketing, and autonomous engagement out of v1.
-- [x] `COMP-04` Define and prove the customer operating contract: supported
+- [ ] `COMP-04` Define and prove the customer operating contract: supported
       deployment topology, service objectives without unearned SLA promises,
       support hours/severity/escalation, public status and incident communication,
       backup/restore and tenant export, onboarding/migration acceptance receipt,
