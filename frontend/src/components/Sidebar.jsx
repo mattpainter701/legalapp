@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Blocks, X, BarChart2, CalendarDays, MessageSquare, FileSignature,
   Briefcase, Clock, Receipt, User, Landmark, CheckSquare, Users, ClipboardList,
-  Mail, Shield, ShieldCheck, Rocket, PhoneCall, Lock, LogOut, PanelLeftClose, PanelLeftOpen,
+  Mail, Shield, ShieldCheck, Rocket, PhoneCall, Lock, LogOut, PanelLeftClose, PanelLeftOpen, Search,
 } from 'lucide-react'
 import UpgradeModal from './UpgradeModal'
 import { canAccessModuleList } from '../moduleAccess'
@@ -14,6 +14,7 @@ const NAV_GROUPS = [
     items: [
       { path: '/matters', label: 'My Matters', icon: Briefcase, primary: true, module: 'matters' },
       { path: '/chat',    label: 'Assistant',  icon: MessageSquare, module: 'chat' },
+      { path: '/firm-memory', label: 'Firm Memory', icon: Search, module: 'matters' },
     ],
   },
   {

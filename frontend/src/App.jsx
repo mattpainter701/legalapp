@@ -28,6 +28,7 @@ const WorkspaceMcpAuthorizePage = lazy(() => import('./pages/WorkspaceMcpAuthori
 const ResearchMcpAuthorizePage = lazy(() => import('./pages/ResearchMcpAuthorizePage'))
 const NotFoundPage = lazy(() => import('./pages/NotFoundPage'))
 const ChatPage = lazy(() => import('./pages/ChatPage'))
+const FirmMemoryPage = lazy(() => import('./pages/FirmMemoryPage'))
 const AdminPage = lazy(() => import('./pages/AdminPage'))
 const AuthCallback = lazy(() => import('./pages/AuthCallback'))
 const PluginsPage = lazy(() => import('./pages/PluginsPage'))
@@ -248,6 +249,10 @@ export default function App() {
         <Route
           path="/chat"
           element={<ShellRoute title="Chat" module="chat"><ChatPage /></ShellRoute>}
+        />
+        <Route
+          path="/firm-memory"
+          element={<ShellRoute title="Firm Memory" module="matters"><FirmMemoryPage /></ShellRoute>}
         />
         <Route
           path="/matters"
