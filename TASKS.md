@@ -51,7 +51,7 @@ and [Westlaw docket coverage](https://legal.thomsonreuters.com/en/products/westl
 ### P0 — remove switching and research-trust blockers
 
 **PM acceptance snapshot (2026-08-30):** Independently revalidated against
-`origin/main` at `330c14a5`. `COMP-01` and `COMP-04` remain accepted. `COMP-02`
+`origin/main` at `7a29f551`. `COMP-01` and `COMP-04` remain accepted. `COMP-02`
 remains open: PR #279 adds a narrow approval-bound client/matter import slice,
 but production-shaped closure still requires broader import reconciliation,
 provider-specific billing/trust/history handling, customer sign-off, and one
@@ -59,19 +59,15 @@ rehearsed imported-client-to-payment-to-signed-closeout lifecycle. `COMP-03`
 remains open for its missing provider-backed conversion evidence; `COMP-05` is
 reopened because the merged Brief Check is a safe review-first scaffold but does
 not yet satisfy the full citation-resolution, pin-cite, treatment/currentness,
-omitted-authority, linked-export, and end-to-end acceptance below; and `COMP-06`
-remains open after independent review of hardened draft PR #280 through
-`5a14d029`. Version-keyed legal and caselaw snapshots, same-identity
-cutover/rollback fixtures, snapshot-backed search/detail/worker/metrics paths,
-and post-promotion mutation guards are material progress. They still do not form
-one production-shaped release chain: initial legacy snapshot backfill, atomic
-loader-to-chunker completion, promotion-time content/integrity checks, composite
-snapshot relationships, and a real loader/worker rehearsal are absent.
-Execution-resumable rights-gated harvest, scheduled retries/dead letters,
-complete platform-token middleware/audit/denial coverage, worker
-failure/drain/reopen and measured telemetry, concurrency, latest version-bound
-audits/currentness/partitions/isolation, and Brief Check currentness also remain
-open. See
+omitted-authority, linked-export, and end-to-end acceptance below. `COMP-06` PR
+#280 merged as `7a29f551` from tested head `09a58a23`; its exact-head CI proves
+versioned legal/caselaw snapshots, production-shaped ingest/loader and rollback,
+latest same-version audit gates, signed operator/replay controls, customer
+coverage metadata, and the `AIP-19` embedding-worker lifecycle. `COMP-06` remains
+open for an explicit, fail-closed `public-authority` allowlist across every
+catalog, ingest, snapshot, promotion, audit/coverage, retrieval, and telemetry
+path, including custom-private negative fixtures. Brief Check promoted-version
+and currentness propagation remains separate open `COMP-05` work. See
 [`docs/core-milestone-status.md`](docs/core-milestone-status.md) for the evidence
 matrix and claim boundaries. Feature PRs do not self-certify these checkboxes.
 
@@ -521,7 +517,9 @@ Epic and acceptance criteria:
 - [x] `AIP-12a` Stop treating OpenCode/DeepSeek chat keys as direct embedding
       providers; use explicit OpenAI or OpenRouter embedding endpoints only
 - [ ] `AIP-17–21` Harden CourtListener/official-source lifecycle, Jetson worker
-      scheduling, query-embedding redundancy, source coverage, and freshness UX
+      scheduling, query-embedding redundancy, source coverage, and freshness UX.
+      `AIP-19` is accepted from merged PR #280; the aggregate stays open for the
+      explicit-public `AIP-17` boundary and parent milestone acceptance.
 - [ ] `AIP-23–24` Complete persisted contract work products and retainer-aware
       recurring workflows
 - [ ] `AIP-26–29` Add AI operations telemetry, privacy gates, canary/rollback,

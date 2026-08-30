@@ -227,7 +227,7 @@ Unknown-price enforcement belongs to `AIP-04`.
 
 ### AIP-19 — Jetson worker pool
 
-- [ ] Register model/version/dimension; schedule idempotent leased shards with
+- [x] Register model/version/dimension; schedule idempotent leased shards with
   heartbeat, retry/dead-letter, throughput, temperature, and capacity metrics.
 
 ### AIP-20 — Query embedding availability
