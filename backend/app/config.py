@@ -795,10 +795,30 @@ def validate_mcp_security_settings(settings: Settings) -> None:
             "MCP_OPERATOR_ASSERTION_SECRET must be at least 32 characters whenever "
             "MCP_SERVER_URL is configured"
         )
-    if settings.MCP_SERVER_URL and settings.MCP_OPERATOR_ASSERTION_SECRET == settings.MCP_UPSTREAM_API_KEY:
+    if (
+        settings.MCP_SERVER_URL
+        and settings.MCP_OPERATOR_ASSERTION_SECRET == settings.MCP_UPSTREAM_API_KEY
+    ):
         raise ValueError(
             "MCP_OPERATOR_ASSERTION_SECRET must be distinct from MCP_UPSTREAM_API_KEY"
         )
+    signer = str(settings.MCP_OPERATOR_ASSERTION_SECRET or "").strip()
+    if settings.MCP_SERVER_URL and signer:
+        for name in ("SECRET_KEY", "PLATFORM_TOKEN_SIGNING_KEY", "PLATFORM_SECRET_KEY"):
+            if signer == str(getattr(settings, name, "") or "").strip():
+                raise ValueError(
+                    f"MCP_OPERATOR_ASSERTION_SECRET must be distinct from {name}"
+                )
+        encryption_values = list(getattr(settings, "TOKEN_ENCRYPTION_KEYS", []) or [])
+        legacy_encryption = str(
+            getattr(settings, "TOKEN_ENCRYPTION_KEY", "") or ""
+        ).strip()
+        if legacy_encryption:
+            encryption_values.append(legacy_encryption)
+        if signer in {str(value).strip() for value in encryption_values if value}:
+            raise ValueError(
+                "MCP_OPERATOR_ASSERTION_SECRET must be distinct from token-encryption keys"
+            )
     if settings.MCP_PRODUCT_ENABLED or settings.RESEARCH_MCP_PUBLIC_URL.strip():
         _validate_mcp_endpoint_url(
             settings.research_mcp_endpoint,

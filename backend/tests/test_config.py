@@ -210,6 +210,26 @@ def test_mcp_operator_assertion_signer_is_required_and_distinct():
     )
 
 
+def test_mcp_operator_assertion_signer_cannot_reuse_platform_or_encryption_secret():
+    base = dict(
+        _env_file=None,
+        DATABASE_URL="postgresql://test",
+        SECRET_KEY="x" * 48,
+        TOKEN_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+        TOKEN_ENCRYPTION_KEYS="",
+        MCP_SERVER_URL="http://courtlistener-mcp:8021",
+        MCP_UPSTREAM_API_KEY="u" * 40,
+        MCP_OPERATOR_ASSERTION_SECRET="s" * 40,
+    )
+    for field in ("SECRET_KEY", "PLATFORM_TOKEN_SIGNING_KEY", "PLATFORM_SECRET_KEY"):
+        with pytest.raises(ValueError, match=field):
+            validate_mcp_security_settings(Settings(**{**base, field: "s" * 40}))
+    with pytest.raises(ValueError, match="token-encryption"):
+        validate_mcp_security_settings(
+            Settings(**{**base, "TOKEN_ENCRYPTION_KEY": "s" * 40})
+        )
+
+
 def test_platform_bootstrap_requires_identity_scope_expiry_and_distinct_signing_key():
     import hashlib
     import json

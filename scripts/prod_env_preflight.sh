@@ -296,12 +296,22 @@ if [[ -n "$mcp_server_url" ]]; then
     if [[ -n "$mcp_upstream_key" && -n "$shared_key" && "$mcp_upstream_key" == "$shared_key" ]]; then
       errors+=("MCP_UPSTREAM_API_KEY must be a dedicated credential, not shared with $shared_key_name")
     fi
+    if [[ -n "$mcp_assertion_secret" && -n "$shared_key" && "$mcp_assertion_secret" == "$shared_key" ]]; then
+      errors+=("MCP_OPERATOR_ASSERTION_SECRET must be distinct from $shared_key_name")
+    fi
   done
   for encryption_key in "${normalized_encryption_keys[@]:-}"; do
     if [[ -n "$mcp_upstream_key" && "$mcp_upstream_key" == "$encryption_key" ]]; then
       errors+=("MCP_UPSTREAM_API_KEY must not reuse a token-encryption key")
     fi
+    if [[ -n "$mcp_assertion_secret" && "$mcp_assertion_secret" == "$encryption_key" ]]; then
+      errors+=("MCP_OPERATOR_ASSERTION_SECRET must not reuse a token-encryption key")
+    fi
   done
+  legacy_encryption_key="$(get_env TOKEN_ENCRYPTION_KEY)"
+  if [[ -n "$mcp_assertion_secret" && -n "$legacy_encryption_key" && "$mcp_assertion_secret" == "$legacy_encryption_key" ]]; then
+    errors+=("MCP_OPERATOR_ASSERTION_SECRET must not reuse TOKEN_ENCRYPTION_KEY")
+  fi
 fi
 
 workspace_mcp_enabled="$(get_env WORKSPACE_MCP_ENABLED)"
