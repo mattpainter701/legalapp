@@ -529,10 +529,17 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 [source_key, f"manifest:{source_key}", version],
             )
             cur.execute(
-                "SELECT COUNT(DISTINCT cluster_id) FROM authority_case_chunks WHERE corpus_version=%s",
+                """SELECT DISTINCT cluster_id, court_id
+                     FROM authority_case_chunks
+                    WHERE corpus_version=%s
+                    ORDER BY cluster_id""",
                 [version],
             )
-            assert cur.fetchone()[0] == 2
+            assert set(cur.fetchall()) == {
+                (97000001, "ohio"),
+                (97000002, "ohio"),
+                (97100001, "rehearsal-ohio"),
+            }
             cur.execute(
                 "SELECT COUNT(*) FROM authority_case_citations WHERE corpus_version=%s",
                 [version],
