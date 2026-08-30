@@ -85,16 +85,19 @@ def run_control_audit(body: ControlPlaneRequest, actor: str = Depends(operator_i
             if body.audit_kind == "release":
                 cur.execute("""
                     SELECT s.rights_decision, s.reviewed_at,
-                           COALESCE(ss.status, 'missing'), d.corpus_version
+                           COALESCE(cp.status, 'missing'), COUNT(d.id)
                     FROM legal_sources s
-                    LEFT JOIN source_sync_states ss ON ss.source_key=s.source_key
-                    LEFT JOIN legal_documents d ON d.source_key=s.source_key
+                    LEFT JOIN authority_harvest_checkpoints cp
+                      ON cp.source_key=s.source_key AND cp.corpus_version=%s
+                    LEFT JOIN legal_documents d
+                      ON d.source_key=s.source_key AND d.corpus_version=%s
                     WHERE s.enabled IS TRUE
-                """)
+                    GROUP BY s.source_key, s.rights_decision, s.reviewed_at, cp.status
+                """, [body.version, body.version])
                 records = [{"ready": row[0] in {"official", "open", "licensed"}
                             and row[1] is not None
-                            and row[2] not in {"failed", "retryable", "dead_letter"}
-                            and row[3] == body.version} for row in cur.fetchall()]
+                            and row[2] not in {"failed", "retryable", "retryable_failure", "quarantined", "dead_letter", "missing"}
+                            and row[3] > 0} for row in cur.fetchall()]
             elif body.audit_kind == "completeness":
                 cur.execute("SELECT expected_item_count, rows_loaded FROM corpus_coverage_ledger WHERE source_key IS NOT NULL")
                 records = [{"expected": row[0] or 0, "observed": row[1] or 0} for row in cur.fetchall()]

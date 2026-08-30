@@ -179,8 +179,8 @@ def stage_corpus_version(conn: Any, *, version: str, manifest_hash: str,
                          embedding_dimension: int) -> None:
     """Create a staged immutable release and record its rollback target."""
     actor, reason = _authorized(actor, reason)
-    if not manifest_hash or not as_of or embedding_dimension < 1:
-        raise ValueError("manifest hash, as-of date, and embedding contract are required")
+    if not manifest_hash or not as_of or embedding_dimension != 1024:
+        raise ValueError("manifest hash, as-of date, and 1024-dimensional embedding contract are required")
     with conn.cursor() as cur:
         cur.execute("SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1")
         current = cur.fetchone()

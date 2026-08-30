@@ -473,6 +473,12 @@ CREATE TABLE IF NOT EXISTS authority_case_citations (
     PRIMARY KEY (citation_id)
 );
 ALTER TABLE authority_case_citations ADD COLUMN IF NOT EXISTS citation_id uuid DEFAULT gen_random_uuid();
+CREATE UNIQUE INDEX IF NOT EXISTS ux_authority_case_citation_identity
+    ON authority_case_citations(
+      corpus_version, citing_opinion_id,
+      cited_opinion_id, cited_cluster_id, cited_reporter,
+      cited_volume, cited_page
+    ) NULLS NOT DISTINCT;
 DO $$ BEGIN
     IF EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid='authority_case_citations'::regclass AND c.contype='p' AND pg_get_constraintdef(c.oid) <> 'PRIMARY KEY (citation_id)') THEN
         ALTER TABLE authority_case_citations DROP CONSTRAINT authority_case_citations_pkey;
