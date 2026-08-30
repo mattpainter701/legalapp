@@ -396,6 +396,32 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
         replay_counts = load_staged_core(bulk_dir, db_url)
         assert replay_counts == bulk_counts
         assert create_chunks(db_url) == 0
+        # A release contract change invalidates an otherwise unchanged
+        # candidate chunk so it cannot be promoted with an old vector.
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE authority_case_chunks
+                   SET embedding=('[' || array_to_string(array_fill(0, ARRAY[1024]), ',') || ']')::vector,
+                       embedding_model='fixture-model', embedding_version='1'
+                 WHERE corpus_version=%s AND opinion_id=97100001 AND chunk_index=0""",
+                [version],
+            )
+            cur.execute(
+                """UPDATE authority_corpus_versions
+                      SET embedding_model='fixture-model-v2', embedding_version='2'
+                    WHERE version=%s""",
+                [version],
+            )
+        conn.commit()
+        assert create_chunks(db_url) > 0
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT embedding, embedding_model, embedding_version
+                     FROM authority_case_chunks
+                    WHERE corpus_version=%s AND opinion_id=97100001 AND chunk_index=0""",
+                [version],
+            )
+            assert cur.fetchone() == (None, None, None)
         # A changed replay must invalidate the old vector contract while an
         # unchanged replay remains idempotent.  The production CSV path is
         # used here rather than updating snapshot rows directly.

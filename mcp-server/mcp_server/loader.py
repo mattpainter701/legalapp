@@ -1063,6 +1063,16 @@ def create_snapshot_chunks(conn, corpus_version: str, limit: int | None = None) 
     created = 0
     with conn.cursor() as cur:
         cur.execute(
+            """SELECT embedding_model, embedding_version
+                 FROM authority_corpus_versions
+                WHERE version=%s""",
+            [corpus_version],
+        )
+        contract = cur.fetchone()
+        if not contract:
+            raise ValueError(f"unknown corpus version: {corpus_version}")
+        expected_model, expected_version = contract
+        cur.execute(
             """
             SELECT ao.opinion_id, ac.cluster_id, d.court_id, ao.plain_text
             FROM authority_case_opinions ao
@@ -1097,8 +1107,19 @@ def create_snapshot_chunks(conn, corpus_version: str, limit: int | None = None) 
                       embedding_model=NULL,
                       embedding_version=NULL
                     WHERE authority_case_chunks.content IS DISTINCT FROM EXCLUDED.content
+                       OR authority_case_chunks.embedding_model IS DISTINCT FROM %s
+                       OR authority_case_chunks.embedding_version IS DISTINCT FROM %s
                     """,
-                    [corpus_version, opinion_id, cluster_id, court_id, idx, content],
+                    [
+                        corpus_version,
+                        opinion_id,
+                        cluster_id,
+                        court_id,
+                        idx,
+                        content,
+                        expected_model,
+                        expected_version,
+                    ],
                 )
                 created += cur.rowcount
     return created
