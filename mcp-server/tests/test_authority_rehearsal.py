@@ -1064,10 +1064,25 @@ def test_legal_only_upgrade_bootstrap_rehearsal():
             cur.execute(f'SET search_path TO "{schema}", public')
             cur.execute(
                 """CREATE TABLE legal_sources (
-                    source_key text PRIMARY KEY, publisher text, source_type text,
-                    canonical_url text, enabled boolean, storage_policy text,
-                    rights_decision text, expected_cadence text,
-                    claim_safe_wording text, metadata jsonb NOT NULL DEFAULT '{}'::jsonb)"""
+                    source_key text PRIMARY KEY, display_name text, description text,
+                    publisher text NOT NULL, source_type text NOT NULL, jurisdiction text,
+                    court_id text, canonical_url text NOT NULL,
+                    authority_tier text NOT NULL DEFAULT 'secondary',
+                    official_status text NOT NULL DEFAULT 'aggregator',
+                    ingestion_mode text NOT NULL DEFAULT 'manual',
+                    storage_policy text NOT NULL DEFAULT 'metadata_only',
+                    access_type text NOT NULL DEFAULT 'public_web',
+                    license_status text NOT NULL DEFAULT 'review_required', terms_url text,
+                    sync_frequency text, data_format text, corpus_table text,
+                    enabled boolean NOT NULL DEFAULT false, priority integer NOT NULL DEFAULT 100,
+                    coverage_start date, coverage_end date, coverage_kind text NOT NULL DEFAULT 'bounded',
+                    last_attempted_at timestamptz, last_successful_sync_at timestamptz,
+                    item_count bigint NOT NULL DEFAULT 0, chunk_count bigint NOT NULL DEFAULT 0,
+                    embedded_chunk_count bigint NOT NULL DEFAULT 0, parser_version text,
+                    embedding_model text, embedding_version integer, current_error text,
+                    licensing_notes text, expected_cadence text, rights_decision text,
+                    claim_safe_wording text, metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+                    updated_at timestamptz NOT NULL DEFAULT now())"""
             )
             cur.execute(
                 """CREATE TABLE legal_documents (
@@ -1099,7 +1114,8 @@ def test_legal_only_upgrade_bootstrap_rehearsal():
                     last_successful_sync_at timestamptz, rows_processed bigint NOT NULL DEFAULT 0,
                     chunks_created bigint NOT NULL DEFAULT 0, last_error text,
                     metadata jsonb NOT NULL DEFAULT '{}'::jsonb, updated_at timestamptz NOT NULL DEFAULT now(),
-                    PRIMARY KEY (source_key, partition_key))"""
+                    PRIMARY KEY (source_key, partition_key),
+                    FOREIGN KEY (source_key) REFERENCES legal_sources(source_key) ON DELETE CASCADE)"""
             )
             cur.execute(
                 """INSERT INTO legal_sources
@@ -1167,10 +1183,22 @@ def test_legacy_upgrade_bootstrap_rehearsal():
             cur.execute(f'SET search_path TO "{schema}", public')
             cur.execute(
                 """CREATE TABLE legal_sources (
-                    source_key text PRIMARY KEY, publisher text, source_type text,
-                    canonical_url text, enabled boolean, storage_policy text,
-                    rights_decision text, expected_cadence text,
-                    claim_safe_wording text, metadata jsonb NOT NULL DEFAULT '{}'::jsonb)"""
+                    source_key text PRIMARY KEY, display_name text, description text,
+                    publisher text NOT NULL, source_type text NOT NULL, jurisdiction text,
+                    court_id text, canonical_url text NOT NULL,
+                    authority_tier text NOT NULL DEFAULT 'secondary', official_status text NOT NULL DEFAULT 'aggregator',
+                    ingestion_mode text NOT NULL DEFAULT 'manual', storage_policy text NOT NULL DEFAULT 'metadata_only',
+                    access_type text NOT NULL DEFAULT 'public_web', license_status text NOT NULL DEFAULT 'review_required',
+                    terms_url text, sync_frequency text, data_format text, corpus_table text,
+                    enabled boolean NOT NULL DEFAULT false, priority integer NOT NULL DEFAULT 100,
+                    coverage_start date, coverage_end date, coverage_kind text NOT NULL DEFAULT 'bounded',
+                    last_attempted_at timestamptz, last_successful_sync_at timestamptz,
+                    item_count bigint NOT NULL DEFAULT 0, chunk_count bigint NOT NULL DEFAULT 0,
+                    embedded_chunk_count bigint NOT NULL DEFAULT 0, parser_version text,
+                    embedding_model text, embedding_version integer, current_error text,
+                    licensing_notes text, expected_cadence text, rights_decision text,
+                    claim_safe_wording text, metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+                    updated_at timestamptz NOT NULL DEFAULT now())"""
             )
             cur.execute(
                 """CREATE TABLE opinion_clusters (
@@ -1196,7 +1224,7 @@ def test_legacy_upgrade_bootstrap_rehearsal():
                 """CREATE TABLE opinion_citations (
                     citing_opinion_id bigint, cited_opinion_id bigint,
                     cited_cluster_id bigint, cited_reporter text,
-                    cited_volume text, cited_page text, depth integer)"""
+                    cited_volume text, cited_page text, depth integer NOT NULL DEFAULT 0)"""
             )
             cur.execute(
                 """CREATE TABLE source_sync_states (
@@ -1206,7 +1234,8 @@ def test_legacy_upgrade_bootstrap_rehearsal():
                     last_successful_sync_at timestamptz, rows_processed bigint NOT NULL DEFAULT 0,
                     chunks_created bigint NOT NULL DEFAULT 0, last_error text,
                     metadata jsonb NOT NULL DEFAULT '{}'::jsonb, updated_at timestamptz NOT NULL DEFAULT now(),
-                    PRIMARY KEY (source_key, partition_key))"""
+                    PRIMARY KEY (source_key, partition_key),
+                    FOREIGN KEY (source_key) REFERENCES legal_sources(source_key) ON DELETE CASCADE)"""
             )
             cur.execute(
                 """INSERT INTO legal_sources
