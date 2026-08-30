@@ -5,6 +5,8 @@ import os
 import sys
 import time
 import json
+import platform
+import shutil
 from collections import Counter
 from typing import Iterable
 
@@ -18,6 +20,46 @@ from .worker_config import DEFAULT_MODEL, WorkerConfig, partition_sql
 # The reviewed authority corpus is small and high-value for chat. Drain it before
 # returning to the much larger CourtListener opinion backlog.
 CORPORA = ("legal_document_chunks", "authority_case_chunks")
+
+
+def measured_host_telemetry() -> dict:
+    """Return measured worker health, with explicit unavailable values."""
+    telemetry = {
+        "observed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "host": platform.node() or "unknown",
+        "platform": platform.platform(),
+        "temperature_c": None,
+        "temperature_source": "unavailable",
+        "capacity": {"disk_free_bytes": None, "cpu_count": os.cpu_count()},
+        "capacity_source": "os",
+    }
+    try:
+        usage = shutil.disk_usage(os.getcwd())
+        telemetry["capacity"]["disk_free_bytes"] = usage.free
+    except OSError:
+        telemetry["capacity_source"] = "unavailable"
+    try:
+        import psutil
+
+        temperatures = psutil.sensors_temperatures(fahrenheit=False)
+        readings = [
+            entry.current
+            for entries in temperatures.values()
+            for entry in entries
+            if entry.current is not None
+        ]
+        if readings:
+            telemetry["temperature_c"] = max(readings)
+            telemetry["temperature_source"] = "psutil"
+        memory = psutil.virtual_memory()
+        telemetry["capacity"].update({
+            "memory_available_bytes": memory.available,
+            "memory_total_bytes": memory.total,
+        })
+        telemetry["capacity_source"] = "psutil"
+    except (ImportError, OSError, RuntimeError):
+        pass
+    return telemetry
 
 
 def update_sql(corpus: str, model_version: str = "1") -> str:
@@ -93,6 +135,7 @@ def embed_batch(model, texts: list[str], batch_size: int) -> list[list[float]]:
 def process_once(config: WorkerConfig, model) -> int:
     config.validate()
     overall_total = 0
+    telemetry = measured_host_telemetry()
     with connect(config.db_url) as conn:
         for corpus in CORPORA:
             with conn.cursor() as cur:
@@ -108,7 +151,7 @@ def process_once(config: WorkerConfig, model) -> int:
                      temperature_c, capacity_evidence)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb) ON CONFLICT DO NOTHING""",
                     [shard_key, version, corpus, config.model, config.model_version, config.dim,
-                     config.temperature_c, json.dumps(config.capacity_evidence or {})])
+                     telemetry["temperature_c"], json.dumps(telemetry)])
                 cur.execute(
                     f"""UPDATE authority_embedding_shards SET status='queued',
                            lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL,
@@ -121,12 +164,15 @@ def process_once(config: WorkerConfig, model) -> int:
             conn.commit()
             if not claim_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id)):
                 continue
-            heartbeat_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id), lease_seconds=900)
+            if not heartbeat_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id), lease_seconds=900):
+                finish_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id), success=False, error="embedding lease lost before processing")
+                continue
             started = time.monotonic()
             total = 0
             try:
                 while True:
-                    heartbeat_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id), lease_seconds=900)
+                    if not heartbeat_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id), lease_seconds=900):
+                        raise RuntimeError("embedding lease lost before batch")
                     with conn.cursor() as cur:
                         cur.execute("BEGIN")
                         version_params = ([version] if corpus == "authority_case_chunks"
@@ -141,6 +187,8 @@ def process_once(config: WorkerConfig, model) -> int:
                         vectors = embed_batch(model, texts, config.batch_size)
                         if len(vectors) != len(ids) or any(len(vector) != config.dim for vector in vectors):
                             raise RuntimeError("embedding output count or dimension mismatch")
+                        if not heartbeat_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id), lease_seconds=900):
+                            raise RuntimeError("embedding lease lost before writes")
                         updates = [(format_embedding(vector), config.model, config.model_version, chunk_id) for chunk_id, vector in zip(ids, vectors)]
                         psycopg2.extras.execute_batch(cur, update_sql(corpus), updates, page_size=100)
                         if corpus == "legal_document_chunks":
