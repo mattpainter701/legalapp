@@ -118,6 +118,49 @@ class TestAuthMe:
             "Northern District of Illinois",
         ]
 
+    async def test_me_exposes_live_addons_and_effective_capabilities(
+        self,
+        client,
+        db_session,
+        test_user,
+        test_tenant,
+    ):
+        from app.models.plugin import TenantPluginEntitlement
+        from app.models.rbac import Role, UserRole
+
+        role = Role(
+            id=uuid.uuid4(),
+            tenant_id=test_tenant.id,
+            name="Legal Approver",
+            capabilities=["approve_legal_work"],
+            is_system=False,
+        )
+        db_session.add_all(
+            [
+                TenantPluginEntitlement(
+                    id=uuid.uuid4(),
+                    tenant_id=test_tenant.id,
+                    plugin_name="mediation-legal",
+                    status="purchased",
+                ),
+                role,
+                UserRole(
+                    id=uuid.uuid4(),
+                    user_id=test_user.id,
+                    role_id=role.id,
+                    tenant_id=test_tenant.id,
+                    source="manual",
+                ),
+            ]
+        )
+        await db_session.commit()
+
+        response = await client.get("/api/auth/me")
+
+        assert response.status_code == 200
+        assert "mediation-legal" in response.json()["active_addons"]
+        assert "approve_legal_work" in response.json()["capabilities"]
+
     async def test_me_profile_patch_only_updates_professional_fields(
         self, client, test_user
     ):
@@ -246,10 +289,18 @@ class TestAuthMe:
         async def plan_meta(_db, _tenant_id):
             return "full-platform", None
 
+        async def addons(_db, _tenant_id):
+            return []
+
+        async def capabilities(_db, _user_id):
+            return set()
+
         monkeypatch.setattr(auth, "get_current_user", current_user)
         monkeypatch.setattr(auth, "set_tenant_context", tenant_context)
         monkeypatch.setattr(auth, "resolve_enabled_modules", enabled_modules)
         monkeypatch.setattr(auth, "resolve_plan_meta", plan_meta)
+        monkeypatch.setattr(auth, "active_plugin_names", addons)
+        monkeypatch.setattr(auth, "get_user_capabilities", capabilities)
 
         response = await auth.update_me(
             UserProfileUpdate(professional_role="Attorney"),
@@ -335,12 +386,20 @@ class TestAuthMe:
         async def plan_meta(_db, _tenant_id):
             return "full-platform", None
 
+        async def addons(_db, _tenant_id):
+            return []
+
+        async def capabilities(_db, _user_id):
+            return set()
+
         audit = AsyncMock()
         cleanup = AsyncMock(side_effect=RuntimeError("Redis unavailable"))
         monkeypatch.setattr(auth, "get_current_user", current_user)
         monkeypatch.setattr(auth, "set_tenant_context", tenant_context)
         monkeypatch.setattr(auth, "resolve_enabled_modules", enabled_modules)
         monkeypatch.setattr(auth, "resolve_plan_meta", plan_meta)
+        monkeypatch.setattr(auth, "active_plugin_names", addons)
+        monkeypatch.setattr(auth, "get_user_capabilities", capabilities)
         monkeypatch.setattr(workspace_mcp_oauth, "append_workspace_mcp_audit", audit)
         monkeypatch.setattr(
             workspace_mcp_oauth, "revoke_workspace_grant_runtime", cleanup

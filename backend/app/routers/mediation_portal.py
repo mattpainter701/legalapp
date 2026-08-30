@@ -60,6 +60,10 @@ from app.services.portal_invites import (
     PORTAL_INVITE_UNAVAILABLE_STATUS,
     resolve_active_portal_invite,
 )
+from app.services.plugin_entitlements import (
+    load_plugin_entitlement,
+    plugin_entitlement_is_active,
+)
 from app.services.portal_token import create_portal_token
 
 settings = get_settings()
@@ -115,6 +119,17 @@ async def accept_invite(
             detail=PORTAL_INVITE_UNAVAILABLE_DETAIL,
         )
 
+    entitlement = await load_plugin_entitlement(
+        db,
+        invite.tenant_id,
+        "mediation-legal",
+    )
+    if not plugin_entitlement_is_active(entitlement):
+        raise HTTPException(
+            status_code=PORTAL_INVITE_UNAVAILABLE_STATUS,
+            detail=PORTAL_INVITE_UNAVAILABLE_DETAIL,
+        )
+
     party = await db.get(MediationParty, invite.party_id)
     if party is None:
         raise HTTPException(status_code=404, detail="Party not found")
@@ -146,6 +161,13 @@ async def _resolve(
     request: Request, db: AsyncSession, case_id: str | None
 ) -> PortalContext:
     ctx = await get_portal_context(request, db, case_id=case_id)
+    entitlement = await load_plugin_entitlement(
+        db,
+        uuid.UUID(str(ctx.tenant_id)),
+        "mediation-legal",
+    )
+    if not plugin_entitlement_is_active(entitlement):
+        raise HTTPException(status_code=404, detail="Mediation workspace not found")
     return ctx
 
 

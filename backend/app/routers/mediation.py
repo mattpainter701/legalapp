@@ -74,15 +74,59 @@ from app.services.email import (
     email_delivery_http_error,
     send_portal_invite,
 )
+from app.services.plugin_entitlements import (
+    load_plugin_entitlement,
+    plugin_entitlement_is_active,
+)
+from app.services.rbac_service import get_user_capabilities
 
 settings = get_settings()
 
-router = APIRouter(prefix="/api/plugins/mediation", tags=["mediation"])
-
+MEDIATION_PLUGIN_NAME = "mediation-legal"
 INVITE_TTL_DAYS = 14
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
+
+
+async def _require_mediation_entitlement(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Apply the paid add-on boundary to every firm mediation endpoint."""
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    entitlement = await load_plugin_entitlement(
+        db,
+        user.tenant_id,
+        MEDIATION_PLUGIN_NAME,
+    )
+    if plugin_entitlement_is_active(entitlement):
+        return
+    if entitlement is not None and entitlement.status in {"disabled", "locked"}:
+        raise HTTPException(
+            status_code=403,
+            detail="The Mediation add-on is turned off for this firm",
+        )
+    raise HTTPException(
+        status_code=402,
+        detail="The Mediation add-on is not active for this firm",
+    )
+
+
+async def _require_legal_approval(db: AsyncSession, user: User) -> None:
+    if "approve_legal_work" not in await get_user_capabilities(db, user.id):
+        raise HTTPException(
+            status_code=403,
+            detail="Legal approval authority is required for this action",
+        )
+
+
+router = APIRouter(
+    prefix="/api/plugins/mediation",
+    tags=["mediation"],
+    dependencies=[Depends(_require_mediation_entitlement)],
+)
 
 
 def _as_uuid(value: str | None) -> uuid.UUID | None:
@@ -894,6 +938,7 @@ async def approve_asset(
 ):
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
+    await _require_legal_approval(db, user)
     case = await _get_case_or_404(db, case_id, user.tenant_id)
     asset = await _get_asset_or_404(
         db, asset_id, case_id, user.tenant_id, for_update=True
@@ -928,6 +973,7 @@ async def send_asset(
 ):
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
+    await _require_legal_approval(db, user)
     case = await _get_case_or_404(db, case_id, user.tenant_id)
     asset = await _get_asset_or_404(
         db, asset_id, case_id, user.tenant_id, for_update=True
@@ -1101,6 +1147,7 @@ async def release_document(
 ):
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
+    await _require_legal_approval(db, user)
     case = await _get_case_or_404(db, case_id, user.tenant_id)
     doc = await _get_doc_or_404(db, doc_id, case_id, user.tenant_id, for_update=True)
     if not doc.storage_path or not os.path.exists(doc.storage_path):
@@ -1294,6 +1341,7 @@ async def review_proposal(
 ):
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
+    await _require_legal_approval(db, user)
     case = await _get_case_or_404(db, case_id, user.tenant_id)
     proposal = await _get_proposal_or_404(
         db, proposal_id, case_id, user.tenant_id, for_update=True
@@ -1342,6 +1390,7 @@ async def release_proposal(
 ):
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
+    await _require_legal_approval(db, user)
     case = await _get_case_or_404(db, case_id, user.tenant_id)
     proposal = await _get_proposal_or_404(
         db, proposal_id, case_id, user.tenant_id, for_update=True

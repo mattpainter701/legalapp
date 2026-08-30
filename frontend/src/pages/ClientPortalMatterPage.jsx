@@ -96,6 +96,7 @@ export default function ClientPortalMatterPage() {
   const [loadError, setLoadError] = useState('')
   const [expired, setExpired] = useState(false)
   const [signingOut, setSigningOut] = useState(false)
+  const matterRequestSequence = useRef(0)
 
   // Any tab hitting an expired session escalates to the whole-page notice —
   // otherwise a client sits on a screen of "unable to load" panels with no
@@ -108,28 +109,34 @@ export default function ClientPortalMatterPage() {
     return false
   }, [])
 
-  const refreshMatter = useCallback(
-    () =>
-      getClientPortalMatter()
+  const refreshMatter = useCallback(() => {
+    const requestSequence = ++matterRequestSequence.current
+    return getClientPortalMatter()
         .then((data) => {
+          if (requestSequence !== matterRequestSequence.current) return data
           setMatter(data)
           setMediation(null)
           // Mediation is an optional add-on. A missing entitlement, a stale
           // deployment, or a transient failure must never hide the core matter.
-          getClientPortalMediation()
-            .then((data) => setMediation(normalizeClientPortalMediation(data)))
+          return getClientPortalMediation()
+            .then((mediationData) => {
+              if (requestSequence === matterRequestSequence.current) {
+                setMediation(normalizeClientPortalMediation(mediationData))
+              }
+            })
             .catch((err) => {
+              if (requestSequence !== matterRequestSequence.current) return
               if (!handleSessionExpiry(err)) setMediation(null)
             })
-          return data
+            .then(() => data)
         })
         .catch((err) => {
+          if (requestSequence !== matterRequestSequence.current) return null
           if (handleSessionExpiry(err)) return null
           setLoadError('Unable to load your matter. Please try again later.')
           return null
-        }),
-    [handleSessionExpiry],
-  )
+        })
+  }, [handleSessionExpiry])
 
   useEffect(() => {
     refreshMatter()
@@ -337,15 +344,43 @@ function normalizeClientPortalMediation(data) {
   if (!data.mediation && !data.case && !data.id && !data.case_id) return null
   const value = data.mediation || data.case || data
   if (!value || typeof value !== 'object') return null
-  // The endpoint is responsible for authorization. Keep the rendering
-  // contract deliberately narrow so a future response cannot accidentally
-  // render a private opposing-party collection.
+  const normalizeAssets = (rows) => (Array.isArray(rows) ? rows : []).map((row) => ({
+    id: row?.id,
+    description: row?.description,
+    status: row?.status,
+    value: row?.value,
+  }))
+  const normalizeDocuments = (rows) => (Array.isArray(rows) ? rows : []).map((row) => ({
+    id: row?.id,
+    filename: row?.filename,
+    created_at: row?.created_at,
+    is_own: row?.is_own === true,
+    release_state: row?.release_state,
+    download_url: row?.download_url,
+  }))
+  const normalizeProposals = (rows) => (Array.isArray(rows) ? rows : []).map((row) => ({
+    id: row?.id,
+    title: row?.title,
+    status: row?.status,
+    review_state: row?.review_state,
+    is_own: row?.is_own === true,
+    release_state: row?.release_state,
+  }))
+  // Copy only fields this read-only view renders. The server owns the privacy
+  // boundary; this allowlist prevents a future response expansion from being
+  // retained or accidentally surfaced by the client component.
   return {
-    ...value,
-    own_assets: data.own_assets || value.own_assets || [],
-    shared_assets: data.shared_assets || value.shared_assets || [],
-    documents: data.documents || value.documents || [],
-    proposals: data.proposals || value.proposals || [],
+    id: value.id || value.case_id,
+    case_name: value.case_name,
+    title: value.title,
+    status: value.status,
+    mediation_stage: value.mediation_stage,
+    stage: value.stage,
+    scheduled_session: value.scheduled_session,
+    own_assets: normalizeAssets(data.own_assets || value.own_assets),
+    shared_assets: normalizeAssets(data.shared_assets || value.shared_assets),
+    documents: normalizeDocuments(data.documents || value.documents),
+    proposals: normalizeProposals(data.proposals || value.proposals),
   }
 }
 

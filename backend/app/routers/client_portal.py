@@ -65,7 +65,7 @@ from app.models.mediation import (
     MediationProposal,
     MediationProposalRecipient,
 )
-from app.models.plugin import Matter, MediationCase, TenantPluginEntitlement
+from app.models.plugin import Matter, MediationCase
 from app.models.signature import SignatureRequest, SignatureSigner
 from app.models.tenant import Tenant
 from app.models.user import User
@@ -97,6 +97,10 @@ from app.schemas.client_portal import (
     PortalSessionResponse,
 )
 from app.services import mediation_service as mediation_service
+from app.services.plugin_entitlements import (
+    load_plugin_entitlement,
+    plugin_entitlement_is_active,
+)
 from app.services.matter_file_store import (
     MatterFileAccessError,
     MatterFileIntegrityError,
@@ -880,23 +884,12 @@ async def _native_mediation_case(
     """Resolve one licensed mediation and bind it to the portal contact."""
     tenant_id = uuid.UUID(str(ctx.tenant_id))
     matter_id = uuid.UUID(str(ctx.matter_id))
-    entitlement = await db.scalar(
-        select(TenantPluginEntitlement).where(
-            TenantPluginEntitlement.tenant_id == tenant_id,
-            TenantPluginEntitlement.plugin_name == "mediation-legal",
-        )
+    entitlement = await load_plugin_entitlement(
+        db,
+        tenant_id,
+        "mediation-legal",
     )
-    now = datetime.now(timezone.utc)
-    starts_at = _aware(entitlement.starts_at) if entitlement else None
-    expires_at = _aware(entitlement.expires_at) if entitlement else None
-    entitled = bool(
-        entitlement
-        and entitlement.status in {"purchased", "included", "trial"}
-        and (starts_at is None or starts_at <= now)
-        and (expires_at is None or expires_at > now)
-        and (entitlement.status != "trial" or expires_at is not None)
-    )
-    if not entitled:
+    if not plugin_entitlement_is_active(entitlement):
         raise HTTPException(status_code=404, detail="Mediation workspace not found")
 
     result = await db.execute(

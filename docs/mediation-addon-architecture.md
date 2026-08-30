@@ -20,12 +20,14 @@ documents, proposals, counters, sessions, and eventually settlement packets.
 | Native My Matters overlay | Matter-scoped client portal invite/account | Show the licensed mediation workflow inside the client's existing matter portal. |
 | External-party mediation portal | Mediation party invitation | Give an opposing or other invited party only its own submissions and content deliberately released to that party. |
 
-The native overlay is returned only when the tenant has an active purchased,
-included, or unexpired trial entitlement; exactly one mediation is linked to
-the current matter; and the portal contact resolves to exactly one `our_client`
-party on that mediation. Other participant roles use the external-party portal.
-Missing, inactive, ambiguous, cross-contact, cross-role, and cross-tenant states
-fail closed without affecting the base My Matters portal.
+All three mediation surfaces require an active purchased, included, or
+unexpired trial entitlement. Staff routes return an upgrade/disabled response;
+the party portals fail closed without exposing whether a mediation exists. The
+native overlay additionally requires exactly one mediation linked to the
+current matter and exactly one `our_client` party matching the portal contact.
+Other participant roles use the external-party portal. Missing, inactive,
+ambiguous, cross-contact, cross-role, and cross-tenant states fail closed
+without affecting the base My Matters portal.
 
 ## Confidentiality and release contract
 
@@ -37,6 +39,10 @@ Mediation negotiation is private by default.
   attorney review is pending.
 - Attorney review records an explicit decision: `approved`,
   `changes_requested`, or `rejected`.
+- Firm-side approval and release require the live `approve_legal_work` RBAC
+  capability. A professional-title field is never treated as authorization;
+  paralegals and other staff can prepare the record without receiving legal
+  release authority.
 - Approved content is delivered through recipient-specific release rows. A
   party sees only a release addressed to that party.
 - A counterproposal may reference only a proposal from the same case that was
@@ -62,7 +68,8 @@ The first implementation slice establishes the safe extension seam:
 2. attorney proposal review before release;
 3. same-case, released-parent counteroffer lineage;
 4. immutable released/approved records and content-integrity checks;
-5. staff recipient-selection and review controls;
+5. capability-gated attorney recipient-selection and review controls, while
+   other staff retain preparation access;
 6. private/pending/released states in the external-party portal; and
 7. a read-only, entitlement-gated Mediation tab in native My Matters, including
    authenticated downloads.

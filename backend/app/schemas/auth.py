@@ -91,6 +91,8 @@ class UserInfo(BaseModel):
     subscription_status: Optional[str] = None
     billing_status: Optional[str] = None
     enabled_modules: list[str] = []
+    active_addons: list[str] = []
+    capabilities: list[str] = []
     default_route: str = "/matters"
     plan: str = "full-platform"
     upsell_target: Optional[str] = None

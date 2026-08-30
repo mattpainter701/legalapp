@@ -3,6 +3,7 @@ import { reportError } from '../utils/reportError'
 import { useNavigate, useParams } from 'react-router-dom'
 import { format, parseISO } from 'date-fns'
 import ReactMarkdown from 'react-markdown'
+import { useAuth } from '../App'
 import {
   getMediationCase, updateMediationCase, advanceMediationCase, addMediationEvent,
   listMediationParties, createMediationParty, updateMediationParty, deleteMediationParty, inviteMediationParty,
@@ -15,6 +16,7 @@ import {
 import MediationSubTable from '../components/MediationSubTable'
 import { useConfirm } from '../components/dialog/ConfirmProvider'
 import { useToast } from '../components/toast/useToast'
+import { hasCapability } from '../moduleAccess'
 import {
   Handshake, ArrowLeft, CalendarPlus, Check, X, FileEdit, Clock,
   Send, FileCheck, Trash2, Download, AlertTriangle,
@@ -100,6 +102,7 @@ function AssetStatusBadge({ status }) {
 }
 
 export default function MediationDetailPage() {
+  const { user } = useAuth()
   const confirmAction = useConfirm()
   const toast = useToast()
   const { id } = useParams()
@@ -127,6 +130,7 @@ export default function MediationDetailPage() {
   const [releaseTarget, setReleaseTarget] = useState(null)
   const [releasePartyIds, setReleasePartyIds] = useState([])
   const [releasing, setReleasing] = useState(false)
+  const canApproveLegalWork = hasCapability(user?.capabilities, 'approve_legal_work')
 
   const loadCase = useCallback(async () => {
     setLoading(true)
@@ -339,8 +343,8 @@ export default function MediationDetailPage() {
       { key: 'notes', label: 'Notes', type: 'textarea' },
     ],
     actions: [
-      { label: 'Approve', icon: FileCheck, onClick: async (row) => { try { await approveMediationAsset(id, row.id); loadCase() } catch (error) { toast.error('Asset was not approved', { message: error?.response?.data?.detail || 'Please try again.' }) } }, condition: (row) => row.status === 'submitted' },
-      { label: 'Send', icon: Send, onClick: async (row) => { try { await sendMediationAsset(id, row.id); loadCase() } catch (error) { toast.error('Asset was not sent', { message: error?.response?.data?.detail || 'Please try again.' }) } }, condition: (row) => row.status === 'attorney_approved' },
+      { label: 'Approve', icon: FileCheck, onClick: async (row) => { try { await approveMediationAsset(id, row.id); loadCase() } catch (error) { toast.error('Asset was not approved', { message: error?.response?.data?.detail || 'Please try again.' }) } }, condition: (row) => canApproveLegalWork && row.status === 'submitted' },
+      { label: 'Send', icon: Send, onClick: async (row) => { try { await sendMediationAsset(id, row.id); loadCase() } catch (error) { toast.error('Asset was not sent', { message: error?.response?.data?.detail || 'Please try again.' }) } }, condition: (row) => canApproveLegalWork && row.status === 'attorney_approved' },
     ],
     updateCondition: (row) => ['draft', 'submitted'].includes(row.status),
     deleteCondition: (row) => ['draft', 'submitted'].includes(row.status),
@@ -363,7 +367,7 @@ export default function MediationDetailPage() {
     uploadFn: (file, desc) => uploadMediationDocument(id, file, desc),
     actions: [
       { label: 'Download', icon: Download, onClick: (row) => { window.open(downloadMediationDocumentUrl(id, row.id), '_blank') } },
-      { label: 'Release', icon: Send, onClick: (row) => openRelease('document', row), condition: (row) => parties.some((party) => party.id !== row.uploaded_by_party_id && !row.recipient_party_ids?.includes(party.id)) },
+      { label: 'Release', icon: Send, onClick: (row) => openRelease('document', row), condition: (row) => canApproveLegalWork && parties.some((party) => party.id !== row.uploaded_by_party_id && !row.recipient_party_ids?.includes(party.id)) },
     ],
   }
 
@@ -386,10 +390,10 @@ export default function MediationDetailPage() {
       { key: 'body', label: 'Proposal Details', type: 'textarea', full: true },
     ],
     actions: [
-      { label: 'Approve', icon: FileCheck, onClick: (row) => handleProposalReview(row, 'approved'), condition: (row) => !row.is_released && row.review_state !== 'approved' },
-      { label: 'Changes', icon: FileEdit, onClick: (row) => handleProposalReview(row, 'changes_requested'), condition: (row) => !row.is_released && row.review_state !== 'changes_requested' },
-      { label: 'Reject', icon: X, onClick: (row) => handleProposalReview(row, 'rejected'), condition: (row) => !row.is_released && row.review_state !== 'rejected' },
-      { label: 'Release', icon: Send, onClick: (row) => openRelease('proposal', row), condition: (row) => row.review_state === 'approved' && parties.some((party) => party.id !== row.proposed_by_party_id && !row.recipient_party_ids?.includes(party.id)) },
+      { label: 'Approve', icon: FileCheck, onClick: (row) => handleProposalReview(row, 'approved'), condition: (row) => canApproveLegalWork && !row.is_released && row.review_state !== 'approved' },
+      { label: 'Changes', icon: FileEdit, onClick: (row) => handleProposalReview(row, 'changes_requested'), condition: (row) => canApproveLegalWork && !row.is_released && row.review_state !== 'changes_requested' },
+      { label: 'Reject', icon: X, onClick: (row) => handleProposalReview(row, 'rejected'), condition: (row) => canApproveLegalWork && !row.is_released && row.review_state !== 'rejected' },
+      { label: 'Release', icon: Send, onClick: (row) => openRelease('proposal', row), condition: (row) => canApproveLegalWork && row.review_state === 'approved' && parties.some((party) => party.id !== row.proposed_by_party_id && !row.recipient_party_ids?.includes(party.id)) },
     ],
   }
 
@@ -477,6 +481,13 @@ export default function MediationDetailPage() {
         {saveError && (
           <div className="bg-brand-rose/10 border border-brand-rose/20 rounded-xl px-5 py-4 mb-8 text-brand-rose text-sm font-sans flex items-start gap-3">
             <AlertTriangle size={16} className="shrink-0 mt-0.5" /> {saveError}
+          </div>
+        )}
+
+        {!canApproveLegalWork && (
+          <div className="bg-blue-50 border border-blue-200 rounded-xl px-5 py-4 mb-8 text-blue-800 text-sm font-sans flex items-start gap-3">
+            <AlertTriangle size={16} className="shrink-0 mt-0.5" />
+            You can prepare the mediation record, but an authorized attorney must approve and release party-visible content.
           </div>
         )}
 

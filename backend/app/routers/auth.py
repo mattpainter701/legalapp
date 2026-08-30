@@ -23,6 +23,8 @@ from app.config import get_settings
 from app.database import enable_rls_bypass, get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.services.module_visibility import resolve_enabled_modules, resolve_plan_meta
+from app.services.plugin_entitlements import active_plugin_names
+from app.services.rbac_service import get_user_capabilities
 from app.services.llm_routing import resolve_llm_route, route_matter_context_allowed
 from app.services.office_access import (
     require_office_globally_enabled,
@@ -1861,6 +1863,8 @@ async def get_me(
     enabled_modules, default_route = await resolve_enabled_modules(
         db, user.tenant_id, user=user
     )
+    active_addons = await active_plugin_names(db, user.tenant_id)
+    capabilities = sorted(await get_user_capabilities(db, user.id))
     plan_id, upsell_target = await resolve_plan_meta(db, user.tenant_id)
     demo_session = await _active_demo_session(db, user.tenant_id)
     standard_context_allowed = await _standard_matter_context_policy(db, user.tenant_id)
@@ -1881,6 +1885,8 @@ async def get_me(
         ),
         billing_status=user.tenant.mcp_billing_status if user.tenant else None,
         enabled_modules=enabled_modules,
+        active_addons=active_addons,
+        capabilities=capabilities,
         default_route=default_route,
         plan=plan_id,
         upsell_target=upsell_target,
@@ -1992,6 +1998,8 @@ async def update_me(
     enabled_modules, default_route = await resolve_enabled_modules(
         db, user.tenant_id, user=user
     )
+    active_addons = await active_plugin_names(db, user.tenant_id)
+    capabilities = sorted(await get_user_capabilities(db, user.id))
     plan_id, upsell_target = await resolve_plan_meta(db, user.tenant_id)
     standard_context_allowed = await _standard_matter_context_policy(db, user.tenant_id)
     return UserInfo(
@@ -2011,6 +2019,8 @@ async def update_me(
         ),
         billing_status=user.tenant.mcp_billing_status if user.tenant else None,
         enabled_modules=enabled_modules,
+        active_addons=active_addons,
+        capabilities=capabilities,
         default_route=default_route,
         plan=plan_id,
         upsell_target=upsell_target,

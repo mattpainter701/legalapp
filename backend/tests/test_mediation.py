@@ -1,10 +1,14 @@
 """Tests for the Mediation Platform module (firm router + external portal)."""
 
 import uuid
+from datetime import datetime, timezone
 
 import pytest
 import pytest_asyncio
 
+from app.models.mediation import MediationInvite
+from app.models.plugin import TenantPluginEntitlement
+from app.models.rbac import Role, UserRole
 from app.models.user import User
 from app.services import email as email_module
 
@@ -23,6 +27,35 @@ async def _reset_mediation_portal_auth_limit(test_redis):
     ]
     if keys:
         await test_redis.delete(*keys)
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def mediation_access(db_session, test_tenant, test_user):
+    """Model a licensed firm and a live RBAC legal approver."""
+    entitlement = TenantPluginEntitlement(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        plugin_name="mediation-legal",
+        status="included",
+        starts_at=datetime.now(timezone.utc),
+    )
+    approver_role = Role(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        name="Mediation Attorney",
+        capabilities=["manage_matters", "manage_documents", "approve_legal_work"],
+        is_system=False,
+    )
+    assignment = UserRole(
+        id=uuid.uuid4(),
+        user_id=test_user.id,
+        role_id=approver_role.id,
+        tenant_id=test_tenant.id,
+        source="manual",
+    )
+    db_session.add_all([entitlement, approver_role, assignment])
+    await db_session.commit()
+    return entitlement, approver_role
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -66,6 +99,142 @@ async def _portal_headers(client, *, tenant_id, case_id, party_id, party_role):
 
 
 # ── Firm-side CRUD ────────────────────────────────────────────────────────────
+
+
+async def test_mediation_requires_an_active_paid_entitlement(
+    client,
+    db_session,
+    test_tenant,
+    mediation_access,
+):
+    entitlement, _ = mediation_access
+    case = await _make_case(client)
+    active_party = await _add_party(client, case["id"], "our_client", "Jane Doe")
+    active_portal_headers = await _portal_headers(
+        client,
+        tenant_id=test_tenant.id,
+        case_id=case["id"],
+        party_id=active_party["id"],
+        party_role="our_client",
+    )
+    party = await _add_party(
+        client,
+        case["id"],
+        "opposing_party",
+        "John Doe",
+        "john@example.com",
+    )
+    invite = await client.post(
+        f"/api/plugins/mediation/cases/{case['id']}/parties/{party['id']}/invite"
+    )
+    raw_token = invite.json()["invite_url"].split("token=")[1]
+
+    entitlement.status = "disabled"
+    await db_session.commit()
+
+    firm = await client.get("/api/plugins/mediation/cases")
+    assert firm.status_code == 403
+    assert "turned off" in firm.json()["detail"]
+    existing_portal = await client.get(
+        "/api/portal/mediation/case",
+        headers=active_portal_headers,
+    )
+    assert existing_portal.status_code == 404
+    rejected_invite = await client.post(
+        "/api/portal/mediation/accept",
+        json={"token": raw_token},
+    )
+    assert rejected_invite.status_code == 404
+    stored_invite = await db_session.get(
+        MediationInvite, uuid.UUID(invite.json()["id"])
+    )
+    assert stored_invite.accepted_at is None
+
+    await db_session.delete(entitlement)
+    await db_session.commit()
+    missing = await client.get("/api/plugins/mediation/cases")
+    assert missing.status_code == 402
+
+
+async def test_non_approver_can_prepare_but_cannot_approve_or_release(
+    client,
+    db_session,
+    test_user,
+    test_tenant,
+    mediation_access,
+):
+    _, approver_role = mediation_access
+    case = await _make_case(client)
+    case_id = case["id"]
+    party_a = await _add_party(client, case_id, "our_client", "Jane Doe")
+    party_b = await _add_party(client, case_id, "opposing_party", "John Doe")
+    party_headers = await _portal_headers(
+        client,
+        tenant_id=test_tenant.id,
+        case_id=case_id,
+        party_id=party_a["id"],
+        party_role="our_client",
+    )
+    asset = await client.post(
+        "/api/portal/mediation/assets",
+        json={"description": "Retirement account", "value": "100000"},
+        headers=party_headers,
+    )
+    asset_id = asset.json()["id"]
+    assert (
+        await client.post(
+            f"/api/portal/mediation/assets/{asset_id}/submit",
+            headers=party_headers,
+        )
+    ).status_code == 200
+    document = await client.post(
+        "/api/portal/mediation/documents/upload",
+        files={"file": ("private.txt", b"private evidence", "text/plain")},
+        headers=party_headers,
+    )
+    proposal = await client.post(
+        "/api/portal/mediation/proposals",
+        json={"title": "Initial offer", "body": "60/40 split"},
+        headers=party_headers,
+    )
+
+    approver_role.capabilities = ["manage_matters", "manage_documents"]
+    test_user.professional_role = "Attorney"
+    await db_session.commit()
+
+    assert (await client.get("/api/plugins/mediation/cases")).status_code == 200
+    protected_calls = [
+        (
+            f"/api/plugins/mediation/cases/{case_id}/assets/{asset_id}/approve",
+            None,
+        ),
+        (
+            f"/api/plugins/mediation/cases/{case_id}/assets/{asset_id}/send",
+            None,
+        ),
+        (
+            f"/api/plugins/mediation/cases/{case_id}/documents/{document.json()['id']}/release",
+            {"party_ids": [party_b["id"]]},
+        ),
+        (
+            f"/api/plugins/mediation/cases/{case_id}/proposals/{proposal.json()['id']}/review",
+            {"decision": "approved"},
+        ),
+        (
+            f"/api/plugins/mediation/cases/{case_id}/proposals/{proposal.json()['id']}/release",
+            {"party_ids": [party_b["id"]]},
+        ),
+    ]
+    for path, payload in protected_calls:
+        response = (
+            await client.post(path, json=payload)
+            if payload is not None
+            else await client.post(path)
+        )
+        assert response.status_code == 403
+        assert response.json()["detail"] == (
+            "Legal approval authority is required for this action"
+        )
 
 
 async def test_case_crud_and_sessions(client):
@@ -404,6 +573,62 @@ async def test_opposing_cannot_send_or_edit_others(client, test_tenant):
     assert resp.status_code == 409
 
 
+async def test_portal_session_uses_the_partys_current_role(client, test_tenant):
+    case = await _make_case(client)
+    case_id = case["id"]
+    client_party = await _add_party(client, case_id, "our_client", "Jane Doe")
+    opposing_party = await _add_party(client, case_id, "opposing_party", "John Doe")
+    client_headers = await _portal_headers(
+        client,
+        tenant_id=test_tenant.id,
+        case_id=case_id,
+        party_id=client_party["id"],
+        party_role="our_client",
+    )
+    opposing_headers = await _portal_headers(
+        client,
+        tenant_id=test_tenant.id,
+        case_id=case_id,
+        party_id=opposing_party["id"],
+        party_role="opposing_party",
+    )
+    asset = await client.post(
+        "/api/portal/mediation/assets",
+        json={"description": "Marital home"},
+        headers=client_headers,
+    )
+    asset_id = asset.json()["id"]
+    assert (
+        await client.post(
+            f"/api/portal/mediation/assets/{asset_id}/submit",
+            headers=client_headers,
+        )
+    ).status_code == 200
+    assert (
+        await client.post(
+            f"/api/plugins/mediation/cases/{case_id}/assets/{asset_id}/approve"
+        )
+    ).status_code == 200
+    assert (
+        await client.post(
+            f"/api/plugins/mediation/cases/{case_id}/assets/{asset_id}/send"
+        )
+    ).status_code == 200
+
+    changed_role = await client.patch(
+        f"/api/plugins/mediation/cases/{case_id}/parties/{opposing_party['id']}",
+        json={"role": "our_client"},
+    )
+    assert changed_role.status_code == 200
+
+    stale_role_decision = await client.post(
+        f"/api/portal/mediation/assets/{asset_id}/decision",
+        json={"decision": "approved"},
+        headers=opposing_headers,
+    )
+    assert stale_role_decision.status_code == 403
+
+
 # ── Portal invite acceptance ────────────────────────────────────────────────
 
 
@@ -637,7 +862,13 @@ async def test_tenant_isolation(client, db_session, test_tenant):
         role="admin",
         is_active=True,
     )
-    db_session.add_all([other_tenant, other_user])
+    other_entitlement = TenantPluginEntitlement(
+        id=uuid.uuid4(),
+        tenant_id=other_tenant.id,
+        plugin_name="mediation-legal",
+        status="included",
+    )
+    db_session.add_all([other_tenant, other_user, other_entitlement])
     await db_session.commit()
 
     other_token = jose_jwt.encode(

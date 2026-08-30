@@ -9,7 +9,7 @@ import VersionBadge from './components/VersionBadge'
 import ReleaseAnnouncement from './components/ReleaseAnnouncement'
 import AppErrorBoundary from './components/AppErrorBoundary'
 import { getMe } from './api'
-import { canAccessModuleList } from './moduleAccess'
+import { canAccessAddonList, canAccessModuleList } from './moduleAccess'
 
 const LoginPage = lazy(() => import('./pages/LoginPage'))
 const DemoLoginPage = lazy(() => import('./pages/DemoLoginPage'))
@@ -147,7 +147,7 @@ function hasFinanceAccess(user) {
   return user?.role === 'admin' || user?.role === 'accountant'
 }
 
-function ProtectedRoute({ children, adminOnly = false, financeOnly = false, module = null }) {
+function ProtectedRoute({ children, adminOnly = false, financeOnly = false, module = null, addon = null }) {
   const { user, loading } = useAuth()
   const location = useLocation()
 
@@ -175,12 +175,16 @@ function ProtectedRoute({ children, adminOnly = false, financeOnly = false, modu
     return <Navigate to={user.default_route || '/intake/dashboard'} replace />
   }
 
+  if (!canAccessAddonList(user?.active_addons, addon)) {
+    return <Navigate to={`/plugins/${addon}`} replace />
+  }
+
   return children
 }
 
-function ShellRoute({ children, title, adminOnly = false, financeOnly = false, module = null }) {
+function ShellRoute({ children, title, adminOnly = false, financeOnly = false, module = null, addon = null }) {
   return (
-    <ProtectedRoute adminOnly={adminOnly} financeOnly={financeOnly} module={module}>
+    <ProtectedRoute adminOnly={adminOnly} financeOnly={financeOnly} module={module} addon={addon}>
       <AppShell title={title}>
         {children}
       </AppShell>
@@ -395,11 +399,11 @@ export default function App() {
         />
         <Route
           path="/plugins/mediation/cases"
-          element={<ShellRoute title="Mediation Cases" module="plugins"><MediationPortfolioPage /></ShellRoute>}
+          element={<ShellRoute title="Mediation Cases" module="plugins" addon="mediation-legal"><MediationPortfolioPage /></ShellRoute>}
         />
         <Route
           path="/plugins/mediation/cases/:id"
-          element={<ShellRoute title="Mediation Case" module="plugins"><MediationDetailPage /></ShellRoute>}
+          element={<ShellRoute title="Mediation Case" module="plugins" addon="mediation-legal"><MediationDetailPage /></ShellRoute>}
         />
 
         {/* Admin routes */}

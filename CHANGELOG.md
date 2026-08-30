@@ -19,8 +19,10 @@
   proposals, and approved asset rows are immutable, release races serialize on
   the protected record, portal responses mask other recipients and internal
   user identifiers, and new document downloads verify their recorded SHA-256
-  digest. The native overlay fails closed for inactive entitlements, ambiguous
-  matter links, or mismatched contacts without disrupting the base portal.
+  digest. Firm and party surfaces now require the live paid add-on entitlement,
+  and approval/release actions require the `approve_legal_work` capability.
+  The native overlay fails closed for inactive entitlements, ambiguous matter
+  links, or mismatched contacts without disrupting the base portal.
 - **Versioned public-authority coverage control plane:** reviewed rights and
   provenance fields, immutable corpus release/audit ledgers, harvest evidence,
   claim-safe coverage projection, and exact embedding compatibility now back the

@@ -1,4 +1,5 @@
 import hashlib
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -10,6 +11,43 @@ from app.services.mediation_service import (
     case_document_download_response,
     proposal_content_sha256,
 )
+from app.services.plugin_entitlements import plugin_entitlement_is_active
+
+
+def test_mediation_entitlement_requires_an_active_bounded_state():
+    now = datetime.now(timezone.utc)
+    assert plugin_entitlement_is_active(
+        SimpleNamespace(
+            status="purchased",
+            starts_at=now - timedelta(days=1),
+            expires_at=None,
+        ),
+        now=now,
+    )
+    assert plugin_entitlement_is_active(
+        SimpleNamespace(
+            status="trial",
+            starts_at=now - timedelta(days=1),
+            expires_at=now + timedelta(days=1),
+        ),
+        now=now,
+    )
+    for entitlement in (
+        None,
+        SimpleNamespace(status="trial", starts_at=None, expires_at=None),
+        SimpleNamespace(
+            status="trial",
+            starts_at=None,
+            expires_at=now - timedelta(seconds=1),
+        ),
+        SimpleNamespace(
+            status="purchased",
+            starts_at=now + timedelta(seconds=1),
+            expires_at=None,
+        ),
+        SimpleNamespace(status="disabled", starts_at=None, expires_at=None),
+    ):
+        assert not plugin_entitlement_is_active(entitlement, now=now)
 
 
 def test_proposal_integrity_binds_text_and_parent_lineage():

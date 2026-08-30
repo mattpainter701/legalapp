@@ -326,10 +326,23 @@ async def get_portal_context(
             raise HTTPException(
                 status_code=401, detail="Portal session has been revoked"
             )
+        party = await db.scalar(
+            select(MediationParty).where(
+                MediationParty.id == party_claim,
+                MediationParty.tenant_id == tenant_id,
+                MediationParty.case_id == case_claim,
+            )
+        )
+        if party is None:
+            raise HTTPException(
+                status_code=401, detail="Portal session has been revoked"
+            )
         ctx = PortalContext(
             tenant_id=str(tenant_id),
             party_id=party_claim,
-            party_role=payload.get("party_role"),
+            # Party roles are mutable firm data. The JWT identifies the party,
+            # but current authorization must come from the live tenant row.
+            party_role=party.role,
             case_id=case_claim,
             invite_id=invite_id,
             user=None,
