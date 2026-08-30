@@ -1264,6 +1264,14 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
             embedding_dimension=1024,
         )
         with conn.cursor() as cur:
+            # Staging copies the prior promoted snapshot, including chunks
+            # whose vector contract intentionally belongs to that prior
+            # release. This isolated citator rehearsal supplies its own
+            # complete candidate snapshot instead of weakening promotion or
+            # accepting those old/null vectors.
+            cur.execute(
+                "DELETE FROM authority_case_chunks WHERE corpus_version=%s", [version]
+            )
             cur.execute(
                 """INSERT INTO legal_sources
                      (source_key, publisher, source_type, canonical_url, enabled,
