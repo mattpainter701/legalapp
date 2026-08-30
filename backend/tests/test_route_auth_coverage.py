@@ -37,6 +37,7 @@ from app.middleware.smb_auth import get_smb_agent
 from app.middleware.tenant import get_current_user, get_portal_context, require_admin
 from app.routers.client_portal import get_client_portal_context
 from app.services.access_control import require_capability, require_finance_admin
+from app.services.platform_auth import require_platform_token
 
 # Objects, not names: several routers import these under a local alias (e.g.
 # admin.py does `from app.middleware.tenant import require_admin as
@@ -49,6 +50,7 @@ CANONICAL_AUTH_FUNCS = {
     get_portal_context,
     get_smb_agent,
     get_client_portal_context,
+    require_platform_token,
 }
 
 # Names matched literally because they can't be imported for identity
@@ -124,6 +126,36 @@ PUBLIC_ROUTES: dict[tuple[frozenset[str], str], str] = {
         frozenset({"POST"}),
         "/api/public/intake/{slug}/book",
     ): "public booking; published-slot, rate-limit, and idempotency checks enforced",
+    # Public operating-trust material intentionally exposes only versioned,
+    # public-safe claims and incident updates; it contains no tenant data.
+    (
+        frozenset({"GET"}),
+        "/api/public/operating-contract",
+    ): "public versioned operating contract; no tenant data",
+    (
+        frozenset({"GET"}),
+        "/api/public/support-policy",
+    ): "public support hours, severity, and escalation policy; no tenant data",
+    (
+        frozenset({"GET"}),
+        "/api/public/service-objectives",
+    ): "public non-SLA service objectives and exclusions; no tenant data",
+    (
+        frozenset({"GET"}),
+        "/api/public/subprocessors",
+    ): "public versioned subprocessor registry; no tenant data",
+    (
+        frozenset({"GET"}),
+        "/api/public/security-review-packet",
+    ): "public metadata-only security review packet; no tenant data or secrets",
+    (
+        frozenset({"GET"}),
+        "/api/public/assurance-roadmap",
+    ): "public penetration-test and certification evidence state; no tenant data",
+    (
+        frozenset({"GET"}),
+        "/api/public/status",
+    ): "public-safe incident lifecycle updates; no tenant data or internal detail",
     (frozenset({"GET"}), "/api/auth/google/login"): "redirects to Google; no app data",
     (
         frozenset({"GET"}),
