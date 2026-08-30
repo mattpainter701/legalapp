@@ -389,9 +389,9 @@ def ingest_document(conn: Any, document: dict[str, Any], fetched: FetchedDocumen
             """
             SELECT id, content_hash
             FROM legal_documents
-            WHERE source_key = %s AND external_id = %s
+            WHERE source_key = %s AND external_id = %s AND corpus_version = %s
             """,
-            [document["source_key"], document["external_id"]],
+            [document["source_key"], document["external_id"], corpus_version],
         )
         existing = cursor.fetchone()
         changed = existing is None or existing[1] != fetched.content_hash

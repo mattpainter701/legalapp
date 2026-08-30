@@ -286,7 +286,12 @@ def test_full_opinion_contract_requires_exactly_one_identifier():
 
 def test_repository_hybrid_search_uses_vector_and_fts_when_embedding_available():
     conn = RecordingConnection()
-    embedding = [0.001] * 1024
+    class CompatibleEmbedding(list):
+        model = "mixedbread-ai/mxbai-embed-large-v1"
+        version = "1"
+        dimension = 1024
+
+    embedding = CompatibleEmbedding([0.001] * 1024)
 
     CourtListenerRepository(conn).search_caselaw(
         query="constructive possession",

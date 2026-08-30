@@ -107,6 +107,8 @@ class CourtListenerRepository:
         date_to: str | None = None,
         query_embedding: list[float] | None = None,
     ) -> list[dict[str, Any]]:
+        if query_embedding is not None and not self._embedding_matches_promoted(query_embedding):
+            query_embedding = None
         if query_embedding:
             return self._search_hybrid(
                 query=query,

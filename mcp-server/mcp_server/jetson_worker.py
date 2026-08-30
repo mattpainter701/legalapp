@@ -107,12 +107,12 @@ def process_once(config: WorkerConfig, model) -> int:
             conn.commit()
             if not claim_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id)):
                 continue
-            heartbeat_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id))
+            heartbeat_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id), lease_seconds=900)
             started = time.monotonic()
             total = 0
             try:
                 while True:
-                    heartbeat_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id))
+                    heartbeat_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id), lease_seconds=900)
                     with conn.cursor() as cur:
                         cur.execute("BEGIN")
                         version_params = [version] if corpus == "opinion_chunks" else [version, version]

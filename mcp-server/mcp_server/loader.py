@@ -499,9 +499,9 @@ def _load_csv(
             ON CONFLICT (docket_id) DO NOTHING
         """,
         "opinion_clusters": """
-            INSERT INTO opinion_clusters (cluster_id, docket_id, case_name, date_filed, precedential_status, citations, metadata)
-            VALUES (%s, %s, %s, %s, %s, COALESCE(%s::jsonb, '[]'::jsonb), %s::jsonb)
-            ON CONFLICT (cluster_id) DO NOTHING
+            INSERT INTO opinion_clusters (cluster_id, docket_id, case_name, date_filed, precedential_status, citations, metadata, corpus_version)
+            VALUES (%s, %s, %s, %s, %s, COALESCE(%s::jsonb, '[]'::jsonb), %s::jsonb, %s)
+            ON CONFLICT (cluster_id) DO UPDATE SET corpus_version=EXCLUDED.corpus_version
         """,
         "opinions": """
             INSERT INTO opinions (opinion_id, cluster_id, type, author_id, html_with_citations, plain_text, sha1, source_url)
@@ -532,6 +532,14 @@ def _load_csv(
             )
         """,
     }
+    corpus_version = None
+    if table_name == "opinion_clusters":
+        with conn.cursor() as cur:
+            cur.execute("SELECT version FROM authority_corpus_versions WHERE status IN ('staged','canary') ORDER BY created_at DESC LIMIT 1")
+            version_row = cur.fetchone()
+        if not version_row:
+            raise PermissionError("caselaw loading requires a staged or canary corpus version")
+        corpus_version = version_row[0]
     if table_name not in statements:
         raise ValueError(f"Unsupported bulk table: {table_name}")
 
@@ -564,6 +572,7 @@ def _load_csv(
                 _value(row, "precedential_status"),
                 citations if citations else None,
                 json.dumps(row),
+                corpus_version,
             ]
         if table_name == "opinions":
             return [
@@ -796,13 +805,15 @@ def create_chunks(db_url: str | None = None, limit: int | None = None) -> int:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT o.opinion_id, o.cluster_id, d.court_id,
+                SELECT o.opinion_id, o.cluster_id, d.court_id, cl.corpus_version,
                        COALESCE(NULLIF(o.plain_text, ''), NULLIF(o.html_with_citations, '')) AS text
                 FROM opinions o
                 JOIN opinion_clusters cl ON cl.cluster_id = o.cluster_id
                 LEFT JOIN dockets d ON d.docket_id = cl.docket_id
-                WHERE NOT EXISTS (
+                WHERE cl.corpus_version IS NOT NULL
+                  AND NOT EXISTS (
                     SELECT 1 FROM opinion_chunks oc WHERE oc.opinion_id = o.opinion_id
+                      AND oc.corpus_version = cl.corpus_version
                 )
                 ORDER BY o.opinion_id
                 LIMIT %s
@@ -810,15 +821,15 @@ def create_chunks(db_url: str | None = None, limit: int | None = None) -> int:
                 [limit or 1000000],
             )
             rows = cur.fetchall()
-            for opinion_id, cluster_id, court_id, text in rows:
+            for opinion_id, cluster_id, court_id, corpus_version, text in rows:
                 for idx, content in enumerate(chunk_text(text or "")):
                     cur.execute(
                         """
-                        INSERT INTO opinion_chunks (opinion_id, cluster_id, court_id, chunk_index, content)
-                        VALUES (%s, %s, %s, %s, %s)
+                        INSERT INTO opinion_chunks (opinion_id, cluster_id, court_id, chunk_index, content, corpus_version)
+                        VALUES (%s, %s, %s, %s, %s, %s)
                         ON CONFLICT (opinion_id, chunk_index) DO NOTHING
                         """,
-                        [opinion_id, cluster_id, court_id, idx, content],
+                        [opinion_id, cluster_id, court_id, idx, content, corpus_version],
                     )
                     created += cur.rowcount
         conn.commit()

@@ -115,6 +115,10 @@ def promote_corpus_version(conn: Any, *, version: str, actor: str, reason: str) 
     actor, reason = _authorized(actor, reason)
     with conn.cursor() as cur:
         cur.execute("SELECT pg_advisory_xact_lock(hashtext('authority-corpus-release'))")
+        cur.execute("SELECT status FROM authority_corpus_versions WHERE version=%s", [version])
+        target = cur.fetchone()
+        if not target or target[0] not in {"staged", "canary"}:
+            raise ValueError("corpus version is missing or not staged/canary")
         cur.execute("""
             SELECT COUNT(DISTINCT audit_kind) FROM authority_audits
             WHERE corpus_version = %s
@@ -124,6 +128,7 @@ def promote_corpus_version(conn: Any, *, version: str, actor: str, reason: str) 
         audit_row = cur.fetchone()
         if not audit_row or audit_row[0] < 3:
             raise PermissionError("passing release, completeness, and freshness audits are required")
+        cur.execute("UPDATE authority_corpus_versions SET status='retired' WHERE status='promoted' AND version <> %s", [version])
         cur.execute("""
             UPDATE authority_corpus_versions
             SET status='promoted', promoted_at=now(), reason=%s,
@@ -131,8 +136,7 @@ def promote_corpus_version(conn: Any, *, version: str, actor: str, reason: str) 
             WHERE version=%s AND status IN ('staged','canary')
             """, [reason, json.dumps({"promoted_by": actor}), version])
         if cur.rowcount != 1:
-            raise ValueError("corpus version is missing or not staged/canary")
-        cur.execute("UPDATE authority_corpus_versions SET status='retired' WHERE status='promoted' AND version <> %s", [version])
+            raise RuntimeError("corpus promotion transition was not applied")
     conn.commit()
 
 
@@ -223,11 +227,13 @@ def claim_embedding_shard(conn: Any, *, shard_key: str, worker_id: str, lease_se
     return claimed
 
 
-def heartbeat_embedding_shard(conn: Any, *, shard_key: str, worker_id: str) -> bool:
+def heartbeat_embedding_shard(conn: Any, *, shard_key: str, worker_id: str,
+                              lease_seconds: int = 900) -> bool:
     with conn.cursor() as cur:
-        cur.execute("""UPDATE authority_embedding_shards SET heartbeat_at=now(), updated_at=now()
+        cur.execute("""UPDATE authority_embedding_shards SET heartbeat_at=now(),
+                       lease_expires_at=now() + (%s * interval '1 second'), updated_at=now()
                        WHERE shard_key=%s AND status='leased' AND lease_owner=%s
-                         AND lease_expires_at > now()""", [shard_key, worker_id])
+                         AND lease_expires_at > now()""", [lease_seconds, shard_key, worker_id])
         ok = cur.rowcount == 1
     conn.commit()
     return ok
