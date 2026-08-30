@@ -371,6 +371,8 @@ CREATE TABLE IF NOT EXISTS embedding_jobs (
 
 ALTER TABLE legal_documents ADD COLUMN IF NOT EXISTS corpus_version text REFERENCES authority_corpus_versions(version);
 ALTER TABLE legal_document_chunks ADD COLUMN IF NOT EXISTS corpus_version text REFERENCES authority_corpus_versions(version);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_legal_documents_version_id
+    ON legal_documents(corpus_version, id);
 ALTER TABLE opinion_clusters ADD COLUMN IF NOT EXISTS corpus_version text REFERENCES authority_corpus_versions(version);
 ALTER TABLE opinion_chunks ADD COLUMN IF NOT EXISTS corpus_version text REFERENCES authority_corpus_versions(version);
 -- Preserve the currently served corpus during upgrade; do not leave legacy
@@ -383,6 +385,16 @@ UPDATE legal_document_chunks c
 SET corpus_version = d.corpus_version
 FROM legal_documents d
 WHERE c.document_id = d.id AND c.corpus_version IS NULL;
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                   WHERE conname='fk_legal_document_chunks_same_version') THEN
+        ALTER TABLE legal_document_chunks
+          ADD CONSTRAINT fk_legal_document_chunks_same_version
+          FOREIGN KEY (corpus_version, document_id)
+          REFERENCES legal_documents(corpus_version, id) NOT VALID;
+    END IF;
+END $$;
+ALTER TABLE legal_document_chunks VALIDATE CONSTRAINT fk_legal_document_chunks_same_version;
 UPDATE opinion_clusters
 SET corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
 WHERE corpus_version IS NULL
@@ -473,6 +485,19 @@ FROM (
 WHERE ao.cluster_id IS NULL
   AND ao.corpus_version = chunks.corpus_version
   AND ao.opinion_id = chunks.opinion_id;
+-- Do not silently discard irreconcilable legacy rows while tightening the
+-- snapshot contract.  The operator receives an actionable count and can
+-- quarantine/fix the rows before retrying initialization.
+DO $$
+DECLARE unresolved bigint;
+BEGIN
+    SELECT count(*) INTO unresolved
+    FROM authority_case_opinions
+    WHERE cluster_id IS NULL;
+    IF unresolved > 0 THEN
+        RAISE EXCEPTION 'authority snapshot upgrade blocked: % opinion rows have no resolvable cluster_id; quarantine or repair before retrying', unresolved;
+    END IF;
+END $$;
 ALTER TABLE authority_case_opinions
     ALTER COLUMN cluster_id SET NOT NULL;
 CREATE TABLE IF NOT EXISTS authority_case_citations (
@@ -582,6 +607,13 @@ DO $$ BEGIN
           REFERENCES authority_case_opinions(corpus_version, opinion_id) NOT VALID;
     END IF;
 END $$;
+
+-- Existing installations must not retain NOT VALID integrity constraints.
+-- Validation is deliberately fail-closed after the preflight above.
+ALTER TABLE authority_case_opinions VALIDATE CONSTRAINT fk_authority_case_opinions_cluster;
+ALTER TABLE authority_case_chunks VALIDATE CONSTRAINT fk_authority_case_chunks_opinion;
+ALTER TABLE authority_case_chunks VALIDATE CONSTRAINT fk_authority_case_chunks_cluster;
+ALTER TABLE authority_case_citations VALIDATE CONSTRAINT fk_authority_case_citations_citing;
 
 CREATE INDEX IF NOT EXISTS ix_opinion_chunks_court ON opinion_chunks(court_id);
 CREATE INDEX IF NOT EXISTS ix_opinion_chunks_embedding_version ON opinion_chunks(embedding_version);
