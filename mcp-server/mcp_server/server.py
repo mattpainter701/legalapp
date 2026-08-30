@@ -241,7 +241,7 @@ def run_control_audit(
                 cur.execute(
                     """
                     SELECT e.source_key, e.partition_key,
-                           COALESCE(e.expected_item_count, 0),
+                           e.expected_item_count,
                            COALESCE(e.rows_loaded, 0), e.status
                     FROM (
                       SELECT cp.source_key, cp.partition_key,
@@ -275,13 +275,16 @@ def run_control_audit(
                         "observed": row[3]
                         if row[4] in {"complete", "active", "indexed"}
                         else 0,
+                        "declared": row[2] is not None and row[2] > 0,
                     }
                     for row in cur.fetchall()
                 ]
             elif body.audit_kind == "freshness":
                 cur.execute(
                     """
-                    SELECT COALESCE(cp.last_successful_harvest_at, l.last_checked_at),
+                    SELECT COALESCE(cp.last_successful_harvest_at,
+                           CASE WHEN l.acquisition_state IN ('complete', 'indexed')
+                                THEN l.last_checked_at ELSE NULL END),
                            s.expected_cadence, COALESCE(cp.status, l.acquisition_state)
                     FROM legal_sources s
                     LEFT JOIN authority_harvest_checkpoints cp

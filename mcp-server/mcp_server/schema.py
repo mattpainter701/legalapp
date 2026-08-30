@@ -496,10 +496,21 @@ UPDATE corpus_coverage_ledger SET source_release = 'legacy'
  WHERE source_release IS NULL;
 ALTER TABLE corpus_coverage_ledger ALTER COLUMN source_release SET DEFAULT 'legacy';
 ALTER TABLE corpus_coverage_ledger ALTER COLUMN source_release SET NOT NULL;
-ALTER TABLE corpus_coverage_ledger DROP CONSTRAINT IF EXISTS corpus_coverage_ledger_pkey;
-ALTER TABLE corpus_coverage_ledger
-    ADD CONSTRAINT corpus_coverage_ledger_pkey
-    PRIMARY KEY (source_key, partition_key, source_release);
+DO $$
+DECLARE current_primary_key text;
+BEGIN
+    SELECT pg_get_constraintdef(oid) INTO current_primary_key
+    FROM pg_constraint
+    WHERE conrelid = 'corpus_coverage_ledger'::regclass
+      AND contype = 'p';
+    IF current_primary_key IS DISTINCT FROM
+       'PRIMARY KEY (source_key, partition_key, source_release)' THEN
+        ALTER TABLE corpus_coverage_ledger DROP CONSTRAINT IF EXISTS corpus_coverage_ledger_pkey;
+        ALTER TABLE corpus_coverage_ledger
+            ADD CONSTRAINT corpus_coverage_ledger_pkey
+            PRIMARY KEY (source_key, partition_key, source_release);
+    END IF;
+END $$;
 ALTER TABLE authority_case_citations ADD COLUMN IF NOT EXISTS citation_id uuid DEFAULT gen_random_uuid();
 CREATE UNIQUE INDEX IF NOT EXISTS ux_authority_case_citation_identity
     ON authority_case_citations(

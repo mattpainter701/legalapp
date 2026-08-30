@@ -988,7 +988,9 @@ class CourtListenerRepository:
                 """
                 SELECT source_key, partition_key, source_release AS corpus_version,
                        NULL AS cursor_url, acquisition_state AS status, updated_at,
-                       last_checked_at AS last_successful_harvest_at, 0 AS retry_count,
+                       CASE WHEN acquisition_state IN ('complete', 'indexed')
+                            THEN last_checked_at ELSE NULL END
+                            AS last_successful_harvest_at, 0 AS retry_count,
                        NULL AS next_retry_at, NULL AS dead_letter_at
                 FROM corpus_coverage_ledger
                 WHERE source_release = %s
@@ -997,6 +999,13 @@ class CourtListenerRepository:
                 [version_key],
             )
             partitions.extend(dict_rows(cur))
+            partition_index = {}
+            for partition in partitions:
+                key = (partition["source_key"], partition["partition_key"])
+                existing = partition_index.get(key)
+                if existing is None or existing["corpus_version"] == version_key:
+                    partition_index[key] = partition
+            partitions = list(partition_index.values())
             cur.execute(
                 """
                 SELECT d.source_key, COUNT(DISTINCT d.id) AS item_count,

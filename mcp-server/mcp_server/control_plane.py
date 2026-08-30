@@ -259,7 +259,12 @@ def sampled_audit(records: list[dict[str, Any]], *, audit_kind: str,
         return {"audit_kind": audit_kind, "sample_size": total, "passed": passed,
                 "criteria": ["reviewed_sources", "no_failed_partitions", "manifest_bound_documents"]}
     if audit_kind == "completeness":
-        observed = sum(1 for row in records if float(row.get("observed", 0) or 0) >= float(row.get("expected", 0) or 0))
+        observed = sum(
+            1 for row in records
+            if row.get("declared", True)
+            and float(row.get("expected", 0) or 0) > 0
+            and float(row.get("observed", 0) or 0) >= float(row.get("expected", 0) or 0)
+        )
         ratio = observed / total
         passed = ratio >= minimum_completeness
         return {"audit_kind": audit_kind, "sample_size": total, "observed": observed,
