@@ -5,22 +5,47 @@ import base64
 import hashlib
 import hmac
 import time
+import json
 
 from mcp_server.server import require_internal_service_key
 from mcp_server import server
 
 
-def _request(path="/api/mcp/control/stage"):
-    return Request({"type": "http", "method": "POST", "path": path, "headers": []})
+def _request(path="/api/mcp/control/stage", body=b"{}"):
+    request = Request({"type": "http", "method": "POST", "path": path, "headers": []})
+    request._body = body
+    return request
 
 
-def _assertion(secret, *, expires=None, nonce="nonce-1", actor="operator"):
+def _assertion(secret, *, expires=None, nonce="nonce-1", actor="operator", body=b"{}"):
     now = int(time.time())
     expires = expires if expires is not None else now + 30
-    payload = "|".join((actor, "jti-1", "platform:write", "POST",
-                         "/api/mcp/control/stage", str(now), str(expires), nonce))
-    signature = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).digest()
-    return base64.urlsafe_b64encode(payload.encode() + b"|" + signature).decode().rstrip("=")
+    payload = json.dumps(
+        {
+            "actor": actor,
+            "credential": "jti-1",
+            "scope": "platform:write",
+            "method": "POST",
+            "path": "/api/mcp/control/stage",
+            "issued": now,
+            "expires": expires,
+            "nonce": nonce,
+            "body_sha256": hashlib.sha256(
+                json.dumps(
+                    json.loads(body.decode()), sort_keys=True, separators=(",", ":")
+                ).encode()
+            ).hexdigest(),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    signature = hmac.new(secret.encode(), payload, hashlib.sha256).digest()
+    return ".".join(
+        (
+            base64.urlsafe_b64encode(payload).decode().rstrip("="),
+            base64.urlsafe_b64encode(signature).decode().rstrip("="),
+        )
+    )
 
 
 def test_private_service_rejects_missing_configuration(monkeypatch):
@@ -43,15 +68,26 @@ def test_private_service_accepts_exact_key(monkeypatch):
     assert require_internal_service_key(secret) is None
 
 
-def test_signed_operator_context_rejects_replay_expiry_and_tamper(monkeypatch):
+@pytest.mark.asyncio
+async def test_signed_operator_context_rejects_replay_expiry_and_tamper(monkeypatch):
     secret = "service-secret-xxxxxxxxxxxxxxxxxx"
     monkeypatch.setenv("MCP_UPSTREAM_API_KEY", secret)
     request = _request()
     assertion = _assertion(secret)
-    assert server.operator_identity(request, "operator", assertion) == "operator"
+    assert await server.operator_identity(request, "operator", assertion) == "operator"
     with pytest.raises(HTTPException, match="replayed"):
-        server.operator_identity(request, "operator", assertion)
+        await server.operator_identity(request, "operator", assertion)
     with pytest.raises(HTTPException, match="expired"):
-        server.operator_identity(request, "operator", _assertion(secret, expires=int(time.time()) - 1, nonce="nonce-2"))
+        await server.operator_identity(
+            request,
+            "operator",
+            _assertion(secret, expires=int(time.time()) - 1, nonce="nonce-2"),
+        )
     with pytest.raises(HTTPException, match="invalid"):
-        server.operator_identity(request, "operator", assertion[:-2] + "xx")
+        await server.operator_identity(
+            _request(body=b'{"different":true}'),
+            "operator",
+            _assertion(secret, nonce="nonce-3"),
+        )
+    with pytest.raises(HTTPException, match="invalid"):
+        await server.operator_identity(request, "operator", assertion[:-2] + "xx")

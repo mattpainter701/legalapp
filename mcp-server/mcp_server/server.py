@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import os
 import time
+import json
 from fastapi import Request
 from datetime import datetime, timezone
 
@@ -15,9 +16,15 @@ from pydantic import BaseModel, Field
 from .database import connect
 from .loader import init_schema
 from .query_embeddings import QueryEmbeddingClient
-from .control_plane import (cadence_seconds, promote_corpus_version, rollback_corpus_version,
-                             lag_seconds, record_audit, sampled_audit,
-                             stage_corpus_version)
+from .control_plane import (
+    cadence_seconds,
+    promote_corpus_version,
+    rollback_corpus_version,
+    lag_seconds,
+    record_audit,
+    sampled_audit,
+    stage_corpus_version,
+)
 from .repository import CourtListenerRepository
 from .tools import build_tool_manifest
 
@@ -48,28 +55,59 @@ class ControlPlaneRequest(BaseModel):
     embedding_dimension: int = 1024
 
 
-def operator_identity(
+async def operator_identity(
     request: Request,
     value: str = Header(default="", alias="X-Operator-Identity"),
     assertion: str = Header(default="", alias="X-Operator-Assertion"),
 ) -> str:
     if not value.strip() or not assertion.strip():
-        raise HTTPException(status_code=403, detail="signed operator context is required")
+        raise HTTPException(
+            status_code=403, detail="signed operator context is required"
+        )
     try:
-        padded = assertion + "=" * (-len(assertion) % 4)
-        decoded = base64.urlsafe_b64decode(padded.encode())
-        payload, signature = decoded.rsplit(b"|", 1)
-        actor, credential, scope, method, route, issued, expires, nonce = payload.decode().split("|")
-        issued_i, expires_i = int(issued), int(expires)
+        encoded_payload, encoded_signature = assertion.split(".", 1)
+        payload = base64.urlsafe_b64decode(
+            encoded_payload + "=" * (-len(encoded_payload) % 4)
+        )
+        signature = base64.urlsafe_b64decode(
+            encoded_signature + "=" * (-len(encoded_signature) % 4)
+        )
+        claims = json.loads(payload.decode())
+        actor = str(claims["actor"])
+        credential = str(claims["credential"])
+        scope = str(claims["scope"])
+        method = str(claims["method"])
+        route = str(claims["path"])
+        issued_i, expires_i = int(claims["issued"]), int(claims["expires"])
+        nonce = str(claims["nonce"])
+        body_hash = str(claims["body_sha256"])
+        request_body = json.loads((await request.body()).decode())
+        actual_body_hash = hashlib.sha256(
+            json.dumps(request_body, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
     except (ValueError, UnicodeError, TypeError, binascii.Error) as exc:
-        raise HTTPException(status_code=403, detail="invalid signed operator context") from exc
-    expected = hmac.new(os.getenv("MCP_UPSTREAM_API_KEY", "").encode(), payload, hashlib.sha256).digest()
+        raise HTTPException(
+            status_code=403, detail="invalid signed operator context"
+        ) from exc
+    expected = hmac.new(
+        os.getenv("MCP_UPSTREAM_API_KEY", "").encode(), payload, hashlib.sha256
+    ).digest()
     now = int(time.time())
-    if (not hmac.compare_digest(signature, expected) or actor != value.strip()
-            or scope != "platform:write" or method != request.method
-            or route != request.url.path or issued_i > now + 5
-            or expires_i < now or expires_i - issued_i > 60):
-        raise HTTPException(status_code=403, detail="invalid or expired signed operator context")
+    if (
+        not hmac.compare_digest(signature, expected)
+        or actor != value.strip()
+        or not credential
+        or scope != "platform:write"
+        or method != request.method
+        or route != request.url.path
+        or issued_i > now + 5
+        or expires_i < now
+        or expires_i - issued_i > 60
+        or body_hash != actual_body_hash
+    ):
+        raise HTTPException(
+            status_code=403, detail="invalid or expired signed operator context"
+        )
     if nonce in _USED_OPERATOR_NONCES:
         raise HTTPException(status_code=403, detail="replayed signed operator context")
     _USED_OPERATOR_NONCES.add(nonce)
@@ -88,7 +126,9 @@ def require_internal_service_key(
             detail="Private service authentication is not configured",
         )
     if not supplied or not hmac.compare_digest(supplied, expected):
-        raise HTTPException(status_code=401, detail="Invalid internal service credential")
+        raise HTTPException(
+            status_code=401, detail="Invalid internal service credential"
+        )
 
 
 @app.get("/health")
@@ -107,14 +147,22 @@ def manifest():
     return build_tool_manifest()
 
 
-@app.post("/api/mcp/control/audit", dependencies=[Depends(require_internal_service_key)])
-def run_control_audit(body: ControlPlaneRequest, actor: str = Depends(operator_identity)):
+@app.post(
+    "/api/mcp/control/audit", dependencies=[Depends(require_internal_service_key)]
+)
+def run_control_audit(
+    body: ControlPlaneRequest, actor: str = Depends(operator_identity)
+):
     if body.audit_kind not in {"release", "completeness", "freshness", "isolation"}:
-        raise HTTPException(status_code=400, detail="audit_kind must be completeness, freshness, or isolation")
+        raise HTTPException(
+            status_code=400,
+            detail="audit_kind must be completeness, freshness, or isolation",
+        )
     with connect() as conn:
         with conn.cursor() as cur:
             if body.audit_kind == "release":
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT s.rights_decision, s.reviewed_at,
                            COALESCE(cp.status, 'missing'), COUNT(d.id)
                     FROM legal_sources s
@@ -123,14 +171,39 @@ def run_control_audit(body: ControlPlaneRequest, actor: str = Depends(operator_i
                     LEFT JOIN legal_documents d
                       ON d.source_key=s.source_key AND d.corpus_version=%s
                     WHERE s.enabled IS TRUE
+                      AND s.storage_policy <> 'prohibited'
+                      AND s.rights_decision IN ('official','open','licensed')
+                      AND s.reviewed_by IS NOT NULL
+                      AND s.claim_safe_wording IS NOT NULL
+                      AND s.metadata->>'catalog_schema_version' IS NOT NULL
+                      AND s.metadata->>'implementation_status' IS NOT NULL
+                      AND s.source_key NOT LIKE 'tenant:%'
+                      AND s.source_key NOT LIKE 'firm:%'
+                      AND s.source_key NOT LIKE 'private:%'
                     GROUP BY s.source_key, s.rights_decision, s.reviewed_at, cp.status
-                """, [body.version, body.version])
-                records = [{"ready": row[0] in {"official", "open", "licensed"}
-                            and row[1] is not None
-                            and row[2] not in {"failed", "retryable", "retryable_failure", "quarantined", "dead_letter", "missing"}
-                            and row[3] > 0} for row in cur.fetchall()]
+                """,
+                    [body.version, body.version],
+                )
+                records = [
+                    {
+                        "ready": row[0] in {"official", "open", "licensed"}
+                        and row[1] is not None
+                        and row[2]
+                        not in {
+                            "failed",
+                            "retryable",
+                            "retryable_failure",
+                            "quarantined",
+                            "dead_letter",
+                            "missing",
+                        }
+                        and row[3] > 0
+                    }
+                    for row in cur.fetchall()
+                ]
             elif body.audit_kind == "completeness":
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT cp.source_key, cp.partition_key,
                            COALESCE(l.expected_item_count, 0),
                            COALESCE(l.rows_loaded, 0), cp.status
@@ -143,26 +216,53 @@ def run_control_audit(body: ControlPlaneRequest, actor: str = Depends(operator_i
                     WHERE cp.corpus_version=%s AND s.enabled IS TRUE
                       AND s.rights_decision IN ('official','open','licensed')
                       AND s.reviewed_at IS NOT NULL AND s.reviewed_by IS NOT NULL
-                """, [body.version, body.version])
-                records = [{"expected": max(row[2], 1),
-                            "observed": row[3] if row[4] in {"complete", "active"} else 0}
-                           for row in cur.fetchall()]
+                """,
+                    [body.version, body.version],
+                )
+                records = [
+                    {
+                        "expected": max(row[2], 1),
+                        "observed": row[3] if row[4] in {"complete", "active"} else 0,
+                    }
+                    for row in cur.fetchall()
+                ]
             elif body.audit_kind == "freshness":
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT cp.last_successful_harvest_at, s.expected_cadence, cp.status
                     FROM authority_harvest_checkpoints cp
                     JOIN legal_sources s ON s.source_key=cp.source_key
                     WHERE cp.corpus_version=%s AND s.enabled IS TRUE
                       AND s.rights_decision IN ('official','open','licensed')
                       AND s.reviewed_at IS NOT NULL AND s.reviewed_by IS NOT NULL
-                """, [body.version])
+                """,
+                    [body.version],
+                )
                 now = datetime.now(timezone.utc)
-                records = [{"lag_seconds": (lag_seconds(
-                    row[0], cadence_seconds(row[1]),
-                    now) if row[0] and row[2] not in {"failed", "retryable", "retryable_failure", "quarantined", "dead_letter"}
-                    else None), "cadence": row[1]} for row in cur.fetchall()]
+                records = [
+                    {
+                        "lag_seconds": (
+                            lag_seconds(row[0], cadence, now)
+                            if row[0]
+                            and cadence is not None
+                            and row[2]
+                            not in {
+                                "failed",
+                                "retryable",
+                                "retryable_failure",
+                                "quarantined",
+                                "dead_letter",
+                            }
+                            else None
+                        ),
+                        "cadence": row[1],
+                    }
+                    for row in cur.fetchall()
+                    for cadence in [cadence_seconds(row[1])]
+                ]
             else:
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT d.source_key, d.metadata->>'namespace',
                            (d.metadata->>'namespace' IS DISTINCT FROM 'public-authority'
                             OR d.source_key LIKE 'tenant:%' OR d.source_key LIKE 'firm:%'
@@ -171,27 +271,46 @@ def run_control_audit(body: ControlPlaneRequest, actor: str = Depends(operator_i
                     FROM legal_documents d
                     LEFT JOIN legal_sources s ON s.source_key=d.source_key
                     WHERE d.corpus_version=%s
-                """, [body.version])
-                records = [{"namespace": row[1], "private": bool(row[2])} for row in cur.fetchall()]
+                """,
+                    [body.version],
+                )
+                records = [
+                    {"namespace": row[1], "private": bool(row[2])}
+                    for row in cur.fetchall()
+                ]
         result = sampled_audit(records, audit_kind=body.audit_kind)
         immutable_hash = record_audit(
-            conn, corpus_version=body.version, audit_kind=body.audit_kind,
+            conn,
+            corpus_version=body.version,
+            audit_kind=body.audit_kind,
             methodology=f"bounded database sample for {body.audit_kind}",
             thresholds={"minimum_completeness": 0.95, "maximum_lag_seconds": 172800},
-            result=result, passed=bool(result["passed"]), auditor=actor,
+            result=result,
+            passed=bool(result["passed"]),
+            auditor=actor,
         )
     return {"version": body.version, "audit": result, "immutable_hash": immutable_hash}
 
 
-@app.post("/api/mcp/control/stage", dependencies=[Depends(require_internal_service_key)])
-def stage_control_version(body: ControlPlaneRequest, actor: str = Depends(operator_identity)):
+@app.post(
+    "/api/mcp/control/stage", dependencies=[Depends(require_internal_service_key)]
+)
+def stage_control_version(
+    body: ControlPlaneRequest, actor: str = Depends(operator_identity)
+):
     if not all((body.manifest_hash, body.as_of)):
-        raise HTTPException(status_code=400, detail="manifest_hash and as_of are required")
+        raise HTTPException(
+            status_code=400, detail="manifest_hash and as_of are required"
+        )
     with connect() as conn:
         try:
             stage_corpus_version(
-                conn, version=body.version, manifest_hash=body.manifest_hash,
-                as_of=body.as_of, actor=actor, reason=body.reason,
+                conn,
+                version=body.version,
+                manifest_hash=body.manifest_hash,
+                as_of=body.as_of,
+                actor=actor,
+                reason=body.reason,
                 embedding_model=body.embedding_model,
                 embedding_version=body.embedding_version,
                 embedding_dimension=body.embedding_dimension,
@@ -201,29 +320,39 @@ def stage_control_version(body: ControlPlaneRequest, actor: str = Depends(operat
     return {"version": body.version, "status": "staged", "actor": actor}
 
 
-@app.post("/api/mcp/control/promote", dependencies=[Depends(require_internal_service_key)])
-def promote_control_version(body: ControlPlaneRequest, actor: str = Depends(operator_identity)):
+@app.post(
+    "/api/mcp/control/promote", dependencies=[Depends(require_internal_service_key)]
+)
+def promote_control_version(
+    body: ControlPlaneRequest, actor: str = Depends(operator_identity)
+):
     with connect() as conn:
         try:
-            promote_corpus_version(conn, version=body.version, actor=actor, reason=body.reason)
+            promote_corpus_version(
+                conn, version=body.version, actor=actor, reason=body.reason
+            )
         except (PermissionError, ValueError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"version": body.version, "status": "promoted", "actor": actor}
 
 
-@app.post("/api/mcp/control/rollback", dependencies=[Depends(require_internal_service_key)])
-def rollback_control_version(body: ControlPlaneRequest, actor: str = Depends(operator_identity)):
+@app.post(
+    "/api/mcp/control/rollback", dependencies=[Depends(require_internal_service_key)]
+)
+def rollback_control_version(
+    body: ControlPlaneRequest, actor: str = Depends(operator_identity)
+):
     with connect() as conn:
         try:
-            rollback_corpus_version(conn, version=body.version, actor=actor, reason=body.reason)
+            rollback_corpus_version(
+                conn, version=body.version, actor=actor, reason=body.reason
+            )
         except (PermissionError, ValueError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"version": body.version, "status": "rolled_back", "actor": actor}
 
 
-@app.post(
-    "/api/mcp/tools/call", dependencies=[Depends(require_internal_service_key)]
-)
+@app.post("/api/mcp/tools/call", dependencies=[Depends(require_internal_service_key)])
 def call_tool(body: ToolCallRequest):
     try:
         with connect() as conn:
@@ -252,7 +381,9 @@ def call_tool(body: ToolCallRequest):
                     query_embedding=query_embedder.embed_query(query),
                 )
             elif body.name == "get_case_details":
-                result = repo.case_details(args.get("opinion_id"), args.get("cluster_id"))
+                result = repo.case_details(
+                    args.get("opinion_id"), args.get("cluster_id")
+                )
             elif body.name == "get_full_opinion":
                 result = repo.get_full_opinion(
                     opinion_id=args.get("opinion_id"),
@@ -268,7 +399,9 @@ def call_tool(body: ToolCallRequest):
                     chunk_id=args.get("chunk_id"),
                     top_k=int(args.get("top_k", 8)),
                     jurisdiction=args.get("jurisdiction"),
-                    query_embedding=query_embedder.embed_query(query) if query else None,
+                    query_embedding=query_embedder.embed_query(query)
+                    if query
+                    else None,
                 )
             elif body.name == "search_by_citation":
                 result = repo.search_by_citation(args.get("citation", ""))
@@ -319,7 +452,9 @@ def call_tool(body: ToolCallRequest):
                     opinion_ids=args.get("opinion_ids") or [],
                     cluster_ids=args.get("cluster_ids") or [],
                     top_k=int(args.get("top_k", 5)),
-                    query_embedding=query_embedder.embed_query(query) if query else None,
+                    query_embedding=query_embedder.embed_query(query)
+                    if query
+                    else None,
                 )
             elif body.name == "sync_status":
                 result = repo.sync_status()
@@ -328,7 +463,9 @@ def call_tool(body: ToolCallRequest):
             elif body.name == "authority_coverage":
                 result = repo.authority_coverage()
             else:
-                raise HTTPException(status_code=404, detail=f"Unknown tool: {body.name}")
+                raise HTTPException(
+                    status_code=404, detail=f"Unknown tool: {body.name}"
+                )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"content": [{"type": "json", "json": result}], "isError": False}

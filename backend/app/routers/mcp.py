@@ -10,6 +10,7 @@ issued.
 import base64
 import hashlib
 import hmac
+import json
 import logging
 import secrets
 import time
@@ -374,11 +375,33 @@ async def _authority_control(
     expires = issued + 60
     actor = str(principal.actor_id)
     credential = str(principal.credential_id or "session")
-    payload = "|".join((actor, credential, "platform:write", request.method,
-                         route, str(issued), str(expires), secrets.token_urlsafe(18)))
-    signature = hmac.new(str(settings.MCP_UPSTREAM_API_KEY or "").encode(),
-                         payload.encode(), hashlib.sha256).digest()
-    assertion = base64.urlsafe_b64encode(payload.encode() + b"|" + signature).decode().rstrip("=")
+    body_hash = hashlib.sha256(
+        json.dumps(body.model_dump(), sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    payload = json.dumps(
+        {
+            "actor": actor,
+            "credential": credential,
+            "scope": "platform:write",
+            "method": request.method,
+            "path": route,
+            "issued": issued,
+            "expires": expires,
+            "nonce": secrets.token_urlsafe(18),
+            "body_sha256": body_hash,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    signature = hmac.new(
+        str(settings.MCP_UPSTREAM_API_KEY or "").encode(), payload, hashlib.sha256
+    ).digest()
+    assertion = ".".join(
+        (
+            base64.urlsafe_b64encode(payload).decode().rstrip("="),
+            base64.urlsafe_b64encode(signature).decode().rstrip("="),
+        )
+    )
     return await _proxy_post(
         route,
         request,

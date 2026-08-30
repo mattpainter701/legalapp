@@ -8,7 +8,9 @@ from app.middleware.platform_request_paths import is_platform_protected_path
 
 
 def _request(headers=None):
-    return SimpleNamespace(headers=headers or {}, state=SimpleNamespace())
+    return SimpleNamespace(
+        headers=headers or {}, state=SimpleNamespace(), method="POST"
+    )
 
 
 def test_authority_platform_paths_use_segment_boundaries():
