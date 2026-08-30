@@ -176,7 +176,7 @@ async def test_native_mediation_overlay_matches_party_contact_then_email_fallbac
 ):
     fixture = native_mediation_portal
     fixture["party"].contact_id = fixture["contact"].id
-    fixture["case"].client_contact_id = uuid.uuid4()
+    fixture["case"].client_contact_id = None
     await db_session.commit()
     direct = await client.get(f"{PORTAL}/mediation", headers=fixture["headers"])
     assert direct.status_code == 200, direct.text
@@ -236,7 +236,7 @@ async def test_native_mediation_overlay_fails_closed_for_contact_and_case_ambigu
     client, db_session, native_mediation_portal
 ):
     fixture = native_mediation_portal
-    fixture["case"].client_contact_id = uuid.uuid4()
+    fixture["case"].client_contact_id = None
     await db_session.commit()
     assert (
         await client.get(f"{PORTAL}/mediation", headers=fixture["headers"])
