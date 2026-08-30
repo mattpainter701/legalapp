@@ -387,7 +387,8 @@ FROM legal_documents d
 WHERE c.document_id = d.id AND c.corpus_version IS NULL;
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                   WHERE conname='fk_legal_document_chunks_same_version') THEN
+                   WHERE conrelid='legal_document_chunks'::regclass
+                     AND conname='fk_legal_document_chunks_same_version') THEN
         ALTER TABLE legal_document_chunks
           ADD CONSTRAINT fk_legal_document_chunks_same_version
           FOREIGN KEY (corpus_version, document_id)
@@ -586,22 +587,30 @@ SELECT install_authority_snapshot_guard('authority_case_citations');
 DROP FUNCTION install_authority_snapshot_guard(text);
 
 DO $$ BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_authority_case_opinions_cluster') THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                   WHERE conrelid='authority_case_opinions'::regclass
+                     AND conname='fk_authority_case_opinions_cluster') THEN
         ALTER TABLE authority_case_opinions ADD CONSTRAINT fk_authority_case_opinions_cluster
           FOREIGN KEY (corpus_version, cluster_id)
           REFERENCES authority_case_clusters(corpus_version, cluster_id) NOT VALID;
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_authority_case_chunks_opinion') THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                   WHERE conrelid='authority_case_chunks'::regclass
+                     AND conname='fk_authority_case_chunks_opinion') THEN
         ALTER TABLE authority_case_chunks ADD CONSTRAINT fk_authority_case_chunks_opinion
           FOREIGN KEY (corpus_version, opinion_id)
           REFERENCES authority_case_opinions(corpus_version, opinion_id) NOT VALID;
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_authority_case_chunks_cluster') THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                   WHERE conrelid='authority_case_chunks'::regclass
+                     AND conname='fk_authority_case_chunks_cluster') THEN
         ALTER TABLE authority_case_chunks ADD CONSTRAINT fk_authority_case_chunks_cluster
           FOREIGN KEY (corpus_version, cluster_id)
           REFERENCES authority_case_clusters(corpus_version, cluster_id) NOT VALID;
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_authority_case_citations_citing') THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                   WHERE conrelid='authority_case_citations'::regclass
+                     AND conname='fk_authority_case_citations_citing') THEN
         ALTER TABLE authority_case_citations ADD CONSTRAINT fk_authority_case_citations_citing
           FOREIGN KEY (corpus_version, citing_opinion_id)
           REFERENCES authority_case_opinions(corpus_version, opinion_id) NOT VALID;
