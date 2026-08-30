@@ -876,7 +876,7 @@ async def portal_matter(
 async def _native_mediation_case(
     db: AsyncSession,
     ctx: ClientPortalContext,
-) -> tuple[MediationCase, MediationParty]:
+) -> tuple[MediationCase, MediationParty, list[MediationParty]]:
     """Resolve one licensed mediation and bind it to the portal contact."""
     tenant_id = uuid.UUID(str(ctx.tenant_id))
     matter_id = uuid.UUID(str(ctx.matter_id))
@@ -900,12 +900,7 @@ async def _native_mediation_case(
         raise HTTPException(status_code=404, detail="Mediation workspace not found")
 
     result = await db.execute(
-        select(MediationCase)
-        .options(
-            selectinload(MediationCase.case_parties),
-            selectinload(MediationCase.assets),
-        )
-        .where(
+        select(MediationCase).where(
             MediationCase.tenant_id == tenant_id,
             MediationCase.matter_id == matter_id,
         )
@@ -917,11 +912,18 @@ async def _native_mediation_case(
         raise HTTPException(status_code=409, detail="Mediation workspace is ambiguous")
 
     case = cases[0]
+    party_result = await db.execute(
+        select(MediationParty).where(
+            MediationParty.tenant_id == tenant_id,
+            MediationParty.case_id == case.id,
+        )
+    )
+    case_parties = list(party_result.scalars().all())
     matches: list[MediationParty] = []
     if ctx.contact_id:
         matches = [
             party
-            for party in case.case_parties
+            for party in case_parties
             if party.role == "our_client"
             and party.contact_id
             and str(party.contact_id) == str(ctx.contact_id)
@@ -933,14 +935,14 @@ async def _native_mediation_case(
         ):
             matches = [
                 party
-                for party in case.case_parties
+                for party in case_parties
                 if party.role == "our_client" and party.contact_id is None
             ]
     elif case.client_contact_id is None and ctx.email:
         email = ctx.email.strip().casefold()
         matches = [
             party
-            for party in case.case_parties
+            for party in case_parties
             if party.role == "our_client"
             and party.contact_id is None
             and party.email
@@ -948,7 +950,7 @@ async def _native_mediation_case(
         ]
     if len(matches) != 1:
         raise HTTPException(status_code=404, detail="Mediation workspace not found")
-    return case, matches[0]
+    return case, matches[0], case_parties
 
 
 def _portal_mediation_asset(asset: MediationAsset) -> PortalMediationAsset:
@@ -974,7 +976,7 @@ async def portal_mediation(
     db: AsyncSession = Depends(get_db),
 ):
     ctx, _matter = resolved
-    case, party = await _native_mediation_case(db, ctx)
+    case, party, case_parties = await _native_mediation_case(db, ctx)
     party_id = party.id
     tenant_id = uuid.UUID(str(ctx.tenant_id))
     assets = (
@@ -1031,7 +1033,7 @@ async def portal_mediation(
         .scalars()
         .all()
     )
-    names = {str(case_party.id): case_party.name for case_party in case.case_parties}
+    names = {str(case_party.id): case_party.name for case_party in case_parties}
 
     document_responses = []
     for document in documents:
@@ -1146,7 +1148,7 @@ async def portal_download_mediation_document(
     db: AsyncSession = Depends(get_db),
 ):
     ctx, _matter = resolved
-    case, party = await _native_mediation_case(db, ctx)
+    case, party, _case_parties = await _native_mediation_case(db, ctx)
     result = await db.execute(
         select(MediationDocument)
         .options(selectinload(MediationDocument.recipients))
