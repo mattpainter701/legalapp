@@ -215,12 +215,6 @@ def test_authority_release_rehearsal(monkeypatch):
                 [source_key, version],
             )
             cur.execute(
-                """UPDATE corpus_coverage_ledger
-                   SET expected_item_count=2
-                 WHERE source_key='courtlistener:ohio-caselaw' AND source_release=%s""",
-                [version],
-            )
-            cur.execute(
                 "SELECT COUNT(DISTINCT cluster_id) FROM authority_case_chunks WHERE corpus_version=%s",
                 [version],
             )
@@ -234,6 +228,23 @@ def test_authority_release_rehearsal(monkeypatch):
         import mcp_server.server as control_server
 
         monkeypatch.setattr(control_server, "connect", lambda _db=None: connect(db_url))
+        unknown_audit = run_control_audit(
+            ControlPlaneRequest(
+                version=version,
+                reason="production-path unknown expectation negative",
+                audit_kind="completeness",
+            ),
+            actor="rehearsal-admin",
+        )
+        assert unknown_audit["audit"]["passed"] is False
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE corpus_coverage_ledger
+                   SET expected_item_count=2
+                 WHERE source_key='courtlistener:ohio-caselaw' AND source_release=%s""",
+                [version],
+            )
+        conn.commit()
         for kind in ("release", "completeness", "freshness", "isolation"):
             audit_response = run_control_audit(
                 ControlPlaneRequest(
@@ -244,27 +255,6 @@ def test_authority_release_rehearsal(monkeypatch):
                 actor="rehearsal-admin",
             )
             assert audit_response["audit"]["passed"] is True
-        for kind, records in (
-            ("release", [{"ready": True}]),
-            ("completeness", [{"expected": True, "observed": True}]),
-            ("freshness", [{"lag_seconds": 1}]),
-            ("isolation", [{"namespace": "public-authority", "private": False}]),
-        ):
-            result = sampled_audit(records, audit_kind=kind)
-            assert result["passed"]
-            record_audit(
-                conn,
-                corpus_version=version,
-                audit_kind=kind,
-                methodology="fixture sample with computed threshold result",
-                thresholds={
-                    "minimum_completeness": 0.95,
-                    "maximum_lag_seconds": 172800,
-                },
-                result=result,
-                passed=True,
-                auditor="rehearsal-admin",
-            )
         with pytest.raises(ValueError):
             record_audit(
                 conn,
