@@ -77,7 +77,7 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |pypi|tomli|>=2.0;python_version<'3.11'|runtime|agent/pyproject.toml|
 |pypi|tomli_w|>=1.0|runtime|agent/pyproject.toml|
 |pypi|aiofiles|==24.1.0|runtime/dev|backend/requirements.txt|
-|pypi|aiosmtplib|==5.1.1|runtime/dev|backend/requirements.txt|
+|pypi|aiosmtplib|==5.1.2|runtime/dev|backend/requirements.txt|
 |pypi|alembic|==1.14.0|runtime/dev|backend/requirements.txt|
 |pypi|apscheduler|==3.10.4|runtime/dev|backend/requirements.txt|
 |pypi|asyncpg|==0.30.0|runtime/dev|backend/requirements.txt|
