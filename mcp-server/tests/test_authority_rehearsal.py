@@ -1143,6 +1143,20 @@ def test_legal_only_upgrade_bootstrap_rehearsal():
                     VALUES (%s, 0, 'Legacy statute text', 'legacy-chunk-hash')""",
                 [document_id],
             )
+            cur.execute(
+                """SELECT count(*) FROM information_schema.columns
+                    WHERE table_schema=current_schema()
+                      AND table_name IN ('legal_documents', 'legal_document_chunks')
+                      AND column_name='corpus_version'"""
+            )
+            assert cur.fetchone()[0] == 0
+            cur.execute(
+                """SELECT count(*) FROM pg_constraint
+                    WHERE conrelid='legal_document_chunks'::regclass
+                      AND conname IN ('legal_document_chunks_document_id_fkey',
+                                      'legal_document_chunks_document_id_chunk_index_key')"""
+            )
+            assert cur.fetchone()[0] == 2
         conn.commit()
     init_schema(scoped_url)
     with connect(scoped_url) as conn:
@@ -1157,7 +1171,8 @@ def test_legal_only_upgrade_bootstrap_rehearsal():
             assert result and result[0]["title"] == "Legacy statute"
             cur.execute(
                 """SELECT convalidated FROM pg_constraint
-                    WHERE conname='fk_legal_document_chunks_same_version'"""
+                    WHERE conrelid='legal_document_chunks'::regclass
+                      AND conname='fk_legal_document_chunks_same_version'"""
             )
             assert cur.fetchone() == (True,)
         conn.commit()
@@ -1303,10 +1318,10 @@ def test_legacy_upgrade_bootstrap_rehearsal():
             assert cur.fetchone()[0] == 0
             cur.execute(
                 """SELECT count(*) FROM pg_constraint
-                    WHERE conname IN ('opinion_chunks_opinion_id_chunk_index_key',
-                                      'legal_document_chunks_document_id_chunk_index_key')"""
+                    WHERE conrelid='opinion_chunks'::regclass
+                      AND conname='opinion_chunks_opinion_id_chunk_index_key'"""
             )
-            assert cur.fetchone()[0] >= 1
+            assert cur.fetchone()[0] == 1
         conn.commit()
     init_schema(scoped_url)
     with connect(scoped_url) as conn:
