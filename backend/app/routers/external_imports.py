@@ -10,6 +10,7 @@ import base64
 import hashlib
 import io
 import json
+import re
 import uuid
 import zipfile
 from datetime import datetime, timedelta, timezone
@@ -19,7 +20,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, set_tenant_context
@@ -531,7 +532,11 @@ def _report_hash(run: ExternalImportRun) -> str:
     payload = _canonical_json(
         {
             "run_id": str(run.id),
-            "manifest": run.manifest or {},
+            "manifest": {
+                key: value
+                for key, value in (run.manifest or {}).items()
+                if key != "_approved_report_hash"
+            },
             "row_counts": run.row_counts or {},
             "checksums": run.checksum_summary or {},
         }
@@ -552,6 +557,16 @@ def _split_name(name: str | None) -> tuple[str | None, str | None]:
     if not parts:
         return None, None
     return parts[0], " ".join(parts[1:]) or None
+
+
+def _import_matter_slug(name: str, tenant_id: uuid.UUID, source_row_key: str) -> str:
+    """Create the same URL-safe, deterministic shape used by matter routes."""
+    base = re.sub(r"[^a-z0-9\s-]", "", name.lower().strip())
+    base = re.sub(r"\s+", "-", base)[:100].strip("-") or "imported-matter"
+    suffix = hashlib.sha256(
+        f"{tenant_id}:{source_row_key}".encode("utf-8")
+    ).hexdigest()[:10]
+    return f"{base}-{suffix}"
 
 
 @router.post("/{run_id}/approve", response_model=ExternalImportRunResponse)
@@ -580,6 +595,7 @@ async def approve_import_run(
         )
     run.status = "approved"
     run.approved_at = datetime.now(timezone.utc)
+    run.manifest = {**(run.manifest or {}), "_approved_report_hash": expected}
     db.add(
         OperatorAuditLog(
             action="external_import_approved",
@@ -587,7 +603,11 @@ async def approve_import_run(
             actor_id=str(admin.id),
             resource_type="external_import_run",
             resource_id=str(run.id),
-            metadata_json={"report_hash": expected, "provider": run.provider},
+            metadata_json={
+                "tenant_id": str(admin.tenant_id),
+                "report_hash": expected,
+                "provider": run.provider,
+            },
         )
     )
     await db.commit()
@@ -608,7 +628,14 @@ async def promote_import_run(
     external link; failures are reported and never presented as success.
     """
     await set_tenant_context(db, str(admin.tenant_id))
-    run = await db.get(ExternalImportRun, run_id)
+    run = await db.scalar(
+        select(ExternalImportRun)
+        .where(
+            ExternalImportRun.id == run_id,
+            ExternalImportRun.tenant_id == admin.tenant_id,
+        )
+        .with_for_update()
+    )
     if not run or run.tenant_id != admin.tenant_id:
         raise HTTPException(status_code=404, detail="Import run not found")
     if run.status == "promoted":
@@ -636,6 +663,12 @@ async def promote_import_run(
             status_code=409,
             detail="Import must be approved against an unchanged reconciliation report",
         )
+    approved_hash = (run.manifest or {}).get("_approved_report_hash")
+    if not approved_hash or approved_hash != _report_hash(run):
+        raise HTTPException(
+            status_code=409,
+            detail="Import approval is stale; request a fresh reconciliation approval",
+        )
 
     rows = (
         await db.scalars(
@@ -644,12 +677,17 @@ async def promote_import_run(
             .order_by(ExternalRawRow.created_at, ExternalRawRow.id)
         )
     ).all()
+    source_tables = {raw.source_table for raw in rows}
+    source_keys = {raw.source_row_key for raw in rows}
     existing = {
         (link.source_table, link.source_row_key, link.target_table): link
         for link in (
             await db.scalars(
                 select(ExternalRecordLink).where(
-                    ExternalRecordLink.import_run_id == run.id
+                    ExternalRecordLink.tenant_id == admin.tenant_id,
+                    ExternalRecordLink.provider == run.provider,
+                    ExternalRecordLink.source_table.in_(source_tables),
+                    ExternalRecordLink.source_row_key.in_(source_keys),
                 )
             )
         ).all()
@@ -659,9 +697,25 @@ async def promote_import_run(
     skipped = 0
     errors: list[str] = []
     client_targets: dict[str, uuid.UUID] = {}
+    client_identifiers: dict[str, str] = {}
+    client_rows = [raw for raw in rows if raw.source_table == "CLIENT"]
+    matter_rows = [raw for raw in rows if raw.source_table in {"MATTER", "CASE"}]
+    duplicate_client_ids: set[str] = set()
+    for raw in client_rows:
+        identifier = _value(raw.row_data or {}, "CLIENT_ID", "Client_ID")
+        if identifier:
+            prior = client_identifiers.get(identifier)
+            if prior and prior != raw.source_row_key:
+                duplicate_client_ids.add(identifier)
+            client_identifiers[identifier] = raw.source_row_key
+    if duplicate_client_ids:
+        errors.extend(
+            f"CLIENT_ID={identifier}: duplicate client identifier requires review"
+            for identifier in sorted(duplicate_client_ids)
+        )
 
-    for raw in rows:
-        if raw.source_table not in {"CLIENT", "MATTER", "CASE"}:
+    for raw in [*client_rows, *matter_rows]:
+        if raw.source_table not in {"CLIENT", "MATTER", "CASE"} or errors:
             continue
         target_table = "contacts" if raw.source_table == "CLIENT" else "matters"
         key = (raw.source_table, raw.source_row_key, target_table)
@@ -680,11 +734,31 @@ async def promote_import_run(
                     identity_filters.append(Contact.client_number == client_number)
                 if email:
                     identity_filters.append(Contact.email == email)
-                client = await db.scalar(
-                    select(Contact).where(
-                        Contact.tenant_id == admin.tenant_id,
-                        or_(*identity_filters) if identity_filters else False,
+                matches_by_identifier = []
+                for identity_filter in identity_filters:
+                    matches_by_identifier.append(
+                        (
+                            await db.scalars(
+                                select(Contact).where(
+                                    Contact.tenant_id == admin.tenant_id,
+                                    identity_filter,
+                                )
+                            )
+                        ).all()
                     )
+                distinct_matches = {
+                    match.id for matches in matches_by_identifier for match in matches
+                }
+                if len(distinct_matches) > 1:
+                    raise ValueError(
+                        "client number and email resolve to different contacts; review required"
+                    )
+                client = (
+                    next(
+                        match for matches in matches_by_identifier for match in matches
+                    )
+                    if distinct_matches
+                    else None
                 )
                 if client is None:
                     client = Contact(
@@ -712,17 +786,12 @@ async def promote_import_run(
                     raise ValueError("matter row has no name")
                 client_key = _value(data, "CLIENT_ID", "Client_ID")
                 client_id = (
-                    next(
-                        (
-                            value
-                            for key2, value in client_targets.items()
-                            if key2.endswith(f"CLIENT_ID={client_key}")
-                        ),
-                        None,
-                    )
+                    client_targets.get(client_identifiers.get(client_key))
                     if client_key
                     else None
                 )
+                if client_key and client_id is None:
+                    raise ValueError("matter references a missing or ambiguous client")
                 source_ref = f"{run.provider}:{raw.source_row_key}"
                 matter = await db.scalar(
                     select(Matter).where(
@@ -733,7 +802,9 @@ async def promote_import_run(
                     matter = Matter(
                         tenant_id=admin.tenant_id,
                         user_id=admin.id,
-                        slug=f"import-{raw.source_row_key.lower().replace('|', '-').replace('#', '-')}",
+                        slug=_import_matter_slug(
+                            name, admin.tenant_id, raw.source_row_key
+                        ),
                         matter_name=name,
                         matter_type=_value(data, "MATTER_TYPE", "TYPE") or "general",
                         description=_value(data, "DESCRIPTION", "Description"),
@@ -768,6 +839,7 @@ async def promote_import_run(
         run.status = "promotion_failed"
         run.errors = errors
         await db.rollback()
+        await set_tenant_context(db, str(admin.tenant_id))
         failed_run = await db.get(ExternalImportRun, run_id)
         failed_run.status = "promotion_failed"
         failed_run.errors = errors
@@ -788,10 +860,29 @@ async def promote_import_run(
             actor_id=str(admin.id),
             resource_type="external_import_run",
             resource_id=str(run.id),
-            metadata_json={"created": created, "report_hash": _report_hash(run)},
+            metadata_json={
+                "tenant_id": str(admin.tenant_id),
+                "created": created,
+                "report_hash": _report_hash(run),
+            },
         )
     )
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        await set_tenant_context(db, str(admin.tenant_id))
+        failed_run = await db.get(ExternalImportRun, run_id)
+        failed_run.status = "promotion_failed"
+        failed_run.errors = [f"promotion commit failed: {str(exc)[:240]}"]
+        await db.commit()
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "Import promotion failed; no canonical records were committed",
+                "errors": failed_run.errors,
+            },
+        ) from exc
     return ExternalImportPromoteResponse(
         import_run_id=run.id,
         status=run.status,

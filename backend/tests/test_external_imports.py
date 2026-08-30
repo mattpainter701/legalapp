@@ -268,3 +268,109 @@ async def test_import_requires_report_bound_approval_and_promotes_idempotently(
     rolled_back = await client.post(f"/api/imports/{run_id}/rollback")
     assert rolled_back.status_code == 200, rolled_back.text
     assert rolled_back.json()["status"] == "rollback_pending"
+
+
+@pytest.mark.asyncio
+async def test_import_reuses_links_across_runs_and_maps_matter_before_client(
+    client, db_session
+):
+    bundle = _bundle(
+        {
+            "MATTER": [{"CLIENT_ID": "100.00", "MATTER_NAME": "Acme v. Beta"}],
+            "CLIENT": [{"CLIENT_ID": "100.00", "NAME": "Acme"}],
+        }
+    )
+
+    async def promote_once():
+        uploaded = await client.post(
+            "/api/imports/tabs3/upload",
+            files={"file": ("tabs3.zip", bundle, "application/zip")},
+        )
+        assert uploaded.status_code == 200, uploaded.text
+        run_id = uuid.UUID(uploaded.json()["id"])
+        run = await db_session.get(ExternalImportRun, run_id)
+        approved = await client.post(
+            f"/api/imports/{run_id}/approve",
+            json={
+                "confirmation": PROMOTION_CONFIRMATION,
+                "report_hash": _report_hash(run),
+            },
+        )
+        assert approved.status_code == 200, approved.text
+        promoted = await client.post(f"/api/imports/{run_id}/promote")
+        assert promoted.status_code == 200, promoted.text
+        return run_id, promoted.json()
+
+    first_run, first = await promote_once()
+    second_run, second = await promote_once()
+    assert first["created"] == {"contacts": 1, "matters": 1}
+    assert second["created"] == {"contacts": 0, "matters": 0}
+    assert second["linked"] == 0
+    assert second["skipped"] == 2
+    assert await db_session.scalar(select(func.count()).select_from(Contact)) == 1
+    assert await db_session.scalar(select(func.count()).select_from(Matter)) == 1
+    assert (
+        await db_session.scalar(select(func.count()).select_from(ExternalRecordLink))
+        == 2
+    )
+    assert first_run != second_run
+
+
+@pytest.mark.asyncio
+async def test_import_rejects_conflicting_identity_matches_without_writes(
+    client, db_session, test_tenant, test_user
+):
+    db_session.add_all(
+        [
+            Contact(
+                tenant_id=test_tenant.id,
+                client_number="100.00",
+                email="one@example.test",
+                first_name="One",
+                contact_type="client",
+            ),
+            Contact(
+                tenant_id=test_tenant.id,
+                client_number="200.00",
+                email="two@example.test",
+                first_name="Two",
+                contact_type="client",
+            ),
+        ]
+    )
+    await db_session.commit()
+    bundle = _bundle(
+        {
+            "CLIENT": [
+                {"CLIENT_ID": "100.00", "NAME": "Conflict", "EMAIL": "two@example.test"}
+            ]
+        }
+    )
+    uploaded = await client.post(
+        "/api/imports/tabs3/upload",
+        files={"file": ("tabs3.zip", bundle, "application/zip")},
+    )
+    run_id = uuid.UUID(uploaded.json()["id"])
+    run = await db_session.get(ExternalImportRun, run_id)
+    assert (
+        await client.post(
+            f"/api/imports/{run_id}/approve",
+            json={
+                "confirmation": PROMOTION_CONFIRMATION,
+                "report_hash": _report_hash(run),
+            },
+        )
+    ).status_code == 200
+    promoted = await client.post(f"/api/imports/{run_id}/promote")
+    assert promoted.status_code == 422
+    failed = await db_session.get(ExternalImportRun, run_id)
+    assert failed.status == "promotion_failed"
+    assert "different contacts" in failed.errors[0]
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(ExternalRecordLink)
+            .where(ExternalRecordLink.import_run_id == run_id)
+        )
+        == 0
+    )
