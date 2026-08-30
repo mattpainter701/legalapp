@@ -29,9 +29,10 @@ from mcp_server.loader import (
     refresh_courtlistener_coverage_ledger,
 )
 from mcp_server.repository import CourtListenerRepository
+from mcp_server.server import ControlPlaneRequest, run_control_audit
 
 
-def test_authority_release_rehearsal():
+def test_authority_release_rehearsal(monkeypatch):
     db_url = os.getenv("AUTHORITY_REHEARSAL_DATABASE_URL")
     if not db_url:
         pytest.skip(
@@ -66,10 +67,12 @@ def test_authority_release_rehearsal():
                     """INSERT INTO legal_sources
                     (source_key, publisher, source_type, canonical_url, enabled,
                      storage_policy, rights_decision, reviewed_at, reviewed_by,
-                     expected_cadence, claim_safe_wording)
+                     expected_cadence, claim_safe_wording, metadata)
                     VALUES (%s, 'Rehearsal', 'statute', 'https://example.test', TRUE,
                             'normalized_text', 'official', now(), 'rehearsal-admin',
-                            'daily', 'Fixture source only') ON CONFLICT DO NOTHING""",
+                            'daily', 'Fixture source only',
+                            '{"catalog_schema_version":"rehearsal","implementation_status":"fixture"}')
+                    ON CONFLICT DO NOTHING""",
                     [source_key],
                 )
                 cur.execute(
@@ -87,9 +90,10 @@ def test_authority_release_rehearsal():
                 cur.execute(
                     """INSERT INTO legal_documents
                     (source_key, external_id, document_type, title, authority_tier,
-                     canonical_url, corpus_version, text_content)
+                     canonical_url, corpus_version, text_content, metadata)
                     VALUES (%s, 'same-document', 'statute', %s, 'binding_primary',
-                            'https://example.test/doc', %s, %s) RETURNING id""",
+                            'https://example.test/doc', %s, %s,
+                            '{"namespace":"public-authority"}') RETURNING id""",
                     [
                         source_key,
                         "Fixture " + suffix,
@@ -199,6 +203,24 @@ def test_authority_release_rehearsal():
         refresh_courtlistener_coverage_ledger(conn, source_release=version)
         with conn.cursor() as cur:
             cur.execute(
+                """INSERT INTO corpus_coverage_ledger
+                (source_key, partition_key, expected_item_count, acquisition_state,
+                 source_release, rows_loaded, last_checked_at)
+                VALUES (%s, 'manifest', 1, 'complete', %s, 1, now())
+                ON CONFLICT (source_key, partition_key, source_release) DO UPDATE
+                SET expected_item_count=EXCLUDED.expected_item_count,
+                    acquisition_state=EXCLUDED.acquisition_state,
+                    rows_loaded=EXCLUDED.rows_loaded,
+                    last_checked_at=EXCLUDED.last_checked_at""",
+                [source_key, version],
+            )
+            cur.execute(
+                """UPDATE corpus_coverage_ledger
+                   SET expected_item_count=2
+                 WHERE source_key='courtlistener:ohio-caselaw' AND source_release=%s""",
+                [version],
+            )
+            cur.execute(
                 "SELECT COUNT(DISTINCT cluster_id) FROM authority_case_chunks WHERE corpus_version=%s",
                 [version],
             )
@@ -208,6 +230,20 @@ def test_authority_release_rehearsal():
                 [version],
             )
             assert cur.fetchone()[0] == 1
+        conn.commit()
+        import mcp_server.server as control_server
+
+        monkeypatch.setattr(control_server, "connect", lambda _db=None: connect(db_url))
+        for kind in ("release", "completeness", "freshness", "isolation"):
+            audit_response = run_control_audit(
+                ControlPlaneRequest(
+                    version=version,
+                    reason="production-path rehearsal",
+                    audit_kind=kind,
+                ),
+                actor="rehearsal-admin",
+            )
+            assert audit_response["audit"]["passed"] is True
         for kind, records in (
             ("release", [{"ready": True}]),
             ("completeness", [{"expected": True, "observed": True}]),
