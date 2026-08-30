@@ -18,6 +18,16 @@ production-shaped rehearsal. Live deployment evidence remains release-specific.
 | `COMP-05` | Reopened | PR #275 merged as `7e0745b3` and provides bounded DOCX/PDF parsing, isolation, review decisions, missing/ambiguous reporting, and DOCX report/TOA export. Current behavior remains partial or absent for provider-backed citation resolution, page/pin-cite quote verification, available treatment/currentness evidence, genuinely omitted-authority discovery, opposing-brief analysis beyond citation-set difference, source hyperlinks, existing-document UI, and a full retrieval-to-export rehearsal. `BK20` therefore remains open. |
 | `COMP-06` | In implementation | Dedicated execution is building the public-authority source registry, rights gates, incremental ingest/currentness, corpus versions, rollback, sampled audits, and coverage UI. Private Firm Memory remains an explicitly separate tenant/matter-scoped corpus and must not feed public-authority telemetry. Acceptance awaits merged code and an independent `AIP-17–AIP-21` evidence matrix. |
 
+## Production deployment snapshot
+
+At 2026-08-30 15:00 UTC, the read-only IONOS runner verification succeeded on
+`ionos-lawhand-prod-secure`. Public version and readiness endpoints were healthy
+at `9375fdfb01b106c3ad2d0437737dca6fb0f1b4b1`, while available `origin/main`
+was `1453002e7b80c42bb5a79817c0a5d51ad25129c3`. The merges after COMP-04 were
+therefore not deployed at this snapshot; green merge CI must not be described as
+production rollout evidence. Verification run:
+<https://github.com/mattpainter701/legalapp/actions/runs/33318403320>.
+
 ## Evidence references
 
 - `COMP-01`: `docs/competitive-gap-analysis.md`, `README.md`,
