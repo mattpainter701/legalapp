@@ -39,6 +39,7 @@ gate.
 | 14 | `COMP-14` | bounded integration ecosystem | 3 | L | Workspace MCP, OAuth integrations, outbox |
 | 15 | `COMP-15` | docket-derived litigation analytics | 3 | XL | `COMP-06`, `ECO-30–ECO-36` |
 | 16 | `COMP-16` | native staff/client mobile experience | 3 | XL | stable portal, communications, payments, offline policy |
+| 17 | `COMP-17` | downloadable Windows agent validation installer | 3 | XS | `agent-release.yml`, Windows packaging and upgrade smoke test |
 
 Current comparison references: [Clio platform](https://www.clio.com/features/),
 [Clio Work and Library](https://www.clio.com/work/ai-legal-research/),
@@ -173,6 +174,11 @@ matrix and claim boundaries. Feature PRs do not self-certify these checkboxes.
       encrypted queue with conflict handling, time capture, portal messaging, and
       approved payment handoff; require remote logout/wipe semantics, device tests,
       accessibility, app-store privacy disclosures, and mobile incident support.
+- [ ] `COMP-17` Preserve the Windows installer exercised by unsigned validation:
+      upload the generated MSI alongside the EXE, assert that both build outputs
+      exist before artifact publication, and retain checksums so operators can test
+      the exact installer covered by the Windows upgrade smoke test. Keep signed,
+      tagged release publication as the separate customer-distribution gate.
 
 ### Explicit competitive non-goals
 
