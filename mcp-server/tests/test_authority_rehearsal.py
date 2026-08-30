@@ -15,6 +15,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 import pytest
+from fastapi import HTTPException
 from psycopg2 import DatabaseError
 
 from mcp_server.control_plane import (
@@ -39,6 +40,7 @@ from mcp_server.loader import (
 from mcp_server.authority_ingest import FetchedDocument, ingest_document
 from mcp_server.repository import CourtListenerRepository
 from mcp_server.server import ControlPlaneRequest, run_control_audit
+import mcp_server.server as authority_server
 from mcp_server.jetson_worker import process_once
 from mcp_server.worker_config import WorkerConfig
 
@@ -1133,7 +1135,7 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
         )
 
 
-def test_durable_operator_assertion_replay_rehearsal():
+def test_durable_operator_assertion_replay_rehearsal(monkeypatch):
     """Two consumers sharing PostgreSQL cannot consume one nonce twice."""
     db_url = os.getenv("AUTHORITY_REHEARSAL_DATABASE_URL")
     if not db_url:
@@ -1153,42 +1155,26 @@ def test_durable_operator_assertion_replay_rehearsal():
         "issued": 1_700_000_000,
         "expires": 1_900_000_000,
     }
-    consume_operator_assertion_with_db(db_url, claims)
-    with pytest.raises(RuntimeError, match="replayed"):
-        consume_operator_assertion_with_db(db_url, claims)
+    monkeypatch.setattr(authority_server, "connect", lambda: connect(db_url))
+    outcomes = []
+    barrier = threading.Barrier(2)
 
+    def consume():
+        barrier.wait()
+        try:
+            authority_server.consume_operator_assertion(claims)
+            outcomes.append("accepted")
+        except Exception as exc:  # one concurrent consumer must lose the nonce
+            outcomes.append(exc)
 
-def consume_operator_assertion_with_db(db_url, claims):
-    """Exercise the atomic consume SQL on an independent connection."""
-    with connect(db_url) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "DELETE FROM authority_operator_assertions WHERE expires_at < now()"
-            )
-            cur.execute(
-                """INSERT INTO authority_operator_assertions
-                (nonce, credential_id, actor, scope, method, path, body_sha256, issued_at, expires_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,to_timestamp(%s),to_timestamp(%s))
-                ON CONFLICT (nonce) DO NOTHING RETURNING nonce""",
-                [
-                    claims[k]
-                    for k in (
-                        "nonce",
-                        "credential",
-                        "actor",
-                        "scope",
-                        "method",
-                        "path",
-                        "body_sha256",
-                        "issued",
-                        "expires",
-                    )
-                ],
-            )
-            if cur.fetchone() is None:
-                conn.rollback()
-                raise RuntimeError("replayed signed operator context")
-        conn.commit()
+    workers = [threading.Thread(target=consume) for _ in range(2)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=10)
+    assert all(not worker.is_alive() for worker in workers)
+    assert sum(outcome == "accepted" for outcome in outcomes) == 1
+    assert sum(isinstance(outcome, HTTPException) for outcome in outcomes) == 1
 
 
 def test_process_once_rehearsal_both_corpora(monkeypatch):
