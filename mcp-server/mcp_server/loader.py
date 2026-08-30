@@ -631,14 +631,15 @@ def _load_csv(
             elif table_name == "opinions":
                 for values in batch_values:
                     cur.execute("""INSERT INTO authority_case_opinions
-                      (corpus_version, opinion_id, source_url, plain_text)
-                      SELECT cl.corpus_version, %s, %s, COALESCE(%s, %s)
+                      (corpus_version, opinion_id, cluster_id, source_url, plain_text)
+                      SELECT cl.corpus_version, %s, %s, %s, COALESCE(%s, %s)
                       FROM authority_case_clusters cl
                       WHERE cl.cluster_id=%s
                         AND cl.corpus_version=%s
                       ON CONFLICT (corpus_version, opinion_id) DO UPDATE SET
+                        cluster_id=EXCLUDED.cluster_id,
                         source_url=EXCLUDED.source_url, plain_text=EXCLUDED.plain_text""",
-                               [values[0], values[7], values[5], values[4], values[1], corpus_version])
+                               [values[0], values[1], values[7], values[5], values[4], values[1], corpus_version])
             count += len(pending)
             pending.clear()
             if count % budget_check_every == 0:
@@ -883,8 +884,9 @@ def materialize_caselaw_snapshot(conn, corpus_version: str) -> None:
         """, [corpus_version])
         cur.execute("""
             INSERT INTO authority_case_opinions
-              (corpus_version, opinion_id, source_url, plain_text)
-            SELECT %s, o.opinion_id, o.source_url, COALESCE(o.plain_text, o.html_with_citations)
+              (corpus_version, opinion_id, cluster_id, source_url, plain_text)
+            SELECT %s, o.opinion_id, o.cluster_id, o.source_url,
+                   COALESCE(o.plain_text, o.html_with_citations)
             FROM opinions o JOIN opinion_clusters cl ON cl.cluster_id=o.cluster_id
             WHERE cl.corpus_version=%s
             ON CONFLICT (corpus_version, opinion_id) DO NOTHING
@@ -932,6 +934,7 @@ def create_snapshot_chunks(conn, corpus_version: str, limit: int | None = None) 
             FROM authority_case_opinions ao
             JOIN authority_case_clusters ac
               ON ac.corpus_version=ao.corpus_version
+             AND ac.cluster_id=ao.cluster_id
             LEFT JOIN dockets d ON d.docket_id=ac.docket_id
             WHERE ao.corpus_version=%s
             ORDER BY ao.opinion_id

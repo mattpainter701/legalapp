@@ -188,8 +188,8 @@ def stage_corpus_version(conn: Any, *, version: str, manifest_hash: str,
             """, [version, current[0]])
             cur.execute("""
                 INSERT INTO authority_case_opinions
-                  (corpus_version, opinion_id, source_url, plain_text)
-                SELECT %s, opinion_id, source_url, plain_text
+                  (corpus_version, opinion_id, cluster_id, source_url, plain_text)
+                SELECT %s, opinion_id, cluster_id, source_url, plain_text
                 FROM authority_case_opinions WHERE corpus_version=%s
                 ON CONFLICT DO NOTHING
             """, [version, current[0]])

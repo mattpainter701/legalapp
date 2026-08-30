@@ -403,6 +403,12 @@ CREATE TABLE IF NOT EXISTS authority_embedding_shards (
     updated_at timestamptz NOT NULL DEFAULT now(),
     CHECK (status IN ('queued', 'leased', 'complete', 'retryable', 'dead_letter'))
 );
+-- Keep upgrades safe for installations that created this table before the
+-- hardware-evidence fields were introduced.
+ALTER TABLE authority_embedding_shards
+    ADD COLUMN IF NOT EXISTS temperature_c numeric;
+ALTER TABLE authority_embedding_shards
+    ADD COLUMN IF NOT EXISTS capacity_evidence jsonb NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE TABLE IF NOT EXISTS authority_case_clusters (
     corpus_version text NOT NULL REFERENCES authority_corpus_versions(version),
@@ -430,10 +436,30 @@ CREATE TABLE IF NOT EXISTS authority_case_chunks (
 CREATE TABLE IF NOT EXISTS authority_case_opinions (
     corpus_version text NOT NULL REFERENCES authority_corpus_versions(version),
     opinion_id bigint NOT NULL,
+    cluster_id bigint NOT NULL,
     source_url text,
     plain_text text,
     PRIMARY KEY (corpus_version, opinion_id)
 );
+ALTER TABLE authority_case_opinions
+    ADD COLUMN IF NOT EXISTS cluster_id bigint;
+UPDATE authority_case_opinions ao
+SET cluster_id = o.cluster_id
+FROM opinions o
+WHERE ao.cluster_id IS NULL AND ao.opinion_id = o.opinion_id;
+UPDATE authority_case_opinions ao
+SET cluster_id = chunks.cluster_id
+FROM (
+    SELECT DISTINCT ON (corpus_version, opinion_id)
+           corpus_version, opinion_id, cluster_id
+    FROM authority_case_chunks
+    ORDER BY corpus_version, opinion_id
+) chunks
+WHERE ao.cluster_id IS NULL
+  AND ao.corpus_version = chunks.corpus_version
+  AND ao.opinion_id = chunks.opinion_id;
+ALTER TABLE authority_case_opinions
+    ALTER COLUMN cluster_id SET NOT NULL;
 CREATE TABLE IF NOT EXISTS authority_case_citations (
     corpus_version text NOT NULL REFERENCES authority_corpus_versions(version),
     citing_opinion_id bigint NOT NULL,

@@ -306,7 +306,7 @@ class CourtListenerRepository:
         filters, filter_params = self._search_filters(jurisdiction, date_from, date_to)
         fts_query = broad_legal_websearch_query(query)
         sql = f"""
-            SELECT oc.id::text AS chunk_id, oc.opinion_id, oc.cluster_id, oc.chunk_index,
+            SELECT oc.chunk_id::text AS chunk_id, oc.opinion_id, oc.cluster_id, oc.chunk_index,
                    cl.case_name,
                    cl.date_filed, oc.court_id, c.full_name AS court_name, oc.content,
                    COALESCE(NULLIF(o.source_url, ''), '/opinion/' || oc.opinion_id::text || '/') AS source_url,
@@ -344,7 +344,7 @@ class CourtListenerRepository:
         candidate_limit = min(max(top_k * 4, 20), 200)
         sql = f"""
             WITH filtered AS (
-                SELECT oc.id::text AS chunk_id, oc.opinion_id, oc.cluster_id,
+                SELECT oc.chunk_id::text AS chunk_id, oc.opinion_id, oc.cluster_id,
                        oc.chunk_index, cl.case_name, cl.date_filed, oc.court_id,
                        c.full_name AS court_name, oc.content,
                        COALESCE(NULLIF(o.source_url, ''), '/opinion/' || oc.opinion_id::text || '/') AS source_url,
@@ -429,14 +429,14 @@ class CourtListenerRepository:
         with self.conn.cursor() as cur:
             cur.execute(
                 f"""
-                SELECT o.opinion_id, o.cluster_id, o.type, o.source_url, cl.case_name,
+                SELECT o.opinion_id, o.cluster_id, o.source_url, cl.case_name,
                        cl.date_filed, cl.citations, d.docket_number, c.court_id, c.full_name AS court_name
-                FROM opinions o
-                JOIN opinion_clusters cl ON cl.cluster_id = o.cluster_id
+                FROM authority_case_opinions o
+                JOIN authority_case_clusters cl ON cl.corpus_version = o.corpus_version AND cl.cluster_id = o.cluster_id
                 LEFT JOIN dockets d ON d.docket_id = cl.docket_id
                 LEFT JOIN courts c ON c.court_id = d.court_id
                 WHERE {where}
-                  AND cl.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
+                  AND o.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
                 LIMIT 1
                 """,
                 [value],
@@ -447,8 +447,8 @@ class CourtListenerRepository:
             detail = rows[0]
             cur.execute(
                 """
-                SELECT id::text AS chunk_id, chunk_index, content
-                FROM opinion_chunks
+                SELECT chunk_id::text AS chunk_id, chunk_index, content
+                FROM authority_case_chunks
                 WHERE opinion_id = %s
                   AND corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
                 ORDER BY chunk_index
