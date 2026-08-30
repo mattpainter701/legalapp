@@ -51,7 +51,7 @@ and [Westlaw docket coverage](https://legal.thomsonreuters.com/en/products/westl
 ### P0 — remove switching and research-trust blockers
 
 **PM acceptance snapshot (2026-08-30):** Independently revalidated against
-`origin/main` at `42b486e7`. `COMP-01` and `COMP-04` remain accepted. `COMP-02`
+`origin/main` at `330c14a5`. `COMP-01` and `COMP-04` remain accepted. `COMP-02`
 remains open: PR #279 adds a narrow approval-bound client/matter import slice,
 but production-shaped closure still requires broader import reconciliation,
 provider-specific billing/trust/history handling, customer sign-off, and one
@@ -61,7 +61,7 @@ reopened because the merged Brief Check is a safe review-first scaffold but does
 not yet satisfy the full citation-resolution, pin-cite, treatment/currentness,
 omitted-authority, linked-export, and end-to-end acceptance below; and `COMP-06`
 remains open after independent review of hardened draft PR #280 through
-`9faf8006`. Version-keyed legal and caselaw snapshots, same-identity
+`5a14d029`. Version-keyed legal and caselaw snapshots, same-identity
 cutover/rollback fixtures, snapshot-backed search/detail/worker/metrics paths,
 and post-promotion mutation guards are material progress. They still do not form
 one production-shaped release chain: initial legacy snapshot backfill, atomic

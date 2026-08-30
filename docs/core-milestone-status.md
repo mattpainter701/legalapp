@@ -1,7 +1,7 @@
 # Core milestone acceptance status
 
-Last independently revalidated: 2026-08-30  
-Baseline: `origin/main` `42b486e791d182010f4e476dd9df293fb9ccd206`
+Last independently revalidated: 2026-08-30
+Baseline: `origin/main` `330c14a5312392dd680d89de6095a9144e8ea4be`
 
 This is the evidence ledger for the competitive P0 milestones in `TASKS.md`.
 A merged feature PR is implementation evidence, not automatic milestone
@@ -16,17 +16,21 @@ production-shaped rehearsal. Live deployment evidence remains release-specific.
 | `COMP-03` | Open — closure active | PR #270 supplies spam-resistant conditional intake, source attribution, conflict triage, published-slot booking, guarded lead promotion, recovery candidates, and funnel counters. Provider-backed reminders, consented SMS (`ECO-23–ECO-29`), signed-fee-agreement-gated promotion, and the complete lead-to-retainer rehearsal are not proven at this baseline. |
 | `COMP-04` | Accepted | PR #273 merged as `9375fdfb`; the versioned operating contract, public status/incident lifecycle, support policy, signed tenant export, migration receipt, legal-hold/two-operator offboarding evidence, subprocessor/DPA/BAA boundaries, Trust Center, and synthetic production-shaped tests meet the v1 acceptance without claiming unattained SLAs, certifications, or pen tests. Backup, restore, and deployment proof must still be refreshed for each production release. |
 | `COMP-05` | Reopened | PR #275 merged as `7e0745b3` and provides bounded DOCX/PDF parsing, isolation, review decisions, missing/ambiguous reporting, and DOCX report/TOA export. Current behavior remains partial or absent for provider-backed citation resolution, page/pin-cite quote verification, available treatment/currentness evidence, genuinely omitted-authority discovery, opposing-brief analysis beyond citation-set difference, source hyperlinks, existing-document UI, and a full retrieval-to-export rehearsal. `BK20` therefore remains open. |
-| `COMP-06` | Open — lifecycle acceptance blocked | Draft PR #280 at independently reviewed head `9faf8006` now has version-keyed caselaw cluster/opinion/chunk/citation snapshots, candidate cloning, explicit opinion-to-cluster identity, snapshot-backed search/detail/similarity/coverage/worker paths, atomic cutover/rollback, post-promotion mutation guards, and a signed `platform:write` backend proxy whose minted-key resolution and operator request audit cover exact authority path segments. Helper-level tests prove segment matching, signed-actor forwarding over a spoofed header, and denial before upstream invocation. Same-ID, two-cluster fixture assertions and the mandatory pgvector rehearsal are meaningful progress, but they still bypass the production CSV ingest/loader, rights, embedding-worker, retry, concurrency, currentness, and isolation paths. Initial legacy-to-snapshot backfill, atomic load-to-searchable completion, promotion-time content/integrity checks, composite snapshot relationships, immutable-ledger negative tests, the full authority credential/revocation/audit/status matrix, and latest same-version audit/currentness evidence remain open. Private Firm Memory remains a separate tenant/matter-scoped corpus and must not feed public-authority telemetry. |
+| `COMP-06` | Open — lifecycle acceptance blocked | Draft PR #280 at independently reviewed head `5a14d029` now has version-keyed caselaw cluster/opinion/chunk/citation snapshots, candidate cloning, explicit opinion-to-cluster identity, snapshot-backed search/detail/similarity/coverage/worker paths, atomic cutover/rollback, post-promotion mutation guards, and a signed `platform:write` backend proxy whose minted-key resolution and operator request audit cover exact authority path segments. Helper-level tests prove segment matching, signed-actor forwarding over a spoofed header, and denial before upstream invocation. Same-ID, two-cluster fixture assertions and the mandatory pgvector rehearsal are meaningful progress, but they still bypass the production CSV ingest/loader, rights, embedding-worker, retry, concurrency, currentness, and isolation paths. Initial legacy-to-snapshot backfill, atomic load-to-searchable completion, promotion-time content/integrity checks, composite snapshot relationships, immutable-ledger negative tests, the full authority credential/revocation/audit/status matrix, and latest same-version audit/currentness evidence remain open. Private Firm Memory remains a separate tenant/matter-scoped corpus and must not feed public-authority telemetry. |
 
 ## COMP-06 draft acceptance review
 
 PR #280 was re-reviewed read-only through exact hardened head
-`9faf800656192221663761f2a2d6aa61c26f4b54`, based on `origin/main`
-`42b486e791d182010f4e476dd9df293fb9ccd206`. At handoff the owned worktree was
-clean and pushed, and the PR remained open, draft, and blocked. The earlier
+`5a14d029fb623e02159afcafd5c50e870505384e`, rebased onto `origin/main`
+`330c14a5312392dd680d89de6095a9144e8ea4be`. At handoff the owned worktree was
+clean and pushed, and the PR remained open and draft. Local post-rebase evidence
+was 155 MCP tests passed with one database rehearsal skipped, plus passing Ruff,
+format, compile, and diff checks; fresh GitHub checks had not yet published for
+that rebased head. The earlier
 snapshot rehearsal failure at `3f1e4883` was corrected; the mandatory
 `Authority control-plane DB rehearsal` passed on superseded hardened heads through
-`76837ec9`, while fresh exact-head CI for `9faf8006` had not completed. The
+`76837ec9`, while exact-head CI for the superseded `9faf8006` had not completed
+at its handoff. The
 intermediate release-test correction at `6ccef170` matches the canonical `.5`
 highlight, “Preserve retrieval boundaries”; three focused release tests and six
 focused platform/authority authentication tests passed independently. Passing the
@@ -90,7 +94,8 @@ At 2026-08-30 15:21 UTC, the read-only IONOS runner verification succeeded on
 at `9375fdfb01b106c3ad2d0437737dca6fb0f1b4b1`, while available `origin/main`
 was `42b486e791d182010f4e476dd9df293fb9ccd206`. The merges after COMP-04 were
 therefore not deployed at this snapshot; green merge CI must not be described as
-production rollout evidence. Verification run:
+production rollout evidence. The current ledger baseline is `330c14a5`; no later
+production verification is recorded here. Verification run:
 <https://github.com/mattpainter701/legalapp/actions/runs/33319412188>.
 
 ## Evidence references
