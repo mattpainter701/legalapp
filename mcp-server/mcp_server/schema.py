@@ -334,6 +334,11 @@ CREATE TABLE IF NOT EXISTS legal_documents (
     UNIQUE (source_key, external_id, corpus_version)
 );
 
+-- These additive upgrades must precede indexes that reference the new column
+-- when an older installation already has the table.
+ALTER TABLE legal_documents
+    ADD COLUMN IF NOT EXISTS corpus_version text REFERENCES authority_corpus_versions(version);
+
 ALTER TABLE legal_documents DROP CONSTRAINT IF EXISTS legal_documents_source_key_external_id_key;
 CREATE UNIQUE INDEX IF NOT EXISTS ux_legal_documents_authority_identity
     ON legal_documents(source_key, external_id, corpus_version);
@@ -409,6 +414,7 @@ ALTER TABLE source_sync_states ADD COLUMN IF NOT EXISTS dead_letter_count intege
 ALTER TABLE source_sync_states ADD COLUMN IF NOT EXISTS lag_seconds integer;
 ALTER TABLE source_sync_states ADD COLUMN IF NOT EXISTS next_retry_at timestamptz;
 ALTER TABLE source_sync_states ADD COLUMN IF NOT EXISTS last_cursor_hash text;
+ALTER TABLE source_sync_states ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'active';
 
 CREATE TABLE IF NOT EXISTS authority_embedding_shards (
     shard_key text PRIMARY KEY,
