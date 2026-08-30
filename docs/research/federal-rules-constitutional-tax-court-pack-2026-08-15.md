@@ -102,6 +102,10 @@ reaching chunks or embeddings accidentally.
   opinions, summary opinions, and unpublished material are not crawled. Any
   later daily feed requires a separately reviewed, rate-limited adapter.
 
-All three source families remain disabled in the production scheduler until
-parser boundaries, chunk metadata, and a database sync plan are reviewed. Only
-after that review should the Jetson create embeddings for the accepted chunks.
+Phase 1 completed the parser-boundary and sync-plan review on 2026-08-29. All
+three source families are enabled as separate scheduler jobs so a failure in
+one family does not stop the other two. Production sync excludes the appellate
+rules document through an explicit manifest gate; previews can still inspect
+the retained artifact. Accepted chunks enter PostgreSQL without embeddings and
+remain available to lexical retrieval while the separately operated embedding
+pipeline processes them.

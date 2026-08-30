@@ -26,6 +26,13 @@
   Skynet research upstream without exposing its credential.
 
 ### Added
+- **Phase 1 deep-research authority activation:** the reviewed Federal Rules,
+  Constitution Annotated, and bounded Tax Court Reports families now run as
+  independently switchable scheduler jobs. Document-level sync gates exclude
+  known unreadable extraction while preserving audit previews, supplemented
+  base volumes remain searchable, and explicit Ohio/federal questions apply
+  matching jurisdiction filters across case law and other authorities. New
+  chunks remain embedding-null for the separate embedding pipeline.
 - **Review-first Brief Check:** firms can run bounded DOCX/PDF brief checks that
   normalize citations, compare quotations and pin cites against accessible source
   text, preserve missing/ambiguous/currentness unknowns, compare opposing briefs,

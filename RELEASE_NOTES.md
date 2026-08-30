@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.30.2 — Deeper federal and Ohio research coverage
+
+Released August 30, 2026.
+
+Research can ingest reviewed federal rules, constitutional analysis, and Tax Court reports while keeping jurisdiction and known extraction limits explicit.
+
+- **Search more reviewed federal authority.** Federal rules, Constitution Annotated, and bounded Tax Court Reports now have scheduled, failure-isolated ingestion paths.
+- **Keep unsafe text out.** A known unreadable appellate-rules extraction stays auditable but cannot enter searchable text until its parser is replaced.
+- **Scope Ohio and federal research correctly.** Explicit Ohio and federal questions now apply matching filters to case law and other public authorities.
+
 ## 2026.08.30.1 — Review-first Brief Check
 
 Released August 30, 2026.

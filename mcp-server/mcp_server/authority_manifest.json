@@ -65,6 +65,8 @@
       "effective_date": "2025-12-01",
       "parser": "pdf_text",
       "parser_version": "pdf-text-v1",
+      "sync_enabled": false,
+      "sync_disabled_reason": "The reviewed pypdf extraction is a broken font-map glyph stream; retain the raw artifact but do not create searchable text until a reviewed parser or OCR route passes comparison.",
       "acquisition_basis": "Direct PDF linked from the official current-rules page; reviewed allowlist, no link discovery at runtime.",
       "coverage_notes": "Current national appellate rules. The PDF also includes the official Appendix of Forms; those form pages are official forms, not binding rule text. Unofficial Word templates are excluded.",
       "practice_areas": ["appellate", "litigation"]

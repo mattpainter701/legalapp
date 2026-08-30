@@ -46,6 +46,9 @@ def test_default_jobs_are_allowlisted_modules_with_expected_title_scope(monkeypa
     monkeypatch.delenv("LEGAL_AUTHORITY_IRS_ENABLED", raising=False)
     monkeypatch.delenv("LEGAL_AUTHORITY_OHIO_ENABLED", raising=False)
     monkeypatch.delenv("LEGAL_AUTHORITY_ND_ENABLED", raising=False)
+    monkeypatch.delenv("LEGAL_AUTHORITY_FEDERAL_RULES_ENABLED", raising=False)
+    monkeypatch.delenv("LEGAL_AUTHORITY_CONSTITUTION_ANNOTATED_ENABLED", raising=False)
+    monkeypatch.delenv("LEGAL_AUTHORITY_TAX_COURT_ENABLED", raising=False)
 
     jobs = default_jobs()
 
@@ -56,6 +59,9 @@ def test_default_jobs_are_allowlisted_modules_with_expected_title_scope(monkeypa
         "mcp_server.benefits_authority_ingest",
         "mcp_server.irs_ingest",
         "mcp_server.ohio_authority_ingest",
+        "mcp_server.authority_ingest",
+        "mcp_server.authority_ingest",
+        "mcp_server.authority_ingest",
     ]
     assert jobs[0].arguments == (
         "--title", "11", "--title", "15", "--title", "26", "--title", "28",
@@ -70,6 +76,22 @@ def test_default_jobs_are_allowlisted_modules_with_expected_title_scope(monkeypa
     assert "cms:medicaid-estate-recovery" in jobs[3].arguments
     assert "--irb" in jobs[4].arguments
     assert "--forms" in jobs[4].arguments
+    assert [job.name for job in jobs[-3:]] == [
+        "reviewed-federal-rules",
+        "reviewed-constitution-annotated",
+        "reviewed-tax-court-reports",
+    ]
+    assert jobs[-3].arguments == ("--source-key", "uscourts:federal-rules")
+    assert jobs[-2].arguments == ("--source-key", "crs:constitution-annotated")
+    assert jobs[-1].arguments == ("--source-key", "ustaxcourt:opinions")
+
+
+def test_reviewed_manifest_jobs_can_be_disabled_independently(monkeypatch):
+    monkeypatch.setenv("LEGAL_AUTHORITY_FEDERAL_RULES_ENABLED", "false")
+    monkeypatch.setenv("LEGAL_AUTHORITY_CONSTITUTION_ANNOTATED_ENABLED", "0")
+    monkeypatch.setenv("LEGAL_AUTHORITY_TAX_COURT_ENABLED", "off")
+
+    assert not any(job.module == "mcp_server.authority_ingest" for job in default_jobs())
 
 
 def test_run_once_holds_lock_and_continues_after_failed_job():

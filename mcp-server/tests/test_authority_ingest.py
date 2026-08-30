@@ -68,6 +68,9 @@ def test_bundled_authority_manifest_passes_source_policy_validation():
     assert {item["document_type"] for item in federal} == {"court_rules"}
     assert all(item["source_index_url"].startswith("https://www.uscourts.gov/") for item in federal)
     assert all(item["parser_version"] == "pdf-text-v1" for item in federal)
+    blocked = next(item for item in federal if item.get("sync_enabled") is False)
+    assert blocked["external_id"] == "federal-rules-appellate-2025-12-01"
+    assert "font-map" in blocked["sync_disabled_reason"]
 
 
 def test_manifest_requires_per_artifact_provenance():
@@ -85,6 +88,15 @@ def test_manifest_rejects_invalid_coverage_date():
     manifest["documents"][0]["coverage_start_date"] = "2026/08/15"
 
     with pytest.raises(ManifestValidationError, match="coverage_start_date must be YYYY-MM-DD"):
+        validate_manifest(manifest, catalog)
+
+
+def test_manifest_requires_a_reason_when_document_sync_is_disabled():
+    catalog = load_catalog()
+    manifest = copy.deepcopy(load_manifest())
+    manifest["documents"][0]["sync_enabled"] = False
+
+    with pytest.raises(ManifestValidationError, match="sync_disabled_reason"):
         validate_manifest(manifest, catalog)
 
 
@@ -170,6 +182,26 @@ def test_document_selection_is_source_scoped_and_bounded():
 
     assert len(selected) == 1
     assert selected[0]["source_key"] == "cms:internet-only-manuals"
+
+
+def test_sync_selection_skips_parser_blocked_documents_without_hiding_preview():
+    manifest = load_manifest()
+
+    preview_documents = selected_documents(
+        manifest,
+        ["uscourts:federal-rules"],
+        None,
+    )
+    sync_documents = selected_documents(
+        manifest,
+        ["uscourts:federal-rules"],
+        None,
+        for_sync=True,
+    )
+
+    assert len(preview_documents) == 6
+    assert len(sync_documents) == 5
+    assert all(document.get("sync_enabled", True) for document in sync_documents)
 
 
 def test_preview_collection_writes_raw_text_and_audit_manifest(tmp_path, monkeypatch):
