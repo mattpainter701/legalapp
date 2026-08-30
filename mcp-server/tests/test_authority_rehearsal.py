@@ -1594,11 +1594,21 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
             delivery_key="synthetic-attempt-1", attempted_outcome="queued",
             now=datetime(2026, 8, 30, 23, 0, tzinfo=timezone.utc),
         )
-        # RLS hides the other tenant's watch, while the composite FK also
-        # rejects a bypass-shaped event whose tenant UUID does not match the
-        # referenced watch. This is independent of application-side checks.
+        # The disposable DB user is a superuser and would bypass RLS. Exercise
+        # the policy through a temporary least-privilege role instead, while
+        # the composite FK independently rejects a bypass-shaped event whose
+        # tenant UUID does not match the referenced watch.
+        rls_role = "citator_rls_" + uuid.uuid4().hex[:16]
         with conn.cursor() as cur:
+            cur.execute(f'CREATE ROLE "{rls_role}" NOLOGIN')
+            cur.execute(
+                f'GRANT SELECT ON citator_watches TO "{rls_role}"'
+            )
+            cur.execute(
+                f'GRANT INSERT ON citator_alert_events TO "{rls_role}"'
+            )
             cur.execute("SET LOCAL app.current_tenant_id = %s", [other_tenant_id])
+            cur.execute(f'SET LOCAL ROLE "{rls_role}"')
             cur.execute("SAVEPOINT cross_tenant_watch_event")
             with pytest.raises(DatabaseError):
                 cur.execute(
@@ -1611,10 +1621,10 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
                 )
             cur.execute("ROLLBACK TO SAVEPOINT cross_tenant_watch_event")
             cur.execute("RELEASE SAVEPOINT cross_tenant_watch_event")
-        with conn.cursor() as cur:
-            cur.execute("SET LOCAL app.current_tenant_id = %s", [other_tenant_id])
             cur.execute("SELECT count(*) FROM citator_watches WHERE id=%s::uuid", [watch_id])
             assert cur.fetchone()[0] == 0
+            cur.execute("RESET ROLE")
+            cur.execute(f'DROP ROLE "{rls_role}"')
         conn.commit()
 
         def save_race_watch(principal: str) -> str:
