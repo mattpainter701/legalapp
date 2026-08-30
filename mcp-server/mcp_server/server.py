@@ -212,9 +212,9 @@ def run_control_audit(
                       AND s.claim_safe_wording IS NOT NULL
                       AND s.metadata->>'catalog_schema_version' IS NOT NULL
                       AND s.metadata->>'implementation_status' IS NOT NULL
-                      AND s.source_key NOT LIKE 'tenant:%'
-                      AND s.source_key NOT LIKE 'firm:%'
-                      AND s.source_key NOT LIKE 'private:%'
+                      AND NOT starts_with(s.source_key, 'tenant:')
+                      AND NOT starts_with(s.source_key, 'firm:')
+                      AND NOT starts_with(s.source_key, 'private:')
                     GROUP BY s.source_key, s.rights_decision, s.reviewed_at,
                              cp.status, l.acquisition_state
                 """,
@@ -317,8 +317,8 @@ def run_control_audit(
                     """
                     SELECT d.source_key, d.metadata->>'namespace',
                            (d.metadata->>'namespace' IS DISTINCT FROM 'public-authority'
-                            OR d.source_key LIKE 'tenant:%' OR d.source_key LIKE 'firm:%'
-                            OR d.source_key LIKE 'private:%' OR s.storage_policy = 'prohibited'
+                            OR starts_with(d.source_key, 'tenant:') OR starts_with(d.source_key, 'firm:')
+                            OR starts_with(d.source_key, 'private:') OR s.storage_policy = 'prohibited'
                             OR s.metadata->>'catalog_schema_version' IS NULL)
                     FROM legal_documents d
                     LEFT JOIN legal_sources s ON s.source_key=d.source_key

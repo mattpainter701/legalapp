@@ -955,9 +955,9 @@ class CourtListenerRepository:
                   AND claim_safe_wording IS NOT NULL
                   AND metadata->>'catalog_schema_version' IS NOT NULL
                   AND metadata->>'implementation_status' IS NOT NULL
-                  AND source_key NOT LIKE 'tenant:%'
-                  AND source_key NOT LIKE 'firm:%'
-                  AND source_key NOT LIKE 'private:%'
+                  AND NOT starts_with(source_key, 'tenant:')
+                  AND NOT starts_with(source_key, 'firm:')
+                  AND NOT starts_with(source_key, 'private:')
                 ORDER BY priority, source_key
             """)
             sources = dict_rows(cur)
@@ -976,9 +976,9 @@ class CourtListenerRepository:
                   AND s.storage_policy <> 'prohibited'
                   AND s.metadata->>'catalog_schema_version' IS NOT NULL
                   AND s.metadata->>'implementation_status' IS NOT NULL
-                  AND s.source_key NOT LIKE 'tenant:%'
-                  AND s.source_key NOT LIKE 'firm:%'
-                  AND s.source_key NOT LIKE 'private:%'
+                  AND NOT starts_with(s.source_key, 'tenant:')
+                  AND NOT starts_with(s.source_key, 'firm:')
+                  AND NOT starts_with(s.source_key, 'private:')
                 ORDER BY source_key, partition_key
             """,
                 [version_key],
