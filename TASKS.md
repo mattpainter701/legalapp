@@ -75,7 +75,7 @@ and [Westlaw docket coverage](https://legal.thomsonreuters.com/en/products/westl
       offboarding/deletion, DPA/BAA applicability, subprocessors, security-review
       packet, penetration-test cadence, and certification roadmap. Never present
       a planned control or audit as an attained certification.
-- [ ] `COMP-05` Ship a review-first **Brief Check** that parses an uploaded brief
+- [x] `COMP-05` Ship a review-first **Brief Check** that parses an uploaded brief
       or selected Word document, normalizes and resolves citations, verifies
       quotations and pin cites against accessible source text, reports missing or
       ambiguous sources, applies available treatment/currentness evidence, finds
