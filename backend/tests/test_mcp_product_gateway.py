@@ -49,7 +49,13 @@ def test_product_key_scope_defaults_to_all_tools():
 
 def test_product_key_scope_accepts_expanded_courtlistener_tools():
     tools = mcp_product.normalize_allowed_tools(
-        ["get_full_opinion", "find_similar_cases", "sync_status", "corpus_status"]
+        [
+            "get_full_opinion",
+            "find_similar_cases",
+            "sync_status",
+            "corpus_status",
+            "get_citator_status",
+        ]
     )
 
     assert tools == [
@@ -57,6 +63,7 @@ def test_product_key_scope_accepts_expanded_courtlistener_tools():
         "find_similar_cases",
         "sync_status",
         "corpus_status",
+        "get_citator_status",
     ]
 
 

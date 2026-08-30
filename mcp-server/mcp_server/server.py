@@ -468,6 +468,8 @@ def call_tool(body: ToolCallRequest):
                 result = repo.citation_network(int(args["opinion_id"]))
             elif body.name == "get_authority_treatment":
                 result = repo.authority_treatment(int(args["opinion_id"]))
+            elif body.name == "get_citator_status":
+                result = repo.citator_status()
             elif body.name == "search_by_jurisdiction":
                 query = args.get("query", "")
                 result = repo.search_caselaw(

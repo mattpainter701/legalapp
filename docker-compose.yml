@@ -139,6 +139,7 @@ services:
       MCP_SERVER_URL: ${MCP_SERVER_URL:-}
       MCP_UPSTREAM_API_KEY: ${MCP_UPSTREAM_API_KEY:-}
       MCP_OPERATOR_ASSERTION_SECRET: ${MCP_OPERATOR_ASSERTION_SECRET:-}
+      MCP_CITATOR_SCOPE_ASSERTION_SECRET: ${MCP_CITATOR_SCOPE_ASSERTION_SECRET:-}
     volumes:
       - ${UPLOADS_HOST_DIR:-./uploads}:/app/uploads
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000

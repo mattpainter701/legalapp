@@ -245,6 +245,7 @@ def test_manifest_exposes_domain_scoped_legal_tools():
         "normalize_citation",
         "get_citation_network",
         "get_authority_treatment",
+        "get_citator_status",
         "search_by_jurisdiction",
         "search_recent_authority",
         "get_court_info",

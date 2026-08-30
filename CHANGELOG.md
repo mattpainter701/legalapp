@@ -23,6 +23,16 @@
   and approval/release actions require the `approve_legal_work` capability.
   The native overlay fails closed for inactive entitlements, ambiguous matter
   links, or mismatched contacts without disrupting the base portal.
+- **Review-first citator control plane:** promoted, reviewed public-authority
+  snapshots now have separately immutable source facts for authority identity,
+  direct/later history, citation context, and amendment/repeal evidence plus
+  provisional machine treatment and append-only attorney review/override
+  records. Tenant/matter watches require consent, RLS isolation, idempotent
+  alert fingerprints, revocation, quiet/failure outcomes, and a durable audit
+  trail. Customer MCP read tools expose source/version/as-of evidence and known
+  gaps without making a good-law or complete-coverage claim; a licensed or
+  attorney-reviewed evaluation benchmark remains a release gate for any
+  authoritative-completeness assertion.
 - **Versioned public-authority coverage control plane:** reviewed rights and
   provenance fields, immutable corpus release/audit ledgers, harvest evidence,
   claim-safe coverage projection, and exact embedding compatibility now back the

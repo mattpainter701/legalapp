@@ -279,6 +279,9 @@ class Settings(BaseSettings):
     # Separate short-lived operator assertion signer; never reuse the service
     # transport key for actor/scope authorization claims.
     MCP_OPERATOR_ASSERTION_SECRET: str = ""
+    # Separate backend-to-private-MCP signer for a canonical tenant/matter
+    # ownership assertion.  The public-authority DB does not mirror matters.
+    MCP_CITATOR_SCOPE_ASSERTION_SECRET: str = ""
     MCP_DEFAULT_MONTHLY_CALL_LIMIT: int = 1000
     MCP_MAX_MONTHLY_CALL_LIMIT: int = 100000
     # Customer-facing Research price. Stripe owns invoice calculation, while
@@ -797,10 +800,26 @@ def validate_mcp_security_settings(settings: Settings) -> None:
         )
     if (
         settings.MCP_SERVER_URL
+        and len(settings.MCP_CITATOR_SCOPE_ASSERTION_SECRET) < 32
+    ):
+        raise ValueError(
+            "MCP_CITATOR_SCOPE_ASSERTION_SECRET must be at least 32 characters whenever "
+            "MCP_SERVER_URL is configured"
+        )
+    if (
+        settings.MCP_SERVER_URL
         and settings.MCP_OPERATOR_ASSERTION_SECRET == settings.MCP_UPSTREAM_API_KEY
     ):
         raise ValueError(
             "MCP_OPERATOR_ASSERTION_SECRET must be distinct from MCP_UPSTREAM_API_KEY"
+        )
+    if settings.MCP_SERVER_URL and (
+        settings.MCP_CITATOR_SCOPE_ASSERTION_SECRET
+        in {settings.MCP_UPSTREAM_API_KEY, settings.MCP_OPERATOR_ASSERTION_SECRET}
+    ):
+        raise ValueError(
+            "MCP_CITATOR_SCOPE_ASSERTION_SECRET must be distinct from MCP_UPSTREAM_API_KEY "
+            "and MCP_OPERATOR_ASSERTION_SECRET"
         )
     signer = str(settings.MCP_OPERATOR_ASSERTION_SECRET or "").strip()
     if settings.MCP_SERVER_URL and signer:
@@ -824,6 +843,19 @@ def validate_mcp_security_settings(settings: Settings) -> None:
         if signer in {str(value).strip() for value in encryption_values if value}:
             raise ValueError(
                 "MCP_OPERATOR_ASSERTION_SECRET must be distinct from token-encryption keys"
+            )
+    citator_signer = str(settings.MCP_CITATOR_SCOPE_ASSERTION_SECRET or "").strip()
+    if settings.MCP_SERVER_URL and citator_signer:
+        for name in ("SECRET_KEY", "PLATFORM_TOKEN_SIGNING_KEY", "PLATFORM_SECRET_KEY"):
+            if citator_signer == str(getattr(settings, name, "") or "").strip():
+                raise ValueError(
+                    f"MCP_CITATOR_SCOPE_ASSERTION_SECRET must be distinct from {name}"
+                )
+        if citator_signer in {
+            str(value).strip() for value in encryption_values if value
+        }:
+            raise ValueError(
+                "MCP_CITATOR_SCOPE_ASSERTION_SECRET must be distinct from token-encryption keys"
             )
     if settings.MCP_PRODUCT_ENABLED or settings.RESEARCH_MCP_PUBLIC_URL.strip():
         _validate_mcp_endpoint_url(

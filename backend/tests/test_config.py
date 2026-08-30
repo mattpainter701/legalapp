@@ -197,10 +197,26 @@ def test_mcp_operator_assertion_signer_is_required_and_distinct():
         validate_mcp_security_settings(Settings(**base))
     with pytest.raises(ValueError, match="distinct"):
         validate_mcp_security_settings(
-            Settings(**{**base, "MCP_OPERATOR_ASSERTION_SECRET": "u" * 40})
+            Settings(
+                **{
+                    **base,
+                    "MCP_OPERATOR_ASSERTION_SECRET": "u" * 40,
+                    "MCP_CITATOR_SCOPE_ASSERTION_SECRET": "c" * 40,
+                }
+            )
+        )
+    with pytest.raises(ValueError, match="MCP_CITATOR_SCOPE_ASSERTION_SECRET"):
+        validate_mcp_security_settings(
+            Settings(**{**base, "MCP_OPERATOR_ASSERTION_SECRET": "s" * 40})
         )
     validate_mcp_security_settings(
-        Settings(**{**base, "MCP_OPERATOR_ASSERTION_SECRET": "s" * 40})
+        Settings(
+            **{
+                **base,
+                "MCP_OPERATOR_ASSERTION_SECRET": "s" * 40,
+                "MCP_CITATOR_SCOPE_ASSERTION_SECRET": "c" * 40,
+            }
+        )
     )
 
 
@@ -214,6 +230,7 @@ def test_mcp_operator_assertion_signer_cannot_reuse_platform_or_encryption_secre
         MCP_SERVER_URL="http://courtlistener-mcp:8021",
         MCP_UPSTREAM_API_KEY="u" * 40,
         MCP_OPERATOR_ASSERTION_SECRET="s" * 40,
+        MCP_CITATOR_SCOPE_ASSERTION_SECRET="c" * 40,
     )
     for field in ("SECRET_KEY", "PLATFORM_TOKEN_SIGNING_KEY", "PLATFORM_SECRET_KEY"):
         with pytest.raises(ValueError, match=field):
@@ -228,6 +245,38 @@ def test_mcp_operator_assertion_signer_cannot_reuse_platform_or_encryption_secre
                 **{
                     **base,
                     "TOKEN_ENCRYPTION_KEYS": "first-key,s" + "s" * 39,
+                }
+            )
+        )
+
+
+def test_citator_scope_signer_cannot_reuse_other_mcp_or_platform_secrets():
+    base = dict(
+        _env_file=None,
+        DATABASE_URL="postgresql://test",
+        SECRET_KEY="x" * 48,
+        TOKEN_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+        TOKEN_ENCRYPTION_KEYS="",
+        MCP_SERVER_URL="http://courtlistener-mcp:8021",
+        MCP_UPSTREAM_API_KEY="u" * 40,
+        MCP_OPERATOR_ASSERTION_SECRET="s" * 40,
+        MCP_CITATOR_SCOPE_ASSERTION_SECRET="c" * 40,
+    )
+    with pytest.raises(ValueError, match="MCP_CITATOR_SCOPE_ASSERTION_SECRET"):
+        validate_mcp_security_settings(
+            Settings(**{**base, "MCP_CITATOR_SCOPE_ASSERTION_SECRET": "s" * 40})
+        )
+    with pytest.raises(ValueError, match="SECRET_KEY"):
+        validate_mcp_security_settings(
+            Settings(**{**base, "MCP_CITATOR_SCOPE_ASSERTION_SECRET": "x" * 48})
+        )
+    with pytest.raises(ValueError, match="token-encryption"):
+        validate_mcp_security_settings(
+            Settings(
+                **{
+                    **base,
+                    "MCP_CITATOR_SCOPE_ASSERTION_SECRET": "c" * 40,
+                    "TOKEN_ENCRYPTION_KEY": "c" * 40,
                 }
             )
         )

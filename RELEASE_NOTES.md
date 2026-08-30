@@ -5,6 +5,17 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.30.8 — Review-first citator evidence controls
+
+Released August 30, 2026.
+
+Research now separates linked source facts from provisional treatment interpretation and makes citator limits visible before attorney review.
+
+- **Inspect the evidence state.** Citator results show the promoted source, version, as-of date, history or citation evidence, and currentness limitations separately from any machine interpretation.
+- **Keep treatment reviewable.** Machine labels may abstain and remain provisional until an attorney accepts, rejects, requests more evidence, or records an override in the append-only review trail.
+- **Watch changes safely.** Saved authority watches are consented, tenant-and-matter scoped, deduplicated, revocable, and ready for quiet-hour and failure-aware delivery. This release sends no alerts.
+- **No unsupported status claim.** LawHand does not call an authority good law from a missing negative record. Complete citator coverage still requires a permitted licensed or attorney-reviewed benchmark.
+
 ## 2026.08.30.7 — Private mediation review and party-specific sharing
 
 Released August 30, 2026.
@@ -20,7 +31,7 @@ Licensed mediation work now appears inside the client's existing matter portal w
 
 Released August 30, 2026.
 
-Legal research now distinguishes cited findings from unavailable or unmatched authority and keeps links to the retrieved public source.
+Research now separates linked source facts from provisional treatment interpretation and makes citator limits visible before attorney review.
 
 - **Keep verified findings.** When a response mixes cited and unsupported material, cited findings remain visible while unsupported claims are omitted.
 - **Explain missing authority.** Research gaps now say whether the authority service or fallback was unavailable, or whether no usable match was found.

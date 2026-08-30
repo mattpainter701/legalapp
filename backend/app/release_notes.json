@@ -2,6 +2,19 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.30.8",
+      "version": "2026.08.30.8",
+      "title": "Review-first citator evidence controls",
+      "published_at": "2026-08-30",
+      "summary": "Research now separates linked source facts from provisional treatment interpretation and makes citator limits visible before attorney review.",
+      "highlights": [
+        {"title": "Inspect the evidence state", "description": "Citator results show the promoted source, version, as-of date, history or citation evidence, and currentness limitations separately from any machine interpretation."},
+        {"title": "Keep treatment reviewable", "description": "Machine labels may abstain and remain provisional until an attorney accepts, rejects, requests more evidence, or records an override in the append-only review trail."},
+        {"title": "Watch changes safely", "description": "Saved authority watches are consented, tenant-and-matter scoped, deduplicated, revocable, and ready for quiet-hour and failure-aware delivery. This release sends no alerts."},
+        {"title": "No unsupported status claim", "description": "LawHand does not call an authority good law from a missing negative record. Complete citator coverage still requires a permitted licensed or attorney-reviewed benchmark."}
+      ]
+    },
+    {
       "id": "2026.08.30.7",
       "version": "2026.08.30.7",
       "title": "Private mediation review and party-specific sharing",
@@ -19,7 +32,7 @@
       "version": "2026.08.30.6",
       "title": "Clearer legal research gaps",
       "published_at": "2026-08-30",
-      "summary": "Legal research now distinguishes cited findings from unavailable or unmatched authority and keeps links to the retrieved public source.",
+      "summary": "Research now separates linked source facts from provisional treatment interpretation and makes citator limits visible before attorney review.",
       "highlights": [
         {"title": "Keep verified findings", "description": "When a response mixes cited and unsupported material, cited findings remain visible while unsupported claims are omitted."},
         {"title": "Explain missing authority", "description": "Research gaps now say whether the authority service or fallback was unavailable, or whether no usable match was found."},
