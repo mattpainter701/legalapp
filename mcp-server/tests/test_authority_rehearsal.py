@@ -1191,7 +1191,7 @@ def consume_operator_assertion_with_db(db_url, claims):
         conn.commit()
 
 
-def test_process_once_rehearsal_both_corpora():
+def test_process_once_rehearsal_both_corpora(monkeypatch):
     """Exercise the production worker path with a deterministic model."""
     db_url = os.getenv("AUTHORITY_REHEARSAL_DATABASE_URL")
     if not db_url:
@@ -1307,32 +1307,28 @@ def test_process_once_rehearsal_both_corpora():
         dim=dimension,
         db_url=db_url,
     )
-    monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setenv("AUTHORITY_EMBEDDING_CORPUS_VERSION", version)
     monkeypatch.setenv("AUTHORITY_HEARTBEAT_INTERVAL_SECONDS", "0.01")
-    try:
-        mismatch_config = WorkerConfig(
-            worker_id=0,
-            total_workers=1,
-            batch_size=8,
-            model="wrong-model",
-            model_version=model_version,
-            dim=dimension,
-            db_url=db_url,
-        )
-        with pytest.raises(RuntimeError, match="embedding contract mismatch"):
-            process_once(mismatch_config, DeterministicModel())
-        with connect(db_url) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT COUNT(*) FROM authority_embedding_shards WHERE corpus_version=%s",
-                    [version],
-                )
-                assert cur.fetchone()[0] == 0
-        embedded = process_once(config, DeterministicModel())
-        replay_embedded = process_once(config, DeterministicModel())
-    finally:
-        monkeypatch.undo()
+    mismatch_config = WorkerConfig(
+        worker_id=0,
+        total_workers=1,
+        batch_size=8,
+        model="wrong-model",
+        model_version=model_version,
+        dim=dimension,
+        db_url=db_url,
+    )
+    with pytest.raises(RuntimeError, match="embedding contract mismatch"):
+        process_once(mismatch_config, DeterministicModel())
+    with connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM authority_embedding_shards WHERE corpus_version=%s",
+                [version],
+            )
+            assert cur.fetchone()[0] == 0
+    embedded = process_once(config, DeterministicModel())
+    replay_embedded = process_once(config, DeterministicModel())
     assert embedded == legal_before + authority_before
     assert replay_embedded == 0
     with connect(db_url) as conn:
