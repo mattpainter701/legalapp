@@ -16,46 +16,59 @@ production-shaped rehearsal. Live deployment evidence remains release-specific.
 | `COMP-03` | Open — closure active | PR #270 supplies spam-resistant conditional intake, source attribution, conflict triage, published-slot booking, guarded lead promotion, recovery candidates, and funnel counters. Provider-backed reminders, consented SMS (`ECO-23–ECO-29`), signed-fee-agreement-gated promotion, and the complete lead-to-retainer rehearsal are not proven at this baseline. |
 | `COMP-04` | Accepted | PR #273 merged as `9375fdfb`; the versioned operating contract, public status/incident lifecycle, support policy, signed tenant export, migration receipt, legal-hold/two-operator offboarding evidence, subprocessor/DPA/BAA boundaries, Trust Center, and synthetic production-shaped tests meet the v1 acceptance without claiming unattained SLAs, certifications, or pen tests. Backup, restore, and deployment proof must still be refreshed for each production release. |
 | `COMP-05` | Reopened | PR #275 merged as `7e0745b3` and provides bounded DOCX/PDF parsing, isolation, review decisions, missing/ambiguous reporting, and DOCX report/TOA export. Current behavior remains partial or absent for provider-backed citation resolution, page/pin-cite quote verification, available treatment/currentness evidence, genuinely omitted-authority discovery, opposing-brief analysis beyond citation-set difference, source hyperlinks, existing-document UI, and a full retrieval-to-export rehearsal. `BK20` therefore remains open. |
-| `COMP-06` | Open — snapshot integration blocked | Draft PR #280 at independently reviewed head `76f4eb48` adds version-keyed caselaw cluster/opinion/chunk snapshot tables, candidate cloning, snapshot-backed search, more promoted predicates, and old/new/rollback fixture assertions. It is not accepted: the mandatory pgvector job is red because the test inserts version-FK fixtures before staging the version; opinion loading can update every historical snapshot sharing a cluster ID; real chunk creation and embedding still target legacy singleton tables; court/docket/citation/detail surfaces remain dependent on legacy rows/edges; initial legacy-to-snapshot backfill and promoted-snapshot immutability enforcement are absent; and the rehearsal uses different case IDs and direct SQL instead of proving a same-identity production loader cutover. Retry execution, signed platform authorization, shard reopening/long heartbeat/measured hardware health, and version/latest-bound audit/currentness evidence also remain open. Private Firm Memory remains a separate tenant/matter-scoped corpus and must not feed public-authority telemetry. |
+| `COMP-06` | Open — lifecycle acceptance blocked | Draft PR #280 at independently reviewed head `99af2fa4` now has version-keyed caselaw cluster/opinion/chunk/citation snapshots, candidate cloning, explicit opinion-to-cluster identity, snapshot-backed search/detail/similarity/coverage/worker paths, atomic cutover/rollback, and post-promotion mutation guards. Same-ID, two-cluster fixture assertions and the mandatory pgvector rehearsal are meaningful progress, but they still bypass the production CSV ingest/loader, rights, embedding-worker, authorization, retry, concurrency, currentness, and isolation paths. Initial legacy-to-snapshot backfill, atomic load-to-searchable completion, promotion-time content/integrity checks, composite snapshot relationships, immutable-ledger negative tests, signed platform authorization, and latest same-version audit/currentness evidence remain open. Private Firm Memory remains a separate tenant/matter-scoped corpus and must not feed public-authority telemetry. |
 
 ## COMP-06 draft acceptance review
 
-PR #280 was re-reviewed read-only at exact hardened head
-`76f4eb48c7983ff53acd8635115d97858df17236`, based on `origin/main`
-`42b486e791d182010f4e476dd9df293fb9ccd206`. The owned worktree was clean and the
-PR remained draft/blocked. The mandatory `Authority control-plane DB rehearsal`
-failed in run
-<https://github.com/mattpainter701/legalapp/actions/runs/33321159018>. The test
-inserts legal/caselaw rows referencing the fixture version before that version is
-staged, and the broader production integration remains incomplete:
+PR #280 was re-reviewed read-only through exact hardened head
+`99af2fa49c7abb6c9450828cb805ccf2c9ceb1d5`, based on `origin/main`
+`42b486e791d182010f4e476dd9df293fb9ccd206`. At handoff the owned worktree was
+clean and pushed, and the PR remained open, draft, and blocked. The earlier
+snapshot rehearsal failure at `3f1e4883` was corrected; the mandatory
+`Authority control-plane DB rehearsal` passed on superseded head `2664aa9d` and
+again on exact head `99af2fa4`; tenant safety and both CodeQL analyses were also
+green, while backend pytest, frontend build, and browser E2E were still pending
+at the latest snapshot. Passing the synthetic job is necessary but does not
+close the broader acceptance matrix:
 
-- **Version-safe service:** composite snapshot tables and search queries now
-  exist, but opinion loading selects every snapshot with the same cluster ID and
-  can mutate historical opinion text. Production chunk materialization still
-  reads/writes legacy singleton rows, and there is no initial legacy backfill or
-  database guard preventing changes to promoted/retired snapshots.
+- **Version-safe service:** cluster, opinion, chunk, and citation snapshots now
+  share a corpus version; opinions carry an explicit cluster ID; search, detail,
+  similarity, citation, court/docket, worker, and operator-count paths mostly use
+  the promoted snapshot; and promoted/retired/rolled-back rows have mutation
+  guards. There is still no idempotent initial migration from existing legacy
+  caselaw into the first promoted snapshot, no production-shaped upgrade fixture
+  proving the strict opinion-cluster backfill, no composite foreign-key integrity,
+  and no promotion gate proving that every staged opinion has complete searchable
+  chunks and required relationships.
 - **Harvest and rights:** failure continuation, version-aware evidence, and
   rights fields improved, but the checkpoint is still a document URL rather than
   a consumed upstream pagination cursor; no runner consumes `next_retry_at`; and
   repeat failure attempts are not demonstrated as append-only, bounded work.
-- **Embedding operations:** snapshot-backed caselaw search no longer reads the
-  table the worker embeds. Temperature/capacity fields were added as arbitrary
-  CLI inputs rather than measured evidence; long-inference heartbeat, completed
-  shard reopening, and zero-first-corpus starvation also remain unresolved.
+- **Loader and embedding operations:** the loader can populate candidate
+  snapshots, snapshot chunk generation joins the explicit opinion/cluster
+  relationship, and the worker targets snapshot chunks. `load_mvp_corpus()` and
+  chunk creation remain separate operator steps, however, and the rehearsal does
+  not execute the real CSV loader or embedding worker. Temperature/capacity are
+  operator-supplied values rather than measured evidence; long-inference
+  heartbeat, completed-shard reopening, failure/retry/drain, and first-corpus
+  starvation are not closed.
 - **Operator and query isolation:** the backend platform shared-secret still
-  bypasses the repository's signed `platform:write` principal contract. Added
-  promoted predicates do not make legacy citation edges, court/docket coverage,
-  or case-detail data part of the new immutable snapshot, so new same-ID releases
-  can be empty, stale, or incomplete outside the search path.
+  bypasses the repository's signed `platform:write` principal contract. Snapshot
+  query coverage is broader and the known legacy chunk-ID defects are fixed, but
+  authorization denial, concurrent promote/rollback, relationship-integrity, and
+  fail-closed unsupported-path tests are still absent.
 - **Coverage truth:** display claims now require three passing audit kinds, but
   any historical passing row can mask a newer failure. Completeness and freshness
   draw from global, non-versioned ledgers/timestamps, isolation is not a promotion
   gate, and source-health fallback does not consistently preserve partition data.
-- **Executable acceptance:** the PostgreSQL job is mandatory but red. Its direct
-  SQL fixtures bypass the production rights/ingest/loader/chunker pipeline and
-  use different case identities for old and new content, so even after fixing the
-  FK order it will not prove same-case replacement/rollback, schema upgrade,
-  retry, worker, authorization, concurrency, currentness, or isolation behavior.
+- **Executable acceptance:** the PostgreSQL job now stages before FK-bound data,
+  uses the same two case identities across old/new versions, generates snapshot
+  chunks, exercises repository search/coverage, and asserts cutover/rollback.
+  Its fixtures still insert snapshot rows directly, so it does not prove schema
+  upgrade/backfill, real source rights/CSV ingest, retry/dead-letter execution,
+  worker leases/failure, signed authorization, concurrency, partition-level
+  currentness, isolation, or mutation rejection. Brief Check and citation
+  currentness remain only partially connected to this control plane.
 
 The feature branch remains the implementation owner's responsibility. It must
 stay draft until a fresh exact-head review closes these rows; no production
