@@ -26,6 +26,16 @@
   Skynet research upstream without exposing its credential.
 
 ### Added
+- **Operating trust workflows and evidence:** the versioned public contract now
+  drives measurable non-SLA objectives, exact support hours and S1-S4
+  escalation, sanitized append-only incidents, a named subprocessor registry,
+  DPA/BAA applicability boundaries, and a content-addressed security-review
+  packet. Tenant-scoped immutable receipts reconcile agreement-backed
+  onboarding, BK28 migration manifests, and complete export category counts.
+  Offboarding snapshots legal holds and inventory, requires two distinct
+  operator approvals, and records provider and backup disposition without the
+  evidence endpoint performing deletion. The penetration-test cadence remains
+  explicitly planned-not-attained, and every certification flag remains false.
 - **File-share agents can build a private lexical-search control index:** an
   explicitly enabled, agent-local SQLite FTS5 sidecar indexes bounded text from
   supported files without embeddings or a new document-text relay to LawHand.

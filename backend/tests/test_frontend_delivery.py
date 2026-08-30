@@ -286,7 +286,9 @@ def test_nginx_operator_routes_and_pdf_csp_are_consistent() -> None:
     # granted to every response. An inline snippet is never allowed.
     assert "script-src 'self'$csp_analytics_script;" in csp_lines[0]
     assert "'unsafe-inline'" not in csp_lines[0].split("style-src")[0]
-    public_routes = "privacy|terms|pricing|request-demo|product(?:/(?:chat|mcp))?"
+    public_routes = (
+        "privacy|terms|pricing|request-demo|trust-center|product(?:/(?:chat|mcp))?"
+    )
     assert nginx.count(f"location ~ ^/({public_routes})/?$ {{") == 2
     assert nginx.count(f"rewrite ^/({public_routes})/?$ /$1/index.html break;") == 2
 
@@ -308,7 +310,7 @@ def test_nginx_allows_analytics_hosts_only_on_public_marketing_pages() -> None:
         assert re.search(
             r'default\s+"";', block
         ), f"{name} must deny the analytics hosts by default"
-        for route in ("privacy|terms|pricing|request-demo", "product"):
+        for route in ("privacy|terms|pricing|request-demo|trust-center", "product"):
             assert route in block, f"{name} must cover the {route} pages"
 
     # Every route the SEO config publishes must be able to load the tag, or the

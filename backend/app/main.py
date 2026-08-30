@@ -77,6 +77,8 @@ from app.routers.esignature import router as esignature_router
 from app.routers.esignature import portal_router as esignature_portal_router
 from app.routers.onboarding import router as onboarding_router
 from app.routers.compliance import router as compliance_router
+from app.routers.operating_contract import router as operating_contract_router
+from app.routers.operating_trust import router as operating_trust_router
 from app.routers.licensing import router as licensing_router
 from app.services.mcp_protocol import protocol_endpoint, protocol_lifespan
 from app.services.workspace_mcp_protocol import (
@@ -455,6 +457,8 @@ app.include_router(esignature_portal_router)
 app.include_router(document_templates_router)
 app.include_router(onboarding_router)
 app.include_router(compliance_router)
+app.include_router(operating_contract_router)
+app.include_router(operating_trust_router)
 app.include_router(licensing_router)
 app.include_router(smb_router)
 app.include_router(portfolio_router)

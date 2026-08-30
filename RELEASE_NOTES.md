@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.29.1 — Operating trust workflows and evidence
+
+Released August 29, 2026.
+
+Customers and operators can use one versioned contract for support, incidents, lifecycle receipts, offboarding proof, providers, and security review without unsupported SLA or certification claims.
+
+- **Use defined support and status workflows.** Published business hours, S1-S4 severity objectives, audited escalation, and sanitized append-only incident updates make the operating process reviewable without creating an SLA.
+- **Carry acceptance evidence through the lifecycle.** Onboarding, BK28 migration, and export receipts reconcile scope and counts; offboarding blocks on holds and needs two operators before proof.
+- **Export an honest security packet.** The content-addressed packet names providers and boundaries while marking penetration testing and certifications as not attained.
+
 ## 2026.08.28.6 — Attributed intake and safer lead follow-through
 
 Released August 28, 2026.

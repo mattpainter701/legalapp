@@ -67,6 +67,7 @@ export function MarketingFooter() {
           <Link to="/product/chat" className="inline-flex min-h-11 items-center hover:text-brand-ink">AI Chat</Link>
           <Link to="/product/mcp" className="inline-flex min-h-11 items-center hover:text-brand-ink">Legal Research MCP</Link>
           <Link to="/pricing" className="inline-flex min-h-11 items-center hover:text-brand-ink">Pricing</Link>
+          <Link to="/trust-center" className="inline-flex min-h-11 items-center hover:text-brand-ink">Trust center</Link>
           <Link to="/privacy" className="inline-flex min-h-11 items-center hover:text-brand-ink">Privacy</Link>
           <Link to="/terms" className="inline-flex min-h-11 items-center hover:text-brand-ink">Terms</Link>
           <span>© {new Date().getFullYear()} LawHand</span>

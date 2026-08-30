@@ -33,7 +33,7 @@ export const PLATFORM_PRICE_USD = '89'
 export const MCP_TOOL_CALL_PRICE_USD = '0.45'
 
 // Bumped whenever public marketing copy changes; feeds sitemap <lastmod>.
-export const PUBLIC_CONTENT_LASTMOD = '2026-08-28'
+export const PUBLIC_CONTENT_LASTMOD = '2026-08-29'
 
 export const PRICING_FAQ = Object.freeze([
   Object.freeze([
@@ -191,6 +191,15 @@ export const PUBLIC_ROUTE_META = Object.freeze({
     indexable: true,
     priority: '0.3',
     breadcrumb: 'Terms of Use',
+  },
+  '/trust-center': {
+    title: 'Trust Center | LawHand Operating Controls',
+    description:
+      'Review LawHand operating scope, support and incident workflows, lifecycle evidence, provider boundaries, and planned assurance work without unsupported SLA or certification claims.',
+    canonicalPath: '/trust-center',
+    indexable: true,
+    priority: '0.5',
+    breadcrumb: 'Trust Center',
   },
 })
 

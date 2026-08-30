@@ -2,6 +2,18 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.29.1",
+      "version": "2026.08.29.1",
+      "title": "Operating trust workflows and evidence",
+      "published_at": "2026-08-29",
+      "summary": "Customers and operators can use one versioned contract for support, incidents, lifecycle receipts, offboarding proof, providers, and security review without unsupported SLA or certification claims.",
+      "highlights": [
+        {"title": "Use defined support and status workflows", "description": "Published business hours, S1-S4 severity objectives, audited escalation, and sanitized append-only incident updates make the operating process reviewable without creating an SLA."},
+        {"title": "Carry acceptance evidence through the lifecycle", "description": "Onboarding, BK28 migration, and export receipts reconcile scope and counts; offboarding blocks on holds and needs two operators before proof."},
+        {"title": "Export an honest security packet", "description": "The content-addressed packet names providers and boundaries while marking penetration testing and certifications as not attained."}
+      ]
+    },
+    {
       "id": "2026.08.28.6",
       "version": "2026.08.28.6",
       "title": "Attributed intake and safer lead follow-through",
