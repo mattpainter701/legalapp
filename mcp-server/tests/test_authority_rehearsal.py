@@ -9,6 +9,7 @@ import os
 import uuid
 import bz2
 import csv
+from urllib.parse import quote
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -1046,3 +1047,132 @@ def consume_operator_assertion_with_db(db_url, claims):
                 conn.rollback()
                 raise RuntimeError("replayed signed operator context")
         conn.commit()
+
+
+def test_legacy_upgrade_bootstrap_rehearsal():
+    """Upgrade a pre-control-plane schema without losing its served corpus."""
+    db_url = os.getenv("AUTHORITY_REHEARSAL_DATABASE_URL")
+    if not db_url:
+        pytest.skip(
+            "set AUTHORITY_REHEARSAL_DATABASE_URL for the disposable DB rehearsal"
+        )
+    schema = "legacy_rehearsal_" + uuid.uuid4().hex[:12]
+    scoped_url = db_url + ("&" if "?" in db_url else "?") + (
+        "options=-csearch_path%3D" + quote(schema + ",public", safe="")
+    )
+    with connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(f'CREATE SCHEMA "{schema}"')
+            cur.execute(f'SET search_path TO "{schema}", public')
+            cur.execute(
+                """CREATE TABLE legal_sources (
+                    source_key text PRIMARY KEY, publisher text, source_type text,
+                    canonical_url text, enabled boolean, storage_policy text,
+                    rights_decision text, expected_cadence text,
+                    claim_safe_wording text, metadata jsonb NOT NULL DEFAULT '{}'::jsonb)"""
+            )
+            cur.execute(
+                """CREATE TABLE opinion_clusters (
+                    cluster_id bigint PRIMARY KEY, docket_id bigint, case_name text,
+                    date_filed date, precedential_status text, citations jsonb,
+                    metadata jsonb, corpus_version text)"""
+            )
+            cur.execute(
+                """CREATE TABLE opinions (
+                    opinion_id bigint PRIMARY KEY, cluster_id bigint, type text,
+                    author_id bigint, html_with_citations text, plain_text text,
+                    sha1 text, source_url text)"""
+            )
+            cur.execute(
+                """CREATE TABLE opinion_chunks (
+                    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), opinion_id bigint,
+                    cluster_id bigint, court_id text, chunk_index integer,
+                    content text, embedding vector(1024), embedding_model text,
+                    embedding_version integer, corpus_version text)"""
+            )
+            cur.execute(
+                """CREATE TABLE opinion_citations (
+                    citing_opinion_id bigint, cited_opinion_id bigint,
+                    cited_cluster_id bigint, cited_reporter text,
+                    cited_volume text, cited_page text, depth integer)"""
+            )
+            cur.execute(
+                """CREATE TABLE source_sync_states (
+                    source_key text PRIMARY KEY, updated_at timestamptz)"""
+            )
+            cur.execute(
+                """INSERT INTO legal_sources
+                    (source_key, publisher, source_type, canonical_url, enabled,
+                     storage_policy, rights_decision, expected_cadence,
+                     claim_safe_wording)
+                    VALUES ('legacy:fixture', 'Legacy', 'case_law',
+                            'https://legacy.example', true, 'normalized_text',
+                            'official', 'daily', 'Bounded legacy fixture')"""
+            )
+            cur.execute(
+                """INSERT INTO opinion_clusters
+                    (cluster_id, case_name, date_filed, citations)
+                    VALUES (98000001, 'Legacy served case', '2025-01-01', '[]')"""
+            )
+            cur.execute(
+                """INSERT INTO opinions
+                    (opinion_id, cluster_id, author_id, plain_text, source_url)
+                    VALUES (98000001, 98000001, 98000001,
+                            'Legacy served opinion', 'https://legacy.example/opinion')"""
+            )
+            cur.execute(
+                """INSERT INTO opinion_chunks
+                    (opinion_id, cluster_id, court_id, chunk_index, content)
+                    VALUES (98000001, 98000001, 'legacy-court', 0,
+                            'Legacy served opinion')"""
+            )
+            cur.execute(
+                """INSERT INTO opinion_citations
+                    (citing_opinion_id, cited_reporter, cited_volume, cited_page)
+                    VALUES (98000001, 'Legacy Reporter', '9', '99')"""
+            )
+        conn.commit()
+    init_schema(scoped_url)
+    with connect(scoped_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT version, status FROM authority_corpus_versions
+                    WHERE version='legacy-bootstrap'"""
+            )
+            assert cur.fetchone() == ("legacy-bootstrap", "promoted")
+            cur.execute(
+                """SELECT COUNT(*) FROM authority_case_clusters
+                    WHERE corpus_version='legacy-bootstrap' AND cluster_id=98000001"""
+            )
+            assert cur.fetchone()[0] == 1
+            cur.execute(
+                """SELECT COUNT(*) FROM authority_case_opinions
+                    WHERE corpus_version='legacy-bootstrap' AND opinion_id=98000001"""
+            )
+            assert cur.fetchone()[0] == 1
+            cur.execute(
+                """SELECT COUNT(*) FROM authority_case_chunks
+                    WHERE corpus_version='legacy-bootstrap' AND opinion_id=98000001"""
+            )
+            assert cur.fetchone()[0] == 1
+            cur.execute(
+                """SELECT cited_opinion_id, cited_reporter, cited_volume, cited_page
+                    FROM authority_case_citations
+                   WHERE corpus_version='legacy-bootstrap'"""
+            )
+            assert cur.fetchone() == (None, "Legacy Reporter", "9", "99")
+            cur.execute(
+                """SELECT COUNT(*) FROM authority_case_chunks
+                   WHERE corpus_version IS NULL"""
+            )
+            assert cur.fetchone()[0] == 0
+        conn.commit()
+    # A populated upgrade is idempotent and must not duplicate immutable rows.
+    init_schema(scoped_url)
+    with connect(scoped_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT COUNT(*) FROM authority_case_chunks
+                   WHERE corpus_version='legacy-bootstrap'"""
+            )
+            assert cur.fetchone()[0] == 1

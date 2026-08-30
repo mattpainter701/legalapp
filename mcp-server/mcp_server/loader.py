@@ -85,7 +85,8 @@ def _ensure_legacy_bootstrap_version(conn) -> str | None:
             """SELECT EXISTS (SELECT 1 FROM opinion_clusters)
                     OR EXISTS (SELECT 1 FROM opinions)
                     OR EXISTS (SELECT 1 FROM opinion_chunks)
-                    OR EXISTS (SELECT 1 FROM opinion_citations)"""
+                    OR EXISTS (SELECT 1 FROM opinion_citations)
+                    OR EXISTS (SELECT 1 FROM legal_documents)"""
         )
         if not cur.fetchone()[0]:
             return None
@@ -107,6 +108,15 @@ def _ensure_legacy_bootstrap_version(conn) -> str | None:
                 f"UPDATE {table} SET corpus_version=%s WHERE corpus_version IS NULL",
                 [version],
             )
+        cur.execute(
+            """UPDATE legal_document_chunks c
+                  SET corpus_version = d.corpus_version
+                 FROM legal_documents d
+                WHERE c.document_id = d.id
+                  AND c.corpus_version IS NULL
+                  AND d.corpus_version = %s""",
+            [version],
+        )
         return version
 
 
@@ -1107,7 +1117,7 @@ def create_snapshot_chunks(conn, corpus_version: str, limit: int | None = None) 
     created = 0
     with conn.cursor() as cur:
         cur.execute(
-            """SELECT embedding_model, embedding_version
+            """SELECT embedding_model, embedding_version, embedding_dimension
                  FROM authority_corpus_versions
                 WHERE version=%s""",
             [corpus_version],
@@ -1115,7 +1125,7 @@ def create_snapshot_chunks(conn, corpus_version: str, limit: int | None = None) 
         contract = cur.fetchone()
         if not contract:
             raise ValueError(f"unknown corpus version: {corpus_version}")
-        expected_model, expected_version = contract
+        expected_model, expected_version, expected_dimension = contract
         cur.execute(
             """
             SELECT ao.opinion_id, ac.cluster_id, d.court_id, ao.plain_text
@@ -1151,8 +1161,14 @@ def create_snapshot_chunks(conn, corpus_version: str, limit: int | None = None) 
                       embedding_model=NULL,
                       embedding_version=NULL
                     WHERE authority_case_chunks.content IS DISTINCT FROM EXCLUDED.content
-                       OR authority_case_chunks.embedding_model IS DISTINCT FROM %s
-                       OR authority_case_chunks.embedding_version IS DISTINCT FROM %s
+                       OR (
+                            authority_case_chunks.embedding IS NOT NULL
+                            AND (
+                              authority_case_chunks.embedding_model IS DISTINCT FROM %s
+                              OR authority_case_chunks.embedding_version IS DISTINCT FROM %s
+                              OR vector_dims(authority_case_chunks.embedding) IS DISTINCT FROM %s
+                            )
+                          )
                     """,
                     [
                         corpus_version,
@@ -1163,6 +1179,7 @@ def create_snapshot_chunks(conn, corpus_version: str, limit: int | None = None) 
                         content,
                         expected_model,
                         expected_version,
+                        expected_dimension,
                     ],
                 )
                 created += cur.rowcount
