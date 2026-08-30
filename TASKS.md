@@ -60,11 +60,12 @@ remains open for its missing provider-backed conversion evidence; `COMP-05` is
 reopened because the merged Brief Check is a safe review-first scaffold but does
 not yet satisfy the full citation-resolution, pin-cite, treatment/currentness,
 omitted-authority, linked-export, and end-to-end acceptance below; and `COMP-06`
-remains open after independent review of hardened draft PR #280 at `c49cdfd6`:
-the new mandatory database rehearsal fails its second cutover, and the branch
-still does not prove version-safe caselaw/document serving and rollback,
+remains open after independent review of hardened draft PR #280 at `68063fbc`:
+its mandatory database rehearsal now passes the synthetic cutover, but the branch
+still does not preserve side-by-side caselaw for a real served rollback or prove
 execution-resumable harvest, durable embedding-worker recovery, version-bound
-audits/currentness, or complete platform/query isolation. See
+audits/currentness, complete platform/query isolation, and the full database
+lifecycle. See
 [`docs/core-milestone-status.md`](docs/core-milestone-status.md) for the evidence
 matrix and claim boundaries. Feature PRs do not self-certify these checkboxes.
 
