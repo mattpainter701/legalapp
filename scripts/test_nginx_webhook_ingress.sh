@@ -176,8 +176,8 @@ docker run -d --name "$MOCK_CONTAINER" \
       printf "%s\n" hidden-mcp-bait > /tmp/frontend/.mcp.json
       printf "%s\n" hidden-cursor-bait > /tmp/frontend/.cursor/mcp.json
       mkdir -p /tmp/frontend/privacy /tmp/frontend/terms
-      printf "%s\n" "<html><head><title>Privacy Summary | WellPled</title><link rel=\"canonical\" href=\"https://headers.test/privacy\"></head><body>Privacy summary</body></html>" > /tmp/frontend/privacy/index.html
-      printf "%s\n" "<html><head><title>Service Summary | WellPled</title><link rel=\"canonical\" href=\"https://headers.test/terms\"></head><body>Service summary</body></html>" > /tmp/frontend/terms/index.html
+      printf "%s\n" "<html><head><title>Privacy Summary | LawHand</title><link rel=\"canonical\" href=\"https://headers.test/privacy\"></head><body>Privacy summary</body></html>" > /tmp/frontend/privacy/index.html
+      printf "%s\n" "<html><head><title>Service Summary | LawHand</title><link rel=\"canonical\" href=\"https://headers.test/terms\"></head><body>Service summary</body></html>" > /tmp/frontend/terms/index.html
       python3 -m http.server 8000 --directory /tmp/backend &
       mkdir -p /tmp/office
       printf Office-task-pane > /tmp/office/index.html
@@ -551,9 +551,9 @@ done
 for public_path in /privacy /privacy/ /terms /terms/; do
   public_name="$(printf '%s' "$public_path" | cut -d/ -f2)"
   if [ "$public_name" = privacy ]; then
-    expected_title="Privacy Summary | WellPled"
+    expected_title="Privacy Summary | LawHand"
   else
-    expected_title="Service Summary | WellPled"
+    expected_title="Service Summary | LawHand"
   fi
   for transport in edge tls; do
     public_response=""

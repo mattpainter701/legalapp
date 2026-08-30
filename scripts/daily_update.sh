@@ -93,7 +93,7 @@ trap cleanup EXIT
 # Pre-flight checks
 # ---------------------------------------------------------------------------
 
-log_info "=== WellPled Daily Update: $TODAY ==="
+log_info "=== LawHand Daily Update: $TODAY ==="
 
 # Create directories
 mkdir -p "$LOG_DIR" "$DOWNLOAD_DIR"

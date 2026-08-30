@@ -265,12 +265,11 @@ and module-gated, so a newly invited associate sees none of it.
 A help link in the header and hover definitions on the routing choices would
 cover most of it.
 
-### 15. Brand name is inconsistent between docs and product
+### 15. Brand identity is now consistent
 
-`README.md:1` calls the product **WellPled**. The UI says **LawHand** in 20 files
-(`Sidebar.jsx:180`, `LawHandLogo.jsx`, `SeoHead.jsx`, and the rest). Zero
-occurrences of "WellPled" in `frontend/src`. Whichever is current, the other
-should stop appearing.
+The product name is **LawHand** across the UI, documentation, operational
+configuration, and service metadata. Retired brand collateral must not be
+reintroduced.
 
 ---
 

@@ -28,7 +28,7 @@ from .control_plane import (
 from .repository import CourtListenerRepository
 from .tools import build_tool_manifest
 
-app = FastAPI(title="WellPled CourtListener MCP", version="0.1.0")
+app = FastAPI(title="LawHand CourtListener MCP", version="0.1.0")
 query_embedder = QueryEmbeddingClient.from_env()
 
 
