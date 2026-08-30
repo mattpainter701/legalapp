@@ -672,16 +672,102 @@ TREATMENT_REVIEW_DECISIONS = {
     "rejected",
     "needs_more_evidence",
 }
-_CITATOR_SCOPE = "citator:watch"
 _CITATOR_SCOPE_MAX_SECONDS = 300
+_CITATOR_REVIEWER_PURPOSE = "citator:reviewer:authorize"
+_CITATOR_WATCH_PURPOSE = "citator:watch:save"
 
 
 def _decode_assertion_part(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
 
 
-def _validate_citator_matter_scope(
-    assertion: str, *, tenant_id: str, matter_id: str, principal: str
+def _canonical_command_hash(payload: dict[str, Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _consume_citator_command_assertion(
+    conn: Any,
+    assertion: str,
+    *,
+    signer_secret_name: str,
+    purpose: str,
+    expected_actor: str,
+    expected_body: dict[str, Any],
+    tenant_id: str | None = None,
+    matter_id: str | None = None,
+    max_seconds: int,
+) -> None:
+    """Verify and atomically consume a body-bound backend command assertion."""
+    signer_secret = os.getenv(signer_secret_name, "")
+    if len(signer_secret) < 32:
+        raise PermissionError("citator command assertion signing is not configured")
+    try:
+        encoded_payload, encoded_signature = assertion.split(".", 1)
+        payload = _decode_assertion_part(encoded_payload)
+        signature = _decode_assertion_part(encoded_signature)
+        claims = json.loads(payload)
+        if not isinstance(claims, dict):
+            raise ValueError("assertion claims must be an object")
+        issued = int(claims["issued"])
+        expires = int(claims["expires"])
+        nonce = str(claims["nonce"])
+        body_sha256 = str(claims["body_sha256"])
+        actor = str(claims["actor"])
+    except (KeyError, ValueError, TypeError, binascii.Error, json.JSONDecodeError):
+        raise PermissionError("invalid citator command assertion") from None
+    expected = hmac.new(signer_secret.encode(), payload, hashlib.sha256).digest()
+    now = int(time.time())
+    if (
+        not hmac.compare_digest(signature, expected)
+        or not nonce
+        or claims.get("purpose") != purpose
+        or actor != expected_actor
+        or issued > now + 30
+        or expires <= now
+        or expires <= issued
+        or expires - issued > max_seconds
+        or body_sha256 != _canonical_command_hash(expected_body)
+        or (tenant_id is not None and str(claims.get("tenant_id")) != str(tenant_id))
+        or (matter_id is not None and str(claims.get("matter_id")) != str(matter_id))
+    ):
+        raise PermissionError("invalid, expired, or mismatched citator command assertion")
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM citator_command_assertions WHERE expires_at < now()")
+        cur.execute(
+            """INSERT INTO citator_command_assertions
+                   (nonce, purpose, actor, credential_id, tenant_id, matter_id,
+                    body_sha256, issued_at, expires_at)
+               VALUES (%s, %s, %s, %s, %s::uuid, %s::uuid, %s,
+                       to_timestamp(%s), to_timestamp(%s))
+               ON CONFLICT (nonce) DO NOTHING RETURNING nonce""",
+            [
+                nonce,
+                purpose,
+                actor,
+                str(claims.get("credential") or "") or None,
+                tenant_id,
+                matter_id,
+                body_sha256,
+                issued,
+                expires,
+            ],
+        )
+        if cur.fetchone() is None:
+            raise PermissionError("replayed citator command assertion")
+
+
+def _consume_citator_matter_scope(
+    conn: Any,
+    assertion: str,
+    *,
+    tenant_id: str,
+    matter_id: str,
+    principal: str,
+    authority_key: str,
+    delivery_channels: list[str],
+    quiet_hours: dict[str, Any],
 ) -> None:
     """Require a short-lived backend assertion of canonical matter ownership.
 
@@ -691,36 +777,25 @@ def _validate_citator_matter_scope(
     authoritative lookup and then mint this HMAC-bound assertion.  Absence,
     expiry, a malformed signature, or any identity mismatch fails closed.
     """
-    signer_secret = os.getenv("MCP_CITATOR_SCOPE_ASSERTION_SECRET", "")
-    if len(signer_secret) < 32:
-        raise PermissionError("citator matter-scope assertion signing is not configured")
-    try:
-        encoded_payload, encoded_signature = assertion.split(".", 1)
-        payload = _decode_assertion_part(encoded_payload)
-        signature = _decode_assertion_part(encoded_signature)
-        expected = hmac.new(signer_secret.encode(), payload, hashlib.sha256).digest()
-        claims = json.loads(payload)
-    except (ValueError, TypeError, binascii.Error, json.JSONDecodeError):
-        raise PermissionError("invalid citator matter-scope assertion") from None
-    if not hmac.compare_digest(signature, expected):
-        raise PermissionError("invalid citator matter-scope assertion")
-    now = int(time.time())
-    try:
-        issued = int(claims["issued"])
-        expires = int(claims["expires"])
-    except (KeyError, TypeError, ValueError):
-        raise PermissionError("invalid citator matter-scope assertion") from None
-    if (
-        expires <= now
-        or issued > now + 30
-        or expires <= issued
-        or expires - issued > _CITATOR_SCOPE_MAX_SECONDS
-        or claims.get("scope") != _CITATOR_SCOPE
-        or str(claims.get("tenant_id")) != str(tenant_id)
-        or str(claims.get("matter_id")) != str(matter_id)
-        or str(claims.get("principal")) != str(principal)
-    ):
-        raise PermissionError("citator matter-scope assertion is expired or does not match the watch")
+    _consume_citator_command_assertion(
+        conn,
+        assertion,
+        signer_secret_name="MCP_CITATOR_SCOPE_ASSERTION_SECRET",
+        purpose=_CITATOR_WATCH_PURPOSE,
+        expected_actor=principal,
+        expected_body={
+            "action": "save",
+            "tenant_id": str(tenant_id),
+            "matter_id": str(matter_id),
+            "principal": principal,
+            "authority_key": authority_key,
+            "delivery_channels": delivery_channels,
+            "quiet_hours": quiet_hours,
+        },
+        tenant_id=tenant_id,
+        matter_id=matter_id,
+        max_seconds=_CITATOR_SCOPE_MAX_SECONDS,
+    )
 
 
 def _citator_authority_is_permitted(conn: Any, *, corpus_version: str, authority_key: str) -> bool:
@@ -850,7 +925,12 @@ def record_treatment_assessment(
 
 
 def authorize_citator_reviewer(
-    conn: Any, *, principal: str, authorization_basis: str, actor: str
+    conn: Any,
+    *,
+    principal: str,
+    authorization_basis: str,
+    actor: str,
+    authorization_assertion: str,
 ) -> None:
     """Register an internal attorney-review principal with an audit basis.
 
@@ -858,9 +938,22 @@ def authorize_citator_reviewer(
     authenticated tenant/RBAC adapter registers a principal, treatment review
     is unavailable rather than treating a display name as legal authority.
     """
-    actor, _ = _authorized(actor, "citator reviewer authorization")
     if not principal.strip() or not authorization_basis.strip():
         raise ValueError("reviewer principal and authorization basis are required")
+    actor, _ = _authorized(actor, "citator reviewer authorization")
+    _consume_citator_command_assertion(
+        conn,
+        authorization_assertion,
+        signer_secret_name="MCP_OPERATOR_ASSERTION_SECRET",
+        purpose=_CITATOR_REVIEWER_PURPOSE,
+        expected_actor=actor,
+        expected_body={
+            "action": "authorize_reviewer",
+            "principal": principal.strip(),
+            "authorization_basis": authorization_basis.strip()[:1000],
+        },
+        max_seconds=60,
+    )
     with conn.cursor() as cur:
         cur.execute(
             """INSERT INTO authority_reviewer_principals
@@ -938,11 +1031,16 @@ def save_citator_watch(
         raise ValueError("tenant, matter, authority, and actor are required")
     if not delivery_channels:
         raise ValueError("at least one consented alert channel is required")
-    _validate_citator_matter_scope(
+    normalized_quiet_hours = quiet_hours or {}
+    _consume_citator_matter_scope(
+        conn,
         matter_scope_assertion,
         tenant_id=tenant_id,
         matter_id=matter_id,
         principal=created_by,
+        authority_key=authority_key,
+        delivery_channels=delivery_channels,
+        quiet_hours=normalized_quiet_hours,
     )
     with conn.cursor() as cur:
         cur.execute("SET LOCAL app.current_tenant_id = %s", [tenant_id])
@@ -959,7 +1057,7 @@ def save_citator_watch(
                           state='active', revoked_at=NULL, deleted_at=NULL
             RETURNING id::text, (xmax = 0)
             """,
-            [tenant_id, matter_id, authority_key, created_by, json.dumps(delivery_channels), json.dumps(quiet_hours or {})],
+            [tenant_id, matter_id, authority_key, created_by, json.dumps(delivery_channels), json.dumps(normalized_quiet_hours)],
         )
         row = cur.fetchone()
         cur.execute(
@@ -997,6 +1095,46 @@ def revoke_citator_watch(conn: Any, *, tenant_id: str, watch_id: str) -> bool:
     return changed
 
 
+def _citator_alert_evidence(
+    conn: Any, *, corpus_version: str, authority_key: str, evidence_fact_id: str
+) -> tuple[str, dict[str, Any]]:
+    """Bind alert provenance to a persisted fact, never caller URL/payload JSON."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id::text AS fact_id, source_url, evidence_span, evidence_locator,
+                   source_hash, 'history' AS fact_type
+            FROM authority_history_facts
+            WHERE corpus_version=%s AND authority_key=%s AND id::text=%s
+            UNION ALL
+            SELECT id::text AS fact_id, source_url, evidence_span, evidence_locator,
+                   source_hash, 'citation' AS fact_type
+            FROM authority_citation_facts
+            WHERE corpus_version=%s AND cited_authority_key=%s AND id::text=%s
+            """,
+            [
+                corpus_version,
+                authority_key,
+                evidence_fact_id,
+                corpus_version,
+                authority_key,
+                evidence_fact_id,
+            ],
+        )
+        columns = [column.name for column in cur.description]
+        rows = [dict(zip(columns, row)) for row in cur.fetchall()]
+    if len(rows) != 1 or not rows[0].get("source_url"):
+        raise PermissionError("citator alert requires a stored same-version authority evidence fact")
+    evidence = rows[0]
+    return str(evidence["source_url"]), {
+        "evidence_fact_id": evidence["fact_id"],
+        "evidence_type": evidence["fact_type"],
+        "evidence_span": evidence["evidence_span"],
+        "evidence_locator": evidence["evidence_locator"],
+        "source_hash": evidence["source_hash"],
+    }
+
+
 def enqueue_citator_alert(
     conn: Any,
     *,
@@ -1006,8 +1144,7 @@ def enqueue_citator_alert(
     authority_key: str,
     event_fingerprint: str,
     event_kind: str,
-    source_url: str,
-    payload: dict[str, Any],
+    evidence_fact_id: str,
 ) -> str | None:
     """Append a deduplicated alert only for an active consented watch.
 
@@ -1020,6 +1157,12 @@ def enqueue_citator_alert(
         conn, corpus_version=corpus_version, authority_key=authority_key
     ):
         raise PermissionError("alerts require promoted, reviewed public authority evidence")
+    source_url, payload = _citator_alert_evidence(
+        conn,
+        corpus_version=corpus_version,
+        authority_key=authority_key,
+        evidence_fact_id=evidence_fact_id,
+    )
     with conn.cursor() as cur:
         cur.execute("SET LOCAL app.current_tenant_id = %s", [tenant_id])
         cur.execute(

@@ -756,6 +756,23 @@ CREATE TABLE IF NOT EXISTS authority_reviewer_principals (
     CHECK (length(trim(principal)) > 0),
     CHECK (length(trim(authorization_basis)) > 0)
 );
+-- Single-use signed commands are the only way a backend may authorize a
+-- reviewer principal or mutate a tenant/matter watch.  Keeping nonce, purpose,
+-- caller and canonical body hash together makes replay and cross-action reuse
+-- fail closed without relying on a private-matter mirror in this database.
+CREATE TABLE IF NOT EXISTS citator_command_assertions (
+    nonce text PRIMARY KEY,
+    purpose text NOT NULL,
+    actor text NOT NULL,
+    credential_id text,
+    tenant_id uuid,
+    matter_id uuid,
+    body_sha256 text NOT NULL,
+    issued_at timestamptz NOT NULL,
+    expires_at timestamptz NOT NULL,
+    consumed_at timestamptz NOT NULL DEFAULT now(),
+    CHECK (purpose IN ('citator:watch:save', 'citator:reviewer:authorize'))
+);
 
 -- Watches are tenant/matter scoped. They contain no authority text and are
 -- never consulted by the public authority search path. RLS requires a caller
@@ -792,7 +809,8 @@ CREATE TABLE IF NOT EXISTS citator_alert_events (
     payload jsonb NOT NULL DEFAULT '{}'::jsonb,
     created_at timestamptz NOT NULL DEFAULT now(),
     CHECK (event_kind IN ('history', 'treatment', 'currentness', 'source_gap')),
-    UNIQUE (watch_id, event_fingerprint)
+    UNIQUE (watch_id, event_fingerprint),
+    CONSTRAINT citator_alert_events_id_tenant_key UNIQUE (id, tenant_id)
 );
 CREATE TABLE IF NOT EXISTS citator_watch_audits (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -835,6 +853,12 @@ BEGIN
           ADD CONSTRAINT citator_alert_events_watch_tenant_fk
           FOREIGN KEY (watch_id, tenant_id) REFERENCES citator_watches(id, tenant_id)
           ON DELETE RESTRICT;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'citator_alert_events_id_tenant_key'
+    ) THEN
+        ALTER TABLE citator_alert_events
+          ADD CONSTRAINT citator_alert_events_id_tenant_key UNIQUE (id, tenant_id);
     END IF;
     IF NOT EXISTS (
         SELECT 1 FROM pg_constraint WHERE conname = 'citator_watch_audits_watch_tenant_fk'
@@ -927,6 +951,7 @@ CREATE INDEX IF NOT EXISTS ix_authority_history_facts_lookup ON authority_histor
 CREATE INDEX IF NOT EXISTS ix_authority_citation_facts_cited ON authority_citation_facts(corpus_version, cited_authority_key, depth);
 CREATE INDEX IF NOT EXISTS ix_authority_treatment_assessments_lookup ON authority_treatment_assessments(corpus_version, authority_key, computed_at DESC);
 CREATE INDEX IF NOT EXISTS ix_authority_reviewer_principals_active ON authority_reviewer_principals(active, principal);
+CREATE INDEX IF NOT EXISTS ix_citator_command_assertions_expiry ON citator_command_assertions(expires_at);
 CREATE INDEX IF NOT EXISTS ix_citator_watches_tenant_matter ON citator_watches(tenant_id, matter_id, state);
 CREATE INDEX IF NOT EXISTS ix_citator_alert_events_tenant_created ON citator_alert_events(tenant_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS ix_citator_watch_audits_tenant_created ON citator_watch_audits(tenant_id, created_at DESC);

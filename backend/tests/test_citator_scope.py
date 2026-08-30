@@ -6,7 +6,10 @@ import hmac
 import json
 import uuid
 
-from app.services.citator_scope import build_citator_watch_scope_assertion
+from app.services.citator_scope import (
+    build_citator_reviewer_authorization_assertion,
+    build_citator_watch_scope_assertion,
+)
 
 
 def test_citator_scope_assertion_is_short_lived_and_principal_bound():
@@ -16,6 +19,9 @@ def test_citator_scope_assertion_is_short_lived_and_principal_bound():
         tenant_id=tenant_id,
         matter_id=matter_id,
         principal=principal,
+        authority_key="case:1",
+        delivery_channels=["in_app"],
+        quiet_hours={"timezone": "UTC"},
         signer_secret=secret,
         now=1_700_000_000,
     )
@@ -33,9 +39,29 @@ def test_citator_scope_assertion_is_short_lived_and_principal_bound():
         "expires": 1_700_000_300,
         "issued": 1_700_000_000,
         "matter_id": str(matter_id),
-        "principal": str(principal),
-        "scope": "citator:watch",
+        "actor": str(principal),
+        "purpose": "citator:watch:save",
         "tenant_id": str(tenant_id),
         "nonce": claims["nonce"],
+        "body_sha256": claims["body_sha256"],
     }
     assert claims["nonce"]
+
+
+def test_reviewer_authorization_command_is_short_lived_and_body_bound():
+    assertion = build_citator_reviewer_authorization_assertion(
+        actor="admin-id",
+        credential="platform-jti",
+        principal="attorney-id",
+        authorization_basis="bar membership verified",
+        signer_secret="o" * 48,
+        now=1_700_000_000,
+    )
+    payload_part, _ = assertion.split(".")
+    payload = base64.urlsafe_b64decode(payload_part + "=" * (-len(payload_part) % 4))
+    claims = json.loads(payload)
+    assert claims["purpose"] == "citator:reviewer:authorize"
+    assert claims["actor"] == "admin-id"
+    assert claims["credential"] == "platform-jti"
+    assert claims["expires"] - claims["issued"] == 60
+    assert len(claims["body_sha256"]) == 64

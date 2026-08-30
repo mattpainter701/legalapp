@@ -10,7 +10,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from mcp_server.control_plane import (  # noqa: E402
-    _validate_citator_matter_scope,
     quiet_hours_active,
     record_treatment_assessment,
     save_citator_watch,
@@ -70,6 +69,7 @@ def test_citator_watch_schema_has_tenant_rls_dedupe_and_revocation_states():
     assert "suppressed_no_consent" in SCHEMA_SQL
     assert "revoked" in SCHEMA_SQL
     assert "authority_reviewer_principals" in SCHEMA_SQL
+    assert "citator_command_assertions" in SCHEMA_SQL
 
 
 def test_treatment_refuses_an_unsupported_inference_before_touching_storage():
@@ -99,16 +99,16 @@ def test_watch_requires_matter_scope_and_consent_channel_before_database_access(
 
 
 def test_watch_scope_assertion_fails_closed_when_unconfigured_or_invalid(monkeypatch):
+    args = dict(
+        tenant_id="tenant", matter_id="matter", authority_key="case:1", created_by="principal",
+        delivery_channels=["in_app"], matter_scope_assertion="not-an-assertion",
+    )
     monkeypatch.delenv("MCP_CITATOR_SCOPE_ASSERTION_SECRET", raising=False)
     with pytest.raises(PermissionError, match="not configured"):
-        _validate_citator_matter_scope(
-            "not-an-assertion", tenant_id="tenant", matter_id="matter", principal="principal"
-        )
+        save_citator_watch(EmptyConnection(), **args)
     monkeypatch.setenv("MCP_CITATOR_SCOPE_ASSERTION_SECRET", "c" * 48)
     with pytest.raises(PermissionError, match="invalid"):
-        _validate_citator_matter_scope(
-            "not-an-assertion", tenant_id="tenant", matter_id="matter", principal="principal"
-        )
+        save_citator_watch(EmptyConnection(), **args)
     with pytest.raises(ValueError, match="consented alert channel"):
         save_citator_watch(
             EmptyConnection(),

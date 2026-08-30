@@ -762,6 +762,10 @@ class CourtListenerRepository:
         )
         has_reviewable_evidence = bool(history or citing_references)
         status = "review_ready" if source_ready and has_reviewable_evidence else "incomplete"
+        if assessments and not source_ready:
+            assessment["review_state"] = "source_suppressed"
+            assessment["attorney_reviewed"] = False
+            assessment["effective_label"] = "unknown"
         limitations = [
             "No good-law determination is made from missing negative treatment, citation counts, or a no-decision assessment.",
             "Treatment labels are machine-derived unless an attorney review is shown; deterministic facts are listed separately.",
@@ -773,7 +777,7 @@ class CourtListenerRepository:
         if not has_reviewable_evidence:
             limitations.append("No direct/later-history or citing-reference evidence is available in this promoted snapshot.")
         if assessments and assessment.get("review_state") in {
-            "stale", "rejected", "needs_more_evidence", "not_reviewed"
+            "stale", "rejected", "needs_more_evidence", "not_reviewed", "source_suppressed"
         }:
             limitations.append(
                 "The latest treatment assessment is not an effective current attorney conclusion; "

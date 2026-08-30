@@ -28,8 +28,11 @@ version; its URL, span, locator, and hash are copied from those stored facts,
 not accepted from caller JSON. `authority_treatment_reviews` appends an
 attorney acceptance, rejection, request for more evidence, or override; it
 never overwrites the machine record. Review requires an active,
-authorization-basis-backed reviewer principal—an arbitrary display name cannot
-be treated as an attorney. Only accepted or overridden, non-stale assessments
+authorization-basis-backed reviewer principal provisioned by a single-use,
+short-lived, HMAC-signed backend command tied to an authenticated administrator
+credential, canonical registration body, and durable nonce. An arbitrary
+display name or conventional "internal" caller cannot be treated as an
+attorney. Only accepted or overridden, non-stale assessments
 have an effective treatment label; rejected, needs-more-evidence, pending,
 stale, and superseded assessments remain effectively `unknown`. A new promoted
 snapshot deliberately does not inherit derived treatment—the assessment must
@@ -55,7 +58,9 @@ rehearsal gaps.
 Saved watches are tenant-and-matter scoped and contain no authority text.
 They require explicit consent, at least one delivery channel, and a short-lived
 backend-signed assertion that binds the tenant, canonical matter, and creating
-principal. The backend checks the canonical LawHand `matters` table before
+principal **plus the exact save action, authority, delivery channels, and quiet
+hours**. The nonce is atomically consumed, so replay, action substitution, and
+mutation-body tampering fail closed. The backend checks the canonical LawHand `matters` table before
 minting that assertion; the public-authority database does **not** claim to
 have a matter foreign key or independently prove matter ownership. Database RLS
 requires `app.current_tenant_id` for reads and writes; callers cannot list,
@@ -65,6 +70,10 @@ row through their consent/state recheck, so a queued revocation cannot commit
 between that check and the database write. Delivery attempts can be queued,
 quiet-hour/no-consent suppressed, failed, sent, or revoked. Revocation removes
 consent before later enqueueing and appends a durable watch audit row.
+
+An alert's customer-visible source URL, evidence span/locator/hash, and payload
+are constructed from one stored history or citation fact for the same promoted
+authority/version. Callers cannot supply an alert URL or free-form payload.
 
 This release contains no production notification delivery. A production sender
 must honor quiet-hour configuration, record every delivery attempt, recheck
