@@ -37,6 +37,6 @@ slices and their platform integration contract.
 
 - [ ] MCP documentation updated
 - [x] MCP documentation not needed
-- MCP area: none
+- MCP area: Shared architecture and client-portal authorization boundary
 - Wiki handoff note: This change affects mediation and client-portal REST
   surfaces only; no MCP endpoint, tool, protocol, or client contract changed.
