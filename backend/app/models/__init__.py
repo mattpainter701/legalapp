@@ -144,6 +144,15 @@ from app.models.operating_trust import (
     OffboardingApproval,
 )
 from app.models.brief_check import BriefCheck, BriefCheckAudit
+from app.models.research_workspace import (
+    ResearchRecord,
+    ResearchWorkspace,
+    ResearchWorkspaceEvent,
+    ResearchWorkspaceIdempotency,
+    ResearchWorkspaceMember,
+    ResearchWorkspaceSnapshot,
+    ResearchRecordRevision,
+)
 
 __all__ = [
     "Tenant",
@@ -284,4 +293,11 @@ __all__ = [
     "OffboardingApproval",
     "BriefCheck",
     "BriefCheckAudit",
+    "ResearchWorkspace",
+    "ResearchWorkspaceMember",
+    "ResearchRecord",
+    "ResearchWorkspaceEvent",
+    "ResearchWorkspaceIdempotency",
+    "ResearchWorkspaceSnapshot",
+    "ResearchRecordRevision",
 ]

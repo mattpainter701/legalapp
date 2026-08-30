@@ -24,6 +24,7 @@ class User(Base):
     __tablename__ = "users"
     __table_args__ = (
         UniqueConstraint("tenant_id", "email", name="uq_users_tenant_email"),
+        UniqueConstraint("tenant_id", "id", name="uq_users_tenant_id"),
         UniqueConstraint(
             "entra_tenant_id",
             "entra_object_id",

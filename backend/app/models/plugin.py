@@ -162,6 +162,7 @@ class Matter(Base):
     __tablename__ = "matters"
     __table_args__ = (
         UniqueConstraint("tenant_id", "slug", name="uq_matters_tenant_slug"),
+        UniqueConstraint("tenant_id", "id", name="uq_matters_tenant_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
