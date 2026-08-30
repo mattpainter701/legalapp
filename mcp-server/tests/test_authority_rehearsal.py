@@ -681,6 +681,35 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
         assert legal_contract_counts == (0, 0, 0, 0, 0)
         assert authority_contract_counts == (0, 0, 0, 0)
         conn.commit()
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT embedding_model, embedding_version, embedding_dimension
+                     FROM authority_corpus_versions WHERE version=%s""",
+                [version],
+            )
+            target_model, target_version, target_dimension = cur.fetchone()
+            cur.execute(
+                """SELECT COUNT(*) FROM legal_document_chunks c
+                     JOIN legal_documents d ON d.id=c.document_id
+                    WHERE d.corpus_version=%s
+                      AND (c.corpus_version IS DISTINCT FROM %s
+                           OR c.embedding IS NULL
+                           OR c.embedding_model IS DISTINCT FROM %s
+                           OR c.embedding_version::text IS DISTINCT FROM %s
+                           OR vector_dims(c.embedding) IS DISTINCT FROM %s)""",
+                [version, version, target_model, target_version, target_dimension],
+            )
+            assert cur.fetchone()[0] == 0
+            cur.execute(
+                """SELECT COUNT(*) FROM authority_case_chunks
+                    WHERE corpus_version=%s
+                      AND (embedding IS NULL
+                           OR embedding_model IS DISTINCT FROM %s
+                           OR embedding_version IS DISTINCT FROM %s
+                           OR vector_dims(embedding) IS DISTINCT FROM %s)""",
+                [version, target_model, target_version, target_dimension],
+            )
+            assert cur.fetchone()[0] == 0
         promote_corpus_version(
             conn,
             version=version,
@@ -1283,13 +1312,97 @@ def test_process_once_rehearsal_both_corpora():
 
     first = threading.Thread(target=run_worker)
     first.start()
-    assert started.wait(10)
-    duplicate = process_once(config, DeterministicModel())
-    assert duplicate == 0
-    release.set()
-    first.join(timeout=20)
+    try:
+        assert started.wait(10)
+        duplicate = process_once(config, DeterministicModel())
+        assert duplicate == 0
+    finally:
+        release.set()
+        first.join(timeout=20)
     assert not first.is_alive()
     assert not worker_errors
+
+    # A changed embedding contract is real work, even when the text is
+    # unchanged. The completed shard must reopen and replace the old vector.
+    with connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO authority_case_chunks
+                    (corpus_version, opinion_id, cluster_id, court_id, chunk_index,
+                     content, embedding, embedding_model, embedding_version)
+                    VALUES (%s, 98200001, 98200001, 'worker-court', 2,
+                            'contract changed',
+                            ('[' || array_to_string(array_fill(0, ARRAY[1024]), ',') || ']')::vector,
+                            'old-model', '0')""",
+                [version],
+            )
+        conn.commit()
+    assert process_once(config, DeterministicModel()) == 1
+    with connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT embedding_model, embedding_version, vector_dims(embedding)
+                     FROM authority_case_chunks
+                    WHERE corpus_version=%s AND chunk_index=2""",
+                [version],
+            )
+            assert cur.fetchone() == (model_name, model_version, dimension)
+
+    # A heartbeat loss during inference aborts before vector writes. The
+    # production heartbeat thread observes the loss on its own connection.
+    with connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO authority_case_chunks
+                    (corpus_version, opinion_id, cluster_id, court_id, chunk_index, content)
+                    VALUES (%s, 98200001, 98200001, 'worker-court', 3, 'lease loss')""",
+                [version],
+            )
+        conn.commit()
+    import mcp_server.jetson_worker as jetson_worker
+
+    def lose_lease(*_args, **_kwargs):
+        return not blocked.is_set()
+
+    blocked = threading.Event()
+    release_loss = threading.Event()
+
+    class LeaseLossModel(DeterministicModel):
+        def encode(self, texts, **kwargs):
+            blocked.set()
+            assert release_loss.wait(10)
+            return super().encode(texts, **kwargs)
+
+    monkeypatch.setattr(jetson_worker, "heartbeat_embedding_shard", lose_lease)
+    loss_errors = []
+
+    def run_loss_worker():
+        try:
+            process_once(config, LeaseLossModel())
+        except Exception as exc:  # pragma: no cover - surfaced below
+            loss_errors.append(exc)
+
+    loss_thread = threading.Thread(target=run_loss_worker)
+    loss_thread.start()
+    try:
+        assert blocked.wait(10)
+    finally:
+        release_loss.set()
+        loss_thread.join(timeout=20)
+        monkeypatch.setattr(jetson_worker, "heartbeat_embedding_shard", heartbeat_embedding_shard)
+    assert not loss_thread.is_alive()
+    assert not loss_errors
+    with connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT embedding, status FROM authority_case_chunks c
+                     JOIN authority_embedding_shards s ON s.corpus_version=c.corpus_version
+                    WHERE c.corpus_version=%s AND c.chunk_index=3
+                    ORDER BY s.updated_at DESC LIMIT 1""",
+                [version],
+            )
+            embedding, _status = cur.fetchone()
+            assert embedding is None
 
 
 def test_legal_only_upgrade_bootstrap_rehearsal():
