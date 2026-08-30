@@ -630,6 +630,226 @@ ALTER TABLE authority_case_chunks VALIDATE CONSTRAINT fk_authority_case_chunks_o
 ALTER TABLE authority_case_chunks VALIDATE CONSTRAINT fk_authority_case_chunks_cluster;
 ALTER TABLE authority_case_citations VALIDATE CONSTRAINT fk_authority_case_citations_citing;
 
+-- Citator facts are a second, source-bound projection of a promoted authority
+-- snapshot.  They intentionally do not share a table with model-derived
+-- treatment: a citation edge, direct history, or amendment record is a source
+-- fact; a treatment label is an interpretable, reviewable assessment.
+CREATE TABLE IF NOT EXISTS authority_records (
+    corpus_version text NOT NULL REFERENCES authority_corpus_versions(version),
+    authority_key text NOT NULL,
+    authority_kind text NOT NULL,
+    source_key text NOT NULL REFERENCES legal_sources(source_key) ON DELETE RESTRICT,
+    canonical_citation text,
+    title text NOT NULL,
+    court text,
+    decision_date date,
+    effective_date date,
+    repeal_date date,
+    source_url text NOT NULL,
+    source_as_of timestamptz NOT NULL,
+    source_version text NOT NULL,
+    currentness_state text NOT NULL DEFAULT 'unknown',
+    deterministic_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (corpus_version, authority_key),
+    CHECK (authority_kind IN ('case', 'statute', 'regulation', 'rule', 'other')),
+    CHECK (currentness_state IN ('current', 'stale', 'unknown', 'unavailable'))
+);
+
+CREATE TABLE IF NOT EXISTS authority_history_facts (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    corpus_version text NOT NULL REFERENCES authority_corpus_versions(version),
+    authority_key text NOT NULL,
+    fact_kind text NOT NULL,
+    related_authority_key text,
+    court text,
+    event_date date,
+    source_url text NOT NULL,
+    evidence_span text,
+    evidence_locator jsonb NOT NULL DEFAULT '{}'::jsonb,
+    source_hash text NOT NULL,
+    observed_at timestamptz NOT NULL DEFAULT now(),
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    FOREIGN KEY (corpus_version, authority_key)
+      REFERENCES authority_records(corpus_version, authority_key),
+    CHECK (fact_kind IN ('direct_history', 'later_history', 'amended', 'repealed', 'superseded', 'status_notice'))
+);
+
+CREATE TABLE IF NOT EXISTS authority_citation_facts (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    corpus_version text NOT NULL REFERENCES authority_corpus_versions(version),
+    citing_authority_key text NOT NULL,
+    cited_authority_key text NOT NULL,
+    citing_opinion_id bigint,
+    cited_opinion_id bigint,
+    depth integer NOT NULL DEFAULT 0,
+    issue_context text,
+    source_url text NOT NULL,
+    evidence_span text,
+    evidence_locator jsonb NOT NULL DEFAULT '{}'::jsonb,
+    source_hash text NOT NULL,
+    observed_at timestamptz NOT NULL DEFAULT now(),
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    FOREIGN KEY (corpus_version, citing_authority_key)
+      REFERENCES authority_records(corpus_version, authority_key),
+    FOREIGN KEY (corpus_version, cited_authority_key)
+      REFERENCES authority_records(corpus_version, authority_key)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_authority_history_fact_identity
+    ON authority_history_facts(
+      corpus_version, authority_key, fact_kind,
+      COALESCE(related_authority_key, ''), COALESCE(event_date, DATE '0001-01-01'),
+      source_hash, COALESCE(evidence_span, '')
+    );
+CREATE UNIQUE INDEX IF NOT EXISTS ux_authority_citation_fact_identity
+    ON authority_citation_facts(
+      corpus_version, citing_authority_key, cited_authority_key,
+      COALESCE(citing_opinion_id, 0), COALESCE(cited_opinion_id, 0),
+      COALESCE(source_hash, ''), COALESCE(evidence_span, '')
+    );
+
+CREATE TABLE IF NOT EXISTS authority_treatment_assessments (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    corpus_version text NOT NULL REFERENCES authority_corpus_versions(version),
+    authority_key text NOT NULL,
+    treatment_label text NOT NULL,
+    summary text,
+    confidence numeric NOT NULL,
+    abstained boolean NOT NULL DEFAULT false,
+    abstention_reason text,
+    evidence_fact_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
+    evidence_links jsonb NOT NULL DEFAULT '[]'::jsonb,
+    model_version text,
+    policy_version text NOT NULL,
+    assessment_state text NOT NULL DEFAULT 'provisional',
+    computed_at timestamptz NOT NULL DEFAULT now(),
+    stale_at timestamptz,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    FOREIGN KEY (corpus_version, authority_key)
+      REFERENCES authority_records(corpus_version, authority_key),
+    CHECK (treatment_label IN ('negative', 'positive', 'distinguished', 'no_decision', 'unknown')),
+    CHECK (confidence >= 0 AND confidence <= 1),
+    CHECK ((abstained AND abstention_reason IS NOT NULL) OR NOT abstained),
+    CHECK (assessment_state IN ('provisional', 'reviewed', 'stale', 'superseded', 'abstained'))
+);
+
+CREATE TABLE IF NOT EXISTS authority_treatment_reviews (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    assessment_id uuid NOT NULL REFERENCES authority_treatment_assessments(id) ON DELETE RESTRICT,
+    reviewer text NOT NULL,
+    decision text NOT NULL,
+    override_label text,
+    note text,
+    reviewed_at timestamptz NOT NULL DEFAULT now(),
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    CHECK (decision IN ('accepted', 'overridden', 'rejected', 'needs_more_evidence')),
+    CHECK (override_label IS NULL OR override_label IN ('negative', 'positive', 'distinguished', 'no_decision', 'unknown'))
+);
+
+-- Watches are tenant/matter scoped. They contain no authority text and are
+-- never consulted by the public authority search path. RLS requires a caller
+-- to set app.current_tenant_id, preventing a trusted service omission from
+-- becoming an accidental cross-tenant list or delivery operation.
+CREATE TABLE IF NOT EXISTS citator_watches (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id uuid NOT NULL,
+    matter_id uuid,
+    authority_key text NOT NULL,
+    created_by text NOT NULL,
+    consented boolean NOT NULL DEFAULT false,
+    delivery_channels jsonb NOT NULL DEFAULT '[]'::jsonb,
+    quiet_hours jsonb NOT NULL DEFAULT '{}'::jsonb,
+    state text NOT NULL DEFAULT 'active',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    revoked_at timestamptz,
+    deleted_at timestamptz,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    CHECK (state IN ('active', 'paused', 'revoked', 'deleted')),
+    CHECK ((state = 'active' AND consented) OR state <> 'active'),
+    UNIQUE (tenant_id, matter_id, authority_key, created_by)
+);
+CREATE TABLE IF NOT EXISTS citator_alert_events (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    watch_id uuid NOT NULL REFERENCES citator_watches(id) ON DELETE RESTRICT,
+    tenant_id uuid NOT NULL,
+    corpus_version text NOT NULL REFERENCES authority_corpus_versions(version),
+    authority_key text NOT NULL,
+    event_fingerprint text NOT NULL,
+    event_kind text NOT NULL,
+    source_url text NOT NULL,
+    payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    CHECK (event_kind IN ('history', 'treatment', 'currentness', 'source_gap')),
+    UNIQUE (watch_id, event_fingerprint)
+);
+CREATE TABLE IF NOT EXISTS citator_watch_audits (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    watch_id uuid NOT NULL REFERENCES citator_watches(id) ON DELETE RESTRICT,
+    tenant_id uuid NOT NULL,
+    action text NOT NULL,
+    actor text NOT NULL,
+    detail jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    CHECK (action IN ('created', 'updated', 'revoked', 'deleted'))
+);
+CREATE TABLE IF NOT EXISTS citator_alert_deliveries (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    alert_event_id uuid NOT NULL REFERENCES citator_alert_events(id) ON DELETE RESTRICT,
+    tenant_id uuid NOT NULL,
+    channel text NOT NULL,
+    delivery_key text NOT NULL,
+    outcome text NOT NULL,
+    detail text,
+    attempted_at timestamptz NOT NULL DEFAULT now(),
+    CHECK (outcome IN ('suppressed_quiet_hours', 'suppressed_no_consent', 'queued', 'sent', 'failed', 'revoked')),
+    UNIQUE (alert_event_id, channel, delivery_key)
+);
+
+CREATE OR REPLACE FUNCTION reject_citator_evidence_mutation() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'citator evidence is append-only';
+END;
+$$;
+DO $$
+DECLARE citator_table text;
+BEGIN
+    FOREACH citator_table IN ARRAY ARRAY[
+      'authority_history_facts', 'authority_citation_facts',
+      'authority_treatment_assessments', 'authority_treatment_reviews',
+      'citator_alert_events', 'citator_alert_deliveries', 'citator_watch_audits'
+    ] LOOP
+      EXECUTE format('DROP TRIGGER IF EXISTS citator_append_only ON %I', citator_table);
+      EXECUTE format('CREATE TRIGGER citator_append_only BEFORE UPDATE OR DELETE ON %I FOR EACH ROW EXECUTE FUNCTION reject_citator_evidence_mutation()', citator_table);
+    END LOOP;
+END $$;
+DO $$
+DECLARE citator_table text;
+BEGIN
+    FOREACH citator_table IN ARRAY ARRAY[
+      'authority_records', 'authority_history_facts', 'authority_citation_facts'
+    ] LOOP
+      EXECUTE format('DROP TRIGGER IF EXISTS authority_snapshot_immutable ON %I', citator_table);
+      EXECUTE format('CREATE TRIGGER authority_snapshot_immutable BEFORE INSERT OR UPDATE OR DELETE ON %I FOR EACH ROW EXECUTE FUNCTION reject_authority_snapshot_mutation()', citator_table);
+    END LOOP;
+END $$;
+ALTER TABLE citator_watches ENABLE ROW LEVEL SECURITY;
+ALTER TABLE citator_watches FORCE ROW LEVEL SECURITY;
+ALTER TABLE citator_alert_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE citator_alert_events FORCE ROW LEVEL SECURITY;
+ALTER TABLE citator_alert_deliveries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE citator_alert_deliveries FORCE ROW LEVEL SECURITY;
+ALTER TABLE citator_watch_audits ENABLE ROW LEVEL SECURITY;
+ALTER TABLE citator_watch_audits FORCE ROW LEVEL SECURITY;
+DO $$
+DECLARE citator_table text;
+BEGIN
+    FOREACH citator_table IN ARRAY ARRAY['citator_watches', 'citator_alert_events', 'citator_alert_deliveries', 'citator_watch_audits'] LOOP
+      EXECUTE format('DROP POLICY IF EXISTS %I ON %I', citator_table || '_tenant_isolation', citator_table);
+      EXECUTE format('CREATE POLICY %I ON %I USING (tenant_id = NULLIF(current_setting(''app.current_tenant_id'', true), '''')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting(''app.current_tenant_id'', true), '''')::uuid)', citator_table || '_tenant_isolation', citator_table);
+    END LOOP;
+END $$;
+
 CREATE INDEX IF NOT EXISTS ix_opinion_chunks_court ON opinion_chunks(court_id);
 CREATE INDEX IF NOT EXISTS ix_opinion_chunks_embedding_version ON opinion_chunks(embedding_version);
 CREATE INDEX IF NOT EXISTS ix_opinions_source_modified_at ON opinions(source_modified_at);
@@ -653,4 +873,11 @@ CREATE INDEX IF NOT EXISTS ix_opinion_citations_citing ON opinion_citations(citi
 CREATE INDEX IF NOT EXISTS ix_opinion_citations_cited ON opinion_citations(cited_opinion_id);
 CREATE INDEX IF NOT EXISTS ix_opinion_citations_edge ON opinion_citations(citing_opinion_id, cited_opinion_id);
 CREATE INDEX IF NOT EXISTS ix_opinion_citations_reporter ON opinion_citations(cited_cluster_id, cited_reporter, cited_volume, cited_page);
+CREATE INDEX IF NOT EXISTS ix_authority_records_version_kind ON authority_records(corpus_version, authority_kind);
+CREATE INDEX IF NOT EXISTS ix_authority_history_facts_lookup ON authority_history_facts(corpus_version, authority_key, observed_at DESC);
+CREATE INDEX IF NOT EXISTS ix_authority_citation_facts_cited ON authority_citation_facts(corpus_version, cited_authority_key, depth);
+CREATE INDEX IF NOT EXISTS ix_authority_treatment_assessments_lookup ON authority_treatment_assessments(corpus_version, authority_key, computed_at DESC);
+CREATE INDEX IF NOT EXISTS ix_citator_watches_tenant_matter ON citator_watches(tenant_id, matter_id, state);
+CREATE INDEX IF NOT EXISTS ix_citator_alert_events_tenant_created ON citator_alert_events(tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS ix_citator_watch_audits_tenant_created ON citator_watch_audits(tenant_id, created_at DESC);
 """

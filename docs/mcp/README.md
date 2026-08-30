@@ -66,6 +66,17 @@ open for fail-closed explicit-public classification across every authority path.
 No production corpus harvest, coverage claim, or deployment is implied by this
 documentation.
 
+### Research MCP citator contract
+
+`get_authority_treatment` and `get_citator_status` are read-only citator
+review tools. They separate promoted, reviewed, source-bound deterministic
+history/citation/amendment facts from machine-derived treatment assessments,
+show source/version/as-of/currentness evidence and known gaps, and never make a
+good-law determination. Tenant/matter watch persistence is isolated with RLS
+and is not exposed through a Research key. The canonical data model, alert
+controls, evaluation gate, and remaining licensed-benchmark requirement are in
+[Citator control plane](../CITATOR_CONTROL_PLANE.md).
+
 ### Firm Memory Workspace MCP tool
 
 `search_firm_memory` is a Workspace MCP read tool for the bounded local file

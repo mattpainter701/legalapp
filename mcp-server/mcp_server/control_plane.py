@@ -11,6 +11,7 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 RIGHTS_DECISIONS = {"official", "open", "licensed", "prohibited", "pending_review"}
 CLAIM_STATES = {"supported", "limited", "suppressed"}
@@ -456,6 +457,55 @@ def stage_corpus_version(
             """,
                 [version, current[0]],
             )
+            # Deterministic citator facts are copied with the candidate
+            # snapshot.  Derived treatment is intentionally not copied: it
+            # must be recomputed/reviewed against the candidate's as-of state.
+            cur.execute(
+                """
+                INSERT INTO authority_records
+                  (corpus_version, authority_key, authority_kind, source_key,
+                   canonical_citation, title, court, decision_date, effective_date,
+                   repeal_date, source_url, source_as_of, source_version,
+                   currentness_state, deterministic_metadata)
+                SELECT %s, authority_key, authority_kind, source_key,
+                       canonical_citation, title, court, decision_date, effective_date,
+                       repeal_date, source_url, source_as_of, %s,
+                       currentness_state, deterministic_metadata
+                FROM authority_records WHERE corpus_version=%s
+                ON CONFLICT DO NOTHING
+                """,
+                [version, version, current[0]],
+            )
+            cur.execute(
+                """
+                INSERT INTO authority_history_facts
+                  (corpus_version, authority_key, fact_kind, related_authority_key,
+                   court, event_date, source_url, evidence_span, evidence_locator,
+                   source_hash, observed_at, metadata)
+                SELECT %s, authority_key, fact_kind, related_authority_key,
+                       court, event_date, source_url, evidence_span, evidence_locator,
+                       source_hash, observed_at, metadata
+                FROM authority_history_facts WHERE corpus_version=%s
+                ON CONFLICT DO NOTHING
+                """,
+                [version, current[0]],
+            )
+            cur.execute(
+                """
+                INSERT INTO authority_citation_facts
+                  (corpus_version, citing_authority_key, cited_authority_key,
+                   citing_opinion_id, cited_opinion_id, depth, issue_context,
+                   source_url, evidence_span, evidence_locator, source_hash,
+                   observed_at, metadata)
+                SELECT %s, citing_authority_key, cited_authority_key,
+                       citing_opinion_id, cited_opinion_id, depth, issue_context,
+                       source_url, evidence_span, evidence_locator, source_hash,
+                       observed_at, metadata
+                FROM authority_citation_facts WHERE corpus_version=%s
+                ON CONFLICT DO NOTHING
+                """,
+                [version, current[0]],
+            )
     conn.commit()
 
 
@@ -608,3 +658,347 @@ def finish_embedding_shard(
                 "shard lease is missing, expired, or owned by another worker"
             )
     conn.commit()
+
+
+TREATMENT_LABELS = {"negative", "positive", "distinguished", "no_decision", "unknown"}
+TREATMENT_REVIEW_DECISIONS = {
+    "accepted",
+    "overridden",
+    "rejected",
+    "needs_more_evidence",
+}
+
+
+def _citator_authority_is_permitted(conn: Any, *, corpus_version: str, authority_key: str) -> bool:
+    """Require a reviewed public source, never infer public status from a URL."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT r.source_key, s.rights_decision, s.reviewed_at, s.reviewed_by,
+                   s.metadata->>'catalog_schema_version', s.metadata->>'implementation_status'
+            FROM authority_records r
+            JOIN legal_sources s ON s.source_key=r.source_key
+            JOIN authority_corpus_versions v ON v.version=r.corpus_version
+            WHERE r.corpus_version=%s AND r.authority_key=%s
+              AND v.status='promoted'
+            """,
+            [corpus_version, authority_key],
+        )
+        row = cur.fetchone()
+    return bool(
+        row
+        and row[1] in {"official", "open", "licensed"}
+        and row[2]
+        and row[3]
+        and row[4]
+        and row[5]
+        and not str(row[0]).startswith(("tenant:", "firm:", "private:"))
+    )
+
+
+def record_treatment_assessment(
+    conn: Any,
+    *,
+    corpus_version: str,
+    authority_key: str,
+    treatment_label: str,
+    confidence: float,
+    policy_version: str,
+    evidence_fact_ids: list[str],
+    evidence_links: list[dict[str, Any]],
+    model_version: str | None = None,
+    summary: str | None = None,
+    abstained: bool = False,
+    abstention_reason: str | None = None,
+    actor: str,
+) -> str:
+    """Append a machine assessment only after source/evidence validation.
+
+    The caller may record an abstention. It may not replace that abstention with
+    a default positive result, and it may not submit a custom/private source
+    through the public authority namespace.
+    """
+    actor, _ = _authorized(actor, "citator assessment")
+    if treatment_label not in TREATMENT_LABELS:
+        raise ValueError("unsupported treatment label")
+    if not 0 <= float(confidence) <= 1:
+        raise ValueError("confidence must be between 0 and 1")
+    if not policy_version.strip():
+        raise ValueError("policy version is required")
+    if abstained:
+        if not abstention_reason:
+            raise ValueError("an abstention reason is required")
+        treatment_label = "unknown"
+    elif not evidence_fact_ids or not evidence_links:
+        raise ValueError("non-abstaining treatment requires linked source evidence")
+    if not _citator_authority_is_permitted(
+        conn, corpus_version=corpus_version, authority_key=authority_key
+    ):
+        raise PermissionError("citator assessment requires promoted, reviewed public authority evidence")
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO authority_treatment_assessments
+              (corpus_version, authority_key, treatment_label, summary, confidence,
+               abstained, abstention_reason, evidence_fact_ids, evidence_links,
+               model_version, policy_version, assessment_state, metadata)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb,
+                    %s, %s, %s, %s::jsonb)
+            RETURNING id::text
+            """,
+            [
+                corpus_version,
+                authority_key,
+                treatment_label,
+                (summary or "")[:4000] or None,
+                float(confidence),
+                abstained,
+                (abstention_reason or "")[:1000] or None,
+                json.dumps(evidence_fact_ids),
+                json.dumps(evidence_links),
+                (model_version or "")[:200] or None,
+                policy_version[:200],
+                "abstained" if abstained else "provisional",
+                json.dumps({"recorded_by": actor}),
+            ],
+        )
+        row = cur.fetchone()
+    conn.commit()
+    return str(row[0])
+
+
+def review_treatment_assessment(
+    conn: Any,
+    *,
+    assessment_id: str,
+    reviewer: str,
+    decision: str,
+    override_label: str | None = None,
+    note: str | None = None,
+) -> str:
+    """Append, rather than overwrite, an attorney review/override decision."""
+    reviewer, _ = _authorized(reviewer, "citator treatment review")
+    if decision not in TREATMENT_REVIEW_DECISIONS:
+        raise ValueError("unsupported treatment review decision")
+    if decision == "overridden" and override_label not in TREATMENT_LABELS:
+        raise ValueError("an override treatment label is required")
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO authority_treatment_reviews
+                 (assessment_id, reviewer, decision, override_label, note, metadata)
+               VALUES (%s::uuid, %s, %s, %s, %s, %s::jsonb) RETURNING id::text""",
+            [
+                assessment_id,
+                reviewer,
+                decision,
+                override_label if decision == "overridden" else None,
+                (note or "")[:4000] or None,
+                json.dumps({"review_workflow": "attorney_review_first"}),
+            ],
+        )
+        row = cur.fetchone()
+    conn.commit()
+    return str(row[0])
+
+
+def save_citator_watch(
+    conn: Any,
+    *,
+    tenant_id: str,
+    matter_id: str | None,
+    authority_key: str,
+    created_by: str,
+    delivery_channels: list[str],
+    quiet_hours: dict[str, Any] | None = None,
+) -> str:
+    """Create an idempotent consented watch under explicit tenant RLS context."""
+    if not tenant_id or not matter_id or not authority_key or not created_by:
+        raise ValueError("tenant, matter, authority, and actor are required")
+    if not delivery_channels:
+        raise ValueError("at least one consented alert channel is required")
+    with conn.cursor() as cur:
+        cur.execute("SET LOCAL app.current_tenant_id = %s", [tenant_id])
+        cur.execute(
+            """
+            INSERT INTO citator_watches
+              (tenant_id, matter_id, authority_key, created_by, consented,
+               delivery_channels, quiet_hours, state)
+            VALUES (%s::uuid, %s::uuid, %s, %s, TRUE, %s::jsonb, %s::jsonb, 'active')
+            ON CONFLICT (tenant_id, matter_id, authority_key, created_by)
+            DO UPDATE SET delivery_channels=EXCLUDED.delivery_channels,
+                          quiet_hours=EXCLUDED.quiet_hours,
+                          consented=TRUE,
+                          state='active', revoked_at=NULL, deleted_at=NULL
+            RETURNING id::text, (xmax = 0)
+            """,
+            [tenant_id, matter_id, authority_key, created_by, json.dumps(delivery_channels), json.dumps(quiet_hours or {})],
+        )
+        row = cur.fetchone()
+        cur.execute(
+            """INSERT INTO citator_watch_audits
+                 (watch_id, tenant_id, action, actor, detail)
+               VALUES (%s::uuid, %s::uuid, %s, %s, %s::jsonb)""",
+            [
+                row[0], tenant_id, "created" if row[1] else "updated", created_by,
+                json.dumps({"authority_key": authority_key, "delivery_channels": delivery_channels}),
+            ],
+        )
+    conn.commit()
+    return str(row[0])
+
+
+def revoke_citator_watch(conn: Any, *, tenant_id: str, watch_id: str) -> bool:
+    """Revoke delivery before any further alert attempt; preserve an audit-safe row."""
+    with conn.cursor() as cur:
+        cur.execute("SET LOCAL app.current_tenant_id = %s", [tenant_id])
+        cur.execute(
+            """UPDATE citator_watches SET state='revoked', consented=FALSE,
+                       revoked_at=now() WHERE id=%s::uuid AND tenant_id=%s::uuid
+                       AND state <> 'deleted'""",
+            [watch_id, tenant_id],
+        )
+        changed = cur.rowcount == 1
+        if changed:
+            cur.execute(
+                """INSERT INTO citator_watch_audits
+                     (watch_id, tenant_id, action, actor, detail)
+                   VALUES (%s::uuid, %s::uuid, 'revoked', 'system-or-user', '{}'::jsonb)""",
+                [watch_id, tenant_id],
+            )
+    conn.commit()
+    return changed
+
+
+def enqueue_citator_alert(
+    conn: Any,
+    *,
+    tenant_id: str,
+    watch_id: str,
+    corpus_version: str,
+    authority_key: str,
+    event_fingerprint: str,
+    event_kind: str,
+    source_url: str,
+    payload: dict[str, Any],
+) -> str | None:
+    """Append a deduplicated alert only for an active consented watch.
+
+    A ``None`` result is an intentional suppression (revoked, paused, or no
+    consent), not a failed delivery that could be retried into a revoked watch.
+    """
+    if event_kind not in {"history", "treatment", "currentness", "source_gap"}:
+        raise ValueError("unsupported citator alert kind")
+    if not _citator_authority_is_permitted(
+        conn, corpus_version=corpus_version, authority_key=authority_key
+    ):
+        raise PermissionError("alerts require promoted, reviewed public authority evidence")
+    with conn.cursor() as cur:
+        cur.execute("SET LOCAL app.current_tenant_id = %s", [tenant_id])
+        cur.execute(
+            """SELECT authority_key FROM citator_watches
+                WHERE id=%s::uuid AND tenant_id=%s::uuid
+                  AND state='active' AND consented IS TRUE""",
+            [watch_id, tenant_id],
+        )
+        watch = cur.fetchone()
+        if not watch or watch[0] != authority_key:
+            conn.commit()
+            return None
+        cur.execute(
+            """INSERT INTO citator_alert_events
+                 (watch_id, tenant_id, corpus_version, authority_key,
+                  event_fingerprint, event_kind, source_url, payload)
+               VALUES (%s::uuid, %s::uuid, %s, %s, %s, %s, %s, %s::jsonb)
+               ON CONFLICT (watch_id, event_fingerprint) DO NOTHING
+               RETURNING id::text""",
+            [watch_id, tenant_id, corpus_version, authority_key, event_fingerprint,
+             event_kind, source_url, json.dumps(payload)],
+        )
+        row = cur.fetchone()
+    conn.commit()
+    return str(row[0]) if row else None
+
+
+def quiet_hours_active(
+    quiet_hours: dict[str, Any] | None, now: datetime | None = None
+) -> bool:
+    """Evaluate an optional, explicit wall-clock quiet window.
+
+    Bad or partial configuration is fail-safe for delivery: it is treated as a
+    quiet window rather than guessing a customer timezone.
+    """
+    quiet_hours = quiet_hours or {}
+    if not quiet_hours:
+        return False
+    try:
+        start = str(quiet_hours["start"])
+        end = str(quiet_hours["end"])
+        zone = ZoneInfo(str(quiet_hours.get("timezone") or "UTC"))
+        start_minutes = int(start[:2]) * 60 + int(start[3:5])
+        end_minutes = int(end[:2]) * 60 + int(end[3:5])
+        local = (now or datetime.now(timezone.utc)).astimezone(zone)
+        minute = local.hour * 60 + local.minute
+    except (KeyError, ValueError, IndexError):
+        return True
+    if start_minutes == end_minutes:
+        return True
+    return (
+        start_minutes <= minute < end_minutes
+        if start_minutes < end_minutes
+        else minute >= start_minutes or minute < end_minutes
+    )
+
+
+def record_citator_alert_delivery(
+    conn: Any,
+    *,
+    tenant_id: str,
+    alert_event_id: str,
+    channel: str,
+    delivery_key: str,
+    attempted_outcome: str = "queued",
+    detail: str | None = None,
+    now: datetime | None = None,
+) -> str:
+    """Append an idempotent delivery attempt after consent/revocation recheck.
+
+    This persistence primitive never contacts a customer. A separately
+    authorized sender can call it around an actual send, but cannot bypass the
+    quiet-hour or revocation outcome stored here.
+    """
+    if attempted_outcome not in {"queued", "sent", "failed"}:
+        raise ValueError("attempted alert outcome must be queued, sent, or failed")
+    with conn.cursor() as cur:
+        cur.execute("SET LOCAL app.current_tenant_id = %s", [tenant_id])
+        cur.execute(
+            """
+            SELECT w.state, w.consented, w.quiet_hours
+            FROM citator_alert_events e
+            JOIN citator_watches w ON w.id=e.watch_id
+            WHERE e.id=%s::uuid AND e.tenant_id=%s::uuid
+            """,
+            [alert_event_id, tenant_id],
+        )
+        watch = cur.fetchone()
+        if not watch or watch[0] in {"revoked", "deleted"}:
+            outcome = "revoked"
+        elif not watch[1]:
+            outcome = "suppressed_no_consent"
+        elif quiet_hours_active(watch[2], now=now):
+            outcome = "suppressed_quiet_hours"
+        else:
+            outcome = attempted_outcome
+        cur.execute(
+            """
+            INSERT INTO citator_alert_deliveries
+              (alert_event_id, tenant_id, channel, delivery_key, outcome, detail)
+            VALUES (%s::uuid, %s::uuid, %s, %s, %s, %s)
+            ON CONFLICT (alert_event_id, channel, delivery_key) DO NOTHING
+            RETURNING id::text
+            """,
+            [alert_event_id, tenant_id, channel[:100], delivery_key[:200], outcome,
+             (detail or "")[:2000] or None],
+        )
+        row = cur.fetchone()
+    conn.commit()
+    return str(row[0]) if row else outcome

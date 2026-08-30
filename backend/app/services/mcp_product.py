@@ -33,6 +33,7 @@ RESEARCH_ALLOWED_TOOLS = [
     "normalize_citation",
     "get_citation_network",
     "get_authority_treatment",
+    "get_citator_status",
     "search_by_jurisdiction",
     "search_recent_authority",
     "get_court_info",

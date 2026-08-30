@@ -1,0 +1,69 @@
+# Citator control plane
+
+LawHand’s citator control plane is a review-first, source-bound layer over a
+promoted public-authority corpus. It is not a claim that LawHand supplies
+complete commercial-citator coverage or that any authority is “good law.”
+
+## Evidence model
+
+Every citator record is tied to a promoted `authority_corpus_versions` release,
+the release’s as-of time, a named reviewed source, and a source version. The
+control plane admits only sources classified as `official`, `open`, or
+`licensed`, with a completed source review and catalog implementation evidence.
+Custom, tenant, firm, private, unreviewed, and prohibited source keys fail
+closed; a public URL alone never establishes public-authority eligibility.
+
+`authority_records`, `authority_history_facts`, and
+`authority_citation_facts` contain deterministic source facts. They preserve
+direct/later history, amendment/repeal/status records where the permitted
+source provides them, citation depth, issue/context text, source links, spans
+or locators, source hashes, and observation timestamps. Promoted snapshot facts
+are immutable.
+
+`authority_treatment_assessments` is separate. It records an explicitly
+provisional machine interpretation, confidence, abstention, model/policy
+versions, and linked source-fact evidence. A non-abstaining assessment cannot
+be saved without linked evidence. `authority_treatment_reviews` appends an
+attorney acceptance, rejection, request for more evidence, or override; it
+never overwrites the machine record. A new promoted snapshot deliberately does
+not inherit derived treatment—the assessment must be recomputed and reviewed
+against its new as-of state.
+
+## Customer and API behavior
+
+`get_authority_treatment` shows deterministic facts separately from machine
+interpretation, includes source/version/as-of/currentness data, and marks a
+result `incomplete` or `unavailable` when source coverage, currentness, or
+evidence is not established. `get_citator_status` returns the promoted release
+and known gaps. Neither endpoint emits a good-law conclusion; an absent negative
+record, citation count, or `no_decision` label is never treated as a favorable
+status.
+
+The Research MCP settings page describes these two read contracts. Existing
+Brief Check results remain bounded citation/quotation review evidence; this
+control plane does not close Brief Check’s provider-backed resolution or
+rehearsal gaps.
+
+## Watches and alerts
+
+Saved watches are tenant-and-matter scoped and contain no authority text.
+They require explicit consent and at least one delivery channel. Database RLS
+requires `app.current_tenant_id` for reads and writes; callers cannot list,
+revoke, or enqueue another tenant’s watch. Alert events are idempotent by watch
+and event fingerprint. Delivery attempts can be queued, quiet-hour/no-consent
+suppressed, failed, sent, or revoked. Revocation removes consent before later
+enqueueing and appends a durable watch audit row.
+
+This release contains no production notification delivery. A production sender
+must honor quiet-hour configuration, record every delivery attempt, recheck
+revocation immediately before delivery, and use a separately authorized
+customer/staff channel.
+
+## Evaluation and release gate
+
+The control plane supports sanitized evaluation fixtures with positive,
+negative, distinguished, no-decision, and statute/regulation change examples.
+Before any claim of authoritative citator completeness, the operator must use a
+licensed partner or attorney-reviewed benchmark and publish precision, recall,
+abstention, and attorney edit/override measurements with regression thresholds.
+Until then, all coverage/currentness status remains bounded and provisional.

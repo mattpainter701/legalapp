@@ -203,6 +203,19 @@ describe('Admin MCP servers page', () => {
     expect(screen.getByRole('button', { name: 'Create key' })).toBeDisabled()
   })
 
+  it('describes citator reads as source-bound review evidence, not a good-law claim', async () => {
+    mocks.getMcpProductKeys.mockResolvedValueOnce(researchData({
+      product_enabled: true,
+      tools: ['get_authority_treatment', 'get_citator_status'],
+    }))
+
+    renderPage()
+
+    expect(await screen.findByText('get_citator_status')).toBeInTheDocument()
+    expect(screen.getByText(/provisional or attorney-reviewed treatment/i)).toBeInTheDocument()
+    expect(screen.getByText(/never a good-law determination/i)).toBeInTheDocument()
+  })
+
   it('shows per-key portal charges and lets an admin update lifecycle controls', async () => {
     mocks.getMcpProductKeys.mockResolvedValue(researchData({
       product_enabled: true,

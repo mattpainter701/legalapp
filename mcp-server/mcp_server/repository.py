@@ -614,20 +614,188 @@ class CourtListenerRepository:
             return {"cited": cited, "citing": citing}
 
     def authority_treatment(self, opinion_id: int) -> dict[str, Any]:
-        network = self.citation_network(opinion_id)
+        """Project source facts and reviewed machine treatment without a good-law claim.
+
+        This endpoint is deliberately a citator *review surface*, not a
+        conclusion endpoint.  A missing negative record, a ``no_decision``
+        assessment, stale source evidence, or an unlicensed/incomplete corpus
+        all remain explicit incomplete states.
+        """
+        authority_key = f"case:{opinion_id}"
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT r.authority_key, r.authority_kind, r.canonical_citation,
+                       r.title, r.court, r.decision_date, r.effective_date,
+                       r.repeal_date, r.source_url, r.source_as_of,
+                       r.source_version, r.currentness_state,
+                       r.deterministic_metadata, v.as_of AS corpus_as_of,
+                       v.status AS corpus_status, s.source_key,
+                       s.rights_decision, s.reviewed_at, s.expected_cadence,
+                       s.completeness_caveats, s.claim_safe_wording
+                FROM authority_records r
+                JOIN authority_corpus_versions v ON v.version=r.corpus_version
+                JOIN legal_sources s ON s.source_key=r.source_key
+                WHERE r.authority_key=%s AND r.corpus_version=(
+                  SELECT version FROM authority_corpus_versions WHERE status='promoted'
+                  ORDER BY promoted_at DESC NULLS LAST LIMIT 1
+                )
+                """,
+                [authority_key],
+            )
+            records = dict_rows(cur)
+            if not records:
+                return {
+                    "opinion_id": opinion_id,
+                    "authority_key": authority_key,
+                    "status": "unavailable",
+                    "deterministic_facts": {"history": [], "citing_references": []},
+                    "machine_interpretation": {
+                        "treatment_label": "unknown",
+                        "assessment_state": "unavailable",
+                        "attorney_reviewed": False,
+                    },
+                    "claim": "No good-law or completeness determination is available.",
+                    "limitations": [
+                        "No promoted, reviewed, source-bound citator identity was found.",
+                        "A public URL or local citation edge is not enough to establish citator coverage.",
+                    ],
+                }
+            record = records[0]
+            cur.execute(
+                """
+                SELECT fact_kind, related_authority_key, court, event_date,
+                       source_url, evidence_span, evidence_locator, source_hash,
+                       observed_at, metadata
+                FROM authority_history_facts
+                WHERE corpus_version=(SELECT version FROM authority_corpus_versions
+                  WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
+                  AND authority_key=%s
+                ORDER BY event_date DESC NULLS LAST, observed_at DESC LIMIT 100
+                """,
+                [authority_key],
+            )
+            history = dict_rows(cur)
+            cur.execute(
+                """
+                SELECT citing_authority_key, citing_opinion_id, depth, issue_context,
+                       source_url, evidence_span, evidence_locator, source_hash,
+                       observed_at, metadata
+                FROM authority_citation_facts
+                WHERE corpus_version=(SELECT version FROM authority_corpus_versions
+                  WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
+                  AND cited_authority_key=%s
+                ORDER BY depth, observed_at DESC LIMIT 100
+                """,
+                [authority_key],
+            )
+            citing_references = dict_rows(cur)
+            cur.execute(
+                """
+                SELECT a.id::text AS assessment_id, a.treatment_label, a.summary,
+                       a.confidence, a.abstained, a.abstention_reason,
+                       a.evidence_fact_ids, a.evidence_links, a.model_version,
+                       a.policy_version, a.assessment_state, a.computed_at,
+                       a.stale_at, r.decision AS review_decision,
+                       r.override_label, r.note AS review_note, r.reviewer,
+                       r.reviewed_at
+                FROM authority_treatment_assessments a
+                LEFT JOIN LATERAL (
+                  SELECT decision, override_label, note, reviewer, reviewed_at
+                  FROM authority_treatment_reviews
+                  WHERE assessment_id=a.id ORDER BY reviewed_at DESC, id DESC LIMIT 1
+                ) r ON TRUE
+                WHERE a.corpus_version=(SELECT version FROM authority_corpus_versions
+                  WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
+                  AND a.authority_key=%s
+                ORDER BY a.computed_at DESC, a.id DESC LIMIT 1
+                """,
+                [authority_key],
+            )
+            assessments = dict_rows(cur)
+        assessment = assessments[0] if assessments else {
+            "treatment_label": "unknown",
+            "assessment_state": "unavailable",
+            "abstained": True,
+            "abstention_reason": "No current machine assessment is available.",
+            "attorney_reviewed": False,
+        }
+        if assessments:
+            assessment["attorney_reviewed"] = bool(assessment.get("review_decision"))
+            if assessment.get("review_decision") == "overridden":
+                assessment["effective_label"] = assessment.get("override_label")
+            else:
+                assessment["effective_label"] = assessment.get("treatment_label")
+        source_ready = (
+            record.get("rights_decision") in {"official", "open", "licensed"}
+            and record.get("reviewed_at") is not None
+            and record.get("currentness_state") == "current"
+            and bool(record.get("expected_cadence"))
+        )
+        has_reviewable_evidence = bool(history or citing_references)
+        status = "review_ready" if source_ready and has_reviewable_evidence else "incomplete"
+        limitations = [
+            "No good-law determination is made from missing negative treatment, citation counts, or a no-decision assessment.",
+            "Treatment labels are machine-derived unless an attorney review is shown; deterministic facts are listed separately.",
+        ]
+        if not source_ready:
+            limitations.append(
+                "Source coverage/currentness is stale, unavailable, incomplete, or not established for this authority."
+            )
+        if not has_reviewable_evidence:
+            limitations.append("No direct/later-history or citing-reference evidence is available in this promoted snapshot.")
         return {
             "opinion_id": opinion_id,
-            "cited_authorities": network.get("cited", []),
-            "citing_authorities": network.get("citing", []),
-            "cited_count": len(network.get("cited", [])),
-            "citing_count": len(network.get("citing", [])),
-            "positive_signal_count": 0,
-            "negative_signal_count": 0,
-            "treatment_signal": "unknown",
-            "limitations": (
-                "Local MVP corpus tracks citation edges but does not classify "
-                "positive or negative treatment like a Shepard's service."
+            "authority_key": authority_key,
+            "status": status,
+            "deterministic_facts": {
+                "authority": record,
+                "history": history,
+                "citing_references": citing_references,
+                "source_bound": True,
+            },
+            "machine_interpretation": assessment,
+            "claim": "Review evidence and linked sources; LawHand does not determine that this authority is good law.",
+            "limitations": limitations,
+        }
+
+    def citator_status(self) -> dict[str, Any]:
+        """Return a bounded, honest citator readiness projection for customers."""
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT v.version, v.as_of, v.status,
+                       COUNT(DISTINCT r.authority_key) AS authority_count,
+                       COUNT(DISTINCT h.id) AS history_fact_count,
+                       COUNT(DISTINCT c.id) AS citation_fact_count,
+                       COUNT(DISTINCT a.id) AS assessment_count,
+                       COUNT(DISTINCT a.id) FILTER (WHERE a.assessment_state='reviewed')
+                         AS reviewed_assessment_count
+                FROM authority_corpus_versions v
+                LEFT JOIN authority_records r ON r.corpus_version=v.version
+                LEFT JOIN authority_history_facts h ON h.corpus_version=v.version
+                LEFT JOIN authority_citation_facts c ON c.corpus_version=v.version
+                LEFT JOIN authority_treatment_assessments a ON a.corpus_version=v.version
+                WHERE v.status='promoted'
+                GROUP BY v.version, v.as_of, v.status
+                ORDER BY v.as_of DESC LIMIT 1
+                """
+            )
+            rows = dict_rows(cur)
+        release = rows[0] if rows else None
+        return {
+            "available": bool(release),
+            "release": release,
+            "status": "incomplete" if release else "unavailable",
+            "claim_notice": (
+                "Facts are limited to reviewed, source-bound promoted authority. "
+                "Machine treatment remains provisional unless attorney-reviewed; "
+                "no result is a good-law determination."
             ),
+            "known_gaps": [
+                "Completeness depends on the permitted, reviewed source and release currentness evidence.",
+                "Licensed citator coverage is required where authoritative completeness cannot be established from permitted sources.",
+            ],
         }
 
     def court_info(self, court_id: str) -> dict[str, Any] | None:

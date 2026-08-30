@@ -64,6 +64,7 @@ def init_schema(db_url: str | None = None) -> None:
             cur.execute(SCHEMA_SQL)
         _ensure_legacy_bootstrap_version(conn)
         backfill_promoted_caselaw_snapshot(conn)
+        backfill_promoted_citator_facts(conn)
         conn.commit()
 
 
@@ -192,6 +193,160 @@ def backfill_promoted_caselaw_snapshot(conn) -> int:
         # caller's transaction, where promoted snapshots remain immutable.
         cur.execute("SET LOCAL authority.snapshot_backfill = 'off'")
         return inserted
+
+
+def backfill_promoted_citator_facts(conn) -> int:
+    """Materialize only reviewed, promoted authority into citator facts.
+
+    This migration path is deliberately conservative: an old CourtListener row
+    with no reviewed source record does not acquire a citator identity merely
+    because it is reachable in a public table.  It remains incomplete until an
+    operator has made the explicit source/rights decision required by the
+    authority control plane.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SET LOCAL authority.snapshot_backfill = 'on'")
+        cur.execute(
+            """SELECT version, as_of FROM authority_corpus_versions
+               WHERE status='promoted'
+               ORDER BY promoted_at DESC NULLS LAST LIMIT 1"""
+        )
+        release = cur.fetchone()
+        if not release:
+            cur.execute("SET LOCAL authority.snapshot_backfill = 'off'")
+            return 0
+        version, as_of = release
+        # Case identity is admitted only through the named, reviewed
+        # CourtListener source; arbitrary/imported authority never inherits it.
+        cur.execute(
+            """
+            INSERT INTO authority_records (
+              corpus_version, authority_key, authority_kind, source_key,
+              canonical_citation, title, court, decision_date, source_url,
+              source_as_of, source_version, currentness_state,
+              deterministic_metadata)
+            SELECT cl.corpus_version, 'case:' || op.opinion_id::text, 'case',
+                   s.source_key,
+                   NULLIF((cl.citations->>0), ''),
+                   COALESCE(cl.case_name, 'Untitled opinion'), ch.court_id,
+                   cl.date_filed, COALESCE(op.source_url, s.canonical_url),
+                   %s, cl.corpus_version, 'unknown',
+                   jsonb_build_object('opinion_id', op.opinion_id,
+                                      'cluster_id', cl.cluster_id,
+                                      'source_classification', s.rights_decision)
+            FROM authority_case_opinions op
+            JOIN authority_case_clusters cl
+              ON cl.corpus_version=op.corpus_version AND cl.cluster_id=op.cluster_id
+            LEFT JOIN LATERAL (
+              SELECT court_id FROM authority_case_chunks c
+              WHERE c.corpus_version=op.corpus_version AND c.opinion_id=op.opinion_id
+              ORDER BY chunk_index LIMIT 1
+            ) ch ON TRUE
+            JOIN legal_sources s ON s.source_key='courtlistener:ohio-caselaw'
+            WHERE op.corpus_version=%s AND s.enabled IS TRUE
+              AND s.rights_decision IN ('official','open','licensed')
+              AND s.reviewed_at IS NOT NULL AND s.reviewed_by IS NOT NULL
+              AND s.metadata->>'catalog_schema_version' IS NOT NULL
+              AND s.metadata->>'implementation_status' IS NOT NULL
+            ON CONFLICT (corpus_version, authority_key) DO NOTHING
+            """,
+            [as_of, version],
+        )
+        case_records = cur.rowcount
+        cur.execute(
+            """
+            INSERT INTO authority_records (
+              corpus_version, authority_key, authority_kind, source_key,
+              canonical_citation, title, effective_date, repeal_date, source_url,
+              source_as_of, source_version, currentness_state,
+              deterministic_metadata)
+            SELECT d.corpus_version, 'document:' || d.id::text,
+                   CASE WHEN d.document_type IN ('statute','regulation','rule')
+                        THEN d.document_type ELSE 'other' END,
+                   d.source_key, d.citation, d.title, d.effective_date,
+                   d.termination_date, d.canonical_url, %s, d.corpus_version,
+                   CASE WHEN d.document_status IN ('current','current_with_supplement')
+                        THEN 'unknown' ELSE 'stale' END,
+                   jsonb_build_object('document_id', d.id,
+                                      'external_id', d.external_id,
+                                      'document_status', d.document_status,
+                                      'source_classification', s.rights_decision)
+            FROM legal_documents d
+            JOIN legal_sources s ON s.source_key=d.source_key
+            WHERE d.corpus_version=%s AND s.enabled IS TRUE
+              AND s.rights_decision IN ('official','open','licensed')
+              AND s.reviewed_at IS NOT NULL AND s.reviewed_by IS NOT NULL
+              AND s.metadata->>'catalog_schema_version' IS NOT NULL
+              AND s.metadata->>'implementation_status' IS NOT NULL
+              AND NOT starts_with(d.source_key, 'tenant:')
+              AND NOT starts_with(d.source_key, 'firm:')
+              AND NOT starts_with(d.source_key, 'private:')
+            ON CONFLICT (corpus_version, authority_key) DO NOTHING
+            """,
+            [as_of, version],
+        )
+        document_records = cur.rowcount
+        # A permitted statute/regulation source can provide deterministic
+        # amendment/repeal status even when it cannot provide a full citator.
+        # Preserve that event as a fact rather than converting it into a
+        # treatment label.
+        cur.execute(
+            """
+            INSERT INTO authority_history_facts
+              (corpus_version, authority_key, fact_kind, event_date, source_url,
+               evidence_locator, source_hash, metadata)
+            SELECT d.corpus_version, 'document:' || d.id::text,
+                   CASE WHEN d.document_status='superseded' THEN 'superseded'
+                        ELSE 'repealed' END,
+                   d.termination_date, d.canonical_url,
+                   jsonb_build_object('document_id', d.id,
+                                      'external_id', d.external_id,
+                                      'document_status', d.document_status),
+                   COALESCE(d.content_hash,
+                     encode(digest(concat_ws(':', d.source_key, d.external_id,
+                       d.corpus_version, d.termination_date), 'sha256'), 'hex')),
+                   jsonb_build_object('source_version', d.corpus_version)
+            FROM legal_documents d
+            JOIN authority_records r ON r.corpus_version=d.corpus_version
+              AND r.authority_key='document:' || d.id::text
+            WHERE d.corpus_version=%s AND d.termination_date IS NOT NULL
+            ON CONFLICT DO NOTHING
+            """,
+            [version],
+        )
+        status_facts = cur.rowcount
+        cur.execute(
+            """
+            INSERT INTO authority_citation_facts (
+              corpus_version, citing_authority_key, cited_authority_key,
+              citing_opinion_id, cited_opinion_id, depth, source_url,
+              evidence_locator, source_hash, metadata)
+            SELECT cit.corpus_version, 'case:' || cit.citing_opinion_id::text,
+                   'case:' || cit.cited_opinion_id::text,
+                   cit.citing_opinion_id, cit.cited_opinion_id, cit.depth,
+                   COALESCE(op_source.source_url, 'https://www.courtlistener.com/'),
+                   jsonb_build_object('citation_id', cit.citation_id),
+                   encode(digest(concat_ws(':', cit.corpus_version,
+                     cit.citing_opinion_id, cit.cited_opinion_id, cit.citation_id),
+                     'sha256'), 'hex'),
+                   jsonb_build_object('reporter', cit.cited_reporter,
+                                      'volume', cit.cited_volume,
+                                      'page', cit.cited_page)
+            FROM authority_case_citations cit
+            JOIN authority_records source_record ON source_record.corpus_version=cit.corpus_version
+              AND source_record.authority_key='case:' || cit.citing_opinion_id::text
+            JOIN authority_records target_record ON target_record.corpus_version=cit.corpus_version
+              AND target_record.authority_key='case:' || cit.cited_opinion_id::text
+            LEFT JOIN authority_case_opinions op_source ON op_source.corpus_version=cit.corpus_version
+              AND op_source.opinion_id=cit.citing_opinion_id
+            WHERE cit.corpus_version=%s AND cit.cited_opinion_id IS NOT NULL
+            ON CONFLICT DO NOTHING
+            """,
+            [version],
+        )
+        citation_facts = cur.rowcount
+        cur.execute("SET LOCAL authority.snapshot_backfill = 'off'")
+        return case_records + document_records + status_facts + citation_facts
 
 
 def list_bulk_keys() -> list[str]:

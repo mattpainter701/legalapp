@@ -11,6 +11,7 @@ TOOL_NAMES = [
     "normalize_citation",
     "get_citation_network",
     "get_authority_treatment",
+    "get_citator_status",
     "search_by_jurisdiction",
     "search_recent_authority",
     "get_court_info",
@@ -137,8 +138,13 @@ def build_tool_manifest() -> dict:
         },
         {
             "name": "get_authority_treatment",
-            "description": "Return local citation treatment signals and history counts for a target opinion.",
+            "description": "Return source-bound history/citation facts and separately labeled provisional or attorney-reviewed treatment for a target opinion. Never returns a good-law determination.",
             "inputSchema": _schema({"opinion_id": {"type": "integer"}}, ["opinion_id"]),
+        },
+        {
+            "name": "get_citator_status",
+            "description": "Return promoted source/version/as-of evidence and known citator gaps. Coverage is incomplete unless a permitted source establishes it.",
+            "inputSchema": _schema({}, []),
         },
         {
             "name": "search_by_jurisdiction",
