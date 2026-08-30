@@ -589,7 +589,7 @@
       "name": "aiosmtplib",
       "scope": "runtime/dev",
       "source": "backend/requirements.txt",
-      "specifier": "==5.1.1"
+      "specifier": "==5.1.2"
     },
     {
       "ecosystem": "pypi",
