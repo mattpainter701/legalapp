@@ -4,4 +4,7 @@ PLATFORM_PROTECTED_PREFIXES = ("/api/platform", "/api/mcp/authority")
 
 
 def is_platform_protected_path(path: str) -> bool:
-    return path.startswith(PLATFORM_PROTECTED_PREFIXES)
+    return any(
+        path == prefix or path.startswith(prefix + "/")
+        for prefix in PLATFORM_PROTECTED_PREFIXES
+    )
