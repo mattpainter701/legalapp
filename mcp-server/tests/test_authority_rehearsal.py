@@ -1302,8 +1302,8 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
             cur.execute(
                 """INSERT INTO authority_records
                      (corpus_version, authority_key, authority_kind, source_key,
-                      source_url, source_as_of, source_version, currentness_state)
-                   VALUES (%s, %s, 'case', %s, 'https://example.test/other',
+                      title, source_url, source_as_of, source_version, currentness_state)
+                   VALUES (%s, %s, 'case', %s, 'Other synthetic authority', 'https://example.test/other',
                      '2026-08-30T00:00:00Z', %s, 'current')""",
                 [version, "case:other-" + version, source_key, version],
             )
@@ -1326,8 +1326,8 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
             cur.execute(
                 """INSERT INTO authority_records
                      (corpus_version, authority_key, authority_kind, source_key,
-                      source_url, source_as_of, source_version, currentness_state)
-                   VALUES (%s, %s, 'case', %s, 'https://example.test/foreign',
+                      title, source_url, source_as_of, source_version, currentness_state)
+                   VALUES (%s, %s, 'case', %s, 'Foreign synthetic authority', 'https://example.test/foreign',
                      '2026-08-30T00:00:00Z', %s, 'current')""",
                 [foreign_version, authority_key, source_key, foreign_version],
             )
