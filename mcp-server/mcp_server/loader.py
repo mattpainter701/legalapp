@@ -408,7 +408,7 @@ def refresh_courtlistener_coverage_ledger(
                 rows_loaded, chunks_loaded, vectors_loaded, first_document_date,
                 last_document_date, last_checked_at, metadata, updated_at
             )
-            SELECT 'courtlistener:bulk', d.court_id,
+            SELECT 'courtlistener:ohio-caselaw', d.court_id,
                    jsonb_build_object('court_id', d.court_id, 'source', 'CourtListener bulk'),
                    CASE WHEN COUNT(ch.id) = 0 THEN 'loading' ELSE 'partial' END,
                    %s,
@@ -423,7 +423,7 @@ def refresh_courtlistener_coverage_ledger(
             LEFT JOIN opinion_chunks ch ON ch.opinion_id = o.opinion_id
             {filters}
             GROUP BY d.court_id
-            ON CONFLICT (source_key, partition_key) DO UPDATE SET
+            ON CONFLICT (source_key, partition_key, source_release) DO UPDATE SET
                 rows_loaded = EXCLUDED.rows_loaded,
                 chunks_loaded = EXCLUDED.chunks_loaded,
                 vectors_loaded = EXCLUDED.vectors_loaded,

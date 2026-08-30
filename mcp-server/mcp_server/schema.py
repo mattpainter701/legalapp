@@ -272,7 +272,7 @@ CREATE TABLE IF NOT EXISTS corpus_coverage_ledger (
     expected_item_count bigint,
     acquisition_state text NOT NULL DEFAULT 'not_started',
     snapshot_date date,
-    source_release text,
+    source_release text NOT NULL DEFAULT 'legacy',
     rows_loaded bigint NOT NULL DEFAULT 0,
     chunks_loaded bigint NOT NULL DEFAULT 0,
     vectors_loaded bigint NOT NULL DEFAULT 0,
@@ -286,7 +286,7 @@ CREATE TABLE IF NOT EXISTS corpus_coverage_ledger (
     owner text,
     metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
     updated_at timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (source_key, partition_key),
+    PRIMARY KEY (source_key, partition_key, source_release),
     CHECK (acquisition_state IN ('not_started', 'staged', 'loading', 'indexed',
         'complete', 'partial', 'blocked', 'retired'))
 );
@@ -472,6 +472,19 @@ CREATE TABLE IF NOT EXISTS authority_case_citations (
     depth integer NOT NULL DEFAULT 0,
     PRIMARY KEY (citation_id)
 );
+
+-- Upgrade the original two-column ledger without losing its legacy evidence.
+-- Version is part of identity so side-by-side releases cannot overwrite one
+-- another's counts or freshness checkpoint.
+ALTER TABLE corpus_coverage_ledger ADD COLUMN IF NOT EXISTS source_release text;
+UPDATE corpus_coverage_ledger SET source_release = 'legacy'
+ WHERE source_release IS NULL;
+ALTER TABLE corpus_coverage_ledger ALTER COLUMN source_release SET DEFAULT 'legacy';
+ALTER TABLE corpus_coverage_ledger ALTER COLUMN source_release SET NOT NULL;
+ALTER TABLE corpus_coverage_ledger DROP CONSTRAINT IF EXISTS corpus_coverage_ledger_pkey;
+ALTER TABLE corpus_coverage_ledger
+    ADD CONSTRAINT corpus_coverage_ledger_pkey
+    PRIMARY KEY (source_key, partition_key, source_release);
 ALTER TABLE authority_case_citations ADD COLUMN IF NOT EXISTS citation_id uuid DEFAULT gen_random_uuid();
 CREATE UNIQUE INDEX IF NOT EXISTS ux_authority_case_citation_identity
     ON authority_case_citations(

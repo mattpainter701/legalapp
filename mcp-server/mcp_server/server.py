@@ -85,7 +85,7 @@ async def operator_identity(
         actual_body_hash = hashlib.sha256(
             json.dumps(request_body, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
-    except (ValueError, UnicodeError, TypeError, binascii.Error) as exc:
+    except (KeyError, ValueError, UnicodeError, TypeError, binascii.Error) as exc:
         raise HTTPException(
             status_code=403, detail="invalid signed operator context"
         ) from exc
@@ -164,12 +164,15 @@ def run_control_audit(
                 cur.execute(
                     """
                     SELECT s.rights_decision, s.reviewed_at,
-                           COALESCE(cp.status, 'missing'), COUNT(d.id)
+                           COALESCE(cp.status, l.acquisition_state, 'missing'),
+                           GREATEST(COUNT(DISTINCT d.id), COALESCE(MAX(l.rows_loaded), 0))
                     FROM legal_sources s
                     LEFT JOIN authority_harvest_checkpoints cp
                       ON cp.source_key=s.source_key AND cp.corpus_version=%s
                     LEFT JOIN legal_documents d
                       ON d.source_key=s.source_key AND d.corpus_version=%s
+                    LEFT JOIN corpus_coverage_ledger l
+                      ON l.source_key=s.source_key AND l.source_release=%s
                     WHERE s.enabled IS TRUE
                       AND s.storage_policy <> 'prohibited'
                       AND s.rights_decision IN ('official','open','licensed')
@@ -180,9 +183,10 @@ def run_control_audit(
                       AND s.source_key NOT LIKE 'tenant:%'
                       AND s.source_key NOT LIKE 'firm:%'
                       AND s.source_key NOT LIKE 'private:%'
-                    GROUP BY s.source_key, s.rights_decision, s.reviewed_at, cp.status
+                    GROUP BY s.source_key, s.rights_decision, s.reviewed_at,
+                             cp.status, l.acquisition_state
                 """,
-                    [body.version, body.version],
+                    [body.version, body.version, body.version],
                 )
                 records = [
                     {
@@ -204,16 +208,30 @@ def run_control_audit(
             elif body.audit_kind == "completeness":
                 cur.execute(
                     """
-                    SELECT cp.source_key, cp.partition_key,
-                           COALESCE(l.expected_item_count, 0),
-                           COALESCE(l.rows_loaded, 0), cp.status
-                    FROM authority_harvest_checkpoints cp
-                    JOIN legal_sources s ON s.source_key=cp.source_key
-                    LEFT JOIN corpus_coverage_ledger l
-                      ON l.source_key=cp.source_key
-                     AND l.partition_key=cp.partition_key
-                     AND l.source_release=%s
-                    WHERE cp.corpus_version=%s AND s.enabled IS TRUE
+                    SELECT e.source_key, e.partition_key,
+                           COALESCE(e.expected_item_count, 0),
+                           COALESCE(e.rows_loaded, 0), e.status
+                    FROM (
+                      SELECT cp.source_key, cp.partition_key,
+                             l.expected_item_count, l.rows_loaded, cp.status
+                      FROM authority_harvest_checkpoints cp
+                      LEFT JOIN corpus_coverage_ledger l
+                        ON l.source_key=cp.source_key AND l.partition_key=cp.partition_key
+                       AND l.source_release=cp.corpus_version
+                      WHERE cp.corpus_version=%s
+                      UNION ALL
+                      SELECT l.source_key, l.partition_key,
+                             l.expected_item_count, l.rows_loaded, l.acquisition_state
+                      FROM corpus_coverage_ledger l
+                      WHERE l.source_release=%s
+                        AND NOT EXISTS (
+                          SELECT 1 FROM authority_harvest_checkpoints cp
+                          WHERE cp.source_key=l.source_key AND cp.partition_key=l.partition_key
+                            AND cp.corpus_version=l.source_release
+                        )
+                    ) e
+                    JOIN legal_sources s ON s.source_key=e.source_key
+                    WHERE s.enabled IS TRUE
                       AND s.rights_decision IN ('official','open','licensed')
                       AND s.reviewed_at IS NOT NULL AND s.reviewed_by IS NOT NULL
                 """,
@@ -229,14 +247,19 @@ def run_control_audit(
             elif body.audit_kind == "freshness":
                 cur.execute(
                     """
-                    SELECT cp.last_successful_harvest_at, s.expected_cadence, cp.status
-                    FROM authority_harvest_checkpoints cp
-                    JOIN legal_sources s ON s.source_key=cp.source_key
-                    WHERE cp.corpus_version=%s AND s.enabled IS TRUE
+                    SELECT COALESCE(cp.last_successful_harvest_at, l.last_checked_at),
+                           s.expected_cadence, COALESCE(cp.status, l.acquisition_state)
+                    FROM legal_sources s
+                    LEFT JOIN authority_harvest_checkpoints cp
+                      ON cp.source_key=s.source_key AND cp.corpus_version=%s
+                    LEFT JOIN corpus_coverage_ledger l
+                      ON l.source_key=s.source_key AND l.source_release=%s
+                    WHERE (cp.source_key IS NOT NULL OR l.source_key IS NOT NULL)
+                      AND s.enabled IS TRUE
                       AND s.rights_decision IN ('official','open','licensed')
                       AND s.reviewed_at IS NOT NULL AND s.reviewed_by IS NOT NULL
                 """,
-                    [body.version],
+                    [body.version, body.version],
                 )
                 now = datetime.now(timezone.utc)
                 records = [

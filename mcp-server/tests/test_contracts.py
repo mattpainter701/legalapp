@@ -460,7 +460,7 @@ def test_loader_persists_per_court_coverage_ledger_contract():
     source = (ROOT / "mcp_server" / "loader.py").read_text()
 
     assert "INSERT INTO corpus_coverage_ledger" in source
-    assert "'courtlistener:bulk'" in source
+    assert "'courtlistener:ohio-caselaw'" in source
     assert "vectors_loaded" in source
 
 
