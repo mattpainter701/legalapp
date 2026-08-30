@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.30.5 — Versioned public-authority coverage
+
+Released August 30, 2026.
+
+Public legal research now exposes reviewed source scope, corpus release evidence, currentness limits, and honest retrieval fallbacks.
+
+- **See reviewed source scope.** Rights decisions, authority tiers, content types, jurisdictions, temporal scope, cadence, caveats, and provenance are carried with source health.
+- **Track corpus releases honestly.** Promoted versions, rollback metadata, harvest checkpoints, quarantine states, and sampled audits prevent unsupported complete/current claims.
+- **Preserve retrieval boundaries.** Exact embedding compatibility is required; outages or mismatches fall back to keyword/source search while private firm documents remain outside public telemetry.
+
 ## 2026.08.30.4 — Controlled client and matter import promotion
 
 Released August 30, 2026.

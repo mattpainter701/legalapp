@@ -5,6 +5,7 @@ import logging
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.database import async_session_maker
+from app.middleware.platform_request_paths import is_platform_protected_path
 from app.services.operator_audit import record_operator_audit
 
 
@@ -13,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 class PlatformAuditMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
-        if not request.url.path.startswith("/api/platform"):
+        if not is_platform_protected_path(request.url.path):
             return await call_next(request)
         response = None
         raised = False

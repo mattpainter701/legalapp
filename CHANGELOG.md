@@ -10,6 +10,11 @@
   checkboxes remain open until those acceptance gates are demonstrably met.
 
 ### Added
+- **Versioned public-authority coverage control plane:** reviewed rights and
+  provenance fields, immutable corpus release/audit ledgers, harvest evidence,
+  claim-safe coverage projection, and exact embedding compatibility now back the
+  public research source-health surface. Tenant-private corpus data remains out
+  of the authority namespace and telemetry.
 - **Bounded Firm Memory search relay:** an explicitly matter-scoped local
   SQLite FTS5 control index can now answer bounded searches through the
   outbound-polled file-share agent, authenticated REST/portal, Chat structured

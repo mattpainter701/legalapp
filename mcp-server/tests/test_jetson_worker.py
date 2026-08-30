@@ -6,7 +6,12 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from mcp_server.jetson_worker import OllamaEmbeddingModel, embed_batch
+from mcp_server.jetson_worker import (
+    OllamaEmbeddingModel,
+    embed_batch,
+    measured_host_telemetry,
+    update_sql,
+)
 
 
 class Response:
@@ -52,3 +57,13 @@ def test_ollama_model_rejects_wrong_dimension():
 
     with pytest.raises(RuntimeError, match="1024-dimensional"):
         model.encode(["text"])
+
+
+def test_snapshot_worker_uses_snapshot_identity_and_measured_telemetry():
+    sql = update_sql("authority_case_chunks", "v2")
+    assert "WHERE chunk_id = %s" in sql
+    assert "WHERE id = %s" not in sql
+    telemetry = measured_host_telemetry()
+    assert telemetry["observed_at"].endswith("Z")
+    assert "capacity" in telemetry
+    assert telemetry["temperature_source"] in {"psutil", "unavailable"}

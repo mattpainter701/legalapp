@@ -322,8 +322,10 @@ function PublicSourceHealth({ health }) {
     )
   }
 
-  const source = (health.sources || []).find((item) => item.jurisdiction === 'OH') || health.sources?.[0]
+  const sources = (health.sources || []).filter(Boolean)
+  const source = sources.find((item) => item.jurisdiction === 'OH') || sources[0]
   const attention = health.status === 'attention'
+    || ['failed', 'stale', 'unreviewed', 'attention'].includes(source?.status)
   if (!health.available || !source) {
     return (
       <div className="rounded-xl border border-brand-line bg-brand-surface p-3">
@@ -347,6 +349,8 @@ function PublicSourceHealth({ health }) {
   const embedded = Number(source.embedded_chunk_count || 0)
   const itemCount = Number(source.item_count || 0)
   const coverage = [coverageStart, coverageEnd].filter(Boolean).join('–')
+  const version = health.corpus_version?.version || 'No promoted release'
+  const claimSuppressed = health.claim_state === 'suppressed'
 
   return (
     <details className="group rounded-xl border border-brand-line bg-brand-surface p-3">
@@ -354,9 +358,9 @@ function PublicSourceHealth({ health }) {
         <span className="flex min-w-0 items-start gap-2">
           <Database size={16} className="mt-0.5 shrink-0 text-brand-accent-2" />
           <span className="min-w-0">
-            <span className="block text-sm font-semibold text-brand-ink">Ohio case-law coverage</span>
+            <span className="block text-sm font-semibold text-brand-ink">Public legal authority</span>
             <span className="mt-1 block text-xs leading-relaxed text-brand-muted">
-              {itemCount.toLocaleString()} opinions{coverage ? ` · ${coverage}` : ''}
+              {sources.length} reviewed source{sources.length === 1 ? '' : 's'} · corpus {version}
             </span>
           </span>
         </span>
@@ -364,7 +368,7 @@ function PublicSourceHealth({ health }) {
           attention ? 'bg-brand-amber/15 text-brand-amber' : 'bg-brand-accent/10 text-brand-accent-2'
         }`}>
           {attention ? <AlertTriangle size={11} /> : <CheckCircle2 size={11} />}
-          {attention ? 'Check status' : 'Synced'}
+          {claimSuppressed ? 'Claims limited' : attention ? 'Check status' : 'Synced'}
         </span>
       </summary>
       <div className="mt-3 border-t border-brand-line pt-3 text-xs text-brand-muted">
@@ -372,10 +376,23 @@ function PublicSourceHealth({ health }) {
           <dt>Local snapshot</dt><dd className="text-right text-brand-ink">{coverageEnd || 'Not reported'}</dd>
           <dt>Last successful sync</dt><dd className="text-right text-brand-ink">{lastSync || 'Not reported'}</dd>
           <dt>Search passages</dt><dd className="text-right text-brand-ink">{embedded.toLocaleString()} / {chunks.toLocaleString()} embedded</dd>
+          <dt>Source scope</dt><dd className="text-right text-brand-ink">{source.source_type || 'Authority'} · {source.jurisdiction || 'Named jurisdiction'}</dd>
+          <dt>Temporal coverage</dt><dd className="text-right text-brand-ink">{coverage || 'Not established'} · {itemCount.toLocaleString()} records</dd>
+          <dt>Rights review</dt><dd className="text-right text-brand-ink">{source.rights_decision || 'Pending review'}</dd>
         </dl>
         <p className="mt-3 leading-relaxed">
-          Coverage is bounded and does not replace checking the linked court source or a citator.
+          {health.claim_notice || source.claim_safe_wording || 'Coverage is bounded and does not replace checking the linked source or a citator.'}
         </p>
+        {sources.length > 1 && (
+          <ul className="mt-3 space-y-1 border-t border-brand-line pt-3">
+            {sources.slice(0, 6).map((item) => (
+              <li key={item.source_key} className="flex items-center justify-between gap-2">
+                <span className="truncate text-brand-ink">{item.display_name || item.source_key}</span>
+                <span className="shrink-0 text-[10px] uppercase tracking-wide">{item.claim_state || item.status || 'limited'}</span>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </details>
   )

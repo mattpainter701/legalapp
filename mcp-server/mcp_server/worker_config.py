@@ -13,8 +13,11 @@ class WorkerConfig:
     total_workers: int
     batch_size: int = DEFAULT_BATCH_SIZE
     model: str = DEFAULT_MODEL
+    model_version: str = "1"
     dim: int = DEFAULT_DIM
     db_url: str | None = None
+    temperature_c: float | None = None
+    capacity_evidence: dict | None = None
 
     def validate(self) -> None:
         if self.worker_id < 0 or self.worker_id >= self.total_workers:
@@ -23,23 +26,36 @@ class WorkerConfig:
             raise ValueError("total_workers must be positive")
         if self.batch_size <= 0:
             raise ValueError("batch_size must be positive")
+        if not str(self.model or "").strip() or not str(self.model_version or "").strip():
+            raise ValueError("embedding model and model version are required")
         if self.dim != DEFAULT_DIM:
             raise ValueError("mxbai CourtListener embeddings must be 1024-dimensional")
 
 
-def partition_sql(corpus: str = "opinion_chunks") -> str:
+def partition_sql(corpus: str = "opinion_chunks", corpus_version: str | None = None,
+                  embedding_model: str | None = None,
+                  embedding_version: str | None = None,
+                  embedding_dimension: int | None = None) -> str:
+    contract = ("embedding IS NULL OR embedding_model IS DISTINCT FROM %s "
+                "OR embedding_version::text IS DISTINCT FROM %s "
+                "OR vector_dims(embedding) IS DISTINCT FROM %s") if all(
+                    value is not None for value in (embedding_model, embedding_version, embedding_dimension)
+                ) else "embedding IS NULL"
     if corpus == "opinion_chunks":
-        return """
+        version_filter = "AND oc.corpus_version = %s" if corpus_version else ""
+        return f"""
             SELECT id, content
-            FROM opinion_chunks
-            WHERE embedding IS NULL
+            FROM opinion_chunks oc
+            WHERE ({contract})
+              {version_filter}
               AND ABS(HASHTEXT(id::text)) %% %s = %s
             ORDER BY created_at, id
             LIMIT %s
             FOR UPDATE SKIP LOCKED
         """
     if corpus == "legal_document_chunks":
-        return """
+        version_filter = " AND d.corpus_version = %s AND c.corpus_version = %s" if corpus_version else ""
+        return f"""
             SELECT c.id,
                    CONCAT(
                        '[', COALESCE(d.jurisdiction, 'unknown'), '] ',
@@ -49,13 +65,24 @@ def partition_sql(corpus: str = "opinion_chunks") -> str:
             FROM legal_document_chunks c
             JOIN legal_documents d ON d.id = c.document_id
             JOIN legal_sources s ON s.source_key = d.source_key
-            WHERE c.embedding IS NULL
+            WHERE ({contract.replace('embedding', 'c.embedding')})
               AND s.enabled IS TRUE
               AND d.document_status = 'current'
+              {version_filter}
               AND s.storage_policy IN ('mirror', 'normalized_text')
               AND ABS(HASHTEXT(c.id::text)) %% %s = %s
             ORDER BY c.created_at, c.id
             LIMIT %s
             FOR UPDATE OF c SKIP LOCKED
+        """
+    if corpus == "authority_case_chunks":
+        return f"""
+            SELECT chunk_id, content
+            FROM authority_case_chunks
+            WHERE ({contract}) AND corpus_version = %s
+              AND ABS(HASHTEXT(chunk_id::text)) %% %s = %s
+            ORDER BY chunk_index, opinion_id
+            LIMIT %s
+            FOR UPDATE SKIP LOCKED
         """
     raise ValueError(f"unsupported embedding corpus: {corpus}")

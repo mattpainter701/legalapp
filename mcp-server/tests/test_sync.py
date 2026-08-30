@@ -25,6 +25,7 @@ def test_sync_schema_tracks_sources_checkpoints_and_source_hashes():
     assert "CREATE TABLE IF NOT EXISTS legal_sources" in SCHEMA_SQL
     assert "CREATE TABLE IF NOT EXISTS source_sync_states" in SCHEMA_SQL
     assert "PRIMARY KEY (source_key, partition_key)" in SCHEMA_SQL
+    assert "PRIMARY KEY (source_key, partition_key, source_release)" in SCHEMA_SQL
     assert "ALTER TABLE opinions ADD COLUMN IF NOT EXISTS content_hash text" in SCHEMA_SQL
     assert "source_modified_at timestamptz" in SCHEMA_SQL
     assert "CREATE TABLE IF NOT EXISTS corpus_coverage_ledger" in SCHEMA_SQL

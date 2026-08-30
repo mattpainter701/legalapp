@@ -60,6 +60,9 @@ class RecordingCursor:
     def fetchall(self):
         return []
 
+    def fetchone(self):
+        return ["mixedbread-ai/mxbai-embed-large-v1", "1", 1024]
+
 
 class RecordingConnection:
     def __init__(self):
@@ -248,9 +251,10 @@ def test_manifest_exposes_domain_scoped_legal_tools():
         "get_court_coverage",
         "search_dockets",
         "export_research_bundle",
-        "sync_status",
-        "corpus_status",
-    ]
+            "sync_status",
+            "corpus_status",
+            "authority_coverage",
+        ]
 
 
 def test_case_details_contract_requires_exactly_one_identifier():
@@ -282,7 +286,12 @@ def test_full_opinion_contract_requires_exactly_one_identifier():
 
 def test_repository_hybrid_search_uses_vector_and_fts_when_embedding_available():
     conn = RecordingConnection()
-    embedding = [0.001] * 1024
+    class CompatibleEmbedding(list):
+        model = "mixedbread-ai/mxbai-embed-large-v1"
+        version = "1"
+        dimension = 1024
+
+    embedding = CompatibleEmbedding([0.001] * 1024)
 
     CourtListenerRepository(conn).search_caselaw(
         query="constructive possession",
@@ -363,11 +372,15 @@ def test_repository_searches_general_authority_with_effective_date_filters():
 def test_repository_uses_hybrid_search_for_general_authority():
     conn = RecordingConnection()
 
+    class CompatibleEmbedding(list):
+        model = "mixedbread-ai/mxbai-embed-large-v1"
+        version = "1"
+        dimension = 1024
+
     CourtListenerRepository(conn).search_legal_authorities(
         "estate tax portability",
         top_k=4,
-        jurisdiction="US",
-        query_embedding=[0.001] * 1024,
+        jurisdiction="US", query_embedding=CompatibleEmbedding([0.001] * 1024),
     )
 
     sql = conn.cursor_obj.sql
@@ -405,7 +418,7 @@ def test_repository_search_dockets_targets_docket_metadata():
 
     sql = conn.cursor_obj.sql
     assert "FROM dockets d" in sql
-    assert "opinion_clusters" in sql
+    assert "authority_case_clusters" in sql
     assert "d.docket_number ILIKE" in sql
     assert "c.jurisdiction = %s" in sql
 
@@ -447,7 +460,7 @@ def test_loader_persists_per_court_coverage_ledger_contract():
     source = (ROOT / "mcp_server" / "loader.py").read_text()
 
     assert "INSERT INTO corpus_coverage_ledger" in source
-    assert "'courtlistener:bulk'" in source
+    assert "'courtlistener:ohio-caselaw'" in source
     assert "vectors_loaded" in source
 
 
@@ -459,7 +472,8 @@ def test_query_embedding_client_posts_to_configured_provider(monkeypatch):
             return None
 
         def json(self):
-            return {"embeddings": [[0.1, 0.2, 0.3]]}
+            return {"embeddings": [[0.1] * 1024], "model": "mixedbread-ai/mxbai-embed-large-v1",
+                    "version": "1", "dimension": 1024}
 
     def fake_post(url, json, timeout):
         calls.append((url, json, timeout))
@@ -473,7 +487,7 @@ def test_query_embedding_client_posts_to_configured_provider(monkeypatch):
         timeout_seconds=2.5,
     )
 
-    assert client.embed_query("tax deficiency") == [0.1, 0.2, 0.3]
+    assert client.embed_query("tax deficiency") == [0.1] * 1024
     assert calls == [
         (
             "http://jetson-query-embed:8031/embed",

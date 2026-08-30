@@ -7,7 +7,12 @@ adapter. Legacy ``X-API-Key`` tenant credentials are rejected and cannot be
 issued.
 """
 
+import base64
+import hashlib
+import hmac
+import json
 import logging
+import secrets
 import time
 import uuid
 from datetime import datetime
@@ -49,6 +54,7 @@ from app.services.mcp_product import (
 )
 
 from app.services.rag import full_rag_query
+from app.services.platform_auth import require_platform_token
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -89,12 +95,20 @@ async def _proxy_get(path: str, request: Request):
     return response.json()
 
 
-async def _proxy_post(path: str, request: Request, payload: dict):
+async def _proxy_post(
+    path: str,
+    request: Request,
+    payload: dict,
+    *,
+    extra_headers: dict[str, str] | None = None,
+):
+    headers = _upstream_auth_headers()
+    headers.update(extra_headers or {})
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.post(
             _mcp_proxy_url(settings.MCP_SERVER_URL, path),
             json=payload,
-            headers=_upstream_auth_headers(),
+            headers=headers,
         )
     if response.status_code >= 400:
         raise HTTPException(status_code=response.status_code, detail=response.text)
@@ -224,14 +238,25 @@ async def source_health(
             {"name": "sync_status", "arguments": {}},
         )
     except Exception:
-        return {
-            "available": False,
-            "status": "unavailable",
-            "sources": [],
-            "partitions": [],
-        }
+        try:
+            response = await _proxy_post(
+                "/api/mcp/tools/call",
+                request,
+                {"name": "authority_coverage", "arguments": {}},
+            )
+        except Exception:
+            return {
+                "available": False,
+                "status": "unavailable",
+                "sources": [],
+                "partitions": [],
+                "audits": [],
+            }
 
     payload = _tool_json_payload(response)
+    enriched = payload.get("authority_coverage")
+    if isinstance(enriched, dict):
+        payload = {**payload, **enriched}
     sources = []
     for source in payload.get("sources") or []:
         if not isinstance(source, dict):
@@ -254,12 +279,33 @@ async def source_health(
                     "embedded_chunk_count",
                     "embedding_model",
                     "embedding_version",
+                    "display_name",
+                    "authority_tier",
+                    "source_tier",
+                    "rights_decision",
+                    "geographic_scope",
+                    "temporal_scope",
+                    "expected_cadence",
+                    "completeness_caveats",
+                    "claim_safe_wording",
+                    "reviewed_at",
+                    "reviewed_by",
+                    "claim_state",
+                    "stale",
+                    "lag_seconds",
                 )
             }
-            | {"status": "attention" if source.get("current_error") else "healthy"}
+            | {
+                "status": source.get("status")
+                or ("attention" if source.get("current_error") else "healthy"),
+                "stale": bool(source.get("stale")),
+                "lag_seconds": source.get("lag_seconds"),
+            }
         )
     partitions = []
-    for partition in payload.get("source_partitions") or []:
+    for partition in (
+        payload.get("source_partitions") or payload.get("partitions") or []
+    ):
         if not isinstance(partition, dict):
             continue
         partitions.append(
@@ -268,24 +314,122 @@ async def source_health(
                 for key in (
                     "source_key",
                     "partition_key",
-                    "checkpoint_at",
+                    "corpus_version",
                     "status",
-                    "last_attempted_at",
-                    "last_successful_sync_at",
-                    "rows_processed",
-                    "chunks_created",
+                    "cursor_url",
+                    "updated_at",
+                    "last_successful_harvest_at",
+                    "retry_count",
+                    "next_retry_at",
+                    "dead_letter_at",
                 )
             }
         )
-    has_attention = any(source["status"] == "attention" for source in sources) or any(
-        partition.get("status") == "failed" for partition in partitions
+    has_attention = any(
+        source["status"] in {"attention", "failed", "stale", "unreviewed"}
+        for source in sources
+    ) or any(
+        partition.get("status") in {"failed", "retryable", "dead_letter"}
+        for partition in partitions
     )
+    corpus_version = payload.get("corpus_version")
     return {
         "available": bool(sources),
         "status": "attention" if has_attention else ("healthy" if sources else "empty"),
+        "namespace": "public-authority",
+        "corpus_version": corpus_version,
+        "claim_state": payload.get("claim_state")
+        or ("limited" if sources else "suppressed"),
+        "claim_notice": payload.get("claim_notice")
+        or "Named-source, bounded coverage only; this is not a complete or good-law determination.",
         "sources": sources,
         "partitions": partitions,
+        "audits": payload.get("audits") or [],
     }
+
+
+# ── Role-authorized authority release controls ───────────────────────────────
+
+
+class AuthorityControlRequest(BaseModel):
+    version: str
+    reason: str
+    audit_kind: str | None = None
+    manifest_hash: str | None = None
+    as_of: str | None = None
+    embedding_model: str = "mixedbread-ai/mxbai-embed-large-v1"
+    embedding_version: str = "1"
+    embedding_dimension: int = 1024
+
+
+async def _authority_control(
+    action: str, body: AuthorityControlRequest, request: Request
+):
+    principal = require_platform_token(request, scopes={"platform:write"})
+    if not settings.MCP_SERVER_URL:
+        raise HTTPException(
+            status_code=503, detail="Authority control plane is unavailable"
+        )
+    route = f"/api/mcp/control/{action}"
+    issued = int(time.time())
+    expires = issued + 60
+    actor = str(principal.actor_id)
+    credential = str(principal.credential_id or "session")
+    body_hash = hashlib.sha256(
+        json.dumps(body.model_dump(), sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    payload = json.dumps(
+        {
+            "actor": actor,
+            "credential": credential,
+            "scope": "platform:write",
+            "method": request.method,
+            "path": route,
+            "issued": issued,
+            "expires": expires,
+            "nonce": secrets.token_urlsafe(18),
+            "body_sha256": body_hash,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    signature = hmac.new(
+        str(settings.MCP_OPERATOR_ASSERTION_SECRET or "").encode(),
+        payload,
+        hashlib.sha256,
+    ).digest()
+    assertion = ".".join(
+        (
+            base64.urlsafe_b64encode(payload).decode().rstrip("="),
+            base64.urlsafe_b64encode(signature).decode().rstrip("="),
+        )
+    )
+    return await _proxy_post(
+        route,
+        request,
+        body.model_dump(),
+        extra_headers={"X-Operator-Identity": actor, "X-Operator-Assertion": assertion},
+    )
+
+
+@router.post("/authority/audit")
+async def authority_audit(body: AuthorityControlRequest, request: Request):
+    return await _authority_control("audit", body, request)
+
+
+@router.post("/authority/stage")
+async def authority_stage(body: AuthorityControlRequest, request: Request):
+    return await _authority_control("stage", body, request)
+
+
+@router.post("/authority/promote")
+async def authority_promote(body: AuthorityControlRequest, request: Request):
+    return await _authority_control("promote", body, request)
+
+
+@router.post("/authority/rollback")
+async def authority_rollback(body: AuthorityControlRequest, request: Request):
+    return await _authority_control("rollback", body, request)
 
 
 # ── Tool invocation ───────────────────────────────────────────────────────────

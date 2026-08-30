@@ -28,9 +28,7 @@ def _demo_settings(**overrides):
 
 
 def test_durable_worker_concurrency_is_bounded():
-    validate_worker_settings(
-        SimpleNamespace(DURABLE_JOB_TENANT_CONCURRENCY=4)
-    )
+    validate_worker_settings(SimpleNamespace(DURABLE_JOB_TENANT_CONCURRENCY=4))
     for concurrency in (0, 17):
         with pytest.raises(ValueError, match="DURABLE_JOB_TENANT_CONCURRENCY"):
             validate_worker_settings(
@@ -144,9 +142,7 @@ def test_token_encryption_key_invalid_raises(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://test")
     monkeypatch.setenv("SECRET_KEY", "test-secret")
 
-    with pytest.raises(
-        ValueError, match="must be a valid Fernet key"
-    ):
+    with pytest.raises(ValueError, match="must be a valid Fernet key"):
         settings = Settings(_env_file=None)
         validate_token_encryption_key(settings)
 
@@ -171,9 +167,7 @@ def test_research_mcp_shorthand_is_public_origin_only():
         RESEARCH_MCP_PUBLIC_URL="https://research.getlawhand.com/api/mcp",
     )
 
-    assert settings.research_mcp_endpoint == (
-        "https://research.getlawhand.com/api/mcp"
-    )
+    assert settings.research_mcp_endpoint == ("https://research.getlawhand.com/api/mcp")
     assert settings.research_mcp_shorthand == "https://research.getlawhand.com"
 
 
@@ -188,6 +182,55 @@ def test_mcp_upstream_key_required_when_private_service_is_configured():
     )
     with pytest.raises(ValueError, match="MCP_UPSTREAM_API_KEY"):
         validate_mcp_security_settings(settings)
+
+
+def test_mcp_operator_assertion_signer_is_required_and_distinct():
+    base = dict(
+        _env_file=None,
+        DATABASE_URL="postgresql://test",
+        SECRET_KEY="x" * 48,
+        TOKEN_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+        MCP_SERVER_URL="http://courtlistener-mcp:8021",
+        MCP_UPSTREAM_API_KEY="u" * 40,
+    )
+    with pytest.raises(ValueError, match="MCP_OPERATOR_ASSERTION_SECRET"):
+        validate_mcp_security_settings(Settings(**base))
+    with pytest.raises(ValueError, match="distinct"):
+        validate_mcp_security_settings(
+            Settings(**{**base, "MCP_OPERATOR_ASSERTION_SECRET": "u" * 40})
+        )
+    validate_mcp_security_settings(
+        Settings(**{**base, "MCP_OPERATOR_ASSERTION_SECRET": "s" * 40})
+    )
+
+
+def test_mcp_operator_assertion_signer_cannot_reuse_platform_or_encryption_secret():
+    base = dict(
+        _env_file=None,
+        DATABASE_URL="postgresql://test",
+        SECRET_KEY="x" * 48,
+        TOKEN_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+        TOKEN_ENCRYPTION_KEYS="",
+        MCP_SERVER_URL="http://courtlistener-mcp:8021",
+        MCP_UPSTREAM_API_KEY="u" * 40,
+        MCP_OPERATOR_ASSERTION_SECRET="s" * 40,
+    )
+    for field in ("SECRET_KEY", "PLATFORM_TOKEN_SIGNING_KEY", "PLATFORM_SECRET_KEY"):
+        with pytest.raises(ValueError, match=field):
+            validate_mcp_security_settings(Settings(**{**base, field: "s" * 40}))
+    with pytest.raises(ValueError, match="token-encryption"):
+        validate_mcp_security_settings(
+            Settings(**{**base, "TOKEN_ENCRYPTION_KEY": "s" * 40})
+        )
+    with pytest.raises(ValueError, match="token-encryption"):
+        validate_mcp_security_settings(
+            Settings(
+                **{
+                    **base,
+                    "TOKEN_ENCRYPTION_KEYS": "first-key,s" + "s" * 39,
+                }
+            )
+        )
 
 
 def test_platform_bootstrap_requires_identity_scope_expiry_and_distinct_signing_key():

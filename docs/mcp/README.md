@@ -26,6 +26,45 @@ Keep the detailed source documents in the repository so behavior, security bound
 
 The two products may share internal capability or retrieval components, but they must not share public identity, hostname, authorization, billing, or release-state assumptions.
 
+### Research MCP authority coverage contract
+
+The Research MCP exposes an internal, authenticated `authority_coverage` tool
+for operator and application source-health projections. It returns the
+promoted public-authority corpus version, reviewed source manifests, source
+tier/content type/jurisdiction, geographic and temporal scope, last successful
+harvest/index metadata, expected cadence, lag/failure state, claim-safe caveats,
+and sampled completeness/freshness/release audit evidence. It returns metadata
+only; tenant IDs, firm documents, matter content, and query text are never part
+of this tool or its telemetry.
+
+The authenticated application endpoint `/api/mcp/source-health` calls the
+private MCP service using the backend service credential and exposes a
+sanitized version of that projection to signed-in users. Research clients
+cannot use it to access Workspace MCP data. The public/private boundary remains
+explicit across storage, authorization, provenance, retention, deletion,
+retrieval, logs, and tests.
+
+Coverage claims are fail-closed. A source must have a reviewed rights decision
+(`official`, `open`, `licensed`, `prohibited`, or `pending_review`), a promoted
+corpus version, and passing audit evidence before it can report a supported
+claim. Stale, failed, partial, unreviewed, or unaudited sources report limited
+or suppressed claims; the UI must not say “complete,” “current,” “all law,” or
+“good law” based on record volume or missing negative evidence. Operators retain
+release evidence in `authority_corpus_versions`, `authority_harvest_events`, and
+immutable `authority_audits`; promotion and rollback require an explicit actor
+and auditable reason.
+
+Authority search requires exact embedding model/version/dimension compatibility.
+An unavailable or mismatched vector service degrades to keyword/source search
+and exposes that limitation. No padded vectors or semantic-completeness claim
+is permitted. The canonical control-plane details and operator rehearsal
+contract are in [Authority coverage control plane](../AUTHORITY_COVERAGE_CONTROL_PLANE.md).
+
+**Release state:** scaffolded in code and release-gated; COMP-06 acceptance
+remains pending merged implementation, operator rehearsal, and an independent
+AIP-17–AIP-21 evidence matrix. No production corpus harvest, coverage claim, or
+deployment is implied by this documentation.
+
 ### Firm Memory Workspace MCP tool
 
 `search_firm_memory` is a Workspace MCP read tool for the bounded local file
@@ -161,6 +200,26 @@ The page must state which label applies; do not infer availability from a tool n
 - Link operational commands to the repository runbook rather than copying a potentially stale command into multiple wiki pages.
 
 ## Known documentation backlog
+
+### Public-authority operator boundary
+
+Authority control mutations are exposed by the backend gateway only to signed
+platform principals with `platform:write`. The gateway forwards a short-lived,
+HMAC-bound assertion containing actor, credential/JTI, scope, method, path,
+canonical request-body hash, nonce, and expiry. The private MCP service requires
+both the internal service key and this assertion; it rejects tampering, body or
+route/method mismatch, and expiry. Each accepted nonce/JTI is atomically
+consumed in the shared PostgreSQL `authority_operator_assertions` table with
+expiry cleanup, so replay is rejected across service instances.
+`X-Operator-Identity` is informational and cannot override the signed actor.
+
+The MCP control service is a network-private downstream. Its internal key is
+defence in depth, not a browser credential: firewall/service-network policy
+must prevent direct external reachability, and operators must use the signed
+platform gateway. Authority coverage responses contain metadata-only public
+source health and promoted-corpus/version/currentness evidence; tenant/private
+documents and query content are excluded. COMP-06 remains scaffolded and
+release-gated; no production harvest, coverage claim, or deployment is implied.
 
 - Generate a complete workspace tool catalog from `backend/app/services/capabilities.py` and `backend/app/services/matter_workspace_capabilities.py`, emitting checked-in Markdown and JSON artifacts. Add CI drift checking so the catalog is regenerated and compared whenever the registry or tool contract changes.
 - Add an end-to-end attorney scenario with sanitized sample matter and document data.

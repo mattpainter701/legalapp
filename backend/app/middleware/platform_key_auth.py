@@ -17,6 +17,7 @@ from sqlalchemy import select, update
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.database import async_session_maker
+from app.middleware.platform_request_paths import is_platform_protected_path
 from app.models.platform_api_key import PlatformApiKey
 from app.services.platform_auth import (
     PlatformPrincipal,
@@ -25,8 +26,6 @@ from app.services.platform_auth import (
 )
 
 logger = logging.getLogger(__name__)
-
-PLATFORM_PATH_PREFIX = "/api/platform"
 
 # A write per request would make every operator call a read-modify-write on the
 # same row. Last-used is a staleness signal for revocation decisions, not an
@@ -37,7 +36,7 @@ LAST_USED_WRITE_INTERVAL = timedelta(minutes=1)
 
 class PlatformKeyAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
-        if not request.url.path.startswith(PLATFORM_PATH_PREFIX):
+        if not is_platform_protected_path(request.url.path):
             return await call_next(request)
 
         authorization = request.headers.get("Authorization", "")
