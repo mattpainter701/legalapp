@@ -795,6 +795,10 @@ def validate_mcp_security_settings(settings: Settings) -> None:
             "MCP_OPERATOR_ASSERTION_SECRET must be at least 32 characters whenever "
             "MCP_SERVER_URL is configured"
         )
+    if settings.MCP_SERVER_URL and settings.MCP_OPERATOR_ASSERTION_SECRET == settings.MCP_UPSTREAM_API_KEY:
+        raise ValueError(
+            "MCP_OPERATOR_ASSERTION_SECRET must be distinct from MCP_UPSTREAM_API_KEY"
+        )
     if settings.MCP_PRODUCT_ENABLED or settings.RESEARCH_MCP_PUBLIC_URL.strip():
         _validate_mcp_endpoint_url(
             settings.research_mcp_endpoint,

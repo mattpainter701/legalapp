@@ -292,6 +292,7 @@ def _production_env(**overrides: str) -> str:
         "TOKEN_ENCRYPTION_KEYS": f"{NEW_FERNET_KEY},{OLD_FERNET_KEY}",
         "MCP_SERVER_URL": "http://courtlistener-mcp:8000",
         "MCP_UPSTREAM_API_KEY": "mcp-upstream-key-0123456789-abcdef",
+        "MCP_OPERATOR_ASSERTION_SECRET": "mcp-operator-signer-0123456789-abcdef",
         "UPLOADS_HOST_DIR": "/srv/legalapp/uploads",
         "HOST_STATUS_HOST_DIR": "/srv/legalapp/host-status",
         "HOST_DISK_STATUS_FILE": "/run/legalapp-host-status/disk-status.json",

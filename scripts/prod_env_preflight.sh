@@ -287,7 +287,10 @@ fi
 mcp_server_url="$(get_env MCP_SERVER_URL)"
 if [[ -n "$mcp_server_url" ]]; then
   mcp_upstream_key="$(get_env MCP_UPSTREAM_API_KEY)"
+  mcp_assertion_secret="$(get_env MCP_OPERATOR_ASSERTION_SECRET)"
   [[ ${#mcp_upstream_key} -ge 32 ]] || errors+=("MCP_UPSTREAM_API_KEY must be at least 32 characters when MCP_SERVER_URL is set")
+  [[ ${#mcp_assertion_secret} -ge 32 ]] || errors+=("MCP_OPERATOR_ASSERTION_SECRET must be at least 32 characters when MCP_SERVER_URL is set")
+  [[ -n "$mcp_assertion_secret" && "$mcp_assertion_secret" != "$mcp_upstream_key" ]] || errors+=("MCP_OPERATOR_ASSERTION_SECRET must be distinct from MCP_UPSTREAM_API_KEY")
   for shared_key_name in SECRET_KEY PLATFORM_TOKEN_SIGNING_KEY PLATFORM_SECRET_KEY; do
     shared_key="$(get_env "$shared_key_name")"
     if [[ -n "$mcp_upstream_key" && -n "$shared_key" && "$mcp_upstream_key" == "$shared_key" ]]; then
@@ -491,7 +494,7 @@ workspace_mcp_guarded_vars=(
   WORKSPACE_MCP_GRANT_DAYS WORKSPACE_MCP_CLIENT_REGISTRATION_DAYS
   WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED
 )
-for key in "${required[@]}" "${workspace_mcp_guarded_vars[@]}" TOKEN_ENCRYPTION_KEY TOKEN_ENCRYPTION_KEYS MCP_SERVER_URL MCP_UPSTREAM_API_KEY ZOOM_REQUIRED_TENANT_ID OFFSITE_RESTORE_PUBLIC_KEY_FILE DISK_PATH DISK_MAX_PERCENT; do
+for key in "${required[@]}" "${workspace_mcp_guarded_vars[@]}" TOKEN_ENCRYPTION_KEY TOKEN_ENCRYPTION_KEYS MCP_SERVER_URL MCP_UPSTREAM_API_KEY MCP_OPERATOR_ASSERTION_SECRET ZOOM_REQUIRED_TENANT_ID OFFSITE_RESTORE_PUBLIC_KEY_FILE DISK_PATH DISK_MAX_PERCENT; do
   guarded_compose_vars["$key"]=1
 done
 for compose_file in "${compose_file_list[@]}"; do

@@ -190,6 +190,26 @@ def test_mcp_upstream_key_required_when_private_service_is_configured():
         validate_mcp_security_settings(settings)
 
 
+def test_mcp_operator_assertion_signer_is_required_and_distinct():
+    base = dict(
+        _env_file=None,
+        DATABASE_URL="postgresql://test",
+        SECRET_KEY="x" * 48,
+        TOKEN_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+        MCP_SERVER_URL="http://courtlistener-mcp:8021",
+        MCP_UPSTREAM_API_KEY="u" * 40,
+    )
+    with pytest.raises(ValueError, match="MCP_OPERATOR_ASSERTION_SECRET"):
+        validate_mcp_security_settings(Settings(**base))
+    with pytest.raises(ValueError, match="distinct"):
+        validate_mcp_security_settings(
+            Settings(**{**base, "MCP_OPERATOR_ASSERTION_SECRET": "u" * 40})
+        )
+    validate_mcp_security_settings(
+        Settings(**{**base, "MCP_OPERATOR_ASSERTION_SECRET": "s" * 40})
+    )
+
+
 def test_platform_bootstrap_requires_identity_scope_expiry_and_distinct_signing_key():
     import hashlib
     import json

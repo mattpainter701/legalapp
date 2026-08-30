@@ -139,6 +139,15 @@ and bind any host diagnostic port to `127.0.0.1`. The credential is not a
 customer key and must never be placed in frontend build arguments, browser
 storage, API examples, or support tickets.
 
+When `MCP_SERVER_URL` is configured, also provide
+`MCP_OPERATOR_ASSERTION_SECRET` (32+ characters) to both the backend and the
+private sidecar. It must be a distinct, rotatable signer and must never equal
+`MCP_UPSTREAM_API_KEY` or another platform/token secret. The backend signs the
+short-lived actor/scope/request assertion with it; the sidecar verifies it and
+fails closed if it is missing or too short. Rotate the signer by provisioning
+the new value to both services and restarting them together; do not expose
+either value to clients or logs.
+
 Keep `MCP_PRODUCT_ENABLED=false` until migrations, official protocol tests,
 Stripe meter configuration, tenant entitlement/billing state, alerts and the
 production ingress smoke tests all pass.
