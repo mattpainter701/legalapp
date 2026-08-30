@@ -495,7 +495,17 @@ class CourtListenerRepository:
         if not source_text and chunk_id:
             with self.conn.cursor() as cur:
                 cur.execute(
-                    "SELECT opinion_id, content FROM opinion_chunks WHERE id = %s LIMIT 1",
+                    """
+                    SELECT opinion_id, content
+                    FROM authority_case_chunks
+                    WHERE chunk_id = %s
+                      AND corpus_version = (
+                          SELECT version FROM authority_corpus_versions
+                          WHERE status='promoted'
+                          ORDER BY promoted_at DESC NULLS LAST LIMIT 1
+                      )
+                    LIMIT 1
+                    """,
                     [chunk_id],
                 )
                 rows = dict_rows(cur)
@@ -767,8 +777,15 @@ class CourtListenerRepository:
             cur.execute(
                 """
                 SELECT
-                    (SELECT COUNT(*) FROM opinion_chunks WHERE embedding IS NOT NULL)
-                  + (SELECT COUNT(*) FROM legal_document_chunks WHERE embedding IS NOT NULL)
+                    (SELECT COUNT(*) FROM authority_case_chunks ac
+                     WHERE ac.embedding IS NOT NULL AND ac.corpus_version = (
+                       SELECT version FROM authority_corpus_versions WHERE status='promoted'
+                       ORDER BY promoted_at DESC NULLS LAST LIMIT 1))
+                  + (SELECT COUNT(*) FROM legal_document_chunks c
+                     JOIN legal_documents d ON d.id=c.document_id
+                     WHERE c.embedding IS NOT NULL AND d.corpus_version = (
+                       SELECT version FROM authority_corpus_versions WHERE status='promoted'
+                       ORDER BY promoted_at DESC NULLS LAST LIMIT 1))
                     AS embedded_chunks
                 """
             )
@@ -776,8 +793,15 @@ class CourtListenerRepository:
             cur.execute(
                 """
                 SELECT
-                    (SELECT COUNT(*) FROM opinion_chunks WHERE embedding IS NULL)
-                  + (SELECT COUNT(*) FROM legal_document_chunks WHERE embedding IS NULL)
+                    (SELECT COUNT(*) FROM authority_case_chunks ac
+                     WHERE ac.embedding IS NULL AND ac.corpus_version = (
+                       SELECT version FROM authority_corpus_versions WHERE status='promoted'
+                       ORDER BY promoted_at DESC NULLS LAST LIMIT 1))
+                  + (SELECT COUNT(*) FROM legal_document_chunks c
+                     JOIN legal_documents d ON d.id=c.document_id
+                     WHERE c.embedding IS NULL AND d.corpus_version = (
+                       SELECT version FROM authority_corpus_versions WHERE status='promoted'
+                       ORDER BY promoted_at DESC NULLS LAST LIMIT 1))
                     AS pending_chunks
                 """
             )
@@ -831,17 +855,30 @@ class CourtListenerRepository:
                 SELECT
                     (SELECT COUNT(*) FROM courts) AS courts,
                     (SELECT COUNT(*) FROM dockets) AS dockets,
-                    (SELECT COUNT(*) FROM opinion_clusters) AS clusters,
-                    (SELECT COUNT(*) FROM opinions) AS opinions,
-                    (SELECT COUNT(*) FROM opinion_chunks) AS chunks,
-                    (SELECT COUNT(*) FROM opinion_chunks WHERE embedding IS NOT NULL) AS embedded_chunks,
+                    (SELECT COUNT(*) FROM authority_case_clusters cl WHERE cl.corpus_version = (
+                       SELECT version FROM authority_corpus_versions WHERE status='promoted'
+                       ORDER BY promoted_at DESC NULLS LAST LIMIT 1)) AS clusters,
+                    (SELECT COUNT(*) FROM authority_case_opinions o WHERE o.corpus_version = (
+                       SELECT version FROM authority_corpus_versions WHERE status='promoted'
+                       ORDER BY promoted_at DESC NULLS LAST LIMIT 1)) AS opinions,
+                    (SELECT COUNT(*) FROM authority_case_chunks ch WHERE ch.corpus_version = (
+                       SELECT version FROM authority_corpus_versions WHERE status='promoted'
+                       ORDER BY promoted_at DESC NULLS LAST LIMIT 1)) AS chunks,
+                    (SELECT COUNT(*) FROM authority_case_chunks ch
+                     WHERE ch.embedding IS NOT NULL AND ch.corpus_version = (
+                       SELECT version FROM authority_corpus_versions WHERE status='promoted'
+                       ORDER BY promoted_at DESC NULLS LAST LIMIT 1)) AS embedded_chunks,
                     (SELECT COUNT(*) FROM legal_sources) AS legal_sources,
                     (SELECT COUNT(*) FROM legal_documents) AS legal_documents,
                     (SELECT COUNT(*) FROM legal_document_chunks) AS legal_document_chunks,
                     (SELECT COUNT(*) FROM legal_document_chunks WHERE embedding IS NOT NULL)
                         AS embedded_legal_document_chunks,
-                    (SELECT MIN(date_filed) FROM opinion_clusters) AS first_date,
-                    (SELECT MAX(date_filed) FROM opinion_clusters) AS last_date
+                    (SELECT MIN(date_filed) FROM authority_case_clusters cl WHERE cl.corpus_version = (
+                       SELECT version FROM authority_corpus_versions WHERE status='promoted'
+                       ORDER BY promoted_at DESC NULLS LAST LIMIT 1)) AS first_date,
+                    (SELECT MAX(date_filed) FROM authority_case_clusters cl WHERE cl.corpus_version = (
+                       SELECT version FROM authority_corpus_versions WHERE status='promoted'
+                       ORDER BY promoted_at DESC NULLS LAST LIMIT 1)) AS last_date
                 """
             )
             rows = dict_rows(cur)
