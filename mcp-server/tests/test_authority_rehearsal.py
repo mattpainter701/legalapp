@@ -1662,10 +1662,13 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
         assert locked.wait(timeout=5)
 
         def revoke_enqueue_race():
-            race_results["revoke"] = revoke_citator_watch(
-                connect(db_url), tenant_id=tenant_id, watch_id=race_watch
-            )
-            revoke_done.set()
+            try:
+                with connect(db_url) as race_conn:
+                    race_results["revoke"] = revoke_citator_watch(
+                        race_conn, tenant_id=tenant_id, watch_id=race_watch
+                    )
+            finally:
+                revoke_done.set()
 
         def enqueue_after_revoke():
             with connect(db_url) as race_conn:
@@ -1705,11 +1708,13 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
         assert locked.wait(timeout=5)
 
         def revoke_delivery_race():
-            with connect(db_url) as race_conn:
-                delivery_results["revoke"] = revoke_citator_watch(
-                    race_conn, tenant_id=tenant_id, watch_id=delivery_watch
-                )
-            revoke_done.set()
+            try:
+                with connect(db_url) as race_conn:
+                    delivery_results["revoke"] = revoke_citator_watch(
+                        race_conn, tenant_id=tenant_id, watch_id=delivery_watch
+                    )
+            finally:
+                revoke_done.set()
 
         def delivery_after_revoke():
             with connect(db_url) as race_conn:
