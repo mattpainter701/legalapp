@@ -26,6 +26,12 @@
   Skynet research upstream without exposing its credential.
 
 ### Added
+- **Review-first Brief Check:** firms can run bounded DOCX/PDF brief checks that
+  normalize citations, compare quotations and pin cites against accessible source
+  text, preserve missing/ambiguous/currentness unknowns, compare opposing briefs,
+  record attorney decisions, and export linked review and table-of-authorities
+  drafts. Candidate authority retrieval is explicitly bounded and never labels an
+  authority good law from an absent negative record.
 - **Operating trust workflows and evidence:** the versioned public contract now
   drives measurable non-SLA objectives, exact support hours and S1-S4
   escalation, sanitized append-only incidents, a named subprocessor registry,

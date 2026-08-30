@@ -2,6 +2,18 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.30.1",
+      "version": "2026.08.30.1",
+      "title": "Review-first Brief Check",
+      "published_at": "2026-08-30",
+      "summary": "Firms can review brief citations, quotations, pin cites, opposing-brief differences, and bounded authority candidates with linked evidence before exporting work product.",
+      "highlights": [
+        {"title": "Inspect evidence before relying on a brief", "description": "DOCX/PDF checks preserve source identity, location, confidence, ambiguity, retrieval evidence, and explicit unknown or unavailable states."},
+        {"title": "Keep attorney decisions auditable", "description": "Reviewers can accept, reject, or follow up on findings; decisions are tenant-scoped and recorded in an immutable audit trail."},
+        {"title": "Export linked review work product", "description": "Download a review report and table-of-authorities draft while bounded recall and currentness limitations remain visible."}
+      ]
+    },
+    {
       "id": "2026.08.29.1",
       "version": "2026.08.29.1",
       "title": "Operating trust workflows and evidence",
