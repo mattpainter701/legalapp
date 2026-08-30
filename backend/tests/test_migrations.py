@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["142_conversion_loop"]
+    assert heads == ["143_operating_trust"]
 
 
 def test_background_value_cutover_never_backfills_existing_spend_as_free():
@@ -27,6 +27,8 @@ def test_background_value_cutover_never_backfills_existing_spend_as_free():
     assert "WHERE status IN ('reserved', 'settled', 'unknown')" in source
     assert "app.background_ai_quota_scope', 'on', true" in source
     assert "app.background_ai_quota_scope', 'off', true" in source
+
+
 def test_smb_agent_lifecycle_indexes_cover_auth_and_cleanup_paths():
     backend_dir = Path(__file__).resolve().parents[1]
     source = (
