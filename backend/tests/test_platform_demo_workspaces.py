@@ -118,6 +118,29 @@ async def test_platform_lists_demo_capacity_without_counting_expired_or_regular_
 
 
 @pytest.mark.asyncio
+async def test_platform_tenant_inventory_identifies_demos_and_their_expiration(
+    client, db_session, test_tenant
+):
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=2)
+    demo = _demo_tenant(tenant_id=uuid.uuid4(), expires_at=expires_at)
+    db_session.add(demo)
+    await db_session.commit()
+
+    response = await client.get(
+        "/api/platform/tenants", headers=platform_headers(["platform:read"])
+    )
+
+    assert response.status_code == 200
+    tenants = {row["id"]: row for row in response.json()["tenants"]}
+    assert tenants[str(demo.id)]["tenant_type"] == "demo"
+    assert tenants[str(demo.id)]["expires_at"] == expires_at.isoformat().replace(
+        "+00:00", "Z"
+    )
+    assert tenants[str(test_tenant.id)]["tenant_type"] == "platform"
+    assert tenants[str(test_tenant.id)]["expires_at"] is None
+
+
+@pytest.mark.asyncio
 async def test_platform_termination_requires_write_scope_and_both_workspace_ids(
     client, monkeypatch
 ):

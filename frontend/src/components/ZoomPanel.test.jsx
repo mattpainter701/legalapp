@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ZoomPanel from './ZoomPanel'
 import {
+  connectZoomPhoneIntegration,
   getZoomPhoneStatus,
   getZoomStatus,
   saveZoomPhoneAppCredentials,
@@ -36,6 +37,7 @@ const emptyPhoneStatus = {
 describe('Zoom Phone tenant app setup', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    window.history.replaceState({}, '', '/admin?tab=integrations&integration=zoom')
     getZoomStatus.mockResolvedValue({ configured: false, connected: false })
     getZoomPhoneStatus.mockResolvedValue(emptyPhoneStatus)
     saveZoomPhoneAppCredentials.mockResolvedValue({ configured: true })
@@ -48,6 +50,13 @@ describe('Zoom Phone tenant app setup', () => {
     render(<ZoomPanel />)
 
     expect(await screen.findByText('Customer Zoom app')).toBeInTheDocument()
+    expect(screen.getAllByText('Get account’s call history')).not.toHaveLength(0)
+    expect(screen.getAllByText('Get call history detail and call element')).not.toHaveLength(0)
+    expect(screen.getAllByText('phone:read:list_call_logs:admin')).not.toHaveLength(0)
+    expect(screen.getAllByText('phone:read:call_log:admin')).not.toHaveLength(0)
+    expect(screen.getByText('Start authorization from LawHand')).toBeInTheDocument()
+    expect(screen.getByText(/Do not use the Add button or generated OAuth link in Zoom Marketplace/i)).toBeInTheDocument()
+    expect(screen.getByText(/Development or Production, never a mix/i)).toBeInTheDocument()
     expect(screen.queryByLabelText(/Zoom Account ID/i)).not.toBeInTheDocument()
     const saveButton = screen.getByRole('button', { name: 'Save Zoom app' })
     expect(saveButton).toBeDisabled()
@@ -64,6 +73,92 @@ describe('Zoom Phone tenant app setup', () => {
       client_secret: 'secret-123',
       webhook_secret_token: 'webhook-123',
     }))
+  })
+
+  it('directs tenant authorization through the LawHand connect action', async () => {
+    getZoomPhoneStatus.mockResolvedValue({
+      ...emptyPhoneStatus,
+      configured: true,
+      tenant_app_configured: true,
+      webhook_secret_configured: true,
+      app_credentials: { configured: true, client_id_hint: 'clie…123' },
+    })
+    const user = userEvent.setup()
+    render(<ZoomPanel />)
+
+    const connectButton = await screen.findByRole('button', { name: 'Connect Zoom Phone' })
+    expect(connectButton).toBeEnabled()
+    await user.click(connectButton)
+
+    expect(connectZoomPhoneIntegration).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns OAuth failures to the Zoom panel with an actionable credential message', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/admin?tab=integrations&integration=zoom&error=app_credentials_invalid&provider=zoom_phone',
+    )
+    render(<ZoomPanel />)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Zoom rejected the saved Client ID or Client Secret/i)
+    expect(window.location.search).toBe('?tab=integrations&integration=zoom')
+  })
+
+  it('confirms a completed LawHand authorization and removes one-time query state', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/admin?tab=integrations&integration=zoom&connected=zoom_phone',
+    )
+    render(<ZoomPanel />)
+
+    expect(await screen.findByRole('status')).toHaveTextContent(/LawHand verified access to Phone call history/i)
+    expect(window.location.search).toBe('?tab=integrations&integration=zoom')
+  })
+
+  it('explains that replacing OAuth credentials requires reconnecting', async () => {
+    getZoomPhoneStatus.mockResolvedValue({
+      ...emptyPhoneStatus,
+      configured: true,
+      connected: true,
+      tenant_app_configured: true,
+      webhook_secret_configured: true,
+      app_credentials: { configured: true, client_id_hint: 'old…123' },
+    })
+    saveZoomPhoneAppCredentials.mockResolvedValue({
+      reauthorization_required: true,
+      grant_invalidated: true,
+    })
+    const user = userEvent.setup()
+    render(<ZoomPanel />)
+
+    await user.type(await screen.findByLabelText('Zoom OAuth client ID'), 'new-client')
+    await user.type(screen.getByLabelText('Zoom OAuth client secret'), 'new-secret')
+    await user.click(screen.getByRole('button', { name: 'Save Zoom app' }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent(/previous grant was disconnected.*Connect Zoom Phone/i)
+  })
+
+  it('shows each independently verifiable setup stage', async () => {
+    getZoomPhoneStatus.mockResolvedValue({
+      ...emptyPhoneStatus,
+      configured: true,
+      connected: true,
+      status: 'connected',
+      tenant_app_configured: true,
+      webhook_status: 'pending',
+      webhook_verified: false,
+      app_credentials: { configured: true },
+    })
+    render(<ZoomPanel />)
+
+    expect(await screen.findByText('Zoom Phone setup progress')).toBeInTheDocument()
+    expect(screen.getByText('Save app credentials')).toBeInTheDocument()
+    expect(screen.getByText('Authorize Zoom account')).toBeInTheDocument()
+    expect(screen.getByText('Verify Phone API scopes')).toBeInTheDocument()
+    expect(screen.getByText('Verify real-time calls')).toBeInTheDocument()
+    expect(screen.getByText('Next')).toBeInTheDocument()
   })
 
   it('does not repopulate saved secrets and permits rotating only the webhook secret', async () => {

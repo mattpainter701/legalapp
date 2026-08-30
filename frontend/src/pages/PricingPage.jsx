@@ -26,7 +26,7 @@ export default function PricingPage() {
         <span className="text-[12px] font-bold uppercase tracking-[0.16em] text-brand-accent-2">LawHand pricing</span>
         <h1 className="mx-auto mt-5 max-w-3xl font-serif text-[44px] font-bold leading-[1.04] tracking-tight md:text-[60px]">One clear platform price. Controlled expansion.</h1>
         <p className="mx-auto mt-6 max-w-2xl text-[18px] leading-relaxed text-brand-ink-2">
-          Begin with the full LawHand workspace at a predictable seat price, add specialized workflows deliberately, and connect external tools through MCP when the preview is right for your team.
+          Begin with a controlled LawHand rollout at a predictable seat price, add specialized workflows deliberately, and evaluate metered Research MCP access when your firm is eligible for the pilot.
         </p>
       </section>
 
@@ -66,15 +66,15 @@ export default function PricingPage() {
           <article className="rounded-3xl border border-brand-line bg-brand-ink p-7 text-white shadow-lg">
             <div className="flex items-center justify-between gap-3">
               <KeyRound size={24} className="text-brand-gold" />
-              <span className="rounded-full border border-white/15 bg-white/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.13em] text-white/70">Private preview</span>
+              <span className="rounded-full border border-white/15 bg-white/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.13em] text-white/70">Controlled pilot</span>
             </div>
             <h2 className="mt-5 font-serif text-[24px] font-bold text-white">LawHand MCP</h2>
             <div className="mt-4 flex items-baseline gap-1.5">
               <span className="font-serif text-[44px] font-bold leading-none">${MCP_TOOL_CALL_PRICE_USD}</span>
               <span className="text-[13px] text-white/55">/ tool call</span>
             </div>
-            <p className="mt-4 text-[13.5px] leading-relaxed text-white/65">Intended public price. Scoped keys, allowlisted tools, bounded usage, and administrative visibility.</p>
-            <Link to="/product/mcp" className="mt-6 inline-flex min-h-11 items-center gap-2 rounded-lg border border-white/20 px-4 text-[13px] font-semibold text-white transition-colors hover:bg-white/10">Preview details <ArrowRight size={15} /></Link>
+            <p className="mt-4 text-[13.5px] leading-relaxed text-white/65">Pilot price per successful tool call. Scoped keys, expiration, hard budgets, and administrative visibility. Public-authority coverage depends on the configured corpus.</p>
+            <Link to="/product/mcp" className="mt-6 inline-flex min-h-11 items-center gap-2 rounded-lg border border-white/20 px-4 text-[13px] font-semibold text-white transition-colors hover:bg-white/10">Research details <ArrowRight size={15} /></Link>
           </article>
 
           <article className="rounded-3xl border border-brand-line bg-brand-bg-soft p-7">

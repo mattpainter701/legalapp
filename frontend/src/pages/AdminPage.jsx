@@ -29,6 +29,7 @@ import FirmBrandingPanel from '../components/FirmBrandingPanel'
 import ReleaseInfoPanel from '../components/ReleaseInfoPanel'
 import BillingPage from './BillingPage'
 import GuideViewer from '../components/GuideViewer'
+import CompliancePanel from '../components/CompliancePanel'
 import { ADMINISTRATIVE_GUIDE } from '../platformDocs'
 import { Spinner, Toggle } from '../components/ui'
 import { UserPlus, ChevronDown, ChevronRight, X } from 'lucide-react'
@@ -894,7 +895,7 @@ function TenantTab() {
   if (!tenant) return <p className="text-brand-muted text-sm font-sans py-4">No tenant data available.</p>
 
   return (
-    <div className="max-w-3xl">
+    <div className="max-w-5xl space-y-6">
       <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden">
         <div className="px-8 py-6 border-b border-brand-line bg-brand-bg-soft/50">
           <h3 className="font-serif font-bold text-xl text-brand-ink">Tenant Information</h3>
@@ -917,6 +918,7 @@ function TenantTab() {
           ))}
         </div>
       </div>
+      <CompliancePanel />
     </div>
   )
 }

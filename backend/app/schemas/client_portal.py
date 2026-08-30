@@ -20,9 +20,23 @@ class ClientPortalAcceptRequest(BaseModel):
     token: str = Field(min_length=1, max_length=512)
 
 
+class ClientPortalActivateRequest(ClientPortalAcceptRequest):
+    password: str = Field(min_length=12, max_length=128)
+
+
+class ClientPortalLoginRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=1, max_length=128)
+    matter_id: str
+
+
 class ClientPortalAcceptResponse(BaseModel):
     matter_id: str
     matter_name: str
+
+
+class ClientPortalLoginResponse(ClientPortalAcceptResponse):
+    email: str
 
 
 # ── Session ─────────────────────────────────────────────────────────────────
@@ -166,6 +180,16 @@ class PortalInvoiceList(BaseModel):
     total_paid: Decimal = Decimal("0")
     outstanding_balance: Decimal = Decimal("0")
     overdue_balance: Decimal = Decimal("0")
+
+
+class PortalInvoicePaymentResponse(BaseModel):
+    invoice_id: str
+    amount: Decimal
+    currency: str = "usd"
+    payment_intent_id: str
+    client_secret: str | None = None
+    checkout_url: str | None = None
+    checkout_session_id: str | None = None
 
 
 # ── Firm-side invite management ─────────────────────────────────────────────

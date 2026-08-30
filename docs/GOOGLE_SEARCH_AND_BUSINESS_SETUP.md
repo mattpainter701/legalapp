@@ -44,8 +44,10 @@ Structured data must never claim a capability the served page does not show.
 `CORE_CAPABILITIES` in `frontend/src/marketing/capabilities.js` is the single
 source for the home-page capability grid, the no-JavaScript shell in
 `frontend/index.html`, and the published `featureList`. A test fails if they
-drift apart. Release-gated surfaces — MCP today — must state the gate in the
-copy rather than being described as generally available.
+drift apart. Every catalog entry records an availability state, claim owner,
+and review date. Release-gated surfaces — MCP today — must say controlled pilot
+rather than generally available; planned and internal-only entries remain in
+the review catalog with `public: false` and never reach `featureList`.
 
 ---
 

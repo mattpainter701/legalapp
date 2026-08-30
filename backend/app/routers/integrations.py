@@ -51,6 +51,7 @@ from app.services.zoom_phone import (
     zoom_phone_webhook_jobs,
     zoom_webhook_validation_response,
 )
+from app.services.compliance import agreement_status
 from app.utils.oauth_security import (
     generate_pkce_pair,
     is_oauth_client_configured,
@@ -371,6 +372,12 @@ async def microsoft_connect(
         raise HTTPException(status_code=501, detail="Microsoft OAuth not configured")
 
     user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    if (await agreement_status(db, user.tenant_id))["blocking"]:
+        raise HTTPException(
+            status_code=428,
+            detail="Accept the current tenant agreements before connecting an integration",
+        )
     if intent == "admin" and user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
 
@@ -594,6 +601,12 @@ async def google_connect(
         raise HTTPException(status_code=501, detail="Google OAuth not configured")
 
     user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    if (await agreement_status(db, user.tenant_id))["blocking"]:
+        raise HTTPException(
+            status_code=428,
+            detail="Accept the current tenant agreements before connecting an integration",
+        )
     if intent == "admin" and user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
 
@@ -1010,12 +1023,17 @@ async def zoom_phone_callback(
             },
         )
     if token_resp.status_code != 200:
+        provider_error = _zoom_phone_provider_error(token_resp)
         logger.warning(
-            "Zoom Phone token exchange failed: %s %s",
+            "Zoom Phone token exchange failed: status=%s provider_error=%s",
             token_resp.status_code,
-            token_resp.text[:300],
+            provider_error or "unknown",
         )
-        return _error_redirect(ZOOM_PHONE_PROVIDER, "token_exchange_failed")
+        error_code = {
+            "invalid_client": "app_credentials_invalid",
+            "invalid_grant": "authorization_code_invalid",
+        }.get(provider_error, "token_exchange_failed")
+        return _error_redirect(ZOOM_PHONE_PROVIDER, error_code)
 
     token_data = token_resp.json()
     access_token = token_data.get("access_token")
@@ -1097,6 +1115,21 @@ async def zoom_phone_callback(
         logger.warning("Zoom Phone post-OAuth API probe failed: %s", exc)
         return _error_redirect(ZOOM_PHONE_PROVIDER, "phone_api_probe_failed")
     return await _post_connect_redirect(db, tenant_id, ZOOM_PHONE_PROVIDER)
+
+
+def _zoom_phone_provider_error(response: httpx.Response) -> str:
+    """Extract a bounded Zoom error code without logging response secrets."""
+    try:
+        payload = response.json()
+    except Exception:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    raw_error = payload.get("error") or payload.get("code")
+    if isinstance(raw_error, dict):
+        raw_error = raw_error.get("code")
+    normalized = str(raw_error or "").strip().lower()
+    return normalized[:64] if re.fullmatch(r"[a-z0-9_.-]+", normalized) else ""
 
 
 async def _resolve_zoom_phone_webhook_tenant(
@@ -1427,6 +1460,7 @@ async def save_zoom_phone_app_credentials(
             redirect_uri=_zoom_phone_redirect_uri(),
             scopes=settings.ZOOM_PHONE_SCOPES,
         )
+    grant_invalidated = False
     if app_changed:
         credential = await db.scalar(
             select(TenantCredential).where(
@@ -1435,6 +1469,7 @@ async def save_zoom_phone_app_credentials(
             )
         )
         if credential:
+            grant_invalidated = True
             credential.is_active = False
             credential.health = "reauthorization_required"
             credential.last_refresh_error = (
@@ -1444,6 +1479,8 @@ async def save_zoom_phone_app_credentials(
     await db.commit()
     return {
         "status": "saved",
+        "reauthorization_required": app_changed,
+        "grant_invalidated": grant_invalidated,
         "app_credentials": _app_credentials_payload(
             app,
             source="tenant",
@@ -1599,10 +1636,17 @@ async def _post_connect_redirect(
 ) -> RedirectResponse:
     """Build the success redirect back into the app after OAuth connect.
 
-    Lands on the onboarding wizard while onboarding is in progress, otherwise
-    the admin cloud-search settings tab. The ``connected`` query param is a UX
-    hint the frontend can use to refresh integration status.
+    Zoom Phone always returns to its admin integration panel. Other providers
+    land on onboarding while it is in progress, otherwise on their admin tab.
+    The ``connected`` query param is a one-time UX hint.
     """
+    if provider == ZOOM_PHONE_PROVIDER:
+        base = settings.FRONTEND_URL.rstrip("/")
+        return RedirectResponse(
+            f"{base}/admin?tab=integrations&integration=zoom&connected={provider}",
+            status_code=302,
+        )
+
     from app.models.tenant import Tenant
 
     completed = False
@@ -1623,9 +1667,14 @@ async def _post_connect_redirect(
 
 
 def _error_redirect(provider: str, code: str) -> RedirectResponse:
-    """Redirect back to the app's onboarding wizard with an error hint instead
-    of stranding the user on a raw-JSON error page."""
+    """Return OAuth failures to the relevant app workflow with an error hint."""
     base = settings.FRONTEND_URL.rstrip("/")
+    if provider == ZOOM_PHONE_PROVIDER:
+        return RedirectResponse(
+            f"{base}/admin?tab=integrations&integration=zoom"
+            f"&error={code}&provider={provider}",
+            status_code=302,
+        )
     return RedirectResponse(
         f"{base}/onboarding?error={code}&provider={provider}", status_code=302
     )

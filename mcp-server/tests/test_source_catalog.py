@@ -96,13 +96,16 @@ def test_federal_rules_and_research_sources_have_auditable_bounded_policy():
 
     assert rules["ingestion_mode"] == "manifest"
     assert rules["coverage_kind"] == "bounded"
-    assert rules["enabled"] is False
-    assert rules["implementation_status"] == "preview_verified"
+    assert rules["enabled"] is True
+    assert rules["implementation_status"] == "implemented"
     assert "reviewed allowlist" in rules["acquisition_basis"].lower()
     assert conan["authority_tier"] == "secondary_metadata"
     assert conan["official_status"] == "official_authenticated"
+    assert conan["enabled"] is True
+    assert conan["implementation_status"] == "implemented"
     assert "not binding primary law" in conan["coverage_notes"]
-    assert tax_court["implementation_status"] == "preview_verified"
+    assert tax_court["enabled"] is True
+    assert tax_court["implementation_status"] == "implemented"
     assert "DAWSON" in tax_court["coverage_notes"]
 
 

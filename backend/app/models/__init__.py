@@ -111,6 +111,7 @@ from app.models.generated_artifact import (
 from app.models.document_storage_operation import DocumentStorageOperation
 from app.models.document_integrity_event import DocumentIntegrityEvent
 from app.models.stripe_webhook_event import StripeWebhookEvent
+from app.models.esign_webhook_event import ESignWebhookEvent
 from app.models.inbound_email import InboundEmail, InboundEmailAlias
 from app.models.prospect_follow_through import (
     ProspectFollowThrough,
@@ -118,7 +119,29 @@ from app.models.prospect_follow_through import (
     ProspectContactEvent,
     ProspectFollowThroughEvent,
 )
+from app.models.conversion_loop import (
+    IntakeForm,
+    IntakeSubmission,
+    LeadChannelConsent,
+    LeadAppointment,
+    LeadFunnelEvent,
+)
 from app.models.background_ai_usage import BackgroundAIUsageReservation
+from app.models.compliance import (
+    AgreementDefinition,
+    TenantAgreementAcceptance,
+    RetentionPolicy,
+    RetentionAction,
+)
+from app.models.operating_trust import (
+    CustomerLifecycleReceipt,
+    SupportRequest,
+    PublicIncident,
+    PublicIncidentUpdate,
+    OffboardingCase,
+    OffboardingApproval,
+)
+from app.models.brief_check import BriefCheck, BriefCheckAudit
 
 __all__ = [
     "Tenant",
@@ -194,6 +217,11 @@ __all__ = [
     "TaskEvent",
     "ScheduledEvent",
     "CommunicationLog",
+    "IntakeForm",
+    "IntakeSubmission",
+    "LeadChannelConsent",
+    "LeadAppointment",
+    "LeadFunnelEvent",
     "DocumentTemplate",
     "DocumentTemplatePreview",
     "PromptOverride",
@@ -232,6 +260,7 @@ __all__ = [
     "DocumentStorageOperation",
     "DocumentIntegrityEvent",
     "StripeWebhookEvent",
+    "ESignWebhookEvent",
     "InboundEmail",
     "InboundEmailAlias",
     "ProspectFollowThrough",
@@ -239,4 +268,16 @@ __all__ = [
     "ProspectContactEvent",
     "ProspectFollowThroughEvent",
     "BackgroundAIUsageReservation",
+    "AgreementDefinition",
+    "TenantAgreementAcceptance",
+    "RetentionPolicy",
+    "RetentionAction",
+    "CustomerLifecycleReceipt",
+    "SupportRequest",
+    "PublicIncident",
+    "PublicIncidentUpdate",
+    "OffboardingCase",
+    "OffboardingApproval",
+    "BriefCheck",
+    "BriefCheckAudit",
 ]

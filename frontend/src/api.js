@@ -1192,6 +1192,15 @@ export const downloadClientPortalDocumentUrl = (docId) =>
 export const listClientPortalInvoices = () =>
   clientPortalApi.get('/portal/client/invoices').then((r) => r.data)
 
+export const createClientPortalInvoicePayment = (invoiceId) =>
+  clientPortalApi.post(`/portal/client/invoices/${invoiceId}/pay`).then((r) => r.data)
+
+export const activateClientPortalAccount = (token, password) =>
+  clientPortalApi.post('/portal/client/activate', { token, password }).then((r) => r.data)
+
+export const loginClientPortalAccount = (email, password, matterId) =>
+  clientPortalApi.post('/portal/client/login', { email, password, matter_id: matterId }).then((r) => r.data)
+
 export const downloadClientPortalInvoiceUrl = (invoiceId) =>
   `${BASE_URL}/portal/client/invoices/${invoiceId}/download`
 
@@ -1242,6 +1251,7 @@ export const createPortalSession = () => api.post('/billing/portal').then((r) =>
 // MCP
 export const getMcpProductKeys = () => api.get('/mcp/product-keys').then((r) => r.data)
 export const createMcpProductKey = (data) => api.post('/mcp/product-keys', data).then((r) => r.data)
+export const updateMcpProductKey = (keyId, data) => api.patch(`/mcp/product-keys/${keyId}`, data).then((r) => r.data)
 export const revokeMcpProductKey = (keyId) => api.delete(`/mcp/product-keys/${keyId}`).then((r) => r.data)
 export const getMcpUsage = (days = 30) => api.get('/mcp/usage', { params: { days } }).then((r) => r.data)
 export const getLegalSourceHealth = () => api.get('/mcp/source-health').then((r) => r.data)
@@ -1260,11 +1270,24 @@ const platformApi = (platformToken) =>
     headers: { Authorization: `Bearer ${platformToken}` },
   })
 
+// Tenant compliance (agreement evidence and retention controls)
+export const getComplianceAgreements = () => api.get('/compliance/agreements').then((r) => r.data)
+export const acceptComplianceAgreement = (kind, data) => api.post(`/compliance/agreements/${encodeURIComponent(kind)}/accept`, data).then((r) => r.data)
+export const getRetentionInventory = () => api.get('/compliance/retention').then((r) => r.data)
+export const updateRetentionPolicy = (data) => api.put('/compliance/retention', data).then((r) => r.data)
+export const executeRetention = (dryRun = true) => api.post('/compliance/retention/execute', {}, { params: { dry_run: dryRun } }).then((r) => r.data)
+
 export const getPlatformTenants = (key, page = 1) =>
   platformApi(key).get(`/platform/tenants?page=${page}`).then((r) => r.data)
 
 export const getPlatformTenant = (key, id) =>
   platformApi(key).get(`/platform/tenants/${id}`).then((r) => r.data)
+export const getPlatformTenantCompliance = (key, id) =>
+  platformApi(key).get(`/platform/tenants/${id}/compliance`).then((r) => r.data)
+export const getPlatformAgreementDefinitions = (key) =>
+  platformApi(key).get('/platform/agreements').then((r) => r.data)
+export const publishPlatformAgreementDefinition = (key, data) =>
+  platformApi(key).post('/platform/agreements', data).then((r) => r.data)
 
 export const updatePlatformTenant = (key, id, data) =>
   platformApi(key).put(`/platform/tenants/${id}`, data).then((r) => r.data)
@@ -1732,6 +1755,17 @@ export const updateLead = (id, data) =>
 export const convertLead = (id, data) =>
   api.post(`/intake/${id}/convert`, data).then(r => r.data)
 
+// COMP-03 public intake and conversion-loop controls.
+export const getIntakeForms = () => api.get('/intake/forms').then(r => r.data)
+export const createIntakeForm = (data) => api.post('/intake/forms', data).then(r => r.data)
+export const getPublicIntakeForm = (slug) => api.get(`/public/intake/${slug}`).then(r => r.data)
+export const submitPublicIntake = (slug, data) => api.post(`/public/intake/${slug}/submissions`, data).then(r => r.data)
+export const getPublicIntakeAvailability = (slug) => api.get(`/public/intake/${slug}/availability`).then(r => r.data)
+export const bookPublicIntakeAppointment = (slug, data) => api.post(`/public/intake/${slug}/book`, data).then(r => r.data)
+export const updateLeadConsent = (leadId, data) => api.post(`/intake/leads/${leadId}/consent`, data).then(r => r.data)
+export const triageLead = (leadId, data) => api.post(`/intake/leads/${leadId}/triage`, data).then(r => r.data)
+export const getLeadFunnel = () => api.get('/intake/funnel').then(r => r.data)
+
 // After-call assistant APIs stay isolated here while the backend contract is
 // finalized. The server remains authoritative for permissions and audit.
 export const getLeadFollowThrough = (leadId) =>
@@ -2050,6 +2084,17 @@ export const renderTemplateFile = (id, data) =>
     throw error
   })
 
+export const createBriefCheck = (matterId, { file, selectedDocumentId, opposingFile }) => {
+  const form = new FormData()
+  if (file) form.append('file', file)
+  if (selectedDocumentId) form.append('selected_document_id', selectedDocumentId)
+  if (opposingFile) form.append('opposing_file', opposingFile)
+  return api.post(`/matters/${matterId}/brief-checks`, form, { headers: { 'Content-Type': 'multipart/form-data' } }).then((response) => response.data)
+}
+export const listBriefChecks = (matterId) => api.get(`/matters/${matterId}/brief-checks`).then((response) => response.data)
+export const decideBriefCheckItem = (matterId, checkId, data) => api.post(`/matters/${matterId}/brief-checks/${checkId}/decisions`, data).then((response) => response.data)
+export const exportBriefCheck = (matterId, checkId, kind) => api.get(`/matters/${matterId}/brief-checks/${checkId}/export/${kind}`, { responseType: 'blob' }).then((response) => response.data)
+
 export const discoverTemplateVariables = (id, data = {}) =>
   api.post(`/templates/${id}/smart-fill-preview`, data).then(r => r.data)
 
@@ -2349,6 +2394,16 @@ export const deleteSmbCredential = (credentialId) =>
 export const searchSmbFiles = (params) =>
   api.get('/v1/smb/files/search', { params }).then(r => r.data)
 
+// Search the firm's locally indexed document text through the outbound SMB agent.
+// The server enforces matter scope; callers must send matter_id explicitly.
+export const searchFirmMemory = (data) =>
+  api.post('/v1/smb/local-search', data).then(r => r.data)
+
+export const getFirmMemoryFile = (fileId, matterId) =>
+  api.get(`/v1/smb/files/${encodeURIComponent(fileId)}/detail`, {
+    params: { matter_id: matterId },
+  }).then(r => r.data)
+
 // ── Trust Accounting ─────────────────────────────────────────────────────────
 export const createTrustAccount = (body) =>
   api.post('/trust/accounts', body).then(r => r.data)
@@ -2387,5 +2442,27 @@ export const getFirmBranding = () =>
 
 export const updateFirmBranding = (body) =>
   api.put('/firm/branding', body).then(r => r.data)
+
+// ── Customer operating trust ────────────────────────────────────────────────
+export const getPublicOperatingContract = () =>
+  api.get('/public/operating-contract').then(r => r.data)
+
+export const getPublicServiceStatus = () =>
+  api.get('/public/status').then(r => r.data)
+
+export const getPublicSecurityReviewPacket = () =>
+  api.get('/public/security-review-packet').then(r => r.data)
+
+export const createOperatingSupportRequest = (body) =>
+  api.post('/compliance/operating/support', body).then(r => r.data)
+
+export const createCustomerLifecycleReceipt = (body) =>
+  api.post('/compliance/operating/receipts', body).then(r => r.data)
+
+export const getTenantExportInventory = () =>
+  api.get('/compliance/operating/export-inventory').then(r => r.data)
+
+export const requestCustomerOffboarding = (body) =>
+  api.post('/compliance/operating/offboarding', body).then(r => r.data)
 
 export default api

@@ -1,0 +1,102 @@
+# Isolated Skynet development deployment. Pair with docker-compose.hypervisor.yml.
+# The fixed project name prevents this stack from attaching to the legacy
+# `legalapp_*` production/research volumes that remain on Skynet.
+name: law-hand-dev1
+
+services:
+  postgres:
+    volumes:
+      - dev1_postgres_data:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1.0"
+
+  redis:
+    volumes:
+      - dev1_redis_data:/data
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.20"
+
+  litellm-postgres:
+    volumes:
+      - dev1_litellm_postgres_data:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+          cpus: "0.30"
+
+  litellm:
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "0.50"
+
+  backend:
+    environment:
+      RUN_SCHEDULER: "false"
+      PUBLIC_SIGNUP_ENABLED: "false"
+      EMAIL_ENABLED: "false"
+      WORKSPACE_MCP_ENABLED: "false"
+      MCP_PRODUCT_ENABLED: "false"
+      RESEARCH_MCP_OAUTH_ENABLED: "false"
+      SMB_ENABLED: "false"
+      HOST_DISK_STATUS_FILE: ""
+      BACKUP_STATUS_FILE: ""
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1.0"
+
+  # Development must never own scheduled customer jobs. A deliberate profile
+  # makes `docker compose up -d` omit this service even though it exists in the
+  # hardened hypervisor base topology.
+  scheduler:
+    profiles: ["production-writer-disabled-on-dev1"]
+
+  frontend:
+    build:
+      args:
+        VITE_PUBLIC_SITE_URL: https://dev1.getlawhand.com
+        VITE_PUBLIC_SIGNUP_ENABLED: "false"
+
+  office-addin:
+    profiles: ["office-addin-disabled-on-dev1"]
+
+  nginx:
+    depends_on: !override
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    # Nginx resolves every declared upstream at startup. Keep the intentionally
+    # disabled Office route fail-closed without preventing the private edge.
+    extra_hosts:
+      - "office-addin=127.0.0.1"
+    volumes:
+      - ${DEV1_ORIGIN_TLS_HOST_DIR:?Set DEV1_ORIGIN_TLS_HOST_DIR}:/etc/nginx/ssl:ro
+      - ${DEV1_WEBROOT_HOST_DIR:?Set DEV1_WEBROOT_HOST_DIR}:/var/www/certbot:ro
+    ports: !override
+      - "127.0.0.1:18080:80"
+      - "127.0.0.1:18443:443"
+    deploy:
+      resources:
+        limits:
+          memory: 192M
+          cpus: "0.20"
+
+volumes:
+  dev1_postgres_data:
+    name: law-hand-dev1-postgres
+  dev1_redis_data:
+    name: law-hand-dev1-redis
+  dev1_litellm_postgres_data:
+    name: law-hand-dev1-litellm-postgres

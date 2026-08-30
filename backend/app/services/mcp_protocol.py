@@ -511,6 +511,12 @@ async def authenticate_product_request(scope: Scope) -> MCPProductIdentity:
     scheme, _, bearer_value = authorization.partition(" ")
     if raw_key and authorization:
         raise HTTPException(status_code=400, detail="Multiple MCP credentials supplied")
+    bearer_value = bearer_value.strip()
+    bearer_product_key = (
+        bearer_value
+        if scheme.casefold() == "bearer" and bearer_value.startswith("lhrk_")
+        else ""
+    )
     if raw_key:
         async with async_session_maker() as db:
             product_key, tenant = await resolve_product_key(db, raw_key)
@@ -519,8 +525,16 @@ async def authenticate_product_request(scope: Scope) -> MCPProductIdentity:
             tenant_id=str(tenant.id),
             allowed_tools=frozenset(effective_allowed_tools(product_key)),
         )
-    elif scheme.casefold() == "bearer" and bearer_value.strip():
-        identity = await _authenticate_research_bearer(request, bearer_value.strip())
+    elif bearer_product_key:
+        async with async_session_maker() as db:
+            product_key, tenant = await resolve_product_key(db, bearer_product_key)
+        identity = MCPProductIdentity(
+            product_key_id=str(product_key.id),
+            tenant_id=str(tenant.id),
+            allowed_tools=frozenset(effective_allowed_tools(product_key)),
+        )
+    elif scheme.casefold() == "bearer" and bearer_value:
+        identity = await _authenticate_research_bearer(request, bearer_value)
     else:
         raise HTTPException(
             status_code=401,

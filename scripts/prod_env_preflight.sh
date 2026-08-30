@@ -243,16 +243,10 @@ disk_max_percent="${disk_max_percent:-85}"
 [[ "$(get_env EMAIL_FROM)" == "$operator_email" ]] || errors+=("EMAIL_FROM must be $operator_email")
 
 zoom_required_tenant_id="$(get_env ZOOM_REQUIRED_TENANT_ID)"
-zoom_required_tenant_plan="$(get_env ZOOM_REQUIRED_TENANT_PLAN)"
-if [[ "${BOOTSTRAP_MODE:-false}" == "true" && -z "$zoom_required_tenant_id" ]]; then
-  warnings+=("ZOOM_REQUIRED_TENANT_ID is omitted for bootstrap; strict go-live checks remain blocked")
+if [[ -z "$zoom_required_tenant_id" ]]; then
+  warnings+=("ZOOM_REQUIRED_TENANT_ID is omitted; the optional Zoom provider gate cannot be requested")
 elif [[ ! "$zoom_required_tenant_id" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]]; then
-  errors+=("ZOOM_REQUIRED_TENANT_ID must be the sold tenant UUID outside bootstrap mode")
-fi
-if [[ "${BOOTSTRAP_MODE:-false}" == "true" && -z "$zoom_required_tenant_plan" ]]; then
-  warnings+=("ZOOM_REQUIRED_TENANT_PLAN is omitted for bootstrap; strict go-live checks remain blocked")
-elif [[ "$zoom_required_tenant_plan" != "intake-only" ]]; then
-  errors+=("ZOOM_REQUIRED_TENANT_PLAN must be intake-only for the first-customer launch")
+  errors+=("ZOOM_REQUIRED_TENANT_ID must be a tenant UUID when configured")
 fi
 if [[ "$email_enabled" == "false" ]]; then
   warnings+=("EMAIL_ENABLED=false by design; outbound application email is disabled and GitHub production-health issues are the primary operator alert channel")
@@ -497,7 +491,7 @@ workspace_mcp_guarded_vars=(
   WORKSPACE_MCP_GRANT_DAYS WORKSPACE_MCP_CLIENT_REGISTRATION_DAYS
   WORKSPACE_MCP_DYNAMIC_REGISTRATION_ENABLED
 )
-for key in "${required[@]}" "${workspace_mcp_guarded_vars[@]}" TOKEN_ENCRYPTION_KEY TOKEN_ENCRYPTION_KEYS MCP_SERVER_URL MCP_UPSTREAM_API_KEY ZOOM_REQUIRED_TENANT_ID ZOOM_REQUIRED_TENANT_PLAN OFFSITE_RESTORE_PUBLIC_KEY_FILE DISK_PATH DISK_MAX_PERCENT; do
+for key in "${required[@]}" "${workspace_mcp_guarded_vars[@]}" TOKEN_ENCRYPTION_KEY TOKEN_ENCRYPTION_KEYS MCP_SERVER_URL MCP_UPSTREAM_API_KEY ZOOM_REQUIRED_TENANT_ID OFFSITE_RESTORE_PUBLIC_KEY_FILE DISK_PATH DISK_MAX_PERCENT; do
   guarded_compose_vars["$key"]=1
 done
 for compose_file in "${compose_file_list[@]}"; do

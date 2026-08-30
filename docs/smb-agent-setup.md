@@ -12,9 +12,11 @@
 ## Step 1: Run the Migration
 
 ```bash
-cd backend
-alembic upgrade head
+docker compose exec backend alembic upgrade head
 ```
+
+For a source checkout with backend dependencies installed on the host, run
+`cd backend` and then `alembic upgrade head` instead.
 
 This creates the 5 SMB tables (`smb_agents`, `smb_shares`, `smb_file_index`, `smb_access_log`, `matter_smb_shares`), RLS policies, GIN index on `search_vector`, and adds `smb_folders` JSONB to the `matters` table.
 
@@ -31,6 +33,12 @@ SMB_SNIPPET_MAX_CHARS=500
 SMB_TASK_POLL_INTERVAL=30
 SMB_CONTENT_FETCH_TIMEOUT=120
 ```
+
+This control-index work does not add a new relay for local-index results or
+excerpts. The existing, separately bounded content-fetch flow described below
+is unchanged. Any local-index integration remains a separate reviewed change
+after the customer approves what result metadata or excerpts may leave the
+on-premises agent.
 
 The reviewed Skynet and production Compose overlays pin `SMB_ENABLED=true` for
 both the API and scheduler. This prevents a stale inherited host value from
@@ -71,7 +79,7 @@ curl -X POST http://localhost:8000/api/v1/smb/pairing-code \
 Response:
 ```json
 {
-  "pairing_code": "A7X3K9M2",
+  "pairing_code": "A7X3-K9M2-Q4TR-8VWP",
   "expires_at": "2026-06-04T15:30:00Z"
 }
 ```
@@ -191,6 +199,9 @@ tenant/matter-scoped metadata index first, then asks the agent for full text for
 at most the top three hits. That on-demand phase has a 12-second aggregate wait
 and a 12,000-character context budget; unavailable files fall back to snippets
 and the degraded result is not cached.
+
+`SMB_CONTENT_FETCH_TIMEOUT=120` governs the separate manual/content-status
+polling path; it does not extend the RAG request's 12-second aggregate wait.
 
 ## Step 10: Test Content Fetch
 
@@ -377,6 +388,214 @@ can read only configured share roots. The logical isolation now approaches a
 per-tenant private link; mTLS device certificates and signed public installers
 remain the next controls if a Tailscale-equivalent device identity is required.
 
+## Private firm-memory search rollout
+
+The current shipped slice is a metadata-first search path: the SaaS stores the
+filename, bounded opening snippet, file metadata, and a PostgreSQL search
+vector. Full text is fetched from the agent only for an authorized, bounded
+set of results. It does not search every page of a file, and it does not claim
+native Windows-user ACL enforcement.
+
+The planned 4 TB program adds a local full-text sidecar beside the agent. The
+index stays in the customer's environment and contains page- or paragraph-
+bounded extracted text plus provenance. The current scanner records share,
+canonical path, size, modified time, and a first-4-KiB SHA-256 fingerprint; it
+does not yet compute a full-file hash or capture native Windows ACLs.
+Embeddings are not required. SQLite FTS5/BM25 is the bounded local full-text
+control implementation used to validate extraction, scope, ranking, and a
+representative corpus; it is not the 4 TB scale target. The proposed scale PoC
+uses a durable manifest/queue, isolated Apache Tika extraction, asynchronous
+OCR, ACL capture/security trimming, and OpenSearch on local SSD/NVMe while the
+original files remain on the HDD-backed file server. That pipeline is not yet
+shipped. See
+`docs/firm-memory-poc-architecture.md`.
+
+Release 0.15.3 adds an explicitly authorized, matter-scoped relay for bounded
+local-search excerpts and metadata. It uses the agent's existing outbound
+polling connection and is available through the portal, Chat structured
+sources, and user-bound Workspace MCP. Query text is short-lived and is not
+application-logged, persisted, or placed in evaluator output. Results use an
+opaque same-origin portal link with an authorization recheck and **Copy UNC**;
+raw `file://` and `smb://` browser links are not emitted. This does not add a
+general inbound network route or make the SaaS an SMB proxy.
+
+The planned rollout is deliberately staged:
+
+1. Inventory the corpus, then measure a stratified 50–200 GB subset and 30–50
+   customer-judged queries on the actual SMB path.
+2. Enable lexical full-text indexing for approved extensions and inspect
+   recall, exact-page rate, latency, and extraction failures.
+3. Run extraction in bounded Tika Pipes workers and add asynchronous OCR or
+   legacy-format readers only after their sandbox, limits, and retention
+   behavior have been reviewed.
+4. Consider semantic retrieval later only if the measured query set shows a
+   material lexical-recall gap.
+
+### Local index storage and protection
+
+The control index and its retry ledger use the agent's protected
+application-data directory, not the share itself. On Windows this is under
+`C:\\ProgramData\\LawHand\\Agent`; on Linux it is under the protected
+`/var/lib/lawhand-agent` installation data path. The scale PoC places the
+active OpenSearch data path and parser/OCR scratch space on dedicated local
+SSD/NVMe, never on the SMB share. The service account must be able to read and
+write these paths, while ordinary users must not be granted directory access.
+Backups, if enabled by the customer, inherit the same encryption, retention,
+and legal-hold policy as the agent ledger.
+
+The control index is opt-in. A safe HDD-source starting point is:
+
+```env
+CLARITY_LOCAL_INDEX_ENABLED=true
+CLARITY_LOCAL_INDEX_PATH=D:\\LawHandIndex\\search-index.db
+CLARITY_LOCAL_INDEX_MAX_FILE_MB=25
+CLARITY_LOCAL_INDEX_WORKERS=1
+```
+
+Before enabling it, an operator must confirm all of the following:
+
+- the index path resolves to protected local SSD/NVMe and not to the SMB share;
+- the volume has enough free space for the bounded sample plus SQLite WAL and
+  rebuild headroom;
+- full-disk encryption, backup, retention, legal-hold, and deletion treatment
+  for derived client text have been approved;
+- the service identity can write the directory and ordinary users cannot read
+  it; and
+- the sample roots, indexing window, and source-server I/O throttle have been
+  approved by the customer.
+
+Place `CLARITY_LOCAL_INDEX_PATH` on protected SSD/NVMe storage. Begin with one
+worker; raise the bounded worker count only after measuring SMB/HDD queueing.
+The path must be absolute and must name a file inside a dedicated
+subdirectory on a local disk, not the root of a drive or a UNC/network path.
+The agent restricts that directory and the database file to the service
+identity/system administrators and refuses to enable the index if either ACL
+operation fails. These
+settings enable the local control index only. They do not enable the separate
+SaaS result/excerpt flow.
+
+The index is rebuildable derived data. Never treat it as the authoritative
+copy of a case file. Atomic blue/green index switching is a requirement for
+the planned scale PoC; it is not implemented by the SQLite control index.
+
+The control index has no customer-facing query endpoint. For a local,
+operator-run evaluation, stop writes or use a completed index and run:
+
+```powershell
+python -m clarity_agent.poc_query_runner `
+  D:\LawHandIndex\search-index.db queries.jsonl --output results.jsonl
+```
+
+The query manifest contains query text and share paths and must stay inside the
+customer boundary. The result file contains opaque query labels and
+pseudonymous document IDs, but it is still sensitive evaluation data. See the
+full manifest format and evaluator command in
+`docs/firm-memory-poc-architecture.md`.
+
+### Formats, pages, and extraction status
+
+The control implementation recognizes text PDFs, DOCX/DOCM, TXT, and RTF with
+a source-byte and extracted-character cap. Its exact manifest states are
+`pending`, `running`, `ready`, `unsupported`, and `error`. DOC, WPD, ODT,
+password-protected/encrypted files, active Office content, and scanned-image
+PDFs remain unsupported or degraded until a reviewed parser/OCR capability is
+enabled. The planned scale pipeline may add `partial` and `timed_out`. Any
+non-ready state must never appear as authoritative proof of “no match.”
+
+The embedded Python extractor is a control implementation for synthetic or
+separately reviewed test files. Its source-byte cap does not bound decompressed
+PDF/DOCX size, parser CPU, or parser memory, and a Python thread cannot safely
+terminate a hung parser. Do not use it as the messy-corpus PoC extractor. The
+customer PoC requires the process-isolated Tika Pipes boundary and limits in
+`docs/firm-memory-poc-architecture.md`.
+
+Where the control parser supplies PDF page boundaries, a result carries a page
+number and short match-centered passage. Other current formats return a null
+page; stable paragraph/block pinpoints are a scale-PoC requirement, not a
+shipped capability. The pilot does not promise perfect page numbering or OCR
+accuracy.
+
+### Indexing, retry, and deletion lifecycle
+
+Scanning remains resumable and idempotent. The control is reprocessed when its
+canonical path, size, modified time, or first-4-KiB fingerprint changes. A
+same-size, same-timestamp edit outside that prefix can evade this control
+fingerprint; the scale PoC must use a stronger stable identity/full-hash policy.
+Temporary parser failures retry with bounded exponential backoff and a
+per-share queue limit; permanent failures remain visible for operator repair.
+The control handles a rename as delete-plus-add. Preserving identity across
+renames requires the future scale pipeline's stable file-ID/full-hash policy.
+
+When a file disappears, the control removes its rows only after a complete,
+successful walk; a partial SMB walk must not delete healthy rows. Any future
+query service must also make rows immediately ineligible when a share is
+disabled, an agent is revoked, or a matter binding is removed. The current
+control has no customer-facing query service and may retain derived rows until
+the next complete scan or operator-approved rebuild/deletion. Rebuilding or
+deleting an eventual scale index must also clear OCR derivatives, caches, and
+retry payloads covered by the customer's retention policy.
+
+### Limits and configuration
+
+Every deployment must publish and enforce caps for maximum files per share,
+source bytes, extracted characters, page count, OCR pixels, query length,
+wildcard expansion, result count, excerpt bytes, queued jobs, and per-user or
+per-tenant request rate. The existing metadata path defaults remain
+`SMB_MAX_FILE_INDEX_PER_SHARE=250000`, `SMB_SNIPPET_MAX_CHARS=500`, a maximum
+of 100 API results, and a 12,000-character aggregate RAG context. A local
+full-text pilot must add explicit index/OCR caps rather than silently
+reusing these metadata limits.
+
+### Search privacy and authorization
+
+Search is always tenant-bound. Matter searches require a valid matter in the
+same tenant, an authorized user, and a matching share/folder binding. Every
+fetch task binds the tenant, matter (when present), share, file, canonical
+path, and agent; swapping any identifier must fail closed. Folder comparisons
+must use normalized separators and path-component boundaries, so `Client-1`
+cannot match `Client-10`.
+
+The configured SMB credential defines what the agent can read. Unless an
+explicit per-user ACL integration is enabled, LawHand does not mirror native
+Windows ACLs. Administrators must use separate least-privilege shares or
+accounts for different security boundaries and acknowledge this limitation
+before enabling broad firm search. See the canonical controls document:
+`docs/private-firm-memory-search.md`.
+
+Indexed text is untrusted evidence. Retrieved passages are delimited and
+marked as document content before entering an AI context; instructions inside
+a brief, email, filename, or OCR result are never system instructions and
+cannot authorize a tool call. Search and fetch activity is auditable without
+logging credentials or unrestricted document text.
+
+### Secondary and proprietary sources
+
+Customer-owned historic files and licensed secondary sources are separate
+content classes. Do not scrape, bulk-import, train on, or cross-tenant share
+Westlaw/Thomson Reuters, Lexis, Wright & Miller, or other restricted content
+without a written license/API agreement. The product must disclose which
+source classes were searched and preserve source, license, provenance, and
+retention metadata. This feature is not a Westlaw replacement and does not
+promise comprehensive legal-research coverage.
+
+### Pilot status and rollback
+
+The admin status view should show files discovered, indexed, skipped,
+unsupported, failed, retried, deleted, and last successful scan time, plus
+queue depth and index size. Record pilot metrics for indexed bytes/files,
+extraction coverage, OCR coverage if enabled, P50/P95 query latency,
+recall@10, correct-page rate, stale-result revocation time, and authorization
+test failures.
+
+To roll back the control, set `CLARITY_LOCAL_INDEX_ENABLED=false`, restart the
+agent, preserve the audit trail, and retain or remove the local derived index
+according to the customer's retention decision. To rebuild it, stop the
+agent, validate the configured root and credentials, choose a new protected
+index path, run a complete scan, compare counts and canary queries, then update
+the configured path and restart. The planned scale service must implement an
+atomic blue/green switch; the control does not. Never delete the original case
+files as part of rollback or rebuild.
+
 ## Troubleshooting
 
 | Issue | Solution |
@@ -386,5 +605,8 @@ remain the next controls if a Tailscale-equivalent device identity is required.
 | Agent can't connect to SMB | Check `smb_credentials` in config.toml, verify network access |
 | Connection test succeeds but sync returns HTTP 422 | Upgrade the SaaS compatibility fix or agent to v0.15.1+, then retry **Scan now**; SMB credentials are already working |
 | No files in search results | Use **Scan now** in the share admin view, or run `lawhand-agent scan` on the agent |
-| Content fetch timeout | Increase `SMB_CONTENT_FETCH_TIMEOUT` in `.env` |
+| Manual content-status polling times out | Increase `SMB_CONTENT_FETCH_TIMEOUT` in `.env`; this does not change the RAG path's 12-second aggregate wait |
 | Agent shows as "paused" | Heartbeat missed for 15+ minutes; check agent is running |
+| Local index reports unsupported/failed files | Review the per-file status and parser limits; do not infer that an unsupported file has no relevant text |
+| Search returns an unexpected matter result | Confirm the matter binding, share root, user access, and the Windows ACL caveat before changing the index |
+| Index is stale after a share change | Stop the agent, rebuild to a new protected control-index path, validate it, update the configured path, and restart; do not delete the source files |

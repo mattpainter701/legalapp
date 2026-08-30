@@ -16,8 +16,9 @@ authorization endpoints remain on `https://getlawhand.com`.
 Research uses its dedicated origin for both resource and issuer. Hosted
 ChatGPT and Claude clients discover OAuth 2.1 at
 `https://research.getlawhand.com/.well-known/oauth-authorization-server` and
-use dynamic client registration plus PKCE. Header-capable clients may instead
-send a LawHand Research API token as `X-MCP-API-Key: lhrk_...`.
+use dynamic client registration plus PKCE. API clients may instead send a
+LawHand Research token as `Authorization: Bearer lhrk_...`;
+`X-MCP-API-Key` remains supported for existing clients.
 
 The Research authorization endpoint starts on the dedicated issuer and then
 redirects the user to the signed-in portal for consent. The portal page reads
@@ -97,8 +98,8 @@ Create proxied CNAME records for both MCP hosts targeting the existing
 LawHand Tunnel:
 
 ```text
-mcp.getlawhand.com      CNAME  1d780272-f71d-4b23-9381-bbfa0ff94388.cfargotunnel.com
-research.getlawhand.com CNAME  1d780272-f71d-4b23-9381-bbfa0ff94388.cfargotunnel.com
+mcp.getlawhand.com      CNAME  b4e85d87-80ba-432c-a360-20adcd24716f.cfargotunnel.com
+research.getlawhand.com CNAME  b4e85d87-80ba-432c-a360-20adcd24716f.cfargotunnel.com
 ```
 
 In the Cloudflare dashboard, use `CNAME`, names `mcp` and `research`, the

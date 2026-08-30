@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -531,9 +532,14 @@ async def test_tenant_admin_can_create_product_key(monkeypatch):
     created_key = SimpleNamespace(
         id=uuid.uuid4(),
         name="Partner API",
+        purpose=None,
+        assigned_to_user_id=None,
         allowed_tools=["search_caselaw"],
         monthly_call_limit=250,
+        monthly_budget_cents=None,
+        unit_price_cents=45,
         burst_limit_per_minute=30,
+        expires_at=None,
         is_active=True,
     )
 
@@ -566,6 +572,21 @@ async def test_tenant_admin_can_create_product_key(monkeypatch):
     assert result["burst_limit_per_minute"] == 30
 
 
+def test_product_key_status_distinguishes_active_expired_and_revoked():
+    now = datetime.now(timezone.utc)
+    active = SimpleNamespace(
+        is_active=True, revoked_at=None, expires_at=now + timedelta(days=1)
+    )
+    expired = SimpleNamespace(
+        is_active=True, revoked_at=None, expires_at=now - timedelta(seconds=1)
+    )
+    revoked = SimpleNamespace(is_active=False, revoked_at=now, expires_at=None)
+
+    assert mcp_product.product_key_status(active, now=now) == "active"
+    assert mcp_product.product_key_status(expired, now=now) == "expired"
+    assert mcp_product.product_key_status(revoked, now=now) == "revoked"
+
+
 @pytest.mark.asyncio
 async def test_tenant_admin_can_revoke_product_key(monkeypatch):
     tenant_id = uuid.uuid4()
@@ -589,3 +610,363 @@ async def test_tenant_admin_can_revoke_product_key(monkeypatch):
 
     assert result == {"revoked": True}
     assert calls[0] == {"tenant_id": tenant_id, "key_id": key_id}
+
+
+@pytest.mark.asyncio
+async def test_tenant_admin_can_update_key_controls_and_clear_expiration(monkeypatch):
+    tenant_id = uuid.uuid4()
+    key_id = uuid.uuid4()
+    user = SimpleNamespace(id=uuid.uuid4(), tenant_id=tenant_id, role="admin")
+    calls = []
+
+    async def current_user(*args, **kwargs):
+        return user
+
+    async def update_key(*args, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(
+            id=key_id,
+            is_active=True,
+            revoked_at=None,
+            expires_at=None,
+        )
+
+    monkeypatch.setattr(mcp, "get_current_user", current_user)
+    monkeypatch.setattr(mcp, "update_product_key", update_key)
+
+    result = await mcp.update_mcp_product_key(
+        key_id,
+        mcp.ProductKeyUpdateRequest(
+            monthly_budget_cents=9000,
+            assigned_to_user_id=None,
+            expires_at=None,
+        ),
+        SimpleNamespace(headers={}),
+        object(),
+    )
+
+    assert result == {"updated": True, "id": str(key_id), "status": "active"}
+    assert calls[0]["tenant_id"] == tenant_id
+    assert calls[0]["key_id"] == key_id
+    assert calls[0]["changes"] == {
+        "monthly_budget_cents": 9000,
+        "assigned_to_user_id": None,
+        "expires_at": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("overrides", "detail"),
+    [
+        ({"monthly_call_limit": 0}, "Invalid monthly MCP call limit"),
+        ({"burst_limit_per_minute": 0}, "Invalid MCP burst limit"),
+        ({"unit_price_cents": 0}, "MCP product price is invalid"),
+        ({"monthly_budget_cents": True}, "Invalid monthly MCP budget"),
+        (
+            {"monthly_budget_cents": 44},
+            "Monthly budget must cover at least one successful MCP call",
+        ),
+        (
+            {"expires_at": datetime.now(timezone.utc) - timedelta(seconds=1)},
+            "Key expiration must be in the future",
+        ),
+    ],
+)
+def test_product_key_control_validation_rejects_invalid_boundaries(overrides, detail):
+    controls = {
+        "monthly_call_limit": 100,
+        "burst_limit_per_minute": 10,
+        "monthly_budget_cents": None,
+        "unit_price_cents": 45,
+        "expires_at": None,
+    }
+    controls.update(overrides)
+
+    with pytest.raises(HTTPException) as exc:
+        mcp_product._validate_key_controls(**controls)
+
+    assert exc.value.status_code in {400, 503}
+    assert exc.value.detail == detail
+
+
+@pytest.mark.asyncio
+async def test_product_key_assignee_validation_allows_unassigned_and_rejects_missing():
+    class MissingAssigneeDB:
+        async def scalar(self, _statement):
+            return None
+
+    db = MissingAssigneeDB()
+    tenant_id = uuid.uuid4()
+
+    await mcp_product._validate_assignee(
+        db, tenant_id=tenant_id, assigned_to_user_id=None
+    )
+    with pytest.raises(HTTPException) as exc:
+        await mcp_product._validate_assignee(
+            db, tenant_id=tenant_id, assigned_to_user_id=uuid.uuid4()
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Assigned staff member is unavailable"
+
+
+@pytest.mark.asyncio
+async def test_create_product_key_normalizes_controls_and_snapshots_price(monkeypatch):
+    tenant_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    assigned_id = uuid.uuid4()
+    expires_at = datetime.now(timezone.utc) + timedelta(days=30)
+    tenant = SimpleNamespace(id=tenant_id)
+
+    class CreateDB:
+        def __init__(self):
+            self.added = None
+            self.committed = False
+
+        async def scalar(self, _statement):
+            return tenant
+
+        def add(self, value):
+            self.added = value
+
+        async def commit(self):
+            self.committed = True
+
+        async def refresh(self, value):
+            value.id = uuid.uuid4()
+
+    async def validate_assignee(_db, **kwargs):
+        assert kwargs == {
+            "tenant_id": tenant_id,
+            "assigned_to_user_id": assigned_id,
+        }
+
+    db = CreateDB()
+    monkeypatch.setattr(mcp_product, "ensure_mcp_product_access", lambda _tenant: None)
+    monkeypatch.setattr(mcp_product, "_validate_assignee", validate_assignee)
+    monkeypatch.setattr(mcp_product.settings, "MCP_PRODUCT_CALL_PRICE_CENTS", 45)
+
+    key, raw_key = await mcp_product.create_product_key(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        name="  Research team  ",
+        purpose="  Public authority lookup  ",
+        assigned_to_user_id=assigned_id,
+        monthly_call_limit=500,
+        monthly_budget_cents=4500,
+        burst_limit_per_minute=25,
+        expires_at=expires_at,
+        allowed_tools=["search_caselaw"],
+    )
+
+    assert raw_key.startswith("lhrk_")
+    assert db.added is key
+    assert db.committed is True
+    assert key.name == "Research team"
+    assert key.purpose == "Public authority lookup"
+    assert key.assigned_to_user_id == assigned_id
+    assert key.allowed_tools == ["search_caselaw"]
+    assert key.monthly_budget_cents == 4500
+    assert key.unit_price_cents == 45
+    assert key.expires_at == expires_at
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tenant", "name", "purpose", "detail"),
+    [
+        (None, "key", None, "Tenant not found"),
+        (SimpleNamespace(), "x" * 121, None, "Key name is too long"),
+        (SimpleNamespace(), "key", "x" * 256, "Key purpose is too long"),
+    ],
+)
+async def test_create_product_key_rejects_missing_tenant_or_long_labels(
+    monkeypatch, tenant, name, purpose, detail
+):
+    class ScalarDB:
+        async def scalar(self, _statement):
+            return tenant
+
+    async def validate_assignee(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(mcp_product, "ensure_mcp_product_access", lambda _tenant: None)
+    monkeypatch.setattr(mcp_product, "_validate_assignee", validate_assignee)
+
+    with pytest.raises(HTTPException) as exc:
+        await mcp_product.create_product_key(
+            ScalarDB(),
+            tenant_id=uuid.uuid4(),
+            user_id=uuid.uuid4(),
+            name=name,
+            purpose=purpose,
+        )
+
+    assert exc.value.detail == detail
+
+
+@pytest.mark.asyncio
+async def test_update_product_key_applies_editable_controls(monkeypatch):
+    tenant_id = uuid.uuid4()
+    assigned_id = uuid.uuid4()
+    key = SimpleNamespace(
+        id=uuid.uuid4(),
+        assigned_to_user_id=None,
+        monthly_call_limit=100,
+        monthly_budget_cents=None,
+        unit_price_cents=45,
+        burst_limit_per_minute=10,
+        expires_at=None,
+        is_active=True,
+        revoked_at=None,
+    )
+
+    class UpdateDB:
+        committed = False
+
+        async def scalar(self, _statement):
+            return key
+
+        async def commit(self):
+            self.committed = True
+
+        async def refresh(self, _value):
+            return None
+
+    async def validate_assignee(_db, **kwargs):
+        assert kwargs["assigned_to_user_id"] == assigned_id
+
+    db = UpdateDB()
+    monkeypatch.setattr(mcp_product, "_validate_assignee", validate_assignee)
+    updated = await mcp_product.update_product_key(
+        db,
+        tenant_id=tenant_id,
+        key_id=key.id,
+        changes={
+            "name": "  Staff research  ",
+            "purpose": "  Litigation  ",
+            "assigned_to_user_id": assigned_id,
+            "monthly_call_limit": 200,
+            "monthly_budget_cents": 9000,
+            "burst_limit_per_minute": 20,
+            "allowed_tools": ["search_caselaw"],
+        },
+    )
+
+    assert updated is key
+    assert db.committed is True
+    assert key.name == "Staff research"
+    assert key.purpose == "Litigation"
+    assert key.assigned_to_user_id == assigned_id
+    assert key.allowed_tools == ["search_caselaw"]
+    assert key.monthly_budget_cents == 9000
+
+
+@pytest.mark.asyncio
+async def test_update_product_key_handles_missing_revoked_and_invalid_labels(
+    monkeypatch,
+):
+    tenant_id = uuid.uuid4()
+    key_id = uuid.uuid4()
+
+    class ScalarDB:
+        def __init__(self, value):
+            self.value = value
+
+        async def scalar(self, _statement):
+            return self.value
+
+    assert (
+        await mcp_product.update_product_key(
+            ScalarDB(None), tenant_id=tenant_id, key_id=key_id, changes={"name": "x"}
+        )
+        is None
+    )
+
+    revoked = SimpleNamespace(is_active=False, revoked_at=datetime.now(timezone.utc))
+    with pytest.raises(HTTPException) as revoked_exc:
+        await mcp_product.update_product_key(
+            ScalarDB(revoked),
+            tenant_id=tenant_id,
+            key_id=key_id,
+            changes={"name": "x"},
+        )
+    assert revoked_exc.value.status_code == 409
+
+    editable = SimpleNamespace(
+        assigned_to_user_id=None,
+        monthly_call_limit=100,
+        monthly_budget_cents=None,
+        unit_price_cents=45,
+        burst_limit_per_minute=10,
+        expires_at=None,
+        is_active=True,
+        revoked_at=None,
+    )
+
+    async def validate_assignee(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(mcp_product, "_validate_assignee", validate_assignee)
+    for changes, detail in [
+        ({"name": " "}, "Key name is required"),
+        ({"name": "x" * 121}, "Key name is too long"),
+        ({"purpose": "x" * 256}, "Key purpose is too long"),
+    ]:
+        with pytest.raises(HTTPException) as exc:
+            await mcp_product.update_product_key(
+                ScalarDB(editable),
+                tenant_id=tenant_id,
+                key_id=key_id,
+                changes=changes,
+            )
+        assert exc.value.detail == detail
+
+
+@pytest.mark.asyncio
+async def test_monthly_key_usage_separates_failures_and_calculates_charges():
+    key_id = uuid.uuid4()
+
+    class Rows:
+        def __init__(self, values):
+            self.values = values
+
+        def all(self):
+            return self.values
+
+    class UsageDB:
+        def __init__(self):
+            self.calls = 0
+
+        async def execute(self, _statement):
+            self.calls += 1
+            if self.calls == 1:
+                return Rows([(key_id, 200, 3, 8), (key_id, 500, 2, 0)])
+            return Rows([(key_id, 45)])
+
+    summary = await mcp_product.monthly_key_usage(UsageDB(), uuid.uuid4())
+
+    assert summary[str(key_id)] == {
+        "calls": 5,
+        "successful_calls": 3,
+        "failed_calls": 2,
+        "results": 8,
+        "charge_cents": 135,
+        "charge_usd": 1.35,
+    }
+
+
+def test_product_key_header_rejects_duplicate_credentials():
+    request = SimpleNamespace(
+        headers={
+            "X-MCP-API-Key": "lhrk_header",
+            "Authorization": "Bearer lhrk_bearer",
+        }
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        mcp._product_key_credential(request)
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Multiple MCP credentials supplied"

@@ -1,0 +1,108 @@
+name: Deploy Skynet dev1
+
+run-name: ${{ inputs.operation }} dev1 main @ ${{ github.sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Verify the Skynet runner or deploy dev1
+        required: true
+        default: verify
+        type: choice
+        options: [verify, deploy]
+      confirmation:
+        description: Type DEPLOY-SKYNET-DEV1 when deploying
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: law-hand-skynet-dev1
+  cancel-in-progress: false
+
+jobs:
+  release-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.release.outputs.release_sha }}
+    steps:
+      - name: Require main and explicit deploy confirmation
+        env:
+          RELEASE_REF: ${{ github.ref }}
+          OPERATION: ${{ inputs.operation }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$RELEASE_REF" == refs/heads/main ]]
+          case "$OPERATION" in
+            verify) ;;
+            deploy) [[ "$CONFIRMATION" == DEPLOY-SKYNET-DEV1 ]] ;;
+            *) exit 2 ;;
+          esac
+
+      - name: Pin the exact release commit
+        id: release
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Require successful CI for the exact deploy commit
+        if: inputs.operation == 'deploy'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          conclusion="$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow ci.yml \
+            --commit "$RELEASE_SHA" \
+            --event push \
+            --limit 20 \
+            --json conclusion \
+            --jq '.[0].conclusion // ""')"
+          [[ "$conclusion" == success ]] || {
+            echo "::error::CI for $RELEASE_SHA is '$conclusion'; dev1 was not changed."
+            exit 1
+          }
+
+  dev1:
+    needs: release-gate
+    runs-on: [self-hosted, Linux, X64, skynet, lawhand-prod]
+    environment:
+      name: skynet-development
+      url: https://dev1.getlawhand.com
+    timeout-minutes: 60
+    steps:
+      - name: Verify fixed root-owned entrypoint
+        if: inputs.operation == 'verify'
+        env:
+          RELEASE_SHA: ${{ needs.release-gate.outputs.release_sha }}
+        run: sudo -n /usr/local/sbin/lawhand-dev1-deploy-from-github verify "$RELEASE_SHA"
+
+      - name: Deploy pinned main commit
+        if: inputs.operation == 'deploy'
+        env:
+          RELEASE_SHA: ${{ needs.release-gate.outputs.release_sha }}
+        run: sudo -n /usr/local/sbin/lawhand-dev1-deploy-from-github deploy "$RELEASE_SHA"
+
+      - name: Record dev1 summary
+        if: always()
+        env:
+          OPERATION: ${{ inputs.operation }}
+          RELEASE_SHA: ${{ needs.release-gate.outputs.release_sha }}
+        run: |
+          {
+            echo "## Skynet dev1"
+            echo
+            echo "- Operation: \`$OPERATION\`"
+            echo "- Commit: \`$RELEASE_SHA\`"
+            echo "- Scheduler, email, signup, and MCP products: disabled"
+            echo "- Data: isolated dev-only volumes"
+          } >> "$GITHUB_STEP_SUMMARY"

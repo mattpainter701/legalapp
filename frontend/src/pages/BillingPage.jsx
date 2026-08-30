@@ -188,12 +188,23 @@ export default function BillingPage({ embedded = false }) {
                 PAYG line
               </span>
             </div>
-            <div className="mt-4 grid grid-cols-2 gap-3">
+            <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
               <div className="rounded-lg border border-brand-line bg-brand-bg px-3 py-2">
                 <p className="text-xs uppercase tracking-wider text-brand-muted font-sans">30-day calls</p>
                 <p className="mt-1 text-xl font-bold text-brand-ink font-serif">
-                  {(status.mcp_usage.calls_30d || 0).toLocaleString()}
+                  {(status.mcp_usage.successful_calls_30d || 0).toLocaleString()}
                 </p>
+                <p className="mt-1 text-xs text-brand-muted">Successful · billable</p>
+              </div>
+              <div className="rounded-lg border border-brand-line bg-brand-bg px-3 py-2">
+                <p className="text-xs uppercase tracking-wider text-brand-muted font-sans">Failed calls</p>
+                <p className="mt-1 text-xl font-bold text-brand-ink font-serif">{(status.mcp_usage.failed_calls_30d || 0).toLocaleString()}</p>
+                <p className="mt-1 text-xs text-brand-muted">Visible · not billed</p>
+              </div>
+              <div className="rounded-lg border border-brand-line bg-brand-bg px-3 py-2">
+                <p className="text-xs uppercase tracking-wider text-brand-muted font-sans">Estimated charges</p>
+                <p className="mt-1 text-xl font-bold text-brand-ink font-serif">${Number(status.mcp_usage.estimated_charges_usd_30d || 0).toFixed(2)}</p>
+                <p className="mt-1 text-xs text-brand-muted">${Number(status.mcp_usage.unit_price_usd || 0.45).toFixed(2)} per successful call</p>
               </div>
               <div className="rounded-lg border border-brand-line bg-brand-bg px-3 py-2">
                 <p className="text-xs uppercase tracking-wider text-brand-muted font-sans">Returned results</p>

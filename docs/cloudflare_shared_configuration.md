@@ -121,3 +121,10 @@ documentation update.
 On 2026-08-27, the separately authenticated Research MCP was activated at
 `research.getlawhand.com`. Hosted clients use OAuth dynamic registration and
 PKCE; header-capable clients may use separately issued Research API tokens.
+
+On 2026-08-28, IONOS remained the production Tunnel for the apex, `www`,
+Workspace MCP, and Research MCP hostnames. Skynet was assigned two independent
+roles: the private Research sidecar and an isolated development/DR host. The
+optional `dev1.getlawhand.com` record targets the separately credentialed
+Skynet Tunnel only after its app, private origin TLS, and Cloudflare Access
+gate pass acceptance. It never changes or aliases the production MCP records;

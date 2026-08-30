@@ -45,17 +45,18 @@ currency/effective date, retrieval time, and parser version.
 | Federal Register | Complete January 2000-August 2026 monthly XML ZIP history | GovInfo JSON directory plus monthly bulk archives | `collection_verified`, `parser_pending` | 320 archives, 3,570,438,217 retained bytes, and 6,641 daily issue XML members; zero failed partitions. Parse and embed final/proposed rules and corrections selectively rather than mirroring all notices into retrieval. |
 | GovInfo USCOURTS | Selected authenticated federal opinions, generally from 2004 | Collection/court/year sitemaps and bulk packages | `queued` | Use as the official federal provenance/reconciliation layer after expanding the already-staged CourtListener corpus; avoid duplicating opinion text under unrelated IDs. |
 | SEC EDGAR | Filing metadata and bounded material-contract exhibits | Official submissions/data endpoints | `queued` | Respect SEC request policy; exhibits are examples/evidence, not model contract authority. |
-| U.S. Courts current Federal Rules | Six national rules publications, including the official forms printed within applicable publications | Reviewed direct-PDF manifest | `preview_verified`, `sync_pending` | Five normalized previews passed; the appellate PDF raw artifact is retained but its broken font-map extraction is blocked from ingestion. Pending/local/superseded rules and separate forms are excluded. |
-| Constitution Annotated | Authenticated 2022 edition plus 2024 supplement | Reviewed GovInfo package PDFs | `preview_verified`, `sync_pending` | Official research analysis, not binding law. Snapshot reaches Supreme Court decisions through July 1, 2024; continuously updated essays require a later structured adapter. |
-| U.S. Tax Court Reports | Volume 165 pamphlets 1-5 with final `T.C.` pagination | Reviewed official pamphlet PDFs | `preview_verified`, `sync_pending` | Published division opinions only. DAWSON, orders, memorandum/summary opinions, and daily search automation remain excluded. |
+| U.S. Courts current Federal Rules | Six national rules publications, including the official forms printed within applicable publications | Reviewed direct-PDF manifest | `implemented`, `scheduled`, `sync_pending` | Five normalized publications are eligible for sync. The appellate PDF remains visible in the manifest but is explicitly non-syncable because its font map produces unreadable text. Pending/local/superseded rules and separate forms are excluded. |
+| Constitution Annotated | Authenticated 2022 edition plus 2024 supplement | Reviewed GovInfo package PDFs | `implemented`, `scheduled`, `sync_pending` | Official research analysis, not binding law. Retrieval admits the base volume's `current_with_supplement` status together with the current supplement. The snapshot reaches Supreme Court decisions through July 1, 2024. |
+| U.S. Tax Court Reports | Volume 165 pamphlets 1-5 with final `T.C.` pagination | Reviewed official pamphlet PDFs | `implemented`, `scheduled`, `sync_pending` | Published division opinions only. DAWSON, orders, memorandum/summary opinions, and daily discovery remain excluded. |
 
 ## Registry expansion snapshot
 
 The merged catalog now contains 87 source families: the 37-entry base catalog
 plus modular federal/Free Law, federal rules/research, ND/MN/SD, and OH/CA/TX/FL/local/secondary
-fragments. Only 13 previously approved/implemented sources remain enabled. New
-research entries are disabled until both an adapter and their source-specific
-access/storage decision are complete. Twenty-five entries carry a structured
+fragments. Sixteen approved/implemented sources are enabled, including the reviewed
+Federal Rules, Constitution Annotated, and Tax Court Reports families promoted in
+Phase 1. Other new research entries remain disabled until both an adapter and their
+source-specific access/storage decision are complete. Twenty-five entries carry a structured
 `retry_action`; older base entries retain their retry route in notes and this
 ledger.
 

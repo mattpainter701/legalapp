@@ -207,6 +207,20 @@ class Settings(BaseSettings):
     BACKGROUND_AI_TENANT_WEEKLY_LIMIT: int = 750
     BACKGROUND_AI_TENANT_MONTHLY_LIMIT: int = 1500
     BACKGROUND_AI_RESERVATION_TTL_MINUTES: int = 15
+    # Authoritative pool budget. The provider meters value, not calls, so these
+    # windows are what admission enforces; the request limits above remain a
+    # coarse backstop. Defaults mirror the published OpenCode Go value windows.
+    BACKGROUND_AI_ACCOUNT_FIVE_HOUR_USD: float = 12.0
+    BACKGROUND_AI_ACCOUNT_WEEKLY_USD: float = 30.0
+    BACKGROUND_AI_ACCOUNT_MONTHLY_USD: float = 60.0
+    BACKGROUND_AI_TENANT_FIVE_HOUR_USD: float = 3.0
+    BACKGROUND_AI_TENANT_WEEKLY_USD: float = 8.0
+    BACKGROUND_AI_TENANT_MONTHLY_USD: float = 15.0
+    # Reconciliation of reservations whose outcome the provider never confirmed.
+    BACKGROUND_AI_RECONCILE_GRACE_MINUTES: int = 10
+    BACKGROUND_AI_RECONCILE_MAX_AGE_HOURS: int = 24
+    BACKGROUND_AI_RECONCILE_BATCH: int = 100
+    BACKGROUND_AI_RECONCILE_LOOKUP_TIMEOUT_SECONDS: float = 10.0
 
     # QuickBooks Online OAuth2
     QBO_CLIENT_ID: str = ""
@@ -224,6 +238,12 @@ class Settings(BaseSettings):
     )
     STRIPE_SUCCESS_URL: str = ""  # e.g. https://yourdomain.com/billing?success=1
     STRIPE_CANCEL_URL: str = ""  # e.g. https://yourdomain.com/billing?cancel=1
+
+    # Certified e-sign provider. Empty means external signing is unavailable;
+    # the API must fail closed instead of silently using the internal flow.
+    DROPBOX_SIGN_API_KEY: str = ""
+    ESIGN_WEBHOOK_SECRET: str = ""
+    ESIGN_PROVIDER_BASE_URL: str = "https://api.hellosign.com/v3"
 
     # Super-admin platform key — set a long random token; never commit
     # Leave unset on new deployments; this only backs the time-boxed legacy
@@ -258,6 +278,10 @@ class Settings(BaseSettings):
     MCP_UPSTREAM_API_KEY: str = ""
     MCP_DEFAULT_MONTHLY_CALL_LIMIT: int = 1000
     MCP_MAX_MONTHLY_CALL_LIMIT: int = 100000
+    # Customer-facing Research price. Stripe owns invoice calculation, while
+    # this value snapshots the price onto each key for budgets and portal
+    # estimates. One successful tool call is currently $0.45.
+    MCP_PRODUCT_CALL_PRICE_CENTS: int = 45
     MCP_DEFAULT_BURST_LIMIT_PER_MINUTE: int = 60
     MCP_MAX_BURST_LIMIT_PER_MINUTE: int = 600
     # Protocol lifecycle traffic is limited independently from per-tool burst
@@ -335,6 +359,10 @@ class Settings(BaseSettings):
     # Rolling retention window for misc-chat (non-matter) attachments stored in
     # UPLOAD_DIR/{tenant_id}/chat-temp/. Matter-linked chat attachments persist.
     CHAT_ATTACHMENT_TTL_DAYS: int = 7
+    # Roll out only after counsel-owned agreement definitions are published and
+    # existing tenants have had an acceptance window. When disabled, status and
+    # evidence collection remain available without blocking onboarding/OAuth.
+    TENANT_AGREEMENT_GATE_ENABLED: bool = False
 
     RAG_TOP_K: int = 8
     EMBEDDING_MODEL: str = "text-embedding-3-small"

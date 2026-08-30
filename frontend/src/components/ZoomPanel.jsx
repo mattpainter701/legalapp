@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle,
   CheckCircle2,
@@ -27,8 +27,24 @@ import {
 } from '../api'
 
 const PHONE_SCOPE_LABELS = {
-  'phone:read:list_call_logs:admin': 'Read account call history',
-  'phone:read:call_log:admin': 'Read call details',
+  'phone:read:list_call_logs:admin': 'Get account’s call history',
+  'phone:read:call_log:admin': 'Get call history detail and call element',
+}
+
+const PHONE_SCOPE_DOCS_URL = 'https://developers.zoom.us/docs/integrations/oauth-scopes-granular/#call-logs'
+
+const PHONE_OAUTH_ERRORS = {
+  app_credentials_invalid: 'Zoom rejected the saved Client ID or Client Secret. Copy both current values from the same Zoom app environment, save them here, then reconnect.',
+  authorization_code_invalid: 'That Zoom authorization expired or was already used. Start again with Connect Zoom Phone.',
+  invalid_state: 'That authorization request expired or was not started from LawHand. Start again with Connect Zoom Phone.',
+  authorization_revoked: 'Your LawHand administrator session or tenant access changed during authorization. Sign in again and retry.',
+  app_credentials_missing: 'Save the Zoom app Client ID, Client Secret, and webhook Secret Token before connecting.',
+  app_credentials_changed: 'The saved Zoom app changed during authorization. Start again with Connect Zoom Phone.',
+  account_mapping_mismatch: 'Zoom returned an account that does not match this tenant’s verified app binding. Confirm you authorized the intended Zoom account.',
+  phone_api_probe_failed: 'Zoom authorized the app, but the Phone call-history check failed. Confirm the Zoom Phone license and both Call Logs scopes, then reconnect.',
+  no_access_token: 'Zoom did not return an access token. Start the connection again from LawHand.',
+  refresh_token_missing: 'Zoom did not return a refresh token. Re-authorize the app from LawHand.',
+  token_exchange_failed: 'Zoom could not complete authorization. Verify the app environment, callback URL, and current credentials, then retry.',
 }
 
 export default function ZoomPanel() {
@@ -38,6 +54,7 @@ export default function ZoomPanel() {
   const [busy, setBusy] = useState(false)
   const [phoneBusy, setPhoneBusy] = useState(false)
   const [flash, setFlash] = useState(null)
+  const flashTimer = useRef(null)
   const [appForm, setAppForm] = useState({
     client_id: '',
     client_secret: '',
@@ -45,9 +62,14 @@ export default function ZoomPanel() {
   })
 
   const showFlash = (text, type = 'success') => {
+    if (flashTimer.current) clearTimeout(flashTimer.current)
     setFlash({ text, type })
-    setTimeout(() => setFlash(null), 4000)
+    flashTimer.current = setTimeout(() => setFlash(null), type === 'error' ? 12000 : 6000)
   }
+
+  useEffect(() => () => {
+    if (flashTimer.current) clearTimeout(flashTimer.current)
+  }, [])
 
   const loadPanel = async () => {
     const [zoomData, zoomPhoneData] = await Promise.all([
@@ -62,6 +84,25 @@ export default function ZoomPanel() {
     loadPanel()
       .catch(() => showFlash('Failed to load Zoom integration status.', 'error'))
       .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const provider = params.get('provider')
+    const connectedProvider = params.get('connected')
+    const error = params.get('error')
+    if (provider === 'zoom_phone' && error) {
+      showFlash(PHONE_OAUTH_ERRORS[error] || PHONE_OAUTH_ERRORS.token_exchange_failed, 'error')
+    } else if (connectedProvider === 'zoom_phone') {
+      showFlash('Zoom Phone is authorized. LawHand verified access to Phone call history.')
+    } else {
+      return
+    }
+    params.delete('provider')
+    params.delete('connected')
+    params.delete('error')
+    const query = params.toString()
+    window.history.replaceState({}, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`)
   }, [])
 
   const handleDisconnect = async () => {
@@ -107,10 +148,12 @@ export default function ZoomPanel() {
     event.preventDefault()
     setPhoneBusy(true)
     try {
-      await saveZoomPhoneAppCredentials(appForm)
+      const result = await saveZoomPhoneAppCredentials(appForm)
       setAppForm({ client_id: '', client_secret: '', webhook_secret_token: '' })
       await loadPanel()
-      showFlash('Zoom Phone app credentials saved.')
+      showFlash(result?.grant_invalidated
+        ? 'Zoom app credentials saved. The previous grant was disconnected; click Connect Zoom Phone to authorize the current app.'
+        : 'Zoom Phone app credentials saved.')
     } catch (err) {
       showFlash(err?.response?.data?.detail || 'Failed to save Zoom Phone app credentials.', 'error')
     } finally {
@@ -229,11 +272,17 @@ export default function ZoomPanel() {
           ] : []}
           footer={phoneConnected ? 'Phone API access refreshes automatically during history sync and connection tests.' : null}
         >
+          <ZoomPhoneSetupProgress
+            appSaved={tenantPhoneAppSaved}
+            connected={phoneConnected}
+            scopesReady={phoneConnected && phoneMissingScopes.length === 0}
+            webhookVerified={phoneWebhookVerified}
+          />
           {!phoneConfigured && (
             <SetupNotice
               tone="info"
               title="Add your firm’s Zoom OAuth app"
-              body="Create a Zoom OAuth app for this tenant, add the callback and webhook URLs below, save its app credentials, then connect Zoom Phone."
+              body="Create a private, admin-managed Zoom General App for this tenant, add the two Zoom Phone > Call Logs scopes and URLs shown below, save its credentials here, then start authorization with LawHand’s Connect Zoom Phone button."
             />
           )}
           <ZoomPhoneAppSetup
@@ -342,13 +391,48 @@ function isPhoneWebhookVerified(phoneStatus) {
 }
 
 function FlashMessage({ flash }) {
+  const tone = flash.type === 'success'
+    ? 'bg-green-50 border border-green-200 text-green-700'
+    : flash.type === 'warning'
+      ? 'bg-amber-50 border border-amber-200 text-amber-800'
+      : 'bg-red-50 border border-red-200 text-red-700'
   return (
-    <div className={`px-4 py-3 rounded-xl text-xs font-medium ${
-      flash.type === 'success'
-        ? 'bg-green-50 border border-green-200 text-green-700'
-        : 'bg-red-50 border border-red-200 text-red-700'
-    }`}>
+    <div role={flash.type === 'error' ? 'alert' : 'status'} className={`px-4 py-3 rounded-xl text-xs font-medium ${tone}`}>
       {flash.text}
+    </div>
+  )
+}
+
+function ZoomPhoneSetupProgress({ appSaved, connected, scopesReady, webhookVerified }) {
+  const steps = [
+    { label: 'Save app credentials', complete: appSaved },
+    { label: 'Authorize Zoom account', complete: connected },
+    { label: 'Verify Phone API scopes', complete: scopesReady },
+    { label: 'Verify real-time calls', complete: webhookVerified },
+  ]
+  const currentIndex = steps.findIndex((step) => !step.complete)
+
+  return (
+    <div className="rounded-lg border border-brand-line bg-brand-surface p-3">
+      <div className="text-[11px] font-bold uppercase tracking-wider text-brand-muted mb-3">Zoom Phone setup progress</div>
+      <ol className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {steps.map((step, index) => {
+          const current = index === currentIndex
+          return (
+            <li key={step.label} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold ${
+              step.complete
+                ? 'border-green-200 bg-green-50 text-green-700'
+                : current
+                  ? 'border-amber-200 bg-amber-50 text-amber-800'
+                  : 'border-brand-line bg-brand-bg text-brand-muted'
+            }`}>
+              {step.complete ? <CheckCircle2 size={15} /> : <span className="w-[15px] text-center">{index + 1}</span>}
+              <span>{step.label}</span>
+              {current && <span className="ml-auto text-[10px] uppercase tracking-wide">Next</span>}
+            </li>
+          )
+        })}
+      </ol>
     </div>
   )
 }
@@ -366,6 +450,7 @@ function ZoomPhoneAppSetup({
 }) {
   const callbackUrl = status?.redirect_uri || status?.app_credentials?.redirect_uri
   const webhookUrl = status?.webhook_url || status?.app_credentials?.webhook_url
+  const phoneScopes = Object.keys(PHONE_SCOPE_LABELS).join('\n')
   const webhookEvents = 'phone.callee_call_element_completed\nphone.caller_call_element_completed'
   const clientIdHint = status?.app_credentials?.client_id_hint
   const hasOAuthPair = form.client_id.trim() && form.client_secret.trim()
@@ -421,6 +506,54 @@ function ZoomPhoneAppSetup({
             </div>
           </div>
         )}
+        <div>
+          <div className="flex items-center justify-between gap-3 mb-1">
+            <p className="block text-[11px] font-bold uppercase tracking-wider text-brand-muted">
+              Required Zoom Phone OAuth API scopes
+            </p>
+            <a
+              href={PHONE_SCOPE_DOCS_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="text-[11px] font-semibold text-brand-ink underline underline-offset-2"
+            >
+              Zoom Phone → Call Logs reference
+            </a>
+          </div>
+          <div className="flex gap-2">
+            <div className="flex-1 min-w-0 rounded-lg bg-brand-surface border border-brand-line divide-y divide-brand-line">
+              {Object.entries(PHONE_SCOPE_LABELS).map(([scope, label]) => (
+                <div key={scope} className="px-3 py-2">
+                  <div className="text-[11px] font-semibold text-brand-ink">{label}</div>
+                  <code className="block mt-0.5 text-[11px] text-brand-ink-2 break-all">{scope}</code>
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => onCopy(phoneScopes, 'Required Phone scope list')}
+              className="w-10 h-10 inline-flex items-center justify-center rounded-lg border border-brand-line text-brand-ink hover:bg-brand-surface"
+              title="Copy required Phone scopes"
+            >
+              <Copy size={15} />
+            </button>
+          </div>
+          <p className="mt-1 text-[11px] text-brand-muted">
+            In Zoom, choose both account/admin granular permissions under Zoom Phone → Call Logs. Do not add classic, write, delete, or manage scopes.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-amber-900">
+          <div className="flex gap-2">
+            <ShieldCheck size={16} className="mt-0.5 shrink-0" />
+            <div>
+              <div className="text-xs font-bold">Start authorization from LawHand</div>
+              <div className="text-xs mt-0.5 opacity-90">
+                After saving the app below, return to this panel and click Connect Zoom Phone. Do not use the Add button or generated OAuth link in Zoom Marketplace; those paths do not start LawHand’s tenant-bound request with the required state value.
+              </div>
+            </div>
+          </div>
+        </div>
         {webhookUrl && (
           <div>
             <p className="block text-[11px] font-bold uppercase tracking-wider text-brand-muted mb-1">
@@ -504,6 +637,9 @@ function ZoomPhoneAppSetup({
               <span className="mt-1 block text-[11px] font-semibold text-green-700">Webhook signing is configured.</span>
             )}
           </label>
+          <p className="lg:col-span-2 text-[11px] text-brand-muted">
+            Copy the client ID and client secret from the same Zoom environment tab used for the callback, scopes, and webhook—Development or Production, never a mix. If Zoom regenerated the secret, enter both current values here and save before reconnecting.
+          </p>
           <div className="lg:col-span-2 flex flex-wrap gap-2">
             <button
               type="submit"
@@ -658,7 +794,10 @@ function ScopeChecklist({ required, missing }) {
             <div key={scope} className="flex items-center gap-2 px-3 py-2 bg-brand-bg">
               <Icon size={15} className={isMissing ? 'text-red-600' : 'text-green-600'} />
               <span className={`text-xs ${isMissing ? 'text-red-700' : 'text-brand-ink'}`}>
-                {PHONE_SCOPE_LABELS[scope] || scope}
+                <span className="block">{PHONE_SCOPE_LABELS[scope] || scope}</span>
+                {PHONE_SCOPE_LABELS[scope] && (
+                  <code className="block mt-0.5 text-[10px] text-brand-muted break-all">{scope}</code>
+                )}
               </span>
               {isMissing && <span className="ml-auto text-[10px] font-bold uppercase text-red-600">Missing</span>}
             </div>

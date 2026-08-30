@@ -137,7 +137,10 @@ class CourtListenerRepository:
         # Keeping these predicates in the shared filter list prevents disabled
         # sources and superseded documents from leaking through FTS or dense
         # candidates.
-        filters = ["s.enabled IS TRUE", "d.document_status = 'current'"]
+        filters = [
+            "s.enabled IS TRUE",
+            "d.document_status IN ('current', 'current_with_supplement')",
+        ]
         filter_params: list[Any] = []
         if jurisdiction:
             filters.append("d.jurisdiction = %s")

@@ -23,11 +23,22 @@ LawHand normalizes this into a tenant communication record that can be matched t
 
 Use the firm's approved Zoom administrator and account. Verify the account identifier, application type, redirect configuration, required administrative scopes, active status, and intended call population.
 
+Create a private, admin-managed Zoom General App. Under **Zoom Phone → Call Logs**, add both account/admin granular scopes:
+
+- `phone:read:list_call_logs:admin` for account call-history lists; and
+- `phone:read:call_log:admin` for call-history detail and call-element reads.
+
+Do not add classic, write, delete, or manage scopes. Copy the client ID and client secret from the same Zoom environment tab used for the callback, scopes, and webhook—Development or Production, never a mix. After saving the app credentials in LawHand, start authorization with **Connect Zoom Phone** in the LawHand panel. Do not use **Add** or the generated OAuth URL from Zoom Marketplace; neither starts LawHand's tenant-bound OAuth request with the required `state` value.
+
 Webhook secret tokens and client credentials are secrets. Enter them only in the designated protected fields and store recovery material in the approved secret manager.
 
 ## Authorize and test
 
-Complete the provider grant, then review displayed status for authorization, scopes, webhook configuration, credential health, and account alignment. Make an approved demo call and verify:
+Use the four-stage progress row to finish setup in order: save app credentials, authorize the Zoom account, verify the Phone API scopes, and verify real-time calls. Each stage is independent. A saved app is not yet authorized, and working history sync does not prove webhook delivery.
+
+Complete the provider grant from **Connect Zoom Phone**. LawHand returns to this Zoom panel with either a verified success or a specific recovery message. If Zoom rejects the Client ID or Client Secret, copy both current values from the same Development or Production environment and save them together before reconnecting. Replacing that pair intentionally disconnects the prior grant.
+
+Then review displayed status for authorization, scopes, webhook configuration, credential health, and account alignment. Make an approved demo call and verify:
 
 - the call appears in [Call Intake](/intake/dashboard);
 - caller and direction metadata are correct;

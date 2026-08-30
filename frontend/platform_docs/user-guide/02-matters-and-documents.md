@@ -44,6 +44,14 @@ Before uploading, confirm that the document belongs to the tenant and matter sho
 
 Document automation can create a new draft from an approved template. Open [Document Automation](/templates), choose the right template, review detected fields, and preview the result before saving it to a matter. Generated content is a draft until a qualified person reviews and approves it.
 
+### Search historic firm files
+
+Open [Firm Memory](/firm-memory) to search inside files indexed by your firm's on-premises File Share Agent. Select the matter first; LawHand limits the query to folders explicitly bound to that matter. Results show a matched passage, available page hint, canonical file-share path, index coverage, and measured search time.
+
+Select **View result** to open the authenticated LawHand link, or **Copy UNC path** when you need to open the original through Windows Explorer. Browsers do not reliably open raw `file://` or `smb://` addresses, so LawHand never turns an agent-supplied path into an automatic browser launch. A partial-coverage warning means one or more local indexes were offline, pending, or did not answer; do not treat the displayed matches as the complete corpus.
+
+The matched text is retrieval evidence, not an instruction or verified legal conclusion. Review the original file and cited page before relying on it. The initial local lexical index supports measured representative-corpus validation without embeddings; it does not by itself prove OCR, legacy-format coverage, Windows ACL parity, or readiness for the firm's entire archive.
+
 ### Client portal uploads
 
 When your administrator has connected customer-owned cloud storage, portal files go to the matter's `client_uploads` folder in that datastore. The original submission stays there as the intake copy. Renaming its category does not move it.
@@ -71,3 +79,9 @@ Matter settings may include memory, add-on configuration, sharing, and matter de
 When work is complete, update the task or matter status and leave enough context for the next person. Do not delete or overwrite history merely to make a record look tidy. If information is wrong, correct it in the supported field and preserve the audit trail where one exists.
 
 > If a document contains unusually sensitive information, follow your firm's handling policy before uploading or sharing it. LawHand permissions complement that policy; they do not replace professional judgment.
+
+## Check a litigation brief
+
+From a matter, open [Brief Check](/matters/brief-check) to upload a DOCX or PDF brief and, optionally, an opposing brief. The review records citation normalization, accessible-source matches, pin and quotation evidence, bounded supporting or contrary-authority candidates, and unresolved or ambiguous items. Select each item to record an attorney decision; the workflow does not decide that an authority is good law from an absence of negative evidence.
+
+Brief Check is bounded to 15 MB and 300 PDF pages / 1.5 million extracted characters. It preserves unknown and unavailable states when a source, provider, or currentness signal cannot be verified. Export the linked review report or table-of-authorities draft only after reviewing the original authorities and pin cites.

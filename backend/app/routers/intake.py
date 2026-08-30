@@ -23,6 +23,7 @@ from app.middleware.tenant import get_current_user
 from app.models.contact import Contact, Lead
 from app.models.intake_dashboard import IntakeCallDraft
 from app.models.plugin import Matter
+from app.models.conversion_loop import LeadFunnelEvent
 from app.schemas.contact import (
     LeadConvertRequest,
     LeadCreate,
@@ -295,6 +296,7 @@ async def get_lead(
     tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
     lead = await _load_lead(db, lead_id, tenant_id)
+
     return await _lead_to_response(db, lead, tenant_id)
 
 
@@ -338,6 +340,15 @@ async def convert_lead_to_matter(
 
     lead = await _load_lead(db, lead_id, tenant_id)
 
+    # Publicly acquired leads must pass the explicit review gate. Legacy
+    # receptionist imports retain their established conversion behavior while
+    # firms migrate those records into the new triage lifecycle.
+    if lead.source == "website" and lead.conflict_check_status != "cleared":
+        raise HTTPException(
+            status_code=409,
+            detail="A lead must have an explicitly cleared conflict review before conversion",
+        )
+
     if lead.status == "matter_opened" and lead.matter_id:
         raise HTTPException(
             status_code=409,
@@ -369,6 +380,15 @@ async def convert_lead_to_matter(
         contact.contact_type = "client"
     lead.status = "matter_opened"
     lead.matter_id = matter.id
+    db.add(
+        LeadFunnelEvent(
+            tenant_id=uid,
+            lead_id=lead.id,
+            event_type="matter_opened",
+            source=lead.source,
+            metadata_json={"matter_id": str(matter.id)},
+        )
+    )
 
     await db.commit()
     await db.refresh(matter)

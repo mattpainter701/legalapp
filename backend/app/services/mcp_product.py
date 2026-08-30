@@ -13,8 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.models.mcp_product import MCPProductKey, MCPUsageEvent
-from app.models.tenant import Tenant
 from app.models.durable_job import DurableJob
+from app.models.tenant import Tenant
+from app.models.user import User
 from app.services.gateway_privacy import retained_gateway_query_text
 from app.services.durable_jobs import enqueue_job
 
@@ -110,6 +111,87 @@ def current_month_window(now: datetime | None = None) -> tuple[datetime, datetim
     return start, end
 
 
+def _aware_utc(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def product_key_status(
+    product_key: MCPProductKey | Any, *, now: datetime | None = None
+) -> str:
+    if (
+        not getattr(product_key, "is_active", False)
+        or getattr(product_key, "revoked_at", None) is not None
+    ):
+        return "revoked"
+    expires_at = getattr(product_key, "expires_at", None)
+    if expires_at is not None and _aware_utc(expires_at) <= (
+        now or datetime.now(timezone.utc)
+    ):
+        return "expired"
+    return "active"
+
+
+async def _validate_assignee(
+    db: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    assigned_to_user_id: uuid.UUID | None,
+) -> None:
+    if assigned_to_user_id is None:
+        return
+    assignee = await db.scalar(
+        select(User).where(
+            User.id == assigned_to_user_id,
+            User.tenant_id == tenant_id,
+            User.is_active.is_(True),
+        )
+    )
+    if assignee is None:
+        raise HTTPException(
+            status_code=400, detail="Assigned staff member is unavailable"
+        )
+
+
+def _validate_key_controls(
+    *,
+    monthly_call_limit: int,
+    burst_limit_per_minute: int,
+    monthly_budget_cents: int | None,
+    unit_price_cents: int,
+    expires_at: datetime | None,
+) -> None:
+    if (
+        not isinstance(monthly_call_limit, int)
+        or isinstance(monthly_call_limit, bool)
+        or not 1 <= monthly_call_limit <= settings.MCP_MAX_MONTHLY_CALL_LIMIT
+    ):
+        raise HTTPException(status_code=400, detail="Invalid monthly MCP call limit")
+    if (
+        not isinstance(burst_limit_per_minute, int)
+        or isinstance(burst_limit_per_minute, bool)
+        or not 1 <= burst_limit_per_minute <= settings.MCP_MAX_BURST_LIMIT_PER_MINUTE
+    ):
+        raise HTTPException(status_code=400, detail="Invalid MCP burst limit")
+    if unit_price_cents < 1:
+        raise HTTPException(status_code=503, detail="MCP product price is invalid")
+    if monthly_budget_cents is not None:
+        if (
+            not isinstance(monthly_budget_cents, int)
+            or isinstance(monthly_budget_cents, bool)
+            or monthly_budget_cents > 2_000_000_000
+        ):
+            raise HTTPException(status_code=400, detail="Invalid monthly MCP budget")
+        if monthly_budget_cents < unit_price_cents:
+            raise HTTPException(
+                status_code=400,
+                detail="Monthly budget must cover at least one successful MCP call",
+            )
+    if expires_at is not None and _aware_utc(expires_at) <= datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=400, detail="Key expiration must be in the future"
+        )
+
+
 async def deliver_mcp_meter_event(payload: dict[str, Any]) -> dict[str, str]:
     """Deliver one durable usage event to Stripe with a stable identifier."""
     if not settings.STRIPE_SECRET_KEY or not settings.STRIPE_MCP_METER_EVENT_NAME:
@@ -159,6 +241,10 @@ async def create_product_key(
     monthly_call_limit: int | None = None,
     burst_limit_per_minute: int | None = None,
     allowed_tools: list[str] | None = None,
+    purpose: str | None = None,
+    assigned_to_user_id: uuid.UUID | None = None,
+    monthly_budget_cents: int | None = None,
+    expires_at: datetime | None = None,
 ) -> tuple[MCPProductKey, str]:
     tenant = await db.scalar(select(Tenant).where(Tenant.id == tenant_id))
     if not tenant:
@@ -166,25 +252,104 @@ async def create_product_key(
     ensure_mcp_product_access(tenant)
     monthly_limit = monthly_call_limit or settings.MCP_DEFAULT_MONTHLY_CALL_LIMIT
     burst_limit = burst_limit_per_minute or settings.MCP_DEFAULT_BURST_LIMIT_PER_MINUTE
-    if not 1 <= monthly_limit <= settings.MCP_MAX_MONTHLY_CALL_LIMIT:
-        raise HTTPException(status_code=400, detail="Invalid monthly MCP call limit")
-    if not 1 <= burst_limit <= settings.MCP_MAX_BURST_LIMIT_PER_MINUTE:
-        raise HTTPException(status_code=400, detail="Invalid MCP burst limit")
+    unit_price_cents = settings.MCP_PRODUCT_CALL_PRICE_CENTS
+    _validate_key_controls(
+        monthly_call_limit=monthly_limit,
+        burst_limit_per_minute=burst_limit,
+        monthly_budget_cents=monthly_budget_cents,
+        unit_price_cents=unit_price_cents,
+        expires_at=expires_at,
+    )
+    await _validate_assignee(
+        db,
+        tenant_id=tenant_id,
+        assigned_to_user_id=assigned_to_user_id,
+    )
+    clean_name = name.strip() or "MCP API key"
+    clean_purpose = (purpose or "").strip() or None
+    if len(clean_name) > 120:
+        raise HTTPException(status_code=400, detail="Key name is too long")
+    if clean_purpose is not None and len(clean_purpose) > 255:
+        raise HTTPException(status_code=400, detail="Key purpose is too long")
     raw_key = generate_product_key()
     product_key = MCPProductKey(
         tenant_id=tenant_id,
-        name=name.strip() or "MCP API key",
+        name=clean_name,
+        purpose=clean_purpose,
+        assigned_to_user_id=assigned_to_user_id,
         key_hash=hash_key(raw_key),
         key_prefix=raw_key[:12],
         allowed_tools=normalize_allowed_tools(allowed_tools),
         monthly_call_limit=monthly_limit,
+        monthly_budget_cents=monthly_budget_cents,
+        unit_price_cents=unit_price_cents,
         burst_limit_per_minute=burst_limit,
+        expires_at=expires_at,
         created_by_user_id=user_id,
     )
     db.add(product_key)
     await db.commit()
     await db.refresh(product_key)
     return product_key, raw_key
+
+
+async def update_product_key(
+    db: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    key_id: uuid.UUID,
+    changes: dict[str, Any],
+) -> MCPProductKey | None:
+    product_key = await db.scalar(
+        select(MCPProductKey).where(
+            MCPProductKey.id == key_id,
+            MCPProductKey.tenant_id == tenant_id,
+        )
+    )
+    if product_key is None:
+        return None
+    if product_key_status(product_key) == "revoked":
+        raise HTTPException(status_code=409, detail="Revoked MCP keys cannot be edited")
+
+    assigned_to_user_id = changes.get(
+        "assigned_to_user_id", product_key.assigned_to_user_id
+    )
+    await _validate_assignee(
+        db,
+        tenant_id=tenant_id,
+        assigned_to_user_id=assigned_to_user_id,
+    )
+    monthly_limit = changes.get("monthly_call_limit", product_key.monthly_call_limit)
+    burst_limit = changes.get(
+        "burst_limit_per_minute", product_key.burst_limit_per_minute
+    )
+    budget_cents = changes.get("monthly_budget_cents", product_key.monthly_budget_cents)
+    expires_at = changes.get("expires_at", product_key.expires_at)
+    _validate_key_controls(
+        monthly_call_limit=monthly_limit,
+        burst_limit_per_minute=burst_limit,
+        monthly_budget_cents=budget_cents,
+        unit_price_cents=product_key.unit_price_cents,
+        expires_at=expires_at,
+    )
+
+    for field, value in changes.items():
+        if field == "name":
+            value = str(value or "").strip()
+            if not value:
+                raise HTTPException(status_code=400, detail="Key name is required")
+            if len(value) > 120:
+                raise HTTPException(status_code=400, detail="Key name is too long")
+        elif field == "purpose":
+            value = str(value or "").strip() or None
+            if value is not None and len(value) > 255:
+                raise HTTPException(status_code=400, detail="Key purpose is too long")
+        elif field == "allowed_tools":
+            value = normalize_allowed_tools(value)
+        setattr(product_key, field, value)
+    await db.commit()
+    await db.refresh(product_key)
+    return product_key
 
 
 async def list_product_keys(
@@ -221,19 +386,32 @@ async def resolve_product_key(
 ) -> tuple[MCPProductKey, Tenant]:
     await db.execute(text("SELECT set_config('app.rls_bypass', 'on', true)"))
     try:
-        result = await db.execute(
-            select(MCPProductKey, Tenant)
-            .join(Tenant, Tenant.id == MCPProductKey.tenant_id)
-            .where(MCPProductKey.key_hash == hash_key(raw_key))
-        )
+        row = (
+            await db.execute(
+                select(MCPProductKey, Tenant)
+                .join(Tenant, Tenant.id == MCPProductKey.tenant_id)
+                .where(MCPProductKey.key_hash == hash_key(raw_key))
+            )
+        ).first()
+        assigned_user = None
+        if row and row[0].assigned_to_user_id is not None:
+            assigned_user = await db.scalar(
+                select(User).where(User.id == row[0].assigned_to_user_id)
+            )
     finally:
         await db.execute(text("SELECT set_config('app.rls_bypass', 'off', true)"))
-    row = result.first()
     if not row:
         raise HTTPException(status_code=401, detail="Invalid MCP API key")
     product_key, tenant = row
-    if not product_key.is_active or product_key.revoked_at is not None:
+    status = product_key_status(product_key)
+    if status == "revoked":
         raise HTTPException(status_code=401, detail="MCP API key has been revoked")
+    if status == "expired":
+        raise HTTPException(status_code=401, detail="MCP API key has expired")
+    if product_key.assigned_to_user_id is not None and (
+        assigned_user is None or not assigned_user.is_active
+    ):
+        raise HTTPException(status_code=401, detail="MCP API key assignee is inactive")
     ensure_mcp_product_access(tenant)
     return product_key, tenant
 
@@ -314,6 +492,16 @@ async def enforce_product_key_quota(
         raise HTTPException(
             status_code=429, detail="MCP API key monthly quota exceeded"
         )
+    budget_cents = getattr(product_key, "monthly_budget_cents", None)
+    if budget_cents is not None:
+        unit_price_cents = int(
+            getattr(product_key, "unit_price_cents", None)
+            or settings.MCP_PRODUCT_CALL_PRICE_CENTS
+        )
+        if (used + 1) * unit_price_cents > int(budget_cents):
+            raise HTTPException(
+                status_code=429, detail="MCP API key monthly budget exceeded"
+            )
 
 
 async def enforce_research_oauth_quota(
@@ -482,6 +670,66 @@ async def usage_summary(
             for key_id, calls, results in by_key_result.all()
         ],
     }
+
+
+async def monthly_key_usage(
+    db: AsyncSession, tenant_id: uuid.UUID
+) -> dict[str, dict[str, int | float]]:
+    start, end = current_month_window()
+    rows = (
+        await db.execute(
+            select(
+                MCPUsageEvent.product_key_id,
+                MCPUsageEvent.status_code,
+                func.count(MCPUsageEvent.id),
+                func.coalesce(func.sum(MCPUsageEvent.result_count), 0),
+            )
+            .where(
+                MCPUsageEvent.tenant_id == tenant_id,
+                MCPUsageEvent.product_key_id.is_not(None),
+                MCPUsageEvent.created_at >= start,
+                MCPUsageEvent.created_at < end,
+            )
+            .group_by(MCPUsageEvent.product_key_id, MCPUsageEvent.status_code)
+        )
+    ).all()
+    key_prices = {
+        key_id: int(price or settings.MCP_PRODUCT_CALL_PRICE_CENTS)
+        for key_id, price in (
+            await db.execute(
+                select(MCPProductKey.id, MCPProductKey.unit_price_cents).where(
+                    MCPProductKey.tenant_id == tenant_id
+                )
+            )
+        ).all()
+    }
+    summary: dict[str, dict[str, int | float]] = {}
+    for key_id, status_code, count, results in rows:
+        item = summary.setdefault(
+            str(key_id),
+            {
+                "calls": 0,
+                "successful_calls": 0,
+                "failed_calls": 0,
+                "results": 0,
+                "charge_cents": 0,
+                "charge_usd": 0.0,
+            },
+        )
+        call_count = int(count or 0)
+        item["calls"] += call_count
+        item["results"] += int(results or 0)
+        if int(status_code) < 400:
+            item["successful_calls"] += call_count
+        else:
+            item["failed_calls"] += call_count
+    for key_id, item in summary.items():
+        charge_cents = int(item["successful_calls"]) * key_prices.get(
+            uuid.UUID(key_id), settings.MCP_PRODUCT_CALL_PRICE_CENTS
+        )
+        item["charge_cents"] = charge_cents
+        item["charge_usd"] = charge_cents / 100
+    return summary
 
 
 async def metering_outbox_summary(

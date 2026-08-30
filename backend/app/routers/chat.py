@@ -81,6 +81,7 @@ from app.utils.guardrails import (
 )
 from app.services.error_tracker import capture_chat_error
 from app.services.usage_limits import check_token_budget
+from app.services.compliance import chat_attachment_ttl_days
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +106,9 @@ _STREAM_INTERRUPTED_MESSAGE = (
     "Retry this message before relying on the analysis."
 )
 _INTERNAL_DOCUMENT_URL_RE = re.compile(r"^/api/documents/[0-9a-fA-F-]{36}/download$")
+_INTERNAL_FIRM_MEMORY_URL_RE = re.compile(
+    r"^/firm-memory\?matter=[0-9a-fA-F-]{36}&file=[0-9a-fA-F-]{36}$"
+)
 
 
 def _request_redis(request: Request):
@@ -160,6 +164,10 @@ def _normalize_source_url(value: str | None) -> str | None:
     # as /opinion/ and are normalized below.
     if _INTERNAL_DOCUMENT_URL_RE.fullmatch(url):
         return url
+    if _INTERNAL_FIRM_MEMORY_URL_RE.fullmatch(url):
+        return url
+    if url.startswith("/firm-memory"):
+        return None
     if url.startswith("/api/"):
         return None
     if url.startswith("/"):
@@ -208,6 +216,7 @@ def _source_label(source_type: str | None) -> str:
         "cloud": "Cloud context",
         "matter_context": "Matter context",
         "tenant_document": "Firm context",
+        "firm_memory": "Firm memory",
     }
     return labels.get(source_type or "", "Context")
 
@@ -1975,9 +1984,10 @@ async def upload_chat_attachment(
                 str(conversation_id),
                 str(document_id),
             )
-            expires_at = datetime.now(timezone.utc) + timedelta(
-                days=settings.CHAT_ATTACHMENT_TTL_DAYS
+            retention_days = await chat_attachment_ttl_days(
+                locked_db, locked_user.tenant_id
             )
+            expires_at = datetime.now(timezone.utc) + timedelta(days=retention_days)
 
         os.makedirs(storage_dir, exist_ok=True)
         storage_path = os.path.join(storage_dir, safe_filename)

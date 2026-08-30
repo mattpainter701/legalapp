@@ -49,6 +49,7 @@ AUTH_LIMITS = {
     "/api/marketing/demo-requests": (5, 3600),
     "/api/marketing/events": (60, 3600),
 }
+PUBLIC_INTAKE_LIMIT = (20, 900)
 # AUTH_LIMITS above is enforced for POST only. These paths are unauthenticated
 # GETs that still cost server-side state, so they need the same IP limiter.
 # nginx limits them at the edge; this is the layer that also covers traffic
@@ -62,6 +63,7 @@ AUTH_GET_LIMITS = {
 SKIP_PREFIXES = (
     "/api/auth/",
     "/api/billing/webhook",
+    "/api/matters/esign/webhooks",
     "/api/integrations/zoom-phone/webhook",
     "/api/integrations/teams/voice/webhook",
     "/api/platform/",  # handled by the dedicated operator limiter below
@@ -238,6 +240,29 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             if request.method == "GET"
             else None
         )
+        # Public intake is intentionally limited by source IP, independently
+        # of tenant authentication, so a single form cannot be used as a spam
+        # relay. The dynamic slug path is matched here rather than trusting
+        # only an edge proxy configuration.
+        if request.method == "POST" and path.startswith("/api/public/intake/"):
+            key = f"rate:public-intake:{_client_ip(request)}"
+            limit, window_seconds = PUBLIC_INTAKE_LIMIT
+            try:
+                count = (
+                    await self._redis.incr(key)
+                    if self._redis
+                    else _fallback_auth_increment(key, window_seconds)
+                )
+                if self._redis and count == 1:
+                    await self._redis.expire(key, window_seconds)
+            except aioredis.RedisError:
+                count = _fallback_auth_increment(key, window_seconds)
+            if count > limit:
+                return JSONResponse(
+                    status_code=429,
+                    content={"detail": "Public intake rate limit exceeded"},
+                    headers={"Retry-After": str(window_seconds)},
+                )
         if method_limits is not None:
             for auth_path, (limit, window_seconds) in method_limits.items():
                 if path == auth_path:

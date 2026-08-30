@@ -59,9 +59,9 @@ Set these non-secret relationships in `.env`:
 - When Restic is not configured, `OFFSITE_RESTORE_PUBLIC_KEY_FILE` points to the
   pinned public half of a dedicated recovery-evidence signing key. Keep the
   private half only in the encrypted off-host recovery environment.
-- `ZOOM_REQUIRED_TENANT_ID` is the sold tenant UUID and
-  `ZOOM_REQUIRED_TENANT_PLAN=intake-only`. Strict checks are bound to that exact
-  active tenant and plan; another configured/demo tenant cannot satisfy launch.
+- `ZOOM_REQUIRED_TENANT_ID` is an optional selector for the dedicated Zoom
+  provider check. When requested, validation is bound to that exact active
+  tenant and its Zoom configuration, independent of commercial plan.
 - `EMAIL_ENABLED=false` is the intentional production policy. LawHand does not
   operate an SMTP sender. Assignment alerts are logged as unavailable and
   explicit reminder requests return a clear service-unavailable error; tasks
@@ -480,26 +480,34 @@ ENV_FILE=.env COMPOSE_FILE=docker-compose.hypervisor.yml bash scripts/production
 For repeatable post-deploy evidence, dispatch the GitHub Actions
 **Production acceptance** workflow from `main` with the exact deployed SHA.
 It verifies that SHA is both current `main` and the `production` tag, then runs
-the same strict host gate on Skynet and checks public readiness, host disks,
+the platform host gate on Skynet and checks public readiness, host disks,
 backups, frontend health, and `/api/version` commit identity. It is read-only
 with respect to provider configuration and prints no secret values. The
 runner's root-owned `lawhand-deploy-from-github` entrypoint must include its
 `accept` operation before dispatching the workflow.
 
-`ZOOM_REQUIRED=true` is the validated default. It requires
-`ZOOM_REQUIRED_TENANT_ID` to be active, configured, healthy, and on the expected
-`intake-only` plan. This strict command must pass
-after tenant Zoom setup and before go-live, even when the host was created with
-`BOOTSTRAP_MODE=true`.
+Zoom Phone provider acceptance is intentionally separate from the global
+platform release gate. Run it explicitly while completing or certifying the
+integration:
+
+```bash
+ENV_FILE=.env COMPOSE_FILE=docker-compose.hypervisor.yml ZOOM_REQUIRED=true \
+  bash scripts/production_check.sh
+```
+
+That dedicated check requires `ZOOM_REQUIRED_TENANT_ID` to be active,
+configured, and healthy. The commercial tenant plan is not a Zoom readiness
+signal. Normal deployments and the GitHub **Production acceptance** workflow
+use `ZOOM_REQUIRED=false`, so one customer's provider grant cannot block an
+unrelated platform release.
 
 It fails on excessive disk use, a missing/inactive host disk timer, a stale or
 malformed aggregate, any monitored filesystem at the configured threshold,
 missing/unhealthy containers, PostgreSQL, authenticated Redis, missing
-per-tenant scheduler heartbeats, stale/exhausted durable jobs, incomplete Zoom
-Phone configuration, failed Zoom CRC ingress, public HTTP, or a TLS certificate
-inside the 14-day floor. The host probe deduplicates filesystem identities while
-covering `DISK_PATH`, uploads, backups, every resolved Compose bind, and
-DockerRootDir (which covers named volumes). The check verifies the intentional
+per-tenant scheduler heartbeats, stale/exhausted durable jobs, public HTTP, or a
+TLS certificate inside the 14-day floor. The host probe deduplicates filesystem
+identities while covering `DISK_PATH`, uploads, backups, every resolved Compose
+bind, and DockerRootDir (which covers named volumes). The check verifies the intentional
 email-disabled policy and relies on the GitHub production-health issue workflow
 for operator incident delivery. If SMTP is ever explicitly enabled later, the
 check still fails closed on incomplete or unauthenticated configuration.
@@ -519,7 +527,7 @@ There must be one current heartbeat row for every active tenant and none with a 
 Follow the complete [Zoom Phone tenant app setup](ZOOM_PHONE_TENANT_APP_SETUP.md)
 for customer prerequisites, current Marketplace screens, OAuth and webhook
 secret handling, authorization, rotations, and troubleshooting. The checks
-below are the release-gate summary, not a substitute for that onboarding
+below are the dedicated provider-gate summary, not a substitute for that onboarding
 procedure.
 
 Register these exact HTTPS URLs in the Zoom app:

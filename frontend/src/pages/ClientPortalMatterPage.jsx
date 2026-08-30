@@ -10,6 +10,7 @@ import {
   uploadClientPortalDocument,
   downloadClientPortalDocumentUrl,
   listClientPortalInvoices,
+  createClientPortalInvoicePayment,
   downloadClientPortalInvoiceUrl,
   listClientPortalSignatures,
   signClientPortalSignature,
@@ -1021,6 +1022,8 @@ function SignaturesTab({ onSessionError, onChanged }) {
 // ── Invoices ────────────────────────────────────────────────────────────────
 
 function InvoicesTab({ onSessionError }) {
+  const [paying, setPaying] = useState(null)
+  const [payError, setPayError] = useState('')
   const loader = useCallback(() => listClientPortalInvoices(), [])
   const { data, loading, error, reload } = usePortalResource(
     loader,
@@ -1034,9 +1037,22 @@ function InvoicesTab({ onSessionError }) {
   const invoices = data?.invoices || []
   const outstanding = Number(data?.outstanding_balance || 0)
   const overdue = Number(data?.overdue_balance || 0)
+  const pay = async (invoiceId) => {
+    setPaying(invoiceId)
+    setPayError('')
+    try {
+      const result = await createClientPortalInvoicePayment(invoiceId)
+      if (!result.checkout_url) throw new Error('Payment provider did not return a checkout URL')
+      window.location.assign(result.checkout_url)
+    } catch (err) {
+      if (!onSessionError(err)) setPayError(errorMessage(err, 'Unable to start payment. Please try again.'))
+      setPaying(null)
+    }
+  }
 
   return (
     <div className="space-y-4">
+      {payError && <ErrorBanner message={payError} onRetry={() => setPayError('')} />}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <SummaryTile label="Billed to date" value={fmtMoney(data?.total_billed)} />
         <SummaryTile label="Paid" value={fmtMoney(data?.total_paid)} />
@@ -1090,14 +1106,14 @@ function InvoicesTab({ onSessionError }) {
                     >
                       <Download size={14} /> PDF
                     </a>
-                    {Number(inv.balance_due) > 0 && inv.stripe_payment_link && (
+                    {Number(inv.balance_due) > 0 && (
                       <a
-                        href={inv.stripe_payment_link}
-                        target="_blank"
-                        rel="noreferrer"
+                        href={inv.stripe_payment_link || '#'}
+                        onClick={(event) => { event.preventDefault(); pay(inv.id) }}
+                        aria-disabled={paying === inv.id}
                         className="px-3 py-1.5 bg-brand-green text-white rounded-lg hover:opacity-90 transition-all whitespace-nowrap"
                       >
-                        Pay now
+                        <CreditCard size={14} className="inline mr-1" /> {paying === inv.id ? 'Opening…' : 'Pay now'}
                       </a>
                     )}
                   </div>

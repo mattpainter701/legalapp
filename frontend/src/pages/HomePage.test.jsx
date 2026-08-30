@@ -96,7 +96,7 @@ describe('HomePage launch routing and claims', () => {
     expect(screen.queryByText(/Clarity Legal/i)).not.toBeInTheDocument()
   })
 
-  it('publishes AI chat, MCP preview, and intended pricing paths', () => {
+  it('publishes AI chat, Research MCP, and pricing paths', () => {
     render(
       <MemoryRouter>
         <HomePage />
@@ -110,7 +110,7 @@ describe('HomePage launch routing and claims', () => {
     expect(screen.getAllByText('$89')).not.toHaveLength(0)
     expect(screen.getAllByText(/\$0\.45/)).not.toHaveLength(0)
     expect(screen.getByRole('link', { name: /Explore LawHand Chat/i })).toHaveAttribute('href', '/product/chat')
-    expect(screen.getByRole('link', { name: /Explore the MCP preview/i })).toHaveAttribute('href', '/product/mcp')
+    expect(screen.getByRole('link', { name: /Explore Research MCP/i })).toHaveAttribute('href', '/product/mcp')
     expect(screen.getByRole('link', { name: 'View full pricing' })).toHaveAttribute('href', '/pricing')
     expect(screen.getByRole('link', { name: /See the full platform/i })).toHaveAttribute('href', '/product')
   })

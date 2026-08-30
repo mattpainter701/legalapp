@@ -3,6 +3,7 @@ import { createPlatformSession, getPlatformTenants, getPlatformUsage, getPlatfor
 import { Activity, AlertTriangle, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3, FileText, Globe, Key, Plus, Trash2, RefreshCw, CheckCircle, XCircle, Cpu, ArrowDown, ArrowUp, Save, Settings2, PhoneCall, Video } from 'lucide-react'
 import { useConfirm } from '../components/dialog/ConfirmProvider'
 import { getPlatformDemoWorkspaces, terminatePlatformDemoWorkspace } from '../api'
+import PlatformComplianceCard from '../components/PlatformComplianceCard'
 
 const apiErrorMessage = (error, fallback) => {
   const detail = error?.response?.data?.detail
@@ -35,6 +36,29 @@ function TierBadge({ tier }) {
     <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${colors[tier] || colors.payg}`}>
       {labels[tier] || tier}
     </span>
+  )
+}
+
+function TenantTypeBadge({ type }) {
+  const isDemo = type === 'demo'
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${isDemo ? 'bg-brand-ink/10 text-brand-ink border-brand-ink/20' : 'bg-brand-accent/10 text-brand-accent border-brand-accent/20'}`}>
+      {isDemo ? 'Demo' : 'Platform'}
+    </span>
+  )
+}
+
+const tenantType = (tenant) => tenant.tenant_type || (tenant.billing_tier === 'demo' ? 'demo' : 'platform')
+
+function TenantExpiry({ tenant }) {
+  if (tenantType(tenant) !== 'demo') return <span className="text-brand-muted">—</span>
+  if (!tenant.expires_at) return <span className="text-brand-rose">Missing</span>
+  const expiresAt = new Date(tenant.expires_at)
+  const expired = expiresAt.getTime() <= Date.now()
+  return (
+    <time dateTime={tenant.expires_at} className={expired ? 'text-brand-rose' : 'text-brand-ink-2'}>
+      {expired ? 'Expired ' : ''}{expiresAt.toLocaleString()}
+    </time>
   )
 }
 
@@ -314,7 +338,7 @@ export function ResearchMcpReleaseControls({ platformKey, onAuthError }) {
               {[
                 ['Official MCP URL', connection.streamable_http || 'https://research.getlawhand.com/api/mcp'],
                 ['Supported shorthand', connection.shorthand || 'https://research.getlawhand.com'],
-                ['Auth header', `${connection.auth_header || 'X-MCP-API-Key'}: lhrk_...`],
+                ['Auth header', `${connection.auth_header || 'Authorization'}: ${connection.auth_scheme || 'Bearer'} lhrk_...`],
               ].map(([label, value]) => (
                 <div key={label} className="rounded-lg border border-brand-line bg-brand-bg px-3 py-2">
                   <p className="text-[10px] font-bold uppercase tracking-wider text-brand-muted">{label}</p>
@@ -355,9 +379,11 @@ export function ResearchMcpReleaseControls({ platformKey, onAuthError }) {
                         <td className="px-5 py-3">
                           <p className="text-sm font-medium text-brand-ink font-sans">{key.name}</p>
                           <p className="text-xs text-brand-muted font-mono">{key.api_key_masked}</p>
+                          {key.purpose && <p className="mt-1 text-xs text-brand-muted">{key.purpose}</p>}
+                          <p className="mt-1 text-xs text-brand-muted">{key.assigned_to?.name || key.assigned_to?.email || 'Shared / unassigned'}</p>
                         </td>
-                        <td className="px-5 py-3 text-center text-sm text-brand-ink-2 font-sans">{(key.calls_30d || 0).toLocaleString()}</td>
-                        <td className="px-5 py-3 text-center text-sm text-brand-muted font-sans">{key.monthly_call_limit ?? 'Not configured'}</td>
+                        <td className="px-5 py-3 text-center text-sm text-brand-ink-2 font-sans"><p>{(key.calls_30d || 0).toLocaleString()}</p><p className="text-xs text-brand-muted">${((key.estimated_charge_cents_30d || 0) / 100).toFixed(2)}</p></td>
+                        <td className="px-5 py-3 text-center text-sm text-brand-muted font-sans"><p>{key.monthly_call_limit ?? 'Not configured'} calls</p><p className="text-xs">{key.monthly_budget_cents == null ? 'No dollar cap' : `$${(key.monthly_budget_cents / 100).toFixed(2)}`}</p><p className="text-xs">Expires {key.expires_at ? new Date(key.expires_at).toLocaleDateString() : 'never'}</p></td>
                         <td className="px-5 py-3">
                           <TierBadge tier={key.billing?.mode} />
                           <p className="mt-1 text-[11px] text-brand-muted font-mono">{key.billing?.line_item || 'MCP usage'}</p>
@@ -368,7 +394,7 @@ export function ResearchMcpReleaseControls({ platformKey, onAuthError }) {
                         <td className="px-5 py-3 text-center">
                           <span className={`inline-flex items-center gap-1.5 text-xs font-medium font-sans ${key.is_active ? 'text-brand-accent' : 'text-brand-rose'}`}>
                             <span className={`w-2 h-2 rounded-full ${key.is_active ? 'bg-brand-accent' : 'bg-brand-rose'}`} />
-                            {key.is_active ? 'Active' : 'Revoked'}
+                            {key.status === 'active' ? 'Active' : key.status === 'expired' ? 'Expired' : 'Revoked'}
                           </span>
                         </td>
                       </tr>
@@ -1175,7 +1201,30 @@ function LogsTab({ platformKey, tenants }) {
 // ── AI Routing Tab (Task 1206) ─────────────────────────────────────────────
 
 const emptyRoute = () => ({ key_id: '', provider_id: '', model: '', capacity: 100, alternates: [], fallbacks: [], allow_matter_context: false })
-const defaultBackgroundQuota = () => ({ account_five_hour: 2050, account_weekly: 5100, account_monthly: 10250, tenant_five_hour: 250, tenant_weekly: 750, tenant_monthly: 1500, reservation_ttl_minutes: 15 })
+// The pool's real budget is provider value; the request ceilings are a coarse
+// backstop. Defaults mirror the published OpenCode Go dollar windows.
+const defaultBackgroundQuota = () => ({
+  account_five_hour: 2050, account_weekly: 5100, account_monthly: 10250,
+  tenant_five_hour: 250, tenant_weekly: 750, tenant_monthly: 1500,
+  reservation_ttl_minutes: 15,
+  account_five_hour_usd: 12, account_weekly_usd: 30, account_monthly_usd: 60,
+  tenant_five_hour_usd: 3, tenant_weekly_usd: 8, tenant_monthly_usd: 15,
+})
+
+const MICROS_PER_USD = 1_000_000
+const SPEND_WINDOWS = ['account_five_hour', 'account_weekly', 'account_monthly', 'tenant_five_hour', 'tenant_weekly', 'tenant_monthly']
+
+// The API stores money as integer micros; the form edits dollars.
+const quotaFromLimits = (limits) => {
+  const next = { ...defaultBackgroundQuota(), ...(limits || {}) }
+  SPEND_WINDOWS.forEach((window) => {
+    const micros = limits?.[`${window}_micros`]
+    if (typeof micros === 'number' && micros > 0) next[`${window}_usd`] = micros / MICROS_PER_USD
+  })
+  return next
+}
+
+const money = (value) => `$${Number(value ?? 0).toFixed(2)}`
 const isCompleteTarget = (target) => Boolean(target?.provider_id && target?.key_id && target?.model)
 const hasRouteConfiguration = (route) => Boolean(
   route?.provider_id
@@ -1224,7 +1273,7 @@ function routeIssues(route, allKeys) {
   return issues
 }
 
-function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, compact = false, allowResponses = false }) {
+function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, compact = false, allowResponses = false, allowBackgroundFreeModels = false }) {
   const selectedPreset = presets.find((p) => p.id === value.provider_id)
   const keysForPreset = value.provider_id ? allKeys.filter((k) => k.provider_id === value.provider_id) : allKeys
   const placeholder = selectedPreset?.model_placeholder || 'model-id'
@@ -1309,9 +1358,9 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
               <option
                 key={model.id}
                 value={model.id}
-                disabled={!endpointSupported(model) || model.confidential_data_allowed === false}
+                disabled={!endpointSupported(model) || (!allowBackgroundFreeModels && model.confidential_data_allowed === false)}
               >
-                {model.name || model.id}{model.is_free ? ' — Free' : ' — Paid'}{!endpointSupported(model) ? ' — Unsupported endpoint' : ''}{model.confidential_data_allowed === false ? ' — Not approved for client data' : ''}
+                {model.name || model.id}{model.is_free ? ' — Free' : ' — Paid'}{!endpointSupported(model) ? ' — Unsupported endpoint' : ''}{model.confidential_data_allowed === false ? (allowBackgroundFreeModels ? ' — Background-only' : ' — Not approved for client data') : ''}
               </option>
             ))}
           </select>
@@ -1319,7 +1368,7 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
         {!compact && suggestedModels.length > 0 && (
           <p className="text-[11px] text-brand-muted mt-1 font-sans">
             {allowResponses
-              ? 'Provider/key-specific Responses models are supported on this Background route; incompatible endpoint families stay disabled.'
+              ? 'Provider/key-specific Responses models and OpenCode Zen free models are supported on this Background route; matter context remains disabled and incompatible endpoint families stay disabled.'
               : 'All provider/key-specific catalog models, ranked for legal work and latency. Unsupported endpoints are visible but cannot be activated on the Chat Completions route.'}
           </p>
         )}
@@ -1556,6 +1605,7 @@ function RouteCard({ label, routeName, alias: activeAlias, route, allKeys, prese
             models={modelsFor(route)}
             modelListId={`models-${routeKey}-primary`}
             allowResponses={routeKey === 'background'}
+            allowBackgroundFreeModels={routeKey === 'background'}
             onChange={(next) => updateRoute({ ...next, alternates: route.alternates || [], fallbacks: route.fallbacks || [] })}
           />
         </div>
@@ -1594,6 +1644,7 @@ function RouteCard({ label, routeName, alias: activeAlias, route, allKeys, prese
                   models={modelsFor(alt)}
                   modelListId={`models-${routeKey}-alternate-${i}`}
                   allowResponses={routeKey === 'background'}
+                  allowBackgroundFreeModels={routeKey === 'background'}
                   compact
                   onChange={(next) => updateAlternate(i, next)}
                 />
@@ -1644,6 +1695,7 @@ function RouteCard({ label, routeName, alias: activeAlias, route, allKeys, prese
                   models={modelsFor(fb)}
                   modelListId={`models-${routeKey}-fallback-${i}`}
                   allowResponses={routeKey === 'background'}
+                  allowBackgroundFreeModels={routeKey === 'background'}
                   compact
                   onChange={(next) => updateFallback(i, next)}
                 />
@@ -2525,11 +2577,39 @@ function LiteLLMGatewayPanel({ status, checking, reloading, onCheck, onReload })
   )
 }
 
+function SpendWindowCard({ label, spend, requests, children }) {
+  const percent = Math.min(100, Number(spend?.percent ?? 0))
+  return (
+    <div className="rounded-lg border border-brand-line bg-brand-bg px-4 py-3">
+      <p className="text-[10px] uppercase tracking-wider text-brand-muted font-sans">{label}</p>
+      <p className="mt-1 text-xl font-serif font-bold text-brand-ink tabular-nums">
+        {money(spend?.spent_usd)} <span className="text-brand-muted font-normal">/ {money(spend?.limit_usd)}</span>
+      </p>
+      <div className="mt-2 h-1 rounded-full bg-brand-line overflow-hidden">
+        <div className={`h-full ${percent >= 90 ? 'bg-brand-amber' : 'bg-brand-accent'}`} style={{ width: `${percent}%` }} />
+      </div>
+      <p className="mt-2 text-xs text-brand-muted font-sans tabular-nums">
+        {money(spend?.remaining_usd)} left · {requests?.used ?? 0} requests
+      </p>
+      {children}
+    </div>
+  )
+}
+
 function BackgroundQuotaPanel({ usage, quota, onChange, saving, onSave }) {
-  const fiveHour = usage?.five_hour || {}
-  const weekly = usage?.weekly || {}
-  const monthly = usage?.monthly || {}
-  const fields = [
+  const value = usage?.value || {}
+  const monthlySpend = value.monthly || {}
+  const unreconciled = value.unreconciled || {}
+  // Money is the enforced budget; request ceilings are the coarse second guard.
+  const spendFields = [
+    ['account_five_hour_usd', 'Pool / 5 hours'],
+    ['account_weekly_usd', 'Pool / 7 days'],
+    ['account_monthly_usd', 'Pool / month'],
+    ['tenant_five_hour_usd', 'Firm / 5 hours'],
+    ['tenant_weekly_usd', 'Firm / 7 days'],
+    ['tenant_monthly_usd', 'Firm / month'],
+  ]
+  const requestFields = [
     ['account_five_hour', 'Pool / 5 hours'],
     ['account_weekly', 'Pool / 7 days'],
     ['account_monthly', 'Pool / month'],
@@ -2541,41 +2621,64 @@ function BackgroundQuotaPanel({ usage, quota, onChange, saving, onSave }) {
     <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden mb-6">
       <div className="px-5 py-4 border-b border-brand-line flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <Activity size={16} className="text-brand-accent" />
-            <h3 className="font-serif font-bold text-brand-ink">Background request budget</h3>
-            {monthly.projected_over_budget && <span className="rounded-full bg-brand-amber/10 px-2 py-0.5 text-[11px] text-brand-amber font-sans">Projected over budget</span>}
+            <h3 className="font-serif font-bold text-brand-ink">Background pool budget</h3>
+            {monthlySpend.projected_over_budget && <span className="rounded-full bg-brand-amber/10 px-2 py-0.5 text-[11px] text-brand-amber font-sans">Projected over budget</span>}
           </div>
-          <p className="text-xs text-brand-muted font-sans mt-1">Atomic reservations enforce the shared subscription windows and per-firm fairness before inference.</p>
+          <p className="text-xs text-brand-muted font-sans mt-1">The provider meters spend, not calls, so admission reserves against these dollar windows before every request.</p>
         </div>
         <button type="button" onClick={onSave} disabled={saving} className="inline-flex items-center gap-2 px-3 py-2 bg-brand-ink text-white text-xs font-medium font-sans rounded-lg hover:bg-brand-ink-2 disabled:opacity-40">
           {saving ? <RefreshCw size={12} className="animate-spin" /> : <Save size={12} />}
           {saving ? 'Saving…' : 'Save budget'}
         </button>
       </div>
+
+      {Number(unreconciled.requests ?? 0) > 0 && (
+        <div className="px-5 py-3 bg-brand-amber/5 border-b border-brand-line flex items-start gap-2">
+          <AlertTriangle size={14} className="text-brand-amber mt-0.5 shrink-0" />
+          <p className="text-xs text-brand-ink font-sans">
+            <span className="font-medium">{unreconciled.requests} unconfirmed {unreconciled.requests === 1 ? 'request holds' : 'requests hold'} {money(unreconciled.held_usd)}.</span>{' '}
+            The provider never confirmed whether these were billed, so they keep their estimated cost against the budget.
+            {Number(unreconciled.aged_out_requests ?? 0) > 0 && (
+              <> {unreconciled.aged_out_requests} could not be resolved before the retry deadline and permanently retain {money(unreconciled.aged_out_held_usd)} until their quota windows expire or an operator backfills provider spend.</>
+            )}
+          </p>
+        </div>
+      )}
+
       <div className="p-5 grid grid-cols-1 xl:grid-cols-[1fr_1fr_1fr_2fr] gap-5">
-        <div className="rounded-lg border border-brand-line bg-brand-bg px-4 py-3">
-          <p className="text-[10px] uppercase tracking-wider text-brand-muted font-sans">Rolling five-hour pool</p>
-          <p className="mt-1 text-xl font-serif font-bold text-brand-ink">{fiveHour.used ?? 0} / {quota.account_five_hour}</p>
-          <p className="mt-1 text-xs text-brand-muted font-sans">{fiveHour.remaining ?? quota.account_five_hour} requests remaining</p>
-        </div>
-        <div className="rounded-lg border border-brand-line bg-brand-bg px-4 py-3">
-          <p className="text-[10px] uppercase tracking-wider text-brand-muted font-sans">Rolling seven-day pool</p>
-          <p className="mt-1 text-xl font-serif font-bold text-brand-ink">{weekly.used ?? 0} / {quota.account_weekly}</p>
-          <p className="mt-1 text-xs text-brand-muted font-sans">{weekly.remaining ?? quota.account_weekly} requests remaining</p>
-        </div>
-        <div className="rounded-lg border border-brand-line bg-brand-bg px-4 py-3">
-          <p className="text-[10px] uppercase tracking-wider text-brand-muted font-sans">Monthly pool</p>
-          <p className="mt-1 text-xl font-serif font-bold text-brand-ink">{monthly.used ?? 0} / {quota.account_monthly}</p>
-          <p className="mt-1 text-xs text-brand-muted font-sans">{monthly.percent ?? 0}% used · {monthly.month_elapsed_percent ?? 0}% of month elapsed</p>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          {fields.map(([field, label]) => (
-            <label key={field} className="text-xs text-brand-muted font-sans">
-              {label}
-              <input type="number" min="1" value={quota[field]} onChange={(event) => onChange({ ...quota, [field]: Number(event.target.value) })} className="mt-1 w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono bg-brand-surface" />
-            </label>
-          ))}
+        <SpendWindowCard label="Rolling five-hour pool" spend={value.five_hour} requests={usage?.five_hour} />
+        <SpendWindowCard label="Rolling seven-day pool" spend={value.weekly} requests={usage?.weekly} />
+        <SpendWindowCard label="Monthly pool" spend={monthlySpend} requests={usage?.monthly}>
+          <p className="mt-1 text-xs text-brand-muted font-sans tabular-nums">
+            {monthlySpend.month_elapsed_percent ?? 0}% of month elapsed · tracking to {money(monthlySpend.projected_month_usd)}
+          </p>
+        </SpendWindowCard>
+        <div className="flex flex-col gap-4">
+          <div>
+            <p className="text-[10px] uppercase tracking-wider text-brand-muted font-sans mb-2">Spend limits (USD) — enforced</p>
+            <div className="grid grid-cols-2 gap-3">
+              {spendFields.map(([field, label]) => (
+                <label key={field} className="text-xs text-brand-muted font-sans">
+                  {label}
+                  <input type="number" min="0.01" step="0.01" value={quota[field]} onChange={(event) => onChange({ ...quota, [field]: Number(event.target.value) })} className="mt-1 w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono bg-brand-surface" />
+                </label>
+              ))}
+            </div>
+          </div>
+          <details className="text-xs">
+            <summary className="cursor-pointer text-brand-muted font-sans">Request backstop — not the provider's limit</summary>
+            <p className="mt-2 text-[11px] text-brand-muted font-sans">A coarse second ceiling. Published request counts are estimates, so these must never be treated as the budget.</p>
+            <div className="grid grid-cols-2 gap-3 mt-2">
+              {requestFields.map(([field, label]) => (
+                <label key={field} className="text-xs text-brand-muted font-sans">
+                  {label}
+                  <input type="number" min="1" value={quota[field]} onChange={(event) => onChange({ ...quota, [field]: Number(event.target.value) })} className="mt-1 w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono bg-brand-surface" />
+                </label>
+              ))}
+            </div>
+          </details>
         </div>
       </div>
     </div>
@@ -2635,7 +2738,7 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
       setPremium({ key_id: prem.key_id || '', provider_id: prem.provider_id || '', model: prem.model || '', capacity: prem.capacity || 100, alternates: prem.alternates || [], fallbacks: prem.fallbacks || [], allow_matter_context: Boolean(prem.allow_matter_context) })
       setBackground({ key_id: bg.key_id || '', provider_id: bg.provider_id || '', model: bg.model || '', capacity: bg.capacity || 100, alternates: bg.alternates || [], fallbacks: bg.fallbacks || [], allow_matter_context: false })
       setBackgroundUsage(usageData)
-      setBackgroundQuota({ ...defaultBackgroundQuota(), ...(usageData?.limits || {}) })
+      setBackgroundQuota(quotaFromLimits(usageData?.limits))
     } catch (e) {
       if (e?.response?.status === 403) {
         setLoadError('Platform access was denied. Sign in again with the current platform key.')
@@ -2803,9 +2906,13 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
   }
 
   const handleSaveBackgroundQuota = async () => {
-    const invalid = Object.entries(backgroundQuota).find(([, value]) => !Number.isFinite(value) || value < 1)
+    const invalid = Object.entries(backgroundQuota).find(([field, value]) => {
+      const minimum = field.endsWith('_usd') ? 0.01 : 1
+      return !Number.isFinite(value) || value < minimum
+    })
     if (invalid) {
-      setSaveResult({ ok: false, error: `${invalid[0].replaceAll('_', ' ')} must be at least 1.` })
+      const minimum = invalid[0].endsWith('_usd') ? '0.01' : '1'
+      setSaveResult({ ok: false, error: `${invalid[0].replaceAll('_', ' ')} must be at least ${minimum}.` })
       return
     }
     setSavingBackgroundQuota(true)
@@ -2813,7 +2920,7 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
     try {
       const data = await updateBackgroundAssistantQuota(platformKey, backgroundQuota)
       setBackgroundUsage(data)
-      setBackgroundQuota({ ...defaultBackgroundQuota(), ...(data.limits || {}) })
+      setBackgroundQuota(quotaFromLimits(data.limits))
       setSaveResult({ ok: true, message: 'Background request budget saved.' })
     } catch (error) {
       setSaveResult({ ok: false, error: apiErrorMessage(error, 'Background budget save failed') })
@@ -3192,9 +3299,11 @@ export function PlatformTenantRow({ tenant: t, expanded, onToggle }) {
         <p className="text-xs text-brand-muted">{t.domain}</p>
       </td>
       <td className="px-5 py-3"><TierBadge tier={t.billing_tier} /></td>
+      <td className="px-5 py-3"><TenantTypeBadge type={tenantType(t)} /></td>
       <td className="px-5 py-3 text-center text-sm text-brand-ink-2 font-sans">{t.user_count}</td>
       <td className="px-5 py-3 text-center text-sm text-brand-ink-2 font-sans">{t.requests_30d?.toLocaleString()}</td>
       <td className="px-5 py-3 text-right text-sm text-brand-ink-2 font-mono">${t.cost_usd_30d?.toFixed(2)}</td>
+      <td className="px-5 py-3 text-xs text-brand-muted"><TenantExpiry tenant={t} /></td>
       <td className="px-5 py-3 text-center">
         <span className={`inline-flex items-center gap-1.5 text-xs font-medium font-sans ${t.is_active ? 'text-brand-accent' : 'text-brand-rose'}`}>
           <span className={`w-2 h-2 rounded-full ${t.is_active ? 'bg-brand-accent' : 'bg-brand-rose'}`} />
@@ -3226,6 +3335,7 @@ export default function PlatformPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [search, setSearch] = useState('')
+  const [tenantTypeFilter, setTenantTypeFilter] = useState('all')
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [expandedTenant, setExpandedTenant] = useState(null)
@@ -3310,7 +3420,8 @@ export default function PlatformPage() {
   }
 
   const filtered = tenants.filter((t) =>
-    !search || t.name.toLowerCase().includes(search.toLowerCase()) || t.domain.toLowerCase().includes(search.toLowerCase())
+    (tenantTypeFilter === 'all' || tenantType(t) === tenantTypeFilter) &&
+    (!search || t.name.toLowerCase().includes(search.toLowerCase()) || t.domain.toLowerCase().includes(search.toLowerCase()))
   )
 
   if (!platformKey) return <LoginScreen onLogin={handleLogin} />
@@ -3429,6 +3540,12 @@ export default function PlatformPage() {
                 <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-brand-muted" />
                 <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by name or domain…" className="w-full pl-9 pr-4 py-2 border border-brand-line rounded-lg text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface" />
               </div>
+              <label className="sr-only" htmlFor="tenant-type-filter">Tenant type</label>
+              <select id="tenant-type-filter" value={tenantTypeFilter} onChange={(e) => setTenantTypeFilter(e.target.value)} className="rounded-lg border border-brand-line bg-brand-surface px-3 py-2 text-sm font-sans text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-accent">
+                <option value="all">All tenant types</option>
+                <option value="platform">Platform tenants</option>
+                <option value="demo">Demo tenants</option>
+              </select>
               <button onClick={loadData} disabled={loading} className="text-xs text-brand-muted hover:text-brand-ink font-sans transition-colors">
                 {loading ? 'Loading…' : 'Refresh'}
               </button>
@@ -3448,9 +3565,11 @@ export default function PlatformPage() {
                         <th className="text-left px-5 py-3"></th>
                         <th className="text-left px-5 py-3">Tenant</th>
                         <th className="text-left px-5 py-3">Tier</th>
+                        <th className="text-left px-5 py-3">Type</th>
                         <th className="text-center px-5 py-3">Users</th>
                         <th className="text-center px-5 py-3">Requests (30d)</th>
                         <th className="text-right px-5 py-3">Cost (30d)</th>
+                        <th className="text-left px-5 py-3">Demo expiration</th>
                         <th className="text-center px-5 py-3">Status</th>
                         <th className="text-center px-5 py-3">Action</th>
                       </tr>
@@ -3466,7 +3585,7 @@ export default function PlatformPage() {
                           {/* Expanded detail row */}
                           {expandedTenant === t.id && (
                             <tr key={`detail-${t.id}`} id={`tenant-details-${t.id}`}>
-                              <td colSpan={8} className="px-5 py-4 bg-brand-bg-soft">
+                              <td colSpan={10} className="px-5 py-4 bg-brand-bg-soft">
                                 {loadingDetail ? (
                                   <div className="flex justify-center py-4"><div className="w-6 h-6 border-2 border-brand-accent border-t-transparent rounded-full animate-spin" /></div>
                                 ) : tenantDetail ? (
@@ -3477,6 +3596,8 @@ export default function PlatformPage() {
                                       <dl className="space-y-2 text-sm">
                                         <div className="flex justify-between"><dt className="text-brand-muted font-sans">Company</dt><dd className="text-brand-ink font-sans">{tenantDetail.company_name || '—'}</dd></div>
                                         <div className="flex justify-between"><dt className="text-brand-muted font-sans">Domain</dt><dd className="text-brand-ink font-sans">{tenantDetail.domain}</dd></div>
+                                        <div className="flex justify-between"><dt className="text-brand-muted font-sans">Type</dt><dd><TenantTypeBadge type={tenantType(tenantDetail)} /></dd></div>
+                                        <div className="flex justify-between"><dt className="text-brand-muted font-sans">Demo expiration</dt><dd className="text-brand-ink font-sans"><TenantExpiry tenant={tenantDetail} /></dd></div>
                                         <div className="flex justify-between"><dt className="text-brand-muted font-sans">Stripe ID</dt><dd className="text-brand-ink font-mono text-xs">{tenantDetail.stripe_customer_id ? '✓' : '—'}</dd></div>
                                         <div className="flex justify-between"><dt className="text-brand-muted font-sans">Seats</dt><dd className="text-brand-ink font-sans">{tenantDetail.flat_seat_count || '—'}</dd></div>
                                         <div className="flex justify-between"><dt className="text-brand-muted font-sans">Created</dt><dd className="text-brand-ink font-sans">{new Date(tenantDetail.created_at).toLocaleDateString()}</dd></div>
@@ -3500,7 +3621,7 @@ export default function PlatformPage() {
                                     </div>
                                     <div>
                                       <h4 className="text-xs font-bold text-brand-ink uppercase tracking-wider mb-3 font-sans">Actions</h4>
-                                      {t.billing_tier === 'demo' ? (
+                                      {tenantType(t) === 'demo' ? (
                                         <p className="rounded-lg border border-brand-line bg-brand-bg px-3 py-2 text-xs leading-5 text-brand-muted">
                                           Use the Demos tab to terminate this disposable workspace. Generic tenant controls are disabled so an ongoing demo cannot be interrupted accidentally.
                                         </p>
@@ -3548,6 +3669,9 @@ export default function PlatformPage() {
                                       onUpdate={handleUpdate}
                                       onError={(message) => setError(message)}
                                     />
+                                  </div>
+                                  <div className="mt-4 pt-4 border-t border-brand-line">
+                                    <PlatformComplianceCard platformKey={platformKey} tenantId={t.id} />
                                   </div>
                                   </>
                                 ) : (

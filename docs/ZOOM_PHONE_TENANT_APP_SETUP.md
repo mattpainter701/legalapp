@@ -214,6 +214,10 @@ Select **Save Zoom app**. After saving:
 - the client secret and webhook token are encrypted at rest; and
 - the tenant still requires OAuth authorization.
 
+The setup progress row tracks four independent facts: app credentials saved,
+Zoom account authorized, Phone API scopes verified, and real-time calls verified.
+Do not treat an earlier green step as proof that a later step is complete.
+
 Do not enter the numeric **Account Number** from the Zoom profile. Zoom's
 human-facing Account Number is not the opaque API/webhook `account_id`. LawHand
 learns the opaque value only from Zoom's OAuth response or a signed event that
@@ -227,7 +231,16 @@ For an existing app:
   client secret; and
 - replacing the OAuth pair deactivates the old grant and requires reauthorization.
 
+When the OAuth pair changes, LawHand now confirms that the prior grant was
+disconnected and points the administrator directly to **Connect Zoom Phone**.
+
 ## Authorize the customer account
+
+Start this step from LawHand. Do **not** select **Add** from the private app
+listing or open Zoom's generated OAuth URL. Those actions do not originate
+LawHand's tenant-bound authorization request and therefore do not include the
+required OAuth `state` value. LawHand intentionally rejects a callback without
+`state`.
 
 1. Select **Connect Zoom Phone**, or **Re-authorize Phone** for an existing
    connection.
@@ -237,18 +250,24 @@ For an existing app:
    or unrelated Zoom products.
 4. Select **Allow**.
 5. Confirm Zoom returns to:
-   `https://<lawhand-domain>/admin?tab=zoom&connected=zoom_phone`.
+   `https://<lawhand-domain>/admin?tab=integrations&integration=zoom&connected=zoom_phone`.
 
 LawHand exchanges the one-time code using the tenant's encrypted app credential,
 requires a refresh token, stores the granted scope string, and immediately
 probes the account Call History API. A successful callback therefore proves
 both token exchange and the minimum API read used by Call Intake.
 
+LawHand returns both successful and failed authorization attempts to
+**Administration > Integrations > Zoom**. The result banner distinguishes a
+rejected client ID/secret, an expired or reused authorization, a missing scope
+or Phone API failure, and an authorization that was not started from LawHand.
+Follow that banner before rotating unrelated values.
+
 ## Verify the setup
 
 Complete every check before marking the tenant ready.
 
-1. **Administration > Zoom** reports **Phone API connected** and **2/2 granted**.
+1. **Administration > Integrations > Zoom** reports **Phone API connected** and **2/2 granted**.
 2. Select **Test connection**. It must succeed; zero sample calls is acceptable
    for a new account, but an API or scope error is not.
 3. From Call Intake, run a manual Zoom Phone history sync and confirm the request
@@ -258,40 +277,36 @@ Complete every check before marking the tenant ready.
 5. Place one answered inbound Zoom Phone call and one missed inbound call.
 6. Confirm both appear once in Call Intake with the expected caller, time,
    direction, and result.
-7. Confirm **Administration > Zoom** changes real-time webhook state from pending
+7. Confirm **Administration > Integrations > Zoom** changes real-time webhook state from pending
    to verified after provider proof. API sync can be healthy while this binding
    is still pending.
 8. Re-run the same history window or redeliver a test event and confirm LawHand
    does not create a duplicate call/task.
 
-For the sold production tenant, set only the non-secret selectors in the
-deployment `.env`:
+To run the dedicated provider check for a production tenant, set the non-secret
+selector in the deployment `.env`:
 
 ```dotenv
 ZOOM_REQUIRED_TENANT_ID=<lawhand-tenant-uuid>
-ZOOM_REQUIRED_TENANT_PLAN=intake-only
 ```
+
+The tenant's commercial plan is managed separately and does not participate in
+Zoom readiness. The optional provider gate binds to this exact active tenant
+UUID and verifies its tenant-owned Zoom app, grant, scopes, account binding,
+CRC, and live API.
 
 Then run the production gate on the host:
 
 ```bash
-ENV_FILE=.env COMPOSE_FILE=docker-compose.hypervisor.yml \
+ENV_FILE=.env COMPOSE_FILE=docker-compose.hypervisor.yml ZOOM_REQUIRED=true \
   bash scripts/production_check.sh
 ```
 
-After the exact main revision is deployed, dispatch the acceptance workflow:
-
-```bash
-gh workflow run production-acceptance.yml \
-  --repo <owner>/<repository> \
-  --ref main \
-  -f release_sha=<full-deployed-main-sha>
-```
-
-The production gate requires the exact tenant and plan, active encrypted app
+The dedicated provider gate requires the exact tenant, active encrypted app
 and webhook secrets, a refreshable healthy grant, both read scopes, a provider-
 verified account binding, successful public CRC ingress, and a live Zoom Phone
-API probe.
+API probe. The global production acceptance workflow does not run this
+customer-specific gate.
 
 ## Rotation and recovery
 
@@ -339,6 +354,8 @@ and run the full call proof.
 | Symptom | Likely cause | Resolution |
 |---|---|---|
 | `4700 Invalid redirect url` | Callback differs from the selected Zoom environment, a legacy domain remains, or the allowlist did not update | Compare the LawHand callback byte-for-byte with Redirect URL and Allow Lists on the tab whose client ID is stored. Click outside the field and inspect the generated OAuth URL. |
+| Zoom rejects the saved Client ID or Client Secret | The stored pair is stale, regenerated, or mixed across Development and Production | Copy both current values from the same Zoom environment, save them together in LawHand, then select **Connect Zoom Phone**. |
+| Callback returns `Field required` for query `state` | Authorization was started with **Add** from the Zoom Marketplace private listing instead of from LawHand | Do not retry or reuse the callback URL. Return to **LawHand > Administration > Integrations > Zoom** and select **Connect Zoom Phone** so LawHand creates a fresh tenant-bound OAuth request with `state`. |
 | Zoom Microsoft login ends with `Oops ... (300)` | The Microsoft identity is not yet linked to the existing Zoom account, or the login attempt used stale social-login state | Sign in to Zoom cleanly, link the Microsoft identity when Zoom offers **Link and Sign In**, then reopen Marketplace. Do not create a duplicate Zoom account. |
 | Wrong email/password | The Zoom account uses federated/social sign-in or the password is stale | Stop repeated password attempts. Use the customer's configured identity provider or have the customer owner reset the Zoom password. |
 | `token_exchange_failed` after Allow | Stored client secret does not match the client ID/environment, often after Regenerate | Save the matching client ID and new client secret together, then restart authorization. |

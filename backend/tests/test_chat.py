@@ -994,12 +994,42 @@ def test_message_response_preserves_attachment_link_and_locator():
 
 def test_source_url_only_preserves_expected_internal_document_downloads():
     document_id = uuid.uuid4()
+    matter_id = uuid.uuid4()
+    firm_memory_url = f"/firm-memory?matter={matter_id}&file={document_id}"
 
     assert (
         _normalize_source_url(f"/api/documents/{document_id}/download")
         == f"/api/documents/{document_id}/download"
     )
+    assert _normalize_source_url(firm_memory_url) == firm_memory_url
     assert _normalize_source_url("/api/admin/users") is None
+    assert _normalize_source_url("/firm-memory?matter=bad&file=bad") is None
+    assert _normalize_source_url(r"file://FILESERVER/Cases/secret.pdf") is None
+
+
+def test_firm_memory_chunk_becomes_a_linkable_page_level_source():
+    file_id = uuid.uuid4()
+    matter_id = uuid.uuid4()
+    source = _source_dict_from_chunk(
+        {
+            "id": f"firm-memory:{file_id}:page:7",
+            "source": "firm_memory",
+            "source_type": "firm_memory",
+            "document_title": "Motion for Summary Judgment.pdf",
+            "citation": r"\\FILESERVER\Cases\Ada\motion.pdf",
+            "court": "On-prem file share",
+            "content": "The movant bears the initial burden.",
+            "page_number": 7,
+            "url": f"/firm-memory?matter={matter_id}&file={file_id}",
+        }
+    )
+
+    assert source["source_type"] == "firm_memory"
+    assert source["source_label"] == "Firm memory"
+    assert source["case_name"] == "Motion for Summary Judgment.pdf"
+    assert source["citation"] == r"\\FILESERVER\Cases\Ada\motion.pdf"
+    assert source["locator"] == "Page 7"
+    assert source["url"] == f"/firm-memory?matter={matter_id}&file={file_id}"
 
 
 @pytest.mark.asyncio

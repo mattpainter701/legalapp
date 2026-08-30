@@ -223,6 +223,14 @@ def validate_manifest(manifest: dict[str, Any], catalog: dict[str, Any]) -> None
             raise ManifestValidationError(f"{identity}: canonical_url must be https")
         if document["parser"] not in {"html_main_text", "pdf_text"}:
             raise ManifestValidationError(f"{identity}: unsupported parser")
+        if not isinstance(document.get("sync_enabled", True), bool):
+            raise ManifestValidationError(f"{identity}: sync_enabled must be boolean")
+        if document.get("sync_enabled") is False:
+            reason = document.get("sync_disabled_reason")
+            if not isinstance(reason, str) or not reason.strip():
+                raise ManifestValidationError(
+                    f"{identity}: sync_disabled_reason must explain why sync is disabled"
+                )
         for field in ("parser_version", "acquisition_basis", "coverage_notes"):
             if not isinstance(document[field], str) or not document[field].strip():
                 raise ManifestValidationError(f"{identity}: {field} must be non-empty")
@@ -475,7 +483,11 @@ def ingest_document(conn: Any, document: dict[str, Any], fetched: FetchedDocumen
 
 
 def selected_documents(
-    manifest: dict[str, Any], source_keys: list[str] | None, limit: int | None
+    manifest: dict[str, Any],
+    source_keys: list[str] | None,
+    limit: int | None,
+    *,
+    for_sync: bool = False,
 ) -> list[dict[str, Any]]:
     documents = manifest["documents"]
     if source_keys:
@@ -486,6 +498,10 @@ def selected_documents(
             raise ManifestValidationError(
                 f"no manifest documents for source(s): {', '.join(sorted(missing))}"
             )
+    if for_sync:
+        documents = [
+            document for document in documents if document.get("sync_enabled", True)
+        ]
     return documents[:limit] if limit is not None else documents
 
 
@@ -668,7 +684,12 @@ def main() -> None:
     catalog = load_catalog(args.catalog)
     manifest = load_manifest(args.manifest)
     validate_manifest(manifest, catalog)
-    documents = selected_documents(manifest, args.source_keys, args.limit)
+    documents = selected_documents(
+        manifest,
+        args.source_keys,
+        args.limit,
+        for_sync=args.sync,
+    )
 
     if args.preview:
         print(

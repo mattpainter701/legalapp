@@ -46,7 +46,7 @@ The current Platform MCP catalog is intentionally review-first:
 
 - **Reads:** `search_clients`, `get_client`, `search_intakes`, `get_intake`,
   `search_matters`, `find_matter`, `get_matter_context`, `search_tasks`,
-  `get_task`, `list_matter_tasks`, `list_matter_recipients`,
+  `search_firm_memory`, `get_task`, `list_matter_tasks`, `list_matter_recipients`,
   `list_matter_documents`, `get_matter_document_text`,
   `list_document_templates`, and `get_document_template_text`.
 - **Proposals:** `propose_task`, `propose_client_email`, and
@@ -122,22 +122,32 @@ Rotate when custody, environment, scope, or risk changes. Revoke immediately for
 
 If MCP output or activity suggests tenant leakage or an unauthorized external action, stop the client, revoke the key, preserve request identifiers, and invoke the incident process.
 
-## Research MCP — release-gated, secondary
+## Research MCP — customer-managed legal research
 
-Research MCP is listed after Platform MCP because external Research MCP access
-is not released. The official endpoint is:
+Research MCP is listed after Platform MCP because it is a separate,
+public-authority-only product. The official endpoint is:
 
 ```text
 https://research.getlawhand.com/api/mcp
 ```
 
-OAuth, if enabled for a hosted Research client, is a separate release-gated
-path. A header-capable client may eventually use a tenant Research API key
-(`lhrk_...`), but self-service key issuance is unavailable until key authority,
-billing, and external-client release gates are complete. Do not promise a key,
-PAYG access, or a production Research connection from this page. Research
-credentials never authorize workspace matter access.
+Hosted clients use the LawHand OAuth consent flow. For API clients, tenant
+administrators issue `lhrk_...` tokens and use
+`Authorization: Bearer lhrk_...`; the older `X-MCP-API-Key` header remains
+supported. Research credentials never authorize workspace matter access.
 
-If and when the release gates are approved, this section is the intended place
-for an administrator to generate, scope, rotate, and revoke a Research key.
-Until then, show the release-gated status and do not expose a generate action.
+The Research panel lists every historical key and its masked identifier,
+assigned staff member, purpose, creator, expiration, last use, allowed tools,
+current-month successful and failed calls, charges, and remaining budget. New
+keys can use preset durations or an exact expiration date. Administrators can
+change custody, scope, expiry, monthly dollar budget, call cap, and burst limit,
+or revoke the key immediately. Revocation is permanent; issue a replacement
+instead of attempting to reactivate the old secret.
+
+The current rate is **$0.45 per successful tool call**. Failed calls remain
+visible but are not billed. The gateway stops a key before the next call would
+exceed either its dollar budget or monthly call cap. The raw secret is displayed
+only once, so deliver it to staff through the approved secret manager. Assignment
+in the panel records custody and deactivating that profile stops the key, but it
+does not turn a bearer key into user-bound authentication; use OAuth when
+individual identity binding is required.

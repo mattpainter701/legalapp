@@ -8,21 +8,45 @@ import re
 import signal
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
-from clarity_agent import __version__
+import smbclient
+
+from clarity_agent import __version__, updater
 from clarity_agent.api_client import SaaSClient
 from clarity_agent.config import AgentConfig
 from clarity_agent.db import FileLedger
 from clarity_agent.heartbeat import HeartbeatService, host_info
+from clarity_agent.local_index import (
+    LocalSearchIndex,
+    PermanentIndexError,
+    read_index_stats,
+)
 from clarity_agent.schedule import due_for_scan
-from clarity_agent.smb_auth import ShareCredential
+from clarity_agent.smb_auth import ShareCredential, connect, session_kwargs
 from clarity_agent.smb_reader import SmbReader
 from clarity_agent.smb_scanner import SmbScanner
 from clarity_agent.task_worker import TaskWorker
-from clarity_agent import updater
-from clarity_agent.utils import parse_smb_path, setup_logging
+from clarity_agent.utils import normalize_unc_path, parse_smb_path, setup_logging
 
 logger = logging.getLogger("clarity_agent")
+
+
+def _read_index_bytes(smb_module, path: str, max_bytes: int, kwargs: dict) -> bytes:
+    with smb_module.open_file(path, mode="rb", **kwargs) as handle:
+        data = handle.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise PermanentIndexError("file_too_large")
+    return data
+
+
+def _path_is_under_share(path: str, share_path: str) -> bool:
+    try:
+        target = normalize_unc_path(path).casefold()
+        root = normalize_unc_path(share_path).casefold()
+    except ValueError:
+        return False
+    return target.startswith(root + "\\")
 
 
 def _safe_request_error(exc: Exception) -> str:
@@ -95,6 +119,19 @@ SHARE_CACHE_TTL_SECONDS = 300
 SYNC_BATCH_SIZE = 100
 
 
+def _local_index_settings(config: AgentConfig) -> tuple[str, int, int]:
+    """Resolve bounded local-index settings for daemon, scan, and status."""
+    configured_path = getattr(config, "local_index_path", "")
+    path = configured_path or str(
+        Path(config.ledger_path).expanduser().resolve().with_name("search-index.db")
+    )
+    max_bytes = (
+        max(1, min(getattr(config, "local_index_max_file_mb", 25), 1024)) * 1024 * 1024
+    )
+    workers = max(1, min(getattr(config, "local_index_workers", 1), 4))
+    return path, max_bytes, workers
+
+
 def normalize_share(share: dict) -> dict:
     """Fill in ``server``/``share``/``root_path`` from the UNC path.
 
@@ -120,6 +157,7 @@ async def _scan_share(
     ledger: FileLedger,
     client: SaaSClient,
     smb_scanner: SmbScanner,
+    local_index=None,
 ) -> dict:
     """Scan one share, report the outcome to the SaaS, and return it.
 
@@ -154,6 +192,22 @@ async def _scan_share(
         raise
 
     new_and_changed = result.new_files + result.changed_files
+    if local_index is not None:
+        try:
+            # Seed missing rows from unchanged ledger entries so an upgrade can
+            # build the sidecar without forcing a fake source-file change.
+            await local_index.enqueue_many(new_and_changed)
+            await local_index.enqueue_many(result.unchanged_files, only_if_missing=True)
+            if not result.errors:
+                await local_index.delete(result.deleted_files)
+        except Exception as exc:
+            # This index is optional derived data. Its disk/SQLite failures must
+            # never block the authoritative metadata synchronization path.
+            logger.error(
+                "Local index update for share %s failed: %s",
+                share_id,
+                type(exc).__name__,
+            )
     synced_count = 0
     sync_error: str | None = None
 
@@ -317,6 +371,14 @@ async def run_daemon(
 
     ledger = FileLedger(config.ledger_path)
     await ledger.init()
+    index_path, index_max_bytes, index_workers = _local_index_settings(config)
+    local_index = (
+        LocalSearchIndex(index_path, max_file_bytes=index_max_bytes)
+        if getattr(config, "local_index_enabled", False)
+        else None
+    )
+    if local_index:
+        await local_index.init()
 
     client = SaaSClient(config)
     smb_scanner = SmbScanner(config, ledger)
@@ -327,7 +389,58 @@ async def run_daemon(
     last_scans: dict[str, datetime] = {}
 
     async def scan_one(share: dict) -> dict:
-        return await _scan_share(share, ledger, client, smb_scanner)
+        return await _scan_share(share, ledger, client, smb_scanner, local_index)
+
+    async def assigned_for_index(job: dict) -> dict | None:
+        assigned_shares = await shares.get()
+        return next(
+            (
+                share
+                for share in assigned_shares
+                if str(share.get("share_id")) == str(job["share_id"])
+                and _path_is_under_share(job["path"], share.get("share_path") or "")
+            ),
+            None,
+        )
+
+    async def validate_index_path(job: dict) -> bool:
+        return await assigned_for_index(job) is not None
+
+    async def fetch_for_index(job: dict) -> bytes:
+        assigned = await assigned_for_index(job)
+        if not assigned:
+            raise ValueError("File path is not under an assigned share")
+        credential = ShareCredential.from_share(assigned, config)
+        server, _, _ = parse_smb_path(job["path"])
+        cache: dict = {}
+        try:
+            await asyncio.to_thread(
+                connect,
+                server,
+                credential,
+                smbclient_module=smbclient,
+                connection_cache=cache,
+            )
+            return await asyncio.to_thread(
+                _read_index_bytes,
+                smbclient,
+                job["path"],
+                local_index.max_file_bytes,
+                {**session_kwargs(credential), "connection_cache": cache},
+            )
+        finally:
+            await asyncio.to_thread(
+                smbclient.reset_connection_cache,
+                connection_cache=cache,
+                fail_on_error=False,
+            )
+
+    if local_index:
+        local_index.start(
+            fetch_for_index,
+            path_validator=validate_index_path,
+            worker_count=index_workers,
+        )
 
     async def update_agent(target_version: str, manifest_id: str) -> dict:
         info = await updater.check_async()
@@ -349,6 +462,7 @@ async def run_daemon(
         scan_callback=scan_one,
         share_refresher=shares.refresh,
         update_callback=update_agent,
+        local_search_index=local_index,
     )
     heartbeat = HeartbeatService(config, client)
 
@@ -451,9 +565,9 @@ async def run_daemon(
         await asyncio.gather(*workers, stop_waiter, return_exceptions=True)
         # Keep resource cleanup in finally: an unexpected worker completion or
         # cancellation must not strand the ledger or HTTP connection pool.
-        await asyncio.gather(
-            ledger.close(), client.close(), return_exceptions=True
-        )
+        if local_index:
+            await local_index.close()
+        await asyncio.gather(ledger.close(), client.close(), return_exceptions=True)
         logger.info("Agent shut down")
 
 
@@ -555,25 +669,104 @@ def cmd_scan(args) -> None:
     async def _run():
         ledger = FileLedger(config.ledger_path)
         await ledger.init()
+        index_path, index_max_bytes, index_workers = _local_index_settings(config)
+        local_index = (
+            LocalSearchIndex(index_path, max_file_bytes=index_max_bytes)
+            if getattr(config, "local_index_enabled", False)
+            else None
+        )
+        if local_index:
+            await local_index.init()
         smb_scanner = SmbScanner(config, ledger)
         client = SaaSClient(config)
+        manual_share: dict | None = None
+        assigned_shares: list[dict] = []
+
+        async def assigned_for_index(job: dict) -> dict | None:
+            assigned = next(
+                (
+                    share
+                    for share in assigned_shares
+                    if str(share.get("share_id")) == str(job["share_id"])
+                    and _path_is_under_share(job["path"], share.get("share_path") or "")
+                ),
+                None,
+            )
+            if (
+                assigned is None
+                and manual_share is not None
+                and str(manual_share.get("share_id")) == str(job["share_id"])
+                and _path_is_under_share(
+                    job["path"], manual_share.get("share_path") or ""
+                )
+            ):
+                assigned = manual_share
+            return assigned
+
+        async def validate_index_path(job: dict) -> bool:
+            return await assigned_for_index(job) is not None
+
+        async def fetch_for_index(job: dict) -> bytes:
+            assigned = await assigned_for_index(job)
+            if not assigned:
+                raise ValueError("File path is not under an assigned share")
+            credential = ShareCredential.from_share(assigned, config)
+            server, _, _ = parse_smb_path(job["path"])
+            cache: dict = {}
+            try:
+                await asyncio.to_thread(
+                    connect,
+                    server,
+                    credential,
+                    smbclient_module=smbclient,
+                    connection_cache=cache,
+                )
+                return await asyncio.to_thread(
+                    _read_index_bytes,
+                    smbclient,
+                    job["path"],
+                    local_index.max_file_bytes,
+                    {**session_kwargs(credential), "connection_cache": cache},
+                )
+            finally:
+                await asyncio.to_thread(
+                    smbclient.reset_connection_cache,
+                    connection_cache=cache,
+                    fail_on_error=False,
+                )
+
+        if local_index:
+            local_index.start(
+                fetch_for_index,
+                path_validator=validate_index_path,
+                worker_count=index_workers,
+            )
         try:
             if args.share_path:
                 server, share, root = parse_smb_path(args.share_path)
-                share_config = {
+                manual_share = {
                     "server": server,
                     "share": share,
                     "root_path": root,
                     "share_path": args.share_path,
                     "share_id": args.share_id or f"{server}/{share}",
                 }
-                await _scan_share(share_config, ledger, client, smb_scanner)
+                await _scan_share(
+                    manual_share, ledger, client, smb_scanner, local_index
+                )
             else:
                 # No path given: scan everything the SaaS has assigned to us,
                 # using the credentials it delivers.
-                for share in await client.get_shares():
-                    await _scan_share(share, ledger, client, smb_scanner)
+                assigned_shares = [
+                    normalize_share(share) for share in await client.get_shares()
+                ]
+                for share in assigned_shares:
+                    await _scan_share(share, ledger, client, smb_scanner, local_index)
+            if local_index:
+                await local_index.wait_until_idle()
         finally:
+            if local_index:
+                await local_index.close()
             await ledger.close()
             await client.close()
 
@@ -582,6 +775,7 @@ def cmd_scan(args) -> None:
 
 def cmd_status(args) -> None:
     config = AgentConfig.load()
+    index_path, index_max_bytes, index_workers = _local_index_settings(config)
     print(f"Agent ID:      {config.agent_id or '(not registered)'}")
     print(f"SaaS URL:      {config.saas_url}")
     # Never echo any part of the key: this output is pasted into support
@@ -591,6 +785,26 @@ def cmd_status(args) -> None:
     print(f"Ledger:        {config.ledger_path}")
     print(f"Scan interval: {config.scan_interval_minutes} min (fallback)")
     print(f"Task poll:     {config.task_poll_interval_seconds} sec")
+    if getattr(config, "local_index_enabled", False):
+        print(f"Local index:   enabled ({index_workers} worker(s))")
+        print(f"Index path:    {index_path}")
+        print(f"File cap:      {index_max_bytes // (1024 * 1024)} MB")
+        stats = asyncio.run(read_index_stats(index_path))
+        if stats["available"]:
+            counts = (
+                ", ".join(
+                    f"{status}={values['files']}"
+                    for status, values in stats["statuses"].items()
+                )
+                or "empty"
+            )
+            print(f"Index files:   {counts}")
+            print(f"Index rows:    {stats.get('fts_rows', 0)}")
+            print(f"Index bytes:   {stats['database_bytes']}")
+        else:
+            print("Index state:   not built or unreadable")
+    else:
+        print("Local index:   disabled")
 
     if not (config.api_key and config.agent_id):
         return

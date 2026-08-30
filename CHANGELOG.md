@@ -2,7 +2,143 @@
 
 ## [Unreleased]
 
+### Documentation
+- **COMP-02/03 closure audit:** reconciled the merged switching and conversion
+  slices against current `origin/main`, recorded focused validation evidence,
+  and documented the canonical import-promotion, SMS compliance/provider,
+  signed-agreement promotion, and production-rehearsal blockers. The COMP
+  checkboxes remain open until those acceptance gates are demonstrably met.
+
 ### Added
+- **Bounded Firm Memory search relay:** an explicitly matter-scoped local
+  SQLite FTS5 control index can now answer bounded searches through the
+  outbound-polled file-share agent, authenticated REST/portal, Chat structured
+  sources, and user-bound Workspace MCP. Results carry opaque file identity,
+  bounded snippets/page hints, safe same-origin deep links, index state, and
+  partial/degraded status. The browser receives no raw `file://` or `smb://`
+  link; users can copy the canonical UNC path after authorization is rechecked.
+  Query text is short-lived and excluded from application logs, audit rows, and
+  evaluator output. This release does not claim 4 TB scale, Tika/OCR/OpenSearch,
+  native Windows ACL trimming, or semantic retrieval.
+
+### Fixed
+- **Zoom Phone setup reports each independent connection stage:** tenant
+  administrators now return from Phone OAuth to the Zoom integration panel,
+  see actionable recovery for rejected credentials and other safe provider
+  failures, and can distinguish saved app credentials, authorized API access,
+  verified scopes, and real-time webhook proof. Replacing the OAuth pair
+  explicitly reports that the old grant was invalidated and requires a new
+  LawHand-initiated authorization. Provider errors are logged only as bounded
+  error codes without raw response details.
+- **Zoom Phone setup prevents state-less Marketplace authorization:** the
+  tenant admin panel now lists the exact account call-history and call-detail
+  granular scopes, their Zoom Phone > Call Logs location, and a copy action.
+  It explicitly requires starting OAuth from LawHand's Connect Zoom Phone
+  action instead of the private Marketplace listing's Add action or generated
+  OAuth link, which cannot supply LawHand's tenant-bound `state`. The panel also
+  requires one matching Development or Production client pair. The operator and
+  in-product guides document the same fail-closed recovery path.
+- **IONOS release validation now recognizes the launched Research gateway:**
+  the stage gate requires an enabled Research MCP to return an unauthenticated
+  `401` with a Bearer challenge, still requires disabled deployments to return
+  `404`, preserves hostname isolation, and continues to probe the private
+  Skynet research upstream without exposing its credential.
+
+### Added
+- **Phase 1 deep-research authority activation:** the reviewed Federal Rules,
+  Constitution Annotated, and bounded Tax Court Reports families now run as
+  independently switchable scheduler jobs. Document-level sync gates exclude
+  known unreadable extraction while preserving audit previews, supplemented
+  base volumes remain searchable, and explicit Ohio/federal questions apply
+  matching jurisdiction filters across case law and other authorities. New
+  chunks remain embedding-null for the separate embedding pipeline.
+- **Review-first Brief Check:** firms can run bounded DOCX/PDF brief checks that
+  normalize citations, compare quotations and pin cites against accessible source
+  text, preserve missing/ambiguous/currentness unknowns, compare opposing briefs,
+  record attorney decisions, and export linked review and table-of-authorities
+  drafts. Candidate authority retrieval is explicitly bounded and never labels an
+  authority good law from an absent negative record.
+- **Operating trust workflows and evidence:** the versioned public contract now
+  drives measurable non-SLA objectives, exact support hours and S1-S4
+  escalation, sanitized append-only incidents, a named subprocessor registry,
+  DPA/BAA applicability boundaries, and a content-addressed security-review
+  packet. Tenant-scoped immutable receipts reconcile agreement-backed
+  onboarding, BK28 migration manifests, and complete export category counts.
+  Offboarding snapshots legal holds and inventory, requires two distinct
+  operator approvals, and records provider and backup disposition without the
+  evidence endpoint performing deletion. The penetration-test cadence remains
+  explicitly planned-not-attained, and every certification flag remains false.
+- **File-share agents can build a private lexical-search control index:** an
+  explicitly enabled, agent-local SQLite FTS5 sidecar indexes bounded text from
+  supported files without embeddings or a new document-text relay to LawHand.
+  Durable retries, assigned-share path validation, fail-closed local ACLs, and
+  operator-only query and relevance-evaluation tools support a measured pilot;
+  the documented Tika, OCR, OpenSearch, and native-ACL scale architecture
+  remains a separate 50–200 GB proof-of-concept gate rather than a 4 TB claim.
+- **Bounded COMP-03 lead conversion loop:** firms can publish tenant-scoped,
+  conditional intake forms with attributed, honeypot-protected, idempotent
+  public submissions; book only published consultation slots; record explicit
+  conflict triage, channel consent, appointment/reminder state, and funnel
+  events; and send authored email follow-up only when consent and provider
+  delivery succeed. Public leads remain blocked from conversion until a clear
+  conflict decision is recorded. SMS stays fail-closed until the ECO-23–29
+  provider and opt-out/reconciliation gates are complete.
+- **Client portal switching bundle:** clients can activate durable, revocable
+  portal accounts, pay sent invoices through hosted Stripe Checkout, and use
+  authenticated, idempotent Dropbox Sign webhook reconciliation. Portal
+  payments, signatures, conflicts, roles, imports, receipts, and closeout
+  remain tenant-scoped and auditable.
+- **Platform tenant inventory distinguishes lifecycle from billing:** operator
+  tenant summaries now include an explicit `demo` or `platform` type and the
+  existing tenant expiry. The console labels and filters that type, renders a
+  demo expiration (including expired state), and keeps disposable workspaces
+  behind their dedicated termination controls rather than generic tenant
+  controls.
+- **Background automation can use OpenCode Zen free capacity:** operators can
+  assign Zen free models to the global Background route while Standard and
+  Premium still require confidential-data approval; Background matter context
+  remains disabled.
+- **Marketing now shows the platform as an end-to-end legal workflow:** the
+  public product tour follows one illustrative matter from caller intake and
+  saved conflict review through matter setup, document and AI-assisted review,
+  client action, signature, billing, and follow-through. Role switchers show
+  attorney, paralegal, intake, billing, and client handoffs; the expanded
+  capability catalog adds conflict review, matter communications, client
+  portal, and signature routing with the existing rollout-state boundaries.
+  Server-rendered search copy, structured data, and focused interaction tests
+  stay aligned with the visible React experience.
+- **Competitive claims now have an evidence and maturity gate:** the public
+  capability catalog records implemented, controlled-pilot, planned, and
+  partner-dependent states with claim ownership and review dates. Pricing,
+  demo, SEO, and no-JavaScript copy consistently present Research MCP as a
+  controlled pilot; the dated Clio and Thomson Reuters register preserves
+  LawHand's unified matter operating-system positioning while prohibiting
+  unsupported AI-superiority, Westlaw-replacement, coverage, good-law, SLA,
+  certification, and service-level claims. Focused backend and frontend tests
+  keep those boundaries from silently drifting.
+- **Tenant agreement evidence and bounded retention controls:** platform
+  operators publish immutable counsel-owned document identities; tenant admins
+  accept the exact version/hash with authority, signer, request, and optional
+  e-sign evidence. Onboarding enforcement is dark-launched behind an explicit
+  flag. Admin and Platform dashboards expose metadata-only data inventories,
+  policy versions, legal holds, and audit actions. The existing scheduler now
+  enforces tenant-configurable expiry only for non-matter chat attachments,
+  committing database deletion before path-confined local byte cleanup.
+- **Research API keys now have a complete tenant-admin lifecycle:** firm admins
+  can record purpose and staff custody, set an expiration, scope allowed tools,
+  enforce monthly call and dollar budgets at the snapshotted $0.45 successful-
+  call price, and edit controls without exposing the raw secret again. The
+  tenant and operator portals show active, expired, and revoked keys with
+  creator, last use, billable and failed calls, estimated charges, and remaining
+  budget. Standard `Authorization: Bearer lhrk_...` clients are supported while
+  `X-MCP-API-Key` remains backward compatible; failed calls remain observable
+  but are neither quota-consuming nor billable.
+- **Skynet development and disaster-recovery controls:** an isolated
+  `dev1.getlawhand.com` Compose project and pinned-SHA runner workflow keep test
+  data, writers, email, signup, and MCP surfaces separate from IONOS production.
+  Daily network-isolated restore rehearsals create durable alerts, while a new
+  operator-only infrastructure page shows primary, dev, DR fencing, release,
+  and research gateway health without exposing credentials or raw errors.
 - **Document automation now scales with an operator-visible safety boundary:**
   tenant-scoped template search, status/category filters, pagination, readiness
   summaries, and an independently loaded generation view replace the unbounded

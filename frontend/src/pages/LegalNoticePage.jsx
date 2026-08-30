@@ -217,6 +217,7 @@ export default function LegalNoticePage({ type }) {
           <nav aria-label='Legal footer' className='flex flex-wrap items-center gap-x-5 font-sans text-sm text-brand-muted'>
             <Link to='/privacy' aria-current={type === 'privacy' ? 'page' : undefined} className='inline-flex min-h-11 items-center hover:text-brand-ink'>Privacy</Link>
             <Link to='/terms' aria-current={type === 'terms' ? 'page' : undefined} className='inline-flex min-h-11 items-center hover:text-brand-ink'>Terms</Link>
+            <Link to='/trust-center' className='inline-flex min-h-11 items-center hover:text-brand-ink'>Trust center</Link>
             <a href='#top' className='inline-flex min-h-11 items-center gap-1.5 hover:text-brand-ink'>Back to top <ArrowUp size={14} aria-hidden='true' /></a>
           </nav>
         </div>

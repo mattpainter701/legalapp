@@ -14,8 +14,6 @@ under that tenant's normal RLS context; it never opens a cross-tenant data path.
 
 import hashlib
 import logging
-import os
-import shutil
 import uuid
 import xml.etree.ElementTree as ET
 from collections import defaultdict
@@ -32,7 +30,6 @@ from sqlalchemy import func, or_, select, text
 
 from app.config import get_settings
 from app.database import async_session_maker, set_tenant_context
-from app.models.document import Document
 from app.models.plugin import Estate, Matter, MatterEvent, Renewal
 from app.models.smb_agent import SmbAgent
 from app.models.estate import EstateDeadline
@@ -48,26 +45,6 @@ from app.services.integration_observability import (
     capture_integration_error,
     record_integration_sync_run,
 )
-
-
-async def _lock_expired_chat_attachments(session, now: datetime) -> list[Document]:
-    """Claim expired attachments before any filesystem deletion.
-
-    Promotion uses a row lock while clearing ``expires_at``. ``SKIP LOCKED``
-    makes cleanup yield to that promotion; conversely, once cleanup owns the
-    row, promotion waits and then observes deletion instead of preserving a DB
-    row whose file was already removed.
-    """
-    result = await session.execute(
-        select(Document)
-        .where(
-            Document.conversation_id.isnot(None),
-            Document.expires_at.isnot(None),
-            Document.expires_at < now,
-        )
-        .with_for_update(skip_locked=True)
-    )
-    return list(result.scalars().all())
 
 
 settings = get_settings()
@@ -685,6 +662,23 @@ class LegalScheduler:
             hours=1,
             id="demo-session-purge",
             name="Expired Demo Session Purge",
+            replace_existing=True,
+        )
+
+        from app.services.background_ai_reconciliation import (
+            reconcile_unknown_reservations,
+        )
+
+        # Background AI reservations whose outcome the provider never confirmed
+        # keep holding their estimated spend against every quota window. This
+        # sweep resolves what it can and ages out what it cannot, so the held
+        # amount stays visible and bounded rather than growing unattended.
+        self.scheduler.add_job(
+            self._guarded("background-ai-reconcile", reconcile_unknown_reservations),
+            "interval",
+            minutes=15,
+            id="background-ai-reconcile",
+            name="Background AI Reservation Reconciliation",
             replace_existing=True,
         )
 
@@ -1974,32 +1968,38 @@ class LegalScheduler:
             try:
                 await _apply_scheduler_tenant_context(session)
 
-                now = datetime.now(timezone.utc)
-                expired_docs = await _lock_expired_chat_attachments(session, now)
+                from app.services.compliance import (
+                    execute_chat_attachment_retention,
+                    process_identity,
+                )
 
-                if not expired_docs:
+                tenant_id = _scheduler_tenant_id.get()
+                if tenant_id is None:
+                    raise RuntimeError("Scheduler job started without a tenant context")
+                result = await execute_chat_attachment_retention(
+                    session,
+                    tenant_id,
+                    dry_run=False,
+                    actor_user_id=None,
+                    actor_type=process_identity(),
+                )
+                await _apply_scheduler_tenant_context(session)
+                if result["eligible_records"] == 0:
                     await _log_complete(
                         session, log, "No expired chat attachments found."
                     )
                     logger.info("[chat-attachment-cleanup] Nothing to clean up.")
                     return
-
-                deleted = 0
-                storage_directories: set[str] = set()
-                for doc in expired_docs:
-                    if doc.storage_path:
-                        storage_directories.add(os.path.dirname(doc.storage_path))
-                    await session.delete(doc)
-                    deleted += 1
-
-                await _commit_and_restore_scheduler_context(session)
-                # Delete bytes only after the row deletion is durably committed.
-                # An orphan directory is recoverable; a live evidence row whose
-                # file was destroyed after an ambiguous commit is not.
-                for directory in storage_directories:
-                    shutil.rmtree(directory, ignore_errors=True)
-
-                summary = f"Deleted {deleted} expired chat attachment(s)."
+                if result["protected"] == "legal_hold":
+                    summary = (
+                        f"Legal hold protected {result['eligible_records']} "
+                        "expired chat attachment(s)."
+                    )
+                else:
+                    summary = (
+                        f"Deleted {result['deleted_records']} expired chat attachment "
+                        f"record(s); {result['deleted_files']} file(s) removed."
+                    )
                 await _log_complete(session, log, summary)
                 logger.info("[chat-attachment-cleanup] Complete. %s", summary)
 

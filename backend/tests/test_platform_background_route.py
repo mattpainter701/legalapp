@@ -9,6 +9,7 @@ from app.models.llm_provider_key import LLMProviderKey
 from app.models.platform import PlatformSetting
 from app.routers import platform_llm as router
 from app.routers.platform_assistant import BackgroundQuotaUpdate
+from app.services.ai_price_card import PriceCard
 from app.services import llm_routing
 from app.services.background_ai_quota import BACKGROUND_ROUTE_CONFIG_KEY
 from app.services.llm_routing import RouteTier, resolve_llm_route
@@ -34,12 +35,25 @@ def test_background_quota_contract_covers_every_published_request_window():
         tenant_monthly=1500,
     )
     assert quota.account_weekly == 5100
+    stored = quota.to_stored_quota({"account_five_hour_micros": 500_000})
+    assert stored["account_five_hour_micros"] == 500_000
+    assert stored["account_weekly_micros"] == 30_000_000
     with pytest.raises(ValidationError):
         BackgroundQuotaUpdate(
             account_five_hour=2050,
             account_monthly=10250,
             tenant_five_hour=250,
             tenant_monthly=1500,
+        )
+    with pytest.raises(ValidationError):
+        BackgroundQuotaUpdate(
+            account_five_hour=2050,
+            account_weekly=5100,
+            account_monthly=10250,
+            tenant_five_hour=250,
+            tenant_weekly=750,
+            tenant_monthly=1500,
+            account_five_hour_usd=0.001,
         )
 
 
@@ -124,6 +138,55 @@ def test_background_primary_and_alternate_share_alias_and_keep_fallback_explicit
     assert fallbacks == [{alias: [f"{alias}-fb-0"]}]
     assert all(model["model_name"] != "clarity-premium" for model in models)
     assert errors == []
+
+
+async def _async_value(value):
+    return value
+
+
+@pytest.mark.asyncio
+async def test_background_activation_prices_primary_alternates_and_fallbacks(
+    monkeypatch,
+):
+    card = PriceCard(
+        version="test",
+        rates={
+            "provider/primary": {"input": 1, "output": 2},
+            "provider/alternate": {"input": 1, "output": 2},
+        },
+    )
+    monkeypatch.setattr(router, "get_price_card", lambda _db: _async_value(card))
+    config = {
+        "background": {
+            "provider_id": "provider",
+            "model": "primary",
+            "alternates": [{"provider_id": "provider", "model": "alternate"}],
+            "fallbacks": [{"provider_id": "provider", "model": "unpriced"}],
+        }
+    }
+
+    with pytest.raises(router.HTTPException) as raised:
+        await router._require_background_route_prices(object(), config, required=True)
+
+    assert raised.value.status_code == 409
+    assert "provider/unpriced" in raised.value.detail
+
+
+@pytest.mark.asyncio
+async def test_background_price_guard_ignores_policy_only_unset_route(monkeypatch):
+    async def unexpected_price_card(_db):
+        raise AssertionError("an unset Background route does not need pricing")
+
+    monkeypatch.setattr(router, "get_price_card", unexpected_price_card)
+    config = {"background": {"allow_matter_context": False}}
+
+    await router._require_background_route_prices(object(), config)
+
+    with pytest.raises(router.HTTPException) as raised:
+        await router._require_background_route_prices(object(), config, required=True)
+
+    assert raised.value.status_code == 409
+    assert "no executable target" in raised.value.detail
 
 
 def test_route_audit_payload_contains_background_without_secrets():

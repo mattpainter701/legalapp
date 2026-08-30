@@ -1,6 +1,6 @@
-# WellPled
+# LawHand
 
-WellPled is a multi-tenant, AI-assisted legal operations platform. It
+LawHand is a multi-tenant, AI-assisted legal operations platform. It
 combines caller intake, tasks, matters, document automation, billing, cloud
 integrations, and source-aware legal research in one web application.
 
@@ -14,9 +14,36 @@ Public MCP access is release-gated and must remain disabled.
 |---|---|
 | Call Intake, Tasks, Zoom Phone | First-customer release candidate. Ship only after every gate in the [first-customer production runbook](docs/FIRST_CUSTOMER_PRODUCTION_RUNBOOK.md) passes on the deployed revision. |
 | PDF templates | Adobe-style Prepare Form review, existing AcroForm discovery, OCR-assisted scan/handwriting overlays, manual field placement, flattening, integrity checks, and matter-file output are implemented. See [PDF template operations](docs/PDF_TEMPLATE_OPERATIONS.md) for supported inputs and customer recovery steps. |
-| Full legal platform | Available for controlled tenants; modules are enforced in both navigation and API middleware. |
-| Public MCP product | **Disabled.** `MCP_PRODUCT_ENABLED=false` is a launch invariant. Do not market, issue, or accept customer MCP keys yet. |
+| Full legal platform | **Controlled pilot.** Selected tenants receive explicit module enablement and acceptance review; navigation and API middleware enforce the configured boundary. |
+| Research MCP and Workspace MCP | **Controlled pilot; disabled by default.** Do not imply general availability. Research requires an enabled account and billing controls; Workspace requires tenant approval, user consent, and scoped OAuth. |
 | Marketing / SEO | Public landing, original artwork, social card, canonical metadata, structured data (organization, software, capability list, breadcrumbs, FAQ, site navigation), sitemap, and private-route `noindex` controls are included. Google Search Console, Analytics 4, and Business Profile setup is in [docs/GOOGLE_SEARCH_AND_BUSINESS_SETUP.md](docs/GOOGLE_SEARCH_AND_BUSINESS_SETUP.md). Marketing claims and prices still require commercial-owner approval before publication. |
+
+## Capability and competitive-claim status
+
+Public product copy uses four states. **Implemented** means the exact behavior
+is code backed within its documented tenant/module configuration; it is not an
+uptime or service promise. **Controlled pilot** means selected-tenant rollout
+only. **Planned** items remain off feature lists and sales commitments.
+**Partner-dependent** behavior requires the applicable provider account,
+license, consent, production configuration, and provider availability.
+
+LawHand is positioned as a **unified matter operating system with review-first
+agents and source-transparent research**. That does not make it a Westlaw
+replacement or a citator. LawHand does not claim comprehensive or nationwide
+authority coverage, determine that authority remains good law, or inherit a
+provider's SLA, certification, content rights, support hours, or service level.
+Westlaw, KeyCite, Practical Law, and other proprietary legal content are
+license/partner only and are not included in LawHand's public-authority corpus.
+
+| Customer-discussed area | Status and boundary | Claim owner | Reviewed |
+|---|---|---|---|
+| Shared matter record, tasks, tenant isolation, and review controls | Implemented within configured tenant/module permissions. | Product & Commercial | 2026-08-27 |
+| Full-platform rollout, client portal, signature routing, specialized workspaces, and MCP | Controlled pilot; describe the exact enabled surface. | Product & Commercial | 2026-08-27 |
+| Microsoft, Google, Teams, Zoom, QuickBooks, Stripe, SMTP, and file-share connections | Partner-dependent; each provider requires separate proof and consent. | Product & Commercial | 2026-08-27 |
+| Rules-derived deadlines, citator-grade treatment, comprehensive coverage, maintained secondary content, native mobile apps, and general customer onboarding/import APIs | Planned, not available. Existing onboarding and import APIs remain platform-operator/internal only. | Product & Commercial | 2026-08-27 |
+
+The dated official-vendor evidence, approved wording, and review gate are in
+the [competitive baseline and claims register](docs/competitive-gap-analysis.md).
 
 ## Task and customer-data lifecycle
 
@@ -42,7 +69,7 @@ for the backend contract, recovery checks, and remaining legacy-local migration.
 
 ## What is in the product
 
-| Area | Implemented behavior |
+| Area | Implemented code-backed behavior (availability may still be gated) |
 |---|---|
 | Caller intake | Manual and Zoom Phone intake, signed tenant webhook, call-history sync, caller/contact matching, notes, lead/task handoff, partner assignment log, and CSV exports. |
 | Tasks | Tenant-scoped CRUD, assignee and matter/contact links, priorities, deadlines, reminders, assignment notes, viewed/contacted signals, reassignment, and close reasons. |
@@ -51,7 +78,7 @@ for the backend contract, recovery checks, and remaining legacy-local migration.
 | Billing | Time, expenses, invoices, payments, retainers, LEDES export, and optional Stripe payment flows. |
 | Conflict review | Standalone tenant-wide search with restricted-matter redaction, saved evidence, attorney review decisions, locked records, and PDF reports. |
 | Research and drafting | Tenant document RAG, public CourtListener context, practice-area workflows, source labels, and attorney-review guardrails. |
-| Cloud integrations | Microsoft and Google OAuth, cloud search/storage paths, Zoom, QuickBooks, Teams, SMTP, and optional Slack/webhook notifications. Each provider still requires its own production consent and ingress proof. |
+| Cloud integrations | Microsoft and Google OAuth, cloud search/storage paths, Zoom, QuickBooks, Teams, SMTP, and optional Slack/webhook notifications. These are partner-dependent: each provider still requires its own account, license where applicable, production consent, configuration, ingress proof, and availability. |
 | Authentication | Email/password, Microsoft and Google login, short-lived access cookies, rotating Redis-backed refresh tokens, tenant/module authorization, and scoped platform-operator sessions. |
 
 No AI output is a substitute for professional review. A displayed citation or
@@ -209,9 +236,12 @@ Compose topologies pass that explicit value into the frontend build.
 This is a client-rendered SPA. The home page has useful static metadata and a
 `noscript` summary, but it is not server-rendered or prerendered. If organic
 search becomes a primary acquisition channel, prerendering and real search
-performance telemetry are the next architecture step. Do not publish security
-certifications, uptime promises, customer logos, trial enforcement, or prices
-that have not been independently approved and operationally supported.
+performance telemetry are the next architecture step. Do not publish a
+Westlaw-replacement, comprehensive/nationwide coverage, good-law,
+certification, uptime/SLA, support-hours, service-level, customer, trial, or
+price claim that has not been independently approved and supported by current
+acceptance evidence. Comparative statements also require an owner and review
+date in the competitive claims register.
 
 ## Local development
 

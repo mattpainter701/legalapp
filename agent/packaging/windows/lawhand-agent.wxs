@@ -6,10 +6,10 @@
   auto-starting Windows service, and creates the machine-wide data directory
   the agent keeps its config, key and ledger in.
 
-  Build:  wix build lawhand-agent.wxs -arch x64 -d AgentExe=..\..\dist\lawhand-agent.exe -d ProductVersion=0.15.2 -ext WixToolset.Util.wixext -o lawhand-agent.msi
+  Build:  wix build lawhand-agent.wxs -arch x64 -d AgentExe=..\..\dist\lawhand-agent.exe -d ProductVersion=0.15.3 -ext WixToolset.Util.wixext -o lawhand-agent.msi
 
   Install or over-top upgrade (pair separately with `lawhand-agent register`):
-      msiexec /i lawhand-agent-0.15.2-x64.msi /qn /norestart
+      msiexec /i lawhand-agent-0.15.3-x64.msi /qn /norestart
 
   Run the service as a domain account instead of LocalSystem (only needed when
   shares are mounted with the machine's own identity rather than a credential

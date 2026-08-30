@@ -30,6 +30,8 @@ from app.routers.mcp import router as mcp_router
 from app.routers.workspace_mcp_oauth import router as workspace_mcp_oauth_router
 from app.routers.research_mcp_oauth import router as research_mcp_oauth_router
 from app.routers.platform import router as platform_router
+from app.routers.platform_compliance import router as platform_compliance_router
+from app.routers.platform_infrastructure import router as platform_infrastructure_router
 from app.routers.plugins import router as plugins_router
 from app.routers.scheduler import router as scheduler_router
 from app.routers.dev import router as dev_router
@@ -54,6 +56,7 @@ from app.routers.intake_dashboard import router as intake_dashboard_router
 from app.routers.plan import router as plan_router
 from app.routers.intake import router as intake_router
 from app.routers.intake_assistant import router as intake_assistant_router
+from app.routers.conversion_loop import router as conversion_loop_router
 from app.routers.engagement_packets import router as engagement_packets_router
 from app.routers.matter_parties import router as matter_parties_router
 from app.routers.matter_documents import router as matter_documents_router
@@ -73,6 +76,9 @@ from app.routers.client_portal import firm_router as client_portal_firm_router
 from app.routers.esignature import router as esignature_router
 from app.routers.esignature import portal_router as esignature_portal_router
 from app.routers.onboarding import router as onboarding_router
+from app.routers.compliance import router as compliance_router
+from app.routers.operating_contract import router as operating_contract_router
+from app.routers.operating_trust import router as operating_trust_router
 from app.routers.licensing import router as licensing_router
 from app.services.mcp_protocol import protocol_endpoint, protocol_lifespan
 from app.services.workspace_mcp_protocol import (
@@ -100,6 +106,7 @@ from app.routers.marketing import router as marketing_router
 from app.routers.matter_document_revisions import (
     router as matter_document_revisions_router,
 )
+from app.routers.brief_checks import router as brief_checks_router
 from app.routers.demo import router as demo_router
 
 settings = get_settings()
@@ -398,6 +405,8 @@ app.include_router(admin_router, prefix="/api")
 app.include_router(billing_router, prefix="/api")
 app.include_router(mcp_router, prefix="/api")
 app.include_router(platform_router, prefix="/api")
+app.include_router(platform_compliance_router, prefix="/api")
+app.include_router(platform_infrastructure_router, prefix="/api")
 app.include_router(platform_llm_router, prefix="/api")
 app.include_router(platform_assistant_router, prefix="/api")
 # Dedicated plugin-subpath routers MUST be registered before the generic
@@ -432,6 +441,7 @@ app.include_router(tasks_router)
 app.include_router(communications_router)
 app.include_router(intake_dashboard_router)
 app.include_router(plan_router, prefix="/api")
+app.include_router(conversion_loop_router)
 app.include_router(intake_router)
 app.include_router(intake_assistant_router)
 app.include_router(engagement_packets_router)
@@ -447,6 +457,9 @@ app.include_router(esignature_router)
 app.include_router(esignature_portal_router)
 app.include_router(document_templates_router)
 app.include_router(onboarding_router)
+app.include_router(compliance_router)
+app.include_router(operating_contract_router)
+app.include_router(operating_trust_router)
 app.include_router(licensing_router)
 app.include_router(smb_router)
 app.include_router(portfolio_router)
@@ -456,6 +469,7 @@ app.include_router(roles_router)
 app.include_router(office_assistant_router)
 app.include_router(marketing_router)
 app.include_router(matter_document_revisions_router)
+app.include_router(brief_checks_router)
 
 
 # ─────────────────────────────────────────────────────

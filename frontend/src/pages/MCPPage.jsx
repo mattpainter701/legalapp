@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Copy, KeyRound, Plus, RotateCcw, Trash2 } from 'lucide-react'
+import { Copy, KeyRound, Pencil, Plus, RotateCcw, Trash2, X } from 'lucide-react'
 import { useConfirm } from '../components/dialog/ConfirmProvider'
 import {
   createMcpProductKey,
@@ -8,6 +8,7 @@ import {
   getMcpProductKeys,
   revokeMcpProductKey,
   updateAdminSettings,
+  updateMcpProductKey,
 } from '../api'
 import { useAuth } from '../App'
 import { AlertBanner, Toggle } from '../components/ui'
@@ -57,6 +58,25 @@ const codexSetup = (url) => `codex mcp add lawhandWorkspace --url ${url}
 codex mcp login lawhandWorkspace
 codex mcp list`
 const claudeSetup = (url) => `claude mcp add --transport http --scope user lawhand ${url}`
+const dollars = (value) => `$${Number(value || 0).toFixed(2)}`
+const dateInputValue = (value) => value ? new Date(value).toISOString().slice(0, 10) : ''
+const formatDate = (value) => value ? new Date(value).toLocaleDateString() : 'Never'
+const dateAfterDays = (days) => {
+  const date = new Date()
+  date.setUTCDate(date.getUTCDate() + days)
+  return date.toISOString().slice(0, 10)
+}
+
+const blankKeyForm = () => ({
+  name: 'LawHand Research',
+  purpose: '',
+  assigned_to_user_id: '',
+  monthly_call_limit: '5000',
+  monthly_budget_usd: '2250.00',
+  burst_limit_per_minute: '60',
+  expires_at: '',
+  allowed_tools: [],
+})
 
 function MetricCard({ label, value, detail }) {
   return (
@@ -230,12 +250,9 @@ export default function MCPPage({ embedded = false }) {
   const [researchError, setResearchError] = useState(null)
   const [actionError, setActionError] = useState(null)
   const [newKey, setNewKey] = useState(null)
-  const [form, setForm] = useState({
-    name: 'LawHand Research',
-    monthly_call_limit: '5000',
-    burst_limit_per_minute: '60',
-    allowed_tools: [],
-  })
+  const [form, setForm] = useState(blankKeyForm)
+  const [editingKey, setEditingKey] = useState(null)
+  const [editForm, setEditForm] = useState(null)
   const [overviewSaving, setOverviewSaving] = useState(null)
 
   // This page is the Research MCP surface.  Keep workspace/platform tools out
@@ -342,15 +359,58 @@ export default function MCPPage({ embedded = false }) {
     try {
       const result = await createMcpProductKey({
         name: form.name,
+        purpose: form.purpose || null,
+        assigned_to_user_id: form.assigned_to_user_id || null,
         monthly_call_limit: Number(form.monthly_call_limit),
+        monthly_budget_cents: Math.round(Number(form.monthly_budget_usd) * 100),
         burst_limit_per_minute: Number(form.burst_limit_per_minute),
+        expires_at: form.expires_at ? new Date(`${form.expires_at}T23:59:59Z`).toISOString() : null,
         allowed_tools: allToolsSelected ? null : form.allowed_tools,
       })
       setNewKey(result.api_key)
-      setForm({ name: 'LawHand Research', monthly_call_limit: '5000', burst_limit_per_minute: '60', allowed_tools: [] })
+      setForm(blankKeyForm())
       await getMcpProductKeys().then(setData)
     } catch (error) {
       setActionError(errorDetail(error, 'Failed to create MCP key'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const beginEdit = (key) => {
+    setEditingKey(key.id)
+    setEditForm({
+      name: key.name,
+      purpose: key.purpose || '',
+      assigned_to_user_id: key.assigned_to_user_id || '',
+      monthly_call_limit: String(key.monthly_call_limit),
+      monthly_budget_usd: key.monthly_budget_usd == null ? '' : Number(key.monthly_budget_usd).toFixed(2),
+      burst_limit_per_minute: String(key.burst_limit_per_minute),
+      expires_at: dateInputValue(key.expires_at),
+      allowed_tools: key.allowed_tools || [],
+    })
+  }
+
+  const handleUpdate = async (event) => {
+    event.preventDefault()
+    setSaving(true)
+    setActionError(null)
+    try {
+      await updateMcpProductKey(editingKey, {
+        name: editForm.name,
+        purpose: editForm.purpose || null,
+        assigned_to_user_id: editForm.assigned_to_user_id || null,
+        monthly_call_limit: Number(editForm.monthly_call_limit),
+        monthly_budget_cents: editForm.monthly_budget_usd === '' ? null : Math.round(Number(editForm.monthly_budget_usd) * 100),
+        burst_limit_per_minute: Number(editForm.burst_limit_per_minute),
+        expires_at: editForm.expires_at ? new Date(`${editForm.expires_at}T23:59:59Z`).toISOString() : null,
+        allowed_tools: editForm.allowed_tools,
+      })
+      setEditingKey(null)
+      setEditForm(null)
+      await getMcpProductKeys().then(setData)
+    } catch (error) {
+      setActionError(errorDetail(error, 'Failed to update MCP key'))
     } finally {
       setSaving(false)
     }
@@ -384,6 +444,9 @@ export default function MCPPage({ embedded = false }) {
   }
 
   const usage = data?.usage || { total_calls: 0, total_results: 0 }
+  const monthSuccessfulCalls = (data?.keys || []).reduce((total, key) => total + Number(key.usage?.successful_calls || 0), 0)
+  const monthFailedCalls = (data?.keys || []).reduce((total, key) => total + Number(key.usage?.failed_calls || 0), 0)
+  const monthChargeUsd = (data?.keys || []).reduce((total, key) => total + Number(key.usage?.charge_usd || 0), 0)
   const PageHeading = embedded ? 'h2' : 'h1'
   const ResearchHeading = embedded ? 'h3' : 'h2'
   const researchEnabled = data?.product_enabled === true
@@ -469,9 +532,10 @@ export default function MCPPage({ embedded = false }) {
                 </AlertBanner>
               )}
 
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-                <MetricCard label="30-day calls" value={usage.total_calls || 0} />
-                <MetricCard label="Returned results" value={usage.total_results || 0} />
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-6">
+                <MetricCard label="30-day calls" value={(usage.total_calls || 0).toLocaleString()} />
+                <MetricCard label="Month billable calls" value={monthSuccessfulCalls.toLocaleString()} detail={`${monthFailedCalls.toLocaleString()} failed · not billed`} />
+                <MetricCard label="Month charges" value={dollars(monthChargeUsd)} detail={`${dollars(data.billing?.unit_price_usd || 0.45)} per successful call`} />
                 <MetricCard label="Active keys" value={(data.keys || []).filter((key) => key.is_active).length} />
                 <MetricCard label="Entitlement" value={data.entitlement_status || 'Unknown'} />
                 <MetricCard label="Billing" value={data.billing_status || 'Unknown'} />
@@ -482,14 +546,14 @@ export default function MCPPage({ embedded = false }) {
                 <div className="mt-3 grid gap-3 md:grid-cols-2">
                   <CodeBlock label="Official MCP URL" value={researchEndpoint} />
                   <CodeBlock label="Supported shorthand" value={researchShorthand} />
-                  <CodeBlock label="API client header" value={`${data.auth_header || 'X-MCP-API-Key'}: lhrk_...`} />
+                  <CodeBlock label="API client header" value={`${data.auth_header || 'Authorization'}: ${data.auth_scheme || 'Bearer'} lhrk_...`} />
                 </div>
                 <p className="mt-3 text-xs leading-5 text-brand-muted">
                   Publish the full URL; the shorthand remains supported. OAuth is for hosted clients, while product keys are for clients that can set request headers. LiteLLM remains an internal model gateway and its credentials are never exposed as Research MCP keys.
                 </p>
               </div>
 
-              <div className="grid gap-6 lg:grid-cols-[360px_1fr]">
+              <div className="grid gap-6 lg:grid-cols-[400px_1fr]">
                 <form onSubmit={handleCreate} className="rounded-xl border border-brand-line bg-brand-surface p-5">
                   <div className="mb-4 flex items-center gap-2">
                     <KeyRound size={18} className="text-brand-accent" aria-hidden="true" />
@@ -499,9 +563,30 @@ export default function MCPPage({ embedded = false }) {
                     <span className="mb-1 block text-xs font-semibold uppercase text-brand-muted">Name</span>
                     <input value={form.name} onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))} className="w-full rounded-md border border-brand-line bg-white px-3 py-2 text-sm text-brand-ink" required />
                   </label>
+                  <label className="mb-3 block">
+                    <span className="mb-1 block text-xs font-semibold uppercase text-brand-muted">Purpose</span>
+                    <input value={form.purpose} onChange={(event) => setForm((prev) => ({ ...prev, purpose: event.target.value }))} placeholder="e.g. Litigation team research" className="w-full rounded-md border border-brand-line bg-white px-3 py-2 text-sm text-brand-ink" />
+                  </label>
+                  <label className="mb-3 block">
+                    <span className="mb-1 block text-xs font-semibold uppercase text-brand-muted">Assigned staff member</span>
+                    <select value={form.assigned_to_user_id} onChange={(event) => setForm((prev) => ({ ...prev, assigned_to_user_id: event.target.value }))} className="w-full rounded-md border border-brand-line bg-white px-3 py-2 text-sm text-brand-ink">
+                      <option value="">Shared / unassigned</option>
+                      {(data.staff || []).filter((staff) => staff.is_active).map((staff) => <option key={staff.id} value={staff.id}>{staff.name || staff.email}</option>)}
+                    </select>
+                  </label>
+                  <label className="mb-3 block">
+                    <span className="mb-1 block text-xs font-semibold uppercase text-brand-muted">Duration / expiration date</span>
+                    <input type="date" value={form.expires_at} onChange={(event) => setForm((prev) => ({ ...prev, expires_at: event.target.value }))} className="w-full rounded-md border border-brand-line bg-white px-3 py-2 text-sm text-brand-ink" />
+                    <span className="mt-2 flex flex-wrap gap-2">{[30, 90, 180, 365].map((days) => <button key={days} type="button" onClick={() => setForm((prev) => ({ ...prev, expires_at: dateAfterDays(days) }))} className="rounded border border-brand-line px-2 py-1 text-xs text-brand-muted">{days} days</button>)}<button type="button" onClick={() => setForm((prev) => ({ ...prev, expires_at: '' }))} className="rounded border border-brand-line px-2 py-1 text-xs text-brand-muted">Never</button></span>
+                  </label>
                   <label className="mb-4 block">
                     <span className="mb-1 block text-xs font-semibold uppercase text-brand-muted">Monthly call limit</span>
                     <input type="number" min="1" value={form.monthly_call_limit} onChange={(event) => setForm((prev) => ({ ...prev, monthly_call_limit: event.target.value }))} className="w-full rounded-md border border-brand-line bg-white px-3 py-2 text-sm text-brand-ink" required />
+                  </label>
+                  <label className="mb-4 block">
+                    <span className="mb-1 block text-xs font-semibold uppercase text-brand-muted">Monthly budget (USD)</span>
+                    <input type="number" min="0.45" step="0.01" value={form.monthly_budget_usd} onChange={(event) => setForm((prev) => ({ ...prev, monthly_budget_usd: event.target.value }))} className="w-full rounded-md border border-brand-line bg-white px-3 py-2 text-sm text-brand-ink" required />
+                    <span className="mt-1 block text-xs text-brand-muted">Hard stop at the lower of this budget or the call limit. Successful calls cost $0.45.</span>
                   </label>
                   <label className="mb-4 block">
                     <span className="mb-1 block text-xs font-semibold uppercase text-brand-muted">Burst limit per minute</span>
@@ -547,9 +632,10 @@ export default function MCPPage({ embedded = false }) {
                       <thead className="text-xs uppercase text-brand-muted">
                         <tr>
                           <th scope="col" className="pb-2 pr-3">Name</th>
-                          <th scope="col" className="pb-2 pr-3">Key</th>
-                          <th scope="col" className="pb-2 pr-3">Calls</th>
-                          <th scope="col" className="pb-2 pr-3">Limit</th>
+                          <th scope="col" className="pb-2 pr-3">Assigned to</th>
+                          <th scope="col" className="pb-2 pr-3">Month usage</th>
+                          <th scope="col" className="pb-2 pr-3">Budget</th>
+                          <th scope="col" className="pb-2 pr-3">Expires</th>
                           <th scope="col" className="pb-2 pr-3">Status</th>
                           <th scope="col" className="pb-2"><span className="sr-only">Actions</span></th>
                         </tr>
@@ -557,24 +643,57 @@ export default function MCPPage({ embedded = false }) {
                       <tbody>
                         {(data.keys || []).map((key) => (
                           <tr key={key.id} className="border-t border-brand-line">
-                            <td className="py-3 pr-3 font-medium text-brand-ink">{key.name}</td>
-                            <td className="py-3 pr-3 font-mono text-xs text-brand-muted">{key.api_key_masked}</td>
-                            <td className="py-3 pr-3 text-brand-ink">{key.usage?.calls || 0}</td>
-                            <td className="py-3 pr-3 text-brand-muted">{key.monthly_call_limit ?? 'Not configured'}</td>
-                            <td className="py-3 pr-3"><span className={key.is_active ? 'text-emerald-700' : 'text-brand-muted'}>{key.is_active ? 'Active' : 'Revoked'}</span></td>
+                            <td className="py-3 pr-3">
+                              <p className="font-medium text-brand-ink">{key.name}</p>
+                              <p className="mt-0.5 font-mono text-xs text-brand-muted">{key.api_key_masked}</p>
+                              {key.purpose && <p className="mt-1 max-w-48 text-xs text-brand-muted">{key.purpose}</p>}
+                              <p className="mt-1 max-w-56 text-xs text-brand-muted">Created by {key.created_by?.name || key.created_by?.email || 'a former administrator'} · Last used {key.last_used_at ? new Date(key.last_used_at).toLocaleString() : 'never'}</p>
+                            </td>
+                            <td className="py-3 pr-3 text-brand-ink">{key.assigned_to?.name || key.assigned_to?.email || 'Shared'}</td>
+                            <td className="py-3 pr-3">
+                              <p className="text-brand-ink">{(key.usage?.successful_calls || 0).toLocaleString()} billed</p>
+                              <p className="text-xs text-brand-muted">{dollars(key.usage?.charge_usd || 0)} · {key.usage?.failed_calls || 0} failed</p>
+                            </td>
+                            <td className="py-3 pr-3">
+                              <p className="text-brand-ink">{key.monthly_budget_usd == null ? 'No dollar cap' : dollars(key.monthly_budget_usd)}</p>
+                              <p className="text-xs text-brand-muted">{key.monthly_call_limit.toLocaleString()} calls · {key.budget_remaining_usd == null ? 'uncapped' : `${dollars(key.budget_remaining_usd)} left`}</p>
+                            </td>
+                            <td className="py-3 pr-3 text-brand-muted">{formatDate(key.expires_at)}</td>
+                            <td className="py-3 pr-3"><span className={key.status === 'active' ? 'text-emerald-700' : key.status === 'expired' ? 'text-amber-700' : 'text-brand-muted'}>{key.status === 'active' ? 'Active' : key.status === 'expired' ? 'Expired' : 'Revoked'}</span></td>
                             <td className="py-3 text-right">
-                              {key.is_active && (
-                                <button type="button" onClick={() => handleRevoke(key)} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-brand-line text-brand-rose hover:bg-brand-rose/10" aria-label={`Revoke ${key.name}`} title="Revoke key"><Trash2 size={15} aria-hidden="true" /></button>
-                              )}
+                              <div className="flex justify-end gap-2">
+                                {key.status !== 'revoked' && <button type="button" onClick={() => beginEdit(key)} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-brand-line text-brand-muted hover:text-brand-ink" aria-label={`Manage ${key.name}`} title="Manage key"><Pencil size={15} aria-hidden="true" /></button>}
+                                {key.status !== 'revoked' && <button type="button" onClick={() => handleRevoke(key)} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-brand-line text-brand-rose hover:bg-brand-rose/10" aria-label={`Revoke ${key.name}`} title="Revoke key"><Trash2 size={15} aria-hidden="true" /></button>}
+                              </div>
                             </td>
                           </tr>
                         ))}
-                        {!data.keys?.length && <tr><td colSpan="6" className="py-8 text-center text-sm text-brand-muted">No product keys yet.</td></tr>}
+                        {!data.keys?.length && <tr><td colSpan="7" className="py-8 text-center text-sm text-brand-muted">No product keys yet.</td></tr>}
                       </tbody>
                     </table>
                   </div>
                 </div>
               </div>
+
+              {editingKey && editForm && (
+                <form onSubmit={handleUpdate} className="rounded-xl border border-brand-accent/40 bg-brand-surface p-5" aria-label="Manage Research product key">
+                  <div className="flex items-start justify-between gap-4">
+                    <div><p className="text-sm font-semibold text-brand-ink">Manage Research product key</p><p className="mt-1 text-xs text-brand-muted">Changes apply immediately. Extending an expired key restores it; revoked keys remain permanently revoked.</p></div>
+                    <button type="button" onClick={() => { setEditingKey(null); setEditForm(null) }} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-brand-line text-brand-muted" aria-label="Close key controls"><X size={15} /></button>
+                  </div>
+                  <div className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                    <label><span className="mb-1 block text-xs font-semibold uppercase text-brand-muted">Name</span><input value={editForm.name} onChange={(event) => setEditForm((prev) => ({ ...prev, name: event.target.value }))} className="w-full rounded-md border border-brand-line bg-white px-3 py-2 text-sm" required /></label>
+                    <label><span className="mb-1 block text-xs font-semibold uppercase text-brand-muted">Purpose</span><input value={editForm.purpose} onChange={(event) => setEditForm((prev) => ({ ...prev, purpose: event.target.value }))} className="w-full rounded-md border border-brand-line bg-white px-3 py-2 text-sm" /></label>
+                    <label><span className="mb-1 block text-xs font-semibold uppercase text-brand-muted">Assigned staff</span><select value={editForm.assigned_to_user_id} onChange={(event) => setEditForm((prev) => ({ ...prev, assigned_to_user_id: event.target.value }))} className="w-full rounded-md border border-brand-line bg-white px-3 py-2 text-sm"><option value="">Shared / unassigned</option>{(data.staff || []).filter((staff) => staff.is_active).map((staff) => <option key={staff.id} value={staff.id}>{staff.name || staff.email}</option>)}</select></label>
+                    <label><span className="mb-1 block text-xs font-semibold uppercase text-brand-muted">Expiration</span><input type="date" value={editForm.expires_at} onChange={(event) => setEditForm((prev) => ({ ...prev, expires_at: event.target.value }))} className="w-full rounded-md border border-brand-line bg-white px-3 py-2 text-sm" /></label>
+                    <label><span className="mb-1 block text-xs font-semibold uppercase text-brand-muted">Monthly budget (USD)</span><input type="number" min="0.45" step="0.01" value={editForm.monthly_budget_usd} onChange={(event) => setEditForm((prev) => ({ ...prev, monthly_budget_usd: event.target.value }))} className="w-full rounded-md border border-brand-line bg-white px-3 py-2 text-sm" /></label>
+                    <label><span className="mb-1 block text-xs font-semibold uppercase text-brand-muted">Monthly call limit</span><input type="number" min="1" value={editForm.monthly_call_limit} onChange={(event) => setEditForm((prev) => ({ ...prev, monthly_call_limit: event.target.value }))} className="w-full rounded-md border border-brand-line bg-white px-3 py-2 text-sm" required /></label>
+                    <label><span className="mb-1 block text-xs font-semibold uppercase text-brand-muted">Burst per minute</span><input type="number" min="1" value={editForm.burst_limit_per_minute} onChange={(event) => setEditForm((prev) => ({ ...prev, burst_limit_per_minute: event.target.value }))} className="w-full rounded-md border border-brand-line bg-white px-3 py-2 text-sm" required /></label>
+                  </div>
+                  <fieldset className="mt-4"><legend className="mb-2 text-xs font-semibold uppercase text-brand-muted">Allowed tools</legend><div className="grid gap-2 md:grid-cols-2 lg:grid-cols-3">{tools.map((tool) => <label key={tool} className="flex items-center gap-2 text-xs text-brand-ink"><input type="checkbox" checked={editForm.allowed_tools.includes(tool)} onChange={() => setEditForm((prev) => ({ ...prev, allowed_tools: prev.allowed_tools.includes(tool) ? prev.allowed_tools.filter((item) => item !== tool) : [...prev.allowed_tools, tool] }))} /><span className="font-mono">{tool}</span></label>)}</div></fieldset>
+                  <div className="mt-5 flex gap-3"><button type="submit" disabled={saving || editForm.allowed_tools.length === 0} className="rounded-md bg-brand-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-60">{saving ? 'Saving' : 'Save controls'}</button><button type="button" onClick={() => { setEditingKey(null); setEditForm(null) }} className="rounded-md border border-brand-line px-4 py-2 text-sm text-brand-muted">Cancel</button></div>
+                </form>
+              )}
 
               <div className="rounded-xl border border-brand-line bg-brand-surface p-5">
                 <div className="flex items-baseline justify-between gap-3"><p className="font-semibold text-brand-ink">Research tool reference</p><p className="text-xs text-brand-muted">{tools.length} published</p></div>

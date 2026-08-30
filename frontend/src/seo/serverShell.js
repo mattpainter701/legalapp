@@ -1,4 +1,5 @@
 import {
+  CAPABILITY_STATES,
   CORE_CAPABILITIES,
 } from '../marketing/capabilities.js'
 import {
@@ -46,15 +47,28 @@ const LEGAL_SHELLS = Object.freeze({
 })
 
 const MARKETING_SHELLS = Object.freeze({
-  '/product': {
-    heading: 'The legal automation platform for law firms.',
-    lead: 'LawHand holds client and matter CRM, caller intake, tasks and deadlines, document preparation, time and invoicing, and source-linked legal research in a single tenant-isolated workspace.',
+  '/trust-center': {
+    heading: 'Evidence before claims.',
+    lead: 'The LawHand trust center publishes the current operating scope, evidence boundaries, provider dependencies, and assurance state without presenting objectives or planned work as attained commitments.',
     sections: [
-      { heading: 'Core capabilities', body: CORE_CAPABILITIES.map((capability) => capability.name).join(' \u00b7 ') },
-      { heading: 'The core workspace', body: 'Intake and tasks, matters and contacts, calendar and deadlines, documents and automation, time, billing, trust accounting, reporting, client portal, and signature routing.' },
+      { heading: 'Support and incident communication', body: 'Published Central business hours, S1-S4 impact definitions, acknowledgement objectives, and escalation routes drive audited support cases. Shared-service incidents use sanitized append-only public updates. Objectives are not an SLA unless signed customer terms say otherwise.' },
+      { heading: 'Customer lifecycle evidence', body: 'Authorized onboarding, BK28 migration, and tenant export receipts bind scope, counts, artifact hashes, signer, and outcome. Missing or mismatched categories are blocked rather than treated as complete.' },
+      { heading: 'Offboarding without a deletion shortcut', body: 'Legal holds block progress. Two distinct operators must approve offboarding before a final proof records category reconciliation, provider disposition, and backup expiry. The evidence workflow never deletes tenant data.' },
+      { heading: 'Providers and privacy terms', body: 'The versioned named-provider record states purpose, data category, region and configuration boundary, terms state, and DPA or BAA evidence state. Optional providers are not represented as active for every customer.' },
+      { heading: 'Assurance roadmap', body: 'External penetration testing has a target cadence and owner but remains planned and not attained. SOC 2, ISO 27001, HIPAA readiness, and BAA availability are not claimed as achieved.' },
+      { heading: 'Downloadable review packet', body: 'The content-addressed security-review packet exports the current first-party contract and evidence catalogue without secrets, customer data, internal hostnames, or an independent audit opinion.' },
+    ],
+  },
+  '/product': {
+    heading: 'See the entire matter move.',
+    lead: 'LawHand follows the work from the first call through conflict review, matter organization, drafting, attorney review, client action, signature, billing, and follow-up.',
+    sections: [
+      { heading: 'Core capabilities', body: CORE_CAPABILITIES.map((capability) => `${capability.name} (${CAPABILITY_STATES[capability.availability]})`).join(' \u00b7 ') },
+      { heading: 'The matter flow', body: 'Capture and match a caller, preserve conflict review, open the matter, assign work, prepare documents and source-linked analysis, route attorney review, collect client action, and account for the work.' },
+      { heading: 'Views by responsibility', body: 'Attorneys, paralegals, intake staff, billing staff, and clients work from the same matter record while roles and permissions keep each view and action appropriately bounded.' },
       { heading: 'Practice-area library', body: 'Skill libraries add the document patterns, checks, and terminology of a practice area to the shared matter record. Trust and estate, family and domestic relations, and mediation add dedicated workspaces with their own records and roles.' },
       { heading: 'Connected sources', body: 'Supported Microsoft 365, Google Workspace, Microsoft Teams, Zoom Phone, QuickBooks Online, and enterprise file-share connections are enabled by a firm administrator and can be disconnected at any time.' },
-      { heading: 'Controls', body: 'Firm workspaces are tenant-isolated, module roles decide what each participant can see or approve, and AI-assisted work carries source links for attorney review before reliance.' },
+      { heading: 'Controls in the workflow', body: 'Firm workspaces are tenant-isolated, module roles decide what each participant can see or approve, and AI-assisted work carries source links and review states before reliance or delivery.' },
     ],
   },
   '/product/chat': {
@@ -68,11 +82,11 @@ const MARKETING_SHELLS = Object.freeze({
   },
   '/product/mcp': {
     heading: 'Bring approved public legal authority into the tools you already use.',
-    lead: 'LawHand Research MCP connects ChatGPT, Claude, and API clients through OAuth or a scoped API token for research-only retrieval, PAYG metering, and administrative visibility.',
+    lead: 'LawHand Research MCP is a controlled pilot connecting approved ChatGPT, Claude, and API clients through OAuth or a scoped API token for research-only retrieval, PAYG metering, and administrative visibility.',
     sections: [
       { heading: 'Research-only boundary', body: 'Search approved public legal authority without exposing workspace matters, documents, tasks, or client files.' },
       { heading: 'OAuth or API token', body: 'Hosted ChatGPT and Claude clients use OAuth 2.1. Header-capable API clients use a scoped LawHand Research token.' },
-      { heading: 'Private preview', body: 'Public access remains gated while production release checks are completed. The intended public price is $0.45 per tool call.' },
+      { heading: 'Controlled pilot', body: 'Approved pilot customers can use OAuth or managed Research API keys at a pilot price of $0.45 per successful tool call. Coverage depends on the configured public-authority corpus.' },
     ],
   },
   '/request-demo': {
@@ -86,10 +100,10 @@ const MARKETING_SHELLS = Object.freeze({
   },
   '/pricing': {
     heading: 'One clear platform price. Controlled expansion.',
-    lead: 'LawHand is $89 per user per month, billed annually. Begin with the full platform, add specialized workflows deliberately, and evaluate MCP through the private preview.',
+    lead: 'LawHand is $89 per user per month, billed annually. Research MCP is a controlled pilot for approved customers at a pilot price of $0.45 per successful tool call.',
     sections: [
       { heading: 'LawHand platform', body: 'The core seat includes the firm workspace, matter-aware AI chat, firm operations, source-aware workflows, and role-aware access within the licensed scope.' },
-      { heading: 'LawHand MCP', body: 'The intended public price is $0.45 per tool call. MCP remains in private preview until its public release gates are complete.' },
+      { heading: 'LawHand Research MCP', body: 'Approved pilot customers pay $0.45 per successful tool call, with administrator-managed keys, budgets, expiration, and usage visibility.' },
       { heading: 'Call Intake', body: 'Firms may begin with a focused caller-intake and task workflow, with optional verified Zoom Phone integration.' },
     ],
   },

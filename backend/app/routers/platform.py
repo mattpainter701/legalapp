@@ -57,7 +57,7 @@ from app.models.platform_api_key import PlatformApiKey
 from app.models.llm_routing_profile import LLMRoutingProfile
 from app.models.tenant import Tenant, TenantSettings
 from app.models.user import User
-from app.services.mcp_product import DEFAULT_ALLOWED_TOOLS, mask_key
+from app.services.mcp_product import DEFAULT_ALLOWED_TOOLS, mask_key, product_key_status
 from app.services.llm_routing import (
     VALID_LLM_PROVIDERS,
     default_platform_llm_config,
@@ -329,6 +329,12 @@ class TenantSummary(BaseModel):
     domain: str
     company_name: Optional[str]
     billing_tier: str
+    # Tenant type is intentionally separate from commercial billing.  Demo
+    # workspaces retain a demo billing tier today, but the operator console
+    # needs a clear lifecycle distinction rather than inferring it from a
+    # price label.
+    tenant_type: str
+    expires_at: datetime | None
     flat_seat_count: int
     is_active: bool
     stripe_customer_id: Optional[str]
@@ -432,6 +438,18 @@ def _validate_provider(provider: str | None, field: str = "provider") -> None:
 
 def _field_was_sent(model: BaseModel, field: str) -> bool:
     return field in getattr(model, "model_fields_set", set())
+
+
+def _tenant_type(tenant: Tenant) -> str:
+    """Return the lifecycle classification presented to platform operators.
+
+    ``billing_tier`` remains the authoritative legacy marker for disposable
+    demos and is deliberately not changed by this presentation field.  Keeping
+    the conversion here makes every platform tenant response classify the same
+    way while existing demo safety checks continue to work unchanged.
+    """
+
+    return "demo" if tenant.billing_tier == "demo" else "platform"
 
 
 def _validate_modules(values: list[str] | None) -> list[str] | None:
@@ -546,6 +564,8 @@ async def list_tenants(
                 domain=t.domain,
                 company_name=t.company_name,
                 billing_tier=t.billing_tier,
+                tenant_type=_tenant_type(t),
+                expires_at=t.expires_at,
                 flat_seat_count=t.flat_seat_count,
                 is_active=t.is_active,
                 stripe_customer_id=_mask(t.stripe_customer_id),
@@ -849,6 +869,8 @@ async def get_tenant_detail(
             domain=tenant.domain,
             company_name=tenant.company_name,
             billing_tier=tenant.billing_tier,
+            tenant_type=_tenant_type(tenant),
+            expires_at=tenant.expires_at,
             flat_seat_count=tenant.flat_seat_count,
             is_active=tenant.is_active,
             stripe_customer_id=_mask(tenant.stripe_customer_id),
@@ -954,7 +976,7 @@ async def update_tenant(
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
     if (
-        tenant.billing_tier == "demo"
+        _tenant_type(tenant) == "demo"
         and tenant.domain.endswith(".demo.invalid")
         and (
             _field_was_sent(body, "billing_tier") or _field_was_sent(body, "is_active")
@@ -1307,6 +1329,7 @@ async def platform_mcp_overview(
     tenants = list((await db.scalars(select(Tenant).order_by(Tenant.id))).all())
     keys: list[tuple[MCPProductKey, Tenant]] = []
     usage_by_key: dict[str, dict] = {}
+    staff_by_id: dict[uuid.UUID, User] = {}
     for tenant in tenants:
         async with _platform_tenant_scope(db, tenant.id):
             tenant_keys = list(
@@ -1319,6 +1342,16 @@ async def platform_mcp_overview(
                 ).all()
             )
             keys.extend((key, tenant) for key in tenant_keys)
+            staff_by_id.update(
+                {
+                    staff.id: staff
+                    for staff in (
+                        await db.scalars(
+                            select(User).where(User.tenant_id == tenant.id)
+                        )
+                    ).all()
+                }
+            )
             key_ids = [key.id for key in tenant_keys]
             if not key_ids:
                 continue
@@ -1383,7 +1416,7 @@ async def platform_mcp_overview(
         tenant_row["calls_30d"] += calls
         tenant_row["errors_30d"] += errors
         tenant_row["results_30d"] += results
-        if key.is_active and key.revoked_at is None:
+        if product_key_status(key) == "active":
             tenant_row["active_keys"] += 1
         last_used = key.last_used_at.isoformat() if key.last_used_at else None
         if last_used and (
@@ -1398,11 +1431,27 @@ async def platform_mcp_overview(
                 "tenant_name": tenant.name,
                 "domain": tenant.domain,
                 "name": key.name,
+                "purpose": key.purpose,
+                "assigned_to": (
+                    {
+                        "id": str(key.assigned_to_user_id),
+                        "name": staff_by_id[key.assigned_to_user_id].full_name,
+                        "email": staff_by_id[key.assigned_to_user_id].email,
+                    }
+                    if key.assigned_to_user_id in staff_by_id
+                    else None
+                ),
                 "api_key_masked": mask_key(key.key_prefix, key.key_hash[-4:]),
                 "allowed_tools": key.allowed_tools or DEFAULT_ALLOWED_TOOLS,
                 "monthly_call_limit": key.monthly_call_limit,
-                "is_active": key.is_active and key.revoked_at is None,
+                "monthly_budget_cents": key.monthly_budget_cents,
+                "unit_price_cents": key.unit_price_cents,
+                "estimated_charge_cents_30d": max(0, calls - errors)
+                * key.unit_price_cents,
+                "status": product_key_status(key),
+                "is_active": product_key_status(key) == "active",
                 "revoked_at": key.revoked_at.isoformat() if key.revoked_at else None,
+                "expires_at": key.expires_at.isoformat() if key.expires_at else None,
                 "last_used_at": last_used,
                 "created_at": key.created_at.isoformat() if key.created_at else None,
                 "billing": {
@@ -1418,7 +1467,7 @@ async def platform_mcp_overview(
     overview = PlatformMCPOverview(
         tenants_with_keys=len(tenant_summary),
         active_keys=sum(
-            1 for key, _tenant in keys if key.is_active and key.revoked_at is None
+            1 for key, _tenant in keys if product_key_status(key) == "active"
         ),
         total_keys=len(keys),
         calls_30d=sum(row.get("calls_30d", 0) for row in usage_by_key.values()),
@@ -1441,7 +1490,8 @@ async def platform_mcp_overview(
             "shorthand": settings.research_mcp_shorthand,
             "streamable_http": settings.research_mcp_endpoint,
             "rest_compatibility": f"{settings.research_mcp_endpoint}/tools/call",
-            "auth_header": "X-MCP-API-Key",
+            "auth_header": "Authorization",
+            "auth_scheme": "Bearer",
         },
         "product_enabled": settings.MCP_PRODUCT_ENABLED,
     }

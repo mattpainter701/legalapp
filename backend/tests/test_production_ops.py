@@ -313,7 +313,6 @@ def _production_env(**overrides: str) -> str:
         "CLOUDFLARED_CONFIG_FILE": "__TEST_CLOUDFLARED_CONFIG__",
         "CLOUDFLARED_BIN": "/bin/true",
         "ZOOM_REQUIRED_TENANT_ID": "00000000-0000-4000-8000-000000000111",
-        "ZOOM_REQUIRED_TENANT_PLAN": "intake-only",
         "QBO_CLIENT_ID": "qbo-client-id-0123456789",
         "QBO_CLIENT_SECRET": "qbo-client-secret-0123456789",
         "QBO_REDIRECT_URI": "https://ops-test.invalid/api/integrations/qbo/callback",
@@ -531,6 +530,19 @@ def test_production_preflight_accepts_staged_keyring_and_dedicated_mcp_auth(
     assert "Production preflight passed" in output
     assert "ops-secret-key-0123456789" not in output
     assert "mcp-upstream-key-0123456789" not in output
+
+
+def test_production_preflight_does_not_gate_zoom_on_commercial_plan(
+    tmp_path: Path,
+) -> None:
+    result = _run_preflight(
+        tmp_path,
+        _production_env(ZOOM_REQUIRED_TENANT_PLAN="full-platform"),
+    )
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, output
+    assert "Production preflight passed" in output
 
 
 def test_production_preflight_rejects_nonproduction_qbo_oauth(
@@ -1287,9 +1299,12 @@ def test_production_check_exercises_customer_llm_routes() -> None:
     production_check = PRODUCTION_CHECK.read_text(encoding="utf-8")
 
     assert "LiteLLM customer-route completion probe failed" in production_check
-    assert 'for model in ("clarity-standard", "clarity-premium"):' in production_check
-    assert '"http://127.0.0.1:4000/v1/chat/completions"' in production_check
-    assert '"Reply with exactly READY."' in production_check
+    assert "python -m app.services.llm_availability" in production_check
+    assert '"${compose[@]}" exec -T backend' in production_check
+    assert "timeout --kill-after=10s 140s" in production_check
+    assert (
+        'for model in ("clarity-standard", "clarity-premium"):' not in production_check
+    )
 
 
 def test_production_check_fails_closed_on_document_automation_integrity_gaps() -> None:
@@ -1585,7 +1600,8 @@ def test_litellm_release_contract_is_pinned_and_fail_closed() -> None:
         assert proxy["depends_on"] == {
             "litellm-schema-migrator": {"condition": "service_completed_successfully"}
         }
-        assert proxy["healthcheck"]["start_period"] == "90s"
+        expected_start_period = "240s" if compose_name == "docker-compose.hypervisor.yml" else "90s"
+        assert proxy["healthcheck"]["start_period"] == expected_start_period
         assert proxy["healthcheck"]["retries"] == 5
         assert services["litellm-migrator"]["entrypoint"] == ["prisma"]
         assert services["litellm-migrator"]["pull_policy"] == "never"
@@ -1731,7 +1747,13 @@ def test_ionos_stage_gate_is_private_exact_and_fail_closed() -> None:
     assert 'ipaddress.ip_network("100.64.0.0/10")' in stage
     assert "X-Clarity-Internal-Key" in stage
     assert "MCP_SERVER_URL.rstrip('/')}/api/mcp\"" in stage
-    assert "Research MCP must remain disabled" in stage
+    assert 'research_enabled="$(get_env MCP_PRODUCT_ENABLED)"' in stage
+    assert '[[ "$research_status" == 401 ]]' in stage
+    assert "enabled Research MCP did not require authentication" in stage
+    assert "enabled Research MCP did not advertise Bearer authentication" in stage
+    assert '[[ "$research_status" == 404 ]]' in stage
+    assert "disabled Research MCP did not fail closed" in stage
+    assert "MCP_PRODUCT_ENABLED must be true or false" in stage
     assert "IONOS_PUBLIC_CUTOVER=not-yet-approved" in stage
 
 
@@ -1776,7 +1798,6 @@ def test_upload_bind_scheduler_and_launch_capability_contracts() -> None:
     assert "billing_tier <> 'demo'" in production_check
     assert "t.billing_tier <> 'demo'" in production_check
     assert "ZOOM_REQUIRED_TENANT_ID" in production_check
-    assert "ZOOM_REQUIRED_TENANT_PLAN" in production_check
 
 
 def test_demo_tenants_are_excluded_from_scheduler_health_gates() -> None:
@@ -1791,7 +1812,6 @@ def test_demo_tenants_are_excluded_from_scheduler_health_gates() -> None:
     assert "billing_tier <> 'demo'" in deploy
     assert "billing_tier <> 'demo'" in production_check
     assert "billing_tier <> 'demo' ORDER BY id" in main
-    assert "custom_config->>'plan'" in production_check
     assert '--tenant-id "$ZOOM_REQUIRED_TENANT_ID"' in production_check
     assert "SMTP no-delivery capability probe" in production_check
     assert "client.starttls" in production_check
@@ -1803,6 +1823,49 @@ def test_demo_tenants_are_excluded_from_scheduler_health_gates() -> None:
         "backend and scheduler runtime SMTP configurations differ" in production_check
     )
     assert "inherited EMAIL_ENABLED conflicts" in production_check
+
+
+def test_zoom_production_gate_is_independent_of_commercial_plan() -> None:
+    preflight = (ROOT / "scripts" / "prod_env_preflight.sh").read_text(encoding="utf-8")
+    production_check = (ROOT / "scripts" / "production_check.sh").read_text(
+        encoding="utf-8"
+    )
+    env_example = (ROOT / ".env.prod.example").read_text(encoding="utf-8")
+    acceptance = (ROOT / "scripts" / "production_acceptance.sh").read_text(
+        encoding="utf-8"
+    )
+    deploy = (ROOT / "scripts" / "deploy_prod.sh").read_text(encoding="utf-8")
+
+    for source in (preflight, production_check, env_example):
+        assert "ZOOM_REQUIRED_TENANT_PLAN" not in source
+    assert "custom_config->>'plan'" not in production_check
+    assert "required Zoom tenant is inactive or missing" in production_check
+    assert "a.encrypted_webhook_secret_token IS NOT NULL" in production_check
+    assert "c.encrypted_refresh_token IS NOT NULL" in production_check
+    assert "c.service_account_email = a.zoom_account_id" in production_check
+    assert "c.health = 'healthy'" in production_check
+    assert "phone:read:list_call_logs:admin" in production_check
+    assert "phone:read:call_log:admin" in production_check
+    assert '--tenant-id "$ZOOM_REQUIRED_TENANT_ID"' in production_check
+    assert 'ZOOM_REQUIRED="${ZOOM_REQUIRED:-false}"' in production_check
+    assert "ZOOM_REQUIRED=false" in acceptance
+    assert 'ZOOM_REQUIRED="${ZOOM_REQUIRED:-false}"' in deploy
+    assert 'zoom_required="$ZOOM_REQUIRED"' in deploy
+
+
+def test_production_preflight_allows_zoom_selector_to_be_omitted(
+    tmp_path: Path,
+) -> None:
+    env_text = "\n".join(
+        line
+        for line in _production_env().splitlines()
+        if not line.startswith("ZOOM_REQUIRED_TENANT_ID=")
+    )
+    result = _run_preflight(tmp_path, env_text + "\n")
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, output
+    assert "optional Zoom provider gate cannot be requested" in output
 
 
 def test_production_guards_cover_litellm_data_and_schema() -> None:
@@ -1865,6 +1928,14 @@ def test_production_guards_cover_litellm_data_and_schema() -> None:
     assert "escrow_has_value LITELLM_SALT_KEY" in restore
     assert "escrow_has_value TOKEN_ENCRYPTION_KEYS" in restore
     assert "isolated-clean-host-restore" in manual_restore
+    assert "wait_for_final_postgres" in restore
+    assert '[ "$(cat /proc/1/comm)" = postgres ]' in restore
+    assert restore.count('wait_for_final_postgres "$') == 2
+    assert "pg_isready" in restore
+    assert (
+        "pg_isready -U postgres -d legalapp_restore >/dev/null 2>&1 && break"
+        not in restore
+    )
     assert "legalapp-restored.counts.tsv" in manual_restore
     assert "litellm-restored.counts.tsv" in manual_restore
     assert "upload_backup_artifact.py" in manual_restore
@@ -1873,6 +1944,55 @@ def test_production_guards_cover_litellm_data_and_schema() -> None:
     assert "OFFSITE_RESTORE_SIGNING_KEY_FILE" in manual_restore
     assert "openssl dgst -sha256 -sign" in manual_restore
     assert nullable_tenant_metric in manual_restore
+
+
+def test_skynet_installers_separate_runner_from_runtime_owner() -> None:
+    dev1 = (ROOT / "scripts" / "install_dev1_deploy_entrypoint.sh").read_text(
+        encoding="utf-8"
+    )
+    dr = (ROOT / "scripts" / "install_skynet_dr_services.sh").read_text(
+        encoding="utf-8"
+    )
+    deploy = (ROOT / "scripts" / "deploy_dev1.sh").read_text(encoding="utf-8")
+    assert "host_ip: 127.0.0.1" in deploy
+    assert 'published: "18443"' in deploy
+    assert 'published: "443"' in deploy
+    assert "127.0.0.1:18443" not in deploy
+    assert "127\\.0\\.0\\.1:443" not in deploy
+    assert 'cd "$APP_DIR"' in deploy
+    assert 'chmod 0644 -- "$postgres_init_script"' in deploy
+    assert '[[ -f "$postgres_init_script" && ! -L "$postgres_init_script" ]]' in deploy
+
+    dev1_compose = (ROOT / "docker-compose.dev1.yml").read_text(encoding="utf-8")
+    assert 'profiles: ["office-addin-disabled-on-dev1"]' in dev1_compose
+    assert 'extra_hosts:' in dev1_compose
+    assert '- "office-addin=127.0.0.1"' in dev1_compose
+
+    for installer in (dev1, dr):
+        assert 'deploy_user="${DEPLOY_USER:-varta}"' in installer
+        assert 'runner_user="${RUNNER_USER:-lawhand-runner}"' in installer
+        assert 'id -u "$runner_user" >/dev/null' in installer
+        assert '"$runner_user ALL=(root) NOPASSWD:' in installer
+        assert '"$deploy_user ALL=(root) NOPASSWD:' not in installer
+    rehearsal = (ROOT / "scripts" / "skynet_dr_rehearsal.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "install -m 0755 -o root -g root" in dr
+    assert "/usr/local/libexec/lawhand-dr" in dr
+    assert "runuser -u varta" not in dr
+    assert "DR_ENV_FILE=/etc/lawhand/skynet-dr.env" in dr
+    assert "DR_ENV_FILE=/home/varta/.config/lawhand/dr.env" not in dr
+    assert 'install -m 0600 -o root -g root "$password_source"' in dr
+    assert 'install -m 0600 -o root -g root "$credential_tmp"' in dr
+    assert "RESTIC_PASSWORD_FILE=$password_file" in dr
+    assert 'DR_STATE_DIR="$STATE_DIR"' in dr
+    assert 'DR_RELEASE_SHA="$RELEASE_SHA"' in dr
+    assert 'chown root:varta "$STATE_DIR"' in dr
+    assert 'chmod 0750 "$STATE_DIR"' in dr
+    assert 'chown root:varta "$STATUS_FILE"' in dr
+    assert "systemctl restart lawhand-skynet-status.service" in dr
+    assert "DR_RELEASE_SHA" in rehearsal
+    assert 'release_sha="$(git -C "$APP_DIR" rev-parse HEAD)"' in rehearsal
 
 
 def test_tls_and_recurring_backup_ops_support_multi_compose() -> None:

@@ -210,7 +210,7 @@ describe('SEO configuration', () => {
     expect(JSON.stringify(faq)).toContain('CRM')
     // MCP is release-gated; the published answer must say so rather than
     // describing it as generally available.
-    expect(JSON.stringify(faq)).toContain('private preview')
+    expect(JSON.stringify(faq)).toContain('successful tool call')
   })
 
   it('limits structured data to claims supported by the product', () => {
@@ -309,9 +309,9 @@ describe('SEO configuration', () => {
 
   it.each([
     ['/product/chat', 'Ask with the whole matter in hand.', 'matter-aware AI workspace'],
-    ['/product/mcp', 'Bring approved public legal authority into the tools you already use.', '$0.45 per tool call'],
+    ['/product/mcp', 'Bring approved public legal authority into the tools you already use.', '$0.45 per successful tool call'],
     ['/pricing', 'One clear platform price. Controlled expansion.', '$89 per user per month'],
-    ['/product', 'The legal automation platform for law firms.', 'Practice-area library'],
+    ['/product', 'See the entire matter move.', 'The matter flow'],
     ['/request-demo', 'Book a LawHand demo.', 'client and matter CRM'],
   ])('builds a substantive public product shell for %s', (route, heading, claim) => {
     const base = readFileSync('index.html', 'utf8')

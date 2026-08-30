@@ -85,16 +85,28 @@ beforeEach(() => {
   getLLMModelCatalog.mockResolvedValue({ models: [] })
   getLLMGatewayStatus.mockResolvedValue({ reachable: true, aliases: {} })
   getBackgroundAssistantUsage.mockResolvedValue({
-    limits: { account_five_hour: 2050, account_weekly: 5100, account_monthly: 10250, tenant_five_hour: 250, tenant_weekly: 750, tenant_monthly: 1500, reservation_ttl_minutes: 15 },
+    limits: { account_five_hour: 2050, account_weekly: 5100, account_monthly: 10250, tenant_five_hour: 250, tenant_weekly: 750, tenant_monthly: 1500, reservation_ttl_minutes: 15, account_five_hour_micros: 12000000, account_weekly_micros: 30000000, account_monthly_micros: 60000000, tenant_five_hour_micros: 3000000, tenant_weekly_micros: 8000000, tenant_monthly_micros: 15000000 },
     five_hour: { used: 0, remaining: 2050, percent: 0 },
     weekly: { used: 0, remaining: 5100, percent: 0 },
     monthly: { used: 0, remaining: 10250, percent: 0, month_elapsed_percent: 50, projected_over_budget: false },
+    value: {
+      five_hour: { spent_usd: 0, limit_usd: 12, remaining_usd: 12, percent: 0 },
+      weekly: { spent_usd: 0, limit_usd: 30, remaining_usd: 30, percent: 0 },
+      monthly: { spent_usd: 0, limit_usd: 60, remaining_usd: 60, percent: 0, month_elapsed_percent: 50, projected_month_usd: 0, projected_over_budget: false },
+      unreconciled: { requests: 0, held_usd: 0 },
+    },
   })
   updateBackgroundAssistantQuota.mockResolvedValue({
-    limits: { account_five_hour: 2050, account_weekly: 5100, account_monthly: 10250, tenant_five_hour: 250, tenant_weekly: 750, tenant_monthly: 1500, reservation_ttl_minutes: 15 },
+    limits: { account_five_hour: 2050, account_weekly: 5100, account_monthly: 10250, tenant_five_hour: 250, tenant_weekly: 750, tenant_monthly: 1500, reservation_ttl_minutes: 15, account_five_hour_micros: 12000000, account_weekly_micros: 30000000, account_monthly_micros: 60000000, tenant_five_hour_micros: 3000000, tenant_weekly_micros: 8000000, tenant_monthly_micros: 15000000 },
     five_hour: { used: 0, remaining: 2050, percent: 0 },
     weekly: { used: 0, remaining: 5100, percent: 0 },
     monthly: { used: 0, remaining: 10250, percent: 0, month_elapsed_percent: 50, projected_over_budget: false },
+    value: {
+      five_hour: { spent_usd: 0, limit_usd: 12, remaining_usd: 12, percent: 0 },
+      weekly: { spent_usd: 0, limit_usd: 30, remaining_usd: 30, percent: 0 },
+      monthly: { spent_usd: 0, limit_usd: 60, remaining_usd: 60, percent: 0, month_elapsed_percent: 50, projected_month_usd: 0, projected_over_budget: false },
+      unreconciled: { requests: 0, held_usd: 0 },
+    },
   })
   saveLLMRoutes.mockResolvedValue({
     activated: true,
@@ -154,7 +166,84 @@ describe('platform AI routing', () => {
     expect(getLLMGatewayStatus).toHaveBeenCalledWith('platform-token')
     expect(getBackgroundAssistantUsage).toHaveBeenCalledWith('platform-token')
     expect(screen.getAllByText('Background Automations (global)')).toHaveLength(2)
-    expect(screen.getByText('Background request budget')).toBeInTheDocument()
+    expect(screen.getByText('Background pool budget')).toBeInTheDocument()
+  })
+
+  it('reports the background pool budget in spend, not request counts', async () => {
+    getBackgroundAssistantUsage.mockResolvedValue({
+      limits: { account_five_hour: 2050, account_weekly: 5100, account_monthly: 10250, tenant_five_hour: 250, tenant_weekly: 750, tenant_monthly: 1500, reservation_ttl_minutes: 15, account_monthly_micros: 60000000 },
+      five_hour: { used: 40, remaining: 2010, percent: 2 },
+      weekly: { used: 120, remaining: 4980, percent: 2.4 },
+      monthly: { used: 300, remaining: 9950, percent: 2.9, month_elapsed_percent: 25 },
+      value: {
+        five_hour: { spent_usd: 9.5, limit_usd: 12, remaining_usd: 2.5, percent: 79.17 },
+        weekly: { spent_usd: 21, limit_usd: 30, remaining_usd: 9, percent: 70 },
+        // Only 300 of ~10,250 requests used, but a quarter into the month the
+        // spend is already tracking well past the $60 ceiling.
+        monthly: { spent_usd: 44, limit_usd: 60, remaining_usd: 16, percent: 73.33, month_elapsed_percent: 25, projected_month_usd: 176, projected_over_budget: true },
+        unreconciled: { requests: 0, held_usd: 0 },
+      },
+    })
+    renderRouting()
+
+    expect(await screen.findByText('$9.50')).toBeInTheDocument()
+    expect(screen.getByText('$44.00')).toBeInTheDocument()
+    expect(screen.getByText(/tracking to \$176\.00/)).toBeInTheDocument()
+    expect(screen.getByText('Projected over budget')).toBeInTheDocument()
+    // Requests stay visible, but only as the secondary figure.
+    expect(screen.getByText(/\$2\.50 left · 40 requests/)).toBeInTheDocument()
+  })
+
+  it('warns when unconfirmed requests are still holding budget', async () => {
+    getBackgroundAssistantUsage.mockResolvedValue({
+      limits: { account_monthly: 10250, reservation_ttl_minutes: 15 },
+      five_hour: { used: 0 }, weekly: { used: 0 }, monthly: { used: 0 },
+      value: {
+        five_hour: { spent_usd: 0, limit_usd: 12, remaining_usd: 12, percent: 0 },
+        weekly: { spent_usd: 0, limit_usd: 30, remaining_usd: 30, percent: 0 },
+        monthly: { spent_usd: 3.2, limit_usd: 60, remaining_usd: 56.8, percent: 5.3, month_elapsed_percent: 40, projected_month_usd: 8, projected_over_budget: false },
+        unreconciled: { requests: 7, held_usd: 3.2 },
+      },
+    })
+    renderRouting()
+
+    expect(await screen.findByText(/7 unconfirmed requests hold \$3\.20/)).toBeInTheDocument()
+  })
+
+  it('keeps aged-out unknown spend visible to operators', async () => {
+    getBackgroundAssistantUsage.mockResolvedValue({
+      limits: { account_monthly: 10250, reservation_ttl_minutes: 15 },
+      five_hour: { used: 0 }, weekly: { used: 0 }, monthly: { used: 0 },
+      value: {
+        five_hour: { spent_usd: 0.6, limit_usd: 12, remaining_usd: 11.4, percent: 5 },
+        weekly: { spent_usd: 0.6, limit_usd: 30, remaining_usd: 29.4, percent: 2 },
+        monthly: { spent_usd: 0.6, limit_usd: 60, remaining_usd: 59.4, percent: 1, month_elapsed_percent: 40, projected_month_usd: 1.5, projected_over_budget: false },
+        unreconciled: { requests: 1, held_usd: 0.6, aged_out_requests: 1, aged_out_held_usd: 0.6 },
+      },
+    })
+    renderRouting()
+
+    expect(await screen.findByText(/1 unconfirmed request holds \$0\.60/)).toBeInTheDocument()
+    expect(screen.getByText(/could not be resolved before the retry deadline/)).toBeInTheDocument()
+  })
+
+  it('accepts sub-dollar background spend limits shown by the input', async () => {
+    const user = userEvent.setup()
+    renderRouting()
+
+    const fiveHour = await screen.findByLabelText('Pool / 5 hours', {
+      selector: 'input[step="0.01"]',
+    })
+    await user.clear(fiveHour)
+    await user.type(fiveHour, '0.50')
+    await user.click(screen.getByRole('button', { name: 'Save budget' }))
+
+    await waitFor(() => {
+      expect(updateBackgroundAssistantQuota).toHaveBeenCalledWith(
+        'platform-token',
+        expect.objectContaining({ account_five_hour_usd: 0.5 }),
+      )
+    })
   })
 
   it('allows Responses-only Luna on the Background route', async () => {
@@ -189,6 +278,38 @@ describe('platform AI routing', () => {
 
     expect(luna).not.toBeDisabled()
     expect(luna).not.toHaveTextContent('Unsupported endpoint')
+  })
+
+  it('allows OpenCode Zen free models on the Background route only', async () => {
+    const user = userEvent.setup()
+    getLLMProviderKeys.mockResolvedValue({
+      keys: [{ id: 'key-zen', name: 'Zen', provider_id: 'opencode-zen', key_hint: '1234' }],
+    })
+    getLLMProviderPresets.mockResolvedValue({
+      providers: [{ id: 'opencode-zen', name: 'OpenCode Zen', description: 'Free evaluation models' }],
+    })
+    getLLMModelCatalog.mockResolvedValue({
+      models: [{
+        id: 'nemotron-3-ultra-free',
+        name: 'Nemotron 3 Ultra',
+        provider_id: 'opencode-zen',
+        key_id: 'key-zen',
+        key_ids: ['key-zen'],
+        is_free: true,
+        confidential_data_allowed: false,
+      }],
+    })
+    renderRouting()
+
+    await waitFor(() => expect(document.getElementById('models-background-primary-provider')).not.toBeNull())
+    await user.selectOptions(document.getElementById('models-background-primary-provider'), 'opencode-zen')
+    await user.selectOptions(document.getElementById('models-background-primary-key'), 'key-zen')
+    const model = document.getElementById('models-background-primary-model')
+    await waitFor(() => expect(model.querySelector('option[value="nemotron-3-ultra-free"]')).not.toBeNull())
+
+    const zenFree = model.querySelector('option[value="nemotron-3-ultra-free"]')
+    expect(zenFree).not.toBeDisabled()
+    expect(zenFree).toHaveTextContent('Background-only')
   })
 
   it('validates and activates both complete routes as one operation', async () => {

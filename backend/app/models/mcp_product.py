@@ -29,8 +29,19 @@ class MCPProductKey(Base):
     )
     key_prefix: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     allowed_tools: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    purpose: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    assigned_to_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     monthly_call_limit: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1000, server_default="1000"
+    )
+    monthly_budget_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    unit_price_cents: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=45, server_default="45"
     )
     burst_limit_per_minute: Mapped[int] = mapped_column(
         Integer, nullable=False, default=60, server_default="60"
@@ -40,6 +51,9 @@ class MCPProductKey(Base):
     )
     revoked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
     )
     last_used_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

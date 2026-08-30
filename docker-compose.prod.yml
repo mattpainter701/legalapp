@@ -64,6 +64,7 @@ services:
       MCP_SERVER_URL: ${MCP_SERVER_URL:-}
       MCP_UPSTREAM_API_KEY: ${MCP_UPSTREAM_API_KEY:-}
       MCP_PRODUCT_ENABLED: ${MCP_PRODUCT_ENABLED:-false}
+      MCP_PRODUCT_CALL_PRICE_CENTS: ${MCP_PRODUCT_CALL_PRICE_CENTS:-45}
       PUBLIC_SIGNUP_ENABLED: ${PUBLIC_SIGNUP_ENABLED:-false}
       # Production invariant: override stale SMB_ENABLED=false from env_file.
       SMB_ENABLED: "true"
@@ -143,6 +144,7 @@ services:
       MCP_SERVER_URL: ${MCP_SERVER_URL:-}
       MCP_UPSTREAM_API_KEY: ${MCP_UPSTREAM_API_KEY:-}
       MCP_PRODUCT_ENABLED: ${MCP_PRODUCT_ENABLED:-false}
+      MCP_PRODUCT_CALL_PRICE_CENTS: ${MCP_PRODUCT_CALL_PRICE_CENTS:-45}
       PUBLIC_SIGNUP_ENABLED: ${PUBLIC_SIGNUP_ENABLED:-false}
       # Keep scheduler retrieval policy identical to the API process.
       SMB_ENABLED: "true"

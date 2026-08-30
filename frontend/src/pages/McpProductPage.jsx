@@ -25,13 +25,13 @@ const CONNECTION_TYPES = [
   },
   {
     icon: KeyRound,
-    label: 'Private preview',
+    label: 'Controlled pilot',
     title: 'Scoped product keys',
     body: 'A named system connects with a credential issued for the tenant, limited to an explicit tool allowlist and a usage boundary. Use this when the caller is an application rather than a person.',
     points: [
       'Issued and revoked without touching a user session',
-      'Allowed tools and monthly and per-minute limits',
-      'Calls, results, errors, and usage visible to administrators',
+      'Allowed tools, expiration, monthly dollar budgets, and request limits',
+      'Calls, charges, errors, and remaining budget visible to administrators',
     ],
   },
 ]
@@ -45,7 +45,7 @@ export default function McpProductPage() {
         <div>
           <div className="flex flex-wrap items-center gap-3">
             <span className="font-sans text-[12px] font-bold uppercase tracking-[0.16em] text-brand-accent-2">LawHand Research MCP</span>
-            <span className="rounded-full border border-brand-gold/30 bg-brand-gold/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.13em] text-brand-gold">Private preview</span>
+            <span className="rounded-full border border-brand-gold/30 bg-brand-gold/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.13em] text-brand-gold">Controlled pilot</span>
           </div>
           <h1 className="mt-5 max-w-2xl font-serif text-[44px] font-bold leading-[1.04] tracking-tight md:text-[58px]">
             Bring approved public legal authority into the tools you already use.
@@ -55,7 +55,7 @@ export default function McpProductPage() {
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
             <a href={contactUrl} className="inline-flex min-h-12 items-center gap-2 rounded-lg bg-brand-accent px-6 text-[14px] font-semibold text-white shadow-sm transition-all hover:-translate-y-px hover:bg-brand-accent-2">
-              Join the private preview <ArrowRight size={17} />
+              Get Research access <ArrowRight size={17} />
             </a>
             <Link to="/pricing" className="inline-flex min-h-12 items-center rounded-lg border border-brand-line-2 bg-brand-surface px-6 text-[14px] font-semibold text-brand-ink hover:border-brand-ink">
               See pricing
@@ -74,7 +74,7 @@ export default function McpProductPage() {
                   <p className="mt-1 text-[14px] font-semibold">Streamable HTTP</p>
                 </div>
               </div>
-              <span className="h-2.5 w-2.5 rounded-full bg-brand-green shadow-[0_0_0_5px_rgba(74,111,93,0.18)]" aria-label="Available in private preview" />
+              <span className="h-2.5 w-2.5 rounded-full bg-brand-gold shadow-[0_0_0_5px_rgba(180,142,67,0.18)]" aria-label="Controlled pilot" />
             </div>
             <div className="mt-6 space-y-3">
               {[
@@ -91,10 +91,10 @@ export default function McpProductPage() {
             </div>
             <div className="mt-6 flex items-end justify-between border-t border-white/10 pt-6">
               <div>
-                <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-white/45">Intended public price</p>
+                <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-white/45">Usage price</p>
                 <p className="mt-2 font-serif text-[42px] font-bold leading-none">$0.45</p>
               </div>
-              <span className="pb-1 text-[13px] text-white/60">per tool call</span>
+              <span className="pb-1 text-[13px] text-white/60">per successful tool call</span>
             </div>
           </div>
         </div>
@@ -123,8 +123,7 @@ export default function McpProductPage() {
           <span className="text-[12px] font-bold uppercase tracking-[0.16em] text-brand-accent-2">Two ways to connect</span>
           <h2 className="mt-3 font-serif text-[34px] font-bold leading-tight">One person’s workspace, or one approved system.</h2>
           <p className="mt-4 font-sans text-[15px] leading-relaxed text-brand-ink-2">
-            The two connection types authenticate differently and reach different work. Both are
-            enabled by the firm, and both are being released deliberately rather than opened by default.
+            The two connection types authenticate differently and reach different work. Both are enabled by the firm. Research is offered only in a controlled pilot under separate billing; workspace access remains separately permissioned and consented.
           </p>
         </div>
         <div className="mt-10 grid gap-5 md:grid-cols-2">
@@ -153,18 +152,18 @@ export default function McpProductPage() {
           <div className="rounded-3xl border border-brand-line bg-brand-surface p-8">
             <Network size={28} className="text-brand-accent-2" />
             <h2 className="mt-5 font-serif text-[28px] font-bold">Built for controlled connections.</h2>
-            <p className="mt-3 text-[15px] leading-relaxed text-brand-ink-2">The private preview is for teams ready to validate research access, client compatibility, and its boundaries with us.</p>
+            <p className="mt-3 text-[15px] leading-relaxed text-brand-ink-2">Approved pilot customers can enable research access for hosted assistants and API clients while keeping it isolated from firm workspace data.</p>
             <p className="mt-3 font-mono text-[12px] text-brand-muted">https://research.getlawhand.com/api/mcp</p>
             <p className="mt-2 text-[12px] leading-relaxed text-brand-muted">Use the full URL in saved configuration; the bare hostname remains supported as shorthand.</p>
           </div>
           <div className="rounded-3xl border border-brand-line bg-brand-bg-soft p-8">
-            <p className="text-[11px] font-bold uppercase tracking-[0.15em] text-brand-accent-2">Preview readiness</p>
+            <p className="text-[11px] font-bold uppercase tracking-[0.15em] text-brand-accent-2">Account readiness</p>
             <ul className="mt-5 grid gap-4 sm:grid-cols-2">
               {[
                 'A named ChatGPT, Claude, or API client',
                 'A defined public-authority research workflow',
                 'An owner for access and usage review',
-                'A production rollout after release gates pass',
+                'A LawHand profile with Research billing enabled',
               ].map((item) => (
                 <li key={item} className="flex items-start gap-3 text-[14px] leading-relaxed text-brand-ink-2">
                   <CheckCircle2 size={18} className="mt-0.5 shrink-0 text-brand-green" />{item}
@@ -172,7 +171,7 @@ export default function McpProductPage() {
               ))}
             </ul>
             <div className="mt-7 flex items-center gap-3 rounded-xl border border-brand-gold/25 bg-brand-gold/10 px-4 py-3 text-[13px] text-brand-ink-2">
-              <LockKeyhole size={18} className="shrink-0 text-brand-gold" /> Public key issuance remains gated while production release checks are completed.
+              <LockKeyhole size={18} className="shrink-0 text-brand-gold" /> Firm administrators issue keys, assign staff custody, set budgets and expiration, and revoke access from the LawHand portal.
             </div>
           </div>
         </div>

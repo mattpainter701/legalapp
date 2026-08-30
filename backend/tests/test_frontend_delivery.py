@@ -29,6 +29,24 @@ COMPOSE_VARIANTS = {
 }
 
 
+class _ComposeSourceLoader(yaml.SafeLoader):
+    """Parse source Compose files while preserving Compose merge-tag values."""
+
+
+def _construct_compose_merge_tag(
+    loader: _ComposeSourceLoader, node: yaml.Node
+) -> object:
+    if isinstance(node, yaml.MappingNode):
+        return loader.construct_mapping(node, deep=True)
+    if isinstance(node, yaml.SequenceNode):
+        return loader.construct_sequence(node, deep=True)
+    return loader.construct_scalar(node)
+
+
+for _compose_tag in ("!override", "!reset"):
+    _ComposeSourceLoader.add_constructor(_compose_tag, _construct_compose_merge_tag)
+
+
 def _volume_target(volume: object) -> str | None:
     if isinstance(volume, dict):
         target = volume.get("target")
@@ -162,7 +180,10 @@ def _resolved_compose(files: tuple[str, ...]) -> dict:
 
 def test_compose_sources_never_mask_image_baked_frontend_dist() -> None:
     for path in sorted(ROOT.glob("docker-compose*.yml")):
-        config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        config = (
+            yaml.load(path.read_text(encoding="utf-8"), Loader=_ComposeSourceLoader)
+            or {}
+        )
         _assert_no_stale_frontend_mounts(
             config, path.name, require_frontend_build=False
         )
@@ -265,7 +286,9 @@ def test_nginx_operator_routes_and_pdf_csp_are_consistent() -> None:
     # granted to every response. An inline snippet is never allowed.
     assert "script-src 'self'$csp_analytics_script;" in csp_lines[0]
     assert "'unsafe-inline'" not in csp_lines[0].split("style-src")[0]
-    public_routes = "privacy|terms|pricing|request-demo|product(?:/(?:chat|mcp))?"
+    public_routes = (
+        "privacy|terms|pricing|request-demo|trust-center|product(?:/(?:chat|mcp))?"
+    )
     assert nginx.count(f"location ~ ^/({public_routes})/?$ {{") == 2
     assert nginx.count(f"rewrite ^/({public_routes})/?$ /$1/index.html break;") == 2
 
@@ -284,10 +307,10 @@ def test_nginx_allows_analytics_hosts_only_on_public_marketing_pages() -> None:
         start = nginx.index(f"map $request_uri {name} {{")
         block = nginx[start : nginx.index("}", start)]
         # Anything not matched by an explicit public-route pattern gets nothing.
-        assert re.search(r'default\s+"";', block), (
-            f"{name} must deny the analytics hosts by default"
-        )
-        for route in ("privacy|terms|pricing|request-demo", "product"):
+        assert re.search(
+            r'default\s+"";', block
+        ), f"{name} must deny the analytics hosts by default"
+        for route in ("privacy|terms|pricing|request-demo|trust-center", "product"):
             assert route in block, f"{name} must cover the {route} pages"
 
     # Every route the SEO config publishes must be able to load the tag, or the
@@ -295,13 +318,12 @@ def test_nginx_allows_analytics_hosts_only_on_public_marketing_pages() -> None:
     start = nginx.index("map $request_uri $csp_analytics_script {")
     script_map = nginx[start : nginx.index("}", start)]
     patterns = [
-        re.compile(match.group(1))
-        for match in re.finditer(r"~(\S+)\s+\"", script_map)
+        re.compile(match.group(1)) for match in re.finditer(r"~(\S+)\s+\"", script_map)
     ]
     for path in _indexable_public_paths():
-        assert any(pattern.search(path) for pattern in patterns), (
-            f"{path} is indexable but nginx blocks the analytics tag there"
-        )
+        assert any(
+            pattern.search(path) for pattern in patterns
+        ), f"{path} is indexable but nginx blocks the analytics tag there"
 
 
 def _indexable_public_paths() -> list[str]:
@@ -313,8 +335,7 @@ def _indexable_public_paths() -> list[str]:
     end = config.index("const WORKSPACE_ROUTE_TITLES", start)
     block = config[start:end]
     paths = [
-        match.group(1)
-        for match in re.finditer(r"canonicalPath: '([^']+)'", block)
+        match.group(1) for match in re.finditer(r"canonicalPath: '([^']+)'", block)
     ]
     assert paths, "no canonical paths parsed from the SEO config"
     return paths
@@ -333,8 +354,7 @@ def test_nginx_never_noindexes_a_route_the_sitemap_publishes() -> None:
     allowlist = nginx[start : nginx.index("}", start)]
 
     patterns = [
-        re.compile(match.group(1))
-        for match in re.finditer(r'~(\S+)\s+"";', allowlist)
+        re.compile(match.group(1)) for match in re.finditer(r'~(\S+)\s+"";', allowlist)
     ]
     assert patterns, "no allowlist entries parsed from the x_robots_tag map"
 
@@ -357,9 +377,9 @@ def test_nginx_never_advertises_the_mcp_hostnames_as_indexable() -> None:
     start = nginx.index("map $host $robots_tag {")
     host_map = nginx[start : nginx.index("}", start)]
 
-    assert "default" in host_map and "$x_robots_tag" in host_map, (
-        "the host-keyed robots map must fall back to the path-keyed value"
-    )
+    assert (
+        "default" in host_map and "$x_robots_tag" in host_map
+    ), "the host-keyed robots map must fall back to the path-keyed value"
     for host in ("mcp.getlawhand.com", "research.getlawhand.com"):
         assert re.search(
             rf'"{re.escape(host)}"\s+"noindex, nofollow, noarchive";', host_map

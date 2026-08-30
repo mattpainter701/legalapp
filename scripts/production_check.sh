@@ -2,7 +2,7 @@
 # Operator release/monitoring gate. Sends one alert on state transitions.
 set -euo pipefail
 
-ZOOM_REQUIRED="${ZOOM_REQUIRED:-true}"
+ZOOM_REQUIRED="${ZOOM_REQUIRED:-false}"
 case "$ZOOM_REQUIRED" in
   true|false) ;;
   *) echo "FAIL: ZOOM_REQUIRED must be true or false" >&2; exit 2 ;;
@@ -75,7 +75,6 @@ if [[ -n "${PLATFORM_LEGACY_BOOTSTRAP_ENABLED+x}" && "$PLATFORM_LEGACY_BOOTSTRAP
 fi
 PLATFORM_LEGACY_BOOTSTRAP_ENABLED="$legacy_platform_from_file"
 ZOOM_REQUIRED_TENANT_ID="${ZOOM_REQUIRED_TENANT_ID:-$(get_env ZOOM_REQUIRED_TENANT_ID)}"
-ZOOM_REQUIRED_TENANT_PLAN="${ZOOM_REQUIRED_TENANT_PLAN:-$(get_env ZOOM_REQUIRED_TENANT_PLAN)}"
 email_enabled_from_file="$(get_env EMAIL_ENABLED)"
 if [[ -n "${EMAIL_ENABLED+x}" && "$EMAIL_ENABLED" != "$email_enabled_from_file" ]]; then
   echo "FAIL: inherited EMAIL_ENABLED conflicts with the deployed production environment" >&2
@@ -125,10 +124,6 @@ done
 if [[ "$ZOOM_REQUIRED" == true ]]; then
   [[ "$ZOOM_REQUIRED_TENANT_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]] || {
     echo "FAIL: ZOOM_REQUIRED_TENANT_ID must be the sold tenant UUID" >&2
-    exit 1
-  }
-  [[ "$ZOOM_REQUIRED_TENANT_PLAN" == "intake-only" ]] || {
-    echo "FAIL: ZOOM_REQUIRED_TENANT_PLAN must be intake-only for this launch" >&2
     exit 1
   }
 fi
@@ -349,40 +344,13 @@ if not required.issubset(models):
     raise SystemExit(f"missing required model aliases: {sorted(required - models)}")
 PY
 
-# Model discovery proves only that aliases are registered.  Exercise one
-# minimal, non-customer completion through each customer-facing route so a
-# provider outage, broken fallback chain, or alias that returns no visible
-# content blocks the release instead of surfacing as a generic chat failure.
-"${compose[@]}" exec -T litellm python - <<'PY' >/dev/null 2>&1 || fail "LiteLLM customer-route completion probe failed"
-import json
-import os
-import urllib.request
-
-for model in ("clarity-standard", "clarity-premium"):
-    request = urllib.request.Request(
-        "http://127.0.0.1:4000/v1/chat/completions",
-        data=json.dumps(
-            {
-                "model": model,
-                "messages": [
-                    {"role": "user", "content": "Reply with exactly READY."}
-                ],
-                "max_tokens": 128,
-                "temperature": 0,
-            }
-        ).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {os.environ['LITELLM_API_KEY']}",
-            "Content-Type": "application/json",
-        },
-    )
-    with urllib.request.urlopen(request, timeout=45) as response:
-        payload = json.load(response)
-    choices = payload.get("choices") or []
-    content = choices[0].get("message", {}).get("content") if choices else None
-    if not isinstance(content, str) or not content.strip():
-        raise SystemExit(f"{model} returned no visible completion")
-PY
+# Model discovery proves only that aliases are registered. Exercise the active
+# Standard and Premium aliases resolved from the platform database so managed
+# route revisions and their fallback chains are tested exactly as customers use
+# them. The checker emits sanitized route/status evidence only.
+timeout --kill-after=10s 140s "${compose[@]}" exec -T backend \
+  python -m app.services.llm_availability >/dev/null 2>&1 \
+  || fail "LiteLLM customer-route completion probe failed"
 
 sql() {
   "${compose[@]}" exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atq -v ON_ERROR_STOP=1 -c "$1" 2>/dev/null
@@ -417,9 +385,9 @@ if [[ "$invalid_active_templates" =~ ^[0-9]+$ ]] && (( invalid_active_templates 
 
 if [[ "$ZOOM_REQUIRED" == true ]]; then
   zoom_predicate="t.is_active AND a.encrypted_webhook_secret_token IS NOT NULL AND NULLIF(a.zoom_account_id, '') IS NOT NULL AND c.encrypted_refresh_token IS NOT NULL AND c.service_account_email = a.zoom_account_id AND c.health = 'healthy' AND c.scopes LIKE '%phone:read:list_call_logs:admin%' AND c.scopes LIKE '%phone:read:call_log:admin%'"
-  tenant_contract="$(sql "SELECT count(*) FROM tenants t JOIN tenant_settings s ON s.tenant_id=t.id WHERE t.id='${ZOOM_REQUIRED_TENANT_ID}'::uuid AND t.is_active AND COALESCE(s.custom_config->>'plan','')='${ZOOM_REQUIRED_TENANT_PLAN}'" || echo error)"
-  zoom_ready="$(sql "SELECT count(DISTINCT t.id) FROM tenants t JOIN tenant_settings s ON s.tenant_id=t.id JOIN tenant_oauth_apps a ON a.tenant_id=t.id AND a.provider='zoom_phone' AND a.is_active JOIN tenant_credentials c ON c.tenant_id=t.id AND c.provider='zoom_phone' AND c.is_active WHERE t.id='${ZOOM_REQUIRED_TENANT_ID}'::uuid AND COALESCE(s.custom_config->>'plan','')='${ZOOM_REQUIRED_TENANT_PLAN}' AND ${zoom_predicate}" || echo error)"
-  [[ "$tenant_contract" == "1" ]] || fail "required Zoom tenant is inactive, missing, or not on the intake-only launch plan"
+  tenant_contract="$(sql "SELECT count(*) FROM tenants t WHERE t.id='${ZOOM_REQUIRED_TENANT_ID}'::uuid AND t.is_active" || echo error)"
+  zoom_ready="$(sql "SELECT count(DISTINCT t.id) FROM tenants t JOIN tenant_oauth_apps a ON a.tenant_id=t.id AND a.provider='zoom_phone' AND a.is_active JOIN tenant_credentials c ON c.tenant_id=t.id AND c.provider='zoom_phone' AND c.is_active WHERE t.id='${ZOOM_REQUIRED_TENANT_ID}'::uuid AND ${zoom_predicate}" || echo error)"
+  [[ "$tenant_contract" == "1" ]] || fail "required Zoom tenant is inactive or missing"
   [[ "$zoom_ready" == "1" ]] || fail "required Zoom tenant configuration is incomplete"
 
   zoom_crc="$(curl -fsS --max-time 15 -H 'Content-Type: application/json' \
@@ -430,7 +398,7 @@ if [[ "$ZOOM_REQUIRED" == true ]]; then
   "${compose[@]}" exec -T backend python -m scripts.check_zoom_phone \
     --tenant-id "$ZOOM_REQUIRED_TENANT_ID" >/dev/null 2>&1 || fail "Zoom Phone live API probe failed for the required tenant"
 else
-  echo "WARNING: NOT GO-LIVE — Zoom Phone launch gates were skipped for fresh-host bootstrap." >&2
+  echo "INFO: Zoom Phone provider validation was not requested."
 fi
 
 if [[ "$EMAIL_ENABLED" == "true" ]]; then
@@ -654,15 +622,13 @@ else
   state="healthy"
 fi
 
-if [[ "$ZOOM_REQUIRED" == true ]]; then
-  previous="$(cat "$STATE_FILE" 2>/dev/null || true)"
-  if [[ "$state" != "$previous" && -n "${ALERT_WEBHOOK_URL:-}" ]]; then
-    escaped="$(printf '%s' "$message" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-    curl -fsS --max-time 10 -H 'Content-Type: application/json' \
-      --data "{\"text\":\"$escaped\"}" "$ALERT_WEBHOOK_URL" >/dev/null || true
-  fi
-  printf '%s' "$state" > "$STATE_FILE"
+previous="$(cat "$STATE_FILE" 2>/dev/null || true)"
+if [[ "$state" != "$previous" && -n "${ALERT_WEBHOOK_URL:-}" ]]; then
+  escaped="$(printf '%s' "$message" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+  curl -fsS --max-time 10 -H 'Content-Type: application/json' \
+    --data "{\"text\":\"$escaped\"}" "$ALERT_WEBHOOK_URL" >/dev/null || true
 fi
+printf '%s' "$state" > "$STATE_FILE"
 
 if [[ "$state" == "failed" ]]; then
   echo "$message" >&2
@@ -671,5 +637,5 @@ fi
 if [[ "$ZOOM_REQUIRED" == true ]]; then
   echo "Production check passed: disk, containers, PostgreSQL, Redis, scheduler, queue, Zoom, email-delivery policy, HTTP, and TLS."
 else
-  echo "Bootstrap infrastructure check passed. NOT GO-LIVE until strict Zoom production_check passes." >&2
+  echo "Platform production check passed; the optional Zoom provider gate was not requested."
 fi

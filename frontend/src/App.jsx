@@ -18,6 +18,7 @@ const SignupPage = lazy(() => import('./pages/SignupPage'))
 const ForgotPasswordPage = lazy(() => import('./pages/ForgotPasswordPage'))
 const ResetPasswordPage = lazy(() => import('./pages/ResetPasswordPage'))
 const LegalNoticePage = lazy(() => import('./pages/LegalNoticePage'))
+const TrustCenterPage = lazy(() => import('./pages/TrustCenterPage'))
 const ProductChatPage = lazy(() => import('./pages/ProductChatPage'))
 const McpProductPage = lazy(() => import('./pages/McpProductPage'))
 const PricingPage = lazy(() => import('./pages/PricingPage'))
@@ -27,6 +28,7 @@ const WorkspaceMcpAuthorizePage = lazy(() => import('./pages/WorkspaceMcpAuthori
 const ResearchMcpAuthorizePage = lazy(() => import('./pages/ResearchMcpAuthorizePage'))
 const NotFoundPage = lazy(() => import('./pages/NotFoundPage'))
 const ChatPage = lazy(() => import('./pages/ChatPage'))
+const FirmMemoryPage = lazy(() => import('./pages/FirmMemoryPage'))
 const AdminPage = lazy(() => import('./pages/AdminPage'))
 const AuthCallback = lazy(() => import('./pages/AuthCallback'))
 const PluginsPage = lazy(() => import('./pages/PluginsPage'))
@@ -34,6 +36,7 @@ const PluginPage = lazy(() => import('./pages/PluginPage'))
 const MatterPortfolioPage = lazy(() => import('./pages/MatterPortfolioPage'))
 const MatterDetailPage = lazy(() => import('./pages/MatterDetailPage'))
 const DocumentRevisionPage = lazy(() => import('./pages/DocumentRevisionPage'))
+const BriefCheckPage = lazy(() => import('./pages/BriefCheckPage'))
 const RenewalTrackerPage = lazy(() => import('./pages/RenewalTrackerPage'))
 const EstatePortfolioPage = lazy(() => import('./pages/EstatePortfolioPage'))
 const EstateDetailPage = lazy(() => import('./pages/EstateDetailPage'))
@@ -42,6 +45,7 @@ const DomesticDetailPage = lazy(() => import('./pages/DomesticDetailPage'))
 const MediationPortfolioPage = lazy(() => import('./pages/MediationPortfolioPage'))
 const MediationDetailPage = lazy(() => import('./pages/MediationDetailPage'))
 const PlatformPage = lazy(() => import('./pages/PlatformPage'))
+const PlatformInfrastructurePage = lazy(() => import('./pages/PlatformInfrastructurePage'))
 const ContactsPage = lazy(() => import('./pages/ContactsPage'))
 const ConflictChecksPage = lazy(() => import('./pages/ConflictChecksPage'))
 const ContactDetailPage = lazy(() => import('./pages/ContactDetailPage'))
@@ -229,6 +233,7 @@ export default function App() {
         <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route path="/terms" element={<LegalNoticePage type="terms" />} />
         <Route path="/privacy" element={<LegalNoticePage type="privacy" />} />
+        <Route path="/trust-center" element={<TrustCenterPage />} />
         <Route path="/product" element={<ProductPage />} />
         <Route path="/product/chat" element={<ProductChatPage />} />
         <Route path="/product/mcp" element={<McpProductPage />} />
@@ -246,6 +251,10 @@ export default function App() {
           element={<ShellRoute title="Chat" module="chat"><ChatPage /></ShellRoute>}
         />
         <Route
+          path="/firm-memory"
+          element={<ShellRoute title="Firm Memory" module="matters"><FirmMemoryPage /></ShellRoute>}
+        />
+        <Route
           path="/matters"
           element={<ShellRoute title="My Matters" module="matters"><MatterPortfolioPage /></ShellRoute>}
         />
@@ -257,6 +266,7 @@ export default function App() {
           path="/matters/:matterId/documents/:documentId/revise"
           element={<ShellRoute title="Revise Document" module="matters"><DocumentRevisionPage /></ShellRoute>}
         />
+        <Route path="/matters/:matterId/brief-check" element={<ShellRoute title="Brief Check" module="matters"><BriefCheckPage /></ShellRoute>} />
         <Route
           path="/matters/:matterId/documents/:documentId/revisions/:revisionId"
           element={<ShellRoute title="Review Document Revision" module="matters"><DocumentRevisionPage /></ShellRoute>}
@@ -419,6 +429,7 @@ export default function App() {
 
         {/* Platform admin — standalone auth */}
         <Route path="/platform" element={<PlatformPage />} />
+        <Route path="/platform/infrastructure" element={<PlatformInfrastructurePage />} />
         <Route path="*" element={<NotFoundPage />} />
         </Routes>
         </Suspense>

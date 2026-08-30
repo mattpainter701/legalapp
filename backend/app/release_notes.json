@@ -2,6 +2,247 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.30.4",
+      "version": "2026.08.30.4",
+      "title": "Controlled client and matter import promotion",
+      "published_at": "2026-08-30",
+      "summary": "Administrators can approve an unchanged import report before promoting the conservative client and matter subset, with durable links and rollback review markers.",
+      "highlights": [
+        {"title": "Approve the exact reconciliation", "description": "Promotion requires an explicit confirmation and report hash, so changed or stale staging cannot be promoted silently."},
+        {"title": "Reconcile existing records", "description": "Client identifiers and email addresses are matched within the tenant before a new client is created; every promoted row receives an external provenance link."},
+        {"title": "Keep rollback reviewable", "description": "Operators can mark a promoted run for non-destructive rollback review while audit receipts preserve what happened."}
+      ]
+    },
+    {
+      "id": "2026.08.30.3",
+      "version": "2026.08.30.3",
+      "title": "Search a firm's local case-file memory",
+      "published_at": "2026-08-30",
+      "summary": "A bounded local file-search control surface connects an approved file-share agent to the portal, Chat, and Workspace MCP while keeping the firm's query and documents on the firm's network.",
+      "highlights": [
+        {"title": "Search inside supported local files", "description": "Matter-scoped searches can return ranked snippets and page hints from the agent's local SQLite control index without embeddings."},
+        {"title": "Use the same search from three surfaces", "description": "The portal, Chat assistant, and user-authorized Workspace MCP now share one bounded search contract with visible partial and index status."},
+        {"title": "Open results safely", "description": "Results use an authenticated portal link that rechecks access and offers Copy UNC instead of exposing a raw browser file link."},
+        {"title": "Measure the pilot honestly", "description": "Correlation IDs, counts, latency, and indexed or pending status support local validation; this remains a small control-index PoC, not a 4 TB production search promise."}
+      ]
+    },
+    {
+      "id": "2026.08.30.2",
+      "version": "2026.08.30.2",
+      "title": "Deeper federal and Ohio research coverage",
+      "published_at": "2026-08-30",
+      "summary": "Research can ingest reviewed federal rules, constitutional analysis, and Tax Court reports while keeping jurisdiction and known extraction limits explicit.",
+      "highlights": [
+        {"title": "Search more reviewed federal authority", "description": "Federal rules, Constitution Annotated, and bounded Tax Court Reports now have scheduled, failure-isolated ingestion paths."},
+        {"title": "Keep unsafe text out", "description": "A known unreadable appellate-rules extraction stays auditable but cannot enter searchable text until its parser is replaced."},
+        {"title": "Scope Ohio and federal research correctly", "description": "Explicit Ohio and federal questions now apply matching filters to case law and other public authorities."}
+      ]
+    },
+    {
+      "id": "2026.08.30.1",
+      "version": "2026.08.30.1",
+      "title": "Review-first Brief Check",
+      "published_at": "2026-08-30",
+      "summary": "Firms can review brief citations, quotations, pin cites, opposing-brief differences, and bounded authority candidates with linked evidence before exporting work product.",
+      "highlights": [
+        {"title": "Inspect evidence before relying on a brief", "description": "DOCX/PDF checks preserve source identity, location, confidence, ambiguity, retrieval evidence, and explicit unknown or unavailable states."},
+        {"title": "Keep attorney decisions auditable", "description": "Reviewers can accept, reject, or follow up on findings; decisions are tenant-scoped and recorded in an immutable audit trail."},
+        {"title": "Export linked review work product", "description": "Download a review report and table-of-authorities draft while bounded recall and currentness limitations remain visible."}
+      ]
+    },
+    {
+      "id": "2026.08.29.1",
+      "version": "2026.08.29.1",
+      "title": "Operating trust workflows and evidence",
+      "published_at": "2026-08-29",
+      "summary": "Customers and operators can use one versioned contract for support, incidents, lifecycle receipts, offboarding proof, providers, and security review without unsupported SLA or certification claims.",
+      "highlights": [
+        {"title": "Use defined support and status workflows", "description": "Published business hours, S1-S4 severity objectives, audited escalation, and sanitized append-only incident updates make the operating process reviewable without creating an SLA."},
+        {"title": "Carry acceptance evidence through the lifecycle", "description": "Onboarding, BK28 migration, and export receipts reconcile scope and counts; offboarding blocks on holds and needs two operators before proof."},
+        {"title": "Export an honest security packet", "description": "The content-addressed packet names providers and boundaries while marking penetration testing and certifications as not attained."}
+      ]
+    },
+    {
+      "id": "2026.08.28.6",
+      "version": "2026.08.28.6",
+      "title": "Attributed intake and safer lead follow-through",
+      "published_at": "2026-08-28",
+      "summary": "Firms can capture attributed public inquiries, triage conflicts, book consultations, and follow up with explicit consent while keeping the conversion trail auditable.",
+      "highlights": [
+        {"title": "Capture inquiries safely", "description": "Conditional forms accept only validated answers, resist simple spam, preserve source attribution, and deduplicate retries."},
+        {"title": "Review before conversion", "description": "Public leads require an explicit conflict decision before they can become matters; appointment booking and reminder state remain durable."},
+        {"title": "Respect communication choices", "description": "Authored email follow-up checks current consent and reports provider failure truthfully; SMS remains unavailable until its compliance controls are ready."}
+      ]
+    },
+    {
+      "id": "2026.08.28.5",
+      "version": "2026.08.28.5",
+      "title": "Zoom Phone setup now shows exactly what needs attention",
+      "published_at": "2026-08-28",
+      "summary": "Tenant administrators can follow Zoom Phone setup stage by stage and recover from authorization failures without leaving the integration panel.",
+      "highlights": [
+        {
+          "title": "See each setup stage",
+          "description": "The Zoom panel separately tracks saved app credentials, account authorization, Phone API permissions, and verified real-time call delivery."
+        },
+        {
+          "title": "Recover from the actual authorization problem",
+          "description": "Zoom authorization returns to the integration panel with specific guidance for rejected credentials, expired requests, missing permissions, and account mismatches."
+        },
+        {
+          "title": "Know when reconnecting is required",
+          "description": "Replacing an OAuth client pair now clearly reports that the previous grant was disconnected and directs the administrator to authorize the current app."
+        }
+      ]
+    },
+    {
+      "id": "2026.08.28.4",
+      "version": "2026.08.28.4",
+      "title": "Client portal payments and durable sign-in",
+      "published_at": "2026-08-28",
+      "summary": "Clients can activate a durable portal account, pay an invoice through hosted Stripe Checkout, and complete certified Dropbox Sign requests when the firm configures the provider.",
+      "highlights": [
+        {
+          "title": "Pay invoices securely",
+          "description": "The portal opens a hosted Stripe Checkout session for the current invoice balance; payment status updates only after verified provider reconciliation."
+        },
+        {
+          "title": "Return with durable sign-in",
+          "description": "Clients can activate a password-backed account and sign into an explicitly selected matter while invitation revocation remains authoritative."
+        },
+        {
+          "title": "Use certified e-signature providers",
+          "description": "Dropbox Sign dispatch and signed or declined webhook events are authenticated, tenant-bound, and idempotently reconciled."
+        }
+      ]
+    },
+    {
+      "id": "2026.08.28.3",
+      "version": "2026.08.28.3",
+      "title": "Zoom Phone setup now shows the exact authorization path",
+      "published_at": "2026-08-28",
+      "summary": "Tenant administrators can configure Zoom Phone with the exact required permissions and start authorization from the correct LawHand control.",
+      "highlights": [
+        {
+          "title": "Choose only the required Phone access",
+          "description": "The Zoom setup panel names both account call-history permissions, shows their exact identifiers, and links directly to Zoom's Call Logs reference."
+        },
+        {
+          "title": "Start the secure tenant connection correctly",
+          "description": "LawHand now warns administrators to use Connect Zoom Phone instead of Marketplace Add or generated authorization links, preserving the tenant-bound authorization check."
+        }
+      ]
+    },
+    {
+      "id": "2026.08.28.2",
+      "version": "2026.08.28.2",
+      "title": "Demo workspaces are clearly identified for operators",
+      "published_at": "2026-08-28",
+      "summary": "Platform operators can now distinguish disposable demo workspaces from regular platform tenants in the tenant inventory.",
+      "highlights": [
+        {
+          "title": "See the tenant type",
+          "description": "The platform tenant list labels each workspace as Demo or Platform without using the billing tier as the visible grouping."
+        },
+        {
+          "title": "See demo expiry at a glance",
+          "description": "Demo rows show their expiration and clearly flag workspaces that have already expired."
+        },
+        {
+          "title": "Filter the inventory",
+          "description": "Operators can focus the tenant list on demo workspaces or regular platform tenants while the dedicated demo controls remain protected."
+        },
+        {
+          "title": "Use Zen free background capacity",
+          "description": "Platform operators can assign OpenCode Zen free models to the Background Automations route while Standard and Premium keep their confidential-data safeguards."
+        }
+      ]
+    },
+    {
+      "id": "2026.08.28.1",
+      "version": "2026.08.28.1",
+      "title": "The platform tour now follows a matter end to end",
+      "published_at": "2026-08-28",
+      "summary": "The LawHand platform tour now shows how legal work moves from intake and conflict review through preparation, client action, signature, billing, and follow-through.",
+      "highlights": [
+        {
+          "title": "Follow the matter",
+          "description": "Step through a visual workflow from the first call to an opened matter, attorney review, client delivery, and accounting."
+        },
+        {
+          "title": "See every role's handoff",
+          "description": "Compare what attorneys, paralegals, intake staff, billing staff, and clients need from the same matter record."
+        },
+        {
+          "title": "Evaluate the complete platform",
+          "description": "Review expanded capability, practice-area, integration, and control sections with clear rollout labels and concrete workflow details."
+        }
+      ]
+    },
+    {
+      "id": "2026.08.27.12",
+      "version": "2026.08.27.12",
+      "title": "Product claims now show rollout and research boundaries",
+      "published_at": "2026-08-27",
+      "summary": "LawHand product and pricing pages now distinguish shipped behavior, controlled pilots, planned work, and provider-dependent connections.",
+      "highlights": [
+        {
+          "title": "See the rollout state",
+          "description": "Capability cards identify implemented behavior, controlled pilots, and connections that require a separate provider account or approval."
+        },
+        {
+          "title": "Evaluate Research MCP as a pilot",
+          "description": "Research MCP pricing and product pages now state the controlled-pilot gate and the configured public-authority coverage boundary."
+        },
+        {
+          "title": "Keep research claims precise",
+          "description": "LawHand explains that source links support attorney review without claiming Westlaw replacement, comprehensive coverage, or a good-law determination."
+        }
+      ]
+    },
+    {
+      "id": "2026.08.27.11",
+      "version": "2026.08.27.11",
+      "title": "Agreement evidence and safer retention controls",
+      "published_at": "2026-08-27",
+      "summary": "Firms can review current agreement acceptance evidence and preview safe expiry cleanup with legal-hold protection.",
+      "highlights": [
+        {
+          "title": "Know what was accepted",
+          "description": "Tenant admins can review counsel-owned agreement versions and record signer, authority, and immutable document evidence."
+        },
+        {
+          "title": "Retention with guardrails",
+          "description": "Review tenant data-store inventory, configure retention, preview cleanup, and protect held or matter data from deletion."
+        }
+      ]
+    },
+    {
+      "id": "2026.08.27.10",
+      "version": "2026.08.27.10",
+      "title": "Research API keys put staff access and spend under firm control",
+      "published_at": "2026-08-27",
+      "summary": "Firm administrators can provision LawHand Research keys for staff, bound their lifetime and budget, and see usage and charges from the MCP portal.",
+      "highlights": [
+        {
+          "title": "Issue keys with clear custody",
+          "description": "Name each key, record its purpose, assign it to a LawHand staff profile, and choose exactly which Research tools it may use."
+        },
+        {
+          "title": "Bound time and spend",
+          "description": "Set an expiration, monthly dollar budget, call cap, and burst limit; the gateway stops successful calls before they exceed either hard monthly boundary."
+        },
+        {
+          "title": "See the complete key ledger",
+          "description": "The portal shows active, expired, and revoked keys with creator, custodian, last use, successful and failed calls, current-month charges, and remaining budget."
+        },
+        {
+          "title": "Connect standard API clients",
+          "description": "LawHand Research keys work as standard Bearer credentials while the existing custom header remains supported for compatible clients."
+        }
+      ]
+    },
+    {
       "id": "2026.08.27.9",
       "version": "2026.08.27.9",
       "title": "Document automation is faster, safer, and easier to manage",

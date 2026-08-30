@@ -5,6 +5,147 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.30.4 — Controlled client and matter import promotion
+
+Released August 30, 2026.
+
+Administrators can approve an unchanged import report before promoting the conservative client and matter subset, with durable links and rollback review markers.
+
+- **Approve the exact reconciliation.** Promotion requires an explicit confirmation and report hash, so changed or stale staging cannot be promoted silently.
+- **Reconcile existing records.** Client identifiers and email addresses are matched within the tenant before a new client is created; every promoted row receives an external provenance link.
+- **Keep rollback reviewable.** Operators can mark a promoted run for non-destructive rollback review while audit receipts preserve what happened.
+
+## 2026.08.30.3 — Search a firm's local case-file memory
+
+Released August 30, 2026.
+
+A bounded local file-search control surface connects an approved file-share agent to the portal, Chat, and Workspace MCP while keeping the firm's query and documents on the firm's network.
+
+- **Search inside supported local files.** Matter-scoped searches can return ranked snippets and page hints from the agent's local SQLite control index without embeddings.
+- **Use the same search from three surfaces.** The portal, Chat assistant, and user-authorized Workspace MCP now share one bounded search contract with visible partial and index status.
+- **Open results safely.** Results use an authenticated portal link that rechecks access and offers Copy UNC instead of exposing a raw browser file link.
+- **Measure the pilot honestly.** Correlation IDs, counts, latency, and indexed or pending status support local validation; this remains a small control-index PoC, not a 4 TB production search promise.
+
+## 2026.08.30.2 — Deeper federal and Ohio research coverage
+
+Released August 30, 2026.
+
+Research can ingest reviewed federal rules, constitutional analysis, and Tax Court reports while keeping jurisdiction and known extraction limits explicit.
+
+- **Search more reviewed federal authority.** Federal rules, Constitution Annotated, and bounded Tax Court Reports now have scheduled, failure-isolated ingestion paths.
+- **Keep unsafe text out.** A known unreadable appellate-rules extraction stays auditable but cannot enter searchable text until its parser is replaced.
+- **Scope Ohio and federal research correctly.** Explicit Ohio and federal questions now apply matching filters to case law and other public authorities.
+
+## 2026.08.30.1 — Review-first Brief Check
+
+Released August 30, 2026.
+
+Firms can review brief citations, quotations, pin cites, opposing-brief differences, and bounded authority candidates with linked evidence before exporting work product.
+
+- **Inspect evidence before relying on a brief.** DOCX/PDF checks preserve source identity, location, confidence, ambiguity, retrieval evidence, and explicit unknown or unavailable states.
+- **Keep attorney decisions auditable.** Reviewers can accept, reject, or follow up on findings; decisions are tenant-scoped and recorded in an immutable audit trail.
+- **Export linked review work product.** Download a review report and table-of-authorities draft while bounded recall and currentness limitations remain visible.
+
+## 2026.08.29.1 — Operating trust workflows and evidence
+
+Released August 29, 2026.
+
+Customers and operators can use one versioned contract for support, incidents, lifecycle receipts, offboarding proof, providers, and security review without unsupported SLA or certification claims.
+
+- **Use defined support and status workflows.** Published business hours, S1-S4 severity objectives, audited escalation, and sanitized append-only incident updates make the operating process reviewable without creating an SLA.
+- **Carry acceptance evidence through the lifecycle.** Onboarding, BK28 migration, and export receipts reconcile scope and counts; offboarding blocks on holds and needs two operators before proof.
+- **Export an honest security packet.** The content-addressed packet names providers and boundaries while marking penetration testing and certifications as not attained.
+
+## 2026.08.28.6 — Attributed intake and safer lead follow-through
+
+Released August 28, 2026.
+
+Firms can capture attributed public inquiries, triage conflicts, book consultations, and follow up with explicit consent while keeping the conversion trail auditable.
+
+- **Capture inquiries safely.** Conditional forms accept only validated answers, resist simple spam, preserve source attribution, and deduplicate retries.
+- **Review before conversion.** Public leads require an explicit conflict decision before they can become matters; appointment booking and reminder state remain durable.
+- **Respect communication choices.** Authored email follow-up checks current consent and reports provider failure truthfully; SMS remains unavailable until its compliance controls are ready.
+
+## 2026.08.28.5 — Zoom Phone setup now shows exactly what needs attention
+
+Released August 28, 2026.
+
+Tenant administrators can follow Zoom Phone setup stage by stage and recover from authorization failures without leaving the integration panel.
+
+- **See each setup stage.** The Zoom panel separately tracks saved app credentials, account authorization, Phone API permissions, and verified real-time call delivery.
+- **Recover from the actual authorization problem.** Zoom authorization returns to the integration panel with specific guidance for rejected credentials, expired requests, missing permissions, and account mismatches.
+- **Know when reconnecting is required.** Replacing an OAuth client pair now clearly reports that the previous grant was disconnected and directs the administrator to authorize the current app.
+
+## 2026.08.28.4 — Client portal payments and durable sign-in
+
+Released August 28, 2026.
+
+Clients can activate a durable portal account, pay an invoice through hosted Stripe Checkout, and complete certified Dropbox Sign requests when the firm configures the provider.
+
+- **Pay invoices securely.** The portal opens a hosted Stripe Checkout session for the current invoice balance; payment status updates only after verified provider reconciliation.
+- **Return with durable sign-in.** Clients can activate a password-backed account and sign into an explicitly selected matter while invitation revocation remains authoritative.
+- **Use certified e-signature providers.** Dropbox Sign dispatch and signed or declined webhook events are authenticated, tenant-bound, and idempotently reconciled.
+
+## 2026.08.28.3 — Zoom Phone setup now shows the exact authorization path
+
+Released August 28, 2026.
+
+Tenant administrators can configure Zoom Phone with the exact required permissions and start authorization from the correct LawHand control.
+
+- **Choose only the required Phone access.** The Zoom setup panel names both account call-history permissions, shows their exact identifiers, and links directly to Zoom's Call Logs reference.
+- **Start the secure tenant connection correctly.** LawHand now warns administrators to use Connect Zoom Phone instead of Marketplace Add or generated authorization links, preserving the tenant-bound authorization check.
+
+## 2026.08.28.2 — Demo workspaces are clearly identified for operators
+
+Released August 28, 2026.
+
+Platform operators can now distinguish disposable demo workspaces from regular platform tenants in the tenant inventory.
+
+- **See the tenant type.** The platform tenant list labels each workspace as Demo or Platform without using the billing tier as the visible grouping.
+- **See demo expiry at a glance.** Demo rows show their expiration and clearly flag workspaces that have already expired.
+- **Filter the inventory.** Operators can focus the tenant list on demo workspaces or regular platform tenants while the dedicated demo controls remain protected.
+- **Use Zen free background capacity.** Platform operators can assign OpenCode Zen free models to the Background Automations route while Standard and Premium keep their confidential-data safeguards.
+
+## 2026.08.28.1 — The platform tour now follows a matter end to end
+
+Released August 28, 2026.
+
+The LawHand platform tour now shows how legal work moves from intake and conflict review through preparation, client action, signature, billing, and follow-through.
+
+- **Follow the matter.** Step through a visual workflow from the first call to an opened matter, attorney review, client delivery, and accounting.
+- **See every role's handoff.** Compare what attorneys, paralegals, intake staff, billing staff, and clients need from the same matter record.
+- **Evaluate the complete platform.** Review expanded capability, practice-area, integration, and control sections with clear rollout labels and concrete workflow details.
+
+## 2026.08.27.12 — Product claims now show rollout and research boundaries
+
+Released August 27, 2026.
+
+LawHand product and pricing pages now distinguish shipped behavior, controlled pilots, planned work, and provider-dependent connections.
+
+- **See the rollout state.** Capability cards identify implemented behavior, controlled pilots, and connections that require a separate provider account or approval.
+- **Evaluate Research MCP as a pilot.** Research MCP pricing and product pages now state the controlled-pilot gate and the configured public-authority coverage boundary.
+- **Keep research claims precise.** LawHand explains that source links support attorney review without claiming Westlaw replacement, comprehensive coverage, or a good-law determination.
+
+## 2026.08.27.11 — Agreement evidence and safer retention controls
+
+Released August 27, 2026.
+
+Firms can review current agreement acceptance evidence and preview safe expiry cleanup with legal-hold protection.
+
+- **Know what was accepted.** Tenant admins can review counsel-owned agreement versions and record signer, authority, and immutable document evidence.
+- **Retention with guardrails.** Review tenant data-store inventory, configure retention, preview cleanup, and protect held or matter data from deletion.
+
+## 2026.08.27.10 — Research API keys put staff access and spend under firm control
+
+Released August 27, 2026.
+
+Firm administrators can provision LawHand Research keys for staff, bound their lifetime and budget, and see usage and charges from the MCP portal.
+
+- **Issue keys with clear custody.** Name each key, record its purpose, assign it to a LawHand staff profile, and choose exactly which Research tools it may use.
+- **Bound time and spend.** Set an expiration, monthly dollar budget, call cap, and burst limit; the gateway stops successful calls before they exceed either hard monthly boundary.
+- **See the complete key ledger.** The portal shows active, expired, and revoked keys with creator, custodian, last use, successful and failed calls, current-month charges, and remaining budget.
+- **Connect standard API clients.** LawHand Research keys work as standard Bearer credentials while the existing custom header remains supported for compatible clients.
+
 ## 2026.08.27.9 — Document automation is faster, safer, and easier to manage
 
 Released August 27, 2026.

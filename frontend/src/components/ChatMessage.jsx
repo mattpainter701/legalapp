@@ -268,6 +268,9 @@ function sourceBadge(src) {
   if (type === 'tenant_document') {
     return { label, classes: 'bg-brand-amber/10 text-brand-amber border-brand-amber/20' }
   }
+  if (type === 'firm_memory') {
+    return { label, classes: 'bg-brand-accent/10 text-brand-accent-2 border-brand-accent/20' }
+  }
   return { label, classes: 'bg-brand-line/40 text-brand-muted border-brand-line' }
 }
 

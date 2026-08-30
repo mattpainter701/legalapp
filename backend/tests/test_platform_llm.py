@@ -908,6 +908,35 @@ def test_customer_route_policy_uses_catalog_data_policy_metadata():
     ]
 
 
+def test_background_route_allows_free_zen_models_without_relaxing_customer_routes():
+    config = {
+        "standard": {
+            "provider_id": "opencode-zen",
+            "model": "nemotron-3-ultra-free",
+        },
+        "premium": {},
+        "background": {
+            "provider_id": "opencode-zen",
+            "model": "nemotron-3-ultra-free",
+        },
+    }
+    catalog = {
+        "models": [
+            {
+                "provider_id": "opencode-zen",
+                "id": "nemotron-3-ultra-free",
+                "confidential_data_allowed": False,
+            }
+        ]
+    }
+
+    blocked = platform_llm_router._confidential_data_unsafe_targets(config, catalog)
+
+    assert [(item["route"], item["placement"]) for item in blocked] == [
+        ("standard", "primary")
+    ]
+
+
 @pytest.mark.asyncio
 async def test_customer_route_policy_rejection_commits_audit(monkeypatch):
     audit_call = {}
@@ -1343,6 +1372,7 @@ async def test_failed_route_activation_does_not_publish_candidate_config(
                         "key_ids": [str(standard_key.id)],
                         "legal_eligible": True,
                         "route_compatible": True,
+                        "confidential_data_allowed": True,
                     },
                     {
                         "id": "deepseek-v4-pro",
@@ -1350,6 +1380,7 @@ async def test_failed_route_activation_does_not_publish_candidate_config(
                         "key_ids": [str(premium_key.id)],
                         "legal_eligible": True,
                         "route_compatible": True,
+                        "confidential_data_allowed": True,
                     },
                 ]
             },

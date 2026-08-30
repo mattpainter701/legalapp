@@ -14,10 +14,10 @@ export const HOME_TITLE = 'LawHand | Legal Automation Platform for Law Firms'
 // Kept under ~160 characters, and names the concrete functions a firm searches
 // for. The home page must visibly contain every function named here.
 export const HOME_DESCRIPTION =
-  'LawHand is the legal automation platform for law firms: client and matter CRM, caller intake, document preparation, invoicing, and source-linked AI legal research.'
+  'LawHand unifies intake, matters, conflict review, documents, client action, billing, and source-linked AI legal research in one review-first legal workspace.'
 
 export const ORGANIZATION_DESCRIPTION =
-  'LawHand builds a legal automation platform that combines client and matter CRM, caller intake, tasks and deadlines, document preparation, time tracking and invoicing, practice-area workflows, and source-linked AI legal research in one tenant-isolated workspace for law firms and legal teams.'
+  'LawHand builds a legal automation platform that connects client and matter CRM, intake, conflict review, tasks and deadlines, document preparation, client portal and signature workflows, time and invoicing, practice-area skills, and source-linked AI legal research in one tenant-isolated workspace.'
 
 export const PRIVATE_DESCRIPTION =
   'Sign in to the private LawHand workspace for your firm.'
@@ -33,7 +33,7 @@ export const PLATFORM_PRICE_USD = '89'
 export const MCP_TOOL_CALL_PRICE_USD = '0.45'
 
 // Bumped whenever public marketing copy changes; feeds sitemap <lastmod>.
-export const PUBLIC_CONTENT_LASTMOD = '2026-08-26'
+export const PUBLIC_CONTENT_LASTMOD = '2026-08-29'
 
 export const PRICING_FAQ = Object.freeze([
   Object.freeze([
@@ -41,8 +41,8 @@ export const PRICING_FAQ = Object.freeze([
     'The LawHand platform seat covers the firm workspace and its licensed modules. Enabled integrations, onboarding scope, premium model usage, and specialized service commitments are confirmed in your order.',
   ]),
   Object.freeze([
-    'Is MCP generally available?',
-    `Not yet. LawHand Research MCP is in private preview while its public product, billing, monitoring, and recovery gates are completed. It is research-only, with no workspace or matter access. The intended public price is $${MCP_TOOL_CALL_PRICE_USD} per tool call.`,
+    'How is Research MCP offered?',
+    `LawHand Research MCP is offered as a controlled pilot to approved LawHand customers with Research billing enabled. It is research-only, with no workspace or matter access, and the pilot price is $${MCP_TOOL_CALL_PRICE_USD} per successful tool call. Coverage depends on the configured public-authority corpus.`,
   ]),
   Object.freeze([
     'Do administrators count as licensed users?',
@@ -85,7 +85,7 @@ export const HOME_FAQ = Object.freeze([
   ]),
   Object.freeze([
     'What is LawHand Research MCP?',
-    `LawHand Research MCP is a Model Context Protocol server that lets an approved assistant such as ChatGPT or Claude, or an API client, retrieve public legal authority through a scoped credential. It is research-only and cannot reach LawHand matters, contacts, tasks, documents, templates, or firm configuration. It is in private preview at an intended public price of $${MCP_TOOL_CALL_PRICE_USD} per tool call.`,
+    `LawHand Research MCP is a controlled-pilot Model Context Protocol server that lets an approved assistant such as ChatGPT or Claude, or an API client, retrieve configured public legal authority through a scoped credential. It is research-only and cannot reach LawHand matters, contacts, tasks, documents, templates, or firm configuration. Approved pilot customers pay $${MCP_TOOL_CALL_PRICE_USD} per successful tool call.`,
   ]),
   Object.freeze([
     'Can an AI assistant reach our matters through MCP?',
@@ -130,7 +130,7 @@ export const PUBLIC_ROUTE_META = Object.freeze({
   '/product': {
     title: 'Legal Automation Platform | LawHand Product Tour',
     description:
-      'The LawHand platform in one workspace: client and matter CRM, caller intake, tasks and deadlines, document preparation, time and invoicing, practice-area skills, matter-aware AI chat, and controlled MCP integrations.',
+      'Follow a legal matter from intake and conflict review through tasks, documents, attorney review, client action, signature, billing, and connected systems in LawHand.',
     canonicalPath: '/product',
     indexable: true,
     priority: '0.9',
@@ -149,7 +149,7 @@ export const PUBLIC_ROUTE_META = Object.freeze({
   '/product/mcp': {
     title: 'Legal Research MCP Server for AI Assistants | LawHand',
     description:
-      'Retrieve public legal authority in ChatGPT, Claude, or your own API client through the LawHand legal research MCP server, or connect approved assistants to a tenant-scoped LawHand workspace over OAuth.',
+      'Evaluate controlled-pilot retrieval of configured public legal authority in approved assistants, or connect approved assistants to a tenant-scoped LawHand workspace over scoped OAuth.',
     canonicalPath: '/product/mcp',
     indexable: true,
     priority: '0.8',
@@ -168,7 +168,7 @@ export const PUBLIC_ROUTE_META = Object.freeze({
   '/pricing': {
     title: 'Pricing | LawHand Legal Automation Platform',
     description:
-      `LawHand is $${PLATFORM_PRICE_USD} per user per month billed annually. LawHand MCP is in private preview at an intended public price of $${MCP_TOOL_CALL_PRICE_USD} per tool call.`,
+      `LawHand is $${PLATFORM_PRICE_USD} per user per month billed annually. Research MCP is a controlled pilot at $${MCP_TOOL_CALL_PRICE_USD} per successful tool call for approved customers.`,
     canonicalPath: '/pricing',
     indexable: true,
     priority: '0.9',
@@ -191,6 +191,15 @@ export const PUBLIC_ROUTE_META = Object.freeze({
     indexable: true,
     priority: '0.3',
     breadcrumb: 'Terms of Use',
+  },
+  '/trust-center': {
+    title: 'Trust Center | LawHand Operating Controls',
+    description:
+      'Review LawHand operating scope, support and incident workflows, lifecycle evidence, provider boundaries, and planned assurance work without unsupported SLA or certification claims.',
+    canonicalPath: '/trust-center',
+    indexable: true,
+    priority: '0.5',
+    breadcrumb: 'Trust Center',
   },
 })
 
