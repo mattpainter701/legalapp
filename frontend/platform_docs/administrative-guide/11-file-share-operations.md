@@ -42,6 +42,12 @@ Use **Edit** to correct the UNC path or move the share to another registered age
 
 Start indexing during an approved window, using **Scan now** rather than waiting for the schedule. Record baseline file counts and monitor progress and failures — the share row shows the last scan time, its status, the file count, and the error text when a scan fails. After indexing, test a known allowed document and a known disallowed location.
 
+Release 0.15.3 adds the bounded local lexical search relay used by [Firm Memory](/firm-memory), Chat source cards, and the user-bound Workspace MCP tool. Searches require an explicit matter binding and return only short ranked passages, page hints, canonical UNC paths, and aggregate index state. The portal's LawHand link rechecks tenant, matter, share, folder, and active-file status before showing the path; it never emits a raw browser file URL.
+
+For a pilot, correlate the opaque search ID, agent log, `lawhand-agent status`, portal response counts/latency, and the local JSONL relevance evaluator. The agent exposes no inbound `/metrics` endpoint. Tailscale may provide private administrator reachability to the host, but it is transport rather than a telemetry system and is not required for the outbound relay.
+
+Treat this embedded index as a representative-corpus control, not proof that a 4 TB HDD-backed archive is production-ready. Measure extraction coverage, correct-page retrieval, restart behavior, source-server impact, and authorization failures before extrapolating. OCR, robust legacy Office conversion, per-file Windows ACL snapshots, and a dedicated SSD-backed scale index remain separate readiness gates.
+
 File permissions can change after indexing. Establish a process for rescans, deletions, renamed folders, and permission updates so search does not retain content beyond its intended availability.
 
 ## Diagnose safely

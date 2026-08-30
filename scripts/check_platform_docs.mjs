@@ -12,7 +12,7 @@ const integrationsHubSource = readFileSync(join(repositoryRoot, 'frontend', 'src
 const requiredFields = ['slug', 'title', 'description', 'order', 'read_time', 'icon']
 const allowedRouteRoots = new Set([
   'admin', 'calendar', 'chat', 'clients', 'communications', 'conflicts', 'contacts', 'guide', 'intake',
-  'invoices', 'matters', 'onboarding', 'plugins', 'profile', 'reports', 'tasks',
+  'firm-memory', 'invoices', 'matters', 'onboarding', 'plugins', 'profile', 'reports', 'tasks',
   'teams', 'templates', 'time-tracking', 'trust',
 ])
 const adminTabsBlock = adminPageSource.match(/const ADMIN_TABS = \[([\s\S]*?)\n\]/)?.[1] || ''
