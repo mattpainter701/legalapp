@@ -641,6 +641,7 @@ jobs:
       - release-notes
       - security-dependency-sbom
       - dependency-vulnerability-review
+      - authority-control-plane-rehearsal
     runs-on: ubuntu-latest
     permissions: {}
     steps:

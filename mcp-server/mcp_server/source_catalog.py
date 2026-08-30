@@ -260,8 +260,9 @@ def seed_catalog(conn: Any, catalog: dict[str, Any]) -> int:
         )
         VALUES (
             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-            %s, %s, %s, %s, %s, %s, %s, %s::jsonb,
-            %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s
+            %s, %s, %s, %s, %s, %s, %s, %s,
+            %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, %s,
+            %s::jsonb
         )
         ON CONFLICT (source_key) DO UPDATE
         SET display_name = EXCLUDED.display_name,
@@ -286,16 +287,18 @@ def seed_catalog(conn: Any, catalog: dict[str, Any]) -> int:
             parser_version = EXCLUDED.parser_version,
             licensing_notes = EXCLUDED.licensing_notes,
             metadata = legal_sources.metadata || EXCLUDED.metadata,
-            rights_decision = EXCLUDED.rights_decision,
-            source_tier = EXCLUDED.source_tier,
-            geographic_scope = EXCLUDED.geographic_scope,
-            temporal_scope = EXCLUDED.temporal_scope,
+            -- Rights and review evidence are operator-owned. Catalog refreshes
+            -- may fill them only while no review has been recorded.
+            rights_decision = CASE WHEN legal_sources.reviewed_at IS NULL THEN EXCLUDED.rights_decision ELSE legal_sources.rights_decision END,
+            source_tier = CASE WHEN legal_sources.reviewed_at IS NULL THEN EXCLUDED.source_tier ELSE legal_sources.source_tier END,
+            geographic_scope = CASE WHEN legal_sources.reviewed_at IS NULL THEN EXCLUDED.geographic_scope ELSE legal_sources.geographic_scope END,
+            temporal_scope = CASE WHEN legal_sources.reviewed_at IS NULL THEN EXCLUDED.temporal_scope ELSE legal_sources.temporal_scope END,
             expected_cadence = EXCLUDED.expected_cadence,
-            completeness_caveats = EXCLUDED.completeness_caveats,
-            claim_safe_wording = EXCLUDED.claim_safe_wording,
-            reviewed_at = EXCLUDED.reviewed_at,
-            reviewed_by = EXCLUDED.reviewed_by,
-            review_reason = EXCLUDED.review_reason,
+            completeness_caveats = CASE WHEN legal_sources.reviewed_at IS NULL THEN EXCLUDED.completeness_caveats ELSE legal_sources.completeness_caveats END,
+            claim_safe_wording = CASE WHEN legal_sources.reviewed_at IS NULL THEN EXCLUDED.claim_safe_wording ELSE legal_sources.claim_safe_wording END,
+            reviewed_at = legal_sources.reviewed_at,
+            reviewed_by = legal_sources.reviewed_by,
+            review_reason = legal_sources.review_reason,
             updated_at = now()
     """
     with conn.cursor() as cursor:

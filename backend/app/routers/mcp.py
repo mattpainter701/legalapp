@@ -298,7 +298,9 @@ async def source_health(
             }
         )
     partitions = []
-    for partition in payload.get("source_partitions") or []:
+    for partition in (
+        payload.get("source_partitions") or payload.get("partitions") or []
+    ):
         if not isinstance(partition, dict):
             continue
         partitions.append(

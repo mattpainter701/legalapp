@@ -461,6 +461,7 @@ WHERE ao.cluster_id IS NULL
 ALTER TABLE authority_case_opinions
     ALTER COLUMN cluster_id SET NOT NULL;
 CREATE TABLE IF NOT EXISTS authority_case_citations (
+    citation_id uuid NOT NULL DEFAULT gen_random_uuid(),
     corpus_version text NOT NULL REFERENCES authority_corpus_versions(version),
     citing_opinion_id bigint NOT NULL,
     cited_opinion_id bigint,
@@ -469,8 +470,17 @@ CREATE TABLE IF NOT EXISTS authority_case_citations (
     cited_volume text,
     cited_page text,
     depth integer NOT NULL DEFAULT 0,
-    PRIMARY KEY (corpus_version, citing_opinion_id, cited_opinion_id, cited_cluster_id, cited_reporter, cited_volume, cited_page)
+    PRIMARY KEY (citation_id)
 );
+ALTER TABLE authority_case_citations ADD COLUMN IF NOT EXISTS citation_id uuid DEFAULT gen_random_uuid();
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid='authority_case_citations'::regclass AND c.contype='p' AND pg_get_constraintdef(c.oid) <> 'PRIMARY KEY (citation_id)') THEN
+        ALTER TABLE authority_case_citations DROP CONSTRAINT authority_case_citations_pkey;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='authority_case_citations'::regclass AND conname='authority_case_citations_pkey') THEN
+        ALTER TABLE authority_case_citations ADD CONSTRAINT authority_case_citations_pkey PRIMARY KEY (citation_id);
+    END IF;
+END $$;
 
 -- Snapshot rows are mutable only while their release is being assembled.  A
 -- promoted/retired/rolled-back release must remain an immutable explanation
