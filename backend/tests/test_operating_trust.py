@@ -435,3 +435,6 @@ async def test_offboarding_is_evidenced_but_blocked_by_legal_hold(client):
     assert requested.json()["status"] == "hold_blocked"
     assert requested.json()["receipt"]["status"] == "blocked"
     assert requested.json()["receipt"]["legal_hold_snapshot"]["active"] is True
+    assert requested.json()["receipt"]["legal_hold_snapshot"]["set_at"].endswith(
+        "+00:00"
+    )

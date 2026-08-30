@@ -578,7 +578,11 @@ async def request_offboarding(
     hold = {
         "active": retention["legal_hold"],
         "reason": retention["legal_hold_reason"],
-        "set_at": retention["legal_hold_set_at"],
+        "set_at": (
+            retention["legal_hold_set_at"].isoformat()
+            if retention["legal_hold_set_at"]
+            else None
+        ),
         "policy_version": retention["policy_version"],
     }
     status = "hold_blocked" if retention["legal_hold"] else "requested"
