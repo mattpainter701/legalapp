@@ -410,9 +410,14 @@ original files remain on the HDD-backed file server. That pipeline is not yet
 shipped. See
 `docs/firm-memory-poc-architecture.md`.
 
-No new search excerpt or result-content flow to the SaaS is enabled merely by
-building the local index. That separate flow requires explicit customer
-authorization and must remain tenant-, share-, matter-, and ACL-policy-bound.
+Release 0.15.3 adds an explicitly authorized, matter-scoped relay for bounded
+local-search excerpts and metadata. It uses the agent's existing outbound
+polling connection and is available through the portal, Chat structured
+sources, and user-bound Workspace MCP. Query text is short-lived and is not
+application-logged, persisted, or placed in evaluator output. Results use an
+opaque same-origin portal link with an authorization recheck and **Copy UNC**;
+raw `file://` and `smb://` browser links are not emitted. This does not add a
+general inbound network route or make the SaaS an SMB proxy.
 
 The planned rollout is deliberately staged:
 

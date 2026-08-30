@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+- **Bounded Firm Memory search relay:** an explicitly matter-scoped local
+  SQLite FTS5 control index can now answer bounded searches through the
+  outbound-polled file-share agent, authenticated REST/portal, Chat structured
+  sources, and user-bound Workspace MCP. Results carry opaque file identity,
+  bounded snippets/page hints, safe same-origin deep links, index state, and
+  partial/degraded status. The browser receives no raw `file://` or `smb://`
+  link; users can copy the canonical UNC path after authorization is rechecked.
+  Query text is short-lived and excluded from application logs, audit rows, and
+  evaluator output. This release does not claim 4 TB scale, Tika/OCR/OpenSearch,
+  native Windows ACL trimming, or semantic retrieval.
+
 ### Fixed
 - **Zoom Phone setup reports each independent connection stage:** tenant
   administrators now return from Phone OAuth to the Zoom integration panel,

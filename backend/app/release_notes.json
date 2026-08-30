@@ -2,6 +2,19 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.30.3",
+      "version": "2026.08.30.3",
+      "title": "Search a firm's local case-file memory",
+      "published_at": "2026-08-30",
+      "summary": "A bounded local file-search control surface connects an approved file-share agent to the portal, Chat, and Workspace MCP while keeping the firm's query and documents on the firm's network.",
+      "highlights": [
+        {"title": "Search inside supported local files", "description": "Matter-scoped searches can return ranked snippets and page hints from the agent's local SQLite control index without embeddings."},
+        {"title": "Use the same search from three surfaces", "description": "The portal, Chat assistant, and user-authorized Workspace MCP now share one bounded search contract with visible partial and index status."},
+        {"title": "Open results safely", "description": "Results use an authenticated portal link that rechecks access and offers Copy UNC instead of exposing a raw browser file link."},
+        {"title": "Measure the pilot honestly", "description": "Correlation IDs, counts, latency, and indexed or pending status support local validation; this remains a small control-index PoC, not a 4 TB production search promise."}
+      ]
+    },
+    {
       "id": "2026.08.30.2",
       "version": "2026.08.30.2",
       "title": "Deeper federal and Ohio research coverage",

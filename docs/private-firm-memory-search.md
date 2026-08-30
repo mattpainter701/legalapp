@@ -24,6 +24,22 @@ semantic understanding, OCR coverage, native Windows ACL preservation, or
 replacement of Westlaw or other licensed research tools without measured
 evidence for that capability.
 
+Release 0.15.3 adds a bounded `local_search` relay for the control index. It
+is matter-scoped at the API, uses the agent's existing outbound polling
+connection, and is exposed through the authenticated REST/portal surface,
+Chat structured sources, and user-bound Workspace MCP
+`search_firm_memory`. Query text is short-lived relay material: it is not
+application-logged, persisted, or included in search audit records. Only
+correlation IDs, counts, latency, index state, and partial/degraded status are
+operationally retained. Search remains limited to the indexed corpus and
+does not imply that unindexed or unsupported files were searched.
+
+Portal results use an opaque same-origin file deep link. Opening the result
+rechecks the user's matter entitlement and then offers **Copy UNC** for the
+canonical `\\server\\share\\...` path. The browser is never given a raw
+`file://` or `smb://` hyperlink, and the portal does not proxy arbitrary SMB
+bytes. The user's workstation must already have access to the share.
+
 ## Trust boundaries
 
 ```text
@@ -114,6 +130,12 @@ outcome without logging credentials or unrestricted text.
 Operators should monitor discovered/indexed/failed/deleted counts, queue depth,
 index size, last successful scan, parser errors, P50/P95 query latency,
 recall@10, correct-page rate, and revocation-to-ineligibility time.
+
+For a Tailscale-connected validation host, collect the local rotating
+`agent.log`, `lawhand-agent status`, read-only SQLite index statistics, portal
+search/status responses, Workspace MCP audit records, and the local JSONL
+evaluator artifacts. Tailscale is optional admin reachability only; it is not
+the telemetry layer, and the agent still initiates outbound HTTPS polling.
 
 ## Rollback and rebuild
 

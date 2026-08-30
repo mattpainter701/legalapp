@@ -26,6 +26,27 @@ Keep the detailed source documents in the repository so behavior, security bound
 
 The two products may share internal capability or retrieval components, but they must not share public identity, hostname, authorization, billing, or release-state assumptions.
 
+### Firm Memory Workspace MCP tool
+
+`search_firm_memory` is a Workspace MCP read tool for the bounded local file
+share search control surface. It is user-bound and matter-scoped: the caller
+must supply a tenant-valid `matter_id`, a non-empty query, and optional bounded
+extension filters/limit. The server resolves the matter's approved share and
+folder bindings, relays the request only to assigned agents, and returns
+bounded ranked hits with opaque file IDs, snippets, page hints, index state,
+latency, and partial/degraded status. Query text is not persisted or logged;
+Workspace MCP audit records retain the tool, actor, matter, correlation,
+outcome, counts, and timing needed for review.
+
+The tool requires the normal Workspace MCP user grant with `matters:read` and
+`documents:read`, tenant membership, RBAC/capability approval, and the active
+matter boundary. Results use an authenticated same-origin portal deep link
+that rechecks entitlement and offers **Copy UNC**; raw `file://` and `smb://`
+links are not emitted. This tool is not part of Research MCP, does not accept
+Research product keys, and does not search licensed Thomson Reuters,
+Westlaw, Lexis, Wright & Miller, or other secondary-source content unless a
+separate licensed source integration says so.
+
 ## Canonical documentation map
 
 | Topic | Repository source | Primary audience | Future wiki destination |
