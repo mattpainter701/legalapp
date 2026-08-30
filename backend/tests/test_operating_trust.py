@@ -328,6 +328,7 @@ async def test_bk28_migration_and_tenant_export_receipts_reconcile(
 async def test_offboarding_requires_no_hold_two_operators_and_disposition_proof(
     client, test_tenant
 ):
+    tenant_id = test_tenant.id
     requested = await client.post(
         "/api/compliance/operating/offboarding",
         json={
@@ -344,7 +345,7 @@ async def test_offboarding_requires_no_hold_two_operators_and_disposition_proof(
     assert "no data was deleted" in requested.json()["receipt"]["outcome"].lower()
 
     first = await client.post(
-        f"/api/platform/operating-trust/tenants/{test_tenant.id}/offboarding/{case_id}/approve",
+        f"/api/platform/operating-trust/tenants/{tenant_id}/offboarding/{case_id}/approve",
         headers=_operator_headers("operator-one@example.com"),
         json={"reason": "Scope and export evidence reviewed."},
     )
@@ -353,14 +354,14 @@ async def test_offboarding_requires_no_hold_two_operators_and_disposition_proof(
     assert first.json()["status"] == "requested"
 
     duplicate = await client.post(
-        f"/api/platform/operating-trust/tenants/{test_tenant.id}/offboarding/{case_id}/approve",
+        f"/api/platform/operating-trust/tenants/{tenant_id}/offboarding/{case_id}/approve",
         headers=_operator_headers("operator-one@example.com"),
         json={"reason": "Duplicate must not count."},
     )
     assert duplicate.status_code == 409
 
     second = await client.post(
-        f"/api/platform/operating-trust/tenants/{test_tenant.id}/offboarding/{case_id}/approve",
+        f"/api/platform/operating-trust/tenants/{tenant_id}/offboarding/{case_id}/approve",
         headers=_operator_headers("operator-two@example.com"),
         json={"reason": "Legal hold and provider scope independently reviewed."},
     )
@@ -369,7 +370,7 @@ async def test_offboarding_requires_no_hold_two_operators_and_disposition_proof(
     assert second.json()["status"] == "approved"
 
     completed = await client.post(
-        f"/api/platform/operating-trust/tenants/{test_tenant.id}/offboarding/{case_id}/complete",
+        f"/api/platform/operating-trust/tenants/{tenant_id}/offboarding/{case_id}/complete",
         headers=_operator_headers("operator-two@example.com"),
         json={
             "actual_counts": {
