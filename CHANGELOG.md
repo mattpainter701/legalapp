@@ -27,6 +27,12 @@
   native Windows ACL trimming, or semantic retrieval.
 
 ### Fixed
+- **Chat authority gaps now identify the actionable retrieval state:** legal
+  research responses retain independently cited findings, omit unsupported
+  claims, and explain whether the public-authority service was unavailable, the
+  fallback was unavailable, or no usable match was found. Duplicate source
+  notes and uncited jurisdiction-specific model summaries are no longer shown
+  as if they were a completed research result.
 - **Zoom Phone setup reports each independent connection stage:** tenant
   administrators now return from Phone OAuth to the Zoom integration panel,
   see actionable recovery for rejected credentials and other safe provider

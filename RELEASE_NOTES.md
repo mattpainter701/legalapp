@@ -5,6 +5,17 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.30.6 — Clearer legal research gaps
+
+Released August 30, 2026.
+
+Legal research now distinguishes cited findings from unavailable or unmatched authority and keeps links to the retrieved public source.
+
+- **Keep verified findings.** When a response mixes cited and unsupported material, cited findings remain visible while unsupported claims are omitted.
+- **Explain missing authority.** Research gaps now say whether the authority service or fallback was unavailable, or whether no usable match was found.
+- **Open the cited source.** CourtListener and official public-source URLs remain attached to the cited source so reviewers can open the retrieved authority.
+- **Avoid uncited legal summaries.** Jurisdiction-specific questions without authority no longer receive a general-knowledge answer presented as completed research.
+
 ## 2026.08.30.5 — Versioned public-authority coverage
 
 Released August 30, 2026.

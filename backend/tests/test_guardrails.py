@@ -24,12 +24,9 @@ def test_system_prompt_is_transparent_and_requires_source_backed_tags():
     assert "A faithful paraphrase is allowed" in SYSTEM_PROMPT_TEMPLATE
     assert "[cited]" in SYSTEM_PROMPT_TEMPLATE
     assert "[source: <source_id>]" in SYSTEM_PROMPT_TEMPLATE
+    assert "Do not use [model knowledge]" in SYSTEM_PROMPT_TEMPLATE
     assert (
-        "**Source note:** This response uses general legal knowledge"
-        in SYSTEM_PROMPT_TEMPLATE
-    )
-    assert (
-        "Do not repeat [model knowledge] after every factual claim"
+        "do not fill a legal research gap with general knowledge"
         in SYSTEM_PROMPT_TEMPLATE
     )
     assert "Except for a response with empty SOURCE MATERIALS" in SYSTEM_PROMPT_TEMPLATE

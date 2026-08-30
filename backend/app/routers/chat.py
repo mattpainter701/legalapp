@@ -2630,9 +2630,6 @@ async def _send_message_under_generation_lock(
     cleaned_response, _ = reconcile_retrieved_source_attribution(
         cleaned_response, source_dicts
     )
-    cleaned_response, _ = consolidate_unverified_model_knowledge(
-        cleaned_response, source_dicts
-    )
     cleaned_response, _ = validate_citation_confidence(
         cleaned_response,
         _citation_validation_sources(source_dicts, chunks, cloud_hits),
@@ -2641,7 +2638,12 @@ async def _send_message_under_generation_lock(
         body.content,
         cleaned_response,
         source_dicts,
+        getattr(chunks, "public_retrieval", None),
     )
+    if not citation_gap:
+        cleaned_response, _ = consolidate_unverified_model_knowledge(
+            cleaned_response, source_dicts
+        )
     if citation_gap:
         logger.warning(
             "Blocked unsupported legal-research answer conversation_id=%s",
@@ -3307,6 +3309,12 @@ async def _stream_message_under_generation_lock(
                     elapsed_ms=latency_breakdown["retrieval_ms"],
                     counts=progress_counts,
                     sources=authority_previews,
+                    detail=str(
+                        getattr(chunks, "public_retrieval", {}).get("state")
+                        or "Public authority search completed"
+                    )
+                    .replace("_", " ")
+                    .capitalize(),
                 )
 
             public_authority_context = (
@@ -3539,9 +3547,6 @@ async def _stream_message_under_generation_lock(
             cleaned_response, _ = reconcile_retrieved_source_attribution(
                 cleaned_response, source_dicts
             )
-            cleaned_response, _ = consolidate_unverified_model_knowledge(
-                cleaned_response, source_dicts
-            )
             cleaned_response, _ = validate_citation_confidence(
                 cleaned_response,
                 _citation_validation_sources(source_dicts, chunks, cloud_hits),
@@ -3550,7 +3555,12 @@ async def _stream_message_under_generation_lock(
                 body.content,
                 cleaned_response,
                 source_dicts,
+                getattr(chunks, "public_retrieval", None),
             )
+            if not citation_gap:
+                cleaned_response, _ = consolidate_unverified_model_knowledge(
+                    cleaned_response, source_dicts
+                )
             if citation_gap:
                 logger.warning(
                     "Blocked unsupported streamed legal-research answer conversation_id=%s",
@@ -3580,6 +3590,7 @@ async def _stream_message_under_generation_lock(
                     "citation_annotations": build_citation_annotations(
                         cleaned_response, source_dicts
                     ),
+                    "public_retrieval": getattr(chunks, "public_retrieval", {}),
                 },
             )
             # Extract document artifacts before streaming so the raw

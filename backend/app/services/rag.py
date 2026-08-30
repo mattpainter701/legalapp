@@ -719,6 +719,8 @@ def _public_source_url(chunk: dict[str, Any]) -> str:
         return f"https:{url}"
     if url.startswith("/"):
         return f"https://www.courtlistener.com{url}"
+    if url.startswith(("www.courtlistener.com/", "courtlistener.com/")):
+        return f"https://{url}"
     if url.startswith(("https://", "http://")):
         return url
     return ""
@@ -732,7 +734,10 @@ def _mcp_authority_item_to_chunk(item: dict[str, Any], rank_index: int) -> dict:
     if rank_score is None and not search_source:
         rank_score = item.get("rank")
     similarity = _score_value(rank_score)
-    source_url = item.get("source_url") or item.get("canonical_url")
+    # Current and older MCP deployments use different field names. Preserve
+    # every validated public URL so the model prompt and Chat citation ledger
+    # can render the same clickable primary source.
+    source_url = item.get("url") or item.get("source_url") or item.get("canonical_url")
     authority_tier = item.get("authority_tier") or "public_authority"
     effective_date = item.get("effective_date") or item.get("publication_date")
     return {
@@ -833,6 +838,7 @@ class RAGChunks(list):
         degradation_reasons: tuple[str, ...] | list[str] = (),
         requested_public_jurisdictions: tuple[str, ...] | list[str] = (),
         missing_public_jurisdictions: tuple[str, ...] | list[str] = (),
+        public_retrieval: dict[str, Any] | None = None,
     ):
         super().__init__(values or [])
         self.degradation_reasons = tuple(dict.fromkeys(degradation_reasons))
@@ -843,6 +849,9 @@ class RAGChunks(list):
         self.missing_public_jurisdictions = tuple(
             dict.fromkeys(missing_public_jurisdictions)
         )
+        # This contains only user-safe state and aggregate counts.  It must
+        # never contain the query, credentials, endpoint, or raw upstream body.
+        self.public_retrieval = dict(public_retrieval or {})
 
 
 class ConnectedSourceResults(tuple):
@@ -1012,18 +1021,20 @@ async def search_courtlistener_mcp(
             if tool_name == "search_legal_authorities"
             else _mcp_item_to_chunk
         )
-        mapped_chunks = [
+        raw_chunks = [
             mapper(item, index)
             for index, item in enumerate(_mcp_json_items(response or {}))
             if item.get("content")
         ]
-        mapped_chunks = filter_public_retrieval_results(query, mapped_chunks)
+        mapped_chunks = filter_public_retrieval_results(query, raw_chunks)
         if canonical_jurisdiction:
             for chunk in mapped_chunks:
                 chunk["retrieval_jurisdiction"] = canonical_jurisdiction
         chunks_by_jurisdiction[canonical_jurisdiction].extend(mapped_chunks)
         combined.extend(mapped_chunks)
         outcome["jurisdiction"] = requested_jurisdiction
+        outcome["raw_result_count"] = len(raw_chunks)
+        outcome["filtered_result_count"] = len(mapped_chunks)
         outcome["result_count"] = len(mapped_chunks)
         outcomes.append(outcome)
 
@@ -1361,6 +1372,7 @@ async def full_rag_query(
             degradation_reasons.append("public_search_degraded")
             break
     mcp_result_count = len(public_chunks)
+    fallback_result_count = 0
     if use_mcp_public and not public_chunks:
         # A zero-result remote search is still a coverage gap. Preserve access
         # to the already-synced CourtListener bulk index whether the MCP tools
@@ -1377,6 +1389,7 @@ async def full_rag_query(
                     top_k=settings.PUBLIC_RAG_TOP_K,
                 )
                 public_chunks = filter_public_retrieval_results(question, public_chunks)
+                fallback_result_count = len(public_chunks)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -1436,12 +1449,40 @@ async def full_rag_query(
             logger.exception("Private RAG result fusion failed")
             degradation_reasons.append("tenant_fusion_failed")
 
+    if not include_public:
+        public_retrieval = {"state": "not_requested"}
+    elif not settings.MCP_SERVER_URL:
+        public_retrieval = {
+            "state": "no_matches" if public_chunks else "not_configured",
+            "result_count": len(public_chunks),
+        }
+    elif public_chunks:
+        public_retrieval = {
+            "state": "retrieved",
+            "result_count": len(public_chunks),
+            "remote_result_count": mcp_result_count,
+            "fallback_result_count": fallback_result_count,
+        }
+    elif any(int(outcome.get("status_code") or 500) >= 400 for outcome in mcp_outcomes):
+        public_retrieval = {"state": "service_unavailable", "result_count": 0}
+    elif any(
+        reason in degradation_reasons
+        for reason in (
+            "public_fallback_embedding_unavailable",
+            "public_fallback_failed",
+        )
+    ):
+        public_retrieval = {"state": "fallback_unavailable", "result_count": 0}
+    else:
+        public_retrieval = {"state": "no_matches", "result_count": 0}
+
     # Limit fused results and append public chunks
     chunks = RAGChunks(
         fused_private[: settings.RAG_TOP_K] + public_chunks,
         degradation_reasons=degradation_reasons,
         requested_public_jurisdictions=requested_public_jurisdictions,
         missing_public_jurisdictions=missing_public_jurisdictions,
+        public_retrieval=public_retrieval,
     )
 
     context_str = await build_rag_context(chunks)
@@ -1998,6 +2039,7 @@ async def hybrid_rag_query(
             missing_public_jurisdictions=getattr(
                 chunks, "missing_public_jurisdictions", ()
             ),
+            public_retrieval=getattr(chunks, "public_retrieval", None),
         )
     else:
         cloud_context, cloud_hits, smb_context = connected_result
@@ -2018,6 +2060,7 @@ async def hybrid_rag_query(
                 missing_public_jurisdictions=getattr(
                     chunks, "missing_public_jurisdictions", ()
                 ),
+                public_retrieval=getattr(chunks, "public_retrieval", None),
             )
         if smb_hits and matter_id:
             chunks.extend(_firm_memory_chunks(smb_hits, matter_id))
