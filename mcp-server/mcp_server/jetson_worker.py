@@ -140,11 +140,21 @@ def process_once(config: WorkerConfig, model) -> int:
         for corpus in CORPORA:
             with conn.cursor() as cur:
                 requested = os.getenv("AUTHORITY_EMBEDDING_CORPUS_VERSION", "")
-                cur.execute("SELECT version FROM authority_corpus_versions WHERE status IN ('promoted','staged','canary') AND (%s = '' OR version=%s) ORDER BY CASE WHEN version=%s THEN 0 WHEN status='staged' THEN 1 WHEN status='canary' THEN 2 ELSE 3 END, promoted_at DESC NULLS LAST LIMIT 1", [requested, requested, requested])
+                cur.execute("SELECT version, embedding_model, embedding_version, embedding_dimension FROM authority_corpus_versions WHERE status IN ('promoted','staged','canary') AND (%s = '' OR version=%s) ORDER BY CASE WHEN version=%s THEN 0 WHEN status='staged' THEN 1 WHEN status='canary' THEN 2 ELSE 3 END, promoted_at DESC NULLS LAST LIMIT 1", [requested, requested, requested])
                 version_row = cur.fetchone()
                 if not version_row:
                     continue
-                version = version_row[0]
+                version, corpus_model, corpus_model_version, corpus_dimension = version_row
+                if (corpus_model, str(corpus_model_version), corpus_dimension) != (
+                    config.model,
+                    str(config.model_version),
+                    config.dim,
+                ):
+                    raise RuntimeError(
+                        f"embedding contract mismatch for {version}: "
+                        f"corpus={(corpus_model, corpus_model_version, corpus_dimension)!r} "
+                        f"worker={(config.model, config.model_version, config.dim)!r}"
+                    )
                 shard_key = f"{corpus}:{config.worker_id}:{config.total_workers}:{version}"
                 cur.execute("""INSERT INTO authority_embedding_shards
                     (shard_key, corpus_version, corpus_table, model, model_version, dimension,
