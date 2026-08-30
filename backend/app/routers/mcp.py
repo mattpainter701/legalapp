@@ -309,12 +309,14 @@ async def source_health(
                 for key in (
                     "source_key",
                     "partition_key",
-                    "checkpoint_at",
+                    "corpus_version",
                     "status",
-                    "last_attempted_at",
-                    "last_successful_sync_at",
-                    "rows_processed",
-                    "chunks_created",
+                    "cursor_url",
+                    "updated_at",
+                    "last_successful_harvest_at",
+                    "retry_count",
+                    "next_retry_at",
+                    "dead_letter_at",
                 )
             }
         )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hmac
 import os
+from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
@@ -99,17 +100,40 @@ def run_control_audit(body: ControlPlaneRequest, actor: str = Depends(operator_i
                             and row[2] not in {"failed", "retryable", "retryable_failure", "quarantined", "dead_letter", "missing"}
                             and row[3] > 0} for row in cur.fetchall()]
             elif body.audit_kind == "completeness":
-                cur.execute("SELECT expected_item_count, rows_loaded FROM corpus_coverage_ledger WHERE source_key IS NOT NULL")
-                records = [{"expected": row[0] or 0, "observed": row[1] or 0} for row in cur.fetchall()]
+                cur.execute("""
+                    SELECT cp.source_key, cp.partition_key,
+                           COALESCE(l.expected_item_count, 0),
+                           COALESCE(l.rows_loaded, 0), cp.status
+                    FROM authority_harvest_checkpoints cp
+                    JOIN legal_sources s ON s.source_key=cp.source_key
+                    LEFT JOIN corpus_coverage_ledger l
+                      ON l.source_key=cp.source_key
+                     AND l.partition_key=cp.partition_key
+                     AND l.source_release=%s
+                    WHERE cp.corpus_version=%s AND s.enabled IS TRUE
+                      AND s.rights_decision IN ('official','open','licensed')
+                      AND s.reviewed_at IS NOT NULL AND s.reviewed_by IS NOT NULL
+                """, [body.version, body.version])
+                records = [{"expected": max(row[2], 1),
+                            "observed": row[3] if row[4] in {"complete", "active"} else 0}
+                           for row in cur.fetchall()]
             elif body.audit_kind == "freshness":
-                cur.execute("SELECT last_successful_sync_at, expected_cadence FROM legal_sources WHERE enabled IS TRUE")
-                from datetime import datetime, timezone
+                cur.execute("""
+                    SELECT cp.last_successful_harvest_at, s.expected_cadence, cp.status
+                    FROM authority_harvest_checkpoints cp
+                    JOIN legal_sources s ON s.source_key=cp.source_key
+                    WHERE cp.corpus_version=%s AND s.enabled IS TRUE
+                      AND s.rights_decision IN ('official','open','licensed')
+                      AND s.reviewed_at IS NOT NULL AND s.reviewed_by IS NOT NULL
+                """, [body.version])
                 now = datetime.now(timezone.utc)
-                records = [{"lag_seconds": lag_seconds(
-                    row[0], 86400 if "day" in str(row[1] or "").lower()
-                    else 3600 if "hour" in str(row[1] or "").lower()
-                    else 604800 if "week" in str(row[1] or "").lower() else None,
-                    now), "cadence": row[1]} for row in cur.fetchall()]
+                records = [{"lag_seconds": (lag_seconds(
+                    row[0], 2592000 if "month" in str(row[1] or "").lower()
+                    else 604800 if "week" in str(row[1] or "").lower()
+                    else 86400 if "day" in str(row[1] or "").lower()
+                    else 3600 if "hour" in str(row[1] or "").lower() else None,
+                    now) if row[0] and row[2] not in {"failed", "retryable", "retryable_failure", "quarantined", "dead_letter"}
+                    else None), "cadence": row[1]} for row in cur.fetchall()]
             else:
                 cur.execute("""
                     SELECT d.source_key, d.metadata->>'namespace',

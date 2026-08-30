@@ -928,6 +928,10 @@ class CourtListenerRepository:
                        reviewed_by
                 FROM legal_sources
                 WHERE storage_policy <> 'prohibited'
+                  AND enabled IS TRUE
+                  AND rights_decision IN ('official', 'open', 'licensed')
+                  AND reviewed_at IS NOT NULL AND reviewed_by IS NOT NULL
+                  AND claim_safe_wording IS NOT NULL
                   AND source_key NOT LIKE 'tenant:%'
                   AND source_key NOT LIKE 'firm:%'
                   AND source_key NOT LIKE 'private:%'
@@ -935,11 +939,19 @@ class CourtListenerRepository:
             """)
             sources = dict_rows(cur)
             cur.execute("""
-                SELECT source_key, partition_key, corpus_version, cursor_url,
-                       status, updated_at, last_successful_harvest_at,
-                       retry_count, next_retry_at, dead_letter_at
-                FROM authority_harvest_checkpoints
+                SELECT cp.source_key, cp.partition_key, cp.corpus_version, cp.cursor_url,
+                       cp.status, cp.updated_at, cp.last_successful_harvest_at,
+                       cp.retry_count, cp.next_retry_at, cp.dead_letter_at
+                FROM authority_harvest_checkpoints cp
+                JOIN legal_sources s ON s.source_key = cp.source_key
                 WHERE corpus_version = %s
+                  AND s.enabled IS TRUE
+                  AND s.rights_decision IN ('official', 'open', 'licensed')
+                  AND s.reviewed_at IS NOT NULL AND s.reviewed_by IS NOT NULL
+                  AND s.claim_safe_wording IS NOT NULL
+                  AND s.source_key NOT LIKE 'tenant:%'
+                  AND s.source_key NOT LIKE 'firm:%'
+                  AND s.source_key NOT LIKE 'private:%'
                 ORDER BY source_key, partition_key
             """, [version_key])
             partitions = dict_rows(cur)
@@ -948,7 +960,7 @@ class CourtListenerRepository:
                        sampled_at, auditor, immutable_hash
                 FROM authority_audits
                 WHERE corpus_version = %s
-                ORDER BY sampled_at DESC
+                ORDER BY sampled_at DESC, id DESC
                 LIMIT 50
             """, [version_key])
             audits = dict_rows(cur)
@@ -967,10 +979,13 @@ class CourtListenerRepository:
             cadence = str(source.get("expected_cadence") or "").lower()
             cadence_seconds = (2592000 if "month" in cadence else 604800 if "week" in cadence else 86400 if "day" in cadence else 3600 if "hour" in cadence else 0)
             source_partitions = partition_by_source.get(source["source_key"], [])
-            last_sync = max((row["last_successful_harvest_at"] for row in source_partitions if row["last_successful_harvest_at"]), default=None)
+            successful_syncs = [row["last_successful_harvest_at"] for row in source_partitions if row["last_successful_harvest_at"]]
+            # Worst-partition semantics: a fresh partition cannot mask a
+            # missing or stale required partition in the same public source.
+            last_sync = min(successful_syncs, default=None)
             lag = lag_seconds(last_sync, cadence_seconds) if last_sync and cadence_seconds else None
             failed_partition = any(row["status"] in {"retryable", "retryable_failure", "quarantined", "dead_letter", "failed"} for row in source_partitions)
-            missing_partition = not source_partitions or last_sync is None
+            missing_partition = not source_partitions or len(successful_syncs) != len(source_partitions) or last_sync is None
             source["lag_seconds"] = lag
             source["stale"] = missing_partition or bool(cadence_seconds and lag is not None and lag > 0)
             source["status"] = "failed" if failed_partition else (
