@@ -7,8 +7,13 @@ customer-facing coverage projections.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
+import hmac
 import json
+import os
+import time
 from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -667,6 +672,55 @@ TREATMENT_REVIEW_DECISIONS = {
     "rejected",
     "needs_more_evidence",
 }
+_CITATOR_SCOPE = "citator:watch"
+_CITATOR_SCOPE_MAX_SECONDS = 300
+
+
+def _decode_assertion_part(value: str) -> bytes:
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+def _validate_citator_matter_scope(
+    assertion: str, *, tenant_id: str, matter_id: str, principal: str
+) -> None:
+    """Require a short-lived backend assertion of canonical matter ownership.
+
+    The public-authority database intentionally does not mirror LawHand's
+    private ``matters`` table.  It therefore cannot infer that an arbitrary
+    UUID belongs to a tenant.  A backend service must first make that
+    authoritative lookup and then mint this HMAC-bound assertion.  Absence,
+    expiry, a malformed signature, or any identity mismatch fails closed.
+    """
+    signer_secret = os.getenv("MCP_CITATOR_SCOPE_ASSERTION_SECRET", "")
+    if len(signer_secret) < 32:
+        raise PermissionError("citator matter-scope assertion signing is not configured")
+    try:
+        encoded_payload, encoded_signature = assertion.split(".", 1)
+        payload = _decode_assertion_part(encoded_payload)
+        signature = _decode_assertion_part(encoded_signature)
+        expected = hmac.new(signer_secret.encode(), payload, hashlib.sha256).digest()
+        claims = json.loads(payload)
+    except (ValueError, TypeError, binascii.Error, json.JSONDecodeError):
+        raise PermissionError("invalid citator matter-scope assertion") from None
+    if not hmac.compare_digest(signature, expected):
+        raise PermissionError("invalid citator matter-scope assertion")
+    now = int(time.time())
+    try:
+        issued = int(claims["issued"])
+        expires = int(claims["expires"])
+    except (KeyError, TypeError, ValueError):
+        raise PermissionError("invalid citator matter-scope assertion") from None
+    if (
+        expires <= now
+        or issued > now + 30
+        or expires <= issued
+        or expires - issued > _CITATOR_SCOPE_MAX_SECONDS
+        or claims.get("scope") != _CITATOR_SCOPE
+        or str(claims.get("tenant_id")) != str(tenant_id)
+        or str(claims.get("matter_id")) != str(matter_id)
+        or str(claims.get("principal")) != str(principal)
+    ):
+        raise PermissionError("citator matter-scope assertion is expired or does not match the watch")
 
 
 def _citator_authority_is_permitted(conn: Any, *, corpus_version: str, authority_key: str) -> bool:
@@ -674,7 +728,7 @@ def _citator_authority_is_permitted(conn: Any, *, corpus_version: str, authority
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT r.source_key, s.rights_decision, s.reviewed_at, s.reviewed_by,
+            SELECT r.source_key, s.enabled, s.rights_decision, s.reviewed_at, s.reviewed_by,
                    s.metadata->>'catalog_schema_version', s.metadata->>'implementation_status'
             FROM authority_records r
             JOIN legal_sources s ON s.source_key=r.source_key
@@ -687,11 +741,12 @@ def _citator_authority_is_permitted(conn: Any, *, corpus_version: str, authority
         row = cur.fetchone()
     return bool(
         row
-        and row[1] in {"official", "open", "licensed"}
-        and row[2]
+        and row[1] is True
+        and row[2] in {"official", "open", "licensed"}
         and row[3]
         and row[4]
         and row[5]
+        and row[6]
         and not str(row[0]).startswith(("tenant:", "firm:", "private:"))
     )
 
@@ -705,12 +760,12 @@ def record_treatment_assessment(
     confidence: float,
     policy_version: str,
     evidence_fact_ids: list[str],
-    evidence_links: list[dict[str, Any]],
     model_version: str | None = None,
     summary: str | None = None,
     abstained: bool = False,
     abstention_reason: str | None = None,
     actor: str,
+    stale_at: datetime | None = None,
 ) -> str:
     """Append a machine assessment only after source/evidence validation.
 
@@ -729,21 +784,47 @@ def record_treatment_assessment(
         if not abstention_reason:
             raise ValueError("an abstention reason is required")
         treatment_label = "unknown"
-    elif not evidence_fact_ids or not evidence_links:
+    elif not evidence_fact_ids:
         raise ValueError("non-abstaining treatment requires linked source evidence")
     if not _citator_authority_is_permitted(
         conn, corpus_version=corpus_version, authority_key=authority_key
     ):
         raise PermissionError("citator assessment requires promoted, reviewed public authority evidence")
+    bound_evidence: list[dict[str, Any]] = []
+    if not abstained:
+        fact_ids = list(dict.fromkeys(str(value) for value in evidence_fact_ids))
+        if len(fact_ids) != len(evidence_fact_ids):
+            raise ValueError("treatment evidence fact IDs must not be duplicated")
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id::text AS fact_id, source_url, evidence_span,
+                       evidence_locator, source_hash, 'history' AS fact_type
+                FROM authority_history_facts
+                WHERE corpus_version=%s AND authority_key=%s AND id::text = ANY(%s)
+                UNION ALL
+                SELECT id::text AS fact_id, source_url, evidence_span,
+                       evidence_locator, source_hash, 'citation' AS fact_type
+                FROM authority_citation_facts
+                WHERE corpus_version=%s AND cited_authority_key=%s AND id::text = ANY(%s)
+                """,
+                [corpus_version, authority_key, fact_ids, corpus_version, authority_key, fact_ids],
+            )
+            columns = [column.name for column in cur.description]
+            bound_evidence = [dict(zip(columns, row)) for row in cur.fetchall()]
+        if len(bound_evidence) != len(fact_ids):
+            raise PermissionError(
+                "every treatment evidence fact must belong to the same authority and corpus version"
+            )
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO authority_treatment_assessments
               (corpus_version, authority_key, treatment_label, summary, confidence,
                abstained, abstention_reason, evidence_fact_ids, evidence_links,
-               model_version, policy_version, assessment_state, metadata)
+               model_version, policy_version, assessment_state, stale_at, metadata)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb,
-                    %s, %s, %s, %s::jsonb)
+                    %s, %s, %s, %s, %s::jsonb)
             RETURNING id::text
             """,
             [
@@ -754,17 +835,45 @@ def record_treatment_assessment(
                 float(confidence),
                 abstained,
                 (abstention_reason or "")[:1000] or None,
-                json.dumps(evidence_fact_ids),
-                json.dumps(evidence_links),
+                json.dumps(fact_ids if not abstained else []),
+                json.dumps(bound_evidence),
                 (model_version or "")[:200] or None,
                 policy_version[:200],
                 "abstained" if abstained else "provisional",
+                stale_at,
                 json.dumps({"recorded_by": actor}),
             ],
         )
         row = cur.fetchone()
     conn.commit()
     return str(row[0])
+
+
+def authorize_citator_reviewer(
+    conn: Any, *, principal: str, authorization_basis: str, actor: str
+) -> None:
+    """Register an internal attorney-review principal with an audit basis.
+
+    No public Research MCP caller can perform this operation. Until an
+    authenticated tenant/RBAC adapter registers a principal, treatment review
+    is unavailable rather than treating a display name as legal authority.
+    """
+    actor, _ = _authorized(actor, "citator reviewer authorization")
+    if not principal.strip() or not authorization_basis.strip():
+        raise ValueError("reviewer principal and authorization basis are required")
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO authority_reviewer_principals
+                   (principal, authorization_basis, active, verified_by, revoked_at, metadata)
+               VALUES (%s, %s, TRUE, %s, NULL, %s::jsonb)
+               ON CONFLICT (principal) DO UPDATE SET
+                 authorization_basis=EXCLUDED.authorization_basis, active=TRUE,
+                 verified_by=EXCLUDED.verified_by, verified_at=now(), revoked_at=NULL,
+                 metadata=EXCLUDED.metadata""",
+            [principal.strip(), authorization_basis.strip()[:1000], actor,
+             json.dumps({"authorization_contract": "internal-rbac-principal"})],
+        )
+    conn.commit()
 
 
 def review_treatment_assessment(
@@ -784,6 +893,14 @@ def review_treatment_assessment(
         raise ValueError("an override treatment label is required")
     with conn.cursor() as cur:
         cur.execute(
+            """SELECT active, authorization_basis FROM authority_reviewer_principals
+                 WHERE principal=%s""",
+            [reviewer],
+        )
+        authorized = cur.fetchone()
+        if not authorized or not authorized[0] or not authorized[1]:
+            raise PermissionError("reviewer is not an authorized citator review principal")
+        cur.execute(
             """INSERT INTO authority_treatment_reviews
                  (assessment_id, reviewer, decision, override_label, note, metadata)
                VALUES (%s::uuid, %s, %s, %s, %s, %s::jsonb) RETURNING id::text""",
@@ -793,7 +910,11 @@ def review_treatment_assessment(
                 decision,
                 override_label if decision == "overridden" else None,
                 (note or "")[:4000] or None,
-                json.dumps({"review_workflow": "attorney_review_first"}),
+                json.dumps({
+                    "review_workflow": "attorney_review_first",
+                    "authorization_basis": authorized[1],
+                    "principal": reviewer,
+                }),
             ],
         )
         row = cur.fetchone()
@@ -810,12 +931,19 @@ def save_citator_watch(
     created_by: str,
     delivery_channels: list[str],
     quiet_hours: dict[str, Any] | None = None,
+    matter_scope_assertion: str = "",
 ) -> str:
     """Create an idempotent consented watch under explicit tenant RLS context."""
     if not tenant_id or not matter_id or not authority_key or not created_by:
         raise ValueError("tenant, matter, authority, and actor are required")
     if not delivery_channels:
         raise ValueError("at least one consented alert channel is required")
+    _validate_citator_matter_scope(
+        matter_scope_assertion,
+        tenant_id=tenant_id,
+        matter_id=matter_id,
+        principal=created_by,
+    )
     with conn.cursor() as cur:
         cur.execute("SET LOCAL app.current_tenant_id = %s", [tenant_id])
         cur.execute(
@@ -897,7 +1025,8 @@ def enqueue_citator_alert(
         cur.execute(
             """SELECT authority_key FROM citator_watches
                 WHERE id=%s::uuid AND tenant_id=%s::uuid
-                  AND state='active' AND consented IS TRUE""",
+                  AND state='active' AND consented IS TRUE
+                FOR UPDATE""",
             [watch_id, tenant_id],
         )
         watch = cur.fetchone()
@@ -976,6 +1105,7 @@ def record_citator_alert_delivery(
             FROM citator_alert_events e
             JOIN citator_watches w ON w.id=e.watch_id
             WHERE e.id=%s::uuid AND e.tenant_id=%s::uuid
+            FOR UPDATE OF w
             """,
             [alert_event_id, tenant_id],
         )

@@ -631,7 +631,10 @@ class CourtListenerRepository:
                        r.source_version, r.currentness_state,
                        r.deterministic_metadata, v.as_of AS corpus_as_of,
                        v.status AS corpus_status, s.source_key,
-                       s.rights_decision, s.reviewed_at, s.expected_cadence,
+                       s.enabled, s.rights_decision, s.reviewed_at, s.reviewed_by,
+                       s.expected_cadence, s.metadata->>'catalog_schema_version'
+                         AS catalog_schema_version,
+                       s.metadata->>'implementation_status' AS implementation_status,
                        s.completeness_caveats, s.claim_safe_wording
                 FROM authority_records r
                 JOIN authority_corpus_versions v ON v.version=r.corpus_version
@@ -721,16 +724,41 @@ class CourtListenerRepository:
             "attorney_reviewed": False,
         }
         if assessments:
-            assessment["attorney_reviewed"] = bool(assessment.get("review_decision"))
-            if assessment.get("review_decision") == "overridden":
-                assessment["effective_label"] = assessment.get("override_label")
-            else:
+            stale_at = assessment.get("stale_at")
+            is_stale = (
+                assessment.get("assessment_state") in {"stale", "superseded"}
+                or (stale_at is not None and stale_at <= datetime.now(timezone.utc))
+            )
+            decision = assessment.get("review_decision")
+            if is_stale:
+                assessment["review_state"] = "stale"
+                assessment["attorney_reviewed"] = False
+                assessment["effective_label"] = "unknown"
+            elif decision == "accepted":
+                assessment["review_state"] = "accepted"
+                assessment["attorney_reviewed"] = True
                 assessment["effective_label"] = assessment.get("treatment_label")
+            elif decision == "overridden":
+                assessment["review_state"] = "overridden"
+                assessment["attorney_reviewed"] = True
+                assessment["effective_label"] = assessment.get("override_label")
+            elif decision in {"rejected", "needs_more_evidence"}:
+                assessment["review_state"] = decision
+                assessment["attorney_reviewed"] = False
+                assessment["effective_label"] = "unknown"
+            else:
+                assessment["review_state"] = "not_reviewed"
+                assessment["attorney_reviewed"] = False
+                assessment["effective_label"] = "unknown"
         source_ready = (
-            record.get("rights_decision") in {"official", "open", "licensed"}
+            record.get("enabled") is True
+            and record.get("rights_decision") in {"official", "open", "licensed"}
             and record.get("reviewed_at") is not None
+            and bool(record.get("reviewed_by"))
             and record.get("currentness_state") == "current"
             and bool(record.get("expected_cadence"))
+            and bool(record.get("catalog_schema_version"))
+            and bool(record.get("implementation_status"))
         )
         has_reviewable_evidence = bool(history or citing_references)
         status = "review_ready" if source_ready and has_reviewable_evidence else "incomplete"
@@ -744,6 +772,13 @@ class CourtListenerRepository:
             )
         if not has_reviewable_evidence:
             limitations.append("No direct/later-history or citing-reference evidence is available in this promoted snapshot.")
+        if assessments and assessment.get("review_state") in {
+            "stale", "rejected", "needs_more_evidence", "not_reviewed"
+        }:
+            limitations.append(
+                "The latest treatment assessment is not an effective current attorney conclusion; "
+                "its effective treatment remains unknown."
+            )
         return {
             "opinion_id": opinion_id,
             "authority_key": authority_key,

@@ -23,11 +23,17 @@ are immutable.
 `authority_treatment_assessments` is separate. It records an explicitly
 provisional machine interpretation, confidence, abstention, model/policy
 versions, and linked source-fact evidence. A non-abstaining assessment cannot
-be saved without linked evidence. `authority_treatment_reviews` appends an
+be saved without source-fact IDs that resolve to the same authority and corpus
+version; its URL, span, locator, and hash are copied from those stored facts,
+not accepted from caller JSON. `authority_treatment_reviews` appends an
 attorney acceptance, rejection, request for more evidence, or override; it
-never overwrites the machine record. A new promoted snapshot deliberately does
-not inherit derived treatment—the assessment must be recomputed and reviewed
-against its new as-of state.
+never overwrites the machine record. Review requires an active,
+authorization-basis-backed reviewer principal—an arbitrary display name cannot
+be treated as an attorney. Only accepted or overridden, non-stale assessments
+have an effective treatment label; rejected, needs-more-evidence, pending,
+stale, and superseded assessments remain effectively `unknown`. A new promoted
+snapshot deliberately does not inherit derived treatment—the assessment must
+be recomputed and reviewed against its new as-of state.
 
 ## Customer and API behavior
 
@@ -47,17 +53,24 @@ rehearsal gaps.
 ## Watches and alerts
 
 Saved watches are tenant-and-matter scoped and contain no authority text.
-They require explicit consent and at least one delivery channel. Database RLS
+They require explicit consent, at least one delivery channel, and a short-lived
+backend-signed assertion that binds the tenant, canonical matter, and creating
+principal. The backend checks the canonical LawHand `matters` table before
+minting that assertion; the public-authority database does **not** claim to
+have a matter foreign key or independently prove matter ownership. Database RLS
 requires `app.current_tenant_id` for reads and writes; callers cannot list,
 revoke, or enqueue another tenant’s watch. Alert events are idempotent by watch
-and event fingerprint. Delivery attempts can be queued, quiet-hour/no-consent
-suppressed, failed, sent, or revoked. Revocation removes consent before later
-enqueueing and appends a durable watch audit row.
+and event fingerprint. Enqueue and delivery persistence lock the active watch
+row through their consent/state recheck, so a queued revocation cannot commit
+between that check and the database write. Delivery attempts can be queued,
+quiet-hour/no-consent suppressed, failed, sent, or revoked. Revocation removes
+consent before later enqueueing and appends a durable watch audit row.
 
 This release contains no production notification delivery. A production sender
 must honor quiet-hour configuration, record every delivery attempt, recheck
-revocation immediately before delivery, and use a separately authorized
-customer/staff channel.
+revocation immediately before the external send, and use a separately
+authorized customer/staff channel. The database lock serializes audit state; it
+cannot make an external provider send atomic with revocation.
 
 ## Evaluation and release gate
 

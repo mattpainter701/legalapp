@@ -293,6 +293,7 @@ def _production_env(**overrides: str) -> str:
         "MCP_SERVER_URL": "http://courtlistener-mcp:8000",
         "MCP_UPSTREAM_API_KEY": "mcp-upstream-key-0123456789-abcdef",
         "MCP_OPERATOR_ASSERTION_SECRET": "mcp-operator-signer-0123456789-abcdef",
+        "MCP_CITATOR_SCOPE_ASSERTION_SECRET": "mcp-citator-scope-signer-0123456789-abcdef",
         "UPLOADS_HOST_DIR": "/srv/legalapp/uploads",
         "HOST_STATUS_HOST_DIR": "/srv/legalapp/host-status",
         "HOST_DISK_STATUS_FILE": "/run/legalapp-host-status/disk-status.json",
@@ -1204,6 +1205,32 @@ def test_production_preflight_rejects_unsafe_mcp_assertion_signer(
     result = _run_preflight(
         tmp_path,
         _production_env(MCP_OPERATOR_ASSERTION_SECRET=value),
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert message in output
+    if value:
+        assert value not in output
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ("", "MCP_CITATOR_SCOPE_ASSERTION_SECRET must be at least 32 characters"),
+        ("short", "MCP_CITATOR_SCOPE_ASSERTION_SECRET must be at least 32 characters"),
+        (
+            "mcp-operator-signer-0123456789-abcdef",
+            "distinct from MCP_UPSTREAM_API_KEY and MCP_OPERATOR_ASSERTION_SECRET",
+        ),
+        (NEW_FERNET_KEY, "token-encryption key"),
+    ],
+)
+def test_production_preflight_rejects_unsafe_citator_scope_signer(
+    tmp_path: Path, value: str, message: str
+) -> None:
+    result = _run_preflight(
+        tmp_path,
+        _production_env(MCP_CITATOR_SCOPE_ASSERTION_SECRET=value),
     )
     output = result.stdout + result.stderr
     assert result.returncode != 0

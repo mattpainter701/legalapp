@@ -18,7 +18,7 @@ def test_release_catalog_returns_latest_release_and_history():
     assert latest["version"] == LATEST_RELEASE_ID
     assert latest["is_recent"] is True
     assert len(latest["highlights"]) == 4
-    assert latest["highlights"][-1]["title"] == "Use mediation in My Matters"
+    assert latest["highlights"][-1]["title"] == "No unsupported status claim"
     assert catalog["release_notes"][0] == latest
 
 

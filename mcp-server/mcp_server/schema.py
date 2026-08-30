@@ -745,6 +745,17 @@ CREATE TABLE IF NOT EXISTS authority_treatment_reviews (
     CHECK (decision IN ('accepted', 'overridden', 'rejected', 'needs_more_evidence')),
     CHECK (override_label IS NULL OR override_label IN ('negative', 'positive', 'distinguished', 'no_decision', 'unknown'))
 );
+CREATE TABLE IF NOT EXISTS authority_reviewer_principals (
+    principal text PRIMARY KEY,
+    authorization_basis text NOT NULL,
+    active boolean NOT NULL DEFAULT true,
+    verified_by text NOT NULL,
+    verified_at timestamptz NOT NULL DEFAULT now(),
+    revoked_at timestamptz,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    CHECK (length(trim(principal)) > 0),
+    CHECK (length(trim(authorization_basis)) > 0)
+);
 
 -- Watches are tenant/matter scoped. They contain no authority text and are
 -- never consulted by the public authority search path. RLS requires a caller
@@ -766,7 +777,8 @@ CREATE TABLE IF NOT EXISTS citator_watches (
     metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
     CHECK (state IN ('active', 'paused', 'revoked', 'deleted')),
     CHECK ((state = 'active' AND consented) OR state <> 'active'),
-    UNIQUE (tenant_id, matter_id, authority_key, created_by)
+    UNIQUE (tenant_id, matter_id, authority_key, created_by),
+    CONSTRAINT citator_watches_id_tenant_key UNIQUE (id, tenant_id)
 );
 CREATE TABLE IF NOT EXISTS citator_alert_events (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -804,6 +816,43 @@ CREATE TABLE IF NOT EXISTS citator_alert_deliveries (
     CHECK (outcome IN ('suppressed_quiet_hours', 'suppressed_no_consent', 'queued', 'sent', 'failed', 'revoked')),
     UNIQUE (alert_event_id, channel, delivery_key)
 );
+-- A primary-key watch reference alone cannot prove the duplicated tenant UUID
+-- on an event/audit row is the watch owner's tenant.  Keep the simple FK for
+-- compatibility and add composite integrity constraints for all new/runtime
+-- schema initializations, including databases created before this slice.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'citator_watches_id_tenant_key'
+    ) THEN
+        ALTER TABLE citator_watches
+          ADD CONSTRAINT citator_watches_id_tenant_key UNIQUE (id, tenant_id);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'citator_alert_events_watch_tenant_fk'
+    ) THEN
+        ALTER TABLE citator_alert_events
+          ADD CONSTRAINT citator_alert_events_watch_tenant_fk
+          FOREIGN KEY (watch_id, tenant_id) REFERENCES citator_watches(id, tenant_id)
+          ON DELETE RESTRICT;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'citator_watch_audits_watch_tenant_fk'
+    ) THEN
+        ALTER TABLE citator_watch_audits
+          ADD CONSTRAINT citator_watch_audits_watch_tenant_fk
+          FOREIGN KEY (watch_id, tenant_id) REFERENCES citator_watches(id, tenant_id)
+          ON DELETE RESTRICT;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'citator_alert_deliveries_event_tenant_fk'
+    ) THEN
+        ALTER TABLE citator_alert_deliveries
+          ADD CONSTRAINT citator_alert_deliveries_event_tenant_fk
+          FOREIGN KEY (alert_event_id, tenant_id) REFERENCES citator_alert_events(id, tenant_id)
+          ON DELETE RESTRICT;
+    END IF;
+END $$;
 
 CREATE OR REPLACE FUNCTION reject_citator_evidence_mutation() RETURNS trigger
 LANGUAGE plpgsql AS $$
@@ -877,6 +926,7 @@ CREATE INDEX IF NOT EXISTS ix_authority_records_version_kind ON authority_record
 CREATE INDEX IF NOT EXISTS ix_authority_history_facts_lookup ON authority_history_facts(corpus_version, authority_key, observed_at DESC);
 CREATE INDEX IF NOT EXISTS ix_authority_citation_facts_cited ON authority_citation_facts(corpus_version, cited_authority_key, depth);
 CREATE INDEX IF NOT EXISTS ix_authority_treatment_assessments_lookup ON authority_treatment_assessments(corpus_version, authority_key, computed_at DESC);
+CREATE INDEX IF NOT EXISTS ix_authority_reviewer_principals_active ON authority_reviewer_principals(active, principal);
 CREATE INDEX IF NOT EXISTS ix_citator_watches_tenant_matter ON citator_watches(tenant_id, matter_id, state);
 CREATE INDEX IF NOT EXISTS ix_citator_alert_events_tenant_created ON citator_alert_events(tenant_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS ix_citator_watch_audits_tenant_created ON citator_watch_audits(tenant_id, created_at DESC);

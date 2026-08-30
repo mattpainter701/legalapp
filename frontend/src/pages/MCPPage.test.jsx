@@ -211,7 +211,7 @@ describe('Admin MCP servers page', () => {
 
     renderPage()
 
-    expect(await screen.findByText('get_citator_status')).toBeInTheDocument()
+    expect((await screen.findAllByText('get_citator_status')).length).toBeGreaterThan(0)
     expect(screen.getByText(/provisional or attorney-reviewed treatment/i)).toBeInTheDocument()
     expect(screen.getByText(/never a good-law determination/i)).toBeInTheDocument()
   })

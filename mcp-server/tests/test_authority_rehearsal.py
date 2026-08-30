@@ -10,6 +10,11 @@ import uuid
 import bz2
 import csv
 import threading
+import base64
+import hashlib
+import hmac
+import json
+import time
 from urllib.parse import quote
 from pathlib import Path
 from datetime import datetime, timezone
@@ -19,12 +24,19 @@ from fastapi import HTTPException
 from psycopg2 import DatabaseError
 
 from mcp_server.control_plane import (
+    authorize_citator_reviewer,
     claim_embedding_shard,
+    enqueue_citator_alert,
     finish_embedding_shard,
     heartbeat_embedding_shard,
     promote_corpus_version,
     record_audit,
+    record_citator_alert_delivery,
+    record_treatment_assessment,
+    revoke_citator_watch,
+    review_treatment_assessment,
     rollback_corpus_version,
+    save_citator_watch,
     sampled_audit,
     stage_corpus_version,
 )
@@ -1133,6 +1145,405 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
             CourtListenerRepository(conn).search_caselaw("old case")[0]["case_name"]
             == "Fixture old"
         )
+
+
+def _citator_scope_assertion(*, tenant_id: str, matter_id: str, principal: str) -> str:
+    """Build the same short-lived backend contract used by the private service."""
+    payload = json.dumps(
+        {
+            "tenant_id": tenant_id,
+            "matter_id": matter_id,
+            "principal": principal,
+            "scope": "citator:watch",
+            "issued": int(time.time()),
+            "expires": int(time.time()) + 300,
+            "nonce": "rehearsal-" + uuid.uuid4().hex,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    secret = os.environ["MCP_CITATOR_SCOPE_ASSERTION_SECRET"].encode()
+    signature = hmac.new(secret, payload, hashlib.sha256).digest()
+    def encode(value: bytes) -> str:
+        return base64.urlsafe_b64encode(value).decode().rstrip("=")
+
+    return f"{encode(payload)}.{encode(signature)}"
+
+
+def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
+    """Exercise source facts, review, watch dedupe/revocation, and RLS in CI.
+
+    This is intentionally part of the mandatory pgvector/PostgreSQL rehearsal,
+    rather than an opt-in unit fixture. It uses only synthetic authority and
+    UUIDs and never contacts an alert provider.
+    """
+    db_url = os.getenv("AUTHORITY_REHEARSAL_DATABASE_URL")
+    if not db_url:
+        pytest.skip("set AUTHORITY_REHEARSAL_DATABASE_URL for the disposable DB rehearsal")
+    init_schema(db_url)
+    version = "citator-rehearsal-" + uuid.uuid4().hex
+    source_key = "citator:rehearsal:" + version
+    opinion_id = 97900000 + int(uuid.uuid4().int % 100000)
+    authority_key = f"case:{opinion_id}"
+    tenant_id, other_tenant_id, matter_id = (str(uuid.uuid4()) for _ in range(3))
+    monkeypatch.setenv("MCP_CITATOR_SCOPE_ASSERTION_SECRET", "c" * 48)
+
+    with connect(db_url) as conn:
+        stage_corpus_version(
+            conn,
+            version=version,
+            manifest_hash="citator-rehearsal-manifest",
+            as_of="2026-08-30T00:00:00Z",
+            actor="rehearsal-admin",
+            reason="citator/watch/review disposable rehearsal",
+            embedding_model="mixedbread-ai/mxbai-embed-large-v1",
+            embedding_version="1",
+            embedding_dimension=1024,
+        )
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO legal_sources
+                     (source_key, publisher, source_type, canonical_url, enabled,
+                      storage_policy, rights_decision, reviewed_at, reviewed_by,
+                      expected_cadence, claim_safe_wording, metadata)
+                   VALUES (%s, 'Citator rehearsal', 'case_law', 'https://example.test/citator',
+                     TRUE, 'normalized_text', 'official', now(), 'rehearsal-admin',
+                     'daily', 'Synthetic rehearsal source only',
+                     '{"catalog_schema_version":"rehearsal","implementation_status":"fixture"}')""",
+                [source_key],
+            )
+            cur.execute(
+                """INSERT INTO authority_records
+                     (corpus_version, authority_key, authority_kind, source_key,
+                      canonical_citation, title, court, decision_date, source_url,
+                      source_as_of, source_version, currentness_state,
+                      deterministic_metadata)
+                   VALUES (%s, %s, 'case', %s, '1 R. 1', 'Synthetic citator case',
+                     'rehearsal-court', '2026-01-01', 'https://example.test/case',
+                     '2026-08-30T00:00:00Z', %s, 'current',
+                     %s::jsonb)""",
+                [
+                    version,
+                    authority_key,
+                    source_key,
+                    version,
+                    '{"opinion_id":' + str(opinion_id) + '}',
+                ],
+            )
+            cur.execute(
+                """INSERT INTO authority_history_facts
+                     (corpus_version, authority_key, fact_kind, event_date, source_url,
+                      evidence_span, evidence_locator, source_hash)
+                   VALUES (%s, %s, 'later_history', '2026-02-01',
+                     'https://example.test/history', 'Synthetic history span',
+                     '{"paragraph":1}', 'history-sha256-fixture') RETURNING id::text""",
+                [version, authority_key],
+            )
+            history_fact_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO authority_records
+                     (corpus_version, authority_key, authority_kind, source_key,
+                      source_url, source_as_of, source_version, currentness_state)
+                   VALUES (%s, %s, 'case', %s, 'https://example.test/other',
+                     '2026-08-30T00:00:00Z', %s, 'current')""",
+                [version, "case:other-" + version, source_key, version],
+            )
+            cur.execute(
+                """INSERT INTO authority_history_facts
+                     (corpus_version, authority_key, fact_kind, source_url,
+                      evidence_span, evidence_locator, source_hash)
+                   VALUES (%s, %s, 'direct_history', 'https://example.test/other-history',
+                     'Other authority span', '{"paragraph":2}', 'other-sha') RETURNING id::text""",
+                [version, "case:other-" + version],
+            )
+            cross_authority_fact_id = cur.fetchone()[0]
+            foreign_version = version + "-foreign"
+            stage_corpus_version(
+                conn, version=foreign_version, manifest_hash="foreign-citator-manifest",
+                as_of="2026-08-30T00:00:00Z", actor="rehearsal-admin",
+                reason="cross-version evidence negative", embedding_model="mixedbread-ai/mxbai-embed-large-v1",
+                embedding_version="1", embedding_dimension=1024,
+            )
+            cur.execute(
+                """INSERT INTO authority_records
+                     (corpus_version, authority_key, authority_kind, source_key,
+                      source_url, source_as_of, source_version, currentness_state)
+                   VALUES (%s, %s, 'case', %s, 'https://example.test/foreign',
+                     '2026-08-30T00:00:00Z', %s, 'current')""",
+                [foreign_version, authority_key, source_key, foreign_version],
+            )
+            cur.execute(
+                """INSERT INTO authority_history_facts
+                     (corpus_version, authority_key, fact_kind, source_url,
+                      evidence_span, evidence_locator, source_hash)
+                   VALUES (%s, %s, 'direct_history', 'https://example.test/foreign-history',
+                     'Foreign version span', '{"paragraph":3}', 'foreign-sha') RETURNING id::text""",
+                [foreign_version, authority_key],
+            )
+            cross_version_fact_id = cur.fetchone()[0]
+        conn.commit()
+        for kind in ("release", "completeness", "freshness", "isolation"):
+            result = sampled_audit(
+                ([{"ready": True}]
+                 if kind == "release"
+                 else ([{"expected": 1, "observed": 1, "declared": True}]
+                       if kind == "completeness"
+                       else ([{"lag_seconds": 0}]
+                             if kind == "freshness"
+                             else [{"namespace": "public-authority", "private": False}]))),
+                audit_kind=kind,
+            )
+            record_audit(
+                conn, corpus_version=version, audit_kind=kind,
+                methodology="citator synthetic rehearsal", thresholds={}, result=result,
+                passed=True, auditor="rehearsal-admin",
+            )
+        promote_corpus_version(
+            conn, version=version, actor="rehearsal-admin", reason="citator rehearsal cutover"
+        )
+        for fact_id in (str(uuid.uuid4()), cross_authority_fact_id, cross_version_fact_id):
+            with pytest.raises(PermissionError, match="same authority and corpus version"):
+                record_treatment_assessment(
+                    conn, corpus_version=version, authority_key=authority_key,
+                    treatment_label="negative", confidence=0.7,
+                    policy_version="citator-policy-rehearsal-v1",
+                    evidence_fact_ids=[fact_id], model_version="synthetic-model-v1",
+                    actor="rehearsal-worker",
+                )
+        assessment_id = record_treatment_assessment(
+            conn, corpus_version=version, authority_key=authority_key,
+            treatment_label="distinguished", confidence=0.77,
+            policy_version="citator-policy-rehearsal-v1",
+            evidence_fact_ids=[history_fact_id],
+            model_version="synthetic-model-v1", actor="rehearsal-worker",
+        )
+        with pytest.raises(PermissionError, match="authorized citator review principal"):
+            review_treatment_assessment(
+                conn, assessment_id=assessment_id, reviewer="unregistered-attorney",
+                decision="accepted",
+            )
+        authorize_citator_reviewer(
+            conn, principal="rehearsal-attorney", authorization_basis="synthetic attorney review fixture",
+            actor="rehearsal-admin",
+        )
+        review_treatment_assessment(
+            conn, assessment_id=assessment_id, reviewer="rehearsal-attorney",
+            decision="overridden", override_label="no_decision",
+            note="Synthetic attorney override",
+        )
+        watch_id = save_citator_watch(
+            conn, tenant_id=tenant_id, matter_id=matter_id,
+            authority_key=authority_key, created_by="rehearsal-attorney",
+            delivery_channels=["in_app"],
+            quiet_hours={"start": "22:00", "end": "07:00", "timezone": "UTC"},
+            matter_scope_assertion=_citator_scope_assertion(
+                tenant_id=tenant_id, matter_id=matter_id, principal="rehearsal-attorney"
+            ),
+        )
+        alert_id = enqueue_citator_alert(
+            conn, tenant_id=tenant_id, watch_id=watch_id, corpus_version=version,
+            authority_key=authority_key, event_fingerprint="synthetic-history-v1",
+            event_kind="history", source_url="https://example.test/history",
+            payload={"synthetic": True},
+        )
+        assert alert_id
+        assert enqueue_citator_alert(
+            conn, tenant_id=tenant_id, watch_id=watch_id, corpus_version=version,
+            authority_key=authority_key, event_fingerprint="synthetic-history-v1",
+            event_kind="history", source_url="https://example.test/history",
+            payload={"synthetic": True},
+        ) is None
+        assert record_citator_alert_delivery(
+            conn, tenant_id=tenant_id, alert_event_id=alert_id, channel="in_app",
+            delivery_key="synthetic-attempt-1", attempted_outcome="queued",
+            now=datetime(2026, 8, 30, 23, 0, tzinfo=timezone.utc),
+        )
+        # RLS hides the other tenant's watch, while the composite FK also
+        # rejects a bypass-shaped event whose tenant UUID does not match the
+        # referenced watch. This is independent of application-side checks.
+        with conn.cursor() as cur:
+            cur.execute("SET LOCAL app.current_tenant_id = %s", [other_tenant_id])
+            cur.execute("SAVEPOINT cross_tenant_watch_event")
+            with pytest.raises(DatabaseError):
+                cur.execute(
+                    """INSERT INTO citator_alert_events
+                         (watch_id, tenant_id, corpus_version, authority_key,
+                          event_fingerprint, event_kind, source_url, payload)
+                       VALUES (%s::uuid, %s::uuid, %s, %s, 'cross-tenant-fk', 'history',
+                         'https://example.test/history', '{}'::jsonb)""",
+                    [watch_id, other_tenant_id, version, authority_key],
+                )
+            cur.execute("ROLLBACK TO SAVEPOINT cross_tenant_watch_event")
+            cur.execute("RELEASE SAVEPOINT cross_tenant_watch_event")
+        with conn.cursor() as cur:
+            cur.execute("SET LOCAL app.current_tenant_id = %s", [other_tenant_id])
+            cur.execute("SELECT count(*) FROM citator_watches WHERE id=%s::uuid", [watch_id])
+            assert cur.fetchone()[0] == 0
+        conn.commit()
+
+        def save_race_watch(principal: str) -> str:
+            return save_citator_watch(
+                conn, tenant_id=tenant_id, matter_id=matter_id,
+                authority_key=authority_key, created_by=principal, delivery_channels=["in_app"],
+                matter_scope_assertion=_citator_scope_assertion(
+                    tenant_id=tenant_id, matter_id=matter_id, principal=principal
+                ),
+            )
+
+        def lock_watch_row(target_watch_id: str, locked: threading.Event, release: threading.Event):
+            with connect(db_url) as lock_conn:
+                with lock_conn.cursor() as cur:
+                    cur.execute("SET LOCAL app.current_tenant_id = %s", [tenant_id])
+                    cur.execute("SELECT id FROM citator_watches WHERE id=%s::uuid FOR UPDATE", [target_watch_id])
+                    assert cur.fetchone()
+                    locked.set()
+                    assert release.wait(timeout=10)
+                lock_conn.commit()
+
+        # These two races use separate real PostgreSQL connections.  Revoke is
+        # queued first behind the row lock, so enqueue/delivery must recheck
+        # state only after revoke commits; neither may persist after revocation.
+        race_watch = save_race_watch("rehearsal-race-enqueue")
+        locked, release, revoke_done, enqueue_done = (
+            threading.Event(), threading.Event(), threading.Event(), threading.Event()
+        )
+        race_results: dict[str, object] = {}
+        locker = threading.Thread(target=lock_watch_row, args=(race_watch, locked, release))
+        locker.start()
+        assert locked.wait(timeout=5)
+
+        def revoke_enqueue_race():
+            race_results["revoke"] = revoke_citator_watch(
+                connect(db_url), tenant_id=tenant_id, watch_id=race_watch
+            )
+            revoke_done.set()
+
+        def enqueue_after_revoke():
+            with connect(db_url) as race_conn:
+                race_results["enqueue"] = enqueue_citator_alert(
+                    race_conn, tenant_id=tenant_id, watch_id=race_watch, corpus_version=version,
+                    authority_key=authority_key, event_fingerprint="race-enqueue-after-revoke",
+                    event_kind="history", source_url="https://example.test/history", payload={"synthetic": True},
+                )
+            enqueue_done.set()
+
+        revoker = threading.Thread(target=revoke_enqueue_race)
+        enqueuer = threading.Thread(target=enqueue_after_revoke)
+        revoker.start()
+        time.sleep(0.05)
+        enqueuer.start()
+        assert not revoke_done.wait(timeout=0.15)
+        assert not enqueue_done.wait(timeout=0.15)
+        release.set()
+        for worker in (locker, revoker, enqueuer):
+            worker.join(timeout=10)
+            assert not worker.is_alive()
+        assert race_results == {"revoke": True, "enqueue": None}
+
+        delivery_watch = save_race_watch("rehearsal-race-delivery")
+        delivery_alert = enqueue_citator_alert(
+            conn, tenant_id=tenant_id, watch_id=delivery_watch, corpus_version=version,
+            authority_key=authority_key, event_fingerprint="race-delivery-before-revoke",
+            event_kind="history", source_url="https://example.test/history", payload={"synthetic": True},
+        )
+        assert delivery_alert
+        locked, release, revoke_done, delivery_done = (
+            threading.Event(), threading.Event(), threading.Event(), threading.Event()
+        )
+        delivery_results: dict[str, object] = {}
+        locker = threading.Thread(target=lock_watch_row, args=(delivery_watch, locked, release))
+        locker.start()
+        assert locked.wait(timeout=5)
+
+        def revoke_delivery_race():
+            with connect(db_url) as race_conn:
+                delivery_results["revoke"] = revoke_citator_watch(
+                    race_conn, tenant_id=tenant_id, watch_id=delivery_watch
+                )
+            revoke_done.set()
+
+        def delivery_after_revoke():
+            with connect(db_url) as race_conn:
+                delivery_results["delivery"] = record_citator_alert_delivery(
+                    race_conn, tenant_id=tenant_id, alert_event_id=delivery_alert,
+                    channel="in_app", delivery_key="race-delivery-after-revoke", attempted_outcome="queued",
+                )
+            delivery_done.set()
+
+        revoker = threading.Thread(target=revoke_delivery_race)
+        deliverer = threading.Thread(target=delivery_after_revoke)
+        revoker.start()
+        time.sleep(0.05)
+        deliverer.start()
+        assert not revoke_done.wait(timeout=0.15)
+        assert not delivery_done.wait(timeout=0.15)
+        release.set()
+        for worker in (locker, revoker, deliverer):
+            worker.join(timeout=10)
+            assert not worker.is_alive()
+        assert delivery_results["revoke"] is True
+        with conn.cursor() as cur:
+            cur.execute("SET LOCAL app.current_tenant_id = %s", [tenant_id])
+            cur.execute(
+                "SELECT outcome FROM citator_alert_deliveries WHERE alert_event_id=%s::uuid AND delivery_key='race-delivery-after-revoke'",
+                [delivery_alert],
+            )
+            assert cur.fetchone()[0] == "revoked"
+        conn.commit()
+        assert revoke_citator_watch(conn, tenant_id=tenant_id, watch_id=watch_id)
+        assert enqueue_citator_alert(
+            conn, tenant_id=tenant_id, watch_id=watch_id, corpus_version=version,
+            authority_key=authority_key, event_fingerprint="synthetic-history-v2",
+            event_kind="history", source_url="https://example.test/history",
+            payload={"synthetic": True},
+        ) is None
+        result = CourtListenerRepository(conn).authority_treatment(opinion_id)
+        assert result["status"] == "review_ready"
+        assert result["machine_interpretation"]["attorney_reviewed"] is True
+        assert result["machine_interpretation"]["effective_label"] == "no_decision"
+        assert "No good-law" in result["claim"]
+
+        rejected_assessment = record_treatment_assessment(
+            conn, corpus_version=version, authority_key=authority_key,
+            treatment_label="negative", confidence=0.8,
+            policy_version="citator-policy-rehearsal-v1", evidence_fact_ids=[history_fact_id],
+            model_version="synthetic-model-v1", actor="rehearsal-worker",
+        )
+        review_treatment_assessment(
+            conn, assessment_id=rejected_assessment, reviewer="rehearsal-attorney",
+            decision="rejected", note="Synthetic rejection",
+        )
+        rejected = CourtListenerRepository(conn).authority_treatment(opinion_id)
+        assert rejected["machine_interpretation"]["review_state"] == "rejected"
+        assert rejected["machine_interpretation"]["effective_label"] == "unknown"
+
+        stale_assessment = record_treatment_assessment(
+            conn, corpus_version=version, authority_key=authority_key,
+            treatment_label="positive", confidence=0.8,
+            policy_version="citator-policy-rehearsal-v1", evidence_fact_ids=[history_fact_id],
+            model_version="synthetic-model-v1", actor="rehearsal-worker",
+            stale_at=datetime.now(timezone.utc),
+        )
+        review_treatment_assessment(
+            conn, assessment_id=stale_assessment, reviewer="rehearsal-attorney",
+            decision="accepted", note="Synthetic stale acceptance",
+        )
+        stale = CourtListenerRepository(conn).authority_treatment(opinion_id)
+        assert stale["machine_interpretation"]["review_state"] == "stale"
+        assert stale["machine_interpretation"]["effective_label"] == "unknown"
+
+        with conn.cursor() as cur:
+            cur.execute("UPDATE legal_sources SET enabled=FALSE WHERE source_key=%s", [source_key])
+        conn.commit()
+        with pytest.raises(PermissionError, match="promoted, reviewed public authority evidence"):
+            record_treatment_assessment(
+                conn, corpus_version=version, authority_key=authority_key,
+                treatment_label="negative", confidence=0.8,
+                policy_version="citator-policy-rehearsal-v1", evidence_fact_ids=[history_fact_id],
+                actor="rehearsal-worker",
+            )
+        disabled = CourtListenerRepository(conn).authority_treatment(opinion_id)
+        assert disabled["status"] == "incomplete"
 
 
 def test_durable_operator_assertion_replay_rehearsal(monkeypatch):
