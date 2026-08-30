@@ -7,6 +7,9 @@ unit runs so local tests never touch a developer or production database.
 
 import os
 import uuid
+import bz2
+import csv
+from pathlib import Path
 from datetime import datetime, timezone
 
 import pytest
@@ -25,8 +28,10 @@ from mcp_server.control_plane import (
 from mcp_server.database import connect
 from mcp_server.loader import (
     backfill_promoted_caselaw_snapshot,
+    create_chunks,
     create_snapshot_chunks,
     init_schema,
+    load_staged_core,
     refresh_courtlistener_coverage_ledger,
 )
 from mcp_server.authority_ingest import FetchedDocument, ingest_document
@@ -34,7 +39,7 @@ from mcp_server.repository import CourtListenerRepository
 from mcp_server.server import ControlPlaneRequest, run_control_audit
 
 
-def test_authority_release_rehearsal(monkeypatch):
+def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
     db_url = os.getenv("AUTHORITY_REHEARSAL_DATABASE_URL")
     if not db_url:
         pytest.skip(
@@ -200,6 +205,194 @@ def test_authority_release_rehearsal(monkeypatch):
             embedding_version="1",
             embedding_dimension=1024,
         )
+        bulk_dir = tmp_path / "bulk"
+        bulk_dir.mkdir()
+
+        def write_bulk(name, headers, rows):
+            with bz2.open(
+                bulk_dir / name, "wt", encoding="utf-8", newline=""
+            ) as handle:
+                writer = csv.DictWriter(handle, fieldnames=headers)
+                writer.writeheader()
+                writer.writerows(rows)
+
+        write_bulk(
+            "courts-rehearsal.csv.bz2",
+            ["id", "short_name", "full_name", "jurisdiction"],
+            [
+                {
+                    "id": "rehearsal-ohio",
+                    "short_name": "RO",
+                    "full_name": "Rehearsal Ohio",
+                    "jurisdiction": "US-OH",
+                }
+            ],
+        )
+        write_bulk(
+            "dockets-rehearsal.csv.bz2",
+            [
+                "id",
+                "court_id",
+                "docket_number",
+                "case_name",
+                "date_filed",
+                "date_terminated",
+            ],
+            [
+                {
+                    "id": "97100001",
+                    "court_id": "rehearsal-ohio",
+                    "docket_number": "R-1",
+                    "case_name": "Bulk fixture",
+                    "date_filed": "2026-01-01",
+                    "date_terminated": "",
+                }
+            ],
+        )
+        write_bulk(
+            "opinion-clusters-rehearsal.csv.bz2",
+            [
+                "id",
+                "docket_id",
+                "case_name",
+                "date_filed",
+                "precedential_status",
+                "citations",
+            ],
+            [
+                {
+                    "id": "97100001",
+                    "docket_id": "97100001",
+                    "case_name": "Bulk fixture",
+                    "date_filed": "2026-01-01",
+                    "precedential_status": "Published",
+                    "citations": "[]",
+                }
+            ],
+        )
+        write_bulk(
+            "opinions-rehearsal.csv.bz2",
+            [
+                "id",
+                "cluster_id",
+                "type",
+                "author_id",
+                "html_with_citations",
+                "plain_text",
+                "sha1",
+                "download_url",
+            ],
+            [
+                {
+                    "id": "97100001",
+                    "cluster_id": "97100001",
+                    "type": "010combined",
+                    "author_id": "judge",
+                    "html_with_citations": "",
+                    "plain_text": "Bulk fixture opinion",
+                    "sha1": "bulk-sha",
+                    "download_url": "https://example.test/bulk",
+                }
+            ],
+        )
+        write_bulk(
+            "citations-rehearsal.csv.bz2",
+            ["cluster_id", "reporter", "volume", "page"],
+            [
+                {
+                    "cluster_id": "97100001",
+                    "reporter": "Bulk Reporter",
+                    "volume": "1",
+                    "page": "1",
+                }
+            ],
+        )
+        write_bulk(
+            "citation-map-rehearsal.csv.bz2",
+            ["citing_opinion_id", "cited_opinion_id", "depth"],
+            [
+                {
+                    "citing_opinion_id": "97100001",
+                    "cited_opinion_id": "97100001",
+                    "depth": "0",
+                }
+            ],
+        )
+        # A malformed opinion row must fail before a candidate can be promoted.
+        write_bulk(
+            "opinions-rehearsal.csv.bz2",
+            [
+                "id",
+                "cluster_id",
+                "type",
+                "author_id",
+                "html_with_citations",
+                "plain_text",
+                "sha1",
+                "download_url",
+            ],
+            [
+                {
+                    "id": "",
+                    "cluster_id": "97100001",
+                    "type": "010combined",
+                    "author_id": "judge",
+                    "html_with_citations": "",
+                    "plain_text": "broken",
+                    "sha1": "bad",
+                    "download_url": "",
+                }
+            ],
+        )
+        with pytest.raises(Exception):
+            load_staged_core(bulk_dir, db_url)
+        with pytest.raises((PermissionError, ValueError)):
+            promote_corpus_version(
+                conn,
+                version=version,
+                actor="rehearsal-admin",
+                reason="partial bulk must not promote",
+            )
+        write_bulk(
+            "opinions-rehearsal.csv.bz2",
+            [
+                "id",
+                "cluster_id",
+                "type",
+                "author_id",
+                "html_with_citations",
+                "plain_text",
+                "sha1",
+                "download_url",
+            ],
+            [
+                {
+                    "id": "97100001",
+                    "cluster_id": "97100001",
+                    "type": "010combined",
+                    "author_id": "judge",
+                    "html_with_citations": "",
+                    "plain_text": "Bulk fixture opinion",
+                    "sha1": "bulk-sha",
+                    "download_url": "https://example.test/bulk",
+                }
+            ],
+        )
+        bulk_counts = load_staged_core(bulk_dir, db_url)
+        assert bulk_counts["courts"] == 1
+        assert bulk_counts["dockets"] == 1
+        assert bulk_counts["opinion_clusters"] == 1
+        assert bulk_counts["opinions"] == 1
+        assert bulk_counts["citations"] == 1
+        assert bulk_counts["citation_map"] == 1
+        created_bulk_chunks = create_chunks(db_url)
+        assert created_bulk_chunks > 0
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM authority_case_chunks WHERE corpus_version=%s AND opinion_id=97100001",
+                [version],
+            )
+            assert cur.fetchone()[0] > 0
         add_fixture(version, "old")
         monkeypatch.setenv("AUTHORITY_INGEST_CORPUS_VERSION", version)
         ingest_input = {
