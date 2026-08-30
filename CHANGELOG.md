@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Documentation
+- **COMP-02/03 closure audit:** reconciled the merged switching and conversion
+  slices against current `origin/main`, recorded focused validation evidence,
+  and documented the canonical import-promotion, SMS compliance/provider,
+  signed-agreement promotion, and production-rehearsal blockers. The COMP
+  checkboxes remain open until those acceptance gates are demonstrably met.
+
 ### Added
 - **Bounded Firm Memory search relay:** an explicitly matter-scoped local
   SQLite FTS5 control index can now answer bounded searches through the

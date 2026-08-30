@@ -8,13 +8,17 @@ import pytest
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.models.external_import import (
     ExternalImportRun,
     ExternalRawRow,
     ExternalSystemConnection,
 )
+from app.routers.external_imports import PROMOTION_CONFIRMATION, _report_hash
+from app.models.contact import Contact
+from app.models.plugin import Matter
+from app.models.external_import import ExternalRecordLink
 
 
 def _canonical_json(value):
@@ -187,3 +191,57 @@ async def test_tabs3_upload_rejects_bad_checksum_without_canonical_records(
     )
     assert len(failed_runs) == 1
     assert "Checksum mismatch" in failed_runs[0].errors[0]
+
+
+@pytest.mark.asyncio
+async def test_import_requires_report_bound_approval_and_promotes_idempotently(
+    client, db_session, test_tenant
+):
+    bundle = _bundle(
+        {
+            "CLIENT": [{"CLIENT_ID": "100.00", "NAME": "Acme", "EMAIL": "jane@acme.test"}],
+            "MATTER": [{"CLIENT_ID": "100.00", "MATTER_NAME": "Acme v. Beta", "DESCRIPTION": "Imported case"}],
+        }
+    )
+    uploaded = await client.post(
+        "/api/imports/tabs3/upload",
+        files={"file": ("tabs3.zip", bundle, "application/zip")},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    run_id = uuid.UUID(uploaded.json()["id"])
+    run = await db_session.get(ExternalImportRun, run_id)
+    report_hash = _report_hash(run)
+
+    rejected = await client.post(
+        f"/api/imports/{run_id}/approve",
+        json={"confirmation": PROMOTION_CONFIRMATION, "report_hash": "stale"},
+    )
+    assert rejected.status_code == 409
+
+    approved = await client.post(
+        f"/api/imports/{run_id}/approve",
+        json={"confirmation": PROMOTION_CONFIRMATION, "report_hash": report_hash},
+    )
+    assert approved.status_code == 200, approved.text
+
+    promoted = await client.post(f"/api/imports/{run_id}/promote")
+    assert promoted.status_code == 200, promoted.text
+    assert promoted.json()["created"] == {"contacts": 1, "matters": 1}
+    assert promoted.json()["linked"] == 2
+
+    replay = await client.post(f"/api/imports/{run_id}/promote")
+    assert replay.status_code == 200
+    assert replay.json()["status"] == "promoted"
+    assert await db_session.scalar(
+        select(func.count()).select_from(Contact).where(Contact.tenant_id == test_tenant.id)
+    ) == 1
+    assert await db_session.scalar(
+        select(func.count()).select_from(Matter).where(Matter.tenant_id == test_tenant.id)
+    ) == 1
+    assert await db_session.scalar(
+        select(func.count()).select_from(ExternalRecordLink).where(ExternalRecordLink.import_run_id == run_id)
+    ) == 2
+
+    rolled_back = await client.post(f"/api/imports/{run_id}/rollback")
+    assert rolled_back.status_code == 200, rolled_back.text
+    assert rolled_back.json()["status"] == "rollback_pending"
