@@ -65,7 +65,15 @@ async def native_mediation_portal(db_session, test_tenant, test_user):
         name="Jane Doe",
         email="client@example.com",
     )
-    db_session.add_all([contact, matter, case, party])
+    # These models expose the foreign keys but do not declare every ORM
+    # relationship, so make dependency order explicit for PostgreSQL.
+    db_session.add(contact)
+    await db_session.flush()
+    db_session.add(matter)
+    await db_session.flush()
+    db_session.add(case)
+    await db_session.flush()
+    db_session.add(party)
     await db_session.flush()
     raw = secrets.token_urlsafe(32)
     invite = ClientPortalInvite(
@@ -393,12 +401,16 @@ async def test_native_mediation_overlay_filters_records_and_recipient_ids(
     (tmp_path / "my.pdf").write_bytes(b"my document")
     (tmp_path / "other.pdf").write_bytes(b"released document")
     (tmp_path / "private.pdf").write_bytes(b"private document")
+    db_session.add(third_contact)
+    await db_session.flush()
+    db_session.add(other_party)
+    await db_session.flush()
+    db_session.add(third_party)
+    await db_session.flush()
+    db_session.add(third_invite)
+    await db_session.flush()
     db_session.add_all(
         [
-            other_party,
-            third_contact,
-            third_party,
-            third_invite,
             document,
             hidden_document,
             private_document,
