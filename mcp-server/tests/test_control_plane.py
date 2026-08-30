@@ -9,6 +9,7 @@ sys.path.insert(0, str(ROOT))
 
 from mcp_server.control_plane import (  # noqa: E402
     audit_hash,
+    cadence_seconds,
     coverage_claim,
     embedding_compatibility,
     lag_seconds,
@@ -17,6 +18,16 @@ from mcp_server.control_plane import (  # noqa: E402
     source_identity,
     sampled_audit,
 )
+
+
+def test_cadence_mapping_is_explicit_and_unknown_is_not_healthy():
+    assert cadence_seconds("daily") == 86400
+    assert cadence_seconds("weekly") == 604800
+    assert cadence_seconds("monthly") == 2592000
+    assert cadence_seconds("quarterly") == 7776000
+    assert cadence_seconds("annual") == 31536000
+    assert cadence_seconds("on_demand") is None
+    assert cadence_seconds("unknown") is None
 
 
 def test_public_namespace_rejects_private_sources():

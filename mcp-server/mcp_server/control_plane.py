@@ -15,6 +15,17 @@ from typing import Any
 RIGHTS_DECISIONS = {"official", "open", "licensed", "prohibited", "pending_review"}
 CLAIM_STATES = {"supported", "limited", "suppressed"}
 AUTHORITY_SCHEMA_VERSION = "authority-control-plane-v2"
+CADENCE_SECONDS = {
+    "hourly": 3600, "hour": 3600, "daily": 86400, "day": 86400,
+    "weekly": 604800, "week": 604800, "monthly": 2592000, "month": 2592000,
+    "quarterly": 7776000, "annual": 31536000,
+}
+
+
+def cadence_seconds(value: str | None) -> int | None:
+    """Return only explicitly supported cadence names; unknown is not healthy."""
+    key = str(value or "").strip().lower().replace(" ", "_")
+    return CADENCE_SECONDS.get(key)
 
 
 def public_namespace(source_key: str) -> str:

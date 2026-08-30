@@ -6,7 +6,7 @@ from typing import Any
 
 from .database import dict_rows
 from .query_embeddings import format_vector_literal
-from .control_plane import lag_seconds
+from .control_plane import cadence_seconds, lag_seconds
 
 _CITATION_RE = re.compile(r"^\s*(?P<volume>\d+)\s+(?P<reporter>.+?)\s+(?P<page>\d+)\s*$")
 _SEARCH_TERM_RE = re.compile(r"[A-Za-z0-9]{3,}")
@@ -932,6 +932,8 @@ class CourtListenerRepository:
                   AND rights_decision IN ('official', 'open', 'licensed')
                   AND reviewed_at IS NOT NULL AND reviewed_by IS NOT NULL
                   AND claim_safe_wording IS NOT NULL
+                  AND metadata->>'catalog_schema_version' IS NOT NULL
+                  AND metadata->>'implementation_status' IS NOT NULL
                   AND source_key NOT LIKE 'tenant:%'
                   AND source_key NOT LIKE 'firm:%'
                   AND source_key NOT LIKE 'private:%'
@@ -949,12 +951,25 @@ class CourtListenerRepository:
                   AND s.rights_decision IN ('official', 'open', 'licensed')
                   AND s.reviewed_at IS NOT NULL AND s.reviewed_by IS NOT NULL
                   AND s.claim_safe_wording IS NOT NULL
+                  AND s.storage_policy <> 'prohibited'
+                  AND s.metadata->>'catalog_schema_version' IS NOT NULL
+                  AND s.metadata->>'implementation_status' IS NOT NULL
                   AND s.source_key NOT LIKE 'tenant:%'
                   AND s.source_key NOT LIKE 'firm:%'
                   AND s.source_key NOT LIKE 'private:%'
                 ORDER BY source_key, partition_key
             """, [version_key])
             partitions = dict_rows(cur)
+            cur.execute("""
+                SELECT d.source_key, COUNT(DISTINCT d.id) AS item_count,
+                       COUNT(c.id) AS chunk_count,
+                       COUNT(c.id) FILTER (WHERE c.embedding IS NOT NULL) AS embedded_chunk_count
+                FROM legal_documents d
+                LEFT JOIN legal_document_chunks c ON c.document_id=d.id
+                WHERE d.corpus_version=%s
+                GROUP BY d.source_key
+            """, [version_key])
+            version_counts = {row["source_key"]: row for row in dict_rows(cur)}
             cur.execute("""
                 SELECT corpus_version, audit_kind, thresholds, result, passed,
                        sampled_at, auditor, immutable_hash
@@ -977,21 +992,27 @@ class CourtListenerRepository:
             partition_by_source.setdefault(partition["source_key"], []).append(partition)
         for source in sources:
             cadence = str(source.get("expected_cadence") or "").lower()
-            cadence_seconds = (2592000 if "month" in cadence else 604800 if "week" in cadence else 86400 if "day" in cadence else 3600 if "hour" in cadence else 0)
+            cadence_window = cadence_seconds(cadence)
             source_partitions = partition_by_source.get(source["source_key"], [])
             successful_syncs = [row["last_successful_harvest_at"] for row in source_partitions if row["last_successful_harvest_at"]]
             # Worst-partition semantics: a fresh partition cannot mask a
             # missing or stale required partition in the same public source.
             last_sync = min(successful_syncs, default=None)
-            lag = lag_seconds(last_sync, cadence_seconds) if last_sync and cadence_seconds else None
+            lag = lag_seconds(last_sync, cadence_window) if last_sync and cadence_window else None
             failed_partition = any(row["status"] in {"retryable", "retryable_failure", "quarantined", "dead_letter", "failed"} for row in source_partitions)
             missing_partition = not source_partitions or len(successful_syncs) != len(source_partitions) or last_sync is None
             source["lag_seconds"] = lag
-            source["stale"] = missing_partition or bool(cadence_seconds and lag is not None and lag > 0)
+            if source["source_key"] in version_counts:
+                counts = version_counts[source["source_key"]]
+                source["item_count"] = counts["item_count"]
+                source["chunk_count"] = counts["chunk_count"]
+                source["embedded_chunk_count"] = counts["embedded_chunk_count"]
+            source["last_successful_sync_at"] = last_sync
+            source["stale"] = missing_partition or cadence_window is None or bool(lag is not None and lag > 0)
             source["status"] = "failed" if failed_partition else (
                 "unreviewed" if (not source.get("reviewed_at")
                                   or source.get("rights_decision") in {"pending_review", "prohibited"}
-                                  or not source.get("expected_cadence")) else (
+                                  or cadence_window is None) else (
                     "stale" if source["stale"] else "healthy"
                 )
             )

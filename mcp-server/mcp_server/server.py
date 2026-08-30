@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from .database import connect
 from .loader import init_schema
 from .query_embeddings import QueryEmbeddingClient
-from .control_plane import (promote_corpus_version, rollback_corpus_version,
+from .control_plane import (cadence_seconds, promote_corpus_version, rollback_corpus_version,
                              lag_seconds, record_audit, sampled_audit,
                              stage_corpus_version)
 from .repository import CourtListenerRepository
@@ -158,17 +158,19 @@ def run_control_audit(body: ControlPlaneRequest, actor: str = Depends(operator_i
                 """, [body.version])
                 now = datetime.now(timezone.utc)
                 records = [{"lag_seconds": (lag_seconds(
-                    row[0], 2592000 if "month" in str(row[1] or "").lower()
-                    else 604800 if "week" in str(row[1] or "").lower()
-                    else 86400 if "day" in str(row[1] or "").lower()
-                    else 3600 if "hour" in str(row[1] or "").lower() else None,
+                    row[0], cadence_seconds(row[1]),
                     now) if row[0] and row[2] not in {"failed", "retryable", "retryable_failure", "quarantined", "dead_letter"}
                     else None), "cadence": row[1]} for row in cur.fetchall()]
             else:
                 cur.execute("""
                     SELECT d.source_key, d.metadata->>'namespace',
-                           (d.source_key LIKE 'tenant:%' OR d.source_key LIKE 'private:%')
-                    FROM legal_documents d WHERE d.corpus_version=%s
+                           (d.metadata->>'namespace' IS DISTINCT FROM 'public-authority'
+                            OR d.source_key LIKE 'tenant:%' OR d.source_key LIKE 'firm:%'
+                            OR d.source_key LIKE 'private:%' OR s.storage_policy = 'prohibited'
+                            OR s.metadata->>'catalog_schema_version' IS NULL)
+                    FROM legal_documents d
+                    LEFT JOIN legal_sources s ON s.source_key=d.source_key
+                    WHERE d.corpus_version=%s
                 """, [body.version])
                 records = [{"namespace": row[1], "private": bool(row[2])} for row in cur.fetchall()]
         result = sampled_audit(records, audit_kind=body.audit_kind)
