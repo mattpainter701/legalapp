@@ -314,6 +314,13 @@ class ContentFetchTask(BaseModel):
     manifest_id: str | None = Field(
         None, pattern=r"^agent-v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$"
     )
+    # Local full-text search fields.  They are optional so older task kinds
+    # and agents continue to parse the existing content-fetch contract.
+    query: str | None = Field(None, min_length=1, max_length=1000)
+    scopes: list[dict] | None = Field(None, max_length=100)
+    file_extensions: list[str] | None = Field(None, max_length=50)
+    limit: int | None = Field(None, ge=1, le=50)
+    correlation_id: str | None = Field(None, max_length=128)
 
 
 class ContentFetchResult(BaseModel):
@@ -344,6 +351,72 @@ class SmbSearchRequest(BaseModel):
     matter_id: str | None = None
     file_extensions: list[str] | None = None
     limit: int = Field(20, ge=1, le=100)
+
+
+class FirmMemorySearchRequest(BaseModel):
+    """Matter-scoped search executed by the customer's local agent."""
+
+    query: str = Field(..., min_length=1, max_length=1000)
+    matter_id: str = Field(..., min_length=1, max_length=64)
+    file_extensions: list[str] | None = Field(None, max_length=50)
+    limit: int = Field(20, ge=1, le=50)
+    correlation_id: str | None = Field(None, max_length=128)
+
+    @field_validator("query")
+    @classmethod
+    def _trim_query(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("query must not be blank")
+        return value
+
+    @field_validator("file_extensions")
+    @classmethod
+    def _normalize_extensions(cls, value):
+        if value is None:
+            return value
+        normalized = []
+        for ext in value:
+            ext = ext.strip().lower()
+            if ext and not ext.startswith("."):
+                ext = "." + ext
+            if ext and len(ext) <= 20 and ext not in normalized:
+                normalized.append(ext)
+        return normalized or None
+
+
+class FirmMemorySearchHit(UuidStringModel):
+    id: str
+    path: str
+    filename: str
+    ext: str | None
+    snippet: str | None
+    page_number: int | None = None
+    score: float | None
+    owner: str | None
+    size_bytes: int | None
+    modified_time: datetime | None
+    created_time: datetime | None
+    share_id: str
+
+
+class FirmMemoryAgentStatus(BaseModel):
+    agent_id: str
+    status: str
+    index_state: str | None = None
+    indexed_files: int = 0
+    pending_files: int = 0
+    duration_ms: int | None = None
+
+
+class FirmMemorySearchResponse(BaseModel):
+    correlation_id: str
+    hits: list[FirmMemorySearchHit] = Field(default_factory=list)
+    duration_ms: int
+    agent_statuses: list[FirmMemoryAgentStatus] = Field(default_factory=list)
+    partial: bool = False
+    degraded: bool = False
+    errors: list[str] = Field(default_factory=list, max_length=20)
 
 
 class SmbSearchResult(UuidStringModel):

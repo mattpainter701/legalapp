@@ -37,6 +37,9 @@ from app.schemas.smb import (
     AgentShareInfo,
     ContentFetchResult,
     ContentFetchTask,
+    FirmMemoryAgentStatus,
+    FirmMemorySearchHit,
+    FirmMemorySearchResponse,
     MatterSmbShareCreate,
     ShareCreate,
     ShareInfo,
@@ -58,6 +61,8 @@ SMB_PAIRING_CODE_TTL_MIN = settings.SMB_PAIRING_CODE_TTL_MIN
 SMB_SNIPPET_MAX_CHARS = settings.SMB_SNIPPET_MAX_CHARS
 SMB_MAX_FILE_INDEX_PER_SHARE = settings.SMB_MAX_FILE_INDEX_PER_SHARE
 REDIS_TASK_TTL = 300  # 5 minutes
+LOCAL_SEARCH_TIMEOUT_SECONDS = 12.0
+LOCAL_SEARCH_POLL_SECONDS = 0.15
 # Pairing codes are read off a screen and typed into an installer command line,
 # so they use an alphabet without look-alike characters and are grouped in
 # fours. Sixteen symbols from thirty is ~78 bits, and the code both expires and
@@ -1365,6 +1370,197 @@ class SmbService:
                 )
             )
         return results
+
+    async def search_local_files(
+        self,
+        db: AsyncSession,
+        tenant_id: str,
+        user_id: str,
+        matter_id: str,
+        query: str,
+        file_extensions: list[str] | None = None,
+        limit: int = 20,
+        correlation_id: str | None = None,
+        redis=None,
+        timeout_seconds: float = LOCAL_SEARCH_TIMEOUT_SECONDS,
+    ) -> FirmMemorySearchResponse:
+        """Fan out a bounded, matter-scoped full-text query to local agents.
+
+        Agent paths and scores are advisory only. Every returned path is
+        reconstructed from the registered share and matched to the current,
+        non-deleted SaaS index before it can leave this method. The query is
+        placed only in the short-lived relay task; it is never logged or
+        written to a database audit row.
+        """
+        if redis is None:
+            raise RuntimeError("SMB relay is temporarily unavailable")
+        query = query.strip()
+        if not query:
+            raise ValueError("query must not be blank")
+        tenant_uuid = _uuid(tenant_id)
+        matter_uuid = _uuid(matter_id)
+        if not tenant_uuid or not matter_uuid:
+            raise ValueError("Invalid tenant or matter")
+        correlation_id = (correlation_id or secrets.token_urlsafe(12))[:128]
+        started = time.monotonic()
+        await set_tenant_context(db, tenant_id)
+
+        # The paired binding/share predicates are deliberately kept together;
+        # a folder from one share must never widen another share's scope.
+        rows = (
+            await db.execute(
+                select(MatterSmbShare, SmbShare, SmbAgent)
+                .join(SmbShare, SmbShare.id == MatterSmbShare.share_id)
+                .join(SmbAgent, SmbAgent.id == SmbShare.agent_id)
+                .where(
+                    MatterSmbShare.matter_id == matter_uuid,
+                    MatterSmbShare.tenant_id == tenant_uuid,
+                    SmbShare.tenant_id == tenant_uuid,
+                    SmbAgent.tenant_id == tenant_uuid,
+                    SmbShare.is_enabled.is_(True),
+                )
+            )
+        ).all()
+        if not rows:
+            raise ValueError("Matter not found or has no assigned SMB shares")
+
+        grouped: dict[str, dict] = {}
+        for binding, share, agent in rows:
+            if agent.status != "active":
+                continue
+            key = str(agent.id)
+            grouped.setdefault(key, {"agent": agent, "scopes": []})["scopes"].append(
+                {
+                    "share_id": str(share.id),
+                    "folder_path": _normalize_folder_path(binding.folder_path),
+                }
+            )
+        if not grouped:
+            raise ValueError("No active SMB agent is available for this matter")
+
+        tasks: dict[str, str] = {}
+        statuses = [
+            FirmMemoryAgentStatus(
+                agent_id=agent_id, status="queued"
+            )
+            for agent_id in grouped
+        ]
+        for agent_id, group in grouped.items():
+            task_id = secrets.token_urlsafe(16)
+            task = ContentFetchTask(
+                task_id=task_id,
+                kind="local_search",
+                reason="firm_memory_search",
+                query=query,
+                scopes=group["scopes"],
+                file_extensions=file_extensions,
+                limit=limit,
+                correlation_id=correlation_id,
+            )
+            await redis.set(
+                f"smb_task_pending:{agent_id}:{task_id}",
+                json.dumps(
+                    {
+                        **task.model_dump(),
+                        "tenant_id": tenant_id,
+                        "agent_id": agent_id,
+                        "matter_id": matter_id,
+                    }
+                ),
+                ex=REDIS_TASK_TTL,
+            )
+            tasks[agent_id] = task_id
+
+        async def wait_one(agent_id: str, task_id: str):
+            deadline = time.monotonic() + timeout_seconds
+            while time.monotonic() < deadline:
+                payload = await self.get_task_result(
+                    task_id, tenant_id, redis=redis, kind="local_search"
+                )
+                if payload is not None:
+                    return payload
+                await asyncio.sleep(min(LOCAL_SEARCH_POLL_SECONDS, max(0, deadline - time.monotonic())))
+            return None
+
+        results = await asyncio.gather(
+            *(wait_one(agent_id, task_id) for agent_id, task_id in tasks.items()),
+            return_exceptions=True,
+        )
+        hits_by_id: dict[str, FirmMemorySearchHit] = {}
+        errors: list[str] = []
+        for status, (agent_id, group), payload in zip(statuses, grouped.items(), results):
+            if isinstance(payload, Exception):
+                status.status = "failed"
+                errors.append("agent_search_failed")
+                continue
+            if payload is None:
+                status.status = "timeout"
+                errors.append("agent_search_timeout")
+                continue
+            detail = payload.get("detail") or {}
+            status.status = "ready" if payload.get("ok", True) else "failed"
+            status.index_state = str(detail.get("index_state") or "unknown")[:40]
+            status.indexed_files = max(0, int(detail.get("indexed_files") or 0))
+            status.pending_files = max(0, int(detail.get("pending_files") or 0))
+            status.duration_ms = max(0, int(detail.get("duration_ms") or 0))
+            if status.status != "ready":
+                errors.append("agent_search_failed")
+                continue
+            if detail.get("correlation_id") and detail.get("correlation_id") != correlation_id:
+                errors.append("agent_search_correlation_mismatch")
+                continue
+            allowed_scopes = group["scopes"]
+            share_ids = {scope["share_id"] for scope in allowed_scopes}
+            candidate_hits = detail.get("hits") if isinstance(detail.get("hits"), list) else []
+            for raw in candidate_hits[: limit * 3]:
+                if not isinstance(raw, dict) or str(raw.get("share_id")) not in share_ids:
+                    continue
+                share_id = str(raw["share_id"])
+                relative = str(raw.get("relative_path") or "").replace("/", "\\").strip("\\")
+                if not relative or ".." in relative.split("\\"):
+                    continue
+                scope = next(s for s in allowed_scopes if s["share_id"] == share_id)
+                folder = (scope.get("folder_path") or "").replace("/", "\\").strip("\\")
+                if folder and relative.casefold() != folder.casefold() and not relative.casefold().startswith(folder.casefold() + "\\"):
+                    continue
+                share = next((r[1] for r in rows if str(r[1].id) == share_id), None)
+                if share is None:
+                    continue
+                canonical = share.share_path.rstrip("\\/") + "\\" + relative
+                file_result = await db.execute(
+                    select(SmbFileIndex).where(
+                        SmbFileIndex.tenant_id == tenant_uuid,
+                        SmbFileIndex.agent_id == _uuid(agent_id),
+                        SmbFileIndex.share_id == _uuid(share_id),
+                        SmbFileIndex.is_deleted.is_(False),
+                        func.lower(SmbFileIndex.path) == canonical.casefold(),
+                    )
+                )
+                file_entry = file_result.scalar_one_or_none()
+                if file_entry is None:
+                    continue
+                score = float(raw.get("score") or 0.0)
+                hit = FirmMemorySearchHit(
+                    id=str(file_entry.id), path=file_entry.path,
+                    filename=file_entry.filename, ext=file_entry.ext,
+                    snippet=str(raw.get("snippet") or "")[:SMB_SNIPPET_MAX_CHARS] or None,
+                    page_number=(int(raw["page_number"]) if raw.get("page_number") is not None else None),
+                    score=score, owner=file_entry.owner, size_bytes=file_entry.size_bytes,
+                    modified_time=file_entry.modified_time, created_time=file_entry.created_time,
+                    share_id=share_id,
+                )
+                previous = hits_by_id.get(str(file_entry.id))
+                if previous is None or (hit.score or 0) > (previous.score or 0):
+                    hits_by_id[str(file_entry.id)] = hit
+
+        ranked = sorted(hits_by_id.values(), key=lambda h: (-(h.score or 0), h.filename.casefold(), h.id))[:limit]
+        duration_ms = int((time.monotonic() - started) * 1000)
+        partial = bool(errors)
+        return FirmMemorySearchResponse(
+            correlation_id=correlation_id, hits=ranked, duration_ms=duration_ms,
+            agent_statuses=statuses, partial=partial, degraded=partial or not ranked,
+            errors=sorted(set(errors)),
+        )
 
     async def create_share(
         self,

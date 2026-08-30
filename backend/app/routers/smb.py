@@ -27,6 +27,8 @@ from app.schemas.smb import (
     AgentShareInfo,
     AgentStatusUpdate,
     ContentFetchResult,
+    FirmMemorySearchRequest,
+    FirmMemorySearchResponse,
     MatterSmbShareCreate,
     MatterSmbShareInfo,
     PairingCodeResponse,
@@ -366,6 +368,33 @@ async def search_files(
         db, tenant_id, q, matter_id, ext_list, limit
     )
     return results
+
+
+@router.post("/local-search", response_model=FirmMemorySearchResponse)
+async def search_local_files(
+    body: FirmMemorySearchRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Search matter-bound full text on the customer's outbound agent."""
+    redis = getattr(request.app.state, "redis", None)
+    try:
+        return await smb_service.search_local_files(
+            db,
+            str(user.tenant_id),
+            str(user.id),
+            body.matter_id,
+            body.query,
+            body.file_extensions,
+            body.limit,
+            body.correlation_id,
+            redis=redis,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
 
 @router.post("/files/{file_id}/fetch-content")
