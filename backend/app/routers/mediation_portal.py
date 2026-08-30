@@ -641,6 +641,13 @@ async def portal_create_proposal(
         ),
     )
     db.add(proposal)
+    proposed_by_name = await db.scalar(
+        select(MediationParty.name).where(
+            MediationParty.id == proposal.proposed_by_party_id,
+            MediationParty.case_id == ctx.case_id,
+            MediationParty.tenant_id == ctx.tenant_id,
+        )
+    )
     await db.commit()
     await db.refresh(proposal)
-    return _portal_proposal_response(proposal, ctx, ctx.party_name)
+    return _portal_proposal_response(proposal, ctx, proposed_by_name)

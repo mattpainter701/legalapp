@@ -481,6 +481,7 @@ async def test_proposal_counter_chain(client, test_tenant):
         headers=a_hdrs,
     )
     assert resp.status_code == 201
+    assert resp.json()["proposed_by_name"] == "Jane Doe"
     p1 = resp.json()["id"]
 
     # A proposal is private to its author until the firm reviews and releases it.
