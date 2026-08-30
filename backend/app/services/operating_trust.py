@@ -57,7 +57,14 @@ _EVIDENCE_ONLY_TABLES = frozenset(
 )
 _UNSAFE_PUBLIC_PATTERNS = (
     re.compile(r"\b(password|secret|token|authorization)\s*[:=]", re.I),
-    re.compile(r"\b(?:10\.|127\.|169\.254\.|172\.(?:1[6-9]|2\d|3[01])\.|192\.168\.)"),
+    re.compile(
+        r"\b(?:"
+        r"(?:10|127)(?:\.\d{1,3}){3}"
+        r"|169\.254(?:\.\d{1,3}){2}"
+        r"|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}"
+        r"|192\.168(?:\.\d{1,3}){2}"
+        r")\b"
+    ),
     re.compile(r"(?:[A-Za-z]:\\|/etc/|/srv/|/var/lib/)", re.I),
 )
 

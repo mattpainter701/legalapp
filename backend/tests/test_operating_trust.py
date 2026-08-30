@@ -13,6 +13,7 @@ from app.models.external_import import ExternalImportRun, ExternalSystemConnecti
 from app.services import platform_auth
 from app.services.operating_trust import (
     assert_public_safe_text,
+    assert_safe_evidence,
     issue_tenant_export_snapshot,
     reconcile_counts,
     support_acknowledgement_due,
@@ -38,6 +39,19 @@ def test_reconciliation_and_public_safety_fail_closed():
     with pytest.raises(ValueError):
         assert_public_safe_text("database password=hunter2 on 10.0.0.4")
     assert reconcile_counts({"empty": 0}, {})[0]["reason"] == "missing_category"
+
+
+def test_evidence_safety_distinguishes_timestamps_from_private_addresses():
+    assert_safe_evidence({"created_at": "2026-08-30T01:47:10.123456+00:00"})
+    for address in (
+        "10.0.0.4",
+        "127.0.0.1",
+        "169.254.1.2",
+        "172.31.4.5",
+        "192.168.1.2",
+    ):
+        with pytest.raises(ValueError):
+            assert_safe_evidence({"summary": f"internal host {address}"})
 
 
 def test_tenant_export_snapshot_is_signed_and_tenant_bound():
