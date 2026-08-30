@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Verify or privately stage the IONOS release
+        description: Verify or stage the IONOS production stack
         required: true
         default: verify
         type: choice
@@ -81,6 +81,26 @@ jobs:
             }
           done
 
+      - name: Require successful QA acceptance when enabled
+        if: inputs.operation == 'stage' && vars.LAWHAND_QA_GATE_REQUIRED == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          accepted_runs="$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow qa-acceptance.yml \
+            --commit "$RELEASE_SHA" \
+            --event workflow_dispatch \
+            --limit 20 \
+            --json conclusion \
+            --jq '[.[] | select(.conclusion == "success")] | length')"
+          [[ "$accepted_runs" -ge 1 ]] || {
+            echo "::error::No successful QA acceptance exists for $RELEASE_SHA; IONOS was not changed."
+            exit 1
+          }
+
   ionos:
     name: ${{ inputs.operation }} on IONOS Cube M
     needs: release-gate
@@ -117,5 +137,5 @@ jobs:
             echo "- Operation: \`$DEPLOY_OPERATION\`"
             echo "- Commit: \`$RELEASE_SHA\`"
             echo "- Runner: \`$RUNNER_NAME\`"
-            echo "- Public cutover is a separate, explicitly verified step."
+            echo "- Warning: the current stage operation recreates the public production stack; it is not zero-downtime."
           } >> "$GITHUB_STEP_SUMMARY"

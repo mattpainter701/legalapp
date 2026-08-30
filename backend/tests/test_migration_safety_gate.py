@@ -241,6 +241,10 @@ def test_ionos_candidate_uses_pinned_main_without_runner_checkout_or_release_tag
     assert "actions/checkout" not in workflow
     assert "git/refs/tags/production" not in workflow
     assert "sudo -n /usr/local/sbin/lawhand-ionos-deploy-from-github" in workflow
+    assert "Require successful QA acceptance when enabled" in workflow
+    assert "vars.LAWHAND_QA_GATE_REQUIRED == 'true'" in workflow
+    assert "--workflow qa-acceptance.yml" in workflow
+    assert "No successful QA acceptance exists" in workflow
 
     assert "rev-parse 'origin/main^{commit}'" in entrypoint
     assert '[[ "$requested_sha" == "$main_sha" ]]' in entrypoint
@@ -249,3 +253,38 @@ def test_ionos_candidate_uses_pinned_main_without_runner_checkout_or_release_tag
     assert 'readonly APP_DIR="/srv/lawhand/app"' in entrypoint
     assert 'readonly PROD_ENV_FILE="/etc/lawhand/core.env"' in host_deploy
     assert "docker-compose.cube-m.yml" in host_deploy
+
+
+def test_qa_acceptance_deploys_and_validates_exact_main_without_checkout() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "qa-acceptance.yml").read_text(
+        encoding="utf-8"
+    )
+    health = (ROOT / ".github" / "workflows" / "dev1-health.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "name: QA acceptance" in workflow
+    assert "group: law-hand-skynet-dev1" in workflow
+    assert "QA acceptance must be dispatched from main" in workflow
+    assert "release_sha must be a full lowercase commit SHA" in workflow
+    assert "release_sha must equal the main SHA selected for this dispatch" in workflow
+    assert "for workflow in ci.yml codeql.yml" in workflow
+    assert "runs-on: [self-hosted, Linux, X64, skynet, lawhand-prod]" in workflow
+    assert "environment:" in workflow and "skynet-development" in workflow
+    assert "actions/checkout" not in workflow
+    assert (
+        'sudo -n /usr/local/sbin/lawhand-dev1-deploy-from-github deploy "$RELEASE_SHA"'
+        in workflow
+    )
+    assert "LAWHAND_QA_ACCESS_CLIENT_ID" in workflow
+    assert "LAWHAND_QA_ACCESS_CLIENT_SECRET" in workflow
+    assert "CF-Access-Client-Id" in workflow
+    assert "CF-Access-Client-Secret" in workflow
+    assert '.commit == $expected' in workflow
+    assert "LAWHAND_QA_HOSTNAME is missing or invalid" in workflow
+
+    assert "vars.LAWHAND_DEV1_ENABLED == 'true'" in health
+    assert "skynet-development" in health
+    assert "LAWHAND_QA_ACCESS_CLIENT_ID" in health
+    assert "CF-Access-Client-Secret" in health
+    assert 'test("^[0-9a-f]{40}$")' in health

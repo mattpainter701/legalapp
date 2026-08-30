@@ -42,6 +42,8 @@ These nonsecret variables are scoped to `mattpainter701/legalapp`:
 | `LAWHAND_CLOUDFLARE_TUNNEL_ID` | Selects the production Cloudflare Tunnel. |
 | `LAWHAND_CLOUDFLARE_TUNNEL_NAME` | Records the production Tunnel name. |
 | `LAWHAND_CLOUDFLARE_TUNNEL_TARGET` | Records the Tunnel CNAME target. |
+| `LAWHAND_QA_HOSTNAME` | Cloudflare Access-protected isolated Skynet QA hostname; initially `dev1.getlawhand.com`. |
+| `LAWHAND_QA_GATE_REQUIRED` | Set to `true` only after the QA workflow and credentials are proven; then IONOS stage requires successful QA acceptance of the exact SHA. Defaults to `false`. |
 | `LAWHAND_MCP_HOSTNAME` | Records `mcp.getlawhand.com` as the platform/workspace MCP hostname. |
 | `LAWHAND_RESEARCH_MCP_HOSTNAME` | Records `research.getlawhand.com` as the reserved research-only MCP hostname. |
 
@@ -76,6 +78,8 @@ Use these names only when the repository and workflow require the capability:
 | `CLOUDFLARE_DNS_API_TOKEN` | DNS mutation with a token restricted to the required zone and permissions. |
 | `CLOUDFLARE_R2_ACCESS_KEY_ID` | R2 access for an approved storage consumer. |
 | `CLOUDFLARE_R2_SECRET_ACCESS_KEY` | R2 access for the same approved storage consumer. |
+| `LAWHAND_QA_ACCESS_CLIENT_ID` | `skynet-development` environment only; Cloudflare Access service-token client ID used by the QA health and acceptance workflows. |
+| `LAWHAND_QA_ACCESS_CLIENT_SECRET` | `skynet-development` environment only; paired Cloudflare Access service-token secret used by the QA health and acceptance workflows. |
 | `INBOUND_EMAIL_WEBHOOK_SECRET` | LawHand production environment only; authenticates Email Worker delivery to the backend. The same value is provisioned as an encrypted Worker secret. |
 
 Never store credential values in an Actions variable, repository file, skill, memory file, issue, pull request, workflow input, or command argument. Supply secrets to `gh secret set` over standard input and verify only the resulting secret name and scope.
@@ -104,6 +108,37 @@ route `research.getlawhand.com` directly to the raw Skynet sidecar; it remains a
 public IONOS gateway backed by a private authenticated research connection.
 
 See `docs/mcp_hostname_operations.md` and `docs/mcp_security_operations.md` for the production procedures.
+
+## Isolated Skynet QA gate
+
+`dev1.getlawhand.com` is the initial QA hostname. It points only to a separate
+Skynet Tunnel and isolated dev1 application volumes; it is not an alias for
+production and must never reuse `LAWHAND_CLOUDFLARE_TUNNEL_*`. Cloudflare Access
+protects the hostname. The scheduled QA health workflow and the manual **QA
+acceptance** workflow authenticate with a service token held only in the
+`skynet-development` GitHub environment. They verify readiness, a full exact
+`/api/version` commit, and the TLS expiry floor.
+
+The first rollout is deliberately opt-in:
+
+1. Set repository variable `LAWHAND_QA_HOSTNAME=dev1.getlawhand.com`.
+2. Add `LAWHAND_QA_ACCESS_CLIENT_ID` and `LAWHAND_QA_ACCESS_CLIENT_SECRET` to
+   the `skynet-development` environment. Do not add them as repository-wide
+   secrets.
+3. Leave `LAWHAND_QA_GATE_REQUIRED=false`; run **QA acceptance** for the
+   current `main` SHA and confirm the Access-protected checks succeed.
+4. Enable `LAWHAND_DEV1_ENABLED=true` to turn on scheduled QA monitoring.
+5. Set `LAWHAND_QA_GATE_REQUIRED=true` only after those checks are reliable.
+   Thereafter **Deploy IONOS candidate** rejects a `stage` unless a successful
+   QA acceptance exists for that exact SHA.
+
+For a future `qa.getlawhand.com` hostname, first create a separately
+credentialed QA Tunnel with an explicit QA ingress route and a final
+`http_status:404` rule, then protect it with a distinct Cloudflare Access
+application and service token. Only after private-origin TLS and authenticated
+acceptance succeed may a narrowly scoped DNS token create one proxied CNAME to
+that QA Tunnel target. Do not change production DNS or the production Tunnel
+variables as part of QA setup.
 
 ## Change record
 

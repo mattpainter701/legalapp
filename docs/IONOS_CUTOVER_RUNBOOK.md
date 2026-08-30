@@ -111,8 +111,18 @@ Do not move DNS when any item below is true:
 After the infrastructure pull request is merged and its exact `main` push CI
 is green:
 
+> **Current-state warning (2026-08-30):** `stage` runs the public production
+> Compose deployment with `up -d --force-recreate`. It can interrupt customer
+> traffic while services rebuild and restart. It is therefore a maintenance
+> operation today, not a private candidate stage or zero-downtime deployment.
+> The isolated Skynet QA gate validates the exact SHA before this operation;
+> it does not remove the public restart until the IONOS blue/green edge design
+> is implemented.
+
 1. Run **Deploy IONOS candidate** with `operation=verify`.
-2. Run it with `operation=stage` and confirmation
+2. When the QA gate is enabled, first run **QA acceptance** for the current
+   full `main` SHA and require its successful exact-version evidence. Then run
+   **Deploy IONOS candidate** with `operation=stage` and confirmation
    `STAGE-IONOS-CANDIDATE`. This runs the full preflight, backup, data guard,
    sequential image build, migrations, scheduler proof, private-origin checks,
    hostname isolation, and private research manifest probe. It deliberately

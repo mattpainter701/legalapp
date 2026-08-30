@@ -18,17 +18,29 @@
 - The root-owned entrypoint accepts only the current `origin/main` SHA, serializes
   deploys with `flock`, refuses tracked host changes, and runs the data-guarded
   deployment as `lawhandadmin`.
+- The isolated Skynet `dev1` stack is the QA promotion gate. It has separate
+  development-only volumes and its public writers remain disabled. It is not a
+  production failover or a source of production DNS changes.
 
 ## Run from a phone
 
 1. Open `mattpainter701/legalapp` in GitHub.
-2. Open **Actions** and choose **Deploy IONOS candidate**.
-3. Choose **Run workflow**, keep the branch set to `main`, and select `stage`.
+2. Open **Actions**.
+3. If the QA gate is enabled, choose **QA acceptance** first, keep the branch
+   set to `main`, and enter that exact full SHA. It deploys the isolated dev1
+   stack and proves Cloudflare Access, readiness, exact version, and TLS.
+4. Choose **Deploy IONOS candidate**, then **Run workflow**; keep the branch
+   set to `main` and select `stage`.
    Enter `STAGE-IONOS-CANDIDATE` as the confirmation. The stage requires green
-   CI for the exact SHA and performs the data-guarded IONOS deployment.
-4. Follow the job log and record the staged SHA and backup evidence.
-5. Choose **Production acceptance**, enter the full staged SHA, and run it from
+   CI and CodeQL for the exact SHA and, when enabled, a successful QA acceptance
+   for that same SHA.
+5. Follow the job log and record the staged SHA and backup evidence.
+6. Choose **Production acceptance**, enter the full staged SHA, and run it from
    `main`. A successful run validates production and advances the release tag.
+
+Until the blue/green IONOS edge work lands, `stage` is a real public production
+restart: it rebuilds and force-recreates the public Compose stack. Schedule it
+as maintenance work; it is not a private candidate or an instant deployment.
 
 After staging, run **Production acceptance** from `main` with the full SHA
 recorded by the stage run. The workflow requires that SHA to still be `main`
@@ -66,6 +78,8 @@ Codex or a terminal can dispatch the same workflow:
 ```bash
 gh workflow run deploy-ionos-candidate.yml --repo mattpainter701/legalapp \
   --ref main -f operation=verify
+gh workflow run qa-acceptance.yml --repo mattpainter701/legalapp \
+  --ref main -f release_sha=<full-current-main-sha>
 gh workflow run deploy-ionos-candidate.yml --repo mattpainter701/legalapp \
   --ref main -f operation=stage -f confirmation=STAGE-IONOS-CANDIDATE
 gh workflow run production-acceptance.yml --repo mattpainter701/legalapp \

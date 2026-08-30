@@ -1,0 +1,163 @@
+name: QA acceptance
+
+run-name: QA acceptance main @ ${{ inputs.release_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: "Full SHA to deploy to and validate on isolated Skynet QA"
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: law-hand-skynet-dev1
+  cancel-in-progress: false
+
+jobs:
+  release-gate:
+    name: Validate QA release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.release.outputs.release_sha }}
+    steps:
+      - name: Require main and validate the exact release SHA
+        id: release
+        env:
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          DISPATCH_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$RELEASE_REF" == refs/heads/main ]] || {
+            echo "::error::QA acceptance must be dispatched from main, not $RELEASE_REF"
+            exit 1
+          }
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "::error::release_sha must be a full lowercase commit SHA"
+            exit 1
+          }
+          [[ "$RELEASE_SHA" == "$DISPATCH_SHA" ]] || {
+            echo "::error::release_sha must equal the main SHA selected for this dispatch"
+            exit 1
+          }
+          main_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq '.sha')"
+          [[ "$main_sha" == "$RELEASE_SHA" ]] || {
+            echo "::error::release_sha is not the current main commit"
+            exit 1
+          }
+          echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Require successful CI and CodeQL for the QA release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          set -Eeuo pipefail
+          for workflow in ci.yml codeql.yml; do
+            conclusion="$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow "$workflow" \
+              --commit "$RELEASE_SHA" \
+              --event push \
+              --limit 20 \
+              --json conclusion \
+              --jq '.[0].conclusion // ""')"
+            [[ "$conclusion" == success ]] || {
+              echo "::error::$workflow for $RELEASE_SHA is '$conclusion'; QA was not changed."
+              exit 1
+            }
+          done
+
+  qa-deploy:
+    name: Deploy exact release to isolated Skynet QA
+    needs: release-gate
+    runs-on: [self-hosted, Linux, X64, skynet, lawhand-prod]
+    environment:
+      name: skynet-development
+      url: https://${{ vars.LAWHAND_QA_HOSTNAME }}
+    timeout-minutes: 60
+    steps:
+      - name: Deploy pinned main commit through the fixed root entrypoint
+        env:
+          RELEASE_SHA: ${{ needs.release-gate.outputs.release_sha }}
+        run: sudo -n /usr/local/sbin/lawhand-dev1-deploy-from-github deploy "$RELEASE_SHA"
+
+      - name: Record QA deployment summary
+        if: always()
+        env:
+          RELEASE_SHA: ${{ needs.release-gate.outputs.release_sha }}
+          QA_HOSTNAME: ${{ vars.LAWHAND_QA_HOSTNAME }}
+        run: |
+          {
+            echo "## LawHand isolated Skynet QA deployment"
+            echo
+            echo "- Commit: \`$RELEASE_SHA\`"
+            echo "- Hostname: \`$QA_HOSTNAME\`"
+            echo "- Runner: \`$RUNNER_NAME\`"
+            echo "- Data: isolated development-only volumes"
+            echo "- Public writers: scheduler, email, signup, and MCP products disabled"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  qa-acceptance:
+    name: Validate Cloudflare Access-protected QA
+    needs: [release-gate, qa-deploy]
+    runs-on: ubuntu-latest
+    environment:
+      name: skynet-development
+      url: https://${{ vars.LAWHAND_QA_HOSTNAME }}
+    timeout-minutes: 10
+    steps:
+      - name: Require authenticated readiness and exact version evidence
+        env:
+          RELEASE_SHA: ${{ needs.release-gate.outputs.release_sha }}
+          QA_HOSTNAME: ${{ vars.LAWHAND_QA_HOSTNAME }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.LAWHAND_QA_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.LAWHAND_QA_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$QA_HOSTNAME" =~ ^[A-Za-z0-9.-]+$ ]] || {
+            echo "::error::LAWHAND_QA_HOSTNAME is missing or invalid"
+            exit 1
+          }
+          [[ -n "$CF_ACCESS_CLIENT_ID" && -n "$CF_ACCESS_CLIENT_SECRET" ]] || {
+            echo "::error::The skynet-development environment is missing QA Cloudflare Access service-token credentials"
+            exit 1
+          }
+
+          origin="https://$QA_HOSTNAME"
+          access_headers=(
+            --header "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID"
+            --header "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET"
+          )
+          curl --fail --silent --show-error --max-time 30 "${access_headers[@]}" \
+            "$origin/health/readiness" \
+            | jq -e '.status == "ok"' >/dev/null
+          curl --fail --silent --show-error --max-time 30 "${access_headers[@]}" \
+            "$origin/api/version" \
+            | jq -e --arg expected "$RELEASE_SHA" \
+              '.status == "ok" and .commit == $expected' >/dev/null
+          timeout 20 openssl s_client \
+            -connect "${QA_HOSTNAME}:443" \
+            -servername "$QA_HOSTNAME" </dev/null 2>/dev/null \
+            | openssl x509 -checkend 1209600 -noout
+
+      - name: Record QA acceptance summary
+        if: always()
+        env:
+          RELEASE_SHA: ${{ needs.release-gate.outputs.release_sha }}
+          QA_HOSTNAME: ${{ vars.LAWHAND_QA_HOSTNAME }}
+        run: |
+          {
+            echo "## LawHand QA acceptance"
+            echo
+            echo "- Commit: \`$RELEASE_SHA\`"
+            echo "- Hostname: \`https://$QA_HOSTNAME\`"
+            echo "- Gate: Cloudflare Access, readiness, exact version, and 14-day TLS floor"
+          } >> "$GITHUB_STEP_SUMMARY"
