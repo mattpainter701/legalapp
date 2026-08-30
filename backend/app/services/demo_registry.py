@@ -81,6 +81,8 @@ _CLONE_TABLES = {
 # though fixture rows must never be copied into a disposable tenant.
 _PURGE_ONLY_TABLES = {
     "api_access_logs",
+    "brief_check_audits",
+    "brief_checks",
     "background_ai_usage_reservations",
     "client_portal_invites",
     "cloud_metadata_index",
