@@ -243,7 +243,14 @@ def process_once(config: WorkerConfig, model) -> int:
                             raise RuntimeError("embedding output count or dimension mismatch")
                         if lease.lost.is_set():
                             raise RuntimeError("embedding lease lost during inference")
-                        if not heartbeat_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id), lease_seconds=900):
+                        with connect(config.db_url) as lease_conn:
+                            renewed = heartbeat_embedding_shard(
+                                lease_conn,
+                                shard_key=shard_key,
+                                worker_id=str(config.worker_id),
+                                lease_seconds=900,
+                            )
+                        if not renewed or lease.lost.is_set():
                             raise RuntimeError("embedding lease lost before writes")
                         updates = [(format_embedding(vector), config.model, config.model_version, chunk_id) for chunk_id, vector in zip(ids, vectors)]
                         psycopg2.extras.execute_batch(cur, update_sql(corpus), updates, page_size=100)

@@ -271,11 +271,12 @@ def promote_corpus_version(conn: Any, *, version: str, actor: str, reason: str) 
             """SELECT COUNT(*) FROM legal_document_chunks c
                  JOIN legal_documents d ON d.id=c.document_id
                 WHERE d.corpus_version=%s
-                  AND (c.embedding IS NULL
+                  AND (c.corpus_version IS DISTINCT FROM %s
+                       OR c.embedding IS NULL
                        OR c.embedding_model IS DISTINCT FROM %s
                        OR c.embedding_version::text IS DISTINCT FROM %s
                        OR vector_dims(c.embedding) IS DISTINCT FROM %s)""",
-            [version, target_contract[0], target_contract[1], target_contract[2]],
+            [version, version, target_contract[0], target_contract[1], target_contract[2]],
         )
         legal_invalid = cur.fetchone()[0]
         cur.execute(

@@ -1105,9 +1105,11 @@ def test_process_once_rehearsal_both_corpora():
     monkeypatch.setenv("AUTHORITY_HEARTBEAT_INTERVAL_SECONDS", "0.01")
     try:
         embedded = process_once(config, DeterministicModel())
+        replay_embedded = process_once(config, DeterministicModel())
     finally:
         monkeypatch.undo()
     assert embedded == legal_before + authority_before
+    assert replay_embedded == 0
     with connect(db_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
