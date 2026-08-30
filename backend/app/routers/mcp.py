@@ -7,9 +7,7 @@ adapter. Legacy ``X-API-Key`` tenant credentials are rejected and cannot be
 issued.
 """
 
-import hmac
 import logging
-import os
 import time
 import uuid
 from datetime import datetime
@@ -24,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import async_session_maker, get_db, set_tenant_context
-from app.middleware.tenant import get_current_user, require_admin as _require_admin
+from app.middleware.tenant import get_current_user
 from app.middleware.rate_limit import _client_ip as _trusted_client_ip
 from app.models.tenant import Tenant
 from app.models.user import User
@@ -51,6 +49,7 @@ from app.services.mcp_product import (
 )
 
 from app.services.rag import full_rag_query
+from app.services.platform_auth import require_platform_token
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -357,7 +356,7 @@ class AuthorityControlRequest(BaseModel):
 async def _authority_control(
     action: str, body: AuthorityControlRequest, request: Request, db: AsyncSession
 ):
-    admin = await _require_platform_operator(request, db)
+    principal = require_platform_token(request, scopes={"platform:write"})
     if not settings.MCP_SERVER_URL:
         raise HTTPException(
             status_code=503, detail="Authority control plane is unavailable"
@@ -366,24 +365,8 @@ async def _authority_control(
         f"/api/mcp/control/{action}",
         request,
         body.model_dump(),
-        extra_headers={"X-Operator-Identity": str(admin.email)},
+        extra_headers={"X-Operator-Identity": str(principal.actor_id)},
     )
-
-
-async def _require_platform_operator(request: Request, db: AsyncSession):
-    """Global public-corpus mutations require platform, not tenant, authority."""
-    admin = await _require_admin(request, db)
-    expected = os.getenv("LAWHAND_PLATFORM_OPERATOR_TOKEN", "")
-    supplied = request.headers.get("X-Platform-Operator-Token", "")
-    if len(expected) < 32:
-        raise HTTPException(
-            status_code=503, detail="Platform operator authorization is not configured"
-        )
-    if not supplied or not hmac.compare_digest(supplied, expected):
-        raise HTTPException(
-            status_code=403, detail="Platform operator authorization required"
-        )
-    return admin
 
 
 @router.post("/authority/audit")
