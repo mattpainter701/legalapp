@@ -1754,7 +1754,8 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
         assert result["status"] == "review_ready"
         assert result["machine_interpretation"]["attorney_reviewed"] is True
         assert result["machine_interpretation"]["effective_label"] == "no_decision"
-        assert "No good-law" in result["claim"]
+        assert "does not determine" in result["claim"]
+        assert "good law" in result["claim"].lower()
 
         rejected_assessment = record_treatment_assessment(
             conn, corpus_version=version, authority_key=authority_key,
