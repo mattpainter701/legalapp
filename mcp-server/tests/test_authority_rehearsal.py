@@ -1034,6 +1034,13 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
         # A staged follow-up captures usable rollback lineage and restores the
         # prior good version without changing tenant/private tables.
         follow_up = version + "-next"
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT embedding_model, embedding_version, embedding_dimension
+                     FROM authority_corpus_versions WHERE version=%s""",
+                [version],
+            )
+            follow_model, follow_model_version, follow_dimension = cur.fetchone()
         stage_corpus_version(
             conn,
             version=follow_up,
@@ -1041,11 +1048,29 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
             as_of="2026-08-30T00:00:00Z",
             actor="rehearsal-admin",
             reason="rollback fixture",
-            embedding_model="mixedbread-ai/mxbai-embed-large-v1",
-            embedding_version="1",
-            embedding_dimension=1024,
+            embedding_model=follow_model,
+            embedding_version=str(follow_model_version),
+            embedding_dimension=follow_dimension,
         )
         add_fixture(follow_up, "new")
+        follow_config = WorkerConfig(
+            worker_id=0,
+            total_workers=1,
+            batch_size=8,
+            model=follow_model,
+            model_version=str(follow_model_version),
+            dim=follow_dimension,
+            db_url=db_url,
+        )
+        class FollowupModel:
+            def encode(self, texts, **_kwargs):
+                return [[1.0] + [0.0] * (follow_dimension - 1) for _ in texts]
+
+        monkeypatch.setenv("AUTHORITY_EMBEDDING_CORPUS_VERSION", follow_up)
+        try:
+            assert process_once(follow_config, FollowupModel()) > 0
+        finally:
+            monkeypatch.delenv("AUTHORITY_EMBEDDING_CORPUS_VERSION", raising=False)
         for kind in ("release", "completeness", "freshness", "isolation"):
             result = sampled_audit(
                 [{"ready": True}]
@@ -1247,14 +1272,27 @@ def test_process_once_rehearsal_both_corpora():
             cur.execute(
                 """SELECT COUNT(*) FROM legal_document_chunks c
                      JOIN legal_documents d ON d.id=c.document_id
-                    WHERE d.corpus_version=%s AND c.embedding IS NULL""",
-                [version],
+                     JOIN legal_sources s ON s.source_key=d.source_key
+                    WHERE d.corpus_version=%s
+                      AND c.corpus_version IS NOT DISTINCT FROM %s
+                      AND s.enabled IS TRUE
+                      AND d.document_status='current'
+                      AND s.storage_policy IN ('mirror', 'normalized_text')
+                      AND (c.embedding IS NULL
+                           OR c.embedding_model IS DISTINCT FROM %s
+                           OR c.embedding_version::text IS DISTINCT FROM %s
+                           OR vector_dims(c.embedding) IS DISTINCT FROM %s)""",
+                [version, version, model_name, model_version, dimension],
             )
             legal_before = cur.fetchone()[0]
             cur.execute(
                 """SELECT COUNT(*) FROM authority_case_chunks
-                    WHERE corpus_version=%s AND embedding IS NULL""",
-                [version],
+                    WHERE corpus_version=%s
+                      AND (embedding IS NULL
+                           OR embedding_model IS DISTINCT FROM %s
+                           OR embedding_version IS DISTINCT FROM %s
+                           OR vector_dims(embedding) IS DISTINCT FROM %s)""",
+                [version, model_name, model_version, dimension],
             )
             authority_before = cur.fetchone()[0]
         conn.commit()
