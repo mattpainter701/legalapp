@@ -72,6 +72,20 @@ def test_private_service_accepts_exact_key(monkeypatch):
 async def test_signed_operator_context_rejects_replay_expiry_and_tamper(monkeypatch):
     secret = "service-secret-xxxxxxxxxxxxxxxxxx"
     monkeypatch.setenv("MCP_UPSTREAM_API_KEY", secret)
+    consumed = set()
+    monkeypatch.setattr(
+        server,
+        "consume_operator_assertion",
+        lambda claims: (
+            (_ for _ in ()).throw(
+                HTTPException(
+                    status_code=403, detail="replayed signed operator context"
+                )
+            )
+            if claims["nonce"] in consumed
+            else consumed.add(claims["nonce"])
+        ),
+    )
     request = _request()
     assertion = _assertion(secret)
     assert await server.operator_identity(request, "operator", assertion) == "operator"

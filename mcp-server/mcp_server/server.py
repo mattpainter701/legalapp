@@ -30,13 +30,50 @@ from .tools import build_tool_manifest
 
 app = FastAPI(title="WellPled CourtListener MCP", version="0.1.0")
 query_embedder = QueryEmbeddingClient.from_env()
-_USED_OPERATOR_NONCES: set[str] = set()
 
 
 @app.on_event("startup")
 def initialize_public_authority_schema() -> None:
     """Apply the additive public-authority schema before serving requests."""
     init_schema()
+
+
+def consume_operator_assertion(claims: dict[str, object]) -> None:
+    """Atomically consume a signed control assertion in shared storage."""
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM authority_operator_assertions WHERE expires_at < now()"
+            )
+            cur.execute(
+                """
+                INSERT INTO authority_operator_assertions
+                  (nonce, credential_id, actor, scope, method, path, body_sha256,
+                   issued_at, expires_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s,
+                        to_timestamp(%s), to_timestamp(%s))
+                ON CONFLICT (nonce) DO NOTHING
+                RETURNING nonce
+                """,
+                [
+                    claims["nonce"],
+                    claims["credential"],
+                    claims["actor"],
+                    claims["scope"],
+                    claims["method"],
+                    claims["path"],
+                    claims["body_sha256"],
+                    claims["issued"],
+                    claims["expires"],
+                ],
+            )
+            consumed = cur.fetchone()
+        if consumed is None:
+            conn.rollback()
+            raise HTTPException(
+                status_code=403, detail="replayed signed operator context"
+            )
+        conn.commit()
 
 
 class ToolCallRequest(BaseModel):
@@ -79,7 +116,6 @@ async def operator_identity(
         method = str(claims["method"])
         route = str(claims["path"])
         issued_i, expires_i = int(claims["issued"]), int(claims["expires"])
-        nonce = str(claims["nonce"])
         body_hash = str(claims["body_sha256"])
         request_body = json.loads((await request.body()).decode())
         actual_body_hash = hashlib.sha256(
@@ -108,11 +144,7 @@ async def operator_identity(
         raise HTTPException(
             status_code=403, detail="invalid or expired signed operator context"
         )
-    if nonce in _USED_OPERATOR_NONCES:
-        raise HTTPException(status_code=403, detail="replayed signed operator context")
-    _USED_OPERATOR_NONCES.add(nonce)
-    if len(_USED_OPERATOR_NONCES) > 10000:
-        _USED_OPERATOR_NONCES.clear()
+    consume_operator_assertion(claims)
     return actor
 
 
@@ -240,7 +272,9 @@ def run_control_audit(
                 records = [
                     {
                         "expected": max(row[2], 1),
-                        "observed": row[3] if row[4] in {"complete", "active"} else 0,
+                        "observed": row[3]
+                        if row[4] in {"complete", "active", "indexed"}
+                        else 0,
                     }
                     for row in cur.fetchall()
                 ]

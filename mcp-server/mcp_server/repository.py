@@ -8,7 +8,9 @@ from .database import dict_rows
 from .query_embeddings import format_vector_literal
 from .control_plane import cadence_seconds, lag_seconds
 
-_CITATION_RE = re.compile(r"^\s*(?P<volume>\d+)\s+(?P<reporter>.+?)\s+(?P<page>\d+)\s*$")
+_CITATION_RE = re.compile(
+    r"^\s*(?P<volume>\d+)\s+(?P<reporter>.+?)\s+(?P<page>\d+)\s*$"
+)
 _SEARCH_TERM_RE = re.compile(r"[A-Za-z0-9]{3,}")
 _SEARCH_STOP_WORDS = {
     "about",
@@ -85,7 +87,10 @@ class CourtListenerRepository:
         # authority tables. The latter's `d` and `s` aliases are not present
         # in either caselaw query, so those status filters must not leak here.
         promoted_version = "(SELECT version FROM authority_corpus_versions WHERE status = 'promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)"
-        filters = [f"oc.corpus_version = {promoted_version}", f"cl.corpus_version = {promoted_version}"]
+        filters = [
+            f"oc.corpus_version = {promoted_version}",
+            f"cl.corpus_version = {promoted_version}",
+        ]
         params: list[Any] = []
         if jurisdiction:
             filters.append("(oc.court_id = %s OR c.jurisdiction = %s)")
@@ -107,7 +112,9 @@ class CourtListenerRepository:
         date_to: str | None = None,
         query_embedding: list[float] | None = None,
     ) -> list[dict[str, Any]]:
-        if query_embedding is not None and not self._embedding_matches_promoted(query_embedding):
+        if query_embedding is not None and not self._embedding_matches_promoted(
+            query_embedding
+        ):
             query_embedding = None
         if query_embedding:
             return self._search_hybrid(
@@ -173,7 +180,9 @@ class CourtListenerRepository:
         # A provider response is vector-compatible only when it carries the
         # exact promoted model/version/dimension contract.  Mismatches take
         # the keyword branch before any vector SQL is assembled.
-        if query_embedding is not None and not self._embedding_matches_promoted(query_embedding):
+        if query_embedding is not None and not self._embedding_matches_promoted(
+            query_embedding
+        ):
             query_embedding = None
         fts_query = broad_legal_websearch_query(query)
         if not query_embedding:
@@ -292,8 +301,12 @@ class CourtListenerRepository:
                            FROM authority_corpus_versions WHERE status='promoted'
                            ORDER BY promoted_at DESC NULLS LAST LIMIT 1""")
             row = cur.fetchone()
-        return bool(row and row[0] == model and str(row[1]) == str(version)
-                    and int(row[2] or 0) == int(dimension) == len(embedding))
+        return bool(
+            row
+            and row[0] == model
+            and str(row[1]) == str(version)
+            and int(row[2] or 0) == int(dimension) == len(embedding)
+        )
 
     def _search_fts(
         self,
@@ -421,7 +434,9 @@ class CourtListenerRepository:
             cur.execute(sql, params)
             return dict_rows(cur)
 
-    def case_details(self, opinion_id: int | None = None, cluster_id: int | None = None) -> dict[str, Any] | None:
+    def case_details(
+        self, opinion_id: int | None = None, cluster_id: int | None = None
+    ) -> dict[str, Any] | None:
         if bool(opinion_id) == bool(cluster_id):
             raise ValueError("exactly one of opinion_id or cluster_id is required")
         where = "o.opinion_id = %s" if opinion_id else "o.cluster_id = %s"
@@ -469,11 +484,7 @@ class CourtListenerRepository:
             return None
         chunks = detail.get("chunks") or []
         full_text = "\n\n".join(chunk.get("content") or "" for chunk in chunks).strip()
-        result = {
-            key: value
-            for key, value in detail.items()
-            if key != "chunks"
-        }
+        result = {key: value for key, value in detail.items() if key != "chunks"}
         result["full_text"] = full_text
         result["chunk_count"] = len(chunks)
         if include_chunks:
@@ -526,7 +537,8 @@ class CourtListenerRepository:
             query_embedding=query_embedding,
         )
         filtered = [
-            row for row in results
+            row
+            for row in results
             if not source_opinion_id or row.get("opinion_id") != source_opinion_id
         ]
         return filtered[:top_k]
@@ -685,7 +697,9 @@ class CourtListenerRepository:
         date_to: str | None = None,
         top_k: int = 20,
     ) -> list[dict[str, Any]]:
-        filters = ["(d.docket_number ILIKE %s OR d.case_name ILIKE %s OR oc.case_name ILIKE %s)"]
+        filters = [
+            "(d.docket_number ILIKE %s OR d.case_name ILIKE %s OR oc.case_name ILIKE %s)"
+        ]
         promoted = "(SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)"
         filters.append(f"oc.corpus_version = {promoted}")
         pattern = f"%{query}%"
@@ -734,7 +748,9 @@ class CourtListenerRepository:
         selected_opinion_ids = list(dict.fromkeys(opinion_ids or []))
         selected_cluster_ids = list(dict.fromkeys(cluster_ids or []))
         if query and not selected_opinion_ids and not selected_cluster_ids:
-            hits = self.search_caselaw(query=query, top_k=top_k, query_embedding=query_embedding)
+            hits = self.search_caselaw(
+                query=query, top_k=top_k, query_embedding=query_embedding
+            )
             for hit in hits:
                 opinion_id = hit.get("opinion_id")
                 if opinion_id and opinion_id not in selected_opinion_ids:
@@ -753,7 +769,12 @@ class CourtListenerRepository:
         for case in cases:
             opinion_id = case.get("opinion_id")
             if opinion_id:
-                citations.append({"opinion_id": opinion_id, "network": self.citation_network(opinion_id)})
+                citations.append(
+                    {
+                        "opinion_id": opinion_id,
+                        "network": self.citation_network(opinion_id),
+                    }
+                )
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "query": query,
@@ -940,7 +961,8 @@ class CourtListenerRepository:
                 ORDER BY priority, source_key
             """)
             sources = dict_rows(cur)
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT cp.source_key, cp.partition_key, cp.corpus_version, cp.cursor_url,
                        cp.status, cp.updated_at, cp.last_successful_harvest_at,
                        cp.retry_count, cp.next_retry_at, cp.dead_letter_at
@@ -958,9 +980,25 @@ class CourtListenerRepository:
                   AND s.source_key NOT LIKE 'firm:%'
                   AND s.source_key NOT LIKE 'private:%'
                 ORDER BY source_key, partition_key
-            """, [version_key])
+            """,
+                [version_key],
+            )
             partitions = dict_rows(cur)
-            cur.execute("""
+            cur.execute(
+                """
+                SELECT source_key, partition_key, source_release AS corpus_version,
+                       NULL AS cursor_url, acquisition_state AS status, updated_at,
+                       last_checked_at AS last_successful_harvest_at, 0 AS retry_count,
+                       NULL AS next_retry_at, NULL AS dead_letter_at
+                FROM corpus_coverage_ledger
+                WHERE source_release = %s
+                ORDER BY source_key, partition_key
+            """,
+                [version_key],
+            )
+            partitions.extend(dict_rows(cur))
+            cur.execute(
+                """
                 SELECT d.source_key, COUNT(DISTINCT d.id) AS item_count,
                        COUNT(c.id) AS chunk_count,
                        COUNT(c.id) FILTER (WHERE c.embedding IS NOT NULL) AS embedded_chunk_count
@@ -968,39 +1006,84 @@ class CourtListenerRepository:
                 LEFT JOIN legal_document_chunks c ON c.document_id=d.id
                 WHERE d.corpus_version=%s
                 GROUP BY d.source_key
-            """, [version_key])
+            """,
+                [version_key],
+            )
             version_counts = {row["source_key"]: row for row in dict_rows(cur)}
-            cur.execute("""
+            cur.execute(
+                """
+                SELECT 'courtlistener:ohio-caselaw' AS source_key,
+                       COUNT(DISTINCT opinion_id) AS item_count,
+                       COUNT(*) AS chunk_count,
+                       COUNT(*) FILTER (WHERE embedding IS NOT NULL) AS embedded_chunk_count
+                FROM authority_case_chunks
+                WHERE corpus_version = %s
+            """,
+                [version_key],
+            )
+            case_counts = dict_rows(cur)
+            if case_counts and case_counts[0]["chunk_count"]:
+                version_counts[case_counts[0]["source_key"]] = case_counts[0]
+            cur.execute(
+                """
                 SELECT corpus_version, audit_kind, thresholds, result, passed,
                        sampled_at, auditor, immutable_hash
                 FROM authority_audits
                 WHERE corpus_version = %s
                 ORDER BY sampled_at DESC, id DESC
                 LIMIT 50
-            """, [version_key])
+            """,
+                [version_key],
+            )
             audits = dict_rows(cur)
         version = version_rows[0] if version_rows else None
         latest_audits = {}
         for audit in audits:
             latest_audits.setdefault(audit["audit_kind"], audit)
         required_audits = {"release", "completeness", "freshness", "isolation"}
-        passed_release = bool(version) and required_audits.issubset(latest_audits) and all(
-            bool(latest_audits[k]["passed"]) for k in required_audits
+        passed_release = (
+            bool(version)
+            and required_audits.issubset(latest_audits)
+            and all(bool(latest_audits[k]["passed"]) for k in required_audits)
         )
         partition_by_source = {}
         for partition in partitions:
-            partition_by_source.setdefault(partition["source_key"], []).append(partition)
+            partition_by_source.setdefault(partition["source_key"], []).append(
+                partition
+            )
         for source in sources:
             cadence = str(source.get("expected_cadence") or "").lower()
             cadence_window = cadence_seconds(cadence)
             source_partitions = partition_by_source.get(source["source_key"], [])
-            successful_syncs = [row["last_successful_harvest_at"] for row in source_partitions if row["last_successful_harvest_at"]]
+            successful_syncs = [
+                row["last_successful_harvest_at"]
+                for row in source_partitions
+                if row["last_successful_harvest_at"]
+            ]
             # Worst-partition semantics: a fresh partition cannot mask a
             # missing or stale required partition in the same public source.
             last_sync = min(successful_syncs, default=None)
-            lag = lag_seconds(last_sync, cadence_window) if last_sync and cadence_window else None
-            failed_partition = any(row["status"] in {"retryable", "retryable_failure", "quarantined", "dead_letter", "failed"} for row in source_partitions)
-            missing_partition = not source_partitions or len(successful_syncs) != len(source_partitions) or last_sync is None
+            lag = (
+                lag_seconds(last_sync, cadence_window)
+                if last_sync and cadence_window
+                else None
+            )
+            failed_partition = any(
+                row["status"]
+                in {
+                    "retryable",
+                    "retryable_failure",
+                    "quarantined",
+                    "dead_letter",
+                    "failed",
+                }
+                for row in source_partitions
+            )
+            missing_partition = (
+                not source_partitions
+                or len(successful_syncs) != len(source_partitions)
+                or last_sync is None
+            )
             source["lag_seconds"] = lag
             if source["source_key"] in version_counts:
                 counts = version_counts[source["source_key"]]
@@ -1008,16 +1091,33 @@ class CourtListenerRepository:
                 source["chunk_count"] = counts["chunk_count"]
                 source["embedded_chunk_count"] = counts["embedded_chunk_count"]
             source["last_successful_sync_at"] = last_sync
-            source["stale"] = missing_partition or cadence_window is None or bool(lag is not None and lag > 0)
-            source["status"] = "failed" if failed_partition else (
-                "unreviewed" if (not source.get("reviewed_at")
-                                  or source.get("rights_decision") in {"pending_review", "prohibited"}
-                                  or cadence_window is None) else (
-                    "stale" if source["stale"] else "healthy"
+            source["stale"] = (
+                missing_partition
+                or cadence_window is None
+                or bool(lag is not None and lag > 0)
+            )
+            source["status"] = (
+                "failed"
+                if failed_partition
+                else (
+                    "unreviewed"
+                    if (
+                        not source.get("reviewed_at")
+                        or source.get("rights_decision")
+                        in {"pending_review", "prohibited"}
+                        or cadence_window is None
+                    )
+                    else ("stale" if source["stale"] else "healthy")
                 )
             )
-            source["claim_state"] = "suppressed" if source["status"] != "healthy" or not passed_release else (
-                "limited" if source.get("coverage_kind") != "complete" else "supported"
+            source["claim_state"] = (
+                "suppressed"
+                if source["status"] != "healthy" or not passed_release
+                else (
+                    "limited"
+                    if source.get("coverage_kind") != "complete"
+                    else "supported"
+                )
             )
         return {
             "available": bool(version),

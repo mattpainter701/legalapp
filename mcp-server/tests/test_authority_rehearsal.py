@@ -587,3 +587,61 @@ def test_authority_release_rehearsal():
             CourtListenerRepository(conn).search_caselaw("old case")[0]["case_name"]
             == "Fixture old"
         )
+
+
+def test_durable_operator_assertion_replay_rehearsal():
+    """Two consumers sharing PostgreSQL cannot consume one nonce twice."""
+    db_url = os.getenv("AUTHORITY_REHEARSAL_DATABASE_URL")
+    if not db_url:
+        pytest.skip(
+            "set AUTHORITY_REHEARSAL_DATABASE_URL for the disposable DB rehearsal"
+        )
+    init_schema(db_url)
+    nonce = "rehearsal-nonce-" + uuid.uuid4().hex
+    claims = {
+        "nonce": nonce,
+        "credential": "rehearsal-jti",
+        "actor": "rehearsal-operator",
+        "scope": "platform:write",
+        "method": "POST",
+        "path": "/api/mcp/control/stage",
+        "body_sha256": "0" * 64,
+        "issued": 1_700_000_000,
+        "expires": 1_900_000_000,
+    }
+    consume_operator_assertion_with_db(db_url, claims)
+    with pytest.raises(RuntimeError, match="replayed"):
+        consume_operator_assertion_with_db(db_url, claims)
+
+
+def consume_operator_assertion_with_db(db_url, claims):
+    """Exercise the atomic consume SQL on an independent connection."""
+    with connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM authority_operator_assertions WHERE expires_at < now()"
+            )
+            cur.execute(
+                """INSERT INTO authority_operator_assertions
+                (nonce, credential_id, actor, scope, method, path, body_sha256, issued_at, expires_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,to_timestamp(%s),to_timestamp(%s))
+                ON CONFLICT (nonce) DO NOTHING RETURNING nonce""",
+                [
+                    claims[k]
+                    for k in (
+                        "nonce",
+                        "credential",
+                        "actor",
+                        "scope",
+                        "method",
+                        "path",
+                        "body_sha256",
+                        "issued",
+                        "expires",
+                    )
+                ],
+            )
+            if cur.fetchone() is None:
+                conn.rollback()
+                raise RuntimeError("replayed signed operator context")
+        conn.commit()

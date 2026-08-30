@@ -410,17 +410,20 @@ def refresh_courtlistener_coverage_ledger(
             )
             SELECT 'courtlistener:ohio-caselaw', d.court_id,
                    jsonb_build_object('court_id', d.court_id, 'source', 'CourtListener bulk'),
-                   CASE WHEN COUNT(ch.id) = 0 THEN 'loading' ELSE 'partial' END,
+                   CASE WHEN COUNT(ch.chunk_id) = 0 THEN 'loading'
+                        WHEN COUNT(ch.chunk_id) = COUNT(ch.chunk_id) FILTER (WHERE ch.embedding IS NOT NULL)
+                        THEN 'complete' ELSE 'indexed' END,
                    %s,
-                   COUNT(DISTINCT o.opinion_id), COUNT(ch.id),
-                   COUNT(ch.id) FILTER (WHERE ch.embedding IS NOT NULL),
-                   MIN(oc.date_filed), MAX(oc.date_filed), now(),
-                   jsonb_build_object('dockets', COUNT(DISTINCT d.docket_id),
-                                      'clusters', COUNT(DISTINCT oc.cluster_id)), now()
+                   COUNT(DISTINCT ch.opinion_id), COUNT(ch.chunk_id),
+                   COUNT(ch.chunk_id) FILTER (WHERE ch.embedding IS NOT NULL),
+                   MIN(ac.date_filed), MAX(ac.date_filed), now(),
+                   jsonb_build_object('dockets', COUNT(DISTINCT ac.docket_id),
+                                      'clusters', COUNT(DISTINCT ch.cluster_id)), now()
             FROM dockets d
-            LEFT JOIN opinion_clusters oc ON oc.docket_id = d.docket_id
-            LEFT JOIN opinions o ON o.cluster_id = oc.cluster_id
-            LEFT JOIN opinion_chunks ch ON ch.opinion_id = o.opinion_id
+            LEFT JOIN authority_case_chunks ch
+              ON ch.corpus_version = %s AND ch.court_id = d.court_id
+            LEFT JOIN authority_case_clusters ac
+              ON ac.corpus_version = %s AND ac.cluster_id = ch.cluster_id
             {filters}
             GROUP BY d.court_id
             ON CONFLICT (source_key, partition_key, source_release) DO UPDATE SET
@@ -434,7 +437,7 @@ def refresh_courtlistener_coverage_ledger(
                 metadata = EXCLUDED.metadata,
                 updated_at = now()
             """,
-            [source_release, *params],
+            [source_release, source_release, source_release, *params],
         )
 
 

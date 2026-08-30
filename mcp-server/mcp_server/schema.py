@@ -216,6 +216,21 @@ CREATE TABLE IF NOT EXISTS authority_audits (
     CHECK (audit_kind IN ('completeness', 'freshness', 'isolation', 'release'))
 );
 
+CREATE TABLE IF NOT EXISTS authority_operator_assertions (
+    nonce text PRIMARY KEY,
+    credential_id text NOT NULL,
+    actor text NOT NULL,
+    scope text NOT NULL,
+    method text NOT NULL,
+    path text NOT NULL,
+    body_sha256 text NOT NULL,
+    issued_at timestamptz NOT NULL,
+    expires_at timestamptz NOT NULL,
+    consumed_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_authority_operator_assertions_expiry
+    ON authority_operator_assertions(expires_at);
+
 CREATE OR REPLACE FUNCTION reject_authority_evidence_mutation() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
