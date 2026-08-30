@@ -435,7 +435,7 @@ def refresh_courtlistener_coverage_ledger(
                 metadata = EXCLUDED.metadata,
                 updated_at = now()
             """,
-            [source_release, source_release, *params],
+            [source_release, source_release, source_release, *params],
         )
 
 
