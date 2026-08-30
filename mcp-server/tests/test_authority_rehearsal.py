@@ -630,11 +630,36 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 passed=True,
                 auditor="rehearsal-admin",
             )
+        with pytest.raises(PermissionError, match="complete matching embeddings"):
+            promote_corpus_version(
+                conn,
+                version=version,
+                actor="rehearsal-admin",
+                reason="must reject unembedded candidate",
+            )
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE legal_document_chunks c
+                   SET embedding=('[' || array_to_string(array_fill(0, ARRAY[1024]), ',') || ']')::vector,
+                       embedding_model='mixedbread-ai/mxbai-embed-large-v1',
+                       embedding_version='1'
+                 WHERE c.corpus_version=%s""",
+                [version],
+            )
+            cur.execute(
+                """UPDATE authority_case_chunks c
+                   SET embedding=('[' || array_to_string(array_fill(0, ARRAY[1024]), ',') || ']')::vector,
+                       embedding_model='mixedbread-ai/mxbai-embed-large-v1',
+                       embedding_version='1'
+                 WHERE c.corpus_version=%s""",
+                [version],
+            )
+        conn.commit()
         promote_corpus_version(
             conn,
             version=version,
             actor="rehearsal-admin",
-            reason="all fixture audits passed",
+            reason="all fixture audits and embeddings passed",
         )
         authority_results = CourtListenerRepository(conn).search_legal_authorities(
             "old authority"
@@ -1062,7 +1087,7 @@ def test_process_once_rehearsal_both_corpora():
     model_name = "mixedbread-ai/mxbai-embed-large-v1"
     model_version = "1"
     dimension = 1024
-    document_id = uuid.uuid4()
+    document_id = str(uuid.uuid4())
     with connect(db_url) as conn:
         stage_corpus_version(
             conn,
