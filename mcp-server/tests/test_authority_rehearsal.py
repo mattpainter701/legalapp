@@ -1049,6 +1049,88 @@ def consume_operator_assertion_with_db(db_url, claims):
         conn.commit()
 
 
+def test_legal_only_upgrade_bootstrap_rehearsal():
+    """A statute-only legacy database also receives a searchable snapshot."""
+    db_url = os.getenv("AUTHORITY_REHEARSAL_DATABASE_URL")
+    if not db_url:
+        pytest.skip("set AUTHORITY_REHEARSAL_DATABASE_URL for the disposable DB rehearsal")
+    schema = "legal_legacy_" + uuid.uuid4().hex[:12]
+    scoped_url = db_url + ("&" if "?" in db_url else "?") + (
+        "options=-csearch_path%3D" + quote(schema + ",public", safe="")
+    )
+    with connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(f'CREATE SCHEMA "{schema}"')
+            cur.execute(f'SET search_path TO "{schema}", public')
+            cur.execute(
+                """CREATE TABLE legal_sources (
+                    source_key text PRIMARY KEY, publisher text, source_type text,
+                    canonical_url text, enabled boolean, storage_policy text,
+                    rights_decision text, expected_cadence text,
+                    claim_safe_wording text, metadata jsonb NOT NULL DEFAULT '{}'::jsonb)"""
+            )
+            cur.execute(
+                """CREATE TABLE legal_documents (
+                    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), source_key text NOT NULL,
+                    external_id text NOT NULL, document_type text NOT NULL, title text NOT NULL,
+                    citation text, jurisdiction text, authority_tier text NOT NULL,
+                    document_status text NOT NULL DEFAULT 'current', publication_date date,
+                    effective_date date, termination_date date, canonical_url text NOT NULL,
+                    source_modified_at timestamptz, retrieved_at timestamptz NOT NULL DEFAULT now(),
+                    content_hash text, raw_media_type text, raw_storage_uri text,
+                    parser_version text, text_content text, metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+                    created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now())"""
+            )
+            cur.execute(
+                """CREATE TABLE legal_document_chunks (
+                    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), document_id uuid NOT NULL,
+                    chunk_index integer NOT NULL, heading_path jsonb NOT NULL DEFAULT '[]'::jsonb,
+                    content text NOT NULL, content_hash text NOT NULL, token_count integer,
+                    embedding vector(1024), embedding_model text NOT NULL DEFAULT 'mixedbread-ai/mxbai-embed-large-v1',
+                    embedding_version integer NOT NULL DEFAULT 0, metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+                    created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now())"""
+            )
+            cur.execute(
+                """CREATE TABLE source_sync_states (source_key text PRIMARY KEY, updated_at timestamptz)"""
+            )
+            cur.execute(
+                """INSERT INTO legal_sources
+                    (source_key, publisher, source_type, canonical_url, enabled,
+                     storage_policy, rights_decision, expected_cadence, claim_safe_wording)
+                    VALUES ('legacy:statute', 'Legacy', 'statute', 'https://legacy.example',
+                            true, 'normalized_text', 'official', 'daily', 'Bounded statute fixture')"""
+            )
+            cur.execute(
+                """INSERT INTO legal_documents
+                    (source_key, external_id, document_type, title, jurisdiction, authority_tier,
+                     canonical_url, content_hash, text_content)
+                    VALUES ('legacy:statute', 'statute-1', 'statute', 'Legacy statute', 'US',
+                            'binding_primary', 'https://legacy.example/statute', 'legacy-hash',
+                            'Legacy statute text') RETURNING id"""
+            )
+            document_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO legal_document_chunks
+                    (document_id, chunk_index, content, content_hash)
+                    VALUES (%s, 0, 'Legacy statute text', 'legacy-chunk-hash')""",
+                [document_id],
+            )
+        conn.commit()
+    init_schema(scoped_url)
+    with connect(scoped_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT d.corpus_version, c.corpus_version
+                     FROM legal_documents d JOIN legal_document_chunks c ON c.document_id=d.id
+                    WHERE d.external_id='statute-1'"""
+            )
+            assert cur.fetchone() == (("legacy-bootstrap", "legacy-bootstrap"))
+            result = CourtListenerRepository(conn).search_legal_authorities("Legacy statute")
+            assert result and result[0]["title"] == "Legacy statute"
+        conn.commit()
+    init_schema(scoped_url)
+
+
 def test_legacy_upgrade_bootstrap_rehearsal():
     """Upgrade a pre-control-plane schema without losing its served corpus."""
     db_url = os.getenv("AUTHORITY_REHEARSAL_DATABASE_URL")
