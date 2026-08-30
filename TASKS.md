@@ -49,6 +49,16 @@ and [Westlaw docket coverage](https://legal.thomsonreuters.com/en/products/westl
 
 ### P0 — remove switching and research-trust blockers
 
+**PM acceptance snapshot (2026-08-30):** Independently revalidated against
+`origin/main` at `1453002e`. `COMP-01` and `COMP-04` remain accepted;
+`COMP-02` and `COMP-03` remain open for their missing production-shaped closure
+evidence; `COMP-05` is reopened because the merged Brief Check is a safe
+review-first scaffold but does not yet satisfy the full citation-resolution,
+pin-cite, treatment/currentness, omitted-authority, linked-export, and end-to-end
+acceptance below; and `COMP-06` is in implementation. See
+[`docs/core-milestone-status.md`](docs/core-milestone-status.md) for the evidence
+matrix and claim boundaries. Feature PRs do not self-certify these checkboxes.
+
 - [x] `COMP-01` Refresh `docs/competitive-gap-analysis.md`, README, pricing/demo
       claims, and the marketing capability catalog against dated official vendor
       evidence. Retire “ahead of every incumbent on AI,” distinguish implemented,
@@ -75,7 +85,7 @@ and [Westlaw docket coverage](https://legal.thomsonreuters.com/en/products/westl
       offboarding/deletion, DPA/BAA applicability, subprocessors, security-review
       packet, penetration-test cadence, and certification roadmap. Never present
       a planned control or audit as an attained certification.
-- [x] `COMP-05` Ship a review-first **Brief Check** that parses an uploaded brief
+- [ ] `COMP-05` Ship a review-first **Brief Check** that parses an uploaded brief
       or selected Word document, normalizes and resolves citations, verifies
       quotations and pin cites against accessible source text, reports missing or
       ambiguous sources, applies available treatment/currentness evidence, finds
