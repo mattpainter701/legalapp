@@ -325,6 +325,7 @@ function PublicSourceHealth({ health }) {
   const sources = (health.sources || []).filter(Boolean)
   const source = sources.find((item) => item.jurisdiction === 'OH') || sources[0]
   const attention = health.status === 'attention'
+    || ['failed', 'stale', 'unreviewed', 'attention'].includes(source?.status)
   if (!health.available || !source) {
     return (
       <div className="rounded-xl border border-brand-line bg-brand-surface p-3">

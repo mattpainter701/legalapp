@@ -13,6 +13,7 @@ class WorkerConfig:
     total_workers: int
     batch_size: int = DEFAULT_BATCH_SIZE
     model: str = DEFAULT_MODEL
+    model_version: str = "1"
     dim: int = DEFAULT_DIM
     db_url: str | None = None
 

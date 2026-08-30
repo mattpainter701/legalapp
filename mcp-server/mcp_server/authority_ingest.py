@@ -363,6 +363,17 @@ def ingest_document(conn: Any, document: dict[str, Any], fetched: FetchedDocumen
             metadata[field] = document[field]
     metadata.update(document.get("metadata", {}))
     with conn.cursor() as cursor:
+        requested_version = os.environ.get("AUTHORITY_INGEST_CORPUS_VERSION", "").strip()
+        cursor.execute(
+            """SELECT version FROM authority_corpus_versions
+               WHERE status IN ('promoted', 'staged', 'canary')
+                 AND (%s = '' OR version = %s)
+               ORDER BY CASE WHEN version = %s THEN 0 ELSE 1 END,
+                        promoted_at DESC NULLS LAST, created_at DESC LIMIT 1""",
+            [requested_version, requested_version, requested_version],
+        )
+        version_row = cursor.fetchone()
+        corpus_version = version_row[0] if version_row else None
         cursor.execute(
             """
             SELECT id, content_hash
@@ -379,11 +390,12 @@ def ingest_document(conn: Any, document: dict[str, Any], fetched: FetchedDocumen
                 source_key, external_id, document_type, title, citation,
                 jurisdiction, authority_tier, document_status, publication_date,
                 effective_date, canonical_url, source_modified_at, retrieved_at,
-                content_hash, raw_media_type, parser_version, text_content, metadata
+                content_hash, raw_media_type, parser_version, text_content, metadata,
+                corpus_version
             )
             VALUES (
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s::jsonb
+                %s, %s, %s, %s::jsonb, %s
             )
             ON CONFLICT (source_key, external_id) DO UPDATE
             SET document_type = EXCLUDED.document_type,
@@ -401,6 +413,7 @@ def ingest_document(conn: Any, document: dict[str, Any], fetched: FetchedDocumen
                 raw_media_type = EXCLUDED.raw_media_type,
                 parser_version = EXCLUDED.parser_version,
                 text_content = EXCLUDED.text_content,
+                corpus_version = EXCLUDED.corpus_version,
                 metadata = legal_documents.metadata || EXCLUDED.metadata,
                 updated_at = now()
             RETURNING id
@@ -424,6 +437,7 @@ def ingest_document(conn: Any, document: dict[str, Any], fetched: FetchedDocumen
                 document["parser_version"],
                 fetched.text,
                 json.dumps(metadata),
+                corpus_version,
             ],
         )
         document_id = cursor.fetchone()[0]
@@ -435,9 +449,9 @@ def ingest_document(conn: Any, document: dict[str, Any], fetched: FetchedDocumen
                     """
                     INSERT INTO legal_document_chunks (
                         document_id, chunk_index, content, content_hash,
-                        embedding, embedding_version, metadata
+                        embedding, embedding_version, metadata, corpus_version
                     )
-                    VALUES (%s, %s, %s, %s, NULL, 0, %s::jsonb)
+                    VALUES (%s, %s, %s, %s, NULL, 0, %s::jsonb, %s)
                     """,
                     [
                         document_id,
@@ -445,6 +459,7 @@ def ingest_document(conn: Any, document: dict[str, Any], fetched: FetchedDocumen
                         content,
                         hashlib.sha256(content.encode("utf-8")).hexdigest(),
                         json.dumps({"practice_areas": document["practice_areas"]}),
+                        corpus_version,
                     ],
                 )
                 chunks_created += 1
@@ -477,6 +492,7 @@ def ingest_document(conn: Any, document: dict[str, Any], fetched: FetchedDocumen
                 (source_key, partition_key, external_id, content_hash,
                  event_status, citation, effective_date, metadata)
             VALUES (%s, %s, %s, %s, 'accepted', %s, %s, %s::jsonb)
+            ON CONFLICT DO NOTHING
             """,
             [
                 document["source_key"],
@@ -487,6 +503,22 @@ def ingest_document(conn: Any, document: dict[str, Any], fetched: FetchedDocumen
                 document.get("effective_date"),
                 json.dumps({"namespace": "public-authority", "parser_version": document["parser_version"]}),
             ],
+        )
+        cursor.execute(
+            """INSERT INTO source_sync_states
+                 (source_key, partition_key, checkpoint_at, cursor_url, status,
+                  last_attempted_at, last_successful_sync_at, rows_processed,
+                  last_cursor_hash, next_retry_at)
+               VALUES (%s, %s, now(), %s, 'complete', now(), now(), 1, %s, NULL)
+               ON CONFLICT (source_key, partition_key) DO UPDATE SET
+                 checkpoint_at=EXCLUDED.checkpoint_at, cursor_url=EXCLUDED.cursor_url,
+                 status='complete', last_attempted_at=EXCLUDED.last_attempted_at,
+                 last_successful_sync_at=EXCLUDED.last_successful_sync_at,
+                 rows_processed=source_sync_states.rows_processed + 1,
+                 last_cursor_hash=EXCLUDED.last_cursor_hash, next_retry_at=NULL,
+                 retry_count=0, updated_at=now()""",
+            [document["source_key"], f"manifest:{document['source_key']}",
+             document["canonical_url"], fetched.content_hash],
         )
     conn.commit()
     return {
@@ -672,6 +704,7 @@ def sync_documents(
                                 (source_key, partition_key, external_id, event_status,
                                  retry_count, quarantine_reason, metadata)
                             VALUES (%s, %s, %s, %s, 0, %s, %s::jsonb)
+                            ON CONFLICT DO NOTHING
                             """,
                             [
                                 document["source_key"],
@@ -681,6 +714,24 @@ def sync_documents(
                                 failure_text if event_status == "quarantined" else None,
                                 json.dumps({"namespace": "public-authority"}),
                             ],
+                        )
+                        cursor.execute(
+                            """INSERT INTO source_sync_states
+                                 (source_key, partition_key, status, last_attempted_at,
+                                  last_error, retry_count, next_retry_at, dead_letter_count)
+                               VALUES (%s, %s, %s, now(), %s, 1,
+                                       now() + interval '5 minutes',
+                                       CASE WHEN %s = 'quarantined' THEN 1 ELSE 0 END)
+                               ON CONFLICT (source_key, partition_key) DO UPDATE SET
+                                 status=EXCLUDED.status, last_attempted_at=now(),
+                                 last_error=EXCLUDED.last_error,
+                                 retry_count=source_sync_states.retry_count + 1,
+                                 next_retry_at=now() + interval '5 minutes',
+                                 dead_letter_count=source_sync_states.dead_letter_count
+                                   + CASE WHEN EXCLUDED.status='quarantined' THEN 1 ELSE 0 END,
+                                 updated_at=now()""",
+                            [document["source_key"], f"manifest:{document['source_key']}",
+                             event_status, failure_text, event_status],
                         )
                         cursor.execute(
                             """

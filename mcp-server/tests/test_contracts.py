@@ -60,6 +60,9 @@ class RecordingCursor:
     def fetchall(self):
         return []
 
+    def fetchone(self):
+        return ["mixedbread-ai/mxbai-embed-large-v1", "1", 1024]
+
 
 class RecordingConnection:
     def __init__(self):
@@ -364,11 +367,15 @@ def test_repository_searches_general_authority_with_effective_date_filters():
 def test_repository_uses_hybrid_search_for_general_authority():
     conn = RecordingConnection()
 
+    class CompatibleEmbedding(list):
+        model = "mixedbread-ai/mxbai-embed-large-v1"
+        version = "1"
+        dimension = 1024
+
     CourtListenerRepository(conn).search_legal_authorities(
         "estate tax portability",
         top_k=4,
-        jurisdiction="US",
-        query_embedding=[0.001] * 1024,
+        jurisdiction="US", query_embedding=CompatibleEmbedding([0.001] * 1024),
     )
 
     sql = conn.cursor_obj.sql
@@ -460,7 +467,8 @@ def test_query_embedding_client_posts_to_configured_provider(monkeypatch):
             return None
 
         def json(self):
-            return {"embeddings": [[0.1, 0.2, 0.3]]}
+            return {"embeddings": [[0.1] * 1024], "model": "mixedbread-ai/mxbai-embed-large-v1",
+                    "version": "1", "dimension": 1024}
 
     def fake_post(url, json, timeout):
         calls.append((url, json, timeout))
@@ -474,7 +482,7 @@ def test_query_embedding_client_posts_to_configured_provider(monkeypatch):
         timeout_seconds=2.5,
     )
 
-    assert client.embed_query("tax deficiency") == [0.1, 0.2, 0.3]
+    assert client.embed_query("tax deficiency") == [0.1] * 1024
     assert calls == [
         (
             "http://jetson-query-embed:8031/embed",

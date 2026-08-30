@@ -11,6 +11,7 @@ import httpx
 import psycopg2.extras
 
 from .database import connect
+from .control_plane import claim_embedding_shard, finish_embedding_shard, heartbeat_embedding_shard
 from .worker_config import DEFAULT_MODEL, WorkerConfig, partition_sql
 
 # The reviewed authority corpus is small and high-value for chat. Drain it before
@@ -92,6 +93,21 @@ def process_once(config: WorkerConfig, model) -> int:
     with connect(config.db_url) as conn:
         for corpus in CORPORA:
             with conn.cursor() as cur:
+                cur.execute("SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1")
+                version_row = cur.fetchone()
+                if not version_row:
+                    continue
+                version = version_row[0]
+                shard_key = f"{corpus}:{config.worker_id}:{config.total_workers}:{version}"
+                cur.execute("""INSERT INTO authority_embedding_shards
+                    (shard_key, corpus_version, corpus_table, model, model_version, dimension)
+                    VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING""",
+                    [shard_key, version, corpus, config.model, config.model_version, config.dim])
+            conn.commit()
+            if not claim_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id)):
+                continue
+            heartbeat_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id))
+            with conn.cursor() as cur:
                 cur.execute("BEGIN")
                 cur.execute(
                     partition_sql(corpus),
@@ -100,6 +116,7 @@ def process_once(config: WorkerConfig, model) -> int:
                 rows = cur.fetchall()
                 if not rows:
                     conn.rollback()
+                    finish_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id), success=True)
                     continue
                 ids = [row[0] for row in rows]
                 texts = [row[1] for row in rows]
@@ -123,6 +140,7 @@ def process_once(config: WorkerConfig, model) -> int:
                             [embedded_count, source_key],
                         )
                 conn.commit()
+                finish_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id), success=True, throughput_per_minute=len(updates))
                 return len(updates)
         return 0
 
@@ -134,6 +152,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--db-url", default=os.environ.get("VECTORDB_URL") or os.environ.get("DATABASE_URL"))
     parser.add_argument("--model", default="mxbai")
+    parser.add_argument("--model-version", default=os.environ.get("EMBEDDING_MODEL_VERSION", "1"))
     parser.add_argument("--dim", type=int, default=1024)
     parser.add_argument("--ollama-url", default=os.environ.get("OLLAMA_EMBEDDING_URL", ""))
     parser.add_argument(
@@ -158,6 +177,7 @@ def main() -> None:
         total_workers=args.total_workers,
         batch_size=args.batch_size,
         model=model_name,
+        model_version=args.model_version,
         dim=args.dim,
         db_url=args.db_url,
     )

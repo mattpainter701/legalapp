@@ -15,6 +15,7 @@ from mcp_server.control_plane import (  # noqa: E402
     public_namespace,
     review_source,
     source_identity,
+    sampled_audit,
 )
 
 
@@ -66,3 +67,32 @@ def test_lag_and_audit_hash_are_stable():
     now = datetime(2026, 8, 30, tzinfo=timezone.utc)
     assert lag_seconds("2026-08-29T00:00:00Z", 3600, now) == 82800
     assert audit_hash({"b": 2, "a": 1}) == audit_hash({"a": 1, "b": 2})
+
+
+def test_sampled_audits_compute_thresholds_instead_of_accepting_pass_flags():
+    result = sampled_audit(
+        [{"expected": True, "observed": True}, {"expected": True, "observed": False}],
+        audit_kind="completeness",
+        minimum_completeness=0.75,
+    )
+    assert result["ratio"] == 0.5
+    assert result["passed"] is False
+
+    freshness = sampled_audit(
+        [{"lag_seconds": 10}, {"lag_seconds": 999}],
+        audit_kind="freshness",
+        maximum_lag_seconds=100,
+    )
+    assert freshness["fresh"] == 1
+    assert freshness["passed"] is False
+
+
+def test_release_audit_requires_every_sampled_criterion():
+    assert sampled_audit(
+        [{"ready": True}, {"ready": False}], audit_kind="release"
+    )["passed"] is False
+    result = sampled_audit(
+        [{"ready": True}, {"ready": True}], audit_kind="release"
+    )
+    assert result["passed"] is True
+    assert "manifest_bound_documents" in result["criteria"]

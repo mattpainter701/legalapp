@@ -2,6 +2,14 @@ SCHEMA_SQL = """
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version TEXT PRIMARY KEY,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+INSERT INTO schema_migrations (version) VALUES ('authority-control-plane-v2')
+ON CONFLICT (version) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS courts (
     court_id text PRIMARY KEY,
     short_name text,
@@ -149,6 +157,9 @@ CREATE TABLE IF NOT EXISTS authority_corpus_versions (
     rolled_back_at timestamptz,
     rollback_of text REFERENCES authority_corpus_versions(version),
     reason text,
+    embedding_model text,
+    embedding_version text,
+    embedding_dimension integer,
     metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
     CHECK (status IN ('staged', 'canary', 'promoted', 'rolled_back', 'retired'))
 );
@@ -172,6 +183,9 @@ CREATE TABLE IF NOT EXISTS authority_harvest_events (
     metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
     CHECK (event_status IN ('accepted', 'duplicate', 'skipped', 'retryable_failure', 'quarantined', 'failed'))
 );
+CREATE UNIQUE INDEX IF NOT EXISTS ux_authority_harvest_identity_v2
+    ON authority_harvest_events(source_key, partition_key,
+       COALESCE(external_id, ''), COALESCE(content_hash, ''), event_status);
 
 CREATE TABLE IF NOT EXISTS authority_audits (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -306,6 +320,36 @@ CREATE TABLE IF NOT EXISTS embedding_jobs (
     errors bigint NOT NULL DEFAULT 0
 );
 
+ALTER TABLE legal_documents ADD COLUMN IF NOT EXISTS corpus_version text REFERENCES authority_corpus_versions(version);
+ALTER TABLE legal_document_chunks ADD COLUMN IF NOT EXISTS corpus_version text REFERENCES authority_corpus_versions(version);
+ALTER TABLE opinion_clusters ADD COLUMN IF NOT EXISTS corpus_version text REFERENCES authority_corpus_versions(version);
+ALTER TABLE opinion_chunks ADD COLUMN IF NOT EXISTS corpus_version text REFERENCES authority_corpus_versions(version);
+ALTER TABLE source_sync_states ADD COLUMN IF NOT EXISTS retry_count integer NOT NULL DEFAULT 0;
+ALTER TABLE source_sync_states ADD COLUMN IF NOT EXISTS dead_letter_count integer NOT NULL DEFAULT 0;
+ALTER TABLE source_sync_states ADD COLUMN IF NOT EXISTS lag_seconds integer;
+ALTER TABLE source_sync_states ADD COLUMN IF NOT EXISTS next_retry_at timestamptz;
+ALTER TABLE source_sync_states ADD COLUMN IF NOT EXISTS last_cursor_hash text;
+
+CREATE TABLE IF NOT EXISTS authority_embedding_shards (
+    shard_key text PRIMARY KEY,
+    corpus_version text NOT NULL REFERENCES authority_corpus_versions(version),
+    corpus_table text NOT NULL,
+    model text NOT NULL,
+    model_version text NOT NULL,
+    dimension integer NOT NULL,
+    status text NOT NULL DEFAULT 'queued',
+    lease_owner text,
+    lease_expires_at timestamptz,
+    heartbeat_at timestamptz,
+    attempts integer NOT NULL DEFAULT 0,
+    dead_letter_reason text,
+    throughput_per_minute numeric,
+    last_error text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CHECK (status IN ('queued', 'leased', 'complete', 'retryable', 'dead_letter'))
+);
+
 CREATE INDEX IF NOT EXISTS ix_opinion_chunks_court ON opinion_chunks(court_id);
 CREATE INDEX IF NOT EXISTS ix_opinion_chunks_embedding_version ON opinion_chunks(embedding_version);
 CREATE INDEX IF NOT EXISTS ix_opinions_source_modified_at ON opinions(source_modified_at);
@@ -319,6 +363,8 @@ CREATE INDEX IF NOT EXISTS ix_legal_documents_citation ON legal_documents(citati
 CREATE INDEX IF NOT EXISTS ix_legal_documents_effective ON legal_documents(jurisdiction, effective_date);
 CREATE INDEX IF NOT EXISTS ix_legal_document_chunks_fts ON legal_document_chunks USING gin(fts);
 CREATE INDEX IF NOT EXISTS ix_legal_document_chunks_embedding_hnsw ON legal_document_chunks USING hnsw (embedding vector_cosine_ops) WHERE embedding IS NOT NULL;
+CREATE INDEX IF NOT EXISTS ix_legal_documents_corpus_version ON legal_documents(corpus_version);
+CREATE INDEX IF NOT EXISTS ix_legal_document_chunks_corpus_version ON legal_document_chunks(corpus_version);
 CREATE INDEX IF NOT EXISTS ix_opinion_chunks_fts ON opinion_chunks USING gin(fts);
 CREATE INDEX IF NOT EXISTS ix_opinion_chunks_embedding_hnsw ON opinion_chunks USING hnsw (embedding vector_cosine_ops) WHERE embedding IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ix_opinion_citations_citing ON opinion_citations(citing_opinion_id);

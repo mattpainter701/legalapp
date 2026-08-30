@@ -14,6 +14,7 @@ from typing import Any
 
 RIGHTS_DECISIONS = {"official", "open", "licensed", "prohibited", "pending_review"}
 CLAIM_STATES = {"supported", "limited", "suppressed"}
+AUTHORITY_SCHEMA_VERSION = "authority-control-plane-v2"
 
 
 def public_namespace(source_key: str) -> str:
@@ -112,14 +113,14 @@ def promote_corpus_version(conn: Any, *, version: str, actor: str, reason: str) 
     actor, reason = _authorized(actor, reason)
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT 1 FROM authority_audits
-            WHERE corpus_version = %s AND audit_kind IN ('release', 'completeness', 'freshness')
+            SELECT COUNT(DISTINCT audit_kind) FROM authority_audits
+            WHERE corpus_version = %s
+              AND audit_kind IN ('release', 'completeness', 'freshness')
               AND passed = TRUE
-            LIMIT 1
             """, [version])
-        if cur.fetchone() is None:
-            raise PermissionError("a passing release/completeness/freshness audit is required")
-        cur.execute("UPDATE authority_corpus_versions SET status='retired' WHERE status='promoted'")
+        audit_row = cur.fetchone()
+        if not audit_row or audit_row[0] < 3:
+            raise PermissionError("passing release, completeness, and freshness audits are required")
         cur.execute("""
             UPDATE authority_corpus_versions
             SET status='promoted', promoted_at=now(), reason=%s,
@@ -128,6 +129,7 @@ def promote_corpus_version(conn: Any, *, version: str, actor: str, reason: str) 
             """, [reason, json.dumps({"promoted_by": actor}), version])
         if cur.rowcount != 1:
             raise ValueError("corpus version is missing or not staged/canary")
+        cur.execute("UPDATE authority_corpus_versions SET status='retired' WHERE status='promoted' AND version <> %s", [version])
     conn.commit()
 
 
@@ -140,4 +142,106 @@ def rollback_corpus_version(conn: Any, *, version: str, actor: str, reason: str)
             raise ValueError("only a promoted version with a recorded rollback target can be rolled back")
         cur.execute("UPDATE authority_corpus_versions SET status='rolled_back', rolled_back_at=now(), reason=%s WHERE version=%s", [reason, version])
         cur.execute("UPDATE authority_corpus_versions SET status='promoted', promoted_at=now(), metadata=metadata || %s::jsonb WHERE version=%s", [json.dumps({"rollback_by": actor}), row[0]])
+    conn.commit()
+
+
+def stage_corpus_version(conn: Any, *, version: str, manifest_hash: str,
+                         as_of: str, actor: str, reason: str,
+                         embedding_model: str, embedding_version: str,
+                         embedding_dimension: int) -> None:
+    """Create a staged immutable release and record its rollback target."""
+    actor, reason = _authorized(actor, reason)
+    if not manifest_hash or not as_of or embedding_dimension < 1:
+        raise ValueError("manifest hash, as-of date, and embedding contract are required")
+    with conn.cursor() as cur:
+        cur.execute("SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1")
+        current = cur.fetchone()
+        cur.execute("""
+            INSERT INTO authority_corpus_versions
+              (version, status, manifest_hash, as_of, rollback_of,
+               embedding_model, embedding_version, embedding_dimension,
+               reason, metadata)
+            VALUES (%s, 'staged', %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+            ON CONFLICT (version) DO NOTHING
+            """, [version, manifest_hash, as_of, current[0] if current else None,
+                   embedding_model, embedding_version, embedding_dimension,
+                   reason, json.dumps({"staged_by": actor})])
+        if cur.rowcount != 1:
+            raise ValueError("corpus version already exists")
+    conn.commit()
+
+
+def sampled_audit(records: list[dict[str, Any]], *, audit_kind: str,
+                  minimum_completeness: float = 0.95,
+                  maximum_lag_seconds: int = 172800) -> dict[str, Any]:
+    """Evaluate a bounded sample; callers cannot supply the pass/fail result."""
+    if audit_kind not in {"release", "completeness", "freshness", "isolation"}:
+        raise ValueError("unsupported sampled audit kind")
+    total = len(records)
+    if not total:
+        return {"audit_kind": audit_kind, "sample_size": 0, "passed": False, "reason": "empty sample"}
+    if audit_kind == "release":
+        passed = bool(records) and all(bool(row.get("ready")) for row in records)
+        return {"audit_kind": audit_kind, "sample_size": total, "passed": passed,
+                "criteria": ["reviewed_sources", "no_failed_partitions", "manifest_bound_documents"]}
+    if audit_kind == "completeness":
+        observed = sum(1 for row in records if row.get("expected") and row.get("observed"))
+        ratio = observed / total
+        passed = ratio >= minimum_completeness
+        return {"audit_kind": audit_kind, "sample_size": total, "observed": observed,
+                "ratio": ratio, "threshold": minimum_completeness, "passed": passed}
+    if audit_kind == "freshness":
+        fresh = sum(1 for row in records if row.get("lag_seconds") is not None
+                    and int(row["lag_seconds"]) <= maximum_lag_seconds)
+        ratio = fresh / total
+        return {"audit_kind": audit_kind, "sample_size": total, "fresh": fresh,
+                "ratio": ratio, "max_lag_seconds": maximum_lag_seconds, "passed": ratio >= minimum_completeness}
+    isolated = sum(1 for row in records if row.get("namespace") == "public-authority")
+    return {"audit_kind": audit_kind, "sample_size": total, "isolated": isolated,
+            "passed": isolated == total}
+
+
+def claim_embedding_shard(conn: Any, *, shard_key: str, worker_id: str, lease_seconds: int = 900) -> bool:
+    """Atomically lease one shard; expired leases are reclaimable."""
+    if not shard_key or not worker_id or lease_seconds < 1:
+        raise ValueError("shard key, worker identity, and positive lease are required")
+    with conn.cursor() as cur:
+        cur.execute("""
+            UPDATE authority_embedding_shards
+            SET status='leased', lease_owner=%s,
+                lease_expires_at=now() + (%s * interval '1 second'),
+                heartbeat_at=now(), attempts=attempts+1, updated_at=now()
+            WHERE (shard_key=%s AND status IN ('queued','retryable'))
+               OR (shard_key=%s AND status='leased' AND lease_expires_at < now())
+            """, [worker_id, lease_seconds, shard_key, shard_key])
+        claimed = cur.rowcount == 1
+    conn.commit()
+    return claimed
+
+
+def heartbeat_embedding_shard(conn: Any, *, shard_key: str, worker_id: str) -> bool:
+    with conn.cursor() as cur:
+        cur.execute("""UPDATE authority_embedding_shards SET heartbeat_at=now(), updated_at=now()
+                       WHERE shard_key=%s AND status='leased' AND lease_owner=%s
+                         AND lease_expires_at > now()""", [shard_key, worker_id])
+        ok = cur.rowcount == 1
+    conn.commit()
+    return ok
+
+
+def finish_embedding_shard(conn: Any, *, shard_key: str, worker_id: str, success: bool,
+                           error: str | None = None, throughput_per_minute: float | None = None) -> None:
+    with conn.cursor() as cur:
+        cur.execute("""UPDATE authority_embedding_shards
+                       SET status=CASE WHEN %s THEN 'complete'
+                                      WHEN attempts >= 3 THEN 'dead_letter'
+                                      ELSE 'retryable' END,
+                           last_error=%s, dead_letter_reason=%s,
+                           throughput_per_minute=%s, updated_at=now()
+                       WHERE shard_key=%s AND status='leased' AND lease_owner=%s""",
+                    [success, None if success else (error or "")[:2000],
+                     None if success else (error or "")[:2000],
+                     throughput_per_minute, shard_key, worker_id])
+        if cur.rowcount != 1:
+            raise PermissionError("shard lease is missing, expired, or owned by another worker")
     conn.commit()

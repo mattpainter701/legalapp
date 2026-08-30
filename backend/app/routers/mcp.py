@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import async_session_maker, get_db, set_tenant_context
-from app.middleware.tenant import get_current_user
+from app.middleware.tenant import get_current_user, require_admin as _require_admin
 from app.middleware.rate_limit import _client_ip as _trusted_client_ip
 from app.models.tenant import Tenant
 from app.models.user import User
@@ -89,12 +89,20 @@ async def _proxy_get(path: str, request: Request):
     return response.json()
 
 
-async def _proxy_post(path: str, request: Request, payload: dict):
+async def _proxy_post(
+    path: str,
+    request: Request,
+    payload: dict,
+    *,
+    extra_headers: dict[str, str] | None = None,
+):
+    headers = _upstream_auth_headers()
+    headers.update(extra_headers or {})
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.post(
             _mcp_proxy_url(settings.MCP_SERVER_URL, path),
             json=payload,
-            headers=_upstream_auth_headers(),
+            headers=headers,
         )
     if response.status_code >= 400:
         raise HTTPException(status_code=response.status_code, detail=response.text)
@@ -277,9 +285,16 @@ async def source_health(
                     "reviewed_at",
                     "reviewed_by",
                     "claim_state",
+                    "stale",
+                    "lag_seconds",
                 )
             }
-            | {"status": "attention" if source.get("current_error") else "healthy"}
+            | {
+                "status": source.get("status")
+                or ("attention" if source.get("current_error") else "healthy"),
+                "stale": bool(source.get("stale")),
+                "lag_seconds": source.get("lag_seconds"),
+            }
         )
     partitions = []
     for partition in payload.get("source_partitions") or []:
@@ -300,8 +315,12 @@ async def source_health(
                 )
             }
         )
-    has_attention = any(source["status"] == "attention" for source in sources) or any(
-        partition.get("status") == "failed" for partition in partitions
+    has_attention = any(
+        source["status"] in {"attention", "failed", "stale", "unreviewed"}
+        for source in sources
+    ) or any(
+        partition.get("status") in {"failed", "retryable", "dead_letter"}
+        for partition in partitions
     )
     corpus_version = payload.get("corpus_version")
     return {
@@ -317,6 +336,64 @@ async def source_health(
         "partitions": partitions,
         "audits": payload.get("audits") or [],
     }
+
+
+# ── Role-authorized authority release controls ───────────────────────────────
+
+
+class AuthorityControlRequest(BaseModel):
+    version: str
+    reason: str
+    audit_kind: str | None = None
+    manifest_hash: str | None = None
+    as_of: str | None = None
+    embedding_model: str = "mixedbread-ai/mxbai-embed-large-v1"
+    embedding_version: str = "1"
+    embedding_dimension: int = 1024
+
+
+async def _authority_control(
+    action: str, body: AuthorityControlRequest, request: Request, db: AsyncSession
+):
+    admin = await _require_admin(request, db)
+    if not settings.MCP_SERVER_URL:
+        raise HTTPException(
+            status_code=503, detail="Authority control plane is unavailable"
+        )
+    return await _proxy_post(
+        f"/api/mcp/control/{action}",
+        request,
+        body.model_dump(),
+        extra_headers={"X-Operator-Identity": str(admin.email)},
+    )
+
+
+@router.post("/authority/audit")
+async def authority_audit(
+    body: AuthorityControlRequest, request: Request, db: AsyncSession = Depends(get_db)
+):
+    return await _authority_control("audit", body, request, db)
+
+
+@router.post("/authority/stage")
+async def authority_stage(
+    body: AuthorityControlRequest, request: Request, db: AsyncSession = Depends(get_db)
+):
+    return await _authority_control("stage", body, request, db)
+
+
+@router.post("/authority/promote")
+async def authority_promote(
+    body: AuthorityControlRequest, request: Request, db: AsyncSession = Depends(get_db)
+):
+    return await _authority_control("promote", body, request, db)
+
+
+@router.post("/authority/rollback")
+async def authority_rollback(
+    body: AuthorityControlRequest, request: Request, db: AsyncSession = Depends(get_db)
+):
+    return await _authority_control("rollback", body, request, db)
 
 
 # ── Tool invocation ───────────────────────────────────────────────────────────

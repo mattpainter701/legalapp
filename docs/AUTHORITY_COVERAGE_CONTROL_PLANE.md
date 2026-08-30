@@ -7,10 +7,13 @@ tier, jurisdiction/content type, geographic and temporal scope, expected
 cadence, completeness caveats, and claim-safe wording. Prohibited or unreviewed
 sources cannot be promoted.
 
-`authority_corpus_versions` is the immutable release ledger. Operators stage a
+`authority_corpus_versions` is the immutable release ledger. Authorized operators stage a
 manifest hash, canary it, promote it, or roll back to the previous promoted
 version. `authority_audits` records sampled completeness, freshness, isolation,
 and release methodology, thresholds, result, auditor, and immutable hash.
+Promotion requires passing release, completeness, and freshness evidence for the
+same version; the previous promoted version remains active until that atomic
+cutover succeeds.
 `authority_harvest_events` records cursor movement, content-hash identity,
 citation/court/effective-date metadata, duplicate/retry/quarantine state, and
 bounded failure reasons. The existing durable scheduler remains the only

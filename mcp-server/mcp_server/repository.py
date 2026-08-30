@@ -6,6 +6,7 @@ from typing import Any
 
 from .database import dict_rows
 from .query_embeddings import format_vector_literal
+from .control_plane import lag_seconds
 
 _CITATION_RE = re.compile(r"^\s*(?P<volume>\d+)\s+(?P<reporter>.+?)\s+(?P<page>\d+)\s*$")
 _SEARCH_TERM_RE = re.compile(r"[A-Za-z0-9]{3,}")
@@ -83,7 +84,7 @@ class CourtListenerRepository:
         # Caselaw lives in the CourtListener tables, not the versioned legal
         # authority tables. The latter's `d` and `s` aliases are not present
         # in either caselaw query, so those status filters must not leak here.
-        filters = ["TRUE"]
+        filters = ["oc.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status = 'promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)"]
         params: list[Any] = []
         if jurisdiction:
             filters.append("(oc.court_id = %s OR c.jurisdiction = %s)")
@@ -140,6 +141,7 @@ class CourtListenerRepository:
         filters = [
             "s.enabled IS TRUE",
             "d.document_status IN ('current', 'current_with_supplement')",
+            "d.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status = 'promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)",
         ]
         filter_params: list[Any] = []
         if jurisdiction:
@@ -164,6 +166,11 @@ class CourtListenerRepository:
             filter_params.extend([effective_on, effective_on])
 
         where = " AND ".join(filters)
+        # A provider response is vector-compatible only when it carries the
+        # exact promoted model/version/dimension contract.  Mismatches take
+        # the keyword branch before any vector SQL is assembled.
+        if query_embedding is not None and not self._embedding_matches_promoted(query_embedding):
+            query_embedding = None
         fts_query = broad_legal_websearch_query(query)
         if not query_embedding:
             sql = f"""
@@ -269,6 +276,20 @@ class CourtListenerRepository:
         with self.conn.cursor() as cur:
             cur.execute(sql, params)
             return dict_rows(cur)
+
+    def _embedding_matches_promoted(self, embedding: list[float]) -> bool:
+        model = getattr(embedding, "model", None)
+        version = getattr(embedding, "version", None)
+        dimension = getattr(embedding, "dimension", len(embedding))
+        if not model or version is None:
+            return False
+        with self.conn.cursor() as cur:
+            cur.execute("""SELECT embedding_model, embedding_version, embedding_dimension
+                           FROM authority_corpus_versions WHERE status='promoted'
+                           ORDER BY promoted_at DESC NULLS LAST LIMIT 1""")
+            row = cur.fetchone()
+        return bool(row and row[0] == model and str(row[1]) == str(version)
+                    and int(row[2] or 0) == int(dimension) == len(embedding))
 
     def _search_fts(
         self,
@@ -834,7 +855,8 @@ class CourtListenerRepository:
         with self.conn.cursor() as cur:
             cur.execute("""
                 SELECT version, status, manifest_hash, as_of, created_at,
-                       promoted_at, rolled_back_at, rollback_of, reason
+                       promoted_at, rolled_back_at, rollback_of, reason,
+                       embedding_model, embedding_version, embedding_dimension
                 FROM authority_corpus_versions
                 WHERE status IN ('promoted', 'canary')
                 ORDER BY promoted_at DESC NULLS LAST, created_at DESC
@@ -877,8 +899,18 @@ class CourtListenerRepository:
             and row["corpus_version"] == version["version"] for row in audits
         )
         for source in sources:
+            cadence = str(source.get("expected_cadence") or "").lower()
+            cadence_seconds = (86400 if "day" in cadence else 3600 if "hour" in cadence else 604800 if "week" in cadence else 0)
+            last_sync = source.get("last_successful_sync_at")
+            lag = lag_seconds(last_sync, cadence_seconds) if last_sync else None
+            source["lag_seconds"] = lag
+            source["stale"] = bool(cadence_seconds and lag is not None and lag > 0)
             source["status"] = "failed" if source.get("current_error") else (
-                "unreviewed" if source.get("rights_decision") in {"pending_review", "prohibited"} else "healthy"
+                "unreviewed" if (not source.get("reviewed_at")
+                                  or source.get("rights_decision") in {"pending_review", "prohibited"}
+                                  or not source.get("expected_cadence")) else (
+                    "stale" if source["stale"] else "healthy"
+                )
             )
             source["claim_state"] = "suppressed" if source["status"] != "healthy" or not passed_release else (
                 "limited" if source.get("coverage_kind") != "complete" else "supported"
