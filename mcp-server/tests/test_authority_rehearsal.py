@@ -270,9 +270,16 @@ def test_authority_release_rehearsal():
                     cluster_id=EXCLUDED.cluster_id""",
                 [legacy_cluster, legacy_cluster],
             )
+            cur.execute(
+                """INSERT INTO opinion_citations
+                (citing_opinion_id, cited_opinion_id, cited_cluster_id,
+                 cited_reporter, cited_volume, cited_page)
+                VALUES (%s, %s, %s, 'Upgrade', '1', '1')""",
+                [legacy_cluster, legacy_cluster, legacy_cluster],
+            )
         before_backfill = backfill_promoted_caselaw_snapshot(conn)
         after_backfill = backfill_promoted_caselaw_snapshot(conn)
-        assert before_backfill >= 0 and after_backfill >= 0
+        assert before_backfill >= 1 and after_backfill == 0
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT COUNT(*) FROM authority_case_clusters WHERE corpus_version IS NULL"
@@ -286,6 +293,17 @@ def test_authority_release_rehearsal():
                 "SELECT COUNT(*) FROM authority_case_chunks WHERE corpus_version IS NULL"
             )
             assert cur.fetchone()[0] == 0
+            cur.execute(
+                "SELECT COUNT(*) FROM authority_case_citations WHERE corpus_version IS NULL"
+            )
+            assert cur.fetchone()[0] == 0
+            cur.execute(
+                """SELECT COUNT(*) FROM authority_case_chunks
+                WHERE corpus_version=%s AND opinion_id=%s
+                  AND content='Legacy upgrade searchable text'""",
+                [version, legacy_cluster],
+            )
+            assert cur.fetchone()[0] == 1
 
         # Composite snapshot relationships reject cross-version and missing
         # parents; this is stronger than an application orphan count.
