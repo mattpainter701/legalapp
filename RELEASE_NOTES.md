@@ -5,15 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
-## 2026.08.28.7 — Operating contract and trust boundaries
+## 2026.08.29.1 — Operating trust workflows and evidence
 
-Released August 28, 2026.
+Released August 29, 2026.
 
-Customers and operators can review one versioned statement of LawHand service scope, evidence, lifecycle safeguards, and assurance boundaries.
+Customers and operators can use one versioned contract for support, incidents, lifecycle receipts, offboarding proof, providers, and security review without unsupported SLA or certification claims.
 
-- **See the current contract.** The public operating contract identifies supported behavior, provider dependencies, policy commitments, planned work, and unavailable claims.
-- **Understand lifecycle safeguards.** Onboarding acceptance, migration checks, backup and restore evidence, tenant export limits, legal holds, and deletion boundaries are documented together.
-- **Keep assurance claims honest.** DPA or BAA applicability, subprocessors, penetration testing, and certifications are clearly marked as customer-specific, provider-dependent, planned, or unclaimed.
+- **Use defined support and status workflows.** Published business hours, S1-S4 severity objectives, audited escalation, and sanitized append-only incident updates make the operating process reviewable without creating an SLA.
+- **Carry acceptance evidence through the lifecycle.** Onboarding, BK28 migration, and export receipts reconcile scope and counts; offboarding blocks on holds and needs two operators before proof.
+- **Export an honest security packet.** The content-addressed packet names providers and boundaries while marking penetration testing and certifications as not attained.
 
 ## 2026.08.28.6 — Attributed intake and safer lead follow-through
 

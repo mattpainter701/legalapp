@@ -26,12 +26,16 @@
   Skynet research upstream without exposing its credential.
 
 ### Added
-- **Versioned customer operating contract:** a public-safe contract registry now
-  distinguishes implemented, verified, policy-committed, provider-dependent,
-  planned, and unavailable controls across topology, support, incidents,
-  backup/restore, lifecycle, subprocessors, security review, penetration
-  testing, and certification. It links to existing evidence without exposing
-  secrets or making SLA, DPA/BAA, audit, or certification claims.
+- **Operating trust workflows and evidence:** the versioned public contract now
+  drives measurable non-SLA objectives, exact support hours and S1-S4
+  escalation, sanitized append-only incidents, a named subprocessor registry,
+  DPA/BAA applicability boundaries, and a content-addressed security-review
+  packet. Tenant-scoped immutable receipts reconcile agreement-backed
+  onboarding, BK28 migration manifests, and complete export category counts.
+  Offboarding snapshots legal holds and inventory, requires two distinct
+  operator approvals, and records provider and backup disposition without the
+  evidence endpoint performing deletion. The penetration-test cadence remains
+  explicitly planned-not-attained, and every certification flag remains false.
 - **Bounded COMP-03 lead conversion loop:** firms can publish tenant-scoped,
   conditional intake forms with attributed, honeypot-protected, idempotent
   public submissions; book only published consultation slots; record explicit

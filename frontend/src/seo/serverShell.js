@@ -47,6 +47,18 @@ const LEGAL_SHELLS = Object.freeze({
 })
 
 const MARKETING_SHELLS = Object.freeze({
+  '/trust-center': {
+    heading: 'Evidence before claims.',
+    lead: 'The LawHand trust center publishes the current operating scope, evidence boundaries, provider dependencies, and assurance state without presenting objectives or planned work as attained commitments.',
+    sections: [
+      { heading: 'Support and incident communication', body: 'Published Central business hours, S1-S4 impact definitions, acknowledgement objectives, and escalation routes drive audited support cases. Shared-service incidents use sanitized append-only public updates. Objectives are not an SLA unless signed customer terms say otherwise.' },
+      { heading: 'Customer lifecycle evidence', body: 'Authorized onboarding, BK28 migration, and tenant export receipts bind scope, counts, artifact hashes, signer, and outcome. Missing or mismatched categories are blocked rather than treated as complete.' },
+      { heading: 'Offboarding without a deletion shortcut', body: 'Legal holds block progress. Two distinct operators must approve offboarding before a final proof records category reconciliation, provider disposition, and backup expiry. The evidence workflow never deletes tenant data.' },
+      { heading: 'Providers and privacy terms', body: 'The versioned named-provider record states purpose, data category, region and configuration boundary, terms state, and DPA or BAA evidence state. Optional providers are not represented as active for every customer.' },
+      { heading: 'Assurance roadmap', body: 'External penetration testing has a target cadence and owner but remains planned and not attained. SOC 2, ISO 27001, HIPAA readiness, and BAA availability are not claimed as achieved.' },
+      { heading: 'Downloadable review packet', body: 'The content-addressed security-review packet exports the current first-party contract and evidence catalogue without secrets, customer data, internal hostnames, or an independent audit opinion.' },
+    ],
+  },
   '/product': {
     heading: 'See the entire matter move.',
     lead: 'LawHand follows the work from the first call through conflict review, matter organization, drafting, attorney review, client action, signature, billing, and follow-up.',

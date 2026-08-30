@@ -133,6 +133,14 @@ from app.models.compliance import (
     RetentionPolicy,
     RetentionAction,
 )
+from app.models.operating_trust import (
+    CustomerLifecycleReceipt,
+    SupportRequest,
+    PublicIncident,
+    PublicIncidentUpdate,
+    OffboardingCase,
+    OffboardingApproval,
+)
 
 __all__ = [
     "Tenant",
@@ -263,4 +271,10 @@ __all__ = [
     "TenantAgreementAcceptance",
     "RetentionPolicy",
     "RetentionAction",
+    "CustomerLifecycleReceipt",
+    "SupportRequest",
+    "PublicIncident",
+    "PublicIncidentUpdate",
+    "OffboardingCase",
+    "OffboardingApproval",
 ]

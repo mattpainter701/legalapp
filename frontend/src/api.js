@@ -2422,4 +2422,26 @@ export const getFirmBranding = () =>
 export const updateFirmBranding = (body) =>
   api.put('/firm/branding', body).then(r => r.data)
 
+// ── Customer operating trust ────────────────────────────────────────────────
+export const getPublicOperatingContract = () =>
+  api.get('/public/operating-contract').then(r => r.data)
+
+export const getPublicServiceStatus = () =>
+  api.get('/public/status').then(r => r.data)
+
+export const getPublicSecurityReviewPacket = () =>
+  api.get('/public/security-review-packet').then(r => r.data)
+
+export const createOperatingSupportRequest = (body) =>
+  api.post('/compliance/operating/support', body).then(r => r.data)
+
+export const createCustomerLifecycleReceipt = (body) =>
+  api.post('/compliance/operating/receipts', body).then(r => r.data)
+
+export const getTenantExportInventory = () =>
+  api.get('/compliance/operating/export-inventory').then(r => r.data)
+
+export const requestCustomerOffboarding = (body) =>
+  api.post('/compliance/operating/offboarding', body).then(r => r.data)
+
 export default api

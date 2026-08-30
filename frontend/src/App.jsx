@@ -18,6 +18,7 @@ const SignupPage = lazy(() => import('./pages/SignupPage'))
 const ForgotPasswordPage = lazy(() => import('./pages/ForgotPasswordPage'))
 const ResetPasswordPage = lazy(() => import('./pages/ResetPasswordPage'))
 const LegalNoticePage = lazy(() => import('./pages/LegalNoticePage'))
+const TrustCenterPage = lazy(() => import('./pages/TrustCenterPage'))
 const ProductChatPage = lazy(() => import('./pages/ProductChatPage'))
 const McpProductPage = lazy(() => import('./pages/McpProductPage'))
 const PricingPage = lazy(() => import('./pages/PricingPage'))
@@ -230,6 +231,7 @@ export default function App() {
         <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route path="/terms" element={<LegalNoticePage type="terms" />} />
         <Route path="/privacy" element={<LegalNoticePage type="privacy" />} />
+        <Route path="/trust-center" element={<TrustCenterPage />} />
         <Route path="/product" element={<ProductPage />} />
         <Route path="/product/chat" element={<ProductChatPage />} />
         <Route path="/product/mcp" element={<McpProductPage />} />
