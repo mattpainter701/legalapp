@@ -1094,7 +1094,9 @@ def test_legal_only_upgrade_bootstrap_rehearsal():
                     source_modified_at timestamptz, retrieved_at timestamptz NOT NULL DEFAULT now(),
                     content_hash text, raw_media_type text, raw_storage_uri text,
                     parser_version text, text_content text, metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
-                    created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now())"""
+                    created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
+                    FOREIGN KEY (source_key) REFERENCES legal_sources(source_key) ON DELETE RESTRICT,
+                    UNIQUE (source_key, external_id))"""
             )
             cur.execute(
                 """CREATE TABLE legal_document_chunks (
@@ -1104,7 +1106,9 @@ def test_legal_only_upgrade_bootstrap_rehearsal():
                     fts tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED,
                     embedding vector(1024), embedding_model text NOT NULL DEFAULT 'mixedbread-ai/mxbai-embed-large-v1',
                     embedding_version integer NOT NULL DEFAULT 0, metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
-                    created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now())"""
+                    created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
+                    FOREIGN KEY (document_id) REFERENCES legal_documents(id) ON DELETE CASCADE,
+                    UNIQUE (document_id, chunk_index))"""
             )
             cur.execute(
                 """CREATE TABLE source_sync_states (
@@ -1201,28 +1205,50 @@ def test_legacy_upgrade_bootstrap_rehearsal():
                     updated_at timestamptz NOT NULL DEFAULT now())"""
             )
             cur.execute(
+                """CREATE TABLE courts (
+                    court_id text PRIMARY KEY, full_name text NOT NULL,
+                    metadata jsonb NOT NULL DEFAULT '{}'::jsonb)"""
+            )
+            cur.execute(
+                """CREATE TABLE dockets (
+                    docket_id bigint PRIMARY KEY, court_id text REFERENCES courts(court_id),
+                    docket_number text, case_name text, date_filed date,
+                    metadata jsonb NOT NULL DEFAULT '{}'::jsonb)"""
+            )
+            cur.execute(
+                "INSERT INTO courts (court_id, full_name) VALUES ('legacy-court', 'Legacy Court')"
+            )
+            cur.execute(
                 """CREATE TABLE opinion_clusters (
-                    cluster_id bigint PRIMARY KEY, docket_id bigint, case_name text,
-                    date_filed date, precedential_status text, citations jsonb,
-                    metadata jsonb, corpus_version text)"""
+                    cluster_id bigint PRIMARY KEY, docket_id bigint REFERENCES dockets(docket_id),
+                    case_name text, date_filed date, precedential_status text,
+                    citations jsonb NOT NULL DEFAULT '[]'::jsonb,
+                    metadata jsonb NOT NULL DEFAULT '{}'::jsonb)"""
             )
             cur.execute(
                 """CREATE TABLE opinions (
                     opinion_id bigint PRIMARY KEY, cluster_id bigint, type text,
                     author_id bigint, html_with_citations text, plain_text text,
-                    sha1 text, source_url text)"""
+                    sha1 text, source_url text,
+                    updated_at timestamptz NOT NULL DEFAULT now(),
+                    source_created_at timestamptz, source_modified_at timestamptz,
+                    content_hash text, last_synced_at timestamptz,
+                    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+                    FOREIGN KEY (cluster_id) REFERENCES opinion_clusters(cluster_id))"""
             )
             cur.execute(
                 """CREATE TABLE opinion_chunks (
-                    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), opinion_id bigint,
-                    cluster_id bigint, court_id text, chunk_index integer,
-                    content text, fts tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED,
-                    embedding vector(1024), embedding_model text,
-                    embedding_version integer, corpus_version text)"""
+                    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), opinion_id bigint NOT NULL REFERENCES opinions(opinion_id) ON DELETE CASCADE,
+                    cluster_id bigint REFERENCES opinion_clusters(cluster_id), court_id text REFERENCES courts(court_id), chunk_index integer NOT NULL,
+                    content text NOT NULL, fts tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED,
+                    embedding vector(1024), embedding_model text NOT NULL DEFAULT 'mixedbread-ai/mxbai-embed-large-v1',
+                    embedding_version integer NOT NULL DEFAULT 0,
+                    created_at timestamptz NOT NULL DEFAULT now(),
+                    UNIQUE (opinion_id, chunk_index))"""
             )
             cur.execute(
                 """CREATE TABLE opinion_citations (
-                    citing_opinion_id bigint, cited_opinion_id bigint,
+                    id bigserial PRIMARY KEY, citing_opinion_id bigint REFERENCES opinions(opinion_id), cited_opinion_id bigint,
                     cited_cluster_id bigint, cited_reporter text,
                     cited_volume text, cited_page text, depth integer NOT NULL DEFAULT 0)"""
             )
@@ -1268,6 +1294,19 @@ def test_legacy_upgrade_bootstrap_rehearsal():
                     (citing_opinion_id, cited_reporter, cited_volume, cited_page)
                     VALUES (98000001, 'Legacy Reporter', '9', '99')"""
             )
+            cur.execute(
+                """SELECT count(*) FROM information_schema.columns
+                    WHERE table_name IN ('opinion_clusters', 'opinion_chunks')
+                      AND column_name='corpus_version'
+                      AND table_schema=current_schema()"""
+            )
+            assert cur.fetchone()[0] == 0
+            cur.execute(
+                """SELECT count(*) FROM pg_constraint
+                    WHERE conname IN ('opinion_chunks_opinion_id_chunk_index_key',
+                                      'legal_document_chunks_document_id_chunk_index_key')"""
+            )
+            assert cur.fetchone()[0] >= 1
         conn.commit()
     init_schema(scoped_url)
     with connect(scoped_url) as conn:
