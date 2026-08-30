@@ -126,6 +126,16 @@ docker compose -p legalapp -f docker-compose.courtlistener-mcp.yml --env-file .e
 docker compose -p legalapp -f docker-compose.courtlistener-mcp.yml logs -f legal-authority-sync
 ```
 
+The scheduler defaults the reviewed Federal Rules, Constitution Annotated, and
+Tax Court Reports jobs on. Disable a family independently with
+`LEGAL_AUTHORITY_FEDERAL_RULES_ENABLED=false`,
+`LEGAL_AUTHORITY_CONSTITUTION_ANNOTATED_ENABLED=false`, or
+`LEGAL_AUTHORITY_TAX_COURT_ENABLED=false`. Each family runs in its own subprocess
+for failure isolation. The reviewed manifest omits any document marked
+`sync_enabled: false` from database writes; this currently protects the broken
+font-map extraction of the appellate-rules PDF without hiding that artifact from
+preview and audit workflows.
+
 For a bounded preflight before enabling the scheduler, run an adapter with `--preview`
 inside the image. Production syncs seed the source catalog and schema, upsert by stable
 source identity, invalidate changed chunks for re-embedding, checkpoint interrupted
@@ -139,6 +149,12 @@ Current MVP filter behavior:
 - SCOTUS included.
 - Default keeps published/precedential clusters.
 - Use `--include-unpublished` only for a deliberate expansion.
+
+At query time, explicit Ohio research is scoped to CourtListener court id
+`ohio` and legal-authority jurisdiction `OH`. Explicit federal research is
+scoped to CourtListener jurisdiction `F` and legal-authority jurisdiction `US`.
+This routing does not imply that every court or authority partition has already
+been loaded; coverage results and gaps remain authoritative.
 
 ## Current Corpus Checkpoint
 

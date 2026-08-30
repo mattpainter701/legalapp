@@ -126,6 +126,12 @@ python -m mcp_server.authority_ingest --preview
 # Initialize schema, seed the catalog, fetch, chunk, and store reviewed documents.
 python -m mcp_server.authority_ingest --sync --db-url $env:VECTORDB_URL
 
+# Sync one promoted reviewed family. Documents explicitly blocked in the
+# manifest remain available to preview but are omitted from sync.
+python -m mcp_server.authority_ingest --sync `
+  --source-key uscourts:federal-rules `
+  --db-url $env:VECTORDB_URL
+
 # Limit an explicit production pilot to one source.
 python -m mcp_server.authority_ingest --sync `
   --source-key cms:medicaid-estate-recovery `
@@ -150,7 +156,11 @@ python -m mcp_server.authority_scheduler --once --db-url $env:VECTORDB_URL
 ```
 
 Set `LEGAL_SOURCE_USER_AGENT` to a descriptive product/contact value for production and
-`LEGAL_SOURCE_REQUEST_DELAY_SECONDS` for source-appropriate pacing.
+`LEGAL_SOURCE_REQUEST_DELAY_SECONDS` for source-appropriate pacing. The reviewed
+manifest jobs are independently controlled by
+`LEGAL_AUTHORITY_FEDERAL_RULES_ENABLED`,
+`LEGAL_AUTHORITY_CONSTITUTION_ANNOTATED_ENABLED`, and
+`LEGAL_AUTHORITY_TAX_COURT_ENABLED`; all three default to enabled.
 
 ## Retrieval contract
 
@@ -162,10 +172,14 @@ The private MCP exposes `search_legal_authorities` with optional filters for:
 - document types; and
 - authority effective on a requested date.
 
-It performs hybrid FTS/vector retrieval over enabled, current source versions and returns title, citation, authority tier,
+It performs hybrid FTS/vector retrieval over enabled source versions marked either
+`current` or `current_with_supplement` and returns title, citation, authority tier,
 official status, effective dates, canonical URL, retrieval time, and last successful sync.
 Chat searches case law and the reviewed authority corpus concurrently and maps both into
-the existing public-authority context contract.
+the existing public-authority context contract. Explicit Ohio queries use CourtListener
+court id `ohio` and authority jurisdiction `OH`; explicit federal queries use
+CourtListener jurisdiction `F` and authority jurisdiction `US`. A lowercase prose word
+`us` is not treated as a federal abbreviation.
 
 Retrieval ranking must never rely on semantic similarity alone. The next ranking stage
 should boost binding primary authority in the controlling jurisdiction and apply explicit
@@ -208,7 +222,11 @@ Implemented adapters cover versioned U.S. Code USLM sections, current eCFR Title
 public CMS Coverage API records, recursively discovered CMS IOM/transmittal PDFs, IRS IRB
 items and estate/gift/fiduciary products, Medicaid estate-recovery guidance, and the
 permission-granted Supreme Court of Ohio rules, probate forms, mediation materials, and
-official opinions. North Dakota Century Code/Administrative Code/HHS and reviewed
+official opinions. Phase 1 also schedules the five parser-approved current federal-rules
+publications, the authenticated Constitution Annotated base/supplement pair, and the five
+bounded Volume 165 Tax Court Reports pamphlets. The appellate-rules PDF remains
+manifested but non-syncable until a reviewed extraction route replaces its broken font
+map. North Dakota Century Code/Administrative Code/HHS and reviewed
 Medicaid SPA/SSA manifest adapters are also implemented, but those catalog sources remain
 disabled until their access review or explicit manifest approval is recorded.
 

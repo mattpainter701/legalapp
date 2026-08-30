@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "catalog_updated": "2026-08-15",
+  "catalog_updated": "2026-08-29",
   "sources": [
     {
       "source_key": "courtlistener:ohio-caselaw",
@@ -620,12 +620,12 @@
       "sync_frequency": "daily",
       "data_format": "html_pdf",
       "corpus_table": "legal_documents/legal_document_chunks",
-      "enabled": false,
+      "enabled": true,
       "priority": 20,
       "coverage_kind": "bounded",
       "parser_version": "ustaxcourt-opinion-v1",
       "practice_areas": ["tax", "estate_planning", "probate", "corporate"],
-      "implementation_status": "preview_verified",
+      "implementation_status": "implemented",
       "acquisition_basis": "Reviewed allowlist of official Tax Court Reports pamphlet PDFs linked from the court's pamphlets index.",
       "coverage_notes": "Initial coverage is limited to published T.C. Reports pamphlets in volume 165. DAWSON search, Today’s Opinions, orders, memorandum opinions, summary opinions, and broad case discovery remain out of scope.",
       "last_policy_review": "2026-08-15",

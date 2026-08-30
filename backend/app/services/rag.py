@@ -70,6 +70,12 @@ _GENERIC_PRIVATE_RETRIEVAL_TERMS = {
     "statutory",
 }
 _PUBLIC_JURISDICTIONS = (
+    (
+        re.compile(r"(?i:\b(?:federal|united\s+states)\b)|(?:\bUS\b|\bU\.S\.)"),
+        "F",
+        "US",
+    ),
+    (re.compile(r"\b(?:[Oo]hio|OH)\b"), "ohio", "OH"),
     (re.compile(r"\b(?:north\s+dakota|n\.?d\.?)\b", re.IGNORECASE), "nd", "ND"),
     (re.compile(r"\b(?:south\s+dakota|s\.?d\.?)\b", re.IGNORECASE), "sd", "SD"),
     (re.compile(r"\b(?:minnesota|mn)\b", re.IGNORECASE), "minn", "MN"),

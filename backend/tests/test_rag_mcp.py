@@ -423,6 +423,18 @@ def test_public_search_infers_explicit_california_jurisdiction():
     assert rag.infer_public_jurisdiction(query, "search_legal_authorities") == "CA"
 
 
+def test_public_search_infers_explicit_ohio_and_federal_jurisdictions():
+    query = "Compare Ohio procedure with federal appellate practice"
+
+    assert rag.infer_public_jurisdictions(query, "search_caselaw") == ["ohio", "F"]
+    assert rag.infer_public_jurisdictions(query, "search_legal_authorities") == [
+        "OH",
+        "US",
+    ]
+    assert rag.infer_public_jurisdiction("U.S. evidence rule", "search_caselaw") == "F"
+    assert rag.infer_public_jurisdiction("Help us with evidence", "search_caselaw") is None
+
+
 def test_public_search_default_prefers_matter_then_verified_user_profile():
     assert (
         rag.select_public_jurisdiction_default(
@@ -512,6 +524,51 @@ async def test_public_search_uses_trusted_default_but_explicit_query_overrides(
         ("search_legal_authorities", None),
     }
     assert unsupported_explicit.requested_jurisdictions == ()
+
+
+@pytest.mark.asyncio
+async def test_public_search_scopes_ohio_and_federal_across_both_corpora(monkeypatch):
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    calls = []
+
+    async def fake_search(client, url, tool_name, query, top_k, jurisdiction):
+        calls.append((tool_name, jurisdiction))
+        return (
+            {"content": [{"type": "json", "json": []}]},
+            {
+                "tool_name": tool_name,
+                "status_code": 200,
+                "result_count": 0,
+                "latency_ms": 1,
+            },
+        )
+
+    monkeypatch.setattr(rag.settings, "MCP_SERVER_URL", "http://legal-mcp:8021")
+    monkeypatch.setattr(rag.settings, "MCP_UPSTREAM_API_KEY", "test-key")
+    monkeypatch.setattr(rag.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(rag, "_call_public_mcp_search", fake_search)
+
+    results = await rag.search_courtlistener_mcp(
+        "Compare Ohio procedure with federal appellate practice"
+    )
+
+    assert set(calls) == {
+        ("search_caselaw", "ohio"),
+        ("search_legal_authorities", "OH"),
+        ("search_caselaw", "F"),
+        ("search_legal_authorities", "US"),
+    }
+    assert results.requested_jurisdictions == ("OH", "US")
+    assert results.missing_jurisdictions == ("OH", "US")
 
 
 @pytest.mark.asyncio

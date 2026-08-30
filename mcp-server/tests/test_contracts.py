@@ -356,7 +356,7 @@ def test_repository_searches_general_authority_with_effective_date_filters():
     assert "websearch_to_tsquery" in sql
     assert "termination_date" in sql
     assert "s.enabled IS TRUE" in sql
-    assert "d.document_status = 'current'" in sql
+    assert "d.document_status IN ('current', 'current_with_supplement')" in sql
     assert "embedding <=>" not in sql
 
 
@@ -376,7 +376,7 @@ def test_repository_uses_hybrid_search_for_general_authority():
     assert "dense_rank" in sql
     assert "fts_rank" in sql
     assert "s.enabled IS TRUE" in sql
-    assert "d.document_status = 'current'" in sql
+    assert "d.document_status IN ('current', 'current_with_supplement')" in sql
 
 
 def test_repository_normalizes_messy_citation_before_lookup():

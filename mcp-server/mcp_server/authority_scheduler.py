@@ -35,6 +35,9 @@ JOB_SOURCE_KEYS = {
         "ohio:mediation-rules-forms",
     ),
     "north-dakota": ("nd:century-code", "nd:administrative-code"),
+    "reviewed-federal-rules": ("uscourts:federal-rules",),
+    "reviewed-constitution-annotated": ("crs:constitution-annotated",),
+    "reviewed-tax-court-reports": ("ustaxcourt:opinions",),
 }
 
 
@@ -133,6 +136,32 @@ def default_jobs() -> list[AuthorityJob]:
             ("--delay", os.getenv("ND_AUTHORITY_CRAWL_DELAY_SECONDS", "2")),
             timeout,
         ))
+    for job_name, env_name, source_key in (
+        (
+            "reviewed-federal-rules",
+            "LEGAL_AUTHORITY_FEDERAL_RULES_ENABLED",
+            "uscourts:federal-rules",
+        ),
+        (
+            "reviewed-constitution-annotated",
+            "LEGAL_AUTHORITY_CONSTITUTION_ANNOTATED_ENABLED",
+            "crs:constitution-annotated",
+        ),
+        (
+            "reviewed-tax-court-reports",
+            "LEGAL_AUTHORITY_TAX_COURT_ENABLED",
+            "ustaxcourt:opinions",
+        ),
+    ):
+        if _enabled(env_name):
+            jobs.append(
+                AuthorityJob(
+                    job_name,
+                    "mcp_server.authority_ingest",
+                    ("--source-key", source_key),
+                    timeout,
+                )
+            )
     return jobs
 
 
