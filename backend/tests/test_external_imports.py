@@ -303,6 +303,9 @@ async def test_import_reuses_links_across_runs_and_maps_matter_before_client(
 
     first_run, first = await promote_once()
     second_run, second = await promote_once()
+    replay = await client.post(f"/api/imports/{second_run}/promote")
+    assert replay.status_code == 200, replay.text
+    assert replay.json() == second
     assert first["created"] == {"contacts": 1, "matters": 1}
     assert second["created"] == {"contacts": 0, "matters": 0}
     assert second["linked"] == 0
