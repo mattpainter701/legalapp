@@ -659,7 +659,7 @@ class CourtListenerRepository:
                        COUNT(DISTINCT d.docket_id) AS docket_count,
                        COUNT(DISTINCT oc.cluster_id) AS cluster_count,
                        COUNT(DISTINCT o.opinion_id) AS opinion_count,
-                       COUNT(DISTINCT ch.id) AS chunk_count,
+                       COUNT(DISTINCT ch.chunk_id) AS chunk_count,
                        MIN(oc.date_filed) AS first_date,
                        MAX(oc.date_filed) AS last_date
                 FROM courts c

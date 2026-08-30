@@ -116,6 +116,9 @@ def test_authority_release_rehearsal():
         promote_corpus_version(conn, version=version, actor="rehearsal-admin", reason="all fixture audits passed")
         authority_results = CourtListenerRepository(conn).search_legal_authorities('old authority')
         case_results = CourtListenerRepository(conn).search_caselaw('old case')
+        # Execute the operator coverage projection against the versioned
+        # snapshot schema; this guards against legacy ``id`` assumptions.
+        assert isinstance(CourtListenerRepository(conn).court_coverage(), list)
         assert authority_results and authority_results[0]['title'] == 'Fixture old'
         assert case_results and case_results[0]['case_name'] == 'Fixture old'
         with conn.cursor() as cur:
