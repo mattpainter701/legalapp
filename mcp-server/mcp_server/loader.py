@@ -1081,11 +1081,13 @@ def create_snapshot_chunks(conn, corpus_version: str, limit: int | None = None) 
             [corpus_version, limit or 1000000],
         )
         for opinion_id, cluster_id, court_id, text in cur.fetchall():
+            contents = chunk_text(text or "")
             cur.execute(
-                "DELETE FROM authority_case_chunks WHERE corpus_version=%s AND opinion_id=%s",
-                [corpus_version, opinion_id],
+                """DELETE FROM authority_case_chunks
+                   WHERE corpus_version=%s AND opinion_id=%s AND chunk_index >= %s""",
+                [corpus_version, opinion_id, len(contents)],
             )
-            for idx, content in enumerate(chunk_text(text or "")):
+            for idx, content in enumerate(contents):
                 cur.execute(
                     """
                     INSERT INTO authority_case_chunks
@@ -1094,6 +1096,7 @@ def create_snapshot_chunks(conn, corpus_version: str, limit: int | None = None) 
                     VALUES (%s, %s, %s, %s, %s, %s)
                     ON CONFLICT (corpus_version, opinion_id, chunk_index)
                     DO UPDATE SET content=EXCLUDED.content
+                    WHERE authority_case_chunks.content IS DISTINCT FROM EXCLUDED.content
                     """,
                     [corpus_version, opinion_id, cluster_id, court_id, idx, content],
                 )

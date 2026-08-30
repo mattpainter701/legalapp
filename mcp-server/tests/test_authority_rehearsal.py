@@ -393,6 +393,9 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 [version],
             )
             assert cur.fetchone()[0] > 0
+        replay_counts = load_staged_core(bulk_dir, db_url)
+        assert replay_counts == bulk_counts
+        assert create_chunks(db_url) == 0
         add_fixture(version, "old")
         monkeypatch.setenv("AUTHORITY_INGEST_CORPUS_VERSION", version)
         ingest_input = {
@@ -483,13 +486,13 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 """INSERT INTO corpus_coverage_ledger
                 (source_key, partition_key, expected_item_count, acquisition_state,
                  source_release, rows_loaded, last_checked_at)
-                VALUES (%s, 'manifest', 2, 'complete', %s, 2, now())
+                VALUES (%s, %s, 2, 'complete', %s, 2, now())
                 ON CONFLICT (source_key, partition_key, source_release) DO UPDATE
                 SET expected_item_count=EXCLUDED.expected_item_count,
                     acquisition_state=EXCLUDED.acquisition_state,
                     rows_loaded=EXCLUDED.rows_loaded,
                     last_checked_at=EXCLUDED.last_checked_at""",
-                [source_key, version],
+                [source_key, f"manifest:{source_key}", version],
             )
             cur.execute(
                 "SELECT COUNT(DISTINCT cluster_id) FROM authority_case_chunks WHERE corpus_version=%s",
@@ -518,7 +521,15 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
             cur.execute(
                 """UPDATE corpus_coverage_ledger
                    SET expected_item_count=2
-                 WHERE source_key='courtlistener:ohio-caselaw' AND source_release=%s""",
+                 WHERE source_key='courtlistener:ohio-caselaw'
+                   AND partition_key='ohio' AND source_release=%s""",
+                [version],
+            )
+            cur.execute(
+                """UPDATE corpus_coverage_ledger
+                   SET expected_item_count=1
+                 WHERE source_key='courtlistener:ohio-caselaw'
+                   AND partition_key='rehearsal-ohio' AND source_release=%s""",
                 [version],
             )
         conn.commit()
