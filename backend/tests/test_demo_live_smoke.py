@@ -93,6 +93,24 @@ def test_http_error_does_not_include_response_body(monkeypatch):
     assert "secret" not in str(exc.value)
 
 
+def test_access_protected_smoke_uses_paired_service_token_headers(monkeypatch):
+    monkeypatch.setenv("CLOUDFLARE_ACCESS_CLIENT_ID", "service-token-id")
+    monkeypatch.setenv("CLOUDFLARE_ACCESS_CLIENT_SECRET", "service-token-secret")
+
+    client = demo_live_smoke.Client("https://example.test", 1)
+
+    assert client.default_headers["CF-Access-Client-Id"] == "service-token-id"
+    assert client.default_headers["CF-Access-Client-Secret"] == "service-token-secret"
+
+
+def test_access_protected_smoke_rejects_partial_service_token(monkeypatch):
+    monkeypatch.setenv("CLOUDFLARE_ACCESS_CLIENT_ID", "service-token-id")
+    monkeypatch.delenv("CLOUDFLARE_ACCESS_CLIENT_SECRET", raising=False)
+
+    with pytest.raises(demo_live_smoke.SmokeFailure, match="configured together"):
+        demo_live_smoke.Client("https://example.test", 1)
+
+
 def test_default_email_matches_backend_email_schema_and_reserved_domain():
     email = demo_live_smoke._default_email()
 

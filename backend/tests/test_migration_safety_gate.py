@@ -255,7 +255,7 @@ def test_ionos_candidate_uses_pinned_main_without_runner_checkout_or_release_tag
     assert "docker-compose.cube-m.yml" in host_deploy
 
 
-def test_qa_acceptance_deploys_and_validates_exact_main_without_checkout() -> None:
+def test_qa_acceptance_deploys_and_validates_exact_main() -> None:
     workflow = (ROOT / ".github" / "workflows" / "qa-acceptance.yml").read_text(
         encoding="utf-8"
     )
@@ -271,7 +271,10 @@ def test_qa_acceptance_deploys_and_validates_exact_main_without_checkout() -> No
     assert "for workflow in ci.yml codeql.yml" in workflow
     assert "runs-on: [self-hosted, Linux, X64, skynet, lawhand-prod]" in workflow
     assert "environment:" in workflow and "skynet-development" in workflow
-    assert "actions/checkout" not in workflow
+    qa_deploy_block = workflow.split("  qa-deploy:", 1)[1].split(
+        "  qa-acceptance:", 1
+    )[0]
+    assert "actions/checkout" not in qa_deploy_block
     assert (
         'sudo -n /usr/local/sbin/lawhand-dev1-deploy-from-github deploy "$RELEASE_SHA"'
         in workflow
@@ -282,6 +285,10 @@ def test_qa_acceptance_deploys_and_validates_exact_main_without_checkout() -> No
     assert "CF-Access-Client-Secret" in workflow
     assert '.commit == $expected' in workflow
     assert "LAWHAND_QA_HOSTNAME is missing or invalid" in workflow
+    assert "Checkout exact QA API smoke harness" in workflow
+    assert "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" in workflow
+    assert "LAWHAND_QA_DEMO_ACCESS_CODE" in workflow
+    assert "python scripts/demo_live_smoke.py" in workflow
 
     assert "vars.LAWHAND_DEV1_ENABLED == 'true'" in health
     assert "skynet-development" in health

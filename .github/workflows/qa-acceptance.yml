@@ -148,6 +148,26 @@ jobs:
             -servername "$QA_HOSTNAME" </dev/null 2>/dev/null \
             | openssl x509 -checkend 1209600 -noout
 
+      - name: Checkout exact QA API smoke harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5.1 (Node.js 24)
+        with:
+          ref: ${{ needs.release-gate.outputs.release_sha }}
+
+      - name: Exercise normal authenticated QA APIs with synthetic demo data
+        env:
+          DEMO_BASE_URL: https://${{ vars.LAWHAND_QA_HOSTNAME }}
+          DEMO_EMAIL: qa-promotion-gate@demo.example.com
+          DEMO_ACCESS_CODE: ${{ secrets.LAWHAND_QA_DEMO_ACCESS_CODE }}
+          CLOUDFLARE_ACCESS_CLIENT_ID: ${{ secrets.LAWHAND_QA_ACCESS_CLIENT_ID }}
+          CLOUDFLARE_ACCESS_CLIENT_SECRET: ${{ secrets.LAWHAND_QA_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$DEMO_ACCESS_CODE" ]] || {
+            echo "::error::The skynet-development environment is missing the QA demo access code"
+            exit 1
+          }
+          python scripts/demo_live_smoke.py
+
       - name: Record QA acceptance summary
         if: always()
         env:
@@ -159,5 +179,5 @@ jobs:
             echo
             echo "- Commit: \`$RELEASE_SHA\`"
             echo "- Hostname: \`https://$QA_HOSTNAME\`"
-            echo "- Gate: Cloudflare Access, readiness, exact version, and 14-day TLS floor"
+            echo "- Gate: Cloudflare Access, readiness, exact version, TLS, and normal authenticated demo APIs"
           } >> "$GITHUB_STEP_SUMMARY"

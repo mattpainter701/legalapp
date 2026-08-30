@@ -28,7 +28,8 @@
 2. Open **Actions**.
 3. If the QA gate is enabled, choose **QA acceptance** first, keep the branch
    set to `main`, and enter that exact full SHA. It deploys the isolated dev1
-   stack and proves Cloudflare Access, readiness, exact version, and TLS.
+   stack and proves Cloudflare Access, readiness, exact version, TLS, and the
+   normal authenticated synthetic-demo APIs.
 4. Choose **Deploy IONOS candidate**, then **Run workflow**; keep the branch
    set to `main` and select `stage`.
    Enter `STAGE-IONOS-CANDIDATE` as the confirmation. The stage requires green

@@ -80,6 +80,7 @@ Use these names only when the repository and workflow require the capability:
 | `CLOUDFLARE_R2_SECRET_ACCESS_KEY` | R2 access for the same approved storage consumer. |
 | `LAWHAND_QA_ACCESS_CLIENT_ID` | `skynet-development` environment only; Cloudflare Access service-token client ID used by the QA health and acceptance workflows. |
 | `LAWHAND_QA_ACCESS_CLIENT_SECRET` | `skynet-development` environment only; paired Cloudflare Access service-token secret used by the QA health and acceptance workflows. |
+| `LAWHAND_QA_DEMO_ACCESS_CODE` | `skynet-development` environment only; the isolated dev1 demo access code used by QA to exercise normal authenticated APIs with synthetic data. It must not be a production demo code. |
 | `INBOUND_EMAIL_WEBHOOK_SECRET` | LawHand production environment only; authenticates Email Worker delivery to the backend. The same value is provisioned as an encrypted Worker secret. |
 
 Never store credential values in an Actions variable, repository file, skill, memory file, issue, pull request, workflow input, or command argument. Supply secrets to `gh secret set` over standard input and verify only the resulting secret name and scope.
@@ -122,13 +123,17 @@ acceptance** workflow authenticate with a service token held only in the
 The first rollout is deliberately opt-in:
 
 1. Set repository variable `LAWHAND_QA_HOSTNAME=dev1.getlawhand.com`.
-2. Add `LAWHAND_QA_ACCESS_CLIENT_ID` and `LAWHAND_QA_ACCESS_CLIENT_SECRET` to
-   the `skynet-development` environment. Do not add them as repository-wide
-   secrets.
-3. Leave `LAWHAND_QA_GATE_REQUIRED=false`; run **QA acceptance** for the
-   current `main` SHA and confirm the Access-protected checks succeed.
-4. Enable `LAWHAND_DEV1_ENABLED=true` to turn on scheduled QA monitoring.
-5. Set `LAWHAND_QA_GATE_REQUIRED=true` only after those checks are reliable.
+2. Configure dev1's synthetic demo fixture following
+   [the live-demo runbook](LIVE_DEMO_RUNBOOK.md), using only a dev1-specific
+   access code and fixture domain.
+3. Add `LAWHAND_QA_ACCESS_CLIENT_ID`, `LAWHAND_QA_ACCESS_CLIENT_SECRET`, and
+   `LAWHAND_QA_DEMO_ACCESS_CODE` to the `skynet-development` environment. Do
+   not add them as repository-wide secrets or reuse a production demo code.
+4. Leave `LAWHAND_QA_GATE_REQUIRED=false`; run **QA acceptance** for the
+   current `main` SHA and confirm the Access-protected health, version, and
+   normal authenticated demo API checks succeed.
+5. Enable `LAWHAND_DEV1_ENABLED=true` to turn on scheduled QA monitoring.
+6. Set `LAWHAND_QA_GATE_REQUIRED=true` only after those checks are reliable.
    Thereafter **Deploy IONOS candidate** rejects a `stage` unless a successful
    QA acceptance exists for that exact SHA.
 
