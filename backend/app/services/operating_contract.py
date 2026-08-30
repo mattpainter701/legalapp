@@ -118,16 +118,66 @@ def _provider(name: str, purpose: str, data: list[str], use: str) -> dict[str, A
 
 
 _SUBPROCESSORS: tuple[dict[str, Any], ...] = (
-    _provider("IONOS", "Production compute, network, and backup infrastructure for the supported hosted topology.", ["encrypted application data", "service metadata", "backup data"], "production-topology-provider"),
-    _provider("Cloudflare", "Optional edge, DNS, and protected connectivity services in an approved deployment configuration.", ["network metadata", "encrypted transit data"], "deployment-dependent"),
-    _provider("Microsoft", "Customer-authorized identity, Microsoft 365 storage, email, and Teams integrations.", ["identity metadata", "customer-selected files", "communications metadata"], "customer-enabled-only"),
-    _provider("Google", "Customer-authorized identity, Workspace storage, and optional model services.", ["identity metadata", "customer-selected files", "authorized prompt context"], "customer-enabled-only"),
-    _provider("OpenAI", "Optional model inference selected through tenant model-provider configuration.", ["minimum authorized prompt context"], "customer-enabled-only"),
-    _provider("Anthropic", "Optional model inference selected through tenant model-provider configuration.", ["minimum authorized prompt context"], "customer-enabled-only"),
-    _provider("Stripe", "Subscription and payment processing.", ["billing contact", "subscription metadata", "payment-provider identifiers"], "billing-path-provider"),
-    _provider("Dropbox Sign", "Optional customer-authorized electronic signature workflow.", ["signer identity", "customer-selected documents", "signature evidence"], "customer-enabled-only"),
-    _provider("Zoom", "Optional customer-authorized phone and meeting integrations.", ["communications metadata", "customer-authorized call content"], "customer-enabled-only"),
-    _provider("Twilio", "Optional communications delivery where configured.", ["contact routing data", "message or call metadata"], "configuration-dependent"),
+    _provider(
+        "IONOS",
+        "Production compute, network, and backup infrastructure for the supported hosted topology.",
+        ["encrypted application data", "service metadata", "backup data"],
+        "production-topology-provider",
+    ),
+    _provider(
+        "Cloudflare",
+        "Optional edge, DNS, and protected connectivity services in an approved deployment configuration.",
+        ["network metadata", "encrypted transit data"],
+        "deployment-dependent",
+    ),
+    _provider(
+        "Microsoft",
+        "Customer-authorized identity, Microsoft 365 storage, email, and Teams integrations.",
+        ["identity metadata", "customer-selected files", "communications metadata"],
+        "customer-enabled-only",
+    ),
+    _provider(
+        "Google",
+        "Customer-authorized identity, Workspace storage, and optional model services.",
+        ["identity metadata", "customer-selected files", "authorized prompt context"],
+        "customer-enabled-only",
+    ),
+    _provider(
+        "OpenAI",
+        "Optional model inference selected through tenant model-provider configuration.",
+        ["minimum authorized prompt context"],
+        "customer-enabled-only",
+    ),
+    _provider(
+        "Anthropic",
+        "Optional model inference selected through tenant model-provider configuration.",
+        ["minimum authorized prompt context"],
+        "customer-enabled-only",
+    ),
+    _provider(
+        "Stripe",
+        "Subscription and payment processing.",
+        ["billing contact", "subscription metadata", "payment-provider identifiers"],
+        "billing-path-provider",
+    ),
+    _provider(
+        "Dropbox Sign",
+        "Optional customer-authorized electronic signature workflow.",
+        ["signer identity", "customer-selected documents", "signature evidence"],
+        "customer-enabled-only",
+    ),
+    _provider(
+        "Zoom",
+        "Optional customer-authorized phone and meeting integrations.",
+        ["communications metadata", "customer-authorized call content"],
+        "customer-enabled-only",
+    ),
+    _provider(
+        "Twilio",
+        "Optional communications delivery where configured.",
+        ["contact routing data", "message or call metadata"],
+        "configuration-dependent",
+    ),
 )
 
 
@@ -147,28 +197,155 @@ _ASSURANCE_PROGRAM: dict[str, Any] = {
         "claim_boundary": "No completed external penetration test or attestation is claimed until a dated, scoped report is entered into the evidence record.",
     },
     "certification_roadmap": [
-        {"framework": "SOC 2 Type I", "state": "planned", "next_gate": "Approve scope, control owners, and independent assessor.", "target_date": None, "attained": False},
-        {"framework": "SOC 2 Type II", "state": "unavailable-until-type-i-and-observation-period", "next_gate": "Complete prerequisite scope and evidence period.", "target_date": None, "attained": False},
-        {"framework": "ISO 27001", "state": "not-scheduled", "next_gate": "Business decision and formal ISMS scope.", "target_date": None, "attained": False},
-        {"framework": "HIPAA / BAA-supported offering", "state": "not-available", "next_gate": "Counsel review, provider eligibility, control mapping, and signed BAAs.", "target_date": None, "attained": False},
+        {
+            "framework": "SOC 2 Type I",
+            "state": "planned",
+            "next_gate": "Approve scope, control owners, and independent assessor.",
+            "target_date": None,
+            "attained": False,
+        },
+        {
+            "framework": "SOC 2 Type II",
+            "state": "unavailable-until-type-i-and-observation-period",
+            "next_gate": "Complete prerequisite scope and evidence period.",
+            "target_date": None,
+            "attained": False,
+        },
+        {
+            "framework": "ISO 27001",
+            "state": "not-scheduled",
+            "next_gate": "Business decision and formal ISMS scope.",
+            "target_date": None,
+            "attained": False,
+        },
+        {
+            "framework": "HIPAA / BAA-supported offering",
+            "state": "not-available",
+            "next_gate": "Counsel review, provider eligibility, control mapping, and signed BAAs.",
+            "target_date": None,
+            "attained": False,
+        },
     ],
 }
 
 
 _CONTROLS: tuple[dict[str, Any], ...] = (
-    {"id": "topology", "title": "Supported production topology", "status": "verified", "claim": "A version-identified single hosted application deployment with encrypted off-host backups, customer-authorized cloud storage, and a controlled research gateway is supported.", "boundary": "Multi-region, active-active, and provider-specific availability are not promised.", "evidence": ["production-topology-runbook", "release-version-identity"]},
-    {"id": "service-objectives", "title": "Service objectives", "status": "implemented", "claim": "A versioned set of measurable production health, backup freshness, restore readiness, and incident communication objectives is published.", "boundary": "Objectives are not an uptime SLA, RPO/RTO warranty, damages remedy, or service-credit commitment.", "evidence": ["service-objectives-snapshot", "production-health-gate", "restore-rehearsal-gate"]},
-    {"id": "support", "title": "Support and escalation", "status": "implemented", "claim": "Support hours, S1-S4 definitions, acknowledgement objectives, ownership, and escalation paths are versioned and bound to an audited request workflow.", "boundary": "Targets are operating objectives unless signed customer terms expressly incorporate them.", "evidence": ["support-policy-snapshot", "tenant-support-workflow"]},
-    {"id": "status-incidents", "title": "Status and incident communication", "status": "implemented", "claim": "Operators can publish sanitized incidents through an append-only investigating, identified, monitoring, and resolved lifecycle exposed by the public status API.", "boundary": "Updates contain confirmed public-safe facts and may be incomplete during investigation; no incident-free history is asserted.", "evidence": ["public-status-api", "immutable-incident-update-ledger"]},
-    {"id": "backup-restore", "title": "Backup and restore", "status": "verified", "claim": "Encrypted off-host backups and isolated restore rehearsals are enforced by production checks and runbooks.", "boundary": "Evidence is time-bound and does not guarantee recovery from every provider, operator, or customer-cloud failure.", "evidence": ["backup-restore-runbook", "restore-rehearsal-gate"]},
-    {"id": "tenant-export", "title": "Tenant export", "status": "implemented", "claim": "Tenant administrators can inventory every current tenant-id database table and recorded file provider, account for each category through a product export or bounded evidence summary, and bind the resulting artifact by SHA-256.", "boundary": "Secret values are never exported; connected-provider availability, immutable evidence retention, and artifact format remain explicit recorded limitations.", "evidence": ["tenant-export-reconciliation", "immutable-lifecycle-receipt"]},
-    {"id": "onboarding-migration", "title": "Onboarding and migration acceptance receipt", "status": "implemented", "claim": "An authorized tenant administrator can sign immutable onboarding and BK28 migration receipts with scope, source manifest counts, reconciliation, artifact evidence, and outcome.", "boundary": "A receipt accepts only its recorded scope and does not cure source-system omissions or warnings.", "evidence": ["agreement-acceptance-ledger", "bk28-import-run", "immutable-lifecycle-receipt"]},
-    {"id": "offboarding-deletion", "title": "Offboarding and deletion", "status": "implemented", "claim": "A non-destructive offboarding workflow snapshots inventory and legal holds, requires two distinct operator approvals, records provider and backup disposition, and emits immutable proof.", "boundary": "The workflow never deletes tenant data itself; deletion execution requires separately authorized provider and data-store actions and is blocked while a legal hold is active.", "evidence": ["offboarding-approval-workflow", "legal-hold-gate", "immutable-deletion-receipt"]},
-    {"id": "privacy-terms", "title": "DPA and BAA applicability", "status": "policy-committed", "claim": "The security packet states how DPA and BAA applicability must be evaluated and recorded before applicable processing.", "boundary": "No universal DPA, BAA, HIPAA-ready configuration, or legal conclusion is asserted.", "evidence": ["assurance-program-snapshot"]},
-    {"id": "subprocessors", "title": "Subprocessors", "status": "implemented", "claim": "A named, versioned registry records purpose, data categories, region boundary, use status, terms state, and DPA/BAA evidence state.", "boundary": "Configuration-dependent entries are not represented as active, and the registry does not substitute for current provider contracts.", "evidence": ["named-subprocessor-registry"]},
-    {"id": "security-review", "title": "Security-review packet", "status": "implemented", "claim": "A downloadable, content-addressed packet exports the operating contract, objectives, support policy, subprocessors, assurance state, and sanitized evidence catalogue.", "boundary": "The packet is a point-in-time first-party evidence snapshot, not a certification or independent audit opinion.", "evidence": ["public-security-review-packet"]},
-    {"id": "penetration-testing", "title": "Penetration testing", "status": "planned", "claim": "The assurance roadmap records an annual target cadence, owner role, scheduling state, and completed-evidence field.", "boundary": "The current evidence state is planned-not-attained and no completed external test is claimed.", "evidence": ["assurance-program-snapshot"]},
-    {"id": "certification-roadmap", "title": "Certification roadmap", "status": "planned", "claim": "A versioned roadmap records explicit next gates and attainment flags for SOC 2, ISO 27001, and a BAA-supported offering.", "boundary": "No certification, audit report, HIPAA compliance, or target completion date is claimed.", "evidence": ["assurance-program-snapshot"]},
+    {
+        "id": "topology",
+        "title": "Supported production topology",
+        "status": "verified",
+        "claim": "A version-identified single hosted application deployment with encrypted off-host backups, customer-authorized cloud storage, and a controlled research gateway is supported.",
+        "boundary": "Multi-region, active-active, and provider-specific availability are not promised.",
+        "evidence": ["production-topology-runbook", "release-version-identity"],
+    },
+    {
+        "id": "service-objectives",
+        "title": "Service objectives",
+        "status": "implemented",
+        "claim": "A versioned set of measurable production health, backup freshness, restore readiness, and incident communication objectives is published.",
+        "boundary": "Objectives are not an uptime SLA, RPO/RTO warranty, damages remedy, or service-credit commitment.",
+        "evidence": [
+            "service-objectives-snapshot",
+            "production-health-gate",
+            "restore-rehearsal-gate",
+        ],
+    },
+    {
+        "id": "support",
+        "title": "Support and escalation",
+        "status": "implemented",
+        "claim": "Support hours, S1-S4 definitions, acknowledgement objectives, ownership, and escalation paths are versioned and bound to an audited request workflow.",
+        "boundary": "Targets are operating objectives unless signed customer terms expressly incorporate them.",
+        "evidence": ["support-policy-snapshot", "tenant-support-workflow"],
+    },
+    {
+        "id": "status-incidents",
+        "title": "Status and incident communication",
+        "status": "implemented",
+        "claim": "Operators can publish sanitized incidents through an append-only investigating, identified, monitoring, and resolved lifecycle exposed by the public status API.",
+        "boundary": "Updates contain confirmed public-safe facts and may be incomplete during investigation; no incident-free history is asserted.",
+        "evidence": ["public-status-api", "immutable-incident-update-ledger"],
+    },
+    {
+        "id": "backup-restore",
+        "title": "Backup and restore",
+        "status": "verified",
+        "claim": "Encrypted off-host backups and isolated restore rehearsals are enforced by production checks and runbooks.",
+        "boundary": "Evidence is time-bound and does not guarantee recovery from every provider, operator, or customer-cloud failure.",
+        "evidence": ["backup-restore-runbook", "restore-rehearsal-gate"],
+    },
+    {
+        "id": "tenant-export",
+        "title": "Tenant export",
+        "status": "implemented",
+        "claim": "Tenant administrators can inventory every current tenant-id database table and recorded file provider, account for each category through a product export or bounded evidence summary, and bind the resulting artifact by SHA-256.",
+        "boundary": "Secret values are never exported; connected-provider availability, immutable evidence retention, and artifact format remain explicit recorded limitations.",
+        "evidence": ["tenant-export-reconciliation", "immutable-lifecycle-receipt"],
+    },
+    {
+        "id": "onboarding-migration",
+        "title": "Onboarding and migration acceptance receipt",
+        "status": "implemented",
+        "claim": "An authorized tenant administrator can sign immutable onboarding and BK28 migration receipts with scope, source manifest counts, reconciliation, artifact evidence, and outcome.",
+        "boundary": "A receipt accepts only its recorded scope and does not cure source-system omissions or warnings.",
+        "evidence": [
+            "agreement-acceptance-ledger",
+            "bk28-import-run",
+            "immutable-lifecycle-receipt",
+        ],
+    },
+    {
+        "id": "offboarding-deletion",
+        "title": "Offboarding and deletion",
+        "status": "implemented",
+        "claim": "A non-destructive offboarding workflow snapshots inventory and legal holds, requires two distinct operator approvals, records provider and backup disposition, and emits immutable proof.",
+        "boundary": "The workflow never deletes tenant data itself; deletion execution requires separately authorized provider and data-store actions and is blocked while a legal hold is active.",
+        "evidence": [
+            "offboarding-approval-workflow",
+            "legal-hold-gate",
+            "immutable-deletion-receipt",
+        ],
+    },
+    {
+        "id": "privacy-terms",
+        "title": "DPA and BAA applicability",
+        "status": "policy-committed",
+        "claim": "The security packet states how DPA and BAA applicability must be evaluated and recorded before applicable processing.",
+        "boundary": "No universal DPA, BAA, HIPAA-ready configuration, or legal conclusion is asserted.",
+        "evidence": ["assurance-program-snapshot"],
+    },
+    {
+        "id": "subprocessors",
+        "title": "Subprocessors",
+        "status": "implemented",
+        "claim": "A named, versioned registry records purpose, data categories, region boundary, use status, terms state, and DPA/BAA evidence state.",
+        "boundary": "Configuration-dependent entries are not represented as active, and the registry does not substitute for current provider contracts.",
+        "evidence": ["named-subprocessor-registry"],
+    },
+    {
+        "id": "security-review",
+        "title": "Security-review packet",
+        "status": "implemented",
+        "claim": "A downloadable, content-addressed packet exports the operating contract, objectives, support policy, subprocessors, assurance state, and sanitized evidence catalogue.",
+        "boundary": "The packet is a point-in-time first-party evidence snapshot, not a certification or independent audit opinion.",
+        "evidence": ["public-security-review-packet"],
+    },
+    {
+        "id": "penetration-testing",
+        "title": "Penetration testing",
+        "status": "planned",
+        "claim": "The assurance roadmap records an annual target cadence, owner role, scheduling state, and completed-evidence field.",
+        "boundary": "The current evidence state is planned-not-attained and no completed external test is claimed.",
+        "evidence": ["assurance-program-snapshot"],
+    },
+    {
+        "id": "certification-roadmap",
+        "title": "Certification roadmap",
+        "status": "planned",
+        "claim": "A versioned roadmap records explicit next gates and attainment flags for SOC 2, ISO 27001, and a BAA-supported offering.",
+        "boundary": "No certification, audit report, HIPAA compliance, or target completion date is claimed.",
+        "evidence": ["assurance-program-snapshot"],
+    },
 )
 
 
@@ -189,7 +366,12 @@ def support_severity(severity: str) -> dict[str, Any]:
 
 
 def subprocessor_registry() -> dict[str, Any]:
-    return {"schema": "lawhand.subprocessors", "version": SUBPROCESSOR_REGISTRY_VERSION, "entries": deepcopy(list(_SUBPROCESSORS)), "boundary": "Use status describes supported configuration paths, not proof that a provider is active for a particular tenant."}
+    return {
+        "schema": "lawhand.subprocessors",
+        "version": SUBPROCESSOR_REGISTRY_VERSION,
+        "entries": deepcopy(list(_SUBPROCESSORS)),
+        "boundary": "Use status describes supported configuration paths, not proof that a provider is active for a particular tenant.",
+    }
 
 
 def assurance_program() -> dict[str, Any]:
@@ -197,7 +379,20 @@ def assurance_program() -> dict[str, Any]:
 
 
 def operating_contract() -> dict[str, Any]:
-    return {"schema": "lawhand.operating-contract", "version": CONTRACT_VERSION, "claim_statuses": ["implemented", "verified", "policy-committed", "provider-dependent", "planned", "unavailable"], "controls": deepcopy(list(_CONTROLS)), "truth_rule": "Only implemented and verified controls are product capabilities; policy, provider, planned, and unavailable states are not attainment claims."}
+    return {
+        "schema": "lawhand.operating-contract",
+        "version": CONTRACT_VERSION,
+        "claim_statuses": [
+            "implemented",
+            "verified",
+            "policy-committed",
+            "provider-dependent",
+            "planned",
+            "unavailable",
+        ],
+        "controls": deepcopy(list(_CONTROLS)),
+        "truth_rule": "Only implemented and verified controls are product capabilities; policy, provider, planned, and unavailable states are not attainment claims.",
+    }
 
 
 def security_review_packet() -> dict[str, Any]:
@@ -211,11 +406,31 @@ def security_review_packet() -> dict[str, Any]:
         "subprocessors": subprocessor_registry(),
         "assurance_program": assurance_program(),
         "evidence_catalogue": [
-            {"id": "release-version-identity", "state": "implemented", "description": "Runtime metadata binds version and commit identity."},
-            {"id": "tenant-isolation", "state": "verified-by-security-gates", "description": "Tenant data tables use forced row-level security and least-privilege runtime checks."},
-            {"id": "migration-safety", "state": "verified-by-release-gate", "description": "Schema history and migration safety are checked before release."},
-            {"id": "backup-and-restore", "state": "verified-by-production-gates", "description": "Backup freshness and isolated restore rehearsal evidence are release inputs."},
-            {"id": "customer-lifecycle", "state": "implemented", "description": "Append-only receipts bind onboarding, import reconciliation, exports, and offboarding evidence."},
+            {
+                "id": "release-version-identity",
+                "state": "implemented",
+                "description": "Runtime metadata binds version and commit identity.",
+            },
+            {
+                "id": "tenant-isolation",
+                "state": "verified-by-security-gates",
+                "description": "Tenant data tables use forced row-level security and least-privilege runtime checks.",
+            },
+            {
+                "id": "migration-safety",
+                "state": "verified-by-release-gate",
+                "description": "Schema history and migration safety are checked before release.",
+            },
+            {
+                "id": "backup-and-restore",
+                "state": "verified-by-production-gates",
+                "description": "Backup freshness and isolated restore rehearsal evidence are release inputs.",
+            },
+            {
+                "id": "customer-lifecycle",
+                "state": "implemented",
+                "description": "Append-only receipts bind onboarding, import reconciliation, exports, and offboarding evidence.",
+            },
         ],
         "packet_boundary": "This first-party snapshot contains no secrets, customer data, internal hostnames, exploitable topology details, audit opinion, or certification claim.",
     }

@@ -124,7 +124,9 @@ class SupportRequest(Base):
     __tablename__ = "support_requests"
     __table_args__ = (
         Index("ix_support_requests_tenant_created", "tenant_id", "created_at"),
-        CheckConstraint("severity IN ('S1', 'S2', 'S3', 'S4')", name="ck_support_severity"),
+        CheckConstraint(
+            "severity IN ('S1', 'S2', 'S3', 'S4')", name="ck_support_severity"
+        ),
         CheckConstraint(
             "status IN ('open', 'acknowledged', 'mitigated', 'resolved')",
             name="ck_support_status",
@@ -138,7 +140,9 @@ class SupportRequest(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+        UUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="RESTRICT"),
+        nullable=False,
     )
     severity: Mapped[str] = mapped_column(String(2), nullable=False)
     status: Mapped[str] = mapped_column(
@@ -194,7 +198,9 @@ class PublicIncident(Base):
     affected_services: Mapped[list] = mapped_column(
         JSONB, default=list, server_default="[]", nullable=False
     )
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     created_by_actor_id: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default="now()", nullable=False
@@ -244,7 +250,9 @@ class OffboardingCase(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+        UUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="RESTRICT"),
+        nullable=False,
     )
     status: Mapped[str] = mapped_column(String(30), nullable=False)
     requested_scope: Mapped[dict] = mapped_column(
@@ -286,11 +294,11 @@ class OffboardingApproval(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+        UUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="RESTRICT"),
+        nullable=False,
     )
-    case_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), nullable=False
-    )
+    case_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     actor_id: Mapped[str] = mapped_column(String(255), nullable=False)
     reason: Mapped[str] = mapped_column(String(1000), nullable=False)
     approved_at: Mapped[datetime] = mapped_column(

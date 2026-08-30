@@ -102,8 +102,15 @@ def normalized_counts(value: dict[str, int] | None) -> dict[str, int]:
     result: dict[str, int] = {}
     for key, count in sorted((value or {}).items()):
         name = str(key).strip()
-        if not name or not isinstance(count, int) or isinstance(count, bool) or count < 0:
-            raise ValueError("reconciliation counts require named non-negative integers")
+        if (
+            not name
+            or not isinstance(count, int)
+            or isinstance(count, bool)
+            or count < 0
+        ):
+            raise ValueError(
+                "reconciliation counts require named non-negative integers"
+            )
         result[name] = count
     return result
 
@@ -246,9 +253,7 @@ async def tenant_export_inventory(
         ),
         None,
     )
-    counts["file-store:local-references"] = int(
-        (local or {}).get("record_count") or 0
-    )
+    counts["file-store:local-references"] = int((local or {}).get("record_count") or 0)
     categories.append(
         {
             "category": "file-store:local-references",
