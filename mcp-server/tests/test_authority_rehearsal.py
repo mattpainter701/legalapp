@@ -654,6 +654,30 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                  WHERE c.corpus_version=%s""",
                 [version],
             )
+            cur.execute(
+                """SELECT COUNT(*) FILTER (WHERE c.corpus_version IS DISTINCT FROM %s),
+                           COUNT(*) FILTER (WHERE c.embedding IS NULL),
+                           COUNT(*) FILTER (WHERE c.embedding_model IS DISTINCT FROM %s),
+                           COUNT(*) FILTER (WHERE c.embedding_version::text IS DISTINCT FROM %s),
+                           COUNT(*) FILTER (WHERE vector_dims(c.embedding) IS DISTINCT FROM %s)
+                      FROM legal_document_chunks c
+                      JOIN legal_documents d ON d.id=c.document_id
+                     WHERE d.corpus_version=%s""",
+                [version, "mixedbread-ai/mxbai-embed-large-v1", "1", dimension, version],
+            )
+            legal_contract_counts = cur.fetchone()
+            cur.execute(
+                """SELECT COUNT(*) FILTER (WHERE c.embedding IS NULL),
+                           COUNT(*) FILTER (WHERE c.embedding_model IS DISTINCT FROM %s),
+                           COUNT(*) FILTER (WHERE c.embedding_version IS DISTINCT FROM %s),
+                           COUNT(*) FILTER (WHERE vector_dims(c.embedding) IS DISTINCT FROM %s)
+                      FROM authority_case_chunks c
+                     WHERE c.corpus_version=%s""",
+                ["mixedbread-ai/mxbai-embed-large-v1", "1", dimension, version],
+            )
+            authority_contract_counts = cur.fetchone()
+        assert legal_contract_counts == (0, 0, 0, 0, 0)
+        assert authority_contract_counts == (0, 0, 0, 0)
         conn.commit()
         promote_corpus_version(
             conn,
