@@ -9,12 +9,15 @@ Four task kinds arrive on the same poll:
   button waits on;
 * ``scan_now`` — run an immediate scan instead of waiting for the schedule.
 * ``agent_update`` — check/apply the fixed official release (never a task URL).
+* ``local_search`` — search the agent-local private lexical index.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import time
 
 import smbclient
 
@@ -31,6 +34,10 @@ logger = logging.getLogger("clarity_agent.tasks")
 VERIFY_SAMPLE_LIMIT = 25
 
 
+class _LocalSearchInputError(ValueError):
+    """A fixed, query-free task validation error safe to return and log."""
+
+
 class TaskWorker:
     def __init__(
         self,
@@ -41,6 +48,7 @@ class TaskWorker:
         scan_callback=None,
         share_refresher=None,
         update_callback=None,
+        local_search_index=None,
     ):
         self.config = config
         self.client = client
@@ -52,6 +60,9 @@ class TaskWorker:
         # Forces a re-fetch of that list, for a share added moments ago.
         self.share_refresher = share_refresher
         self.update_callback = update_callback
+        # Search remains fail-closed when the optional private index is absent
+        # or failed to initialize.
+        self.local_search_index = local_search_index
 
     async def poll_and_execute(self) -> int:
         try:
@@ -83,10 +94,157 @@ class TaskWorker:
             await self._fetch_content(task)
         elif kind == "agent_update":
             await self._update_agent(task)
+        elif kind == "local_search":
+            await self._local_search(task)
         else:
             await self.client.submit_task_result(
                 task["task_id"], ok=False, error=f"Unsupported task kind: {kind}"
             )
+
+    async def _local_search(self, task: dict) -> None:
+        """Execute a bounded, privacy-safe search against the local index."""
+        task_id = task.get("task_id")
+        correlation_id = task.get("correlation_id")
+        query = task.get("query")
+        scopes = task.get("scopes")
+        extensions = task.get("file_extensions")
+        limit = task.get("limit", 20)
+
+        def reject(message: str) -> None:
+            # Keep query text and scope paths out of both logs and errors.
+            raise _LocalSearchInputError(message)
+
+        try:
+            if not isinstance(task_id, str) or not task_id:
+                reject("Missing task_id")
+            if not isinstance(correlation_id, str) or not correlation_id.strip():
+                reject("correlation_id is required")
+            if len(correlation_id) > 128:
+                reject("correlation_id must be at most 128 characters")
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", correlation_id):
+                reject("correlation_id contains invalid characters")
+            if not isinstance(query, str) or not query.strip():
+                reject("query is required")
+            if len(query) > 1000:
+                reject("query must be at most 1000 characters")
+            if not isinstance(scopes, list) or not scopes:
+                reject("at least one search scope is required")
+            if (
+                not isinstance(limit, int)
+                or isinstance(limit, bool)
+                or not 1 <= limit <= 50
+            ):
+                reject("limit must be between 1 and 50")
+            if extensions is not None and not isinstance(extensions, list):
+                reject("file_extensions must be a list")
+            if extensions is not None and len(extensions) > 50:
+                reject("file_extensions is too large")
+            if extensions is not None and any(
+                not isinstance(extension, str)
+                or not re.fullmatch(r"\.?[A-Za-z0-9][A-Za-z0-9_-]{0,18}", extension)
+                for extension in extensions
+            ):
+                reject("file_extensions contains an invalid extension")
+            for scope in scopes:
+                if not isinstance(scope, dict) or not scope.get("share_id"):
+                    reject("each search scope requires a share_id")
+                folder = scope.get("folder_path", "")
+                if not isinstance(folder, str):
+                    reject("folder_path must be text")
+                parts = [
+                    part
+                    for part in folder.replace("\\", "/").split("/")
+                    if part and part != "."
+                ]
+                if (
+                    any(part == ".." for part in parts)
+                    or ":" in folder
+                    or folder.startswith(("/", "\\"))
+                ):
+                    reject("search scope is outside its assigned share")
+
+            assigned = await self._shares()
+            assigned_ids = {str(share.get("share_id")) for share in assigned}
+            if any(str(scope["share_id"]) not in assigned_ids for scope in scopes):
+                reject("search scope is not assigned to this agent")
+
+            started = time.perf_counter()
+            index = self.local_search_index
+            if index is None or not getattr(index, "available", False):
+                await self.client.submit_task_result(
+                    task_id,
+                    ok=False,
+                    error="Local search index is unavailable",
+                    detail=self._search_detail(
+                        correlation_id, [], "unavailable", 0, 0, started
+                    ),
+                )
+                logger.warning(
+                    "Local search unavailable correlation_id=%s", correlation_id
+                )
+                return
+            result = await index.search(query, scopes, assigned, extensions, limit)
+            allowed = {
+                "relative_path",
+                "filename",
+                "ext",
+                "snippet",
+                "page_number",
+                "score",
+                "share_id",
+            }
+            hits = [
+                {key: hit[key] for key in allowed if key in hit}
+                for hit in result.get("hits", [])[:limit]
+                if isinstance(hit, dict)
+            ]
+            detail = self._search_detail(
+                correlation_id,
+                hits,
+                result.get("index_state", "unknown"),
+                result.get("indexed_files", 0),
+                result.get("pending_files", 0),
+                started,
+            )
+            await self.client.submit_task_result(task_id, ok=True, detail=detail)
+            logger.info(
+                "Local search completed correlation_id=%s hits=%d indexed_files=%d pending_files=%d duration_ms=%d",
+                correlation_id,
+                len(hits),
+                detail["indexed_files"],
+                detail["pending_files"],
+                detail["duration_ms"],
+            )
+        except _LocalSearchInputError as exc:
+            await self.client.submit_task_result(task_id, ok=False, error=str(exc))
+            logger.warning(
+                "Local search rejected correlation_id=%s reason=%s",
+                correlation_id or "?",
+                str(exc),
+            )
+        except Exception as exc:
+            await self.client.submit_task_result(
+                task_id, ok=False, error="Local search failed"
+            )
+            logger.error(
+                "Local search failed correlation_id=%s error_type=%s",
+                correlation_id or "?",
+                type(exc).__name__,
+            )
+
+    @staticmethod
+    def _search_detail(
+        correlation_id, hits, index_state, indexed_files, pending_files, started
+    ):
+        return {
+            "schema_version": 1,
+            "correlation_id": correlation_id,
+            "hits": hits,
+            "index_state": index_state,
+            "indexed_files": int(indexed_files or 0),
+            "pending_files": int(pending_files or 0),
+            "duration_ms": max(0, int((time.perf_counter() - started) * 1000)),
+        }
 
     async def _update_agent(self, task: dict) -> None:
         task_id = task["task_id"]

@@ -462,6 +462,7 @@ async def run_daemon(
         scan_callback=scan_one,
         share_refresher=shares.refresh,
         update_callback=update_agent,
+        local_search_index=local_index,
     )
     heartbeat = HeartbeatService(config, client)
 

@@ -1,9 +1,27 @@
 # Firm Memory file-share search: PoC architecture
 
-> **Status — design target, not shipped:** the Tika/OCR/OpenSearch/ACL pipeline
-> below is the system the customer PoC must build and test. This repository
-> currently contains only a default-off, local SQLite full-text control index
-> and evaluation tools. It does not contain an installable 4 TB search service.
+## Shipped bounded control surface (0.15.3)
+
+The current release adds a bounded, matter-scoped `local_search` relay. A
+configured agent polls the authenticated API over outbound HTTPS, runs the
+query against its local default-off SQLite FTS5 control index, and returns
+ranked metadata/snippets, page hints, and aggregate index state. The same
+contract is available from the portal, Chat structured sources, and the
+user-bound Workspace MCP `search_firm_memory` tool. Results contain opaque file
+IDs and a same-origin portal deep link; the portal rechecks matter scope and
+offers **Copy UNC** for the canonical path.
+
+This is intentionally a control-index PoC, not a 4 TB service. It does not
+ship Tika, OCR, OpenSearch, native Windows per-user ACL trimming, semantic
+embeddings, or a browser `file://`/`smb://` opener. The scale design below is
+the acceptance target for a representative-corpus customer PoC and remains
+separate from the small SQLite implementation.
+
+> **Status — scale design target, not shipped:** the Tika/OCR/OpenSearch/ACL
+> pipeline below is the system the customer PoC must build and test. This
+> repository ships a bounded, default-off local SQLite full-text control index
+> and its authenticated relay surfaces, but it does not contain an installable
+> 4 TB search service.
 
 ## Decision in one paragraph
 
@@ -16,6 +34,20 @@ The PoC answers four questions: (1) can we obtain useful text from the firm’s 
 The repository's SQLite evaluator is operator-only and remains inside the
 customer boundary. It is useful for control measurements, but it is not the
 ACL-enforced end-user query service described below.
+
+### Invocation and observability boundary
+
+The query string exists only in the short-lived authenticated relay task and
+local agent processing. It is not written to application logs, the search
+audit record, or the evaluator output. Correlation IDs, result counts,
+duration, indexed/pending counts, and partial/degraded status are safe
+operational signals and may be returned or logged. Capture the Windows
+`agent.log`, `lawhand-agent status`, the portal response/status view, Workspace
+MCP audit entries, and customer-local `results.jsonl`, `coverage.jsonl`, and
+`report.json` when validating a run. Tailscale can provide optional private
+administrator reachability to the host; it supplies no product telemetry and
+does not change the agent's outbound HTTPS data path. The agent has no
+Prometheus, OpenTelemetry, or `/metrics` endpoint in this release.
 
 ## Planned logical flow
 

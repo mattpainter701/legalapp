@@ -46,7 +46,7 @@ The current Platform MCP catalog is intentionally review-first:
 
 - **Reads:** `search_clients`, `get_client`, `search_intakes`, `get_intake`,
   `search_matters`, `find_matter`, `get_matter_context`, `search_tasks`,
-  `get_task`, `list_matter_tasks`, `list_matter_recipients`,
+  `search_firm_memory`, `get_task`, `list_matter_tasks`, `list_matter_recipients`,
   `list_matter_documents`, `get_matter_document_text`,
   `list_document_templates`, and `get_document_template_text`.
 - **Proposals:** `propose_task`, `propose_client_email`, and

@@ -226,9 +226,10 @@ a share set to run nightly is not walked every few hours. A share with no usable
 schedule falls back to the agent-wide `scan_interval_minutes`. Scan times are
 held in memory, so a restarted agent scans once and then resumes the schedule.
 
-The task loop handles four kinds of work queued by the SaaS — `content_fetch`
+The task loop handles five kinds of work queued by the SaaS — `content_fetch`
 (read one document), `verify_share` (the console's **Test connection**), and
-`scan_now`, plus `agent_update` for the fixed official updater — and every scan
+`scan_now`, `local_search` (a bounded query against the local control index),
+plus `agent_update` for the fixed official updater — and every scan
 reports its outcome back, which is what fills in the last-scan column and error
 text in the console.
 
@@ -240,6 +241,15 @@ workflow without exposing arbitrary tenant hosts or ports. Metadata and short
 snippets are cached in the tenant database; requested document text uses a
 short-lived Redis handoff and bounded LLM context and is not stored in the SMB
 index. Each fetch is recorded in the tenant access log.
+
+`local_search` is matter-scoped by the SaaS task and share/folder-scoped by the
+agent. It returns only relative paths, bounded snippets, optional page hints,
+opaque correlation data, and aggregate index state. Query text is processed
+in memory and is not written to the agent log or returned as telemetry.
+Correlation IDs, counts, duration, and partial/degraded state are safe to use
+when correlating a validation run. The agent has no inbound `/metrics`
+endpoint; Tailscale is optional private administrator reachability, not the
+product data path or a metrics exporter.
 
 Tenant-vault SMB passwords are encrypted in the SaaS, delivered only to the
 assigned agent over TLS, and held in memory. Optional local fallback credentials
@@ -266,7 +276,7 @@ Both drive the shared PyInstaller spec at `packaging/lawhand-agent.spec`, so the
 two platforms ship the same code with the same entry point.
 
 To publish, merge the tested change to `main`, then tag the exact version from
-`clarity_agent/__init__.py` (currently `agent-v0.15.2`) and push that tag. The
+`clarity_agent/__init__.py` (currently `agent-v0.15.3`) and push that tag. The
 workflow rejects a mismatched tag and does not publish either platform unless
 both builds finish successfully.
 

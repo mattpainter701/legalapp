@@ -49,6 +49,16 @@ result bounded:
 | Documents | `list_matter_documents`, `get_matter_document_text` | `propose_matter_document` |
 | Templates | `list_document_templates`, `get_document_template_text` | `propose_document_from_template` |
 
+Firm Memory adds the read-only `search_firm_memory` tool to the Documents area.
+It requires the existing user-bound Workspace grant with `matters:read` and
+`documents:read`; the input must include a tenant-valid `matter_id`, a bounded
+query, and optional bounded extension filters/limit. The handler resolves
+matter share/folder bindings before relaying to assigned agents. It returns
+opaque file IDs, bounded snippets/page hints, same-origin portal deep-link
+metadata, index state, timing, and partial/degraded status. Query text is not
+persisted or logged. This tool is not Research MCP and cannot use a Research
+product key; it also does not provide licensed secondary-source content.
+
 `get_matter_context` can select client, team, parties, tasks, documents,
 events, notes, and communications. `get_task` returns its LawHand review URL
 and bounded history. Document results include authenticated LawHand open and

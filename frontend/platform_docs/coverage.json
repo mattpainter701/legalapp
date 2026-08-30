@@ -5,6 +5,7 @@
     { "id": "document-revisions", "route": "/matters/documents/revisions", "chapter": "matters-and-documents" },
     { "id": "document-revise", "route": "/matters/documents/revise", "chapter": "matters-and-documents" },
     { "id": "brief-check", "route": "/matters/brief-check", "chapter": "matters-and-documents" },
+    { "id": "firm-memory", "route": "/firm-memory", "chapter": "matters-and-documents" },
     { "id": "calendar", "route": "/calendar", "chapter": "tasks-calendar-communications" },
     { "id": "teams", "route": "/teams", "chapter": "teams-and-client-portals" },
     { "id": "communications", "route": "/communications", "chapter": "tasks-calendar-communications" },

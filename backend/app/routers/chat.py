@@ -106,6 +106,9 @@ _STREAM_INTERRUPTED_MESSAGE = (
     "Retry this message before relying on the analysis."
 )
 _INTERNAL_DOCUMENT_URL_RE = re.compile(r"^/api/documents/[0-9a-fA-F-]{36}/download$")
+_INTERNAL_FIRM_MEMORY_URL_RE = re.compile(
+    r"^/firm-memory\?matter=[0-9a-fA-F-]{36}&file=[0-9a-fA-F-]{36}$"
+)
 
 
 def _request_redis(request: Request):
@@ -161,6 +164,10 @@ def _normalize_source_url(value: str | None) -> str | None:
     # as /opinion/ and are normalized below.
     if _INTERNAL_DOCUMENT_URL_RE.fullmatch(url):
         return url
+    if _INTERNAL_FIRM_MEMORY_URL_RE.fullmatch(url):
+        return url
+    if url.startswith("/firm-memory"):
+        return None
     if url.startswith("/api/"):
         return None
     if url.startswith("/"):
@@ -209,6 +216,7 @@ def _source_label(source_type: str | None) -> str:
         "cloud": "Cloud context",
         "matter_context": "Matter context",
         "tenant_document": "Firm context",
+        "firm_memory": "Firm memory",
     }
     return labels.get(source_type or "", "Context")
 

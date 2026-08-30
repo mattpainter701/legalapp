@@ -33,6 +33,7 @@ def test_chat_catalog_stays_stable_and_workspace_adds_lifecycle_tools():
         "search_intakes",
         "get_intake",
         "search_matters",
+        "search_firm_memory",
         "search_tasks",
         "get_task",
         "get_document_template_text",

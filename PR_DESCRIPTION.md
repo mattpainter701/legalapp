@@ -1,37 +1,40 @@
-# COMP-03 — attributed intake and safer lead follow-through
+# Firm Memory — bounded local case-file search surfaces
 
 ## Summary
 
-Adds a bounded lead-acquisition path: tenant-admin-defined conditional forms,
-spam-resistant attributed public submissions, durable channel consent and
-appointment/reminder state, explicit conflict triage, authored consent-checked
-email follow-up, abandonment recovery review, and funnel evidence. Public leads
-cannot be converted until a clear conflict decision is recorded. Existing BK26
-fee-agreement/e-sign and lead conversion paths remain canonical; SMS stays
-fail-closed until ECO-23–29 provider/compliance gates are complete.
+Adds the customer-facing layer over the local SQLite FTS5 control index: an
+outbound-polled, matter-scoped `local_search` relay for the portal, Chat
+structured sources, and user-bound Workspace MCP `search_firm_memory` tool.
+Results are bounded and opaque, with same-origin links that recheck access and
+offer Copy UNC. Query text is not persisted or logged. This is a measured
+representative-corpus control PoC; it does not claim 4 TB/Tika/OCR/OpenSearch,
+semantic retrieval, or native Windows ACL preservation.
 
 ## Validation
 
-- `pytest -q backend/tests/test_conversion_loop_unit.py backend/tests/test_release_notes.py`
-- `ruff check` on changed Python files
-- `python -m compileall -q backend/app`
-- frontend API contract test and `npm run build`
-- PostgreSQL-backed integration/rehearsal checks are pending because the local
-  test Postgres service refused connections.
+- agent: `156 passed`
+- backend focused contracts: `35 passed`
+- frontend: `440 passed`; ESLint has two existing `no-alert` warnings and no errors
+- frontend production build: passed
+- `ruff check` on changed Python files and `compileall`: passed
+- release-catalog generation check: passed
+- PostgreSQL-backed integration remains for GitHub CI because the local Docker
+  service could not be started without host service privileges.
 
 ## Merge policy attestations
 
 - [x] Documentation updated
 - [ ] No documentation impact
-- [x] Customer release notes updated (`2026.08.28.6`)
+- [x] Customer release notes updated (`2026.08.30.3`)
 - [ ] No customer-facing release note
 - [x] Security and privacy impact reviewed
 
 ## MCP documentation handoff
 
-- [ ] MCP documentation updated
-- [x] MCP documentation not needed
-- MCP area: no MCP contract changed; `backend/app/main.py` only registers the
-  conversion-loop router alongside existing routes.
-- Wiki handoff note: no MCP endpoint, tool, protocol, authorization, or tenant
-  boundary changed; no MCP documentation update is required.
+- [x] MCP documentation updated
+- [ ] MCP documentation not needed
+- MCP area: Workspace MCP / tenant isolation / client compatibility.
+- Wiki handoff note: canonical Workspace MCP documentation now names
+  `search_firm_memory`, its `matters:read` + `documents:read` boundary, bounded
+  matter-scoped inputs/results, safe portal links, privacy boundary, and the
+  separation from Research MCP.

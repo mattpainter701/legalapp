@@ -198,7 +198,27 @@ async def test_connected_source_query_searches_cloud_and_smb(monkeypatch):
     )
     import app.services.smb as smb_module
 
-    smb = SimpleNamespace(search_files=AsyncMock(return_value=[_hit()]))
+    file_payload = {
+        "id": "00000000-0000-0000-0000-000000000010",
+        "filename": "contract.docx",
+        "ext": ".docx",
+        "owner": "Alice",
+        "size_bytes": 1234,
+        "modified_time": "2026-01-02T00:00:00Z",
+        "path": r"\\server\share\contract.docx",
+        "snippet": "smb body",
+        "page_number": 4,
+        "score": 2.0,
+        "share_id": "00000000-0000-0000-0000-000000000020",
+    }
+    local_result = SimpleNamespace(
+        hits=[SimpleNamespace(model_dump=lambda **_: file_payload)],
+        partial=False,
+        errors=[],
+        correlation_id="corr-1",
+        duration_ms=20,
+    )
+    smb = SimpleNamespace(search_local_files=AsyncMock(return_value=local_result))
     monkeypatch.setattr(smb_module, "smb_service", smb)
     monkeypatch.setattr(
         rag, "_connected_providers", AsyncMock(return_value=["google_drive"])
@@ -206,21 +226,15 @@ async def test_connected_source_query_searches_cloud_and_smb(monkeypatch):
     monkeypatch.setattr(rag, "set_tenant_context", AsyncMock())
     monkeypatch.setattr(rag.settings, "SMB_ENABLED", True)
     monkeypatch.setattr(rag.settings, "CLOUD_SEARCH_ENABLED", True)
-    monkeypatch.setattr(
-        rag,
-        "_fetch_smb_rag_content",
-        AsyncMock(return_value=({"file-1": "smb body"}, ("smb_content_fetch_failed",))),
-    )
-
     result = await rag._connected_source_query(
         question="find contract",
         tenant_id="00000000-0000-0000-0000-000000000001",
-        user_id="user",
+        user_id="00000000-0000-0000-0000-000000000002",
         cloud_search_service=cloud,
         retrieval_planner=planner,
         tenant_name="Demo",
         matter_context_str=None,
-        matter_id=None,
+        matter_id="00000000-0000-0000-0000-000000000003",
         matter_cloud_folder=None,
         redis=object(),
         db=Db(),
@@ -228,9 +242,10 @@ async def test_connected_source_query_searches_cloud_and_smb(monkeypatch):
     assert result[1][0]["object_id"] == "1"
     assert "cloud body" in result[0]
     assert "smb body" in result[2]
-    assert result.degradation_reasons == ("smb_content_fetch_failed",)
+    assert result.smb_hits == [file_payload]
+    assert result.degradation_reasons == ()
     cloud.search.assert_awaited_once()
-    smb.search_files.assert_awaited_once()
+    smb.search_local_files.assert_awaited_once()
 
 
 @pytest.mark.asyncio
