@@ -39,6 +39,7 @@ gate.
 | 14 | `COMP-14` | bounded integration ecosystem | 3 | L | Workspace MCP, OAuth integrations, outbox |
 | 15 | `COMP-15` | docket-derived litigation analytics | 3 | XL | `COMP-06`, `ECO-30–ECO-36` |
 | 16 | `COMP-16` | native staff/client mobile experience | 3 | XL | stable portal, communications, payments, offline policy |
+| 17 | `COMP-17` | downloadable Windows agent validation installer | 3 | XS | `agent-release.yml`, Windows packaging and upgrade smoke test |
 
 Current comparison references: [Clio platform](https://www.clio.com/features/),
 [Clio Work and Library](https://www.clio.com/work/ai-legal-research/),
@@ -48,6 +49,31 @@ Current comparison references: [Clio platform](https://www.clio.com/features/),
 and [Westlaw docket coverage](https://legal.thomsonreuters.com/en/products/westlaw/dockets-coverage).
 
 ### P0 — remove switching and research-trust blockers
+
+**PM acceptance snapshot (2026-08-30):** Independently revalidated against
+`origin/main` at `330c14a5`. `COMP-01` and `COMP-04` remain accepted. `COMP-02`
+remains open: PR #279 adds a narrow approval-bound client/matter import slice,
+but production-shaped closure still requires broader import reconciliation,
+provider-specific billing/trust/history handling, customer sign-off, and one
+rehearsed imported-client-to-payment-to-signed-closeout lifecycle. `COMP-03`
+remains open for its missing provider-backed conversion evidence; `COMP-05` is
+reopened because the merged Brief Check is a safe review-first scaffold but does
+not yet satisfy the full citation-resolution, pin-cite, treatment/currentness,
+omitted-authority, linked-export, and end-to-end acceptance below; and `COMP-06`
+remains open after independent review of hardened draft PR #280 through
+`5a14d029`. Version-keyed legal and caselaw snapshots, same-identity
+cutover/rollback fixtures, snapshot-backed search/detail/worker/metrics paths,
+and post-promotion mutation guards are material progress. They still do not form
+one production-shaped release chain: initial legacy snapshot backfill, atomic
+loader-to-chunker completion, promotion-time content/integrity checks, composite
+snapshot relationships, and a real loader/worker rehearsal are absent.
+Execution-resumable rights-gated harvest, scheduled retries/dead letters,
+complete platform-token middleware/audit/denial coverage, worker
+failure/drain/reopen and measured telemetry, concurrency, latest version-bound
+audits/currentness/partitions/isolation, and Brief Check currentness also remain
+open. See
+[`docs/core-milestone-status.md`](docs/core-milestone-status.md) for the evidence
+matrix and claim boundaries. Feature PRs do not self-certify these checkboxes.
 
 - [x] `COMP-01` Refresh `docs/competitive-gap-analysis.md`, README, pricing/demo
       claims, and the marketing capability catalog against dated official vendor
@@ -75,7 +101,7 @@ and [Westlaw docket coverage](https://legal.thomsonreuters.com/en/products/westl
       offboarding/deletion, DPA/BAA applicability, subprocessors, security-review
       packet, penetration-test cadence, and certification roadmap. Never present
       a planned control or audit as an attained certification.
-- [x] `COMP-05` Ship a review-first **Brief Check** that parses an uploaded brief
+- [ ] `COMP-05` Ship a review-first **Brief Check** that parses an uploaded brief
       or selected Word document, normalizes and resolves citations, verifies
       quotations and pin cites against accessible source text, reports missing or
       ambiguous sources, applies available treatment/currentness evidence, finds
@@ -163,6 +189,11 @@ and [Westlaw docket coverage](https://legal.thomsonreuters.com/en/products/westl
       encrypted queue with conflict handling, time capture, portal messaging, and
       approved payment handoff; require remote logout/wipe semantics, device tests,
       accessibility, app-store privacy disclosures, and mobile incident support.
+- [ ] `COMP-17` Preserve the Windows installer exercised by unsigned validation:
+      upload the generated MSI alongside the EXE, assert that both build outputs
+      exist before artifact publication, and retain checksums so operators can test
+      the exact installer covered by the Windows upgrade smoke test. Keep signed,
+      tagged release publication as the separate customer-distribution gate.
 
 ### Explicit competitive non-goals
 
