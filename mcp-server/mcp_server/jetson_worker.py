@@ -24,12 +24,13 @@ def update_sql(corpus: str, model_version: str = "1") -> str:
     if corpus not in CORPORA:
         raise ValueError(f"unsupported embedding corpus: {corpus}")
     updated_at = ",\n            updated_at = now()" if corpus == "legal_document_chunks" else ""
+    identity_column = "id" if corpus == "legal_document_chunks" else "chunk_id"
     return f"""
         UPDATE {corpus}
         SET embedding = %s::vector,
             embedding_model = %s,
             embedding_version = %s{updated_at}
-        WHERE id = %s
+        WHERE {identity_column} = %s
     """
 
 
@@ -91,6 +92,7 @@ def embed_batch(model, texts: list[str], batch_size: int) -> list[list[float]]:
 
 def process_once(config: WorkerConfig, model) -> int:
     config.validate()
+    overall_total = 0
     with connect(config.db_url) as conn:
         for corpus in CORPORA:
             with conn.cursor() as cur:
@@ -107,6 +109,15 @@ def process_once(config: WorkerConfig, model) -> int:
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb) ON CONFLICT DO NOTHING""",
                     [shard_key, version, corpus, config.model, config.model_version, config.dim,
                      config.temperature_c, json.dumps(config.capacity_evidence or {})])
+                cur.execute(
+                    f"""UPDATE authority_embedding_shards SET status='queued',
+                           lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL,
+                           updated_at=now()
+                        WHERE shard_key=%s AND status='complete'
+                          AND EXISTS (SELECT 1 FROM {corpus}
+                                      WHERE embedding IS NULL AND corpus_version=%s)""",
+                    [shard_key, version],
+                )
             conn.commit()
             if not claim_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id)):
                 continue
@@ -145,12 +156,12 @@ def process_once(config: WorkerConfig, model) -> int:
                         total += len(updates)
                 elapsed = max(time.monotonic() - started, 0.001)
                 finish_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id), success=True, throughput_per_minute=total / elapsed * 60)
-                return total
+                overall_total += total
             except Exception as exc:
                 conn.rollback()
                 finish_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id), success=False, error=str(exc), throughput_per_minute=total / max(time.monotonic() - started, 0.001) * 60)
                 continue
-        return 0
+        return overall_total
 
 
 def parse_args() -> argparse.Namespace:
