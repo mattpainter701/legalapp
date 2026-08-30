@@ -62,7 +62,64 @@ def init_schema(db_url: str | None = None) -> None:
     with connect(db_url) as conn:
         with conn.cursor() as cur:
             cur.execute(SCHEMA_SQL)
+        backfill_promoted_caselaw_snapshot(conn)
         conn.commit()
+
+
+def backfill_promoted_caselaw_snapshot(conn) -> int:
+    """Idempotently materialize the legacy served corpus into snapshots."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT version FROM authority_corpus_versions
+            WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1
+        """)
+        row = cur.fetchone()
+        if not row:
+            return 0
+        version = row[0]
+        cur.execute("""
+            INSERT INTO authority_case_clusters
+              (corpus_version, cluster_id, docket_id, case_name, date_filed, citations)
+            SELECT %s, cluster_id, docket_id, case_name, date_filed, citations
+            FROM opinion_clusters WHERE corpus_version=%s
+            ON CONFLICT (corpus_version, cluster_id) DO NOTHING
+        """, [version, version])
+        cur.execute("""
+            INSERT INTO authority_case_opinions
+              (corpus_version, opinion_id, cluster_id, source_url, plain_text)
+            SELECT %s, o.opinion_id, o.cluster_id, o.source_url,
+                   COALESCE(o.plain_text, o.html_with_citations)
+            FROM opinions o
+            JOIN opinion_clusters cl ON cl.cluster_id=o.cluster_id
+                                      AND cl.corpus_version=%s
+            ON CONFLICT (corpus_version, opinion_id) DO NOTHING
+        """, [version, version])
+        cur.execute("""
+            INSERT INTO authority_case_chunks
+              (corpus_version, chunk_id, opinion_id, cluster_id, court_id,
+               chunk_index, content, embedding, embedding_model, embedding_version)
+            SELECT %s, oc.id, oc.opinion_id, oc.cluster_id, oc.court_id,
+                   oc.chunk_index, oc.content, oc.embedding, oc.embedding_model,
+                   oc.embedding_version::text
+            FROM opinion_chunks oc
+            JOIN opinion_clusters cl ON cl.cluster_id=oc.cluster_id
+                                      AND cl.corpus_version=%s
+            ON CONFLICT (corpus_version, opinion_id, chunk_index) DO NOTHING
+        """, [version, version])
+        cur.execute("""
+            INSERT INTO authority_case_citations
+              (corpus_version, citing_opinion_id, cited_opinion_id,
+               cited_cluster_id, cited_reporter, cited_volume, cited_page, depth)
+            SELECT %s, cit.citing_opinion_id, cit.cited_opinion_id,
+                   cit.cited_cluster_id, cit.cited_reporter, cit.cited_volume,
+                   cit.cited_page, cit.depth
+            FROM opinion_citations cit
+            WHERE cit.citing_opinion_id IN (
+                SELECT opinion_id FROM authority_case_opinions WHERE corpus_version=%s
+            ) AND cit.cited_opinion_id IS NOT NULL
+            ON CONFLICT DO NOTHING
+        """, [version, version])
+        return cur.rowcount
 
 
 def list_bulk_keys() -> list[str]:

@@ -138,6 +138,16 @@ def promote_corpus_version(conn: Any, *, version: str, actor: str, reason: str) 
         """, [version])
         if not cur.fetchone()[0]:
             raise PermissionError("a corpus version must contain searchable authority snapshot chunks")
+        cur.execute("""
+            SELECT COUNT(*) FROM authority_case_chunks ch
+            LEFT JOIN authority_case_opinions op
+              ON op.corpus_version=ch.corpus_version AND op.opinion_id=ch.opinion_id
+            LEFT JOIN authority_case_clusters cl
+              ON cl.corpus_version=ch.corpus_version AND cl.cluster_id=ch.cluster_id
+            WHERE ch.corpus_version=%s AND (op.opinion_id IS NULL OR cl.cluster_id IS NULL)
+        """, [version])
+        if cur.fetchone()[0]:
+            raise PermissionError("corpus snapshot contains orphaned chunks")
         cur.execute("UPDATE authority_corpus_versions SET status='retired' WHERE status='promoted' AND version <> %s", [version])
         cur.execute("""
             UPDATE authority_corpus_versions
