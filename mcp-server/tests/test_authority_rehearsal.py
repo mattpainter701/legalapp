@@ -51,6 +51,7 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
 
     init_schema(db_url)
     version = "rehearsal-authority-" + uuid.uuid4().hex
+    dimension = 1024
     with connect(db_url) as conn:
 
         def db_reject(sql, params=()):
