@@ -12,12 +12,14 @@ semantic retrieval, or native Windows ACL preservation.
 
 ## Validation
 
-- `pytest -q backend/tests/test_firm_memory_workspace_mcp.py backend/tests/test_smb_pipeline.py backend/tests/test_release_notes.py`
-- `ruff check` on changed Python files
-- `python -m compileall -q backend/app`
-- frontend API contract test and `npm run build`
-- PostgreSQL-backed integration/rehearsal checks are pending because the local
-  test Postgres service refused connections.
+- agent: `156 passed`
+- backend focused contracts: `35 passed`
+- frontend: `440 passed`; ESLint has two existing `no-alert` warnings and no errors
+- frontend production build: passed
+- `ruff check` on changed Python files and `compileall`: passed
+- release-catalog generation check: passed
+- PostgreSQL-backed integration remains for GitHub CI because the local Docker
+  service could not be started without host service privileges.
 
 ## Merge policy attestations
 

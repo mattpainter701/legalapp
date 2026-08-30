@@ -229,7 +229,11 @@ async def test_local_search_rejects_unassigned_scope_without_calling_index(smb):
         ("query", "q" * 1001),
         ("limit", 51),
         ("correlation_id", "c" * 129),
+        ("correlation_id", "run-invalid\nforged-log-line"),
         ("scopes", [{"share_id": "share-1", "folder_path": "..\\private"}]),
+        ("scopes", [{"share_id": "share-1", "folder_path": "\\private"}]),
+        ("file_extensions", ["pdf", 7]),
+        ("file_extensions", ["../../pdf"]),
     ],
 )
 async def test_local_search_rejects_invalid_bounded_input_without_leaking_query(

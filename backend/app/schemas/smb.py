@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -320,7 +321,9 @@ class ContentFetchTask(BaseModel):
     scopes: list[dict] | None = Field(None, max_length=100)
     file_extensions: list[str] | None = Field(None, max_length=50)
     limit: int | None = Field(None, ge=1, le=50)
-    correlation_id: str | None = Field(None, max_length=128)
+    correlation_id: str | None = Field(
+        None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    )
 
 
 class ContentFetchResult(BaseModel):
@@ -333,6 +336,34 @@ class ContentFetchResult(BaseModel):
     # Set by verify/scan tasks; content fetches leave it at the default.
     ok: bool = True
     detail: dict | None = None
+
+
+class LocalSearchResultHit(BaseModel):
+    """Strict untrusted result row accepted from a local-search worker."""
+
+    model_config = {"extra": "forbid", "allow_inf_nan": False}
+
+    share_id: str = Field(..., min_length=1, max_length=128)
+    relative_path: str = Field(..., min_length=1, max_length=32768)
+    filename: str = Field(..., min_length=1, max_length=500)
+    ext: str | None = Field(None, max_length=20)
+    snippet: str | None = Field(None, max_length=10000)
+    page_number: int | None = Field(None, ge=1, le=10_000_000)
+    score: float = Field(0.0, ge=-1_000_000, le=1_000_000)
+
+
+class LocalSearchResultDetail(BaseModel):
+    """Versioned, bounded result envelope for the local-search task kind."""
+
+    model_config = {"extra": "forbid"}
+
+    schema_version: Literal[1]
+    correlation_id: str = Field(..., pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+    hits: list[LocalSearchResultHit] = Field(default_factory=list, max_length=50)
+    index_state: str = Field(..., min_length=1, max_length=40)
+    indexed_files: int = Field(0, ge=0, le=1_000_000_000)
+    pending_files: int = Field(0, ge=0, le=1_000_000_000)
+    duration_ms: int = Field(0, ge=0, le=86_400_000)
 
 
 class TaskAck(BaseModel):
@@ -360,7 +391,9 @@ class FirmMemorySearchRequest(BaseModel):
     matter_id: str = Field(..., min_length=1, max_length=64)
     file_extensions: list[str] | None = Field(None, max_length=50)
     limit: int = Field(20, ge=1, le=50)
-    correlation_id: str | None = Field(None, max_length=128)
+    correlation_id: str | None = Field(
+        None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    )
 
     @field_validator("query")
     @classmethod

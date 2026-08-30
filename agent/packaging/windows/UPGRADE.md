@@ -21,7 +21,7 @@ availability gap and can discard installer-managed state. Run the upgrade
 directly with the new package:
 
 ```powershell
-$msi = "C:\Downloads\lawhand-agent-0.15.2-x64.msi"
+$msi = "C:\Downloads\lawhand-agent-0.15.3-x64.msi"
 $log = "C:\Windows\Temp\lawhand-agent-upgrade.log"
 $args = "/i `"$msi`" /qn /norestart /l*v `"$log`""
 $p = Start-Process msiexec.exe -ArgumentList $args -Wait -PassThru

@@ -133,6 +133,29 @@ def test_build_smb_rag_context_includes_all_metadata_and_fallback_snippet():
     assert "Content:\nsnippet text" in result
 
 
+def test_firm_memory_context_and_chunks_share_safe_page_citation_ids():
+    file_id = "00000000-0000-0000-0000-000000000010"
+    matter_id = "00000000-0000-0000-0000-000000000003"
+    hit = {
+        "id": file_id,
+        "filename": "motion.pdf",
+        "path": r"\\FILESERVER\Cases\motion.pdf",
+        "snippet": "The motion is granted in part.",
+        "page_number": 9,
+        "modified_time": "2026-08-30T12:00:00Z",
+    }
+
+    context = rag._build_firm_memory_context([hit])
+    chunks = rag._firm_memory_chunks([hit], matter_id)
+
+    assert "[source: firm-memory:" in context
+    assert "Page: 9" in context
+    assert chunks[0]["id"] in context
+    assert chunks[0]["page_number"] == 9
+    assert chunks[0]["url"] == f"/firm-memory?matter={matter_id}&file={file_id}"
+    assert not chunks[0]["url"].startswith(("file:", "smb:"))
+
+
 @pytest.mark.asyncio
 async def test_connected_source_query_cloud_and_smb_paths(monkeypatch):
     import app.services.smb as smb
@@ -149,16 +172,21 @@ async def test_connected_source_query_cloud_and_smb_paths(monkeypatch):
                 "keywords": ["term"],
             }
 
-    hit = SimpleNamespace(
-        id="f1",
-        filename="x.txt",
-        ext="txt",
-        owner=None,
-        size_bytes=0,
-        modified_time=None,
-        path=None,
-        snippet="s",
-    )
+    file_id = "00000000-0000-0000-0000-000000000010"
+    hit_payload = {
+        "id": file_id,
+        "filename": "x.txt",
+        "ext": ".txt",
+        "owner": None,
+        "size_bytes": 0,
+        "modified_time": None,
+        "path": r"\\server\share\x.txt",
+        "snippet": "matched passage",
+        "page_number": 2,
+        "score": 3.0,
+        "share_id": "00000000-0000-0000-0000-000000000020",
+    }
+    hit = SimpleNamespace(model_dump=lambda **_: hit_payload)
 
     class Cloud:
         async def search(self, **_kwargs):
@@ -173,8 +201,14 @@ async def test_connected_source_query_cloud_and_smb_paths(monkeypatch):
             ]
 
     class Smb:
-        async def search_files(self, **_kwargs):
-            return [hit]
+        async def search_local_files(self, *_args, **_kwargs):
+            return SimpleNamespace(
+                hits=[hit],
+                partial=True,
+                errors=["agent_search_timeout"],
+                correlation_id="corr-1",
+                duration_ms=44,
+            )
 
     async def providers(*_args):
         return ["drive"]
@@ -182,34 +216,33 @@ async def test_connected_source_query_cloud_and_smb_paths(monkeypatch):
     async def context(*_args):
         return None
 
-    async def fetch(*_args, **_kwargs):
-        return {"f1": "full"}, ("smb_content_fetch_failed",)
-
     monkeypatch.setattr(rag, "async_session_maker", lambda: DbSession(Db()))
     monkeypatch.setattr(rag, "set_tenant_context", context)
     monkeypatch.setattr(rag, "_connected_providers", providers)
     monkeypatch.setattr(rag.settings, "SMB_ENABLED", True)
     monkeypatch.setattr(rag.settings, "CLOUD_SEARCH_ENABLED", True)
     monkeypatch.setattr(rag, "build_cloud_context", AsyncMock(return_value="cloud"))
-    monkeypatch.setattr(rag, "_fetch_smb_rag_content", fetch)
     monkeypatch.setattr(smb, "smb_service", Smb())
     result = await rag._connected_source_query(
         question="question",
         tenant_id="00000000-0000-0000-0000-000000000001",
-        user_id="u",
+        user_id="00000000-0000-0000-0000-000000000002",
         cloud_search_service=Cloud(),
         retrieval_planner=Planner(),
         tenant_name="Tenant",
         matter_context_str=None,
-        matter_id=None,
+        matter_id="00000000-0000-0000-0000-000000000003",
         matter_cloud_folder=None,
         redis=object(),
         conversation_id="c",
         db=Db(),
     )
     assert result[0] == "cloud"
-    assert result[2].startswith("[S1]")
-    assert result.degradation_reasons == ("smb_content_fetch_failed",)
+    assert "[F1]" in result[2]
+    assert "untrusted evidence" in result[2]
+    assert "[source: firm-memory:" in result[2]
+    assert result.smb_hits == [hit_payload]
+    assert result.degradation_reasons == ("agent_search_timeout",)
 
 
 class DbSession:

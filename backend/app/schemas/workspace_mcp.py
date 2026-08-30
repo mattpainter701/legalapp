@@ -44,6 +44,44 @@ class SearchMattersArgs(ChatActionModel):
     limit: int = Field(default=25, ge=1, le=50)
 
 
+class SearchFirmMemoryArgs(ChatActionModel):
+    """Search matter-bound files through the customer's local agent."""
+
+    matter_id: UUID
+    query: str = Field(min_length=1, max_length=1000)
+    file_extensions: list[str] | None = Field(default=None, max_length=50)
+    limit: int = Field(default=20, ge=1, le=50)
+    correlation_id: str | None = Field(
+        default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    )
+
+    @field_validator("query")
+    @classmethod
+    def normalize_query(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Query must not be blank")
+        return value
+
+    @field_validator("file_extensions")
+    @classmethod
+    def normalize_extensions(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        normalized: list[str] = []
+        for raw_extension in value:
+            extension = str(raw_extension).strip().lower()
+            if not extension:
+                continue
+            if not extension.startswith("."):
+                extension = f".{extension}"
+            if len(extension) > 20:
+                raise ValueError("File extensions must be at most 20 characters")
+            if extension not in normalized:
+                normalized.append(extension)
+        return normalized or None
+
+
 class SearchTasksArgs(ChatActionModel):
     query: str | None = Field(default=None, min_length=1, max_length=200)
     matter_id: UUID | None = None

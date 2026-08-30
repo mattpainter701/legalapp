@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 
 import smbclient
@@ -31,6 +32,10 @@ logger = logging.getLogger("clarity_agent.tasks")
 # How many entries a connection test lists before reporting success. Enough to
 # prove the mount and read permission without walking a large share.
 VERIFY_SAMPLE_LIMIT = 25
+
+
+class _LocalSearchInputError(ValueError):
+    """A fixed, query-free task validation error safe to return and log."""
 
 
 class TaskWorker:
@@ -107,7 +112,7 @@ class TaskWorker:
 
         def reject(message: str) -> None:
             # Keep query text and scope paths out of both logs and errors.
-            raise ValueError(message)
+            raise _LocalSearchInputError(message)
 
         try:
             if not isinstance(task_id, str) or not task_id:
@@ -116,6 +121,8 @@ class TaskWorker:
                 reject("correlation_id is required")
             if len(correlation_id) > 128:
                 reject("correlation_id must be at most 128 characters")
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", correlation_id):
+                reject("correlation_id contains invalid characters")
             if not isinstance(query, str) or not query.strip():
                 reject("query is required")
             if len(query) > 1000:
@@ -132,6 +139,12 @@ class TaskWorker:
                 reject("file_extensions must be a list")
             if extensions is not None and len(extensions) > 50:
                 reject("file_extensions is too large")
+            if extensions is not None and any(
+                not isinstance(extension, str)
+                or not re.fullmatch(r"\.?[A-Za-z0-9][A-Za-z0-9_-]{0,18}", extension)
+                for extension in extensions
+            ):
+                reject("file_extensions contains an invalid extension")
             for scope in scopes:
                 if not isinstance(scope, dict) or not scope.get("share_id"):
                     reject("each search scope requires a share_id")
@@ -146,7 +159,7 @@ class TaskWorker:
                 if (
                     any(part == ".." for part in parts)
                     or ":" in folder
-                    or folder.startswith("/")
+                    or folder.startswith(("/", "\\"))
                 ):
                     reject("search scope is outside its assigned share")
 
@@ -182,7 +195,8 @@ class TaskWorker:
             }
             hits = [
                 {key: hit[key] for key in allowed if key in hit}
-                for hit in result.get("hits", [])
+                for hit in result.get("hits", [])[:limit]
+                if isinstance(hit, dict)
             ]
             detail = self._search_detail(
                 correlation_id,
@@ -201,7 +215,7 @@ class TaskWorker:
                 detail["pending_files"],
                 detail["duration_ms"],
             )
-        except ValueError as exc:
+        except _LocalSearchInputError as exc:
             await self.client.submit_task_result(task_id, ok=False, error=str(exc))
             logger.warning(
                 "Local search rejected correlation_id=%s reason=%s",

@@ -44,6 +44,7 @@ from app.schemas.workspace_mcp import (
     GetTaskArgs,
     ProposeDocumentFromTemplateArgs,
     SearchClientsArgs,
+    SearchFirmMemoryArgs,
     SearchIntakesArgs,
     SearchMattersArgs,
     SearchTasksArgs,
@@ -92,6 +93,9 @@ class CapabilityContext:
     # adapters must also pass a bounded, server-resolved source set before a
     # proposal may bind evidence.
     allowed_sources: list[dict[str, Any]] | None = None
+    # Relay transport is supplied by authenticated adapters that can initiate
+    # outbound-agent work. In-app chat capability calls leave it unset.
+    redis: Any | None = None
 
     @property
     def tenant_id(self) -> uuid.UUID:
@@ -244,6 +248,21 @@ CAPABILITY_SPECS: tuple[CapabilitySpec, ...] = (
         effect=CapabilityEffect.READ,
         approval_policy=ApprovalPolicy.NONE,
         required_scopes=("tasks:read",),
+        audiences=("workspace_mcp",),
+    ),
+    CapabilitySpec(
+        name="search_firm_memory",
+        description=(
+            "Search inside files bound to one matter using the firm's local "
+            "full-text index. Returns ranked snippets, page numbers, canonical "
+            "UNC paths for copying, safe LawHand result links, index coverage, "
+            "and latency. The local agent must be online and indexed."
+        ),
+        args_model=SearchFirmMemoryArgs,
+        handler_name="search_firm_memory",
+        effect=CapabilityEffect.READ,
+        approval_policy=ApprovalPolicy.NONE,
+        required_scopes=("matters:read", "documents:read"),
         audiences=("workspace_mcp",),
     ),
     CapabilitySpec(

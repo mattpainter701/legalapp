@@ -2,6 +2,7 @@ import asyncio
 import json
 import uuid
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -202,6 +203,48 @@ async def test_hybrid_rag_serializes_db_phases_on_supplied_session(monkeypatch):
     assert tenant_context_calls == [
         (supplied_db, "00000000-0000-0000-0000-000000000001")
     ]
+
+
+@pytest.mark.asyncio
+async def test_hybrid_rag_adds_firm_memory_hits_to_structured_chunks(monkeypatch):
+    matter_id = "00000000-0000-0000-0000-000000000003"
+    file_id = "00000000-0000-0000-0000-000000000010"
+
+    async def local(**_kwargs):
+        return "", rag.RAGChunks()
+
+    async def connected(**_kwargs):
+        return rag.ConnectedSourceResults(
+            smb_context="firm context",
+            smb_hits=[
+                {
+                    "id": file_id,
+                    "filename": "motion.pdf",
+                    "path": r"\\FILESERVER\Cases\motion.pdf",
+                    "snippet": "Matched holding.",
+                    "page_number": 6,
+                }
+            ],
+        )
+
+    monkeypatch.setattr(rag, "full_rag_query", local)
+    monkeypatch.setattr(rag, "_connected_source_query", connected)
+    monkeypatch.setattr(rag, "set_tenant_context", AsyncMock())
+
+    context, chunks, cloud_hits = await rag.hybrid_rag_query(
+        db=object(),
+        embedding_service=object(),
+        question="summary judgment",
+        tenant_id="00000000-0000-0000-0000-000000000001",
+        matter_id=matter_id,
+    )
+
+    assert "firm context" in context
+    assert cloud_hits == []
+    assert len(chunks) == 1
+    assert chunks[0]["source_type"] == "firm_memory"
+    assert chunks[0]["page_number"] == 6
+    assert chunks[0]["url"] == f"/firm-memory?matter={matter_id}&file={file_id}"
 
 
 @pytest.mark.asyncio
@@ -432,7 +475,9 @@ def test_public_search_infers_explicit_ohio_and_federal_jurisdictions():
         "US",
     ]
     assert rag.infer_public_jurisdiction("U.S. evidence rule", "search_caselaw") == "F"
-    assert rag.infer_public_jurisdiction("Help us with evidence", "search_caselaw") is None
+    assert (
+        rag.infer_public_jurisdiction("Help us with evidence", "search_caselaw") is None
+    )
 
 
 def test_public_search_default_prefers_matter_then_verified_user_profile():

@@ -99,6 +99,7 @@ _APP_CAPABILITIES_BY_TOOL: dict[str, frozenset[str]] = {
     "search_intakes": frozenset({"manage_intake"}),
     "get_intake": frozenset({"manage_intake"}),
     "search_matters": frozenset({"manage_matters"}),
+    "search_firm_memory": frozenset({"manage_matters", "manage_documents"}),
     "search_tasks": frozenset({"manage_matters"}),
     "get_task": frozenset({"manage_matters"}),
     "find_matter": frozenset({"manage_matters"}),
@@ -264,6 +265,21 @@ def _tool_success(payload: dict[str, Any]) -> mcp_types.CallToolResult:
     )
 
 
+def _success_audit_metadata(spec: CapabilitySpec, result: dict[str, Any]) -> dict:
+    """Keep tool audit useful without retaining private search text or snippets."""
+    metadata: dict[str, Any] = {"effect": spec.effect.value}
+    if spec.name == "search_firm_memory":
+        metadata.update(
+            {
+                "correlation_id": str(result.get("correlation_id") or "")[:128],
+                "result_count": max(0, int(result.get("result_count") or 0)),
+                "duration_ms": max(0, int(result.get("duration_ms") or 0)),
+                "partial": bool(result.get("partial")),
+            }
+        )
+    return metadata
+
+
 async def _load_workspace_actor(
     db: AsyncSession, identity: WorkspaceMCPIdentity
 ) -> tuple[User, frozenset[str]]:
@@ -366,6 +382,9 @@ async def execute_workspace_capability(
                     or request.headers.get("X-Idempotency-Key")
                 ),
                 granted_scopes=identity.scopes,
+                redis=getattr(
+                    getattr(request.scope.get("app"), "state", None), "redis", None
+                ),
             )
             spec.authorize(context)
 
@@ -379,6 +398,7 @@ async def execute_workspace_capability(
                     "unsupported_tool", "Workspace capability is unavailable"
                 )
             result = await handler(context, parsed)
+            audit_metadata = _success_audit_metadata(spec, result)
             if spec.mutating:
                 # Proposal state and its audit evidence commit atomically.
                 await append_workspace_mcp_audit(
@@ -391,7 +411,7 @@ async def execute_workspace_capability(
                     event_type="tool_called",
                     tool_name=spec.name,
                     outcome="success",
-                    metadata={"effect": spec.effect.value},
+                    metadata=audit_metadata,
                 )
                 await db.commit()
             else:
@@ -411,7 +431,7 @@ async def execute_workspace_capability(
                         event_type="tool_called",
                         tool_name=spec.name,
                         outcome="success",
-                        metadata={"effect": spec.effect.value},
+                        metadata=audit_metadata,
                     )
                     await audit_db.commit()
             return result

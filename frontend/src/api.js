@@ -2399,6 +2399,11 @@ export const searchSmbFiles = (params) =>
 export const searchFirmMemory = (data) =>
   api.post('/v1/smb/local-search', data).then(r => r.data)
 
+export const getFirmMemoryFile = (fileId, matterId) =>
+  api.get(`/v1/smb/files/${encodeURIComponent(fileId)}/detail`, {
+    params: { matter_id: matterId },
+  }).then(r => r.data)
+
 // ── Trust Accounting ─────────────────────────────────────────────────────────
 export const createTrustAccount = (body) =>
   api.post('/trust/accounts', body).then(r => r.data)

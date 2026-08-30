@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Check, Clipboard, FileText, Search, SlidersHorizontal, Sparkles } from 'lucide-react'
-import { getMattersV2, searchFirmMemory } from '../api'
+import { getFirmMemoryFile, getMattersV2, searchFirmMemory } from '../api'
 
 const EXTENSIONS = ['All files', 'PDF', 'DOCX', 'DOC', 'TXT']
 
@@ -37,6 +37,12 @@ function HighlightedText({ text, query }) {
 function statusLabel(result) {
   if (!result) return null
   if (result.partial || result.degraded) return 'Search completed with limited coverage'
+  if (result.deep_link) return 'Matter file link resolved'
+  const agentStates = result.agent_statuses || result.agent_summaries || result.agents || []
+  if (agentStates.length && agentStates.every((item) => (
+    ['ready', 'complete'].includes(String(item.index_state || '').toLowerCase())
+    && ['ready', 'success'].includes(String(item.status || '').toLowerCase())
+  ))) return 'Index ready'
   const state = String(result.index_state || '').toLowerCase()
   if (state === 'ready' || state === 'complete') return 'Index ready'
   if (state) return `Index ${state}`
@@ -68,10 +74,19 @@ export default function FirmMemoryPage() {
         const fromUrl = new URLSearchParams(window.location.search).get('matter')
         const initial = items.find((item) => String(item.id) === String(fromUrl))?.id || (items.length === 1 ? items[0].id : '')
         if (initial) setMatterId(String(initial))
+        if (requestedFile && fromUrl && String(initial) === String(fromUrl)) {
+          getFirmMemoryFile(requestedFile, fromUrl)
+            .then((hit) => {
+              const id = String(hit?.id || hit?.file_id || '')
+              setResult({ hits: hit ? [hit] : [], deep_link: true })
+              setSelectedId(id)
+            })
+            .catch(() => setError('This matter file link is unavailable or no longer authorized.'))
+        }
       })
       .catch(() => setError('Matters could not be loaded. Refresh and try again.'))
       .finally(() => setLoadingMatters(false))
-  }, [])
+  }, [requestedFile])
 
   const runSearch = useCallback(async (event) => {
     event?.preventDefault()
@@ -109,7 +124,7 @@ export default function FirmMemoryPage() {
 
   const hits = Array.isArray(result?.hits) ? result.hits : []
   const selectedMatter = matters.find((item) => String(item.id) === String(matterId))
-  const indexSummary = result?.agent_summaries || result?.agents || []
+  const indexSummary = result?.agent_statuses || result?.agent_summaries || result?.agents || []
   const indexed = result?.indexed_files ?? indexSummary.reduce((total, item) => total + Number(item.indexed_files || 0), 0)
   const pending = result?.pending_files ?? indexSummary.reduce((total, item) => total + Number(item.pending_files || 0), 0)
 
@@ -151,19 +166,21 @@ export default function FirmMemoryPage() {
 
         {result && <section className="mt-7" aria-live="polite">
           <div className="mb-4 flex flex-col gap-2 rounded-xl border border-brand-line bg-brand-surface px-4 py-3 text-xs text-brand-muted sm:flex-row sm:items-center sm:justify-between">
-            <div><strong className="text-brand-ink">{hits.length} result{hits.length === 1 ? '' : 's'}</strong>{selectedMatter ? ` in ${matterName(selectedMatter)}` : ''} <span className="mx-1">·</span> {result.duration_ms != null ? `${Math.round(Number(result.duration_ms))} ms` : 'latency unavailable'}</div>
-            <div className="flex flex-wrap items-center gap-3"><span className={result.partial || result.degraded ? 'font-semibold text-amber-700' : 'text-emerald-700'}>{statusLabel(result)}</span>{indexed > 0 && <span>{indexed.toLocaleString()} indexed{pending > 0 ? ` · ${pending.toLocaleString()} pending` : ''}</span>}</div>
+            <div><strong className="text-brand-ink">{hits.length} result{hits.length === 1 ? '' : 's'}</strong>{selectedMatter ? ` in ${matterName(selectedMatter)}` : ''} <span className="mx-1">·</span> {result.deep_link ? 'linked file' : (result.duration_ms != null ? `${Math.round(Number(result.duration_ms))} ms` : 'latency unavailable')}</div>
+            <div className="flex flex-wrap items-center gap-3"><span className={result.partial || result.degraded ? 'font-semibold text-amber-700' : 'text-emerald-700'}>{statusLabel(result)}</span>{indexed > 0 && <span>{indexed.toLocaleString()} agent-wide indexed{pending > 0 ? ` · ${pending.toLocaleString()} agent-wide pending` : ''}</span>}</div>
           </div>
           {(result.partial || result.degraded || result.errors?.length) && <div className="mb-4 flex gap-2 rounded-xl border border-amber-300/60 bg-amber-50 p-4 text-sm text-amber-900"><AlertTriangle className="mt-0.5 shrink-0" size={17} /><div><strong>Coverage is limited for this search.</strong> {result.errors?.[0] || 'Some connected file indexes did not respond. These results do not represent the full corpus.'}</div></div>}
           {!hits.length ? <div className="rounded-2xl border border-dashed border-brand-line-2 bg-brand-surface px-6 py-14 text-center"><FileText className="mx-auto mb-3 text-brand-muted" size={30} /><h2 className="text-lg font-semibold">No matching documents</h2><p className="mt-1 text-sm text-brand-muted">Try a broader phrase, another file type, or confirm the matter’s local index is ready.</p></div> : <div className="space-y-3">{hits.map((hit, index) => {
             const id = String(hit.id || hit.file_id || '')
             const path = hit.path || hit.unc_path || ''
-            const link = id ? `${window.location.origin}/firm-memory?matter=${encodeURIComponent(matterId)}&file=${encodeURIComponent(id)}` : ''
+            const relativeLink = id ? `/firm-memory?matter=${encodeURIComponent(matterId)}&file=${encodeURIComponent(id)}` : ''
+            const link = relativeLink ? `${window.location.origin}${relativeLink}` : ''
             return <article key={`${id}-${index}`} className={`rounded-2xl border bg-brand-surface p-5 transition ${selectedId === id ? 'border-brand-accent ring-2 ring-brand-accent/20' : 'border-brand-line hover:border-brand-line-2'}`}>
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div className="min-w-0"><h2 className="truncate text-base font-semibold text-brand-ink"><HighlightedText text={hit.filename || hit.name || 'Untitled document'} query={query} /></h2><p className="mt-1 break-all font-mono text-xs text-brand-muted"><HighlightedText text={path} query={query} /></p></div><span className="shrink-0 rounded-full bg-brand-bg-soft px-2.5 py-1 text-xs font-semibold uppercase text-brand-muted">{String(hit.ext || 'file').replace('.', '')}</span></div>
               {hit.snippet && <p className="mt-4 text-sm leading-6 text-brand-ink-2"><HighlightedText text={hit.snippet} query={query} /></p>}
-              <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-brand-line pt-3 text-xs text-brand-muted"><span>{hit.page_number ? `Page ${hit.page_number}` : 'Document match'}</span>{hit.owner && <span>{hit.owner}</span>}{formatBytes(hit.size) && <span>{formatBytes(hit.size)}</span>}{formatDate(hit.modified_at || hit.updated_at) && <span>Modified {formatDate(hit.modified_at || hit.updated_at)}</span>}{hit.score != null && <span>Match {Number(hit.score).toFixed(2)}</span>}<span className="flex-1" />
+              <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-brand-line pt-3 text-xs text-brand-muted"><span>{hit.page_number ? `Page ${hit.page_number}` : 'Document match'}</span>{hit.owner && <span>{hit.owner}</span>}{formatBytes(hit.size_bytes ?? hit.size) && <span>{formatBytes(hit.size_bytes ?? hit.size)}</span>}{formatDate(hit.modified_time || hit.modified_at || hit.updated_at) && <span>Modified {formatDate(hit.modified_time || hit.modified_at || hit.updated_at)}</span>}{hit.score != null && <span>Match {Number(hit.score).toFixed(2)}</span>}<span className="flex-1" />
                 {path && <button type="button" onClick={() => copy(path, `path-${id}`)} className="inline-flex items-center gap-1.5 font-medium text-brand-ink hover:text-brand-accent">{copied === `path-${id}` ? <Check size={14} /> : <Clipboard size={14} />} {copied === `path-${id}` ? 'Copied path' : 'Copy UNC path'}</button>}
+                {relativeLink && <a href={relativeLink} className="inline-flex items-center gap-1.5 font-medium text-brand-ink hover:text-brand-accent">View result</a>}
                 {link && <button type="button" onClick={() => copy(link, `link-${id}`)} className="inline-flex items-center gap-1.5 font-medium text-brand-ink hover:text-brand-accent">{copied === `link-${id}` ? <Check size={14} /> : <Clipboard size={14} />} {copied === `link-${id}` ? 'Copied link' : 'Copy result link'}</button>}
               </div>
             </article>

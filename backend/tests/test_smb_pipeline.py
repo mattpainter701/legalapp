@@ -1,5 +1,6 @@
 """End-to-end security and scale contracts for the file-share relay."""
 
+import asyncio
 import uuid
 
 import pytest
@@ -217,7 +218,7 @@ async def test_content_read_failure_is_not_reported_as_an_empty_file(
 
 
 @pytest.mark.asyncio
-async def test_matter_folder_scope_pairs_each_folder_with_its_share(client):
+async def test_matter_folder_scope_pairs_each_folder_with_its_share(client, db_session):
     agent_id, api_key = await _register_agent(client)
     share_a = await _create_share(client, agent_id, "\\\\FS01\\CasesA")
     share_b = await _create_share(client, agent_id, "\\\\FS01\\CasesB")
@@ -262,9 +263,142 @@ async def test_matter_folder_scope_pairs_each_folder_with_its_share(client):
     assert result.status_code == 200, result.text
     assert {item["path"] for item in result.json()} == {a_inside, b_inside}
 
+    indexed_rows = (
+        await db_session.execute(
+            select(SmbFileIndex).where(
+                SmbFileIndex.path.in_([a_inside, a_sibling, b_wrong_folder])
+            )
+        )
+    ).scalars()
+    file_ids = {row.path: str(row.id) for row in indexed_rows}
+    resolved = await client.get(
+        f"/api/v1/smb/files/{file_ids[a_inside]}/detail",
+        params={"matter_id": matter_id},
+    )
+    sibling = await client.get(
+        f"/api/v1/smb/files/{file_ids[a_sibling]}/detail",
+        params={"matter_id": matter_id},
+    )
+    wrong_share_folder = await client.get(
+        f"/api/v1/smb/files/{file_ids[b_wrong_folder]}/detail",
+        params={"matter_id": matter_id},
+    )
+    assert resolved.status_code == 200
+    assert resolved.json()["path"] == a_inside
+    assert sibling.status_code == 404
+    assert wrong_share_folder.status_code == 404
+
     traversal = await client.post(
         f"/api/v1/smb/matters/{matter_id}/smb-shares",
         json={"share_id": share_a, "folder_path": "../other-matter"},
     )
     assert traversal.status_code == 400
     assert "within the assigned share" in traversal.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_local_search_fanout_validates_agent_hits_against_matter_scope(client):
+    agent_id, api_key = await _register_agent(client)
+    share_id = await _create_share(client, agent_id, "\\\\FS01\\Cases")
+    inside = "\\\\FS01\\Cases\\Client-1\\inside.txt"
+    outside = "\\\\FS01\\Cases\\Client-10\\outside.txt"
+    synced = await _sync(
+        client,
+        agent_id,
+        api_key,
+        share_id,
+        [_file(inside, "metadata only"), _file(outside, "metadata only")],
+    )
+    assert synced.status_code == 200, synced.text
+
+    matter = await client.post(
+        "/api/matters",
+        json={"matter_name": "Local search matter", "practice_area": "litigation"},
+    )
+    matter_id = matter.json()["id"]
+    bound = await client.post(
+        f"/api/v1/smb/matters/{matter_id}/smb-shares",
+        json={"share_id": share_id, "folder_path": "Client-1"},
+    )
+    assert bound.status_code == 200, bound.text
+
+    search_future = asyncio.create_task(
+        client.post(
+            "/api/v1/smb/local-search",
+            json={
+                "query": "summary judgment",
+                "matter_id": matter_id,
+                "file_extensions": ["txt"],
+                "limit": 10,
+                "correlation_id": "poc-run-123",
+            },
+        )
+    )
+    tasks = await client.get(
+        f"/api/v1/smb/agents/{agent_id}/tasks",
+        params={"wait_seconds": 2},
+        headers={"X-Agent-API-Key": api_key},
+    )
+    assert tasks.status_code == 200, tasks.text
+    search_task = next(item for item in tasks.json() if item["kind"] == "local_search")
+    assert search_task["query"] == "summary judgment"
+    assert search_task["correlation_id"] == "poc-run-123"
+    assert search_task["file_extensions"] == [".txt"]
+    assert search_task["scopes"] == [{"share_id": share_id, "folder_path": "Client-1"}]
+
+    reported = await client.post(
+        f"/api/v1/smb/agents/{agent_id}/tasks/{search_task['task_id']}/result",
+        headers={"X-Agent-API-Key": api_key},
+        json={
+            "task_id": search_task["task_id"],
+            "ok": True,
+            "detail": {
+                "schema_version": 1,
+                "correlation_id": "poc-run-123",
+                "index_state": "ready",
+                "indexed_files": 2,
+                "pending_files": 0,
+                "duration_ms": 17,
+                "hits": [
+                    {
+                        "share_id": share_id,
+                        "relative_path": "Client-1\\inside.txt",
+                        "filename": "agent-controlled-name.txt",
+                        "ext": ".txt",
+                        "snippet": "Relevant page-level passage.",
+                        "page_number": 3,
+                        "score": 9.5,
+                    },
+                    {
+                        "share_id": share_id,
+                        "relative_path": "Client-10\\outside.txt",
+                        "filename": "outside.txt",
+                        "snippet": "Must not escape the binding.",
+                        "score": 99,
+                    },
+                    {
+                        "share_id": share_id,
+                        "relative_path": "Client-1\\not-indexed.txt",
+                        "filename": "not-indexed.txt",
+                        "snippet": "Must exist in the SaaS metadata index.",
+                        "score": 100,
+                    },
+                ],
+            },
+        },
+    )
+    assert reported.status_code == 200, reported.text
+    response = await search_future
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["correlation_id"] == "poc-run-123"
+    assert payload["partial"] is False
+    assert payload["degraded"] is False
+    assert len(payload["hits"]) == 1
+    assert payload["hits"][0]["path"] == inside
+    assert payload["hits"][0]["filename"] == "inside.txt"
+    assert payload["hits"][0]["snippet"] == "Relevant page-level passage."
+    assert payload["hits"][0]["page_number"] == 3
+    assert payload["agent_statuses"][0]["index_state"] == "ready"
+    assert "summary judgment" not in response.text

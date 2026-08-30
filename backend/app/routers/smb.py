@@ -27,6 +27,7 @@ from app.schemas.smb import (
     AgentShareInfo,
     AgentStatusUpdate,
     ContentFetchResult,
+    FirmMemorySearchHit,
     FirmMemorySearchRequest,
     FirmMemorySearchResponse,
     MatterSmbShareCreate,
@@ -54,6 +55,7 @@ from app.services.smb_credentials import (
     SmbCredentialError,
     smb_credential_service,
 )
+from app.services.rbac_service import get_user_capabilities
 from app.services.token_vault import decrypt_token, encrypt_token
 
 logger = logging.getLogger(__name__)
@@ -62,6 +64,24 @@ router = APIRouter(prefix="/api/v1/smb", tags=["smb"])
 
 _REGISTRATION_RECEIPT_PREFIX = "smb_registration_receipt:v1:"
 _REGISTRATION_RECEIPT_TTL_SECONDS = 120
+
+
+async def require_firm_memory_user(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Require the same matter/document capabilities as Workspace MCP."""
+    user = await get_current_user(request, db)
+    capabilities = await get_user_capabilities(db, user.id)
+    # Keep only the established administrator fallback used by other legacy
+    # protected routes. Ordinary staff must hold both seeded RBAC capabilities.
+    legacy_staff = str(getattr(user, "role", "")).casefold() == "admin"
+    if not legacy_staff and not {
+        "manage_matters",
+        "manage_documents",
+    }.issubset(capabilities):
+        raise HTTPException(status_code=403, detail="Firm Memory access required")
+    return user
 
 
 def _registration_receipt_key(pairing_code: str) -> str:
@@ -375,7 +395,7 @@ async def search_local_files(
     body: FirmMemorySearchRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    user=Depends(get_current_user),
+    user=Depends(require_firm_memory_user),
 ):
     """Search matter-bound full text on the customer's outbound agent."""
     redis = getattr(request.app.state, "redis", None)
@@ -395,6 +415,25 @@ async def search_local_files(
         raise HTTPException(status_code=404, detail=str(exc))
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
+
+
+@router.get("/files/{file_id}/detail", response_model=FirmMemorySearchHit)
+async def get_matter_file(
+    file_id: str,
+    matter_id: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_firm_memory_user),
+):
+    """Resolve one safe Firm Memory deep link inside its matter binding."""
+    try:
+        return await smb_service.get_matter_file(
+            db,
+            str(user.tenant_id),
+            matter_id,
+            file_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 @router.post("/files/{file_id}/fetch-content")
