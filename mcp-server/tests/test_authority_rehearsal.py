@@ -1057,6 +1057,72 @@ def test_process_once_rehearsal_both_corpora():
     if not db_url:
         pytest.skip("set AUTHORITY_REHEARSAL_DATABASE_URL for the disposable DB rehearsal")
     init_schema(db_url)
+    version = "worker-rehearsal-" + uuid.uuid4().hex
+    source_key = "worker:rehearsal:" + version
+    model_name = "mixedbread-ai/mxbai-embed-large-v1"
+    model_version = "1"
+    dimension = 1024
+    document_id = uuid.uuid4()
+    with connect(db_url) as conn:
+        stage_corpus_version(
+            conn,
+            version=version,
+            manifest_hash="worker-rehearsal-manifest",
+            as_of="2026-08-30T00:00:00+00:00",
+            actor="rehearsal-admin",
+            reason="production worker rehearsal",
+            embedding_model=model_name,
+            embedding_version=model_version,
+            embedding_dimension=dimension,
+        )
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO legal_sources
+                    (source_key, publisher, source_type, canonical_url, enabled,
+                     storage_policy, rights_decision, reviewed_at, reviewed_by,
+                     expected_cadence, claim_safe_wording, metadata)
+                    VALUES (%s, 'Worker rehearsal', 'statute', 'https://worker.example',
+                            TRUE, 'normalized_text', 'official', now(), 'rehearsal-admin',
+                            'daily', 'Bounded worker rehearsal',
+                            '{\"catalog_schema_version\":\"rehearsal\",\"namespace\":\"public-authority\"}')""",
+                [source_key],
+            )
+            cur.execute(
+                """INSERT INTO legal_documents
+                    (id, source_key, external_id, document_type, title, jurisdiction,
+                     authority_tier, canonical_url, corpus_version, text_content,
+                     content_hash, metadata)
+                    VALUES (%s, %s, 'worker-doc', 'statute', 'Worker document', 'US',
+                            'binding_primary', 'https://worker.example/doc', %s,
+                            'Worker legal text', 'worker-doc-hash',
+                            '{\"namespace\":\"public-authority\"}')""",
+                [document_id, source_key, version],
+            )
+            cur.execute(
+                """INSERT INTO legal_document_chunks
+                    (document_id, chunk_index, content, content_hash, corpus_version)
+                    VALUES (%s, 0, 'Worker legal text', 'worker-chunk-hash', %s)""",
+                [document_id, version],
+            )
+            cur.execute(
+                """INSERT INTO authority_case_clusters
+                    (corpus_version, cluster_id, case_name, date_filed)
+                    VALUES (%s, 98200001, 'Worker case', '2026-01-01')""",
+                [version],
+            )
+            cur.execute(
+                """INSERT INTO authority_case_opinions
+                    (corpus_version, opinion_id, cluster_id, plain_text)
+                    VALUES (%s, 98200001, 98200001, 'Worker case opinion')""",
+                [version],
+            )
+            cur.execute(
+                """INSERT INTO authority_case_chunks
+                    (corpus_version, opinion_id, cluster_id, court_id, chunk_index, content)
+                    VALUES (%s, 98200001, 98200001, 'worker-court', 0, 'Worker case opinion')""",
+                [version],
+            )
+        conn.commit()
 
     class DeterministicModel:
         def encode(self, texts, **_kwargs):
@@ -1064,17 +1130,6 @@ def test_process_once_rehearsal_both_corpora():
 
     with connect(db_url) as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """SELECT version, embedding_model, embedding_version, embedding_dimension
-                     FROM authority_corpus_versions
-                    WHERE status IN ('staged', 'canary', 'promoted')
-                    ORDER BY CASE status WHEN 'staged' THEN 0 WHEN 'canary' THEN 1 ELSE 2 END,
-                             created_at DESC LIMIT 1"""
-            )
-            contract = cur.fetchone()
-            if not contract:
-                pytest.skip("release rehearsal has not produced a corpus version")
-            version, model_name, model_version, dimension = contract
             cur.execute(
                 """SELECT COUNT(*) FROM legal_document_chunks c
                      JOIN legal_documents d ON d.id=c.document_id
@@ -1089,8 +1144,7 @@ def test_process_once_rehearsal_both_corpora():
             )
             authority_before = cur.fetchone()[0]
         conn.commit()
-    if not legal_before and not authority_before:
-        pytest.skip("release rehearsal has no unembedded candidate chunks")
+    assert legal_before > 0 and authority_before > 0
     config = WorkerConfig(
         worker_id=0,
         total_workers=1,
@@ -1113,13 +1167,22 @@ def test_process_once_rehearsal_both_corpora():
     with connect(db_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """SELECT COUNT(*) FROM authority_embedding_shards
-                    WHERE corpus_version=%s AND status='complete'
-                      AND throughput_per_minute IS NOT NULL
-                      AND capacity_evidence->>'observed_at' IS NOT NULL""",
+                """SELECT corpus_table, status, model, model_version, dimension,
+                           throughput_per_minute, capacity_evidence->>'observed_at'
+                    FROM authority_embedding_shards
+                   WHERE corpus_version=%s
+                   ORDER BY corpus_table""",
                 [version],
             )
-            assert cur.fetchone()[0] >= 1
+            rows = cur.fetchall()
+    assert [row[0] for row in rows] == ["authority_case_chunks", "legal_document_chunks"]
+    for corpus_table, status, model, version_value, row_dimension, throughput, observed_at in rows:
+        assert status == "complete"
+        assert model == model_name
+        assert version_value == model_version
+        assert row_dimension == dimension
+        assert throughput is not None and throughput >= 0
+        assert observed_at is not None
 
 
 def test_legal_only_upgrade_bootstrap_rehearsal():
