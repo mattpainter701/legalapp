@@ -9,9 +9,13 @@ complete commercial-citator coverage or that any authority is “good law.”
 Every citator record is tied to a promoted `authority_corpus_versions` release,
 the release’s as-of time, a named reviewed source, and a source version. The
 control plane admits only sources classified as `official`, `open`, or
-`licensed`, with a completed source review and catalog implementation evidence.
-Custom, tenant, firm, private, unreviewed, and prohibited source keys fail
-closed; a public URL alone never establishes public-authority eligibility.
+`licensed`, with a completed source review, catalog implementation evidence,
+and an active, reviewed entry in the citator's explicit public
+catalog/manifest admission list. Custom, tenant, firm, private-shaped,
+unreviewed, and prohibited source keys fail closed; a public URL or metadata
+on an arbitrary source row never establishes public-authority eligibility.
+This deliberately narrow citator gate does not claim to close the separate
+system-wide explicit-public namespace follow-up.
 
 `authority_records`, `authority_history_facts`, and
 `authority_citation_facts` contain deterministic source facts. They preserve
@@ -68,8 +72,9 @@ revoke, or enqueue another tenant’s watch. Alert events are idempotent by watc
 and event fingerprint. Enqueue and delivery persistence lock the active watch
 row through their consent/state recheck, so a queued revocation cannot commit
 between that check and the database write. Delivery attempts can be queued,
-quiet-hour/no-consent suppressed, failed, sent, or revoked. Revocation removes
-consent before later enqueueing and appends a durable watch audit row.
+quiet-hour/no-consent suppressed, failed, sent, or revoked. An attempt must
+also name one of the watch's consented channels. Revocation removes consent
+before later enqueueing and appends a durable watch audit row.
 
 An alert's customer-visible source URL, evidence span/locator/hash, and payload
 are constructed from one stored history or citation fact for the same promoted

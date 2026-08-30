@@ -804,19 +804,44 @@ class CourtListenerRepository:
             cur.execute(
                 """
                 SELECT v.version, v.as_of, v.status,
-                       COUNT(DISTINCT r.authority_key) AS authority_count,
-                       COUNT(DISTINCT h.id) AS history_fact_count,
-                       COUNT(DISTINCT c.id) AS citation_fact_count,
-                       COUNT(DISTINCT a.id) AS assessment_count,
-                       COUNT(DISTINCT a.id) FILTER (WHERE a.assessment_state='reviewed')
-                         AS reviewed_assessment_count
+                       (SELECT COUNT(*) FROM authority_records r
+                         WHERE r.corpus_version=v.version) AS authority_count,
+                       (SELECT COUNT(*) FROM authority_history_facts h
+                         WHERE h.corpus_version=v.version) AS history_fact_count,
+                       (SELECT COUNT(*) FROM authority_citation_facts c
+                         WHERE c.corpus_version=v.version) AS citation_fact_count,
+                       (SELECT COUNT(*) FROM authority_treatment_assessments a
+                         WHERE a.corpus_version=v.version) AS assessment_count,
+                       (SELECT COUNT(*)
+                          FROM authority_treatment_assessments a
+                          JOIN authority_records ar
+                            ON ar.corpus_version=a.corpus_version
+                           AND ar.authority_key=a.authority_key
+                          JOIN legal_sources s ON s.source_key=ar.source_key
+                          JOIN citator_public_source_admissions p
+                            ON p.source_key=ar.source_key
+                          JOIN LATERAL (
+                            SELECT decision FROM authority_treatment_reviews
+                             WHERE assessment_id=a.id
+                             ORDER BY reviewed_at DESC, id DESC LIMIT 1
+                          ) latest_review ON TRUE
+                         WHERE a.corpus_version=v.version
+                           AND a.assessment_state NOT IN ('stale', 'superseded', 'abstained')
+                           AND (a.stale_at IS NULL OR a.stale_at > now())
+                           AND latest_review.decision IN ('accepted', 'overridden')
+                           AND ar.currentness_state='current'
+                           AND s.enabled=TRUE
+                           AND s.rights_decision IN ('official', 'open', 'licensed')
+                           AND s.reviewed_at IS NOT NULL AND s.reviewed_by IS NOT NULL
+                           AND s.metadata->>'catalog_schema_version' IS NOT NULL
+                           AND s.metadata->>'implementation_status' IS NOT NULL
+                           AND p.active=TRUE AND p.namespace='public-authority'
+                           AND p.catalog_schema_version=s.metadata->>'catalog_schema_version'
+                           AND p.manifest_reference <> '' AND p.manifest_sha256 <> ''
+                           AND p.reviewed_at IS NOT NULL AND p.reviewed_by IS NOT NULL
+                       ) AS reviewed_assessment_count
                 FROM authority_corpus_versions v
-                LEFT JOIN authority_records r ON r.corpus_version=v.version
-                LEFT JOIN authority_history_facts h ON h.corpus_version=v.version
-                LEFT JOIN authority_citation_facts c ON c.corpus_version=v.version
-                LEFT JOIN authority_treatment_assessments a ON a.corpus_version=v.version
                 WHERE v.status='promoted'
-                GROUP BY v.version, v.as_of, v.status
                 ORDER BY v.as_of DESC LIMIT 1
                 """
             )

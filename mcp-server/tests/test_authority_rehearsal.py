@@ -1228,8 +1228,12 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
     init_schema(db_url)
     version = "citator-rehearsal-" + uuid.uuid4().hex
     source_key = "citator:rehearsal:" + version
+    custom_source_key = "custom:citator:" + version
+    private_shaped_source_key = "privatefoo:citator:" + version
     opinion_id = 97900000 + int(uuid.uuid4().int % 100000)
     authority_key = f"case:{opinion_id}"
+    custom_authority_key = "case:custom-" + version
+    private_shaped_authority_key = "case:private-shaped-" + version
     tenant_id, other_tenant_id, matter_id = (str(uuid.uuid4()) for _ in range(3))
     monkeypatch.setenv("MCP_CITATOR_SCOPE_ASSERTION_SECRET", "c" * 48)
     monkeypatch.setenv("MCP_OPERATOR_ASSERTION_SECRET", "o" * 48)
@@ -1271,6 +1275,38 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
                      '{"catalog_schema_version":"rehearsal","implementation_status":"fixture"}')""",
                 [source_key],
             )
+            cur.execute(
+                """INSERT INTO citator_public_source_admissions
+                     (source_key, catalog_schema_version, manifest_reference,
+                      manifest_sha256, reviewed_at, reviewed_by)
+                   VALUES (%s, 'rehearsal', 'synthetic://citator/rehearsal',
+                     'synthetic-citator-manifest-sha256', now(), 'rehearsal-admin')""",
+                [source_key],
+            )
+            for unsafe_source_key, unsafe_authority_key in (
+                (custom_source_key, custom_authority_key),
+                (private_shaped_source_key, private_shaped_authority_key),
+            ):
+                cur.execute(
+                    """INSERT INTO legal_sources
+                         (source_key, publisher, source_type, canonical_url, enabled,
+                          storage_policy, rights_decision, reviewed_at, reviewed_by,
+                          expected_cadence, claim_safe_wording, metadata)
+                       VALUES (%s, 'Unsafe synthetic source', 'case_law', 'https://example.test/unsafe',
+                         TRUE, 'normalized_text', 'official', now(), 'rehearsal-admin',
+                         'daily', 'Unsafe synthetic source only',
+                         '{"catalog_schema_version":"rehearsal","implementation_status":"fixture"}')""",
+                    [unsafe_source_key],
+                )
+                cur.execute(
+                    """INSERT INTO authority_records
+                         (corpus_version, authority_key, authority_kind, source_key, title,
+                          source_url, source_as_of, source_version, currentness_state)
+                       VALUES (%s, %s, 'case', %s, 'Unsafe synthetic authority',
+                         'https://example.test/unsafe-authority', '2026-08-30T00:00:00Z',
+                         %s, 'current')""",
+                    [version, unsafe_authority_key, unsafe_source_key, version],
+                )
             cur.execute(
                 """INSERT INTO authority_records
                      (corpus_version, authority_key, authority_kind, source_key,
@@ -1360,6 +1396,25 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
         promote_corpus_version(
             conn, version=version, actor="rehearsal-admin", reason="citator rehearsal cutover"
         )
+        for unsafe_authority_key in (custom_authority_key, private_shaped_authority_key):
+            with pytest.raises(PermissionError, match="promoted, reviewed public authority evidence"):
+                record_treatment_assessment(
+                    conn, corpus_version=version, authority_key=unsafe_authority_key,
+                    treatment_label="unknown", confidence=0.0,
+                    policy_version="citator-policy-rehearsal-v1", evidence_fact_ids=[],
+                    abstained=True, abstention_reason="unsafe source negative",
+                    model_version="synthetic-model-v1", actor="rehearsal-worker",
+                )
+            with pytest.raises(PermissionError, match="watches require promoted, reviewed public authority evidence"):
+                save_citator_watch(
+                    conn, tenant_id=tenant_id, matter_id=matter_id,
+                    authority_key=unsafe_authority_key, created_by="rehearsal-attorney",
+                    delivery_channels=["in_app"],
+                    matter_scope_assertion=_citator_scope_assertion(
+                        tenant_id=tenant_id, matter_id=matter_id, principal="rehearsal-attorney",
+                        authority_key=unsafe_authority_key, delivery_channels=["in_app"], quiet_hours={},
+                    ),
+                )
         for fact_id in (str(uuid.uuid4()), cross_authority_fact_id, cross_version_fact_id):
             with pytest.raises(PermissionError, match="same authority and corpus version"):
                 record_treatment_assessment(
@@ -1418,6 +1473,7 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
             decision="overridden", override_label="no_decision",
             note="Synthetic attorney override",
         )
+        assert CourtListenerRepository(conn).citator_status()["release"]["reviewed_assessment_count"] == 1
         watch_assertion = _citator_scope_assertion(
             tenant_id=tenant_id, matter_id=matter_id, principal="rehearsal-attorney",
             authority_key=authority_key, delivery_channels=["in_app"],
@@ -1487,6 +1543,11 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
             authority_key=authority_key, event_fingerprint="synthetic-history-v1",
             event_kind="history", evidence_fact_id=history_fact_id,
         ) is None
+        with pytest.raises(PermissionError, match="not consented"):
+            record_citator_alert_delivery(
+                conn, tenant_id=tenant_id, alert_event_id=alert_id, channel="email",
+                delivery_key="synthetic-email-attempt", attempted_outcome="queued",
+            )
         assert record_citator_alert_delivery(
             conn, tenant_id=tenant_id, alert_event_id=alert_id, channel="in_app",
             delivery_key="synthetic-attempt-1", attempted_outcome="queued",

@@ -656,6 +656,28 @@ CREATE TABLE IF NOT EXISTS authority_records (
     CHECK (currentness_state IN ('current', 'stale', 'unknown', 'unavailable'))
 );
 
+-- This is intentionally a narrow citator admission list, not a substitute for
+-- the still-open, system-wide explicit-public boundary.  A source must be
+-- named by a reviewed catalog/manifest record before this feature can make a
+-- treatment, watch, or alert claim from it.  Metadata on an arbitrary source
+-- row is never an admission.
+CREATE TABLE IF NOT EXISTS citator_public_source_admissions (
+    source_key text PRIMARY KEY REFERENCES legal_sources(source_key) ON DELETE RESTRICT,
+    catalog_schema_version text NOT NULL,
+    manifest_reference text NOT NULL,
+    manifest_sha256 text NOT NULL,
+    namespace text NOT NULL DEFAULT 'public-authority',
+    reviewed_at timestamptz NOT NULL,
+    reviewed_by text NOT NULL,
+    active boolean NOT NULL DEFAULT true,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    CHECK (namespace = 'public-authority'),
+    CHECK (length(trim(catalog_schema_version)) > 0),
+    CHECK (length(trim(manifest_reference)) > 0),
+    CHECK (length(trim(manifest_sha256)) >= 16),
+    CHECK (length(trim(reviewed_by)) > 0)
+);
+
 CREATE TABLE IF NOT EXISTS authority_history_facts (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     corpus_version text NOT NULL REFERENCES authority_corpus_versions(version),
@@ -949,6 +971,7 @@ CREATE INDEX IF NOT EXISTS ix_opinion_citations_reporter ON opinion_citations(ci
 CREATE INDEX IF NOT EXISTS ix_authority_records_version_kind ON authority_records(corpus_version, authority_kind);
 CREATE INDEX IF NOT EXISTS ix_authority_history_facts_lookup ON authority_history_facts(corpus_version, authority_key, observed_at DESC);
 CREATE INDEX IF NOT EXISTS ix_authority_citation_facts_cited ON authority_citation_facts(corpus_version, cited_authority_key, depth);
+CREATE INDEX IF NOT EXISTS ix_citator_public_source_admissions_active ON citator_public_source_admissions(active, source_key);
 CREATE INDEX IF NOT EXISTS ix_authority_treatment_assessments_lookup ON authority_treatment_assessments(corpus_version, authority_key, computed_at DESC);
 CREATE INDEX IF NOT EXISTS ix_authority_reviewer_principals_active ON authority_reviewer_principals(active, principal);
 CREATE INDEX IF NOT EXISTS ix_citator_command_assertions_expiry ON citator_command_assertions(expires_at);

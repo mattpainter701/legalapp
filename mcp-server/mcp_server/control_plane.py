@@ -804,12 +804,15 @@ def _citator_authority_is_permitted(conn: Any, *, corpus_version: str, authority
         cur.execute(
             """
             SELECT r.source_key, s.enabled, s.rights_decision, s.reviewed_at, s.reviewed_by,
-                   s.metadata->>'catalog_schema_version', s.metadata->>'implementation_status'
+                   s.metadata->>'catalog_schema_version', s.metadata->>'implementation_status',
+                   r.currentness_state, p.catalog_schema_version, p.manifest_reference, p.manifest_sha256,
+                   p.reviewed_at, p.reviewed_by
             FROM authority_records r
             JOIN legal_sources s ON s.source_key=r.source_key
+            JOIN citator_public_source_admissions p ON p.source_key=r.source_key
             JOIN authority_corpus_versions v ON v.version=r.corpus_version
             WHERE r.corpus_version=%s AND r.authority_key=%s
-              AND v.status='promoted'
+              AND v.status='promoted' AND p.active=TRUE
             """,
             [corpus_version, authority_key],
         )
@@ -822,7 +825,12 @@ def _citator_authority_is_permitted(conn: Any, *, corpus_version: str, authority
         and row[4]
         and row[5]
         and row[6]
-        and not str(row[0]).startswith(("tenant:", "firm:", "private:"))
+        and row[7] == "current"
+        and row[8] == row[5]
+        and row[9]
+        and row[10]
+        and row[11]
+        and row[12]
     )
 
 
@@ -1043,6 +1051,16 @@ def save_citator_watch(
         quiet_hours=normalized_quiet_hours,
     )
     with conn.cursor() as cur:
+        cur.execute(
+            """SELECT version FROM authority_corpus_versions
+                 WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1"""
+        )
+        promoted = cur.fetchone()
+    if not promoted or not _citator_authority_is_permitted(
+        conn, corpus_version=str(promoted[0]), authority_key=authority_key
+    ):
+        raise PermissionError("watches require promoted, reviewed public authority evidence")
+    with conn.cursor() as cur:
         cur.execute("SET LOCAL app.current_tenant_id = %s", [tenant_id])
         cur.execute(
             """
@@ -1244,7 +1262,7 @@ def record_citator_alert_delivery(
         cur.execute("SET LOCAL app.current_tenant_id = %s", [tenant_id])
         cur.execute(
             """
-            SELECT w.state, w.consented, w.quiet_hours
+            SELECT w.state, w.consented, w.quiet_hours, w.delivery_channels
             FROM citator_alert_events e
             JOIN citator_watches w ON w.id=e.watch_id
             WHERE e.id=%s::uuid AND e.tenant_id=%s::uuid
@@ -1255,6 +1273,8 @@ def record_citator_alert_delivery(
         watch = cur.fetchone()
         if not watch or watch[0] in {"revoked", "deleted"}:
             outcome = "revoked"
+        elif channel not in set(watch[3] or []):
+            raise PermissionError("alert channel is not consented for this watch")
         elif not watch[1]:
             outcome = "suppressed_no_consent"
         elif quiet_hours_active(watch[2], now=now):
