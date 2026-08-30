@@ -535,7 +535,7 @@ def _report_hash(run: ExternalImportRun) -> str:
             "manifest": {
                 key: value
                 for key, value in (run.manifest or {}).items()
-                if key != "_approved_report_hash"
+                if not key.startswith("_")
             },
             "row_counts": run.row_counts or {},
             "checksums": run.checksum_summary or {},
@@ -639,22 +639,18 @@ async def promote_import_run(
     if not run or run.tenant_id != admin.tenant_id:
         raise HTTPException(status_code=404, detail="Import run not found")
     if run.status == "promoted":
-        links = (
-            await db.scalars(
-                select(ExternalRecordLink).where(
-                    ExternalRecordLink.import_run_id == run.id
-                )
+        summary = (run.manifest or {}).get("_promotion_summary")
+        if not summary:
+            raise HTTPException(
+                status_code=409,
+                detail="Promoted import has no durable promotion summary; review required",
             )
-        ).all()
-        counts = {"contacts": 0, "matters": 0}
-        for link in links:
-            counts["contacts" if link.target_table == "contacts" else "matters"] += 1
         return ExternalImportPromoteResponse(
             import_run_id=run.id,
             status=run.status,
-            created=counts,
-            linked=len(links),
-            skipped=0,
+            created=summary["created"],
+            linked=summary["linked"],
+            skipped=summary["skipped"],
             errors=[],
             report_hash=_report_hash(run),
         )
@@ -720,8 +716,22 @@ async def promote_import_run(
         target_table = "contacts" if raw.source_table == "CLIENT" else "matters"
         key = (raw.source_table, raw.source_row_key, target_table)
         if key in existing:
-            if target_table == "contacts":
-                client_targets[raw.source_row_key] = existing[key].target_record_id
+            try:
+                link = existing[key]
+                if link.status not in {"linked", "active"}:
+                    raise ValueError(
+                        f"existing external link is {link.status}; review required"
+                    )
+                target_model = Contact if target_table == "contacts" else Matter
+                target = await db.get(target_model, link.target_record_id)
+                if target is None or target.tenant_id != admin.tenant_id:
+                    raise ValueError(
+                        "existing external link target is missing or outside the tenant; review required"
+                    )
+                if target_table == "contacts":
+                    client_targets[raw.source_row_key] = link.target_record_id
+            except ValueError as exc:
+                errors.append(f"{raw.source_table}/{raw.source_row_key}: {exc}")
             continue
         data = raw.row_data or {}
         try:
@@ -729,6 +739,10 @@ async def promote_import_run(
                 first, last = _split_name(_value(data, "NAME", "Name", "CLIENT_NAME"))
                 client_number = _value(data, "CLIENT_ID", "Client_ID")
                 email = _value(data, "EMAIL", "Email")
+                if not client_number and not email:
+                    raise ValueError(
+                        "client row has neither CLIENT_ID nor email; review required"
+                    )
                 identity_filters = []
                 if client_number:
                     identity_filters.append(Contact.client_number == client_number)
@@ -853,6 +867,12 @@ async def promote_import_run(
         )
     run.status = "promoted"
     run.promoted_at = datetime.now(timezone.utc)
+    summary = {
+        "created": created,
+        "linked": linked,
+        "skipped": skipped + (len(rows) - linked - skipped),
+    }
+    run.manifest = {**(run.manifest or {}), "_promotion_summary": summary}
     db.add(
         OperatorAuditLog(
             action="external_import_promoted",
@@ -863,6 +883,7 @@ async def promote_import_run(
             metadata_json={
                 "tenant_id": str(admin.tenant_id),
                 "created": created,
+                "promotion_summary": summary,
                 "report_hash": _report_hash(run),
             },
         )
@@ -888,7 +909,7 @@ async def promote_import_run(
         status=run.status,
         created=created,
         linked=linked,
-        skipped=skipped + (len(rows) - linked - skipped),
+        skipped=summary["skipped"],
         errors=[],
         report_hash=_report_hash(run),
     )

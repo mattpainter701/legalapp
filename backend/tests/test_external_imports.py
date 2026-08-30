@@ -374,3 +374,74 @@ async def test_import_rejects_conflicting_identity_matches_without_writes(
         )
         == 0
     )
+
+
+@pytest.mark.asyncio
+async def test_import_rejects_anonymous_client_without_canonical_writes(
+    client, db_session
+):
+    bundle = _bundle({"CLIENT": [{"NAME": "No stable identity"}]})
+    uploaded = await client.post(
+        "/api/imports/tabs3/upload",
+        files={"file": ("tabs3.zip", bundle, "application/zip")},
+    )
+    run_id = uuid.UUID(uploaded.json()["id"])
+    run = await db_session.get(ExternalImportRun, run_id)
+    assert (
+        await client.post(
+            f"/api/imports/{run_id}/approve",
+            json={
+                "confirmation": PROMOTION_CONFIRMATION,
+                "report_hash": _report_hash(run),
+            },
+        )
+    ).status_code == 200
+    promoted = await client.post(f"/api/imports/{run_id}/promote")
+    assert promoted.status_code == 422
+    failed = await db_session.get(ExternalImportRun, run_id)
+    assert failed.status == "promotion_failed"
+    assert "neither CLIENT_ID nor email" in failed.errors[0]
+    assert await db_session.scalar(select(func.count()).select_from(Contact)) == 0
+    assert await db_session.scalar(select(func.count()).select_from(Matter)) == 0
+    assert (
+        await db_session.scalar(select(func.count()).select_from(ExternalRecordLink))
+        == 0
+    )
+
+
+@pytest.mark.asyncio
+async def test_import_missing_matter_name_persists_failure_after_rollback(
+    client, db_session
+):
+    bundle = _bundle(
+        {
+            "CLIENT": [{"CLIENT_ID": "100.00", "NAME": "Acme"}],
+            "MATTER": [{"CLIENT_ID": "100.00"}],
+        }
+    )
+    uploaded = await client.post(
+        "/api/imports/tabs3/upload",
+        files={"file": ("tabs3.zip", bundle, "application/zip")},
+    )
+    run_id = uuid.UUID(uploaded.json()["id"])
+    run = await db_session.get(ExternalImportRun, run_id)
+    assert (
+        await client.post(
+            f"/api/imports/{run_id}/approve",
+            json={
+                "confirmation": PROMOTION_CONFIRMATION,
+                "report_hash": _report_hash(run),
+            },
+        )
+    ).status_code == 200
+    promoted = await client.post(f"/api/imports/{run_id}/promote")
+    assert promoted.status_code == 422
+    failed = await db_session.get(ExternalImportRun, run_id)
+    assert failed.status == "promotion_failed"
+    assert "matter row has no name" in failed.errors[0]
+    assert await db_session.scalar(select(func.count()).select_from(Contact)) == 0
+    assert await db_session.scalar(select(func.count()).select_from(Matter)) == 0
+    assert (
+        await db_session.scalar(select(func.count()).select_from(ExternalRecordLink))
+        == 0
+    )
