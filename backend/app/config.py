@@ -276,6 +276,9 @@ class Settings(BaseSettings):
     # Dedicated backend-to-CourtListener credential. User/app credentials are
     # never forwarded to the private service.
     MCP_UPSTREAM_API_KEY: str = ""
+    # Separate short-lived operator assertion signer; never reuse the service
+    # transport key for actor/scope authorization claims.
+    MCP_OPERATOR_ASSERTION_SECRET: str = ""
     MCP_DEFAULT_MONTHLY_CALL_LIMIT: int = 1000
     MCP_MAX_MONTHLY_CALL_LIMIT: int = 100000
     # Customer-facing Research price. Stripe owns invoice calculation, while
@@ -785,6 +788,11 @@ def validate_mcp_security_settings(settings: Settings) -> None:
     if settings.MCP_SERVER_URL and len(settings.MCP_UPSTREAM_API_KEY) < 32:
         raise ValueError(
             "MCP_UPSTREAM_API_KEY must be at least 32 characters whenever "
+            "MCP_SERVER_URL is configured"
+        )
+    if settings.MCP_SERVER_URL and len(settings.MCP_OPERATOR_ASSERTION_SECRET) < 32:
+        raise ValueError(
+            "MCP_OPERATOR_ASSERTION_SECRET must be at least 32 characters whenever "
             "MCP_SERVER_URL is configured"
         )
     if settings.MCP_PRODUCT_ENABLED or settings.RESEARCH_MCP_PUBLIC_URL.strip():

@@ -71,7 +71,9 @@ def test_private_service_accepts_exact_key(monkeypatch):
 @pytest.mark.asyncio
 async def test_signed_operator_context_rejects_replay_expiry_and_tamper(monkeypatch):
     secret = "service-secret-xxxxxxxxxxxxxxxxxx"
+    signer = "operator-signer-xxxxxxxxxxxxxxxxxx"
     monkeypatch.setenv("MCP_UPSTREAM_API_KEY", secret)
+    monkeypatch.setenv("MCP_OPERATOR_ASSERTION_SECRET", signer)
     consumed = set()
     monkeypatch.setattr(
         server,
@@ -87,7 +89,7 @@ async def test_signed_operator_context_rejects_replay_expiry_and_tamper(monkeypa
         ),
     )
     request = _request()
-    assertion = _assertion(secret)
+    assertion = _assertion(signer)
     assert await server.operator_identity(request, "operator", assertion) == "operator"
     with pytest.raises(HTTPException, match="replayed"):
         await server.operator_identity(request, "operator", assertion)
@@ -95,13 +97,17 @@ async def test_signed_operator_context_rejects_replay_expiry_and_tamper(monkeypa
         await server.operator_identity(
             request,
             "operator",
-            _assertion(secret, expires=int(time.time()) - 1, nonce="nonce-2"),
+            _assertion(signer, expires=int(time.time()) - 1, nonce="nonce-2"),
         )
     with pytest.raises(HTTPException, match="invalid"):
         await server.operator_identity(
             _request(body=b'{"different":true}'),
             "operator",
-            _assertion(secret, nonce="nonce-3"),
+            _assertion(signer, nonce="nonce-3"),
+        )
+    with pytest.raises(HTTPException, match="invalid"):
+        await server.operator_identity(
+            _request(), "operator", _assertion(secret, nonce="nonce-4")
         )
     with pytest.raises(HTTPException, match="invalid"):
         await server.operator_identity(request, "operator", assertion[:-2] + "xx")

@@ -394,7 +394,9 @@ async def _authority_control(
         separators=(",", ":"),
     ).encode()
     signature = hmac.new(
-        str(settings.MCP_UPSTREAM_API_KEY or "").encode(), payload, hashlib.sha256
+        str(settings.MCP_OPERATOR_ASSERTION_SECRET or "").encode(),
+        payload,
+        hashlib.sha256,
     ).digest()
     assertion = ".".join(
         (

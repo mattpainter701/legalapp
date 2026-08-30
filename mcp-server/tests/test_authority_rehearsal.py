@@ -1173,8 +1173,29 @@ def test_durable_operator_assertion_replay_rehearsal(monkeypatch):
     for worker in workers:
         worker.join(timeout=10)
     assert all(not worker.is_alive() for worker in workers)
+    assert len(outcomes) == 2
     assert sum(outcome == "accepted" for outcome in outcomes) == 1
-    assert sum(isinstance(outcome, HTTPException) for outcome in outcomes) == 1
+    rejected = [outcome for outcome in outcomes if isinstance(outcome, HTTPException)]
+    assert len(rejected) == 1
+    assert rejected[0].status_code == 403
+    assert rejected[0].detail == "replayed signed operator context"
+    with connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT COUNT(*), MIN(credential_id), MIN(actor), MIN(scope),
+                           MIN(method), MIN(path), MIN(body_sha256)
+                     FROM authority_operator_assertions WHERE nonce=%s""",
+                [nonce],
+            )
+            assert cur.fetchone() == (
+                1,
+                claims["credential"],
+                claims["actor"],
+                claims["scope"],
+                claims["method"],
+                claims["path"],
+                claims["body_sha256"],
+            )
 
 
 def test_process_once_rehearsal_both_corpora(monkeypatch):

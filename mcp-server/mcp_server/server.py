@@ -125,9 +125,12 @@ async def operator_identity(
         raise HTTPException(
             status_code=403, detail="invalid signed operator context"
         ) from exc
-    expected = hmac.new(
-        os.getenv("MCP_UPSTREAM_API_KEY", "").encode(), payload, hashlib.sha256
-    ).digest()
+    signer_secret = os.getenv("MCP_OPERATOR_ASSERTION_SECRET", "")
+    if len(signer_secret) < 32:
+        raise HTTPException(
+            status_code=503, detail="Operator assertion signing is not configured"
+        )
+    expected = hmac.new(signer_secret.encode(), payload, hashlib.sha256).digest()
     now = int(time.time())
     if (
         not hmac.compare_digest(signature, expected)
