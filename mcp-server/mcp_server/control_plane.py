@@ -375,7 +375,7 @@ def stage_corpus_version(
         not manifest_hash
         or not as_of
         or not str(embedding_model or "").strip()
-        or not str(embedding_version).strip()
+        or not str(embedding_version or "").strip()
         or embedding_dimension != 1024
     ):
         raise ValueError(

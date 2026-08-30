@@ -404,17 +404,11 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
         # candidate chunk so it cannot be promoted with an old vector.
         with conn.cursor() as cur:
             cur.execute(
-                """SELECT embedding_model, embedding_version, embedding_dimension
-                     FROM authority_corpus_versions WHERE version=%s""",
-                [version],
-            )
-            target_model, target_version, target_dimension = cur.fetchone()
-            cur.execute(
                 """UPDATE authority_case_chunks
                    SET embedding=('[' || array_to_string(array_fill(0, ARRAY[1024]), ',') || ']')::vector,
-                       embedding_model=%s, embedding_version=%s
+                       embedding_model='fixture-model', embedding_version='1'
                  WHERE corpus_version=%s AND opinion_id=97100001 AND chunk_index=0""",
-                [target_model, target_version, version],
+                [version],
             )
             cur.execute(
                 """UPDATE authority_corpus_versions
@@ -466,6 +460,13 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
             changed_chunk = cur.fetchone()
         assert changed_chunk[0] == "Bulk fixture opinion changed"
         assert changed_chunk[1:] == (None, None, None)
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT embedding_model, embedding_version, embedding_dimension
+                     FROM authority_corpus_versions WHERE version=%s""",
+                [version],
+            )
+            target_model, target_version, target_dimension = cur.fetchone()
         add_fixture(version, "old")
         monkeypatch.setenv("AUTHORITY_INGEST_CORPUS_VERSION", version)
         ingest_input = {
