@@ -208,11 +208,15 @@ def test_authority_release_rehearsal(monkeypatch):
             "document_type": "statute",
             "title": "Fixture production ingest",
             "canonical_url": "https://example.test/ingest",
+            "jurisdiction": "US",
+            "authority_tier": "binding_primary",
+            "parser_version": "fixture-parser",
             "practice_areas": ["rehearsal"],
             "parser": "fixture-parser",
             "official_status": "official",
             "acquisition_basis": "fixture-only",
             "coverage_notes": "bounded rehearsal input",
+            "metadata": {"namespace": "public-authority"},
         }
         malformed = FetchedDocument(
             text="/i255 " * 200,
@@ -243,6 +247,42 @@ def test_authority_release_rehearsal(monkeypatch):
         )
         ingest_result = ingest_document(conn, ingest_input, fetched)
         assert ingest_result["chunks_created"] > 0
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT source_key, corpus_version, content_hash, parser_version,
+                                  metadata->>'namespace', text_content
+                     FROM legal_documents
+                    WHERE external_id='production-ingest-document'"""
+            )
+            document_row = cur.fetchone()
+            assert document_row == (
+                source_key,
+                version,
+                "production-hash",
+                "fixture-parser",
+                "public-authority",
+                "production fixture authority text",
+            )
+            cur.execute(
+                """SELECT COUNT(*), COUNT(*) FILTER (WHERE embedding IS NULL),
+                                  MIN(content)
+                     FROM legal_document_chunks c
+                     JOIN legal_documents d ON d.id=c.document_id
+                    WHERE d.external_id='production-ingest-document'
+                      AND c.corpus_version=%s""",
+                [version],
+            )
+            chunk_row = cur.fetchone()
+            assert chunk_row[0] == ingest_result["chunks_created"]
+            assert chunk_row[1] == chunk_row[0]
+            assert chunk_row[2] == "production fixture authority text"
+            cur.execute(
+                """SELECT corpus_version, status
+                     FROM authority_harvest_checkpoints
+                    WHERE source_key=%s AND partition_key=%s""",
+                [source_key, f"manifest:{source_key}"],
+            )
+            assert cur.fetchone() == (version, "complete")
         create_snapshot_chunks(conn, version)
         refresh_courtlistener_coverage_ledger(conn, source_release=version)
         with conn.cursor() as cur:
