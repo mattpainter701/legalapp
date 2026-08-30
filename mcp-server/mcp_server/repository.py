@@ -911,11 +911,12 @@ class CourtListenerRepository:
                        promoted_at, rolled_back_at, rollback_of, reason,
                        embedding_model, embedding_version, embedding_dimension
                 FROM authority_corpus_versions
-                WHERE status IN ('promoted', 'canary')
+                WHERE status = 'promoted'
                 ORDER BY promoted_at DESC NULLS LAST, created_at DESC
                 LIMIT 1
             """)
             version_rows = dict_rows(cur)
+            version_key = version_rows[0]["version"] if version_rows else ""
             cur.execute("""
                 SELECT source_key, display_name, publisher, source_type,
                        jurisdiction, authority_tier, source_tier, official_status,
@@ -927,39 +928,52 @@ class CourtListenerRepository:
                        reviewed_by
                 FROM legal_sources
                 WHERE storage_policy <> 'prohibited'
+                  AND source_key NOT LIKE 'tenant:%'
+                  AND source_key NOT LIKE 'firm:%'
+                  AND source_key NOT LIKE 'private:%'
                 ORDER BY priority, source_key
             """)
             sources = dict_rows(cur)
             cur.execute("""
-                SELECT source_key, partition_key, checkpoint_at, cursor_url,
-                       status, last_attempted_at, last_successful_sync_at,
-                       rows_processed, chunks_created, last_error
-                FROM source_sync_states
+                SELECT source_key, partition_key, corpus_version, cursor_url,
+                       status, updated_at, last_successful_harvest_at,
+                       retry_count, next_retry_at, dead_letter_at
+                FROM authority_harvest_checkpoints
+                WHERE corpus_version = %s
                 ORDER BY source_key, partition_key
-            """)
+            """, [version_key])
             partitions = dict_rows(cur)
             cur.execute("""
                 SELECT corpus_version, audit_kind, thresholds, result, passed,
                        sampled_at, auditor, immutable_hash
                 FROM authority_audits
+                WHERE corpus_version = %s
                 ORDER BY sampled_at DESC
                 LIMIT 50
-            """)
+            """, [version_key])
             audits = dict_rows(cur)
         version = version_rows[0] if version_rows else None
-        required_audits = {"release", "completeness", "freshness"}
-        passed_release = bool(version) and required_audits.issubset({
-            row["audit_kind"] for row in audits
-            if row["passed"] and row["corpus_version"] == version["version"]
-        })
+        latest_audits = {}
+        for audit in audits:
+            latest_audits.setdefault(audit["audit_kind"], audit)
+        required_audits = {"release", "completeness", "freshness", "isolation"}
+        passed_release = bool(version) and required_audits.issubset(latest_audits) and all(
+            bool(latest_audits[k]["passed"]) for k in required_audits
+        )
+        partition_by_source = {}
+        for partition in partitions:
+            partition_by_source.setdefault(partition["source_key"], []).append(partition)
         for source in sources:
             cadence = str(source.get("expected_cadence") or "").lower()
-            cadence_seconds = (86400 if "day" in cadence else 3600 if "hour" in cadence else 604800 if "week" in cadence else 0)
-            last_sync = source.get("last_successful_sync_at")
-            lag = lag_seconds(last_sync, cadence_seconds) if last_sync else None
+            cadence_seconds = (2592000 if "month" in cadence else 604800 if "week" in cadence else 86400 if "day" in cadence else 3600 if "hour" in cadence else 0)
+            source_partitions = partition_by_source.get(source["source_key"], [])
+            last_sync = max((row["last_successful_harvest_at"] for row in source_partitions if row["last_successful_harvest_at"]), default=None)
+            lag = lag_seconds(last_sync, cadence_seconds) if last_sync and cadence_seconds else None
+            failed_partition = any(row["status"] in {"retryable", "retryable_failure", "quarantined", "dead_letter", "failed"} for row in source_partitions)
+            missing_partition = not source_partitions or last_sync is None
             source["lag_seconds"] = lag
-            source["stale"] = bool(cadence_seconds and lag is not None and lag > 0)
-            source["status"] = "failed" if source.get("current_error") else (
+            source["stale"] = missing_partition or bool(cadence_seconds and lag is not None and lag > 0)
+            source["status"] = "failed" if failed_partition else (
                 "unreviewed" if (not source.get("reviewed_at")
                                   or source.get("rights_decision") in {"pending_review", "prohibited"}
                                   or not source.get("expected_cadence")) else (
@@ -978,4 +992,5 @@ class CourtListenerRepository:
             "sources": sources,
             "partitions": partitions,
             "audits": audits,
+            "latest_audits": list(latest_audits.values()),
         }

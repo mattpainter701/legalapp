@@ -179,14 +179,16 @@ def require_platform_token(
         )
 
     needed = set(scopes) if scopes else {required_scope(request)}
-    if not needed.issubset(principal.scopes):
-        raise HTTPException(status_code=403, detail="Platform token scope denied")
-
+    # Stamp the decoded principal before scope evaluation so an attributable
+    # denial is persisted by PlatformAuditMiddleware as well as a success.
     request.state.platform_principal = principal
     request.state.platform_actor_id = principal.actor_id
     request.state.platform_token_jti = principal.credential_id
     request.state.platform_credential_type = principal.credential_type
     request.state.platform_scope = " ".join(sorted(needed))
+    if not needed.issubset(principal.scopes):
+        raise HTTPException(status_code=403, detail="Platform token scope denied")
+
     return principal
 
 

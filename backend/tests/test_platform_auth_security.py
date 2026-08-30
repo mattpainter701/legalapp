@@ -111,6 +111,9 @@ def test_token_scope_is_enforced_per_request(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         platform_auth.require_platform_token(request)
     assert exc.value.status_code == 403
+    assert request.state.platform_actor_id == "ops@example.com"
+    assert request.state.platform_token_jti
+    assert request.state.platform_scope == "platform:write"
 
 
 @pytest.mark.asyncio
