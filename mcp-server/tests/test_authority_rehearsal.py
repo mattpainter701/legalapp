@@ -9,6 +9,7 @@ import os
 import uuid
 import bz2
 import csv
+import threading
 from urllib.parse import quote
 from pathlib import Path
 from datetime import datetime, timezone
@@ -1208,6 +1209,24 @@ def test_process_once_rehearsal_both_corpora():
     monkeypatch.setenv("AUTHORITY_EMBEDDING_CORPUS_VERSION", version)
     monkeypatch.setenv("AUTHORITY_HEARTBEAT_INTERVAL_SECONDS", "0.01")
     try:
+        mismatch_config = WorkerConfig(
+            worker_id=0,
+            total_workers=1,
+            batch_size=8,
+            model="wrong-model",
+            model_version=model_version,
+            dim=dimension,
+            db_url=db_url,
+        )
+        with pytest.raises(RuntimeError, match="embedding contract mismatch"):
+            process_once(mismatch_config, DeterministicModel())
+        with connect(db_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COUNT(*) FROM authority_embedding_shards WHERE corpus_version=%s",
+                    [version],
+                )
+                assert cur.fetchone()[0] == 0
         embedded = process_once(config, DeterministicModel())
         replay_embedded = process_once(config, DeterministicModel())
     finally:
@@ -1233,6 +1252,44 @@ def test_process_once_rehearsal_both_corpora():
         assert row_dimension == dimension
         assert throughput is not None and throughput >= 0
         assert observed_at is not None
+
+    # A newly-arriving chunk reopens the completed authority shard. A blocked
+    # first worker holds the row lock while a duplicate worker must be unable
+    # to claim the same shard or write the row.
+    with connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO authority_case_chunks
+                    (corpus_version, opinion_id, cluster_id, court_id, chunk_index, content)
+                    VALUES (%s, 98200001, 98200001, 'worker-court', 1, 'late worker case')""",
+                [version],
+            )
+        conn.commit()
+    started = threading.Event()
+    release = threading.Event()
+    worker_errors = []
+
+    class BlockingModel(DeterministicModel):
+        def encode(self, texts, **kwargs):
+            started.set()
+            assert release.wait(10)
+            return super().encode(texts, **kwargs)
+
+    def run_worker():
+        try:
+            process_once(config, BlockingModel())
+        except Exception as exc:  # pragma: no cover - surfaced below
+            worker_errors.append(exc)
+
+    first = threading.Thread(target=run_worker)
+    first.start()
+    assert started.wait(10)
+    duplicate = process_once(config, DeterministicModel())
+    assert duplicate == 0
+    release.set()
+    first.join(timeout=20)
+    assert not first.is_alive()
+    assert not worker_errors
 
 
 def test_legal_only_upgrade_bootstrap_rehearsal():

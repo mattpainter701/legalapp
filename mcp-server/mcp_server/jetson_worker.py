@@ -206,8 +206,12 @@ def process_once(config: WorkerConfig, model) -> int:
                            updated_at=now()
                         WHERE shard_key=%s AND status='complete'
                           AND EXISTS (SELECT 1 FROM {corpus}
-                                      WHERE embedding IS NULL AND corpus_version=%s)""",
-                    [shard_key, version],
+                                      WHERE (embedding IS NULL
+                                         OR embedding_model IS DISTINCT FROM %s
+                                         OR embedding_version::text IS DISTINCT FROM %s
+                                         OR vector_dims(embedding) IS DISTINCT FROM %s)
+                                        AND corpus_version=%s)""",
+                    [shard_key, config.model, config.model_version, config.dim, version],
                 )
             conn.commit()
             if not claim_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id)):
@@ -229,9 +233,13 @@ def process_once(config: WorkerConfig, model) -> int:
                         raise RuntimeError("embedding lease lost before batch")
                     with conn.cursor() as cur:
                         cur.execute("BEGIN")
-                        version_params = ([version] if corpus == "authority_case_chunks"
-                                          else [version, version] if corpus == "legal_document_chunks" else [])
-                        cur.execute(partition_sql(corpus, version), version_params + [config.total_workers, config.worker_id, config.batch_size])
+                        contract_params = [config.model, config.model_version, config.dim]
+                        version_params = (contract_params + [version] if corpus == "authority_case_chunks"
+                                          else contract_params + [version, version] if corpus == "legal_document_chunks" else [])
+                        cur.execute(
+                            partition_sql(corpus, version, config.model, config.model_version, config.dim),
+                            version_params + [config.total_workers, config.worker_id, config.batch_size],
+                        )
                         rows = cur.fetchall()
                         if not rows:
                             conn.rollback()

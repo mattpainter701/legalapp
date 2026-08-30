@@ -30,13 +30,21 @@ class WorkerConfig:
             raise ValueError("mxbai CourtListener embeddings must be 1024-dimensional")
 
 
-def partition_sql(corpus: str = "opinion_chunks", corpus_version: str | None = None) -> str:
+def partition_sql(corpus: str = "opinion_chunks", corpus_version: str | None = None,
+                  embedding_model: str | None = None,
+                  embedding_version: str | None = None,
+                  embedding_dimension: int | None = None) -> str:
+    contract = ("embedding IS NULL OR embedding_model IS DISTINCT FROM %s "
+                "OR embedding_version::text IS DISTINCT FROM %s "
+                "OR vector_dims(embedding) IS DISTINCT FROM %s") if all(
+                    value is not None for value in (embedding_model, embedding_version, embedding_dimension)
+                ) else "embedding IS NULL"
     if corpus == "opinion_chunks":
         version_filter = "AND oc.corpus_version = %s" if corpus_version else ""
         return f"""
             SELECT id, content
             FROM opinion_chunks oc
-            WHERE embedding IS NULL
+            WHERE ({contract})
               {version_filter}
               AND ABS(HASHTEXT(id::text)) %% %s = %s
             ORDER BY created_at, id
@@ -55,7 +63,7 @@ def partition_sql(corpus: str = "opinion_chunks", corpus_version: str | None = N
             FROM legal_document_chunks c
             JOIN legal_documents d ON d.id = c.document_id
             JOIN legal_sources s ON s.source_key = d.source_key
-            WHERE c.embedding IS NULL
+            WHERE ({contract.replace('embedding', 'c.embedding')})
               AND s.enabled IS TRUE
               AND d.document_status = 'current'
               {version_filter}
@@ -69,7 +77,7 @@ def partition_sql(corpus: str = "opinion_chunks", corpus_version: str | None = N
         return f"""
             SELECT chunk_id, content
             FROM authority_case_chunks
-            WHERE embedding IS NULL AND corpus_version = %s
+            WHERE ({contract}) AND corpus_version = %s
               AND ABS(HASHTEXT(chunk_id::text)) %% %s = %s
             ORDER BY chunk_index, opinion_id
             LIMIT %s
