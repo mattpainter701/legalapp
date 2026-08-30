@@ -60,7 +60,10 @@ remains open for its missing provider-backed conversion evidence; `COMP-05` is
 reopened because the merged Brief Check is a safe review-first scaffold but does
 not yet satisfy the full citation-resolution, pin-cite, treatment/currentness,
 omitted-authority, linked-export, and end-to-end acceptance below; and `COMP-06`
-is in implementation. See
+remains open after independent review of draft PR #280 at `6f53d624`: the proposed
+control-plane scaffold does not yet prove version-safe serving/rollback,
+resumable rights-gated harvest, durable embedding-worker recovery, platform-only
+operator controls, or a mandatory database-backed lifecycle rehearsal. See
 [`docs/core-milestone-status.md`](docs/core-milestone-status.md) for the evidence
 matrix and claim boundaries. Feature PRs do not self-certify these checkboxes.
 
