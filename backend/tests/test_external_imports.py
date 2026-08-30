@@ -199,8 +199,16 @@ async def test_import_requires_report_bound_approval_and_promotes_idempotently(
 ):
     bundle = _bundle(
         {
-            "CLIENT": [{"CLIENT_ID": "100.00", "NAME": "Acme", "EMAIL": "jane@acme.test"}],
-            "MATTER": [{"CLIENT_ID": "100.00", "MATTER_NAME": "Acme v. Beta", "DESCRIPTION": "Imported case"}],
+            "CLIENT": [
+                {"CLIENT_ID": "100.00", "NAME": "Acme", "EMAIL": "jane@acme.test"}
+            ],
+            "MATTER": [
+                {
+                    "CLIENT_ID": "100.00",
+                    "MATTER_NAME": "Acme v. Beta",
+                    "DESCRIPTION": "Imported case",
+                }
+            ],
         }
     )
     uploaded = await client.post(
@@ -232,15 +240,30 @@ async def test_import_requires_report_bound_approval_and_promotes_idempotently(
     replay = await client.post(f"/api/imports/{run_id}/promote")
     assert replay.status_code == 200
     assert replay.json()["status"] == "promoted"
-    assert await db_session.scalar(
-        select(func.count()).select_from(Contact).where(Contact.tenant_id == test_tenant.id)
-    ) == 1
-    assert await db_session.scalar(
-        select(func.count()).select_from(Matter).where(Matter.tenant_id == test_tenant.id)
-    ) == 1
-    assert await db_session.scalar(
-        select(func.count()).select_from(ExternalRecordLink).where(ExternalRecordLink.import_run_id == run_id)
-    ) == 2
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(Contact)
+            .where(Contact.tenant_id == test_tenant.id)
+        )
+        == 1
+    )
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(Matter)
+            .where(Matter.tenant_id == test_tenant.id)
+        )
+        == 1
+    )
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(ExternalRecordLink)
+            .where(ExternalRecordLink.import_run_id == run_id)
+        )
+        == 2
+    )
 
     rolled_back = await client.post(f"/api/imports/{run_id}/rollback")
     assert rolled_back.status_code == 200, rolled_back.text

@@ -569,20 +569,27 @@ async def approve_import_run(
     if run.status == "promoted":
         return ExternalImportRunResponse.model_validate(run)
     if run.status != "staged":
-        raise HTTPException(status_code=409, detail="Only staged imports can be approved")
+        raise HTTPException(
+            status_code=409, detail="Only staged imports can be approved"
+        )
     expected = _report_hash(run)
     if body.confirmation != PROMOTION_CONFIRMATION or body.report_hash != expected:
-        raise HTTPException(status_code=409, detail="Approval does not match the current reconciliation report")
+        raise HTTPException(
+            status_code=409,
+            detail="Approval does not match the current reconciliation report",
+        )
     run.status = "approved"
     run.approved_at = datetime.now(timezone.utc)
-    db.add(OperatorAuditLog(
-        action="external_import_approved",
-        actor_type="tenant_admin",
-        actor_id=str(admin.id),
-        resource_type="external_import_run",
-        resource_id=str(run.id),
-        metadata_json={"report_hash": expected, "provider": run.provider},
-    ))
+    db.add(
+        OperatorAuditLog(
+            action="external_import_approved",
+            actor_type="tenant_admin",
+            actor_id=str(admin.id),
+            resource_type="external_import_run",
+            resource_id=str(run.id),
+            metadata_json={"report_hash": expected, "provider": run.provider},
+        )
+    )
     await db.commit()
     await db.refresh(run)
     return ExternalImportRunResponse.model_validate(run)
@@ -605,16 +612,48 @@ async def promote_import_run(
     if not run or run.tenant_id != admin.tenant_id:
         raise HTTPException(status_code=404, detail="Import run not found")
     if run.status == "promoted":
-        links = (await db.scalars(select(ExternalRecordLink).where(ExternalRecordLink.import_run_id == run.id))).all()
+        links = (
+            await db.scalars(
+                select(ExternalRecordLink).where(
+                    ExternalRecordLink.import_run_id == run.id
+                )
+            )
+        ).all()
         counts = {"contacts": 0, "matters": 0}
         for link in links:
             counts["contacts" if link.target_table == "contacts" else "matters"] += 1
-        return ExternalImportPromoteResponse(import_run_id=run.id, status=run.status, created=counts, linked=len(links), skipped=0, errors=[], report_hash=_report_hash(run))
+        return ExternalImportPromoteResponse(
+            import_run_id=run.id,
+            status=run.status,
+            created=counts,
+            linked=len(links),
+            skipped=0,
+            errors=[],
+            report_hash=_report_hash(run),
+        )
     if run.status != "approved":
-        raise HTTPException(status_code=409, detail="Import must be approved against an unchanged reconciliation report")
+        raise HTTPException(
+            status_code=409,
+            detail="Import must be approved against an unchanged reconciliation report",
+        )
 
-    rows = (await db.scalars(select(ExternalRawRow).where(ExternalRawRow.import_run_id == run.id).order_by(ExternalRawRow.created_at, ExternalRawRow.id))).all()
-    existing = {(link.source_table, link.source_row_key, link.target_table): link for link in (await db.scalars(select(ExternalRecordLink).where(ExternalRecordLink.import_run_id == run.id))).all()}
+    rows = (
+        await db.scalars(
+            select(ExternalRawRow)
+            .where(ExternalRawRow.import_run_id == run.id)
+            .order_by(ExternalRawRow.created_at, ExternalRawRow.id)
+        )
+    ).all()
+    existing = {
+        (link.source_table, link.source_row_key, link.target_table): link
+        for link in (
+            await db.scalars(
+                select(ExternalRecordLink).where(
+                    ExternalRecordLink.import_run_id == run.id
+                )
+            )
+        ).all()
+    }
     created = {"contacts": 0, "matters": 0}
     linked = 0
     skipped = 0
@@ -672,7 +711,18 @@ async def promote_import_run(
                 if not name:
                     raise ValueError("matter row has no name")
                 client_key = _value(data, "CLIENT_ID", "Client_ID")
-                client_id = next((value for key2, value in client_targets.items() if key2.endswith(f"CLIENT_ID={client_key}")), None) if client_key else None
+                client_id = (
+                    next(
+                        (
+                            value
+                            for key2, value in client_targets.items()
+                            if key2.endswith(f"CLIENT_ID={client_key}")
+                        ),
+                        None,
+                    )
+                    if client_key
+                    else None
+                )
                 source_ref = f"{run.provider}:{raw.source_row_key}"
                 matter = await db.scalar(
                     select(Matter).where(
@@ -722,12 +772,35 @@ async def promote_import_run(
         failed_run.status = "promotion_failed"
         failed_run.errors = errors
         await db.commit()
-        raise HTTPException(status_code=422, detail={"message": "Import promotion failed; no canonical records were committed", "errors": errors})
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "Import promotion failed; no canonical records were committed",
+                "errors": errors,
+            },
+        )
     run.status = "promoted"
     run.promoted_at = datetime.now(timezone.utc)
-    db.add(OperatorAuditLog(action="external_import_promoted", actor_type="tenant_admin", actor_id=str(admin.id), resource_type="external_import_run", resource_id=str(run.id), metadata_json={"created": created, "report_hash": _report_hash(run)}))
+    db.add(
+        OperatorAuditLog(
+            action="external_import_promoted",
+            actor_type="tenant_admin",
+            actor_id=str(admin.id),
+            resource_type="external_import_run",
+            resource_id=str(run.id),
+            metadata_json={"created": created, "report_hash": _report_hash(run)},
+        )
+    )
     await db.commit()
-    return ExternalImportPromoteResponse(import_run_id=run.id, status=run.status, created=created, linked=linked, skipped=skipped + (len(rows) - linked - skipped), errors=[], report_hash=_report_hash(run))
+    return ExternalImportPromoteResponse(
+        import_run_id=run.id,
+        status=run.status,
+        created=created,
+        linked=linked,
+        skipped=skipped + (len(rows) - linked - skipped),
+        errors=[],
+        report_hash=_report_hash(run),
+    )
 
 
 @router.post("/{run_id}/rollback", response_model=ExternalImportRunResponse)
@@ -742,13 +815,31 @@ async def rollback_import_run(
     if not run or run.tenant_id != admin.tenant_id:
         raise HTTPException(status_code=404, detail="Import run not found")
     if run.status != "promoted":
-        raise HTTPException(status_code=409, detail="Only promoted imports can be rolled back")
-    links = (await db.scalars(select(ExternalRecordLink).where(ExternalRecordLink.import_run_id == run.id))).all()
+        raise HTTPException(
+            status_code=409, detail="Only promoted imports can be rolled back"
+        )
+    links = (
+        await db.scalars(
+            select(ExternalRecordLink).where(ExternalRecordLink.import_run_id == run.id)
+        )
+    ).all()
     for link in links:
         link.status = "rollback_pending"
     run.status = "rollback_pending"
-    run.warnings = [*(run.warnings or []), f"{len(links)} imported records marked for non-destructive rollback review"]
-    db.add(OperatorAuditLog(action="external_import_rollback_requested", actor_type="tenant_admin", actor_id=str(admin.id), resource_type="external_import_run", resource_id=str(run.id), metadata_json={"linked_records": len(links)}))
+    run.warnings = [
+        *(run.warnings or []),
+        f"{len(links)} imported records marked for non-destructive rollback review",
+    ]
+    db.add(
+        OperatorAuditLog(
+            action="external_import_rollback_requested",
+            actor_type="tenant_admin",
+            actor_id=str(admin.id),
+            resource_type="external_import_run",
+            resource_id=str(run.id),
+            metadata_json={"linked_records": len(links)},
+        )
+    )
     await db.commit()
     await db.refresh(run)
     return ExternalImportRunResponse.model_validate(run)
