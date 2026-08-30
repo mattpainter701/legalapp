@@ -52,7 +52,6 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
 
     init_schema(db_url)
     version = "rehearsal-authority-" + uuid.uuid4().hex
-    dimension = 1024
     with connect(db_url) as conn:
 
         def db_reject(sql, params=()):
@@ -405,11 +404,17 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
         # candidate chunk so it cannot be promoted with an old vector.
         with conn.cursor() as cur:
             cur.execute(
+                """SELECT embedding_model, embedding_version, embedding_dimension
+                     FROM authority_corpus_versions WHERE version=%s""",
+                [version],
+            )
+            target_model, target_version, target_dimension = cur.fetchone()
+            cur.execute(
                 """UPDATE authority_case_chunks
                    SET embedding=('[' || array_to_string(array_fill(0, ARRAY[1024]), ',') || ']')::vector,
-                       embedding_model='fixture-model', embedding_version='1'
+                       embedding_model=%s, embedding_version=%s
                  WHERE corpus_version=%s AND opinion_id=97100001 AND chunk_index=0""",
-                [version],
+                [target_model, target_version, version],
             )
             cur.execute(
                 """UPDATE authority_corpus_versions
@@ -643,18 +648,16 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
             cur.execute(
                 """UPDATE legal_document_chunks c
                    SET embedding=('[' || array_to_string(array_fill(0, ARRAY[1024]), ',') || ']')::vector,
-                       embedding_model='mixedbread-ai/mxbai-embed-large-v1',
-                       embedding_version='1'
+                       embedding_model=%s, embedding_version=%s
                  WHERE c.corpus_version=%s""",
-                [version],
+                [target_model, target_version, version],
             )
             cur.execute(
                 """UPDATE authority_case_chunks c
                    SET embedding=('[' || array_to_string(array_fill(0, ARRAY[1024]), ',') || ']')::vector,
-                       embedding_model='mixedbread-ai/mxbai-embed-large-v1',
-                       embedding_version='1'
+                       embedding_model=%s, embedding_version=%s
                  WHERE c.corpus_version=%s""",
-                [version],
+                [target_model, target_version, version],
             )
             cur.execute(
                 """SELECT COUNT(*) FILTER (WHERE c.corpus_version IS DISTINCT FROM %s),
@@ -665,7 +668,7 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                       FROM legal_document_chunks c
                       JOIN legal_documents d ON d.id=c.document_id
                      WHERE d.corpus_version=%s""",
-                [version, "mixedbread-ai/mxbai-embed-large-v1", "1", dimension, version],
+                [version, target_model, target_version, target_dimension, version],
             )
             legal_contract_counts = cur.fetchone()
             cur.execute(
@@ -675,7 +678,7 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                            COUNT(*) FILTER (WHERE vector_dims(c.embedding) IS DISTINCT FROM %s)
                       FROM authority_case_chunks c
                      WHERE c.corpus_version=%s""",
-                ["mixedbread-ai/mxbai-embed-large-v1", "1", dimension, version],
+                [target_model, target_version, target_dimension, version],
             )
             authority_contract_counts = cur.fetchone()
         assert legal_contract_counts == (0, 0, 0, 0, 0)

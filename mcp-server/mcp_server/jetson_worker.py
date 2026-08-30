@@ -227,7 +227,7 @@ def process_once(config: WorkerConfig, model) -> int:
                     f"""UPDATE authority_embedding_shards SET status='queued',
                            lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL,
                            attempts=0, last_error=NULL, dead_letter_reason=NULL,
-                           dead_letter_at=NULL, updated_at=now()
+                           updated_at=now()
                         WHERE shard_key=%s AND status='complete'
                           AND EXISTS (SELECT 1 FROM {corpus}
                                       WHERE (embedding IS NULL
