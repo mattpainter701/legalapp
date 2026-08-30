@@ -471,6 +471,23 @@ def ingest_document(conn: Any, document: dict[str, Any], fetched: FetchedDocumen
             """,
             [document["source_key"]] * 4,
         )
+        cursor.execute(
+            """
+            INSERT INTO authority_harvest_events
+                (source_key, partition_key, external_id, content_hash,
+                 event_status, citation, effective_date, metadata)
+            VALUES (%s, %s, %s, %s, 'accepted', %s, %s, %s::jsonb)
+            """,
+            [
+                document["source_key"],
+                f"manifest:{document['source_key']}",
+                document["external_id"],
+                fetched.content_hash,
+                document.get("citation"),
+                document.get("effective_date"),
+                json.dumps({"namespace": "public-authority", "parser_version": document["parser_version"]}),
+            ],
+        )
     conn.commit()
     return {
         "source_key": document["source_key"],
@@ -644,13 +661,34 @@ def sync_documents(
                 except Exception as exc:
                     conn.rollback()
                     with conn.cursor() as cursor:
+                        failure_text = str(exc)[:2000]
+                        event_status = "quarantined" if any(
+                            marker in failure_text.lower()
+                            for marker in ("extraction", "unsupported media", "too little readable")
+                        ) else "retryable_failure"
+                        cursor.execute(
+                            """
+                            INSERT INTO authority_harvest_events
+                                (source_key, partition_key, external_id, event_status,
+                                 retry_count, quarantine_reason, metadata)
+                            VALUES (%s, %s, %s, %s, 0, %s, %s::jsonb)
+                            """,
+                            [
+                                document["source_key"],
+                                f"manifest:{document['source_key']}",
+                                document["external_id"],
+                                event_status,
+                                failure_text if event_status == "quarantined" else None,
+                                json.dumps({"namespace": "public-authority"}),
+                            ],
+                        )
                         cursor.execute(
                             """
                             UPDATE legal_sources
                             SET last_attempted_at = now(), current_error = %s, updated_at = now()
                             WHERE source_key = %s
                             """,
-                            [str(exc)[:2000], document["source_key"]],
+                            [failure_text, document["source_key"]],
                         )
                     conn.commit()
                     raise

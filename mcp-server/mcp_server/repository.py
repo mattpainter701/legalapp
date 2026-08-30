@@ -771,13 +771,21 @@ class CourtListenerRepository:
                 """
             )
             source_partitions = dict_rows(cur)
-        return {
+        status = {
             "ingest_runs": ingest_runs,
             "embedded_chunks": embedded[0]["embedded_chunks"] if embedded else 0,
             "pending_chunks": pending[0]["pending_chunks"] if pending else 0,
             "sources": sources,
             "source_partitions": source_partitions,
         }
+        # Keep the established sync_status contract while adding the richer
+        # claim-safe projection for deployments that have the control-plane
+        # tables.  Old databases still receive the legacy status payload.
+        try:
+            status["authority_coverage"] = self.authority_coverage()
+        except Exception:
+            status["authority_coverage"] = None
+        return status
 
     def corpus_status(self) -> dict[str, Any]:
         with self.conn.cursor() as cur:
@@ -816,3 +824,72 @@ class CourtListenerRepository:
         status["coverage"] = self.court_coverage()
         status["coverage_ledger"] = coverage_ledger
         return status
+
+    def authority_coverage(self) -> dict[str, Any]:
+        """Return claim-safe, versioned public-authority coverage evidence.
+
+        The projection contains metadata only.  It deliberately never selects
+        tenant ids, private document bodies, or query text.
+        """
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                SELECT version, status, manifest_hash, as_of, created_at,
+                       promoted_at, rolled_back_at, rollback_of, reason
+                FROM authority_corpus_versions
+                WHERE status IN ('promoted', 'canary')
+                ORDER BY promoted_at DESC NULLS LAST, created_at DESC
+                LIMIT 1
+            """)
+            version_rows = dict_rows(cur)
+            cur.execute("""
+                SELECT source_key, display_name, publisher, source_type,
+                       jurisdiction, authority_tier, source_tier, official_status,
+                       canonical_url, coverage_start, coverage_end, coverage_kind,
+                       last_successful_sync_at, item_count, chunk_count,
+                       embedded_chunk_count, current_error, rights_decision,
+                       geographic_scope, temporal_scope, expected_cadence,
+                       completeness_caveats, claim_safe_wording, reviewed_at,
+                       reviewed_by
+                FROM legal_sources
+                WHERE storage_policy <> 'prohibited'
+                ORDER BY priority, source_key
+            """)
+            sources = dict_rows(cur)
+            cur.execute("""
+                SELECT source_key, partition_key, checkpoint_at, cursor_url,
+                       status, last_attempted_at, last_successful_sync_at,
+                       rows_processed, chunks_created, last_error
+                FROM source_sync_states
+                ORDER BY source_key, partition_key
+            """)
+            partitions = dict_rows(cur)
+            cur.execute("""
+                SELECT corpus_version, audit_kind, thresholds, result, passed,
+                       sampled_at, auditor, immutable_hash
+                FROM authority_audits
+                ORDER BY sampled_at DESC
+                LIMIT 50
+            """)
+            audits = dict_rows(cur)
+        version = version_rows[0] if version_rows else None
+        passed_release = bool(version) and any(
+            row["passed"] and row["audit_kind"] in {"release", "completeness", "freshness"}
+            and row["corpus_version"] == version["version"] for row in audits
+        )
+        for source in sources:
+            source["status"] = "failed" if source.get("current_error") else (
+                "unreviewed" if source.get("rights_decision") in {"pending_review", "prohibited"} else "healthy"
+            )
+            source["claim_state"] = "suppressed" if source["status"] != "healthy" or not passed_release else (
+                "limited" if source.get("coverage_kind") != "complete" else "supported"
+            )
+        return {
+            "available": bool(version),
+            "namespace": "public-authority",
+            "corpus_version": version,
+            "claim_state": "supported" if passed_release else "suppressed",
+            "claim_notice": "Named-source, bounded coverage only; this is not a complete or good-law determination.",
+            "sources": sources,
+            "partitions": partitions,
+            "audits": audits,
+        }

@@ -19,6 +19,7 @@ TOOL_NAMES = [
     "export_research_bundle",
     "sync_status",
     "corpus_status",
+    "authority_coverage",
 ]
 
 
@@ -232,6 +233,11 @@ def build_tool_manifest() -> dict:
         {
             "name": "corpus_status",
             "description": "Return global local corpus counts, embedded chunks, courts, and loaded date range.",
+            "inputSchema": _schema({}, []),
+        },
+        {
+            "name": "authority_coverage",
+            "description": "Return versioned public-authority scope, freshness, reviewed rights, audit evidence, and claim-safe caveats.",
             "inputSchema": _schema({}, []),
         },
     ]

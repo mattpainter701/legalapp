@@ -153,6 +153,8 @@ def call_tool(body: ToolCallRequest):
                 result = repo.sync_status()
             elif body.name == "corpus_status":
                 result = repo.corpus_status()
+            elif body.name == "authority_coverage":
+                result = repo.authority_coverage()
             else:
                 raise HTTPException(status_code=404, detail=f"Unknown tool: {body.name}")
     except ValueError as exc:

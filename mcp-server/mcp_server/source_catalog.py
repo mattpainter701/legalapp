@@ -253,11 +253,15 @@ def seed_catalog(conn: Any, catalog: dict[str, Any]) -> int:
             jurisdiction, canonical_url, authority_tier, official_status,
             ingestion_mode, storage_policy, access_type, license_status,
             terms_url, sync_frequency, data_format, corpus_table, enabled,
-            priority, coverage_kind, parser_version, licensing_notes, metadata
+            priority, coverage_kind, parser_version, licensing_notes,
+            rights_decision, source_tier, geographic_scope, temporal_scope,
+            expected_cadence, completeness_caveats, claim_safe_wording,
+            reviewed_at, reviewed_by, review_reason, metadata
         )
         VALUES (
             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-            %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb
+            %s, %s, %s, %s, %s, %s, %s, %s::jsonb,
+            %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s
         )
         ON CONFLICT (source_key) DO UPDATE
         SET display_name = EXCLUDED.display_name,
@@ -282,6 +286,16 @@ def seed_catalog(conn: Any, catalog: dict[str, Any]) -> int:
             parser_version = EXCLUDED.parser_version,
             licensing_notes = EXCLUDED.licensing_notes,
             metadata = legal_sources.metadata || EXCLUDED.metadata,
+            rights_decision = EXCLUDED.rights_decision,
+            source_tier = EXCLUDED.source_tier,
+            geographic_scope = EXCLUDED.geographic_scope,
+            temporal_scope = EXCLUDED.temporal_scope,
+            expected_cadence = EXCLUDED.expected_cadence,
+            completeness_caveats = EXCLUDED.completeness_caveats,
+            claim_safe_wording = EXCLUDED.claim_safe_wording,
+            reviewed_at = EXCLUDED.reviewed_at,
+            reviewed_by = EXCLUDED.reviewed_by,
+            review_reason = EXCLUDED.review_reason,
             updated_at = now()
     """
     with conn.cursor() as cursor:
@@ -311,6 +325,20 @@ def seed_catalog(conn: Any, catalog: dict[str, Any]) -> int:
                     source["coverage_kind"],
                     source.get("parser_version"),
                     source.get("notes"),
+                    source.get("rights_decision") or (
+                        "official" if source["official_status"].startswith("official")
+                        and source["license_status"] not in {"restricted", "terms_review_required"}
+                        else "pending_review"
+                    ),
+                    source.get("source_tier") or source["authority_tier"],
+                    json.dumps(source.get("geographic_scope") or ([source["jurisdiction"]] if source.get("jurisdiction") else [])),
+                    json.dumps(source.get("temporal_scope") or {"start": source.get("coverage_start"), "end": source.get("coverage_end")}),
+                    source.get("expected_cadence") or source["sync_frequency"],
+                    source.get("completeness_caveats") or source.get("coverage_notes") or "Bounded source scope; completeness is not established.",
+                    source.get("claim_safe_wording") or "Searchable excerpts from this reviewed source; scope and currentness are bounded.",
+                    source.get("reviewed_at") or catalog.get("catalog_updated"),
+                    source.get("reviewed_by") or "source-catalog-review",
+                    source.get("review_reason") or source.get("acquisition_basis") or "Reviewed source catalog entry",
                     json.dumps(_source_metadata(catalog, source)),
                 ],
             )

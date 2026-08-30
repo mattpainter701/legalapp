@@ -125,6 +125,69 @@ CREATE TABLE IF NOT EXISTS legal_sources (
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- Reviewed provenance is a control-plane contract, not an inference from a
+-- public URL.  These fields are deliberately nullable for old seeded rows;
+-- such rows remain claim-limited until an operator review fills them in.
+ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS rights_decision text NOT NULL DEFAULT 'pending_review';
+ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS source_tier text;
+ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS geographic_scope jsonb NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS temporal_scope jsonb NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS expected_cadence text;
+ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS completeness_caveats text;
+ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS claim_safe_wording text;
+ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS reviewed_at timestamptz;
+ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS reviewed_by text;
+ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS review_reason text;
+
+CREATE TABLE IF NOT EXISTS authority_corpus_versions (
+    version text PRIMARY KEY,
+    status text NOT NULL DEFAULT 'staged',
+    manifest_hash text NOT NULL,
+    as_of timestamptz NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    promoted_at timestamptz,
+    rolled_back_at timestamptz,
+    rollback_of text REFERENCES authority_corpus_versions(version),
+    reason text,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    CHECK (status IN ('staged', 'canary', 'promoted', 'rolled_back', 'retired'))
+);
+
+CREATE TABLE IF NOT EXISTS authority_harvest_events (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    source_key text NOT NULL REFERENCES legal_sources(source_key) ON DELETE RESTRICT,
+    partition_key text NOT NULL,
+    corpus_version text REFERENCES authority_corpus_versions(version),
+    external_id text,
+    content_hash text,
+    cursor_before text,
+    cursor_after text,
+    event_status text NOT NULL,
+    retry_count integer NOT NULL DEFAULT 0,
+    quarantine_reason text,
+    citation text,
+    court text,
+    effective_date date,
+    observed_at timestamptz NOT NULL DEFAULT now(),
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    CHECK (event_status IN ('accepted', 'duplicate', 'skipped', 'retryable_failure', 'quarantined', 'failed'))
+);
+
+CREATE TABLE IF NOT EXISTS authority_audits (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    corpus_version text NOT NULL REFERENCES authority_corpus_versions(version),
+    audit_kind text NOT NULL,
+    methodology text NOT NULL,
+    thresholds jsonb NOT NULL DEFAULT '{}'::jsonb,
+    result jsonb NOT NULL DEFAULT '{}'::jsonb,
+    passed boolean NOT NULL,
+    sampled_at timestamptz NOT NULL DEFAULT now(),
+    auditor text NOT NULL,
+    immutable_hash text NOT NULL,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    CHECK (audit_kind IN ('completeness', 'freshness', 'isolation', 'release'))
+);
+
 ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS display_name text;
 ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS description text;
 ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS authority_tier text NOT NULL DEFAULT 'secondary';
@@ -249,6 +312,8 @@ CREATE INDEX IF NOT EXISTS ix_opinions_source_modified_at ON opinions(source_mod
 CREATE INDEX IF NOT EXISTS ix_source_sync_states_status ON source_sync_states(status, updated_at);
 CREATE INDEX IF NOT EXISTS ix_corpus_coverage_ledger_state ON corpus_coverage_ledger(acquisition_state, updated_at);
 CREATE INDEX IF NOT EXISTS ix_legal_sources_priority ON legal_sources(enabled, priority, source_key);
+CREATE INDEX IF NOT EXISTS ix_authority_harvest_events_source ON authority_harvest_events(source_key, partition_key, observed_at);
+CREATE INDEX IF NOT EXISTS ix_authority_audits_version ON authority_audits(corpus_version, sampled_at);
 CREATE INDEX IF NOT EXISTS ix_legal_documents_source ON legal_documents(source_key, document_type);
 CREATE INDEX IF NOT EXISTS ix_legal_documents_citation ON legal_documents(citation) WHERE citation IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ix_legal_documents_effective ON legal_documents(jurisdiction, effective_date);

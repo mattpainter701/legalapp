@@ -5,15 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
-## 2026.08.30.4 — Controlled client and matter import promotion
+## 2026.08.30.5 — Versioned public-authority coverage
 
 Released August 30, 2026.
 
-Administrators can approve an unchanged import report before promoting the conservative client and matter subset, with durable links and rollback review markers.
+Public legal research now exposes reviewed source scope, corpus release evidence, currentness limits, and honest retrieval fallbacks.
 
-- **Approve the exact reconciliation.** Promotion requires an explicit confirmation and report hash, so changed or stale staging cannot be promoted silently.
-- **Reconcile existing records.** Client identifiers and email addresses are matched within the tenant before a new client is created; every promoted row receives an external provenance link.
-- **Keep rollback reviewable.** Operators can mark a promoted run for non-destructive rollback review while audit receipts preserve what happened.
+- **See reviewed source scope.** Rights decisions, authority tiers, content types, jurisdictions, temporal scope, cadence, caveats, and provenance are carried with source health.
+- **Track corpus releases honestly.** Promoted versions, rollback metadata, harvest checkpoints, quarantine states, and sampled audits prevent unsupported complete/current claims.
+- **Preserve retrieval boundaries.** Exact embedding compatibility is required; outages or mismatches fall back to keyword/source search while private firm documents remain outside public telemetry.
 
 ## 2026.08.30.3 — Search a firm's local case-file memory
 

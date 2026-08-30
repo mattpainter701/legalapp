@@ -224,14 +224,15 @@ async def source_health(
             {"name": "sync_status", "arguments": {}},
         )
     except Exception:
-        return {
-            "available": False,
-            "status": "unavailable",
-            "sources": [],
-            "partitions": [],
-        }
+        try:
+            response = await _proxy_post("/api/mcp/tools/call", request, {"name": "authority_coverage", "arguments": {}})
+        except Exception:
+            return {"available": False, "status": "unavailable", "sources": [], "partitions": [], "audits": []}
 
     payload = _tool_json_payload(response)
+    enriched = payload.get("authority_coverage")
+    if isinstance(enriched, dict):
+        payload = {**payload, **enriched}
     sources = []
     for source in payload.get("sources") or []:
         if not isinstance(source, dict):
@@ -254,6 +255,18 @@ async def source_health(
                     "embedded_chunk_count",
                     "embedding_model",
                     "embedding_version",
+                    "display_name",
+                    "authority_tier",
+                    "source_tier",
+                    "rights_decision",
+                    "geographic_scope",
+                    "temporal_scope",
+                    "expected_cadence",
+                    "completeness_caveats",
+                    "claim_safe_wording",
+                    "reviewed_at",
+                    "reviewed_by",
+                    "claim_state",
                 )
             }
             | {"status": "attention" if source.get("current_error") else "healthy"}
@@ -280,11 +293,17 @@ async def source_health(
     has_attention = any(source["status"] == "attention" for source in sources) or any(
         partition.get("status") == "failed" for partition in partitions
     )
+    corpus_version = payload.get("corpus_version")
     return {
         "available": bool(sources),
         "status": "attention" if has_attention else ("healthy" if sources else "empty"),
+        "namespace": "public-authority",
+        "corpus_version": corpus_version,
+        "claim_state": payload.get("claim_state") or ("limited" if sources else "suppressed"),
+        "claim_notice": payload.get("claim_notice") or "Named-source, bounded coverage only; this is not a complete or good-law determination.",
         "sources": sources,
         "partitions": partitions,
+        "audits": payload.get("audits") or [],
     }
 
 

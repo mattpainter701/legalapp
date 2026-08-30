@@ -248,9 +248,10 @@ def test_manifest_exposes_domain_scoped_legal_tools():
         "get_court_coverage",
         "search_dockets",
         "export_research_bundle",
-        "sync_status",
-        "corpus_status",
-    ]
+            "sync_status",
+            "corpus_status",
+            "authority_coverage",
+        ]
 
 
 def test_case_details_contract_requires_exactly_one_identifier():
