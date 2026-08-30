@@ -283,6 +283,10 @@ async def test_backend_to_mcp_asgi_assertion_is_consumed_and_replay_is_rejected(
         "reason": "real verifier fixture",
         "manifest_hash": "fixture-manifest",
         "as_of": "2026-08-30",
+        "audit_kind": None,
+        "embedding_model": "mixedbread-ai/mxbai-embed-large-v1",
+        "embedding_version": "1",
+        "embedding_dimension": 1024,
     }
     response = await client.post(
         "/api/mcp/authority/stage",
@@ -326,7 +330,7 @@ async def test_backend_to_mcp_asgi_assertion_is_consumed_and_replay_is_rejected(
                 "X-Operator-Identity": "asgi-operator",
                 "X-Operator-Assertion": assertion,
             },
-            json=body,
+            json=captured["json"],
         )
     assert replay.status_code == 403
     assert replay.json()["detail"] == "replayed signed operator context"
