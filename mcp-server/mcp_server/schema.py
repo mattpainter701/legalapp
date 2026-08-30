@@ -414,7 +414,7 @@ ALTER TABLE source_sync_states ADD COLUMN IF NOT EXISTS dead_letter_count intege
 ALTER TABLE source_sync_states ADD COLUMN IF NOT EXISTS lag_seconds integer;
 ALTER TABLE source_sync_states ADD COLUMN IF NOT EXISTS next_retry_at timestamptz;
 ALTER TABLE source_sync_states ADD COLUMN IF NOT EXISTS last_cursor_hash text;
-ALTER TABLE source_sync_states ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'active';
+ALTER TABLE source_sync_states ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'idle';
 
 CREATE TABLE IF NOT EXISTS authority_embedding_shards (
     shard_key text PRIMARY KEY,

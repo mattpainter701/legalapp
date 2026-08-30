@@ -1091,7 +1091,14 @@ def test_legal_only_upgrade_bootstrap_rehearsal():
                     created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now())"""
             )
             cur.execute(
-                """CREATE TABLE source_sync_states (source_key text PRIMARY KEY, updated_at timestamptz)"""
+                """CREATE TABLE source_sync_states (
+                    source_key text NOT NULL, partition_key text NOT NULL,
+                    checkpoint_at timestamptz, cursor_url text,
+                    status text NOT NULL DEFAULT 'idle', last_attempted_at timestamptz,
+                    last_successful_sync_at timestamptz, rows_processed bigint NOT NULL DEFAULT 0,
+                    chunks_created bigint NOT NULL DEFAULT 0, last_error text,
+                    metadata jsonb NOT NULL DEFAULT '{}'::jsonb, updated_at timestamptz NOT NULL DEFAULT now(),
+                    PRIMARY KEY (source_key, partition_key))"""
             )
             cur.execute(
                 """INSERT INTO legal_sources
@@ -1191,7 +1198,13 @@ def test_legacy_upgrade_bootstrap_rehearsal():
             )
             cur.execute(
                 """CREATE TABLE source_sync_states (
-                    source_key text PRIMARY KEY, updated_at timestamptz)"""
+                    source_key text NOT NULL, partition_key text NOT NULL,
+                    checkpoint_at timestamptz, cursor_url text,
+                    status text NOT NULL DEFAULT 'idle', last_attempted_at timestamptz,
+                    last_successful_sync_at timestamptz, rows_processed bigint NOT NULL DEFAULT 0,
+                    chunks_created bigint NOT NULL DEFAULT 0, last_error text,
+                    metadata jsonb NOT NULL DEFAULT '{}'::jsonb, updated_at timestamptz NOT NULL DEFAULT now(),
+                    PRIMARY KEY (source_key, partition_key))"""
             )
             cur.execute(
                 """INSERT INTO legal_sources
