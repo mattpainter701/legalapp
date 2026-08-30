@@ -65,4 +65,14 @@ def partition_sql(corpus: str = "opinion_chunks", corpus_version: str | None = N
             LIMIT %s
             FOR UPDATE OF c SKIP LOCKED
         """
+    if corpus == "authority_case_chunks":
+        return f"""
+            SELECT id, content
+            FROM authority_case_chunks
+            WHERE embedding IS NULL AND corpus_version = %s
+              AND ABS(HASHTEXT(id::text)) %% %s = %s
+            ORDER BY chunk_index, opinion_id
+            LIMIT %s
+            FOR UPDATE SKIP LOCKED
+        """
     raise ValueError(f"unsupported embedding corpus: {corpus}")

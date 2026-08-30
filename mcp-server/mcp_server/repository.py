@@ -530,13 +530,14 @@ class CourtListenerRepository:
                 """
                 SELECT DISTINCT o.opinion_id, o.cluster_id, cl.case_name, cl.date_filed,
                        c.court_id, c.full_name AS court_name
-                FROM opinion_citations cit
-                JOIN opinion_clusters cl ON cl.cluster_id = cit.cited_cluster_id
-                LEFT JOIN opinions o ON o.cluster_id = cl.cluster_id
+                FROM authority_case_citations cit
+                JOIN authority_case_clusters cl ON cl.corpus_version = cit.corpus_version AND cl.cluster_id = cit.cited_cluster_id
+                LEFT JOIN authority_case_opinions o ON o.corpus_version = cit.corpus_version AND o.opinion_id = cit.cited_opinion_id
+                LEFT JOIN authority_case_chunks ch ON ch.corpus_version = cit.corpus_version AND ch.cluster_id = cl.cluster_id
                 LEFT JOIN dockets d ON d.docket_id = cl.docket_id
                 LEFT JOIN courts c ON c.court_id = d.court_id
                 WHERE cit.cited_volume = %s AND cit.cited_reporter = %s AND cit.cited_page = %s
-                  AND cl.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
+                  AND cit.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
                 LIMIT 20
                 """,
                 [parsed["volume"], parsed["reporter"], parsed["page"]],
@@ -576,16 +577,15 @@ class CourtListenerRepository:
         with self.conn.cursor() as cur:
             cur.execute(
                 """SELECT cit.cited_opinion_id, cit.cited_reporter, cit.cited_volume, cit.cited_page, cit.depth
-                   FROM opinion_citations cit JOIN opinion_clusters cl ON cl.cluster_id = cit.cited_cluster_id
-                   WHERE cit.citing_opinion_id = %s AND cl.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1) LIMIT 100""",
+                   FROM authority_case_citations cit
+                   WHERE cit.citing_opinion_id = %s AND cit.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1) LIMIT 100""",
                 [opinion_id],
             )
             cited = dict_rows(cur)
             cur.execute(
                 """SELECT cit.citing_opinion_id, cit.depth
-                   FROM opinion_citations cit JOIN opinions o ON o.opinion_id = cit.citing_opinion_id
-                   JOIN opinion_clusters cl ON cl.cluster_id = o.cluster_id
-                   WHERE cit.cited_opinion_id = %s AND cl.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1) LIMIT 100""",
+                   FROM authority_case_citations cit
+                   WHERE cit.cited_opinion_id = %s AND cit.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1) LIMIT 100""",
                 [opinion_id],
             )
             citing = dict_rows(cur)
@@ -617,11 +617,10 @@ class CourtListenerRepository:
                        MIN(cl.date_filed) AS first_date,
                        MAX(cl.date_filed) AS last_date
                 FROM courts c
-                LEFT JOIN opinion_chunks oc ON oc.court_id = c.court_id
-                LEFT JOIN opinion_clusters cl ON cl.cluster_id = oc.cluster_id
+                LEFT JOIN authority_case_chunks oc ON oc.court_id = c.court_id
+                LEFT JOIN authority_case_clusters cl ON cl.corpus_version = oc.corpus_version AND cl.cluster_id = oc.cluster_id
                 WHERE c.court_id = %s
                   AND oc.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
-                  AND cl.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
                 GROUP BY c.court_id, c.short_name, c.full_name, c.jurisdiction
                 """,
                 [court_id],
@@ -655,9 +654,9 @@ class CourtListenerRepository:
                        MAX(oc.date_filed) AS last_date
                 FROM courts c
                 LEFT JOIN dockets d ON d.court_id = c.court_id
-                LEFT JOIN opinion_clusters oc ON oc.docket_id = d.docket_id
-                LEFT JOIN opinions o ON o.cluster_id = oc.cluster_id
-                LEFT JOIN opinion_chunks ch ON ch.opinion_id = o.opinion_id
+                LEFT JOIN authority_case_clusters oc ON oc.docket_id = d.docket_id AND oc.corpus_version = {promoted}
+                LEFT JOIN authority_case_opinions o ON o.corpus_version = oc.corpus_version AND o.opinion_id IN (SELECT opinion_id FROM authority_case_chunks WHERE corpus_version=oc.corpus_version AND cluster_id=oc.cluster_id)
+                LEFT JOIN authority_case_chunks ch ON ch.corpus_version = oc.corpus_version AND ch.cluster_id = oc.cluster_id
                 WHERE {' AND '.join(filters)}
                 GROUP BY c.court_id, c.short_name, c.full_name, c.jurisdiction
                 ORDER BY opinion_count DESC, c.full_name
@@ -704,7 +703,7 @@ class CourtListenerRepository:
                        (ARRAY_REMOVE(ARRAY_AGG(DISTINCT oc.case_name), NULL))[1:5] AS case_names
                 FROM dockets d
                 LEFT JOIN courts c ON c.court_id = d.court_id
-                LEFT JOIN opinion_clusters oc ON oc.docket_id = d.docket_id
+                LEFT JOIN authority_case_clusters oc ON oc.docket_id = d.docket_id AND oc.corpus_version = {promoted}
                 WHERE {' AND '.join(filters)}
                 GROUP BY d.docket_id, d.docket_number, d.case_name, d.court_id, c.full_name, c.jurisdiction
                 ORDER BY last_date DESC NULLS LAST, cluster_count DESC

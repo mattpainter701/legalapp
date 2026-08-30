@@ -17,7 +17,7 @@ from .worker_config import DEFAULT_MODEL, WorkerConfig, partition_sql
 
 # The reviewed authority corpus is small and high-value for chat. Drain it before
 # returning to the much larger CourtListener opinion backlog.
-CORPORA = ("legal_document_chunks", "opinion_chunks")
+CORPORA = ("legal_document_chunks", "authority_case_chunks")
 
 
 def update_sql(corpus: str, model_version: str = "1") -> str:
@@ -118,7 +118,8 @@ def process_once(config: WorkerConfig, model) -> int:
                     heartbeat_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id), lease_seconds=900)
                     with conn.cursor() as cur:
                         cur.execute("BEGIN")
-                        version_params = [version] if corpus == "opinion_chunks" else [version, version]
+                        version_params = ([version] if corpus == "authority_case_chunks"
+                                          else [version, version] if corpus == "legal_document_chunks" else [])
                         cur.execute(partition_sql(corpus, version), version_params + [config.total_workers, config.worker_id, config.batch_size])
                         rows = cur.fetchall()
                         if not rows:

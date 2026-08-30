@@ -31,6 +31,7 @@ def test_authority_release_rehearsal():
     version = "rehearsal-authority-" + uuid.uuid4().hex
     with connect(db_url) as conn:
         source_key = "rehearsal:source:" + version
+        fixture_cluster_id = 97000001
         def add_fixture(version_name, suffix):
             with conn.cursor() as cur:
                 cur.execute("""INSERT INTO legal_sources
@@ -53,15 +54,20 @@ def test_authority_release_rehearsal():
                             [document_id, suffix + ' authority', suffix + ' authority', version_name])
                 cur.execute("""INSERT INTO authority_case_clusters
                     (corpus_version, cluster_id, case_name, date_filed)
-                    VALUES (%s, %s, %s, '2026-01-01')""", [version_name, abs(hash(version_name)) % 100000000, 'Fixture ' + suffix])
-                cluster_id = abs(hash(version_name)) % 100000000
+                    VALUES (%s, %s, %s, '2026-01-01')
+                    ON CONFLICT (corpus_version, cluster_id) DO UPDATE
+                    SET case_name=EXCLUDED.case_name""", [version_name, fixture_cluster_id, 'Fixture ' + suffix])
+                cluster_id = fixture_cluster_id
                 cur.execute("""INSERT INTO authority_case_opinions
                     (corpus_version, opinion_id, source_url, plain_text)
-                    VALUES (%s, %s, 'https://example.test/case', %s)""", [version_name, cluster_id, suffix + ' case'])
+                    VALUES (%s, %s, 'https://example.test/case', %s)
+                    ON CONFLICT (corpus_version, opinion_id) DO UPDATE
+                    SET plain_text=EXCLUDED.plain_text""", [version_name, cluster_id, suffix + ' case'])
                 cur.execute("""INSERT INTO authority_case_chunks
                     (corpus_version, opinion_id, cluster_id, chunk_index, content)
-                    VALUES (%s, %s, %s, 0, %s)""", [version_name, cluster_id, cluster_id, suffix + ' case authority'])
-        add_fixture(version, 'old')
+                    VALUES (%s, %s, %s, 0, %s)
+                    ON CONFLICT (corpus_version, opinion_id, chunk_index) DO UPDATE
+                    SET content=EXCLUDED.content""", [version_name, cluster_id, cluster_id, suffix + ' case authority'])
         stage_corpus_version(
             conn, version=version, manifest_hash="fixture-manifest-hash",
             as_of="2026-08-30T00:00:00Z", actor="rehearsal-admin",
@@ -69,6 +75,7 @@ def test_authority_release_rehearsal():
             embedding_model="mixedbread-ai/mxbai-embed-large-v1",
             embedding_version="1", embedding_dimension=1024,
         )
+        add_fixture(version, 'old')
         for kind, records in (
             ("release", [{"ready": True}]),
             ("completeness", [{"expected": True, "observed": True}]),

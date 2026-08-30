@@ -634,10 +634,11 @@ def _load_csv(
                       (corpus_version, opinion_id, source_url, plain_text)
                       SELECT cl.corpus_version, %s, %s, COALESCE(%s, %s)
                       FROM authority_case_clusters cl
-                      WHERE cl.cluster_id=%s AND cl.corpus_version IS NOT NULL
+                      WHERE cl.cluster_id=%s
+                        AND cl.corpus_version=%s
                       ON CONFLICT (corpus_version, opinion_id) DO UPDATE SET
                         source_url=EXCLUDED.source_url, plain_text=EXCLUDED.plain_text""",
-                               [values[0], values[7], values[5], values[4], values[1]])
+                               [values[0], values[7], values[5], values[4], values[1], corpus_version])
             count += len(pending)
             pending.clear()
             if count % budget_check_every == 0:
@@ -855,12 +856,17 @@ def create_chunks(db_url: str | None = None, limit: int | None = None) -> int:
                     )
                     created += cur.rowcount
         conn.commit()
-        refresh_courtlistener_coverage_ledger(conn)
         with conn.cursor() as cur:
             cur.execute("SELECT version FROM authority_corpus_versions WHERE status IN ('staged','canary') ORDER BY created_at DESC LIMIT 1")
             version_row = cur.fetchone()
         if version_row:
+            # Snapshot-backed serving must not depend on the singleton legacy
+            # opinion_chunks table.  Generate candidate chunks directly from
+            # the candidate opinion snapshot, then copy any legacy metadata
+            # that is still needed for compatibility.
+            created += create_snapshot_chunks(conn, version_row[0], limit=limit)
             materialize_caselaw_snapshot(conn, version_row[0])
+        refresh_courtlistener_coverage_ledger(conn)
         conn.commit()
     return created
 
@@ -897,6 +903,57 @@ def materialize_caselaw_snapshot(conn, corpus_version: str) -> None:
               embedding_model=EXCLUDED.embedding_model,
               embedding_version=EXCLUDED.embedding_version
         """, [corpus_version, corpus_version, corpus_version])
+        cur.execute("""
+            INSERT INTO authority_case_citations
+              (corpus_version, citing_opinion_id, cited_opinion_id,
+               cited_cluster_id, cited_reporter, cited_volume, cited_page, depth)
+            SELECT %s, cit.citing_opinion_id, cit.cited_opinion_id,
+                   cit.cited_cluster_id, cit.cited_reporter, cit.cited_volume,
+                   cit.cited_page, cit.depth
+            FROM opinion_citations cit
+            WHERE EXISTS (SELECT 1 FROM authority_case_opinions ao
+                          WHERE ao.corpus_version=%s AND ao.opinion_id=cit.citing_opinion_id)
+            ON CONFLICT DO NOTHING
+        """, [corpus_version, corpus_version])
+
+
+def create_snapshot_chunks(conn, corpus_version: str, limit: int | None = None) -> int:
+    """Materialize text chunks solely within one staged snapshot.
+
+    Legacy opinion/opinion_cluster rows have singleton identities and cannot
+    represent two releases safely.  Snapshot opinions are therefore the
+    authoritative chunking input for a staged release.
+    """
+    created = 0
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT ao.opinion_id, ac.cluster_id, d.court_id, ao.plain_text
+            FROM authority_case_opinions ao
+            JOIN authority_case_clusters ac
+              ON ac.corpus_version=ao.corpus_version
+            LEFT JOIN dockets d ON d.docket_id=ac.docket_id
+            WHERE ao.corpus_version=%s
+            ORDER BY ao.opinion_id
+            LIMIT %s
+            """,
+            [corpus_version, limit or 1000000],
+        )
+        for opinion_id, cluster_id, court_id, text in cur.fetchall():
+            for idx, content in enumerate(chunk_text(text or "")):
+                cur.execute(
+                    """
+                    INSERT INTO authority_case_chunks
+                      (corpus_version, opinion_id, cluster_id, court_id,
+                       chunk_index, content)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (corpus_version, opinion_id, chunk_index)
+                    DO UPDATE SET content=EXCLUDED.content
+                    """,
+                    [corpus_version, opinion_id, cluster_id, court_id, idx, content],
+                )
+                created += cur.rowcount
+    return created
 
 
 def main() -> None:

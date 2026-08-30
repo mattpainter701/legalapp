@@ -202,6 +202,15 @@ def stage_corpus_version(conn: Any, *, version: str, manifest_hash: str,
                 FROM authority_case_chunks WHERE corpus_version=%s
                 ON CONFLICT DO NOTHING
             """, [version, current[0]])
+            cur.execute("""
+                INSERT INTO authority_case_citations
+                  (corpus_version, citing_opinion_id, cited_opinion_id,
+                   cited_cluster_id, cited_reporter, cited_volume, cited_page, depth)
+                SELECT %s, citing_opinion_id, cited_opinion_id, cited_cluster_id,
+                       cited_reporter, cited_volume, cited_page, depth
+                FROM authority_case_citations WHERE corpus_version=%s
+                ON CONFLICT DO NOTHING
+            """, [version, current[0]])
     conn.commit()
 
 

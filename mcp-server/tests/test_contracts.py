@@ -418,7 +418,7 @@ def test_repository_search_dockets_targets_docket_metadata():
 
     sql = conn.cursor_obj.sql
     assert "FROM dockets d" in sql
-    assert "opinion_clusters" in sql
+    assert "authority_case_clusters" in sql
     assert "d.docket_number ILIKE" in sql
     assert "c.jurisdiction = %s" in sql
 

@@ -434,6 +434,47 @@ CREATE TABLE IF NOT EXISTS authority_case_opinions (
     plain_text text,
     PRIMARY KEY (corpus_version, opinion_id)
 );
+CREATE TABLE IF NOT EXISTS authority_case_citations (
+    corpus_version text NOT NULL REFERENCES authority_corpus_versions(version),
+    citing_opinion_id bigint NOT NULL,
+    cited_opinion_id bigint,
+    cited_cluster_id bigint,
+    cited_reporter text,
+    cited_volume text,
+    cited_page text,
+    depth integer NOT NULL DEFAULT 0,
+    PRIMARY KEY (corpus_version, citing_opinion_id, cited_opinion_id, cited_cluster_id, cited_reporter, cited_volume, cited_page)
+);
+
+-- Snapshot rows are mutable only while their release is being assembled.  A
+-- promoted/retired/rolled-back release must remain an immutable explanation
+-- of what was searchable at that point in time.
+CREATE OR REPLACE FUNCTION reject_authority_snapshot_mutation() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE release_status text;
+BEGIN
+    SELECT status INTO release_status
+    FROM authority_corpus_versions
+    WHERE version = COALESCE(OLD.corpus_version, NEW.corpus_version);
+    IF release_status IS DISTINCT FROM 'staged'
+       AND release_status IS DISTINCT FROM 'canary' THEN
+        RAISE EXCEPTION 'authority snapshot % rows are immutable after staging', release_status;
+    END IF;
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+END $$;
+CREATE OR REPLACE FUNCTION install_authority_snapshot_guard(table_name text) RETURNS void
+LANGUAGE plpgsql AS $$
+BEGIN
+    EXECUTE format('DROP TRIGGER IF EXISTS authority_snapshot_immutable ON %I', table_name);
+    EXECUTE format('CREATE TRIGGER authority_snapshot_immutable
+                    BEFORE UPDATE OR DELETE ON %I
+                    FOR EACH ROW EXECUTE FUNCTION reject_authority_snapshot_mutation()', table_name);
+END $$;
+SELECT install_authority_snapshot_guard('authority_case_clusters');
+SELECT install_authority_snapshot_guard('authority_case_opinions');
+SELECT install_authority_snapshot_guard('authority_case_chunks');
+SELECT install_authority_snapshot_guard('authority_case_citations');
+DROP FUNCTION install_authority_snapshot_guard(text);
 
 CREATE INDEX IF NOT EXISTS ix_opinion_chunks_court ON opinion_chunks(court_id);
 CREATE INDEX IF NOT EXISTS ix_opinion_chunks_embedding_version ON opinion_chunks(embedding_version);
