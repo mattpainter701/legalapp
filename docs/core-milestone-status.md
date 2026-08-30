@@ -16,45 +16,46 @@ production-shaped rehearsal. Live deployment evidence remains release-specific.
 | `COMP-03` | Open — closure active | PR #270 supplies spam-resistant conditional intake, source attribution, conflict triage, published-slot booking, guarded lead promotion, recovery candidates, and funnel counters. Provider-backed reminders, consented SMS (`ECO-23–ECO-29`), signed-fee-agreement-gated promotion, and the complete lead-to-retainer rehearsal are not proven at this baseline. |
 | `COMP-04` | Accepted | PR #273 merged as `9375fdfb`; the versioned operating contract, public status/incident lifecycle, support policy, signed tenant export, migration receipt, legal-hold/two-operator offboarding evidence, subprocessor/DPA/BAA boundaries, Trust Center, and synthetic production-shaped tests meet the v1 acceptance without claiming unattained SLAs, certifications, or pen tests. Backup, restore, and deployment proof must still be refreshed for each production release. |
 | `COMP-05` | Reopened | PR #275 merged as `7e0745b3` and provides bounded DOCX/PDF parsing, isolation, review decisions, missing/ambiguous reporting, and DOCX report/TOA export. Current behavior remains partial or absent for provider-backed citation resolution, page/pin-cite quote verification, available treatment/currentness evidence, genuinely omitted-authority discovery, opposing-brief analysis beyond citation-set difference, source hyperlinks, existing-document UI, and a full retrieval-to-export rehearsal. `BK20` therefore remains open. |
-| `COMP-06` | Open — draft rejected for certification | Draft PR #280 at independently reviewed head `6f53d624` supplies a substantial control-plane scaffold: reviewed-source metadata, corpus/audit/harvest/shard tables, coverage projection/UI, query-embedding compatibility checks, operator routes, and pure unit tests. It is not accepted because the present data model and queries do not yet preserve and serve side-by-side corpus versions safely; caselaw version binding/backfill is absent; harvest is not genuinely resumable with bounded retry/dead-letter behavior; worker leases do not drain or recover safely; global controls are reachable through tenant-admin authorization; promotion/audit/currentness gates are incomplete; and the only database rehearsal is opt-in, skipped in normal CI, and does not prove served-result cutover/rollback or public/private isolation. Private Firm Memory remains a separate tenant/matter-scoped corpus and must not feed public-authority telemetry. |
+| `COMP-06` | Open — hardened draft still blocked | Draft PR #280 at independently reviewed head `c49cdfd6` now includes composite per-version document identity, staged-only authority ingest, parent/chunk retrieval filters, version-aware harvest evidence, append-only audit/event triggers, an advisory release lock and one-promoted-version invariant, broader worker failure handling, all-three customer claim gating, a platform-token check, and a mandatory pgvector CI job. It is not accepted: that CI job fails because promotion violates its own one-promoted invariant; unchanged cross-version documents can still receive no chunks; CourtListener loaders still create unversioned caselaw hidden by promoted-version queries; served-result rollback is untested; cursor/retry state is not consumed as a real resumable execution path; worker lease renewal/reopening and AIP-19 capacity/temperature evidence remain incomplete; citation/network paths and caselaw vector compatibility are not version-safe; and audit/currentness inputs are not fully bound to the exact version/latest result. Private Firm Memory remains a separate tenant/matter-scoped corpus and must not feed public-authority telemetry. |
 
 ## COMP-06 draft acceptance review
 
-PR #280 was reviewed read-only at exact head
-`6f53d624e9ecaf91f9bd7287cea6ab01ddedae2f`, based on `origin/main`
-`42b486e791d182010f4e476dd9df293fb9ccd206`. The worktree was clean and the PR
-remained draft/blocked. At the review snapshot every reported check except
-`Backend — Tests (pytest)` was green; backend tests were still running. Even a
-fully green general CI run would not close the following semantic and evidence
-gaps:
+PR #280 was re-reviewed read-only at exact hardened head
+`c49cdfd650d73d6486b7751304488537e02fbbf2`, based on `origin/main`
+`42b486e791d182010f4e476dd9df293fb9ccd206`. The owned worktree was clean and the
+PR remained draft/blocked. The mandatory `Authority control-plane DB rehearsal`
+failed in run
+<https://github.com/mattpainter701/legalapp/actions/runs/33320651382> because the
+second promotion sets the new version to `promoted` before retiring the old row,
+violating `ux_one_promoted_authority_version`. Unrelated green checks do not cure
+that failure or the following semantic gaps:
 
-- **Version-safe service:** parent/chunk corpus bindings are inconsistent,
-  caselaw rows lack the promoted-version migration/backfill required by the new
-  filter, and destructive upserts do not retain old content for a demonstrated
-  served-results rollback.
-- **Harvest and rights:** ingestion does not consume a real resume cursor,
-  aborts the batch on a document failure, lacks bounded retry/dead-letter
-  processing, and can infer reviewed/official provenance instead of failing
-  closed on an explicit review decision.
-- **Embedding operations:** one batch completes an unreclaimable shard; work is
-  not constrained to the claimed corpus version; staged data cannot be prepared;
-  failures do not durably finish/retry the lease; and heartbeat,
-  temperature/capacity, configured-version, and true throughput evidence is
-  incomplete.
-- **Operator and release integrity:** tenant administrators can reach global
-  stage/audit/promote/rollback routes; promotion/rollback lacks concurrency and
-  one-promoted-version invariants; audit/event immutability is not enforced; and
-  a caller-supplied passing flag can diverge from the audit result.
-- **Coverage truth:** customer coverage can treat any one passing audit as
-  sufficient instead of requiring release, completeness, and freshness for the
-  same version. Completeness, cadence-aware freshness, partition health, and
-  public/private isolation checks do not yet substantiate broad coverage claims.
-- **Executable acceptance:** the sole PostgreSQL rehearsal is opt-in/skipped and
-  exercises ledger transitions only. Required CI evidence must cover migration
-  and backfill, reviewed-rights rejection, resume/retry/quarantine, staged search,
-  embedding lease failures, authorization, concurrent promotion, currentness and
-  isolation, cutover serving the new version, and rollback restoring the prior
-  served result.
+- **Version-safe service:** an existing-document lookup omits `corpus_version`,
+  so identical content in a new staged version creates a parent without chunks.
+  CourtListener loaders still omit version fields while retrieval requires them,
+  and no test proves old/new served result IDs through cutover and rollback.
+- **Harvest and rights:** failure continuation, version-aware evidence, and
+  rights fields improved, but the checkpoint is still a document URL rather than
+  a consumed upstream pagination cursor; no runner consumes `next_retry_at`; and
+  repeat failure attempts are not demonstrated as append-only, bounded work.
+- **Embedding operations:** queries are version-filtered and exceptions now finish
+  the lease, but heartbeats do not extend lease expiry, completed shards do not
+  reopen for later chunks, an empty first corpus can starve the second, and the
+  required temperature/capacity health evidence remains absent.
+- **Operator and query isolation:** the backend added a platform shared-secret
+  header, but it bypasses the repository's signed `platform:write` principal
+  contract and has no route-level denial tests. Caselaw vector compatibility and
+  citation/network/court/docket paths do not consistently enforce the promoted
+  version.
+- **Coverage truth:** display claims now require three passing audit kinds, but
+  any historical passing row can mask a newer failure. Completeness and freshness
+  draw from global, non-versioned ledgers/timestamps, isolation is not a promotion
+  gate, and source-health fallback does not consistently preserve partition data.
+- **Executable acceptance:** the new PostgreSQL job is mandatory but red, and its
+  rehearsal still exercises only synthetic ledger transitions. It attempts to
+  delete append-only evidence, is not safely repeatable, and does not test schema
+  upgrade/backfill, rights rejection, ingest/retry, searchable content, worker
+  leases, authorization, concurrency, currentness/isolation, or served rollback.
 
 The feature branch remains the implementation owner's responsibility. It must
 stay draft until a fresh exact-head review closes these rows; no production
