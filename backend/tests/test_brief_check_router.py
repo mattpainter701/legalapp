@@ -116,6 +116,7 @@ async def test_list_decision_and_exports_are_matter_scoped(monkeypatch):
                 {
                     "id": "citation-1",
                     "input": "123 F.3d 456",
+                    "canonical": "123 F.3d 456",
                     "status": "missing_source",
                     "location": "paragraph 1",
                 }
