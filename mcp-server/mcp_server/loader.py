@@ -76,6 +76,7 @@ def backfill_promoted_caselaw_snapshot(conn) -> int:
         """)
         row = cur.fetchone()
         if not row:
+            cur.execute("SET LOCAL authority.snapshot_backfill = 'off'")
             return 0
         version = row[0]
         cur.execute("""
@@ -120,6 +121,9 @@ def backfill_promoted_caselaw_snapshot(conn) -> int:
             ) AND cit.cited_opinion_id IS NOT NULL
             ON CONFLICT DO NOTHING
         """, [version, version])
+        # The INSERT exemption is migration-only and must not leak into the
+        # caller's transaction, where promoted snapshots remain immutable.
+        cur.execute("SET LOCAL authority.snapshot_backfill = 'off'")
         return cur.rowcount
 
 
