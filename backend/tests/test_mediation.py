@@ -3,12 +3,26 @@
 import uuid
 
 import pytest
+import pytest_asyncio
 
 from app.models.user import User
 from app.services import email as email_module
 
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _reset_mediation_portal_auth_limit(test_redis):
+    """Keep source-IP auth throttling isolated between mediation tests."""
+    keys = [
+        key
+        async for key in test_redis.scan_iter(
+            match="rate:auth:/api/portal/mediation/accept:*"
+        )
+    ]
+    if keys:
+        await test_redis.delete(*keys)
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
