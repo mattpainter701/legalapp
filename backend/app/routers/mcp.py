@@ -354,7 +354,7 @@ class AuthorityControlRequest(BaseModel):
 
 
 async def _authority_control(
-    action: str, body: AuthorityControlRequest, request: Request, db: AsyncSession
+    action: str, body: AuthorityControlRequest, request: Request
 ):
     principal = require_platform_token(request, scopes={"platform:write"})
     if not settings.MCP_SERVER_URL:
@@ -370,31 +370,23 @@ async def _authority_control(
 
 
 @router.post("/authority/audit")
-async def authority_audit(
-    body: AuthorityControlRequest, request: Request, db: AsyncSession = Depends(get_db)
-):
-    return await _authority_control("audit", body, request, db)
+async def authority_audit(body: AuthorityControlRequest, request: Request):
+    return await _authority_control("audit", body, request)
 
 
 @router.post("/authority/stage")
-async def authority_stage(
-    body: AuthorityControlRequest, request: Request, db: AsyncSession = Depends(get_db)
-):
-    return await _authority_control("stage", body, request, db)
+async def authority_stage(body: AuthorityControlRequest, request: Request):
+    return await _authority_control("stage", body, request)
 
 
 @router.post("/authority/promote")
-async def authority_promote(
-    body: AuthorityControlRequest, request: Request, db: AsyncSession = Depends(get_db)
-):
-    return await _authority_control("promote", body, request, db)
+async def authority_promote(body: AuthorityControlRequest, request: Request):
+    return await _authority_control("promote", body, request)
 
 
 @router.post("/authority/rollback")
-async def authority_rollback(
-    body: AuthorityControlRequest, request: Request, db: AsyncSession = Depends(get_db)
-):
-    return await _authority_control("rollback", body, request, db)
+async def authority_rollback(body: AuthorityControlRequest, request: Request):
+    return await _authority_control("rollback", body, request)
 
 
 # ── Tool invocation ───────────────────────────────────────────────────────────
