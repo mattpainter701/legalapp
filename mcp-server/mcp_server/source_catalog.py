@@ -325,20 +325,16 @@ def seed_catalog(conn: Any, catalog: dict[str, Any]) -> int:
                     source["coverage_kind"],
                     source.get("parser_version"),
                     source.get("notes"),
-                    source.get("rights_decision") or (
-                        "official" if source["official_status"].startswith("official")
-                        and source["license_status"] not in {"restricted", "terms_review_required"}
-                        else "pending_review"
-                    ),
+                    source.get("rights_decision") or "pending_review",
                     source.get("source_tier") or source["authority_tier"],
                     json.dumps(source.get("geographic_scope") or ([source["jurisdiction"]] if source.get("jurisdiction") else [])),
                     json.dumps(source.get("temporal_scope") or {"start": source.get("coverage_start"), "end": source.get("coverage_end")}),
                     source.get("expected_cadence") or source["sync_frequency"],
                     source.get("completeness_caveats") or source.get("coverage_notes") or "Bounded source scope; completeness is not established.",
-                    source.get("claim_safe_wording") or "Searchable excerpts from this reviewed source; scope and currentness are bounded.",
-                    source.get("reviewed_at") or catalog.get("catalog_updated"),
-                    source.get("reviewed_by") or "source-catalog-review",
-                    source.get("review_reason") or source.get("acquisition_basis") or "Reviewed source catalog entry",
+                    source.get("claim_safe_wording"),
+                    source.get("reviewed_at"),
+                    source.get("reviewed_by"),
+                    source.get("review_reason"),
                     json.dumps(_source_metadata(catalog, source)),
                 ],
             )

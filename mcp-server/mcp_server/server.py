@@ -10,7 +10,8 @@ from .database import connect
 from .loader import init_schema
 from .query_embeddings import QueryEmbeddingClient
 from .control_plane import (promote_corpus_version, rollback_corpus_version,
-                             record_audit, sampled_audit, stage_corpus_version)
+                             lag_seconds, record_audit, sampled_audit,
+                             stage_corpus_version)
 from .repository import CourtListenerRepository
 from .tools import build_tool_manifest
 
@@ -96,15 +97,23 @@ def run_control_audit(body: ControlPlaneRequest, actor: str = Depends(operator_i
                             and row[3] == body.version} for row in cur.fetchall()]
             elif body.audit_kind == "completeness":
                 cur.execute("SELECT expected_item_count, rows_loaded FROM corpus_coverage_ledger WHERE source_key IS NOT NULL")
-                records = [{"expected": row[0] is not None, "observed": row[1] > 0} for row in cur.fetchall()]
+                records = [{"expected": row[0] or 0, "observed": row[1] or 0} for row in cur.fetchall()]
             elif body.audit_kind == "freshness":
-                cur.execute("SELECT last_successful_sync_at FROM legal_sources WHERE enabled IS TRUE")
+                cur.execute("SELECT last_successful_sync_at, expected_cadence FROM legal_sources WHERE enabled IS TRUE")
                 from datetime import datetime, timezone
                 now = datetime.now(timezone.utc)
-                records = [{"lag_seconds": int((now - row[0]).total_seconds()) if row[0] else None} for row in cur.fetchall()]
+                records = [{"lag_seconds": lag_seconds(
+                    row[0], 86400 if "day" in str(row[1] or "").lower()
+                    else 3600 if "hour" in str(row[1] or "").lower()
+                    else 604800 if "week" in str(row[1] or "").lower() else None,
+                    now), "cadence": row[1]} for row in cur.fetchall()]
             else:
-                cur.execute("SELECT source_key FROM legal_sources WHERE storage_policy <> 'prohibited'")
-                records = [{"namespace": "public-authority"} for _ in cur.fetchall()]
+                cur.execute("""
+                    SELECT d.source_key, d.metadata->>'namespace',
+                           (d.source_key LIKE 'tenant:%' OR d.source_key LIKE 'private:%')
+                    FROM legal_documents d WHERE d.corpus_version=%s
+                """, [body.version])
+                records = [{"namespace": row[1], "private": bool(row[2])} for row in cur.fetchall()]
         result = sampled_audit(records, audit_kind=body.audit_kind)
         immutable_hash = record_audit(
             conn, corpus_version=body.version, audit_kind=body.audit_kind,

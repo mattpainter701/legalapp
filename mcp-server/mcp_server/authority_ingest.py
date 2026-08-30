@@ -366,14 +366,25 @@ def ingest_document(conn: Any, document: dict[str, Any], fetched: FetchedDocumen
         requested_version = os.environ.get("AUTHORITY_INGEST_CORPUS_VERSION", "").strip()
         cursor.execute(
             """SELECT version FROM authority_corpus_versions
-               WHERE status IN ('promoted', 'staged', 'canary')
+               WHERE status IN ('staged', 'canary')
                  AND (%s = '' OR version = %s)
                ORDER BY CASE WHEN version = %s THEN 0 ELSE 1 END,
                         promoted_at DESC NULLS LAST, created_at DESC LIMIT 1""",
             [requested_version, requested_version, requested_version],
         )
         version_row = cursor.fetchone()
-        corpus_version = version_row[0] if version_row else None
+        if not version_row:
+            raise PermissionError("ingest requires an explicitly staged or canary corpus version")
+        corpus_version = version_row[0]
+        cursor.execute("""
+            SELECT rights_decision, reviewed_at, reviewed_by, storage_policy
+            FROM legal_sources WHERE source_key=%s
+        """, [document["source_key"]])
+        source_row = cursor.fetchone()
+        if (not source_row or source_row[0] not in {"official", "open", "licensed"}
+                or not source_row[1] or not source_row[2]
+                or source_row[3] == "prohibited"):
+            raise PermissionError("source rights review is required before public ingestion")
         cursor.execute(
             """
             SELECT id, content_hash
@@ -397,7 +408,7 @@ def ingest_document(conn: Any, document: dict[str, Any], fetched: FetchedDocumen
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s::jsonb, %s
             )
-            ON CONFLICT (source_key, external_id) DO UPDATE
+            ON CONFLICT (source_key, external_id, corpus_version) DO UPDATE
             SET document_type = EXCLUDED.document_type,
                 title = EXCLUDED.title,
                 citation = EXCLUDED.citation,
@@ -489,21 +500,36 @@ def ingest_document(conn: Any, document: dict[str, Any], fetched: FetchedDocumen
         cursor.execute(
             """
             INSERT INTO authority_harvest_events
-                (source_key, partition_key, external_id, content_hash,
-                 event_status, citation, effective_date, metadata)
-            VALUES (%s, %s, %s, %s, 'accepted', %s, %s, %s::jsonb)
+                (source_key, partition_key, corpus_version, external_id, content_hash,
+                 cursor_before, cursor_after, event_status, citation, court,
+                 effective_date, metadata)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, 'accepted', %s, %s, %s, %s::jsonb)
             ON CONFLICT DO NOTHING
             """,
             [
                 document["source_key"],
                 f"manifest:{document['source_key']}",
+                corpus_version,
                 document["external_id"],
                 fetched.content_hash,
+                document.get("canonical_url"),
+                document.get("canonical_url"),
                 document.get("citation"),
+                document.get("court_id"),
                 document.get("effective_date"),
                 json.dumps({"namespace": "public-authority", "parser_version": document["parser_version"]}),
             ],
         )
+        if cursor.rowcount == 0:
+            cursor.execute("""
+                INSERT INTO authority_harvest_events
+                  (source_key, partition_key, corpus_version, external_id,
+                   content_hash, event_status, metadata)
+                VALUES (%s, %s, %s, %s, %s, 'duplicate', %s::jsonb)
+                ON CONFLICT DO NOTHING
+            """, [document["source_key"], f"manifest:{document['source_key']}",
+                  corpus_version, document["external_id"], fetched.content_hash,
+                  json.dumps({"namespace": "public-authority", "replay": True})])
         cursor.execute(
             """INSERT INTO source_sync_states
                  (source_key, partition_key, checkpoint_at, cursor_url, status,
@@ -519,6 +545,18 @@ def ingest_document(conn: Any, document: dict[str, Any], fetched: FetchedDocumen
                  retry_count=0, updated_at=now()""",
             [document["source_key"], f"manifest:{document['source_key']}",
              document["canonical_url"], fetched.content_hash],
+        )
+        cursor.execute(
+            """INSERT INTO authority_harvest_checkpoints
+                 (source_key, partition_key, corpus_version, cursor_url, cursor_hash,
+                  status, retry_count, last_successful_harvest_at)
+               VALUES (%s, %s, %s, %s, %s, 'complete', 0, now())
+               ON CONFLICT (source_key, partition_key, corpus_version) DO UPDATE SET
+                 cursor_url=EXCLUDED.cursor_url, cursor_hash=EXCLUDED.cursor_hash,
+                 status='complete', retry_count=0, next_retry_at=NULL,
+                 dead_letter_at=NULL, last_successful_harvest_at=now(), updated_at=now()""",
+            [document["source_key"], f"manifest:{document['source_key']}",
+             corpus_version, document["canonical_url"], fetched.content_hash],
         )
     conn.commit()
     return {
@@ -687,6 +725,16 @@ def sync_documents(
             headers={"User-Agent": user_agent, "Accept": "text/html"},
         ) as client:
             for index, document in enumerate(documents):
+                partition_key = f"manifest:{document['source_key']}"
+                with conn.cursor() as cursor:
+                    cursor.execute("""SELECT cursor_url, status FROM authority_harvest_checkpoints
+                                      WHERE source_key=%s AND partition_key=%s
+                                      AND corpus_version=(SELECT version FROM authority_corpus_versions WHERE status IN ('staged','canary') ORDER BY created_at DESC LIMIT 1)""",
+                                   [document["source_key"], partition_key])
+                    checkpoint = cursor.fetchone()
+                if checkpoint and checkpoint[0] == document["canonical_url"] and checkpoint[1] == "complete":
+                    results.append({"source_key": document["source_key"], "external_id": document["external_id"], "status": "already_complete"})
+                    continue
                 try:
                     fetched = fetch_document(document, client=client)
                     results.append(ingest_document(conn, document, fetched))
@@ -694,24 +742,36 @@ def sync_documents(
                     conn.rollback()
                     with conn.cursor() as cursor:
                         failure_text = str(exc)[:2000]
+                        cursor.execute("SELECT version FROM authority_corpus_versions WHERE status IN ('staged','canary') ORDER BY created_at DESC LIMIT 1")
+                        version_row = cursor.fetchone()
+                        corpus_version = version_row[0] if version_row else None
+                        cursor.execute("SELECT retry_count FROM source_sync_states WHERE source_key=%s AND partition_key=%s", [document["source_key"], f"manifest:{document['source_key']}"])
+                        retry_row = cursor.fetchone()
+                        retry_count = int(retry_row[0] or 0) + 1 if retry_row else 1
                         event_status = "quarantined" if any(
                             marker in failure_text.lower()
                             for marker in ("extraction", "unsupported media", "too little readable")
-                        ) else "retryable_failure"
+                        ) else ("dead_letter" if retry_count >= 3 else "retryable_failure")
                         cursor.execute(
                             """
                             INSERT INTO authority_harvest_events
-                                (source_key, partition_key, external_id, event_status,
-                                 retry_count, quarantine_reason, metadata)
-                            VALUES (%s, %s, %s, %s, 0, %s, %s::jsonb)
+                                (source_key, partition_key, corpus_version, external_id,
+                                 cursor_before, cursor_after, event_status, retry_count,
+                                 quarantine_reason, court, metadata)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
                             ON CONFLICT DO NOTHING
                             """,
                             [
                                 document["source_key"],
                                 f"manifest:{document['source_key']}",
+                                corpus_version,
                                 document["external_id"],
+                                document.get("canonical_url"),
+                                document.get("canonical_url"),
                                 event_status,
-                                failure_text if event_status == "quarantined" else None,
+                                retry_count,
+                                failure_text if event_status in {"quarantined", "dead_letter"} else None,
+                                document.get("court_id"),
                                 json.dumps({"namespace": "public-authority"}),
                             ],
                         )
@@ -719,20 +779,32 @@ def sync_documents(
                             """INSERT INTO source_sync_states
                                  (source_key, partition_key, status, last_attempted_at,
                                   last_error, retry_count, next_retry_at, dead_letter_count)
-                               VALUES (%s, %s, %s, now(), %s, 1,
+                               VALUES (%s, %s, %s, now(), %s, %s,
                                        now() + interval '5 minutes',
                                        CASE WHEN %s = 'quarantined' THEN 1 ELSE 0 END)
                                ON CONFLICT (source_key, partition_key) DO UPDATE SET
                                  status=EXCLUDED.status, last_attempted_at=now(),
                                  last_error=EXCLUDED.last_error,
-                                 retry_count=source_sync_states.retry_count + 1,
+                                 retry_count=EXCLUDED.retry_count,
                                  next_retry_at=now() + interval '5 minutes',
                                  dead_letter_count=source_sync_states.dead_letter_count
                                    + CASE WHEN EXCLUDED.status='quarantined' THEN 1 ELSE 0 END,
                                  updated_at=now()""",
                             [document["source_key"], f"manifest:{document['source_key']}",
-                             event_status, failure_text, event_status],
+                             event_status, failure_text, retry_count, event_status],
                         )
+                        if corpus_version:
+                            cursor.execute("""INSERT INTO authority_harvest_checkpoints
+                                 (source_key, partition_key, corpus_version, cursor_url,
+                                  status, retry_count, next_retry_at, dead_letter_at)
+                               VALUES (%s, %s, %s, %s, %s, %s, now() + interval '5 minutes',
+                                       CASE WHEN %s='dead_letter' THEN now() ELSE NULL END)
+                               ON CONFLICT (source_key, partition_key, corpus_version) DO UPDATE SET
+                                 status=EXCLUDED.status, retry_count=EXCLUDED.retry_count,
+                                 next_retry_at=EXCLUDED.next_retry_at,
+                                 dead_letter_at=EXCLUDED.dead_letter_at, updated_at=now()""",
+                                [document["source_key"], partition_key, corpus_version,
+                                 document.get("canonical_url"), event_status, retry_count, event_status])
                         cursor.execute(
                             """
                             UPDATE legal_sources
@@ -742,7 +814,10 @@ def sync_documents(
                             [failure_text, document["source_key"]],
                         )
                     conn.commit()
-                    raise
+                    results.append({"source_key": document["source_key"],
+                                    "external_id": document["external_id"],
+                                    "status": event_status, "error": failure_text})
+                    continue
                 if index + 1 < len(documents):
                     time.sleep(float(os.getenv("LEGAL_SOURCE_REQUEST_DELAY_SECONDS", "1")))
     return results

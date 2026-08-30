@@ -19,7 +19,7 @@ from .worker_config import DEFAULT_MODEL, WorkerConfig, partition_sql
 CORPORA = ("legal_document_chunks", "opinion_chunks")
 
 
-def update_sql(corpus: str) -> str:
+def update_sql(corpus: str, model_version: str = "1") -> str:
     if corpus not in CORPORA:
         raise ValueError(f"unsupported embedding corpus: {corpus}")
     updated_at = ",\n            updated_at = now()" if corpus == "legal_document_chunks" else ""
@@ -27,7 +27,7 @@ def update_sql(corpus: str) -> str:
         UPDATE {corpus}
         SET embedding = %s::vector,
             embedding_model = %s,
-            embedding_version = 1{updated_at}
+            embedding_version = %s{updated_at}
         WHERE id = %s
     """
 
@@ -93,7 +93,8 @@ def process_once(config: WorkerConfig, model) -> int:
     with connect(config.db_url) as conn:
         for corpus in CORPORA:
             with conn.cursor() as cur:
-                cur.execute("SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1")
+                requested = os.getenv("AUTHORITY_EMBEDDING_CORPUS_VERSION", "")
+                cur.execute("SELECT version FROM authority_corpus_versions WHERE status IN ('promoted','staged','canary') AND (%s = '' OR version=%s) ORDER BY CASE WHEN version=%s THEN 0 WHEN status='staged' THEN 1 WHEN status='canary' THEN 2 ELSE 3 END, promoted_at DESC NULLS LAST LIMIT 1", [requested, requested, requested])
                 version_row = cur.fetchone()
                 if not version_row:
                     continue
@@ -107,41 +108,44 @@ def process_once(config: WorkerConfig, model) -> int:
             if not claim_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id)):
                 continue
             heartbeat_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id))
-            with conn.cursor() as cur:
-                cur.execute("BEGIN")
-                cur.execute(
-                    partition_sql(corpus),
-                    [config.total_workers, config.worker_id, config.batch_size],
-                )
-                rows = cur.fetchall()
-                if not rows:
-                    conn.rollback()
-                    finish_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id), success=True)
-                    continue
-                ids = [row[0] for row in rows]
-                texts = [row[1] for row in rows]
-                vectors = embed_batch(model, texts, config.batch_size)
-                updates = [
-                    (format_embedding(vector), config.model, chunk_id)
-                    for chunk_id, vector in zip(ids, vectors)
-                ]
-                psycopg2.extras.execute_batch(
-                    cur, update_sql(corpus), updates, page_size=100
-                )
-                if corpus == "legal_document_chunks":
-                    for source_key, embedded_count in Counter(
-                        row[2] for row in rows
-                    ).items():
-                        cur.execute(
-                            """UPDATE legal_sources
-                               SET embedded_chunk_count = embedded_chunk_count + %s,
-                                   updated_at = now()
-                               WHERE source_key = %s""",
-                            [embedded_count, source_key],
-                        )
-                conn.commit()
-                finish_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id), success=True, throughput_per_minute=len(updates))
-                return len(updates)
+            started = time.monotonic()
+            total = 0
+            try:
+                while True:
+                    heartbeat_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id))
+                    with conn.cursor() as cur:
+                        cur.execute("BEGIN")
+                        version_params = [version] if corpus == "opinion_chunks" else [version, version]
+                        cur.execute(partition_sql(corpus, version), version_params + [config.total_workers, config.worker_id, config.batch_size])
+                        rows = cur.fetchall()
+                        if not rows:
+                            conn.rollback()
+                            break
+                        ids = [row[0] for row in rows]
+                        texts = [row[1] for row in rows]
+                        vectors = embed_batch(model, texts, config.batch_size)
+                        if len(vectors) != len(ids) or any(len(vector) != config.dim for vector in vectors):
+                            raise RuntimeError("embedding output count or dimension mismatch")
+                        updates = [(format_embedding(vector), config.model, config.model_version, chunk_id) for chunk_id, vector in zip(ids, vectors)]
+                        psycopg2.extras.execute_batch(cur, update_sql(corpus), updates, page_size=100)
+                        if corpus == "legal_document_chunks":
+                            for source_key, embedded_count in Counter(row[2] for row in rows).items():
+                                cur.execute(
+                                    """UPDATE legal_sources
+                                       SET embedded_chunk_count = embedded_chunk_count + %s,
+                                           updated_at = now()
+                                       WHERE source_key = %s""",
+                                    [embedded_count, source_key],
+                                )
+                        conn.commit()
+                        total += len(updates)
+                elapsed = max(time.monotonic() - started, 0.001)
+                finish_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id), success=True, throughput_per_minute=total / elapsed * 60)
+                return total
+            except Exception as exc:
+                conn.rollback()
+                finish_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id), success=False, error=str(exc), throughput_per_minute=total / max(time.monotonic() - started, 0.001) * 60)
+                continue
         return 0
 
 

@@ -7,7 +7,9 @@ adapter. Legacy ``X-API-Key`` tenant credentials are rejected and cannot be
 issued.
 """
 
+import hmac
 import logging
+import os
 import time
 import uuid
 from datetime import datetime
@@ -355,7 +357,7 @@ class AuthorityControlRequest(BaseModel):
 async def _authority_control(
     action: str, body: AuthorityControlRequest, request: Request, db: AsyncSession
 ):
-    admin = await _require_admin(request, db)
+    admin = await _require_platform_operator(request, db)
     if not settings.MCP_SERVER_URL:
         raise HTTPException(
             status_code=503, detail="Authority control plane is unavailable"
@@ -366,6 +368,22 @@ async def _authority_control(
         body.model_dump(),
         extra_headers={"X-Operator-Identity": str(admin.email)},
     )
+
+
+async def _require_platform_operator(request: Request, db: AsyncSession):
+    """Global public-corpus mutations require platform, not tenant, authority."""
+    admin = await _require_admin(request, db)
+    expected = os.getenv("LAWHAND_PLATFORM_OPERATOR_TOKEN", "")
+    supplied = request.headers.get("X-Platform-Operator-Token", "")
+    if len(expected) < 32:
+        raise HTTPException(
+            status_code=503, detail="Platform operator authorization is not configured"
+        )
+    if not supplied or not hmac.compare_digest(supplied, expected):
+        raise HTTPException(
+            status_code=403, detail="Platform operator authorization required"
+        )
+    return admin
 
 
 @router.post("/authority/audit")

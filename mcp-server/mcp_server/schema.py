@@ -181,10 +181,24 @@ CREATE TABLE IF NOT EXISTS authority_harvest_events (
     effective_date date,
     observed_at timestamptz NOT NULL DEFAULT now(),
     metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
-    CHECK (event_status IN ('accepted', 'duplicate', 'skipped', 'retryable_failure', 'quarantined', 'failed'))
+    CHECK (event_status IN ('accepted', 'duplicate', 'skipped', 'retryable_failure', 'quarantined', 'failed', 'dead_letter'))
+);
+CREATE TABLE IF NOT EXISTS authority_harvest_checkpoints (
+    source_key text NOT NULL REFERENCES legal_sources(source_key) ON DELETE RESTRICT,
+    partition_key text NOT NULL,
+    corpus_version text NOT NULL REFERENCES authority_corpus_versions(version),
+    cursor_url text,
+    cursor_hash text,
+    status text NOT NULL DEFAULT 'active',
+    retry_count integer NOT NULL DEFAULT 0,
+    next_retry_at timestamptz,
+    dead_letter_at timestamptz,
+    last_successful_harvest_at timestamptz,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (source_key, partition_key, corpus_version)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_authority_harvest_identity_v2
-    ON authority_harvest_events(source_key, partition_key,
+    ON authority_harvest_events(corpus_version, source_key, partition_key,
        COALESCE(external_id, ''), COALESCE(content_hash, ''), event_status);
 
 CREATE TABLE IF NOT EXISTS authority_audits (
@@ -201,6 +215,21 @@ CREATE TABLE IF NOT EXISTS authority_audits (
     metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
     CHECK (audit_kind IN ('completeness', 'freshness', 'isolation', 'release'))
 );
+
+CREATE OR REPLACE FUNCTION reject_authority_evidence_mutation() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'authority evidence is append-only';
+END;
+$$;
+DROP TRIGGER IF EXISTS authority_audits_append_only ON authority_audits;
+CREATE TRIGGER authority_audits_append_only
+    BEFORE UPDATE OR DELETE ON authority_audits
+    FOR EACH ROW EXECUTE FUNCTION reject_authority_evidence_mutation();
+DROP TRIGGER IF EXISTS authority_harvest_events_append_only ON authority_harvest_events;
+CREATE TRIGGER authority_harvest_events_append_only
+    BEFORE UPDATE OR DELETE ON authority_harvest_events
+    FOR EACH ROW EXECUTE FUNCTION reject_authority_evidence_mutation();
 
 ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS display_name text;
 ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS description text;
@@ -284,10 +313,15 @@ CREATE TABLE IF NOT EXISTS legal_documents (
     parser_version text,
     text_content text,
     metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    corpus_version text REFERENCES authority_corpus_versions(version),
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (source_key, external_id)
+    UNIQUE (source_key, external_id, corpus_version)
 );
+
+ALTER TABLE legal_documents DROP CONSTRAINT IF EXISTS legal_documents_source_key_external_id_key;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_legal_documents_authority_identity
+    ON legal_documents(source_key, external_id, corpus_version);
 
 CREATE TABLE IF NOT EXISTS legal_document_chunks (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -324,6 +358,24 @@ ALTER TABLE legal_documents ADD COLUMN IF NOT EXISTS corpus_version text REFEREN
 ALTER TABLE legal_document_chunks ADD COLUMN IF NOT EXISTS corpus_version text REFERENCES authority_corpus_versions(version);
 ALTER TABLE opinion_clusters ADD COLUMN IF NOT EXISTS corpus_version text REFERENCES authority_corpus_versions(version);
 ALTER TABLE opinion_chunks ADD COLUMN IF NOT EXISTS corpus_version text REFERENCES authority_corpus_versions(version);
+-- Preserve the currently served corpus during upgrade; do not leave legacy
+-- rows invisible merely because version columns were introduced later.
+UPDATE legal_documents
+SET corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
+WHERE corpus_version IS NULL
+  AND EXISTS (SELECT 1 FROM authority_corpus_versions WHERE status='promoted');
+UPDATE legal_document_chunks c
+SET corpus_version = d.corpus_version
+FROM legal_documents d
+WHERE c.document_id = d.id AND c.corpus_version IS NULL;
+UPDATE opinion_clusters
+SET corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
+WHERE corpus_version IS NULL
+  AND EXISTS (SELECT 1 FROM authority_corpus_versions WHERE status='promoted');
+UPDATE opinion_chunks c
+SET corpus_version = cl.corpus_version
+FROM opinion_clusters cl
+WHERE c.cluster_id = cl.cluster_id AND c.corpus_version IS NULL;
 ALTER TABLE source_sync_states ADD COLUMN IF NOT EXISTS retry_count integer NOT NULL DEFAULT 0;
 ALTER TABLE source_sync_states ADD COLUMN IF NOT EXISTS dead_letter_count integer NOT NULL DEFAULT 0;
 ALTER TABLE source_sync_states ADD COLUMN IF NOT EXISTS lag_seconds integer;
@@ -358,6 +410,8 @@ CREATE INDEX IF NOT EXISTS ix_corpus_coverage_ledger_state ON corpus_coverage_le
 CREATE INDEX IF NOT EXISTS ix_legal_sources_priority ON legal_sources(enabled, priority, source_key);
 CREATE INDEX IF NOT EXISTS ix_authority_harvest_events_source ON authority_harvest_events(source_key, partition_key, observed_at);
 CREATE INDEX IF NOT EXISTS ix_authority_audits_version ON authority_audits(corpus_version, sampled_at);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_one_promoted_authority_version
+    ON authority_corpus_versions ((status)) WHERE status = 'promoted';
 CREATE INDEX IF NOT EXISTS ix_legal_documents_source ON legal_documents(source_key, document_type);
 CREATE INDEX IF NOT EXISTS ix_legal_documents_citation ON legal_documents(citation) WHERE citation IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ix_legal_documents_effective ON legal_documents(jurisdiction, effective_date);

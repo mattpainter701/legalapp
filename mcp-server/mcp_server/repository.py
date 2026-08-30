@@ -84,7 +84,8 @@ class CourtListenerRepository:
         # Caselaw lives in the CourtListener tables, not the versioned legal
         # authority tables. The latter's `d` and `s` aliases are not present
         # in either caselaw query, so those status filters must not leak here.
-        filters = ["oc.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status = 'promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)"]
+        promoted_version = "(SELECT version FROM authority_corpus_versions WHERE status = 'promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)"
+        filters = [f"oc.corpus_version = {promoted_version}", f"cl.corpus_version = {promoted_version}"]
         params: list[Any] = []
         if jurisdiction:
             filters.append("(oc.court_id = %s OR c.jurisdiction = %s)")
@@ -142,6 +143,7 @@ class CourtListenerRepository:
             "s.enabled IS TRUE",
             "d.document_status IN ('current', 'current_with_supplement')",
             "d.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status = 'promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)",
+            "c.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status = 'promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)",
         ]
         filter_params: list[Any] = []
         if jurisdiction:
@@ -432,6 +434,7 @@ class CourtListenerRepository:
                 LEFT JOIN dockets d ON d.docket_id = cl.docket_id
                 LEFT JOIN courts c ON c.court_id = d.court_id
                 WHERE {where}
+                  AND cl.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
                 LIMIT 1
                 """,
                 [value],
@@ -445,6 +448,7 @@ class CourtListenerRepository:
                 SELECT id::text AS chunk_id, chunk_index, content
                 FROM opinion_chunks
                 WHERE opinion_id = %s
+                  AND corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
                 ORDER BY chunk_index
                 """,
                 [detail["opinion_id"]],
@@ -894,10 +898,11 @@ class CourtListenerRepository:
             """)
             audits = dict_rows(cur)
         version = version_rows[0] if version_rows else None
-        passed_release = bool(version) and any(
-            row["passed"] and row["audit_kind"] in {"release", "completeness", "freshness"}
-            and row["corpus_version"] == version["version"] for row in audits
-        )
+        required_audits = {"release", "completeness", "freshness"}
+        passed_release = bool(version) and required_audits.issubset({
+            row["audit_kind"] for row in audits
+            if row["passed"] and row["corpus_version"] == version["version"]
+        })
         for source in sources:
             cadence = str(source.get("expected_cadence") or "").lower()
             cadence_seconds = (86400 if "day" in cadence else 3600 if "hour" in cadence else 604800 if "week" in cadence else 0)

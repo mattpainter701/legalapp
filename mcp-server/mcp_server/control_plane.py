@@ -94,6 +94,8 @@ def record_audit(conn: Any, *, corpus_version: str, audit_kind: str, methodology
                  thresholds: dict[str, Any], result: dict[str, Any], passed: bool,
                  auditor: str, metadata: dict[str, Any] | None = None) -> str:
     actor, _ = _authorized(auditor, methodology)
+    if bool(passed) != bool(result.get("passed")):
+        raise ValueError("passed must match the computed audit result")
     immutable = audit_hash({"corpus_version": corpus_version, "audit_kind": audit_kind,
                             "methodology": methodology, "thresholds": thresholds,
                             "result": result, "passed": passed, "auditor": actor})
@@ -112,6 +114,7 @@ def record_audit(conn: Any, *, corpus_version: str, audit_kind: str, methodology
 def promote_corpus_version(conn: Any, *, version: str, actor: str, reason: str) -> None:
     actor, reason = _authorized(actor, reason)
     with conn.cursor() as cur:
+        cur.execute("SELECT pg_advisory_xact_lock(hashtext('authority-corpus-release'))")
         cur.execute("""
             SELECT COUNT(DISTINCT audit_kind) FROM authority_audits
             WHERE corpus_version = %s
@@ -136,6 +139,7 @@ def promote_corpus_version(conn: Any, *, version: str, actor: str, reason: str) 
 def rollback_corpus_version(conn: Any, *, version: str, actor: str, reason: str) -> None:
     actor, reason = _authorized(actor, reason)
     with conn.cursor() as cur:
+        cur.execute("SELECT pg_advisory_xact_lock(hashtext('authority-corpus-release'))")
         cur.execute("SELECT rollback_of FROM authority_corpus_versions WHERE version=%s AND status='promoted'", [version])
         row = cur.fetchone()
         if row is None or not row[0]:
@@ -185,7 +189,7 @@ def sampled_audit(records: list[dict[str, Any]], *, audit_kind: str,
         return {"audit_kind": audit_kind, "sample_size": total, "passed": passed,
                 "criteria": ["reviewed_sources", "no_failed_partitions", "manifest_bound_documents"]}
     if audit_kind == "completeness":
-        observed = sum(1 for row in records if row.get("expected") and row.get("observed"))
+        observed = sum(1 for row in records if float(row.get("observed", 0) or 0) >= float(row.get("expected", 0) or 0))
         ratio = observed / total
         passed = ratio >= minimum_completeness
         return {"audit_kind": audit_kind, "sample_size": total, "observed": observed,
@@ -196,7 +200,7 @@ def sampled_audit(records: list[dict[str, Any]], *, audit_kind: str,
         ratio = fresh / total
         return {"audit_kind": audit_kind, "sample_size": total, "fresh": fresh,
                 "ratio": ratio, "max_lag_seconds": maximum_lag_seconds, "passed": ratio >= minimum_completeness}
-    isolated = sum(1 for row in records if row.get("namespace") == "public-authority")
+    isolated = sum(1 for row in records if row.get("namespace") == "public-authority" and not row.get("private"))
     return {"audit_kind": audit_kind, "sample_size": total, "isolated": isolated,
             "passed": isolated == total}
 

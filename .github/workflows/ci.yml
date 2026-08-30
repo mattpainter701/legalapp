@@ -161,6 +161,37 @@ jobs:
           scripts/test_dev1_topology.sh
           nginx/renew-cert.sh
 
+  authority-control-plane-rehearsal:
+    name: Authority control-plane DB rehearsal
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb
+        env:
+          POSTGRES_DB: authority_rehearsal
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+        options: >-
+          --health-cmd "pg_isready -U test -d authority_rehearsal"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      AUTHORITY_REHEARSAL_DATABASE_URL: postgresql://test:test@127.0.0.1:5432/authority_rehearsal
+      PYTHONPATH: mcp-server
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.11"
+      - name: Install MCP dependencies
+        run: pip install -r mcp-server/requirements.txt pytest
+      - name: Run mandatory authority lifecycle rehearsal
+        run: python -m pytest -q mcp-server/tests/test_authority_rehearsal.py
+
   # ─── Backend: Tests ─────────────────────────────────────────────────────────
   test-backend:
     name: Backend — Tests (pytest)

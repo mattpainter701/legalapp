@@ -48,7 +48,7 @@ class QueryEmbeddingClient:
         )
 
     def embed_query(self, text: str) -> list[float] | None:
-        if not self.url or not text.strip():
+        if not (self.url or self.fallback_url) or not text.strip():
             return None
 
         payload = {"texts": [QUERY_PREFIX + text], "model": self.model}

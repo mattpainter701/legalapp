@@ -245,7 +245,8 @@ def test_catalog_summary_surfaces_policy_and_implementation_state():
 def test_schema_defines_general_authority_documents_and_vector_chunks():
     assert "CREATE TABLE IF NOT EXISTS legal_documents" in SCHEMA_SQL
     assert "CREATE TABLE IF NOT EXISTS legal_document_chunks" in SCHEMA_SQL
-    assert "UNIQUE (source_key, external_id)" in SCHEMA_SQL
+    assert "UNIQUE (source_key, external_id, corpus_version)" in SCHEMA_SQL
+    assert "ux_legal_documents_authority_identity" in SCHEMA_SQL
     assert "ix_legal_document_chunks_embedding_hnsw" in SCHEMA_SQL
 
 
