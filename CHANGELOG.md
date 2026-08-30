@@ -36,6 +36,13 @@
   operator approvals, and records provider and backup disposition without the
   evidence endpoint performing deletion. The penetration-test cadence remains
   explicitly planned-not-attained, and every certification flag remains false.
+- **File-share agents can build a private lexical-search control index:** an
+  explicitly enabled, agent-local SQLite FTS5 sidecar indexes bounded text from
+  supported files without embeddings or a new document-text relay to LawHand.
+  Durable retries, assigned-share path validation, fail-closed local ACLs, and
+  operator-only query and relevance-evaluation tools support a measured pilot;
+  the documented Tika, OCR, OpenSearch, and native-ACL scale architecture
+  remains a separate 50–200 GB proof-of-concept gate rather than a 4 TB claim.
 - **Bounded COMP-03 lead conversion loop:** firms can publish tenant-scoped,
   conditional intake forms with attributed, honeypot-protected, idempotent
   public submissions; book only published consultation slots; record explicit

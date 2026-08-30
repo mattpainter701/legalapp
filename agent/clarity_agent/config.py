@@ -60,17 +60,23 @@ _ENV_MAP = {
     "scan_interval_minutes": "CLARITY_SCAN_INTERVAL",
     "task_poll_interval_seconds": "CLARITY_TASK_POLL_INTERVAL",
     "heartbeat_interval_seconds": "CLARITY_HEARTBEAT_INTERVAL",
+    "local_index_path": "CLARITY_LOCAL_INDEX_PATH",
+    "local_index_enabled": "CLARITY_LOCAL_INDEX_ENABLED",
+    "local_index_max_file_mb": "CLARITY_LOCAL_INDEX_MAX_FILE_MB",
+    "local_index_workers": "CLARITY_LOCAL_INDEX_WORKERS",
 }
 
 _INT_FIELDS = (
     "scan_interval_minutes",
     "task_poll_interval_seconds",
     "heartbeat_interval_seconds",
+    "local_index_max_file_mb",
+    "local_index_workers",
 )
 
 
-def _restrict(path: Path) -> None:
-    """Make a file readable only by its owner where the OS supports it."""
+def _restrict(path: Path, *, required: bool = False) -> None:
+    """Restrict a path, optionally failing when protection cannot be applied."""
     try:
         if os.name == "nt":
             # chmod is largely ignored by Windows.  Do not leave the API key
@@ -90,11 +96,13 @@ def _restrict(path: Path) -> None:
                 )
                 identity = identity_result.stdout.strip()
                 if identity_result.returncode != 0 or not identity:
-                    _logger.warning(
-                        "Could not resolve the current Windows identity; "
-                        "leaving ACL inheritance unchanged on %s",
-                        path,
+                    message = (
+                        "could not resolve the current Windows identity; "
+                        "ACL inheritance was not changed"
                     )
+                    if required:
+                        raise PermissionError(f"{message}: {path}")
+                    _logger.warning("%s on %s", message, path)
                     return
                 # Preserve any explicit MSI service-account ACE while adding
                 # language-neutral SYSTEM/Administrators SIDs and the current
@@ -121,10 +129,13 @@ def _restrict(path: Path) -> None:
                 check=False,
             )
             if result.returncode != 0:
+                detail = result.stderr.strip() or f"icacls exited {result.returncode}"
+                if required:
+                    raise PermissionError(
+                        f"could not restrict permissions on {path}: {detail}"
+                    )
                 _logger.warning(
-                    "Could not restrict permissions on %s: %s",
-                    path,
-                    result.stderr.strip(),
+                    "Could not restrict permissions on %s: %s", path, detail
                 )
         else:
             # Directories need execute permission for traversal; applying a
@@ -135,7 +146,15 @@ def _restrict(path: Path) -> None:
                 if path.is_dir()
                 else (stat.S_IRUSR | stat.S_IWUSR)
             )
+    except PermissionError:
+        if required:
+            raise
+        _logger.warning("Could not restrict permissions on %s", path)
     except OSError as exc:  # pragma: no cover - depends on the filesystem
+        if required:
+            raise PermissionError(
+                f"could not restrict permissions on {path}: {exc}"
+            ) from exc
         _logger.warning("Could not restrict permissions on %s: %s", path, exc)
 
 
@@ -178,6 +197,14 @@ class AgentConfig:
     scan_interval_minutes: int = 360
     task_poll_interval_seconds: int = 30
     heartbeat_interval_seconds: int = 300
+    local_index_path: str = ""
+    # Explicit opt-in: an upgrade must never start a multi-terabyte crawl or
+    # create a new derived-content store without an operator's decision.
+    local_index_enabled: bool = False
+    local_index_max_file_mb: int = 25
+    # One worker is deliberately conservative for an HDD-backed SMB source.
+    # Operators may raise this only after measuring queue and disk contention.
+    local_index_workers: int = 1
     _encrypted_smb_password: str = field(default="", repr=False)
 
     @property
@@ -208,6 +235,8 @@ class AgentConfig:
             if val is not None:
                 if field_name in _INT_FIELDS:
                     val = int(val)
+                elif field_name == "local_index_enabled":
+                    val = val.strip().lower() not in {"0", "false", "no", "off"}
                 setattr(cfg, field_name, val)
         return cfg
 
@@ -243,6 +272,10 @@ class AgentConfig:
                 "scan_interval_minutes": self.scan_interval_minutes,
                 "task_poll_interval_seconds": self.task_poll_interval_seconds,
                 "heartbeat_interval_seconds": self.heartbeat_interval_seconds,
+                "local_index_path": self.local_index_path,
+                "local_index_enabled": self.local_index_enabled,
+                "local_index_max_file_mb": self.local_index_max_file_mb,
+                "local_index_workers": self.local_index_workers,
             }
         }
         temp_path = CONFIG_FILE.with_suffix(".tmp")

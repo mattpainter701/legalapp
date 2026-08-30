@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from pathlib import Path
 
 import httpx
 import pytest
@@ -40,6 +41,14 @@ class _Client:
 
     async def report_scan_status(self, *args, **kwargs):
         return {}
+
+
+class _FailingIndex:
+    async def enqueue_many(self, files, only_if_missing=False):
+        raise OSError("disk full")
+
+    async def delete(self, paths):
+        raise AssertionError("delete must not be reached")
 
 
 def _file(path):
@@ -137,6 +146,30 @@ async def test_sync_validation_detail_is_reported_without_request_body(monkeypat
     assert "bad.txt" not in outcome["error"]
 
 
+@pytest.mark.asyncio
+async def test_optional_index_failure_does_not_block_saas_sync(monkeypatch):
+    monkeypatch.setattr(agent_main, "SYNC_BATCH_SIZE", 100)
+    ledger = _Ledger()
+    result = SimpleNamespace(
+        new_files=[_file(r"\\FS\Legal\ok.txt")],
+        changed_files=[],
+        deleted_files=[],
+        unchanged_files=[],
+        errors=[],
+    )
+
+    outcome = await agent_main._scan_share(
+        {"share_id": "share-1", "server": "FS", "share": "Legal"},
+        ledger,
+        _Client(response={"synced": 1, "deleted": 0, "errors": []}),
+        _Scanner(result),
+        _FailingIndex(),
+    )
+
+    assert [item["path"] for item in ledger.upserts] == [r"\\FS\Legal\ok.txt"]
+    assert outcome["status"] == "success"
+
+
 def test_safe_request_error_summarizes_pydantic_detail_without_input():
     request = httpx.Request("POST", "https://getlawhand.com/api/v1/smb/agents/a/sync")
     response = httpx.Response(
@@ -165,3 +198,20 @@ def test_safe_request_error_summarizes_pydantic_detail_without_input():
     assert error == "HTTP 422: modified_time: Input should be a valid datetime"
     assert "secret" not in error
     assert "home" not in error
+
+
+def test_default_local_index_path_resolves_relative_ledger(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    config = SimpleNamespace(
+        ledger_path="state/ledger.db",
+        local_index_path="",
+        local_index_max_file_mb=25,
+        local_index_workers=1,
+    )
+
+    path, max_bytes, workers = agent_main._local_index_settings(config)
+
+    assert Path(path).is_absolute()
+    assert Path(path).name == "search-index.db"
+    assert max_bytes == 25 * 1024 * 1024
+    assert workers == 1
