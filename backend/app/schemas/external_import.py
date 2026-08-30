@@ -84,3 +84,18 @@ class ExternalImportReconcileResponse(BaseModel):
     tables: list[ExternalImportTableSummary]
     warnings: list
     errors: list
+
+
+class ExternalImportApproveRequest(BaseModel):
+    confirmation: str
+    report_hash: str
+
+
+class ExternalImportPromoteResponse(BaseModel):
+    import_run_id: uuid.UUID
+    status: str
+    created: dict[str, int]
+    linked: int
+    skipped: int
+    errors: list[str]
+    report_hash: str
