@@ -1416,6 +1416,16 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
                 methodology="citator synthetic rehearsal", thresholds={}, result=result,
                 passed=True, auditor="rehearsal-admin",
             )
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT embedding_model, embedding_version, vector_dims(embedding)
+                     FROM authority_case_chunks
+                     WHERE corpus_version=%s AND opinion_id=%s AND chunk_index=0""",
+                [version, opinion_id],
+            )
+            assert cur.fetchone() == (
+                "mixedbread-ai/mxbai-embed-large-v1", "1", 1024
+            )
         promote_corpus_version(
             conn, version=version, actor="rehearsal-admin", reason="citator rehearsal cutover"
         )
