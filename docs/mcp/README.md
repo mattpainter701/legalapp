@@ -60,8 +60,10 @@ and exposes that limitation. No padded vectors or semantic-completeness claim
 is permitted. The canonical control-plane details and operator rehearsal
 contract are in [Authority coverage control plane](../AUTHORITY_COVERAGE_CONTROL_PLANE.md).
 
-**Release state:** implemented in code and release-gated; no production corpus
-harvest or deployment is implied by this documentation.
+**Release state:** scaffolded in code and release-gated; COMP-06 acceptance
+remains pending merged implementation, operator rehearsal, and an independent
+AIP-17–AIP-21 evidence matrix. No production corpus harvest, coverage claim, or
+deployment is implied by this documentation.
 
 ### Firm Memory Workspace MCP tool
 
