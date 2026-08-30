@@ -225,9 +225,19 @@ async def source_health(
         )
     except Exception:
         try:
-            response = await _proxy_post("/api/mcp/tools/call", request, {"name": "authority_coverage", "arguments": {}})
+            response = await _proxy_post(
+                "/api/mcp/tools/call",
+                request,
+                {"name": "authority_coverage", "arguments": {}},
+            )
         except Exception:
-            return {"available": False, "status": "unavailable", "sources": [], "partitions": [], "audits": []}
+            return {
+                "available": False,
+                "status": "unavailable",
+                "sources": [],
+                "partitions": [],
+                "audits": [],
+            }
 
     payload = _tool_json_payload(response)
     enriched = payload.get("authority_coverage")
@@ -299,8 +309,10 @@ async def source_health(
         "status": "attention" if has_attention else ("healthy" if sources else "empty"),
         "namespace": "public-authority",
         "corpus_version": corpus_version,
-        "claim_state": payload.get("claim_state") or ("limited" if sources else "suppressed"),
-        "claim_notice": payload.get("claim_notice") or "Named-source, bounded coverage only; this is not a complete or good-law determination.",
+        "claim_state": payload.get("claim_state")
+        or ("limited" if sources else "suppressed"),
+        "claim_notice": payload.get("claim_notice")
+        or "Named-source, bounded coverage only; this is not a complete or good-law determination.",
         "sources": sources,
         "partitions": partitions,
         "audits": payload.get("audits") or [],
