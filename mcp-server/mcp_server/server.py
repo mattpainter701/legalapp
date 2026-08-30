@@ -263,7 +263,7 @@ def run_control_audit(
                 )
                 records = [
                     {
-                        "expected": max(row[2], 1),
+                        "expected": max(row[2] or 0, 1),
                         "observed": row[3]
                         if row[4] in {"complete", "active", "indexed"}
                         else 0,

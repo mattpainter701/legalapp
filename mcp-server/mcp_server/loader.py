@@ -409,7 +409,7 @@ def refresh_courtlistener_coverage_ledger(
                 last_document_date, last_checked_at, metadata, updated_at
             )
             SELECT 'courtlistener:ohio-caselaw', ch.court_id,
-                   jsonb_build_object('court_id', d.court_id, 'source', 'CourtListener bulk'),
+                   jsonb_build_object('court_id', ch.court_id, 'source', 'CourtListener bulk'),
                    CASE WHEN COUNT(ch.chunk_id) = 0 THEN 'loading'
                         WHEN COUNT(ch.chunk_id) = COUNT(ch.chunk_id) FILTER (WHERE ch.embedding IS NOT NULL)
                         THEN 'complete' ELSE 'indexed' END,

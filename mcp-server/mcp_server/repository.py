@@ -1000,11 +1000,29 @@ class CourtListenerRepository:
             )
             partitions.extend(dict_rows(cur))
             partition_index = {}
+            failure_states = {
+                "retryable",
+                "retryable_failure",
+                "quarantined",
+                "dead_letter",
+                "failed",
+            }
             for partition in partitions:
                 key = (partition["source_key"], partition["partition_key"])
                 existing = partition_index.get(key)
-                if existing is None or existing["corpus_version"] == version_key:
+                if existing is None:
                     partition_index[key] = partition
+                elif (
+                    partition["status"] in failure_states
+                    and existing["status"] not in failure_states
+                ):
+                    partition_index[key] = partition
+                elif (
+                    existing["status"] not in failure_states
+                    and partition["status"] not in failure_states
+                ):
+                    if existing.get("cursor_url") is None:
+                        partition_index[key] = partition
             partitions = list(partition_index.values())
             cur.execute(
                 """

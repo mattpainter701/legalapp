@@ -208,10 +208,10 @@ platform principals with `platform:write`. The gateway forwards a short-lived,
 HMAC-bound assertion containing actor, credential/JTI, scope, method, path,
 canonical request-body hash, nonce, and expiry. The private MCP service requires
 both the internal service key and this assertion; it rejects tampering, body or
-route/method mismatch, and expiry. Nonce replay protection is process-local in
-the current scaffold; a shared durable replay store is required before running
-the service across replicas. `X-Operator-Identity` is informational and cannot
-override the signed actor.
+route/method mismatch, and expiry. Each accepted nonce/JTI is atomically
+consumed in the shared PostgreSQL `authority_operator_assertions` table with
+expiry cleanup, so replay is rejected across service instances.
+`X-Operator-Identity` is informational and cannot override the signed actor.
 
 The MCP control service is a network-private downstream. Its internal key is
 defence in depth, not a browser credential: firewall/service-network policy
