@@ -1624,6 +1624,8 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
             cur.execute("SELECT count(*) FROM citator_watches WHERE id=%s::uuid", [watch_id])
             assert cur.fetchone()[0] == 0
             cur.execute("RESET ROLE")
+            cur.execute(f'REVOKE SELECT ON citator_watches FROM "{rls_role}"')
+            cur.execute(f'REVOKE INSERT ON citator_alert_events FROM "{rls_role}"')
             cur.execute(f'DROP ROLE "{rls_role}"')
         conn.commit()
 
