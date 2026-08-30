@@ -627,7 +627,8 @@ async def promote_import_run(
     their mappings are proven. Every created record receives an immutable
     external link; failures are reported and never presented as success.
     """
-    await set_tenant_context(db, str(admin.tenant_id))
+    tenant_id = admin.tenant_id
+    await set_tenant_context(db, str(tenant_id))
     run = await db.scalar(
         select(ExternalImportRun)
         .where(
@@ -853,7 +854,7 @@ async def promote_import_run(
         run.status = "promotion_failed"
         run.errors = errors
         await db.rollback()
-        await set_tenant_context(db, str(admin.tenant_id))
+        await set_tenant_context(db, str(tenant_id))
         failed_run = await db.get(ExternalImportRun, run_id)
         failed_run.status = "promotion_failed"
         failed_run.errors = errors
@@ -892,7 +893,7 @@ async def promote_import_run(
         await db.commit()
     except Exception as exc:
         await db.rollback()
-        await set_tenant_context(db, str(admin.tenant_id))
+        await set_tenant_context(db, str(tenant_id))
         failed_run = await db.get(ExternalImportRun, run_id)
         failed_run.status = "promotion_failed"
         failed_run.errors = [f"promotion commit failed: {str(exc)[:240]}"]
