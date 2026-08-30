@@ -90,6 +90,7 @@ _LEGAL_RESEARCH_RE = re.compile(
     r"\b(?:case\s+law|citation|court|custod(?:y|ial)|divorce|enforceab(?:le|ility)|"
     r"elements?|governing\s+law|jurisdiction|legal\s+(?:authority|standard|research)|"
     r"precedent|statute|statutory|limitations?\s+period|uccjea|"
+    r"mediat(?:e|ion|or)|arbitrat(?:e|ion|or)|"
     r"binding|non[-\s]?binding|assignment|change[-\s]of[-\s]control|"
     r"material\s+contracts?|board\s+(?:consent|authority|authorization)|"
     r"contract(?:ual)?\s+(?:analysis|review|schedule|provision))\b",
@@ -98,7 +99,7 @@ _LEGAL_RESEARCH_RE = re.compile(
 _PUBLIC_AUTHORITY_QUESTION_RE = re.compile(
     r"\b(?:case\s+law|citation|courts?|custod(?:y|ial)|divorce|enforceab(?:le|ility)|"
     r"jurisdiction|legal\s+(?:authority|standard|research)|precedent|statute|statutory|"
-    r"limitations?\s+period|uccjea)\b",
+    r"limitations?\s+period|uccjea|mediat(?:e|ion|or)|arbitrat(?:e|ion|or))\b",
     re.IGNORECASE,
 )
 _SUPPLIED_SOURCE_RE = re.compile(
@@ -247,6 +248,12 @@ def consolidate_unverified_model_knowledge(
     cleaned, replacements = _MODEL_ATTRIBUTION_RE.subn("", text)
     cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
     cleaned = re.sub(r" {2,}", " ", cleaned).strip()
+    # The provider prompt may already have supplied its one client-facing
+    # disclosure.  Do not stack a second, differently-worded notice ahead of
+    # it: duplicated warnings made otherwise understandable responses look
+    # like a retrieval malfunction.
+    if re.search(r"^\s*\*\*Source note:\*\*", cleaned, re.IGNORECASE):
+        return cleaned, replacements
     source_note = (
         "**Source note:** The retrieved materials did not substantiate the "
         "analysis below. Treat it as general legal information and verify the "
@@ -315,10 +322,68 @@ def _all_substantive_units_are_cited(text: str, eligible_ids: set[str]) -> bool:
     return True
 
 
+def _verified_substantive_units(text: str, eligible_ids: set[str]) -> list[str]:
+    """Keep only source-backed findings when the rest of an answer is unsafe.
+
+    This is deliberately a smaller promise than validating the whole response:
+    a mixed answer cannot be presented as fully verified, but discarding a
+    separately cited finding is needlessly destructive.  The caller still
+    appends an explicit coverage gap for everything omitted.
+    """
+    verified: list[str] = []
+    for unit in _substantive_source_units(text):
+        unit_ids = {value.strip().casefold() for value in _SOURCE_REF_RE.findall(unit)}
+        if (
+            unit_ids
+            and unit_ids.issubset(eligible_ids)
+            and not _MODEL_ATTRIBUTION_RE.search(unit)
+        ):
+            verified.append(unit)
+    return verified
+
+
+def _authority_coverage_gap(retrieval_status: dict[str, Any] | None) -> str:
+    """Return a bounded, user-safe explanation without infrastructure detail."""
+    state = str((retrieval_status or {}).get("state") or "").strip()
+    messages = {
+        "service_unavailable": (
+            "The configured public-authority service did not return a usable "
+            "result for this request, so no public authority is cited."
+        ),
+        "fallback_unavailable": (
+            "The public-authority service returned no usable authority and the "
+            "local fallback was unavailable, so no public authority is cited."
+        ),
+        "not_configured": (
+            "No public-authority retrieval service is configured for this "
+            "environment, so no public authority is cited."
+        ),
+        "no_matches": (
+            "The configured public-authority sources returned no usable match "
+            "for this request, so no public authority is cited."
+        ),
+    }
+    status_detail = messages.get(
+        state,
+        "No retrieved statute, rule, case, or supplied document supported a "
+        "citable answer to this question.",
+    )
+    return (
+        "## Authority coverage gap\n\n"
+        f"**Research status:** {status_detail}\n\n"
+        "I won't present an uncited jurisdiction-specific conclusion or label "
+        "unrelated material as support. Each substantive finding, list item, "
+        "and schedule row must carry its own retrieved source marker.\n\n"
+        "Try a narrower issue or jurisdiction, retry when the source service is "
+        "available, or attach the controlling sources."
+    )
+
+
 def enforce_legal_citation_integrity(
     question: str | None,
     text: str,
     sources: list[dict[str, Any]] | None,
+    retrieval_status: dict[str, Any] | None = None,
 ) -> tuple[str, bool]:
     """Fail closed when a legal-research answer cites no retrieved evidence.
 
@@ -377,17 +442,16 @@ def enforce_legal_citation_integrity(
     ):
         return text, False
 
-    coverage_gap = (
-        "## Authority coverage gap\n\n"
-        "I couldn't verify a legal answer to this question from a retrieved "
-        "statute, rule, case, or supplied document. I won't present an uncited "
-        "jurisdiction-specific conclusion or label unrelated material as support. "
-        "Each substantive finding, list item, and schedule row must carry its own "
-        "retrieved source marker.\n\n"
-        "Retry after the public-authority index is available, narrow the "
-        "jurisdiction and issue, or attach the controlling sources. Any materials "
-        "shown below were retrieved for review but were **not cited** as authority."
-    )
+    coverage_gap = _authority_coverage_gap(retrieval_status)
+    verified_units = _verified_substantive_units(text or "", eligible_ids)
+    if verified_units:
+        return (
+            "## Verified findings\n\n"
+            + "\n\n".join(verified_units)
+            + "\n\n"
+            + coverage_gap,
+            True,
+        )
     return coverage_gap, True
 
 

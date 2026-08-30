@@ -78,7 +78,7 @@ def test_public_general_prompt_has_no_confidential_context_contract():
     assert "[source: <source_id>]" in prompt
     assert "[cited]" in prompt
     assert "[verify]" in prompt
-    assert "[model knowledge]" in prompt
+    assert "Do not use [model knowledge]" in prompt
 
 
 def test_public_general_prompt_has_no_private_interpolation_slots():
@@ -94,11 +94,11 @@ def test_public_general_prompt_has_no_private_interpolation_slots():
     assert "Public authority only" in prompt
 
 
-def test_public_general_prompt_discloses_empty_public_retrieval():
+def test_public_general_prompt_blocks_general_knowledge_for_empty_public_retrieval():
     prompt = LLMService.public_general_system_prompt()
 
     assert "No public authority retrieved." in prompt
-    assert "This response uses general legal knowledge" in prompt
+    assert "do not fill a jurisdiction-specific gap from general knowledge" in prompt
 
 
 def test_verified_profile_is_a_distinct_prompt_section_and_privacy_scrubbed():

@@ -156,6 +156,30 @@ scoped to CourtListener jurisdiction `F` and legal-authority jurisdiction `US`.
 This routing does not imply that every court or authority partition has already
 been loaded; coverage results and gaps remain authoritative.
 
+## Chat Retrieval Outcomes
+
+Internal Chat carries a bounded public-authority outcome from retrieval through
+the final citation check. It may report `retrieved`, `no_matches`,
+`service_unavailable`, or `fallback_unavailable`; the state contains aggregate
+counts only, never the query, endpoint, credential, or raw upstream response.
+When an answer contains independently cited findings plus unsupported material,
+Chat retains only the cited findings and appends an authority coverage gap. When
+no authority is cited, it does not substitute a jurisdiction-specific answer
+from model knowledge. An outage is therefore distinguishable from a genuine
+no-match without turning an infrastructure detail into a customer-facing claim.
+
+Chat preserves each validated CourtListener opinion URL or official-source URL
+in the same source ledger used for inline citation links. A response without
+retrieved, cited sources cannot render a source hyperlink; that is an evidence
+outcome, not a browser-rendering fallback.
+
+Provider-hosted web research is not an enabled Chat source. Do not enable it
+for legal queries until an adapter can enforce the existing route/privacy
+boundary, collect immutable source URLs and excerpts, apply the same source
+relevance and citation checks, and record a bounded outcome. A model capability
+label alone is not evidence that the resulting web material is fit for legal
+research or attorney review.
+
 ## Current Corpus Checkpoint
 
 ## Corpus Coverage Inventory

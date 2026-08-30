@@ -536,6 +536,10 @@ async def test_public_search_uses_trusted_default_but_explicit_query_overrides(
         ("search_legal_authorities", "ND"),
     }
     assert defaulted.requested_jurisdictions == ("ND",)
+    assert all(outcome["raw_result_count"] == 0 for outcome in defaulted.mcp_outcomes)
+    assert all(
+        outcome["filtered_result_count"] == 0 for outcome in defaulted.mcp_outcomes
+    )
 
     calls.clear()
     lowercase_pronoun = await rag.search_courtlistener_mcp(
@@ -905,7 +909,7 @@ def test_mcp_authority_item_to_chunk_preserves_freshness_and_authority_type():
             "effective_date": "2026-01-01",
             "retrieved_at": "2026-07-31T12:00:00Z",
             "last_successful_sync_at": "2026-07-31T12:00:00Z",
-            "source_url": "https://www.medicaid.gov/medicaid/eligibility-policy/estate-recovery",
+            "url": "https://www.medicaid.gov/medicaid/eligibility-policy/estate-recovery",
             "content": "States must seek recovery in specified circumstances.",
             "similarity": 0.8,
         },
@@ -1426,6 +1430,8 @@ async def test_full_rag_query_falls_back_to_local_public_index_when_mcp_has_no_r
 
     assert embeddings.public_calls == 1
     assert chunks[0]["id"] == "local-public-1"
+    assert chunks.public_retrieval["state"] == "retrieved"
+    assert chunks.public_retrieval["fallback_result_count"] == 1
     assert "Local public authority fallback" in context
     assert recorded == [
         ("search_caselaw", status_codes[0]),

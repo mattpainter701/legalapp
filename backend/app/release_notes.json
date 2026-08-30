@@ -2,6 +2,19 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.30.6",
+      "version": "2026.08.30.6",
+      "title": "Clearer legal research gaps",
+      "published_at": "2026-08-30",
+      "summary": "Legal research now distinguishes cited findings from unavailable or unmatched authority and keeps links to the retrieved public source.",
+      "highlights": [
+        {"title": "Keep verified findings", "description": "When a response mixes cited and unsupported material, cited findings remain visible while unsupported claims are omitted."},
+        {"title": "Explain missing authority", "description": "Research gaps now say whether the authority service or fallback was unavailable, or whether no usable match was found."},
+        {"title": "Open the cited source", "description": "CourtListener and official public-source URLs remain attached to the cited source so reviewers can open the retrieved authority."},
+        {"title": "Avoid uncited legal summaries", "description": "Jurisdiction-specific questions without authority no longer receive a general-knowledge answer presented as completed research."}
+      ]
+    },
+    {
       "id": "2026.08.30.5",
       "version": "2026.08.30.5",
       "title": "Versioned public-authority coverage",

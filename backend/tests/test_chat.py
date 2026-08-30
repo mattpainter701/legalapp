@@ -365,6 +365,19 @@ def test_unverified_model_knowledge_is_kept_when_a_retrieved_source_is_cited():
     assert count == 0
 
 
+def test_existing_source_note_is_not_duplicated_when_model_tags_are_condensed():
+    answer = (
+        "**Source note:** This response uses general legal knowledge, not retrieved "
+        "authority.\n\nA general proposition. [model knowledge]"
+    )
+
+    consolidated, count = consolidate_unverified_model_knowledge(answer, [])
+
+    assert consolidated.count("**Source note:**") == 1
+    assert "[model knowledge]" not in consolidated
+    assert count == 1
+
+
 def test_nd_jurisdiction_answer_without_retrieved_authority_fails_closed():
     unsafe_answer = (
         "North Dakota can decide custody even if California is the home state. "
@@ -384,7 +397,7 @@ def test_nd_jurisdiction_answer_without_retrieved_authority_fails_closed():
     assert blocked is True
     assert guarded.startswith("## Authority coverage gap")
     assert "North Dakota can decide custody" not in guarded
-    assert "not cited" in guarded
+    assert "No retrieved statute, rule, case" in guarded
 
 
 def test_contract_deal_briefing_without_retrieved_citations_fails_closed():
@@ -479,8 +492,42 @@ def test_one_valid_citation_cannot_cover_uncited_legal_findings():
     )
 
     assert blocked is True
-    assert guarded.startswith("## Authority coverage gap")
+    assert guarded.startswith("## Verified findings")
+    assert "residence statute" in guarded
     assert "always automatic" not in guarded
+
+
+def test_mixed_answer_keeps_independently_cited_finding_and_explains_outage():
+    answer = (
+        "The residence statute supplies the filing rule. "
+        "[source: authority:nd-1] [verify]\n\n"
+        "Personal jurisdiction over the nonresident spouse is always automatic."
+    )
+
+    guarded, blocked = enforce_legal_citation_integrity(
+        "Analyze North Dakota divorce jurisdiction.",
+        answer,
+        [{"source_id": "authority:nd-1", "source_type": "public_authority"}],
+        {"state": "service_unavailable"},
+    )
+
+    assert blocked is True
+    assert guarded.startswith("## Verified findings")
+    assert "residence statute" in guarded
+    assert "always automatic" not in guarded
+    assert "configured public-authority service did not return" in guarded
+
+
+def test_mediation_question_requires_retrieved_authority():
+    guarded, blocked = enforce_legal_citation_integrity(
+        "What is the North Dakota mediation process?",
+        "North Dakota mediation follows these steps.",
+        [],
+        {"state": "no_matches"},
+    )
+
+    assert blocked is True
+    assert "returned no usable match" in guarded
 
 
 def test_each_contract_schedule_row_requires_its_own_document_source():
@@ -500,7 +547,8 @@ def test_each_contract_schedule_row_requires_its_own_document_source():
     )
 
     assert blocked is True
-    assert guarded.startswith("## Authority coverage gap")
+    assert guarded.startswith("## Verified findings")
+    assert "Orion MSA" in guarded
     assert "Summit reseller" not in guarded
 
 
