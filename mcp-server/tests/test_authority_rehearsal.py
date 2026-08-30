@@ -7,6 +7,7 @@ unit runs so local tests never touch a developer or production database.
 
 import os
 import uuid
+from datetime import datetime, timezone
 
 import pytest
 from psycopg2 import DatabaseError
@@ -28,6 +29,7 @@ from mcp_server.loader import (
     init_schema,
     refresh_courtlistener_coverage_ledger,
 )
+from mcp_server.authority_ingest import FetchedDocument, ingest_document
 from mcp_server.repository import CourtListenerRepository
 from mcp_server.server import ControlPlaneRequest, run_control_audit
 
@@ -199,6 +201,48 @@ def test_authority_release_rehearsal(monkeypatch):
             embedding_dimension=1024,
         )
         add_fixture(version, "old")
+        monkeypatch.setenv("AUTHORITY_INGEST_CORPUS_VERSION", version)
+        ingest_input = {
+            "source_key": source_key,
+            "external_id": "production-ingest-document",
+            "document_type": "statute",
+            "title": "Fixture production ingest",
+            "canonical_url": "https://example.test/ingest",
+            "practice_areas": ["rehearsal"],
+            "parser": "fixture-parser",
+            "official_status": "official",
+            "acquisition_basis": "fixture-only",
+            "coverage_notes": "bounded rehearsal input",
+        }
+        malformed = FetchedDocument(
+            text="/i255 " * 200,
+            content_hash="bad",
+            media_type="text/html",
+            retrieved_at=datetime.now(timezone.utc),
+            source_modified_at=None,
+            etag=None,
+        )
+        with pytest.raises(RuntimeError, match="blocked_font_map"):
+            ingest_document(
+                conn, {**ingest_input, "external_id": "malformed"}, malformed
+            )
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM legal_documents WHERE external_id='malformed' AND corpus_version=%s",
+                [version],
+            )
+            assert cur.fetchone()[0] == 0
+        fetched = FetchedDocument(
+            text="production fixture authority text",
+            content_hash="production-hash",
+            media_type="text/html",
+            retrieved_at=datetime.now(timezone.utc),
+            source_modified_at=datetime.now(timezone.utc),
+            etag="fixture-etag",
+            resolved_url="https://example.test/ingest",
+        )
+        ingest_result = ingest_document(conn, ingest_input, fetched)
+        assert ingest_result["chunks_created"] > 0
         create_snapshot_chunks(conn, version)
         refresh_courtlistener_coverage_ledger(conn, source_release=version)
         with conn.cursor() as cur:
@@ -206,7 +250,7 @@ def test_authority_release_rehearsal(monkeypatch):
                 """INSERT INTO corpus_coverage_ledger
                 (source_key, partition_key, expected_item_count, acquisition_state,
                  source_release, rows_loaded, last_checked_at)
-                VALUES (%s, 'manifest', 1, 'complete', %s, 1, now())
+                VALUES (%s, 'manifest', 2, 'complete', %s, 2, now())
                 ON CONFLICT (source_key, partition_key, source_release) DO UPDATE
                 SET expected_item_count=EXCLUDED.expected_item_count,
                     acquisition_state=EXCLUDED.acquisition_state,
