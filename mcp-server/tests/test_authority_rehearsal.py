@@ -541,10 +541,16 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 (97100001, "rehearsal-ohio"),
             }
             cur.execute(
-                "SELECT COUNT(*) FROM authority_case_citations WHERE corpus_version=%s",
+                """SELECT citing_opinion_id, cited_opinion_id, cited_cluster_id
+                     FROM authority_case_citations
+                    WHERE corpus_version=%s
+                    ORDER BY citing_opinion_id, cited_opinion_id NULLS LAST""",
                 [version],
             )
-            assert cur.fetchone()[0] == 1
+            assert cur.fetchall() == [
+                (97000001, 97000002, 97000002),
+                (97100001, 97100001, None),
+            ]
         conn.commit()
         import mcp_server.server as control_server
 
