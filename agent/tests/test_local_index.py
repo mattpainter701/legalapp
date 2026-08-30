@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 import sqlite3
 from pathlib import Path
@@ -237,6 +238,104 @@ async def test_missing_index_seeding_only_inserts_missing_rows(tmp_path):
             row = await cursor.fetchone()
         assert row["status"] == "ready"
     finally:
+        await index.close()
+
+
+@pytest.mark.asyncio
+async def test_reenqueue_during_extraction_cannot_publish_stale_text(tmp_path):
+    path = SHARE_A + r"\Cases\changing.txt"
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+
+    async def fetcher(job):
+        if job["content_hash"] == "version-a":
+            first_started.set()
+            await release_first.wait()
+            return b"obsoleteversionmarker"
+        assert job["content_hash"] == "version-b"
+        return b"currentversionmarker"
+
+    index = await _make_index(tmp_path, fetcher)
+    try:
+        first = _file(path, "firm", content_hash="version-a", size_bytes=21)
+        second = _file(path, "firm", content_hash="version-b", size_bytes=22)
+        second["modified_time"] = "2026-08-29T00:00:00Z"
+
+        await index.enqueue(first)
+        await asyncio.wait_for(first_started.wait(), timeout=2)
+        await index.enqueue(second)
+        release_first.set()
+        await _wait(index)
+
+        async with index._db.execute(
+            "SELECT content_hash,size_bytes,modified_time,status FROM index_files "
+            "WHERE path=?",
+            (path,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        assert dict(row) == {
+            "content_hash": "version-b",
+            "size_bytes": 22,
+            "modified_time": "2026-08-29T00:00:00Z",
+            "status": "ready",
+        }
+        stale = await index.search(
+            "obsoleteversionmarker", [{"share_id": "firm"}], ASSIGNED, None, 10
+        )
+        current = await index.search(
+            "currentversionmarker", [{"share_id": "firm"}], ASSIGNED, None, 10
+        )
+        assert stale["hits"] == []
+        assert [hit["relative_path"] for hit in current["hits"]] == [
+            r"Cases\changing.txt"
+        ]
+    finally:
+        release_first.set()
+        await index.close()
+
+
+@pytest.mark.asyncio
+async def test_reenqueue_cannot_be_overwritten_by_stale_extraction_failure(tmp_path):
+    path = SHARE_A + r"\Cases\recovered.txt"
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+
+    async def fetcher(job):
+        if job["content_hash"] == "version-a":
+            first_started.set()
+            await release_first.wait()
+            return b""
+        assert job["content_hash"] == "version-b"
+        return b"recoveredversionmarker"
+
+    index = await _make_index(tmp_path, fetcher)
+    try:
+        await index.enqueue(_file(path, "firm", content_hash="version-a", size_bytes=0))
+        await asyncio.wait_for(first_started.wait(), timeout=2)
+        second = _file(path, "firm", content_hash="version-b", size_bytes=22)
+        second["modified_time"] = "2026-08-29T01:00:00Z"
+        await index.enqueue(second)
+        release_first.set()
+        await _wait(index)
+
+        async with index._db.execute(
+            "SELECT content_hash,status,extraction_error FROM index_files WHERE path=?",
+            (path,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        assert dict(row) == {
+            "content_hash": "version-b",
+            "status": "ready",
+            "extraction_error": None,
+        }
+        result = await index.search(
+            "recoveredversionmarker", [{"share_id": "firm"}], ASSIGNED, None, 10
+        )
+        assert [hit["relative_path"] for hit in result["hits"]] == [
+            r"Cases\recovered.txt"
+        ]
+    finally:
+        release_first.set()
         await index.close()
 
 

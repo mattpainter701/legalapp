@@ -98,6 +98,26 @@ def _validated_local_db_path(raw_path: str) -> Path:
 
 REQUIRED_FTS_COLUMNS = {"text", "path", "share_id", "page_no", "ordinal", "ext"}
 
+CLAIMED_JOB_PREDICATE = """
+path=? AND share_id=? AND ext=? AND content_hash IS ? AND size_bytes IS ?
+AND modified_time IS ? AND status='running' AND attempts=? AND lease_until IS ?
+"""
+
+
+def _claimed_job_params(job: dict) -> tuple:
+    """Identity of one exact queue claim, including its lease generation."""
+    return (
+        str(job["path"]),
+        str(job["share_id"]),
+        str(job.get("ext") or ""),
+        job.get("content_hash"),
+        int(job.get("size_bytes") or 0),
+        job.get("modified_time"),
+        int(job["_claim_attempt"]),
+        float(job["_claim_lease_until"]),
+    )
+
+
 # These words are search-request scaffolding, not legal concepts. Dropping
 # them before constructing the FTS query keeps a natural question such as
 # "find matters discussing negligent spoliation" from requiring every UI word
@@ -632,26 +652,56 @@ class LocalSearchIndex:
         assert self._db
         now = time.time()
         async with self._db_lock:
-            cursor = await self._db.execute(
-                """SELECT * FROM index_files
-                   WHERE (status='pending' AND
-                          (next_attempt_at IS NULL OR next_attempt_at<=?))
-                      OR (status='running' AND lease_until<?)
-                   ORDER BY rowid LIMIT 1""",
-                (now, now),
-            )
-            row = await cursor.fetchone()
-            if not row:
-                return None
-            await self._db.execute(
-                """UPDATE index_files
-                   SET status='running', attempts=attempts+1, lease_until=?,
-                       next_attempt_at=NULL
-                   WHERE path=?""",
-                (now + 300, row["path"]),
-            )
-            await self._db.commit()
-            return dict(row)
+            await self._db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await self._db.execute(
+                    """SELECT * FROM index_files
+                       WHERE (status='pending' AND
+                              (next_attempt_at IS NULL OR next_attempt_at<=?))
+                          OR (status='running' AND lease_until<?)
+                       ORDER BY rowid LIMIT 1""",
+                    (now, now),
+                )
+                row = await cursor.fetchone()
+                if not row:
+                    await self._db.commit()
+                    return None
+                lease_until = now + 300
+                claimed_attempt = int(row["attempts"] or 0) + 1
+                claimed = await self._db.execute(
+                    """UPDATE index_files
+                       SET status='running', attempts=?, lease_until=?,
+                           next_attempt_at=NULL
+                       WHERE path=? AND share_id=? AND ext=?
+                         AND content_hash IS ? AND size_bytes IS ?
+                         AND modified_time IS ? AND attempts=?
+                         AND ((status='pending' AND
+                               (next_attempt_at IS NULL OR next_attempt_at<=?))
+                              OR (status='running' AND lease_until<?))""",
+                    (
+                        claimed_attempt,
+                        lease_until,
+                        row["path"],
+                        row["share_id"],
+                        row["ext"],
+                        row["content_hash"],
+                        row["size_bytes"],
+                        row["modified_time"],
+                        row["attempts"],
+                        now,
+                        now,
+                    ),
+                )
+                await self._db.commit()
+                if claimed.rowcount != 1:
+                    return None
+                job = dict(row)
+                job["_claim_attempt"] = claimed_attempt
+                job["_claim_lease_until"] = lease_until
+                return job
+            except Exception:
+                await self._db.rollback()
+                raise
 
     async def _next_wait_seconds(self) -> float:
         assert self._db
@@ -695,6 +745,15 @@ class LocalSearchIndex:
                 async with self._db_lock:
                     await self._db.execute("BEGIN IMMEDIATE")
                     try:
+                        current = await self._db.execute(
+                            "SELECT 1 FROM index_files WHERE " + CLAIMED_JOB_PREDICATE,
+                            _claimed_job_params(job),
+                        )
+                        if not await current.fetchone():
+                            # A rescan, delete, or newer lease superseded this
+                            # extraction. Never publish its stale text.
+                            await self._db.commit()
+                            continue
                         await self._db.execute(
                             "DELETE FROM index_fts WHERE path=?", (job["path"],)
                         )
@@ -715,14 +774,19 @@ class LocalSearchIndex:
                                 for page, ordinal, text in rows
                             ],
                         )
-                        await self._db.execute(
+                        completed = await self._db.execute(
                             """UPDATE index_files
                                SET status='ready', page_count=?, extraction_error=NULL,
                                    lease_until=NULL, next_attempt_at=NULL,
                                    indexed_at=datetime('now')
-                               WHERE path=?""",
-                            (page_count, job["path"]),
+                               WHERE """
+                            + CLAIMED_JOB_PREDICATE,
+                            (page_count, *_claimed_job_params(job)),
                         )
+                        if completed.rowcount != 1:
+                            raise RuntimeError(
+                                "local index claim changed during commit"
+                            )
                         await self._db.commit()
                     except Exception:
                         await self._db.rollback()
@@ -746,14 +810,21 @@ class LocalSearchIndex:
         attempts = int(job.get("attempts") or 0) + 1
         next_attempt = time.time() + min(60, 2**attempts) if retry else None
         async with self._db_lock:
-            await self._db.execute(
+            updated = await self._db.execute(
                 """UPDATE index_files
                    SET status=?, extraction_error=?, lease_until=NULL,
-                       next_attempt_at=? WHERE path=?""",
-                (status, reason[:500], next_attempt, job["path"]),
+                       next_attempt_at=? WHERE """
+                + CLAIMED_JOB_PREDICATE,
+                (
+                    status,
+                    reason[:500],
+                    next_attempt,
+                    *_claimed_job_params(job),
+                ),
             )
             await self._db.commit()
-        self._wake.set()
+        if updated.rowcount == 1:
+            self._wake.set()
 
     async def wait_until_idle(self) -> None:
         """Wait until the durable queue has no runnable or leased work."""
