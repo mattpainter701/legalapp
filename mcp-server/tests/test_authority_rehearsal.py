@@ -100,6 +100,7 @@ def test_authority_release_rehearsal():
             ("release", [{"ready": True}]),
             ("completeness", [{"expected": True, "observed": True}]),
             ("freshness", [{"lag_seconds": 1}]),
+            ("isolation", [{"namespace": "public-authority", "private": False}]),
         ):
             result = sampled_audit(records, audit_kind=kind)
             assert result["passed"]
@@ -134,9 +135,11 @@ def test_authority_release_rehearsal():
             embedding_version="1", embedding_dimension=1024,
         )
         add_fixture(follow_up, 'new')
-        for kind in ("release", "completeness", "freshness"):
+        for kind in ("release", "completeness", "freshness", "isolation"):
             result = sampled_audit([{"ready": True}] if kind == "release" else
-                                   ([{"expected": True, "observed": True}] if kind == "completeness" else [{"lag_seconds": 1}]),
+                                   ([{"expected": True, "observed": True}] if kind == "completeness" else
+                                    ([{"lag_seconds": 1}] if kind == "freshness" else
+                                     [{"namespace": "public-authority", "private": False}])),
                                    audit_kind=kind)
             record_audit(conn, corpus_version=follow_up, audit_kind=kind,
                          methodology="fixture rollback sample", thresholds={}, result=result,

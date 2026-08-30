@@ -120,14 +120,24 @@ def promote_corpus_version(conn: Any, *, version: str, actor: str, reason: str) 
         if not target or target[0] not in {"staged", "canary"}:
             raise ValueError("corpus version is missing or not staged/canary")
         cur.execute("""
-            SELECT COUNT(DISTINCT audit_kind) FROM authority_audits
-            WHERE corpus_version = %s
-              AND audit_kind IN ('release', 'completeness', 'freshness')
-              AND passed = TRUE
+            SELECT COUNT(*) FROM (
+                SELECT DISTINCT ON (audit_kind) audit_kind, passed
+                FROM authority_audits
+                WHERE corpus_version = %s
+                  AND audit_kind IN ('release', 'completeness', 'freshness', 'isolation')
+                ORDER BY audit_kind, sampled_at DESC, id DESC
+            ) latest
+            WHERE passed = TRUE
             """, [version])
         audit_row = cur.fetchone()
-        if not audit_row or audit_row[0] < 3:
-            raise PermissionError("passing release, completeness, and freshness audits are required")
+        if not audit_row or audit_row[0] < 4:
+            raise PermissionError("latest passing release, completeness, freshness, and isolation audits are required")
+        cur.execute("""
+            SELECT COUNT(*) FROM authority_case_chunks
+            WHERE corpus_version=%s
+        """, [version])
+        if not cur.fetchone()[0]:
+            raise PermissionError("a corpus version must contain searchable authority snapshot chunks")
         cur.execute("UPDATE authority_corpus_versions SET status='retired' WHERE status='promoted' AND version <> %s", [version])
         cur.execute("""
             UPDATE authority_corpus_versions
