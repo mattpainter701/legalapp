@@ -732,9 +732,9 @@ def sync_documents(
                                       AND corpus_version=(SELECT version FROM authority_corpus_versions WHERE status IN ('staged','canary') ORDER BY created_at DESC LIMIT 1)""",
                                    [document["source_key"], partition_key])
                     checkpoint = cursor.fetchone()
-                if checkpoint and checkpoint[0] == document["canonical_url"] and checkpoint[1] == "complete":
-                    results.append({"source_key": document["source_key"], "external_id": document["external_id"], "status": "already_complete"})
-                    continue
+                # A successful URL is only a checkpoint hint.  Re-fetch it so
+                # ETag/Last-Modified/hash semantics can detect upstream change
+                # and cadence staleness; dedupe remains enforced at ingest.
                 try:
                     fetched = fetch_document(document, client=client)
                     results.append(ingest_document(conn, document, fetched))
@@ -779,32 +779,37 @@ def sync_documents(
                             """INSERT INTO source_sync_states
                                  (source_key, partition_key, status, last_attempted_at,
                                   last_error, retry_count, next_retry_at, dead_letter_count)
-                               VALUES (%s, %s, %s, now(), %s, %s,
-                                       now() + interval '5 minutes',
-                                       CASE WHEN %s = 'quarantined' THEN 1 ELSE 0 END)
+                                 VALUES (%s, %s, %s, now(), %s, %s,
+                                       CASE WHEN %s IN ('quarantined', 'dead_letter')
+                                            THEN NULL ELSE now() + interval '5 minutes' END,
+                                       CASE WHEN %s IN ('quarantined', 'dead_letter') THEN 1 ELSE 0 END)
                                ON CONFLICT (source_key, partition_key) DO UPDATE SET
                                  status=EXCLUDED.status, last_attempted_at=now(),
                                  last_error=EXCLUDED.last_error,
                                  retry_count=EXCLUDED.retry_count,
-                                 next_retry_at=now() + interval '5 minutes',
+                                 next_retry_at=CASE WHEN EXCLUDED.status IN ('quarantined', 'dead_letter')
+                                                    THEN NULL ELSE now() + interval '5 minutes' END,
                                  dead_letter_count=source_sync_states.dead_letter_count
-                                   + CASE WHEN EXCLUDED.status='quarantined' THEN 1 ELSE 0 END,
+                                   + CASE WHEN EXCLUDED.status IN ('quarantined', 'dead_letter') THEN 1 ELSE 0 END,
                                  updated_at=now()""",
                             [document["source_key"], f"manifest:{document['source_key']}",
-                             event_status, failure_text, retry_count, event_status],
+                             event_status, failure_text, retry_count, event_status, event_status],
                         )
                         if corpus_version:
                             cursor.execute("""INSERT INTO authority_harvest_checkpoints
                                  (source_key, partition_key, corpus_version, cursor_url,
-                                  status, retry_count, next_retry_at, dead_letter_at)
-                               VALUES (%s, %s, %s, %s, %s, %s, now() + interval '5 minutes',
+                                 status, retry_count, next_retry_at, dead_letter_at)
+                               VALUES (%s, %s, %s, %s, %s, %s,
+                                       CASE WHEN %s IN ('quarantined', 'dead_letter')
+                                            THEN NULL ELSE now() + interval '5 minutes' END,
                                        CASE WHEN %s='dead_letter' THEN now() ELSE NULL END)
                                ON CONFLICT (source_key, partition_key, corpus_version) DO UPDATE SET
                                  status=EXCLUDED.status, retry_count=EXCLUDED.retry_count,
                                  next_retry_at=EXCLUDED.next_retry_at,
                                  dead_letter_at=EXCLUDED.dead_letter_at, updated_at=now()""",
                                 [document["source_key"], partition_key, corpus_version,
-                                 document.get("canonical_url"), event_status, retry_count, event_status])
+                                 document.get("canonical_url"), event_status, retry_count,
+                                 event_status, event_status])
                         cursor.execute(
                             """
                             UPDATE legal_sources
@@ -821,6 +826,31 @@ def sync_documents(
                 if index + 1 < len(documents):
                     time.sleep(float(os.getenv("LEGAL_SOURCE_REQUEST_DELAY_SECONDS", "1")))
     return results
+
+
+def retry_due_documents(
+    documents: list[dict[str, Any]], catalog: dict[str, Any], db_url: str | None,
+    *, limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Run one bounded retry tranche from durable source checkpoints."""
+    if limit < 1:
+        raise ValueError("retry limit must be positive")
+    init_schema(db_url)
+    due_sources: set[str] = set()
+    with connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT source_key
+                FROM authority_harvest_checkpoints
+                WHERE status IN ('retryable_failure', 'retryable')
+                  AND next_retry_at IS NOT NULL AND next_retry_at <= now()
+                ORDER BY source_key LIMIT %s
+            """, [limit])
+            due_sources = {row[0] for row in cur.fetchall()}
+    if not due_sources:
+        return []
+    selected = [d for d in documents if d.get("source_key") in due_sources][:limit]
+    return sync_documents(selected, catalog, db_url)
 
 
 def main() -> None:

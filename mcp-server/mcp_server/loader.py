@@ -69,6 +69,7 @@ def init_schema(db_url: str | None = None) -> None:
 def backfill_promoted_caselaw_snapshot(conn) -> int:
     """Idempotently materialize the legacy served corpus into snapshots."""
     with conn.cursor() as cur:
+        cur.execute("SET LOCAL authority.snapshot_backfill = 'on'")
         cur.execute("""
             SELECT version FROM authority_corpus_versions
             WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1
@@ -1000,6 +1001,10 @@ def create_snapshot_chunks(conn, corpus_version: str, limit: int | None = None) 
             [corpus_version, limit or 1000000],
         )
         for opinion_id, cluster_id, court_id, text in cur.fetchall():
+            cur.execute(
+                "DELETE FROM authority_case_chunks WHERE corpus_version=%s AND opinion_id=%s",
+                [corpus_version, opinion_id],
+            )
             for idx, content in enumerate(chunk_text(text or "")):
                 cur.execute(
                     """

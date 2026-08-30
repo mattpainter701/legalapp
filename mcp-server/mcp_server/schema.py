@@ -489,6 +489,9 @@ CREATE OR REPLACE FUNCTION reject_authority_snapshot_mutation() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE release_status text;
 BEGIN
+    IF TG_OP = 'INSERT' AND current_setting('authority.snapshot_backfill', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
     SELECT status INTO release_status
     FROM authority_corpus_versions
     WHERE version = COALESCE(OLD.corpus_version, NEW.corpus_version);
@@ -503,7 +506,7 @@ LANGUAGE plpgsql AS $$
 BEGIN
     EXECUTE format('DROP TRIGGER IF EXISTS authority_snapshot_immutable ON %I', table_name);
     EXECUTE format('CREATE TRIGGER authority_snapshot_immutable
-                    BEFORE UPDATE OR DELETE ON %I
+                    BEFORE INSERT OR UPDATE OR DELETE ON %I
                     FOR EACH ROW EXECUTE FUNCTION reject_authority_snapshot_mutation()', table_name);
 END $$;
 SELECT install_authority_snapshot_guard('authority_case_clusters');
@@ -511,6 +514,29 @@ SELECT install_authority_snapshot_guard('authority_case_opinions');
 SELECT install_authority_snapshot_guard('authority_case_chunks');
 SELECT install_authority_snapshot_guard('authority_case_citations');
 DROP FUNCTION install_authority_snapshot_guard(text);
+
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_authority_case_opinions_cluster') THEN
+        ALTER TABLE authority_case_opinions ADD CONSTRAINT fk_authority_case_opinions_cluster
+          FOREIGN KEY (corpus_version, cluster_id)
+          REFERENCES authority_case_clusters(corpus_version, cluster_id) NOT VALID;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_authority_case_chunks_opinion') THEN
+        ALTER TABLE authority_case_chunks ADD CONSTRAINT fk_authority_case_chunks_opinion
+          FOREIGN KEY (corpus_version, opinion_id)
+          REFERENCES authority_case_opinions(corpus_version, opinion_id) NOT VALID;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_authority_case_chunks_cluster') THEN
+        ALTER TABLE authority_case_chunks ADD CONSTRAINT fk_authority_case_chunks_cluster
+          FOREIGN KEY (corpus_version, cluster_id)
+          REFERENCES authority_case_clusters(corpus_version, cluster_id) NOT VALID;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_authority_case_citations_citing') THEN
+        ALTER TABLE authority_case_citations ADD CONSTRAINT fk_authority_case_citations_citing
+          FOREIGN KEY (corpus_version, citing_opinion_id)
+          REFERENCES authority_case_opinions(corpus_version, opinion_id) NOT VALID;
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS ix_opinion_chunks_court ON opinion_chunks(court_id);
 CREATE INDEX IF NOT EXISTS ix_opinion_chunks_embedding_version ON opinion_chunks(embedding_version);
