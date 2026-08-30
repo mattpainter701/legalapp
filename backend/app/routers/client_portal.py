@@ -37,8 +37,9 @@ from fastapi import (
     UploadFile,
 )
 from jose import JWTError, jwt
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.config import get_settings
 from app.services.upload_guard import reject_oversized_request
@@ -56,7 +57,15 @@ from app.models.communication_log import CommunicationLog
 from app.models.contact import Contact
 from app.models.matter_assignment import MatterAssignment
 from app.models.matter_document import MatterDocument
-from app.models.plugin import Matter
+from app.models.mediation import (
+    MediationAsset,
+    MediationDocument,
+    MediationDocumentRecipient,
+    MediationParty,
+    MediationProposal,
+    MediationProposalRecipient,
+)
+from app.models.plugin import Matter, MediationCase, TenantPluginEntitlement
 from app.models.signature import SignatureRequest, SignatureSigner
 from app.models.tenant import Tenant
 from app.models.user import User
@@ -77,11 +86,17 @@ from app.schemas.client_portal import (
     PortalKeyDate,
     PortalMarkReadResponse,
     PortalMatterView,
+    PortalMediationAsset,
+    PortalMediationCase,
+    PortalMediationDocument,
+    PortalMediationProposal,
+    PortalMediationView,
     PortalMessageCreate,
     PortalMessageList,
     PortalMessageResponse,
     PortalSessionResponse,
 )
+from app.services import mediation_service as mediation_service
 from app.services.matter_file_store import (
     MatterFileAccessError,
     MatterFileIntegrityError,
@@ -856,6 +871,310 @@ async def portal_matter(
         outstanding_balance=outstanding,
         last_activity_at=_aware(last_activity_at),
     )
+
+
+async def _native_mediation_case(
+    db: AsyncSession,
+    ctx: ClientPortalContext,
+) -> tuple[MediationCase, MediationParty]:
+    """Resolve one licensed mediation and bind it to the portal contact."""
+    tenant_id = uuid.UUID(str(ctx.tenant_id))
+    matter_id = uuid.UUID(str(ctx.matter_id))
+    entitlement = await db.scalar(
+        select(TenantPluginEntitlement).where(
+            TenantPluginEntitlement.tenant_id == tenant_id,
+            TenantPluginEntitlement.plugin_name == "mediation-legal",
+        )
+    )
+    now = datetime.now(timezone.utc)
+    starts_at = _aware(entitlement.starts_at) if entitlement else None
+    expires_at = _aware(entitlement.expires_at) if entitlement else None
+    entitled = bool(
+        entitlement
+        and entitlement.status in {"purchased", "included", "trial"}
+        and (starts_at is None or starts_at <= now)
+        and (expires_at is None or expires_at > now)
+        and (entitlement.status != "trial" or expires_at is not None)
+    )
+    if not entitled:
+        raise HTTPException(status_code=404, detail="Mediation workspace not found")
+
+    result = await db.execute(
+        select(MediationCase)
+        .options(
+            selectinload(MediationCase.case_parties),
+            selectinload(MediationCase.assets),
+        )
+        .where(
+            MediationCase.tenant_id == tenant_id,
+            MediationCase.matter_id == matter_id,
+        )
+    )
+    cases = list(result.scalars().all())
+    if not cases:
+        raise HTTPException(status_code=404, detail="Mediation workspace not found")
+    if len(cases) != 1:
+        raise HTTPException(status_code=409, detail="Mediation workspace is ambiguous")
+
+    case = cases[0]
+    matches: list[MediationParty] = []
+    if ctx.contact_id:
+        matches = [
+            party
+            for party in case.case_parties
+            if party.role == "our_client"
+            and party.contact_id
+            and str(party.contact_id) == str(ctx.contact_id)
+        ]
+        if (
+            not matches
+            and case.client_contact_id
+            and str(case.client_contact_id) == str(ctx.contact_id)
+        ):
+            matches = [
+                party
+                for party in case.case_parties
+                if party.role == "our_client" and party.contact_id is None
+            ]
+    elif case.client_contact_id is None and ctx.email:
+        email = ctx.email.strip().casefold()
+        matches = [
+            party
+            for party in case.case_parties
+            if party.role == "our_client"
+            and party.contact_id is None
+            and party.email
+            and party.email.strip().casefold() == email
+        ]
+    if len(matches) != 1:
+        raise HTTPException(status_code=404, detail="Mediation workspace not found")
+    return case, matches[0]
+
+
+def _portal_mediation_asset(asset: MediationAsset) -> PortalMediationAsset:
+    return PortalMediationAsset(
+        id=str(asset.id),
+        kind=asset.kind,
+        category=asset.category,
+        description=asset.description,
+        value=asset.value,
+        owned_by=asset.owned_by,
+        status=asset.status,
+        opposing_decision=asset.opposing_decision,
+        dispute_reason=asset.dispute_reason,
+        notes=asset.notes,
+        created_at=asset.created_at,
+        updated_at=asset.updated_at,
+    )
+
+
+@router.get("/mediation", response_model=PortalMediationView)
+async def portal_mediation(
+    resolved: tuple[ClientPortalContext, Matter] = Depends(portal_matter_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    ctx, _matter = resolved
+    case, party = await _native_mediation_case(db, ctx)
+    party_id = party.id
+    tenant_id = uuid.UUID(str(ctx.tenant_id))
+    assets = (
+        (
+            await db.execute(
+                select(MediationAsset).where(
+                    MediationAsset.case_id == case.id,
+                    MediationAsset.tenant_id == tenant_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    documents = (
+        (
+            await db.execute(
+                select(MediationDocument)
+                .options(selectinload(MediationDocument.recipients))
+                .where(
+                    MediationDocument.case_id == case.id,
+                    MediationDocument.tenant_id == tenant_id,
+                    or_(
+                        MediationDocument.uploaded_by_party_id == party_id,
+                        MediationDocument.recipients.any(
+                            MediationDocumentRecipient.party_id == party_id
+                        ),
+                    ),
+                )
+                .order_by(MediationDocument.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    proposals = (
+        (
+            await db.execute(
+                select(MediationProposal)
+                .options(selectinload(MediationProposal.recipients))
+                .where(
+                    MediationProposal.case_id == case.id,
+                    MediationProposal.tenant_id == tenant_id,
+                    or_(
+                        MediationProposal.proposed_by_party_id == party_id,
+                        MediationProposal.recipients.any(
+                            MediationProposalRecipient.party_id == party_id
+                        ),
+                    ),
+                )
+                .order_by(MediationProposal.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    names = {str(case_party.id): case_party.name for case_party in case.case_parties}
+
+    document_responses = []
+    for document in documents:
+        is_own = document.uploaded_by_party_id == party_id
+        recipient = next(
+            (row for row in document.recipients if row.party_id == party_id),
+            None,
+        )
+        release_state = (
+            "released_to_you"
+            if recipient
+            else "released"
+            if document.recipients
+            else "private"
+        )
+        released_at = (
+            recipient.released_at
+            if recipient
+            else min(
+                (row.released_at for row in document.recipients),
+                default=None,
+            )
+        )
+        document_responses.append(
+            PortalMediationDocument(
+                id=str(document.id),
+                filename=document.filename,
+                content_type=document.content_type,
+                file_size=document.file_size,
+                description=document.description,
+                is_own=is_own,
+                release_state=release_state,
+                released_at=released_at,
+                created_at=document.created_at,
+                download_url=(
+                    f"/api/portal/client/mediation/documents/{document.id}/download"
+                ),
+            )
+        )
+
+    proposal_responses = []
+    for proposal in proposals:
+        is_own = proposal.proposed_by_party_id == party_id
+        recipient = next(
+            (row for row in proposal.recipients if row.party_id == party_id),
+            None,
+        )
+        proposal_responses.append(
+            PortalMediationProposal(
+                id=str(proposal.id),
+                parent_proposal_id=(
+                    str(proposal.parent_proposal_id)
+                    if proposal.parent_proposal_id
+                    else None
+                ),
+                title=proposal.title,
+                body=proposal.body,
+                proposed_by_name=names.get(str(proposal.proposed_by_party_id)),
+                is_own=is_own,
+                status=proposal.status,
+                review_state=proposal.review_state,
+                review_notes=proposal.review_notes if is_own else None,
+                release_state=(
+                    "released_to_you"
+                    if recipient
+                    else "released"
+                    if proposal.recipients
+                    else "private"
+                ),
+                released_at=(
+                    recipient.released_at if recipient else proposal.released_at
+                ),
+                created_at=proposal.created_at,
+            )
+        )
+
+    return PortalMediationView(
+        case=PortalMediationCase(
+            id=str(case.id),
+            case_name=case.case_name or case.title,
+            party_a=case.party_a,
+            party_b=case.party_b,
+            dispute_type=case.dispute_type,
+            stage=case.mediation_stage,
+            status=case.status,
+            mediator=case.mediator,
+            scheduled_session=case.scheduled_session,
+            confidentiality_signed=case.confidentiality_signed,
+        ),
+        party_id=str(party_id),
+        party_role=party.role,
+        own_assets=[
+            _portal_mediation_asset(asset)
+            for asset in assets
+            if asset.submitted_by_party_id == party_id
+        ],
+        shared_assets=[
+            _portal_mediation_asset(asset)
+            for asset in assets
+            if asset.submitted_by_party_id != party_id
+            and asset.status in mediation_service.SHARED_ASSET_STATUSES
+        ],
+        documents=document_responses,
+        proposals=proposal_responses,
+    )
+
+
+@router.get("/mediation/documents/{document_id}/download")
+async def portal_download_mediation_document(
+    document_id: str,
+    resolved: tuple[ClientPortalContext, Matter] = Depends(portal_matter_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    ctx, _matter = resolved
+    case, party = await _native_mediation_case(db, ctx)
+    result = await db.execute(
+        select(MediationDocument)
+        .options(selectinload(MediationDocument.recipients))
+        .where(
+            MediationDocument.id == document_id,
+            MediationDocument.case_id == case.id,
+            MediationDocument.tenant_id == uuid.UUID(str(ctx.tenant_id)),
+            or_(
+                MediationDocument.uploaded_by_party_id == party.id,
+                MediationDocument.recipients.any(
+                    MediationDocumentRecipient.party_id == party.id
+                ),
+            ),
+        )
+    )
+    document = result.scalar_one_or_none()
+    if document is None:
+        raise HTTPException(status_code=404, detail="File not found")
+    response = await mediation_service.case_document_download_response(document)
+
+    recipient = next(
+        (row for row in document.recipients if row.party_id == party.id),
+        None,
+    )
+    if recipient and recipient.first_downloaded_at is None:
+        recipient.first_downloaded_at = datetime.now(timezone.utc)
+        await db.commit()
+    return response
 
 
 # ── Messages (CommunicationLog channel='portal') ────────────────────────────

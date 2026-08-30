@@ -219,6 +219,132 @@ async def test_full_approval_workflow(client, test_tenant):
     assert any("sent" in t.lower() for t in titles)
 
 
+async def test_approved_and_sent_assets_are_immutable(client, test_tenant):
+    case = await _make_case(client)
+    case_id = case["id"]
+    client_party = await _add_party(client, case_id, "our_client", "Jane Doe")
+    party_headers = await _portal_headers(
+        client,
+        tenant_id=test_tenant.id,
+        case_id=case_id,
+        party_id=client_party["id"],
+        party_role="our_client",
+    )
+    created = await client.post(
+        "/api/portal/mediation/assets",
+        json={"description": "Retirement account", "value": "100000"},
+        headers=party_headers,
+    )
+    assert created.status_code == 201
+    asset_id = created.json()["id"]
+    submitted = await client.post(
+        f"/api/portal/mediation/assets/{asset_id}/submit", headers=party_headers
+    )
+    assert submitted.status_code == 200
+    approved = await client.post(
+        f"/api/plugins/mediation/cases/{case_id}/assets/{asset_id}/approve"
+    )
+    assert approved.status_code == 200
+    before = approved.json()
+
+    # Approval freezes the record, even before it is released externally.
+    changed = await client.patch(
+        f"/api/plugins/mediation/cases/{case_id}/assets/{asset_id}",
+        json={"description": "Tampered account", "value": "1"},
+    )
+    assert changed.status_code == 409
+    sent = await client.post(
+        f"/api/plugins/mediation/cases/{case_id}/assets/{asset_id}/send"
+    )
+    assert sent.status_code == 200
+    deleted = await client.delete(
+        f"/api/plugins/mediation/cases/{case_id}/assets/{asset_id}"
+    )
+    assert deleted.status_code == 409
+    current = (
+        await client.get(f"/api/plugins/mediation/cases/{case_id}/assets")
+    ).json()
+    record = next(item for item in current if item["id"] == asset_id)
+    assert record["description"] == before["description"]
+    assert record["value"] == before["value"]
+    assert record["status"] == "sent"
+
+
+async def test_party_documents_are_private_until_firm_release_and_then_immutable(
+    client, test_tenant
+):
+    case = await _make_case(client)
+    case_id = case["id"]
+    party_a = await _add_party(client, case_id, "our_client", "Jane Doe")
+    party_b = await _add_party(client, case_id, "opposing_party", "John Doe")
+    a_headers = await _portal_headers(
+        client,
+        tenant_id=test_tenant.id,
+        case_id=case_id,
+        party_id=party_a["id"],
+        party_role="our_client",
+    )
+    b_headers = await _portal_headers(
+        client,
+        tenant_id=test_tenant.id,
+        case_id=case_id,
+        party_id=party_b["id"],
+        party_role="opposing_party",
+    )
+    uploaded = await client.post(
+        "/api/portal/mediation/documents/upload",
+        files={"file": ("private.txt", b"private evidence", "text/plain")},
+        headers=a_headers,
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    document = uploaded.json()
+    doc_id = document["id"]
+    assert document["is_released"] is False
+    a_docs = (
+        await client.get("/api/portal/mediation/documents", headers=a_headers)
+    ).json()
+    b_docs = (
+        await client.get("/api/portal/mediation/documents", headers=b_headers)
+    ).json()
+    assert doc_id in {row["id"] for row in a_docs}
+    assert doc_id not in {row["id"] for row in b_docs}
+    assert (
+        await client.get(
+            f"/api/portal/mediation/documents/{doc_id}/download",
+            headers=b_headers,
+        )
+    ).status_code == 404
+    redundant_release = await client.post(
+        f"/api/plugins/mediation/cases/{case_id}/documents/{doc_id}/release",
+        json={"party_ids": [party_a["id"]]},
+    )
+    assert redundant_release.status_code == 400
+
+    released = await client.post(
+        f"/api/plugins/mediation/cases/{case_id}/documents/{doc_id}/release",
+        json={"party_ids": [party_b["id"]]},
+    )
+    assert released.status_code == 200, released.text
+    assert released.json()["is_released"] is True
+    b_docs = (
+        await client.get("/api/portal/mediation/documents", headers=b_headers)
+    ).json()
+    received = next(row for row in b_docs if row["id"] == doc_id)
+    assert received["uploaded_by_party_id"] is None
+    assert received["uploaded_by_user_id"] is None
+    assert received["recipient_party_ids"] == [party_b["id"]]
+    downloaded = await client.get(
+        f"/api/portal/mediation/documents/{doc_id}/download", headers=b_headers
+    )
+    assert downloaded.status_code == 200
+    assert downloaded.content == b"private evidence"
+    assert (
+        await client.delete(
+            f"/api/plugins/mediation/cases/{case_id}/documents/{doc_id}"
+        )
+    ).status_code == 409
+
+
 async def test_opposing_cannot_send_or_edit_others(client, test_tenant):
     case = await _make_case(client)
     case_id = case["id"]
@@ -343,18 +469,126 @@ async def test_proposal_counter_chain(client, test_tenant):
     assert resp.status_code == 201
     p1 = resp.json()["id"]
 
+    # A proposal is private to its author until the firm reviews and releases it.
+    resp = await client.get("/api/portal/mediation/proposals", headers=b_hdrs)
+    assert resp.status_code == 200 and resp.json() == []
+    resp = await client.post(
+        f"/api/plugins/mediation/cases/{case_id}/proposals/{p1}/release",
+        json={"party_ids": [b["id"]]},
+    )
+    assert resp.status_code == 409
+    resp = await client.post(
+        f"/api/plugins/mediation/cases/{case_id}/proposals/{p1}/review",
+        json={"decision": "approved"},
+    )
+    assert resp.status_code == 200
+    resp = await client.post(
+        f"/api/plugins/mediation/cases/{case_id}/proposals/{p1}/release",
+        json={"party_ids": [b["id"]]},
+    )
+    assert resp.status_code == 200
+    received = (
+        await client.get("/api/portal/mediation/proposals", headers=b_hdrs)
+    ).json()[0]
+    assert received["proposed_by_party_id"] is None
+    assert received["created_by_user_id"] is None
+    assert received["reviewed_by_user_id"] is None
+    assert received["released_by_user_id"] is None
+    assert received["recipient_party_ids"] == [b["id"]]
+
     resp = await client.post(
         "/api/portal/mediation/proposals",
         json={"title": "Counter", "body": "50/50", "parent_proposal_id": p1},
         headers=b_hdrs,
     )
     assert resp.status_code == 201
+    counter_id = resp.json()["id"]
 
-    # Firm sees both; the parent is now superseded.
+    # The parent is not superseded merely by drafting a counterproposal.
+    resp = await client.get(f"/api/plugins/mediation/cases/{case_id}/proposals")
+    proposals = {p["title"]: p for p in resp.json()}
+    assert proposals["Offer 1"]["status"] == "open"
+
+    # A counterproposal also requires review and release before it supersedes
+    # the parent and becomes visible to the other party.
+    resp = await client.get("/api/portal/mediation/proposals", headers=a_hdrs)
+    assert resp.status_code == 200
+    assert all(p["id"] != counter_id for p in resp.json())
+    resp = await client.post(
+        f"/api/plugins/mediation/cases/{case_id}/proposals/{counter_id}/review",
+        json={"decision": "approved"},
+    )
+    assert resp.status_code == 200
+    resp = await client.post(
+        f"/api/plugins/mediation/cases/{case_id}/proposals/{counter_id}/release",
+        json={"party_ids": [a["id"]]},
+    )
+    assert resp.status_code == 200
+
+    # Firm sees both; only release of the counter supersedes its parent.
     resp = await client.get(f"/api/plugins/mediation/cases/{case_id}/proposals")
     proposals = {p["title"]: p for p in resp.json()}
     assert proposals["Offer 1"]["status"] == "superseded"
     assert proposals["Counter"]["status"] == "open"
+
+    # Once one reviewed counter is released, neither portal users nor firm
+    # staff can branch a second counter from the superseded parent.
+    stale_portal_counter = await client.post(
+        "/api/portal/mediation/proposals",
+        json={
+            "title": "Stale portal counter",
+            "body": "55/45",
+            "parent_proposal_id": p1,
+        },
+        headers=b_hdrs,
+    )
+    assert stale_portal_counter.status_code == 409
+    stale_firm_counter = await client.post(
+        f"/api/plugins/mediation/cases/{case_id}/proposals",
+        json={
+            "title": "Stale firm counter",
+            "parent_proposal_id": p1,
+            "proposed_by_party_id": b["id"],
+        },
+    )
+    assert stale_firm_counter.status_code == 409
+    assert (
+        await client.post(
+            f"/api/plugins/mediation/cases/{case_id}/proposals/{p1}/review",
+            json={"decision": "approved"},
+        )
+    ).status_code == 409
+    assert (
+        await client.post(
+            f"/api/plugins/mediation/cases/{case_id}/proposals/{p1}/release",
+            json={"party_ids": [a["id"]]},
+        )
+    ).status_code == 409
+
+
+async def test_proposal_parent_must_belong_to_same_case(client, test_tenant):
+    first = await _make_case(client, case_name="First mediation")
+    second = await _make_case(client, case_name="Second mediation")
+    party = await _add_party(client, first["id"], "our_client", "Jane Doe")
+    other_party = await _add_party(client, second["id"], "our_client", "John Doe")
+    p1 = await client.post(
+        "/api/plugins/mediation/cases/%s/proposals" % first["id"],
+        json={"title": "First offer", "proposed_by_party_id": party["id"]},
+    )
+    assert p1.status_code == 201
+    cross_case = await client.post(
+        "/api/plugins/mediation/cases/%s/proposals" % second["id"],
+        json={
+            "title": "Invalid counter",
+            "parent_proposal_id": p1.json()["id"],
+            "proposed_by_party_id": other_party["id"],
+        },
+    )
+    assert cross_case.status_code == 404
+    proposals = (
+        await client.get(f"/api/plugins/mediation/cases/{first['id']}/proposals")
+    ).json()
+    assert proposals[0]["status"] == "open"
 
 
 # ── Tenant isolation ────────────────────────────────────────────────────────

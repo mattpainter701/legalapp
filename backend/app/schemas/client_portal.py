@@ -94,6 +94,76 @@ class PortalMatterView(BaseModel):
     last_activity_at: datetime | None = None
 
 
+class PortalMediationCase(BaseModel):
+    """Client-safe subset of a mediation case linked to the current matter."""
+
+    id: str
+    case_name: str | None = None
+    party_a: str | None = None
+    party_b: str | None = None
+    dispute_type: str | None = None
+    stage: str | None = None
+    status: str
+    mediator: str | None = None
+    scheduled_session: datetime | None = None
+    confidentiality_signed: bool = False
+
+
+class PortalMediationAsset(BaseModel):
+    id: str
+    kind: str
+    category: str | None = None
+    description: str
+    value: Decimal | None = None
+    owned_by: str | None = None
+    status: str
+    opposing_decision: str | None = None
+    dispute_reason: str | None = None
+    notes: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PortalMediationDocument(BaseModel):
+    id: str
+    filename: str
+    content_type: str | None = None
+    file_size: int | None = None
+    description: str | None = None
+    is_own: bool
+    release_state: str
+    released_at: datetime | None = None
+    created_at: datetime
+    download_url: str
+
+
+class PortalMediationProposal(BaseModel):
+    id: str
+    parent_proposal_id: str | None = None
+    title: str
+    body: str | None = None
+    proposed_by_name: str | None = None
+    is_own: bool
+    status: str
+    review_state: str
+    review_notes: str | None = None
+    release_state: str
+    released_at: datetime | None = None
+    created_at: datetime
+
+
+class PortalMediationView(BaseModel):
+    """Mediation data scoped to the native matter-portal identity."""
+
+    case: PortalMediationCase
+    party_id: str
+    party_role: str
+    own_assets: list[PortalMediationAsset] = Field(default_factory=list)
+    shared_assets: list[PortalMediationAsset] = Field(default_factory=list)
+    documents: list[PortalMediationDocument] = Field(default_factory=list)
+    proposals: list[PortalMediationProposal] = Field(default_factory=list)
+
+
 # ── Messages ────────────────────────────────────────────────────────────────
 
 

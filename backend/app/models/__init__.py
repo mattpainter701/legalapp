@@ -71,7 +71,9 @@ from app.models.mediation import (
     MediationInvite,
     MediationAsset,
     MediationDocument,
+    MediationDocumentRecipient,
     MediationProposal,
+    MediationProposalRecipient,
 )
 from app.models.smb_agent import SmbAgent
 from app.models.smb_credential import SmbCredential
@@ -178,7 +180,9 @@ __all__ = [
     "MediationInvite",
     "MediationAsset",
     "MediationDocument",
+    "MediationDocumentRecipient",
     "MediationProposal",
+    "MediationProposalRecipient",
     "DomesticCase",
     "DomesticParty",
     "DomesticChild",

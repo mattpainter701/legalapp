@@ -32,6 +32,27 @@ function StatusBadge({ status }) {
   )
 }
 
+function ReleaseBadge({ isReleased, isOwn, reviewState }) {
+  const review = String(reviewState || '').toLowerCase()
+  const label = !isOwn
+    ? 'Released to you'
+    : isReleased
+      ? 'Released by attorney'
+      : review === 'rejected'
+        ? 'Review declined'
+        : review === 'changes_requested'
+          ? 'Changes requested'
+          : review === 'approved'
+            ? 'Approved · awaiting release'
+            : 'Private · attorney review'
+  const color = !isOwn || isReleased
+    ? 'bg-brand-green/10 text-brand-green border-brand-green/20'
+    : review === 'rejected'
+      ? 'bg-brand-rose/10 text-brand-rose border-brand-rose/20'
+      : 'bg-brand-amber/10 text-brand-amber border-brand-amber/20'
+  return <Pill color={color}>{label}</Pill>
+}
+
 const ASSET_KINDS = ['asset', 'debt']
 const ASSET_CATEGORIES = ['real_property', 'bank_account', 'retirement', 'investment', 'vehicle', 'business', 'personal_property', 'credit_card', 'mortgage', 'loan', 'other']
 const OWNERSHIP = ['party_a', 'party_b', 'joint']
@@ -52,7 +73,7 @@ export default function PortalCasePage() {
   const [actionError, setActionError] = useState(null)
 
   const [showProposalForm, setShowProposalForm] = useState(false)
-  const [proposalForm, setProposalForm] = useState({ title: '', body: '' })
+  const [proposalForm, setProposalForm] = useState({ title: '', body: '', parent_proposal_id: '' })
   const [savingProposal, setSavingProposal] = useState(false)
 
   const [uploading, setUploading] = useState(false)
@@ -133,7 +154,7 @@ export default function PortalCasePage() {
     setSavingProposal(true)
     try {
       await createPortalProposal(proposalForm, caseId)
-      setProposalForm({ title: '', body: '' }); setShowProposalForm(false); loadCase()
+      setProposalForm({ title: '', body: '', parent_proposal_id: '' }); setShowProposalForm(false); loadCase()
     } catch (err) { setActionError(err?.response?.data?.detail || 'Failed.') } finally { setSavingProposal(false) }
   }
 
@@ -313,6 +334,7 @@ export default function PortalCasePage() {
             <div className="flex justify-between items-center">
               <h2 className="font-serif font-bold text-xl text-brand-ink">Documents</h2>
               <div className="flex items-center gap-3">
+                <span className="hidden lg:inline text-[12px] text-brand-muted font-sans">Uploads stay private until released by your attorney.</span>
                 <input type="text" value={uploadDesc} onChange={(e) => setUploadDesc(e.target.value)} placeholder="Description (optional)" className="border border-brand-line rounded-lg px-3 py-2 text-[13px] font-sans w-48" />
                 <input type="file" ref={fileRef} className="hidden" />
                 <button onClick={() => fileRef.current?.click()} className="flex items-center gap-1.5 px-3 py-2 bg-brand-surface border border-brand-line text-brand-ink text-sm font-sans font-medium rounded-lg hover:border-brand-ink"><Upload size={14} /> Choose File</button>
@@ -324,7 +346,7 @@ export default function PortalCasePage() {
             ) : (
               <div className="bg-brand-surface border border-brand-line rounded-2xl overflow-x-auto shadow-sm">
                 <table className="min-w-full text-left">
-                  <thead><tr className="bg-brand-bg-soft/50 border-b border-brand-line">{['Filename','Description','Type','Size','Uploaded',''].map((h) => <th key={h} className="px-5 py-3 text-[11px] font-bold text-brand-muted uppercase tracking-widest font-sans">{h}</th>)}</tr></thead>
+                  <thead><tr className="bg-brand-bg-soft/50 border-b border-brand-line">{['Filename','Description','Type','Size','Uploaded','Release',''].map((h) => <th key={h} className="px-5 py-3 text-[11px] font-bold text-brand-muted uppercase tracking-widest font-sans">{h}</th>)}</tr></thead>
                   <tbody className="divide-y divide-brand-line">
                     {documents.map((d) => (
                       <tr key={d.id} className="hover:bg-brand-bg-soft">
@@ -333,6 +355,7 @@ export default function PortalCasePage() {
                         <td className="px-5 py-3 text-[13px] text-brand-ink-2">{d.content_type || '--'}</td>
                         <td className="px-5 py-3 text-[13px] text-brand-ink-2">{d.file_size ? `${(d.file_size / 1024).toFixed(1)} KB` : '--'}</td>
                         <td className="px-5 py-3 text-[13px] text-brand-ink-2">{d.created_at ? (() => { try { return format(parseISO(d.created_at), 'MMM d, yyyy') } catch { return d.created_at } })() : '--'}</td>
+                        <td className="px-5 py-3"><ReleaseBadge isReleased={d.is_released} isOwn={d.uploaded_by_party_id === data.party_id} /></td>
                         <td className="px-5 py-3"><a href={downloadPortalDocumentUrl(d.id, caseId)} className="flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-sans font-semibold uppercase rounded-md border hover:bg-brand-bg-soft text-brand-ink"><Download size={13} /> DL</a></td>
                       </tr>
                     ))}
@@ -356,10 +379,11 @@ export default function PortalCasePage() {
                 <div className="space-y-4 mb-5">
                   <div><label htmlFor="portalcasepage-title" className={labelCls}>Title *</label><input id="portalcasepage-title" type="text" value={proposalForm.title} onChange={(e) => setProposalForm((p) => ({ ...p, title: e.target.value }))} className={inputCls} placeholder="e.g., Initial Settlement Offer" /></div>
                   <div><label htmlFor="portalcasepage-details" className={labelCls}>Details</label><textarea id="portalcasepage-details" value={proposalForm.body} onChange={(e) => setProposalForm((p) => ({ ...p, body: e.target.value }))} rows={4} className={`${inputCls} resize-none`} placeholder="Describe your proposal terms..." /></div>
+                  <div><label htmlFor="portalcasepage-parent" className={labelCls}>Responding to (optional)</label><select id="portalcasepage-parent" value={proposalForm.parent_proposal_id} onChange={(e) => setProposalForm((p) => ({ ...p, parent_proposal_id: e.target.value }))} className={inputCls}><option value="">New proposal</option>{proposals.filter((p) => p.status === 'open' && p.recipient_party_ids?.includes(data.party_id)).map((p) => <option key={p.id} value={p.id}>{p.title}{p.proposed_by_name ? ` — ${p.proposed_by_name}` : ''}</option>)}</select><p className="text-[11px] text-brand-muted font-sans mt-1.5">Only active proposals released to you can be answered with a counteroffer.</p></div>
                 </div>
                 <div className="flex gap-3 justify-end">
-                  <button onClick={() => { setShowProposalForm(false); setProposalForm({ title: '', body: '' }) }} className="px-5 py-2.5 text-brand-ink-2 text-sm font-sans font-medium hover:text-brand-ink">Cancel</button>
-                  <button onClick={handleCreateProposal} disabled={savingProposal || !proposalForm.title.trim()} className="px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-medium rounded-xl hover:bg-brand-ink-2 disabled:bg-brand-line disabled:text-brand-muted shadow-sm">{savingProposal ? 'Sending...' : 'Send Proposal'}</button>
+                  <button onClick={() => { setShowProposalForm(false); setProposalForm({ title: '', body: '', parent_proposal_id: '' }) }} className="px-5 py-2.5 text-brand-ink-2 text-sm font-sans font-medium hover:text-brand-ink">Cancel</button>
+                  <button onClick={handleCreateProposal} disabled={savingProposal || !proposalForm.title.trim()} className="px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-medium rounded-xl hover:bg-brand-ink-2 disabled:bg-brand-line disabled:text-brand-muted shadow-sm">{savingProposal ? 'Sending...' : proposalForm.parent_proposal_id ? 'Send Counteroffer' : 'Send Proposal'}</button>
                 </div>
               </div>
             )}
@@ -375,6 +399,7 @@ export default function PortalCasePage() {
                         <div className="flex items-center gap-3 mt-1">
                           {p.proposed_by_name && <span className="text-[12px] text-brand-muted font-sans uppercase">{p.proposed_by_name}</span>}
                           <Pill color={p.status === 'open' ? 'bg-brand-amber/10 text-brand-amber border-brand-amber/20' : p.status === 'accepted' ? 'bg-brand-green/10 text-brand-green border-brand-green/20' : 'bg-brand-rose/10 text-brand-rose border-brand-rose/20'}>{p.status}</Pill>
+                          <ReleaseBadge isReleased={p.is_released} isOwn={p.proposed_by_party_id === data.party_id} reviewState={p.review_state} />
                         </div>
                       </div>
                       <span className="text-[12px] text-brand-muted">{p.created_at ? (() => { try { return format(parseISO(p.created_at), 'MMM d, yyyy') } catch { return p.created_at } })() : ''}</span>

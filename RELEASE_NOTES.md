@@ -5,6 +5,17 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.30.7 — Private mediation review and party-specific sharing
+
+Released August 30, 2026.
+
+Licensed mediation work now appears inside the client's existing matter portal while documents and proposals stay private until attorney review and deliberate release.
+
+- **Keep each submission private.** A party's document or proposal is visible to that party and the firm until the legal team explicitly releases it to selected recipients.
+- **Review before delivery.** Attorneys can approve, return, or reject proposals before choosing who receives an approved version; released content is preserved as immutable evidence.
+- **Negotiate with traceable counters.** Counteroffers can reference only an active proposal released to that party, and the prior offer is superseded only when the reviewed counter is actually released.
+- **Use mediation in My Matters.** Eligible clients see a read-only Mediation tab in their native matter portal, with scoped assets, proposals, and integrity-checked document downloads when the add-on is active.
+
 ## 2026.08.30.6 — Clearer legal research gaps
 
 Released August 30, 2026.

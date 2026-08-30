@@ -21,6 +21,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
@@ -232,10 +233,62 @@ class MediationDocument(Base):
     content_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     file_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
     storage_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    content_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = _created_at()
 
     case: Mapped["object"] = relationship("MediationCase", back_populates="documents")
+    recipients: Mapped[list["MediationDocumentRecipient"]] = relationship(
+        "MediationDocumentRecipient",
+        back_populates="document",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        lazy="selectin",
+    )
+
+
+class MediationDocumentRecipient(Base):
+    """A deliberate release of one immutable document to one case party."""
+
+    __tablename__ = "mediation_document_recipients"
+    __table_args__ = (
+        UniqueConstraint(
+            "document_id",
+            "party_id",
+            name="uq_mediation_document_recipient",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("mediation_documents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    party_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("mediation_parties.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    released_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    released_at: Mapped[datetime] = _created_at()
+    first_viewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    first_downloaded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    document: Mapped["MediationDocument"] = relationship(
+        "MediationDocument", back_populates="recipients"
+    )
 
 
 class MediationProposal(Base):
@@ -265,7 +318,84 @@ class MediationProposal(Base):
     status: Mapped[str] = mapped_column(
         String(30), default="open", server_default="open"
     )  # open | accepted | rejected | superseded
+    review_state: Mapped[str] = mapped_column(
+        String(30), default="pending", server_default="pending"
+    )  # pending | approved | changes_requested | rejected
+    review_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    released_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    released_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    content_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = _created_at()
     updated_at: Mapped[datetime] = _updated_at()
 
     case: Mapped["object"] = relationship("MediationCase", back_populates="proposals")
+    recipients: Mapped[list["MediationProposalRecipient"]] = relationship(
+        "MediationProposalRecipient",
+        back_populates="proposal",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        lazy="selectin",
+    )
+
+
+class MediationProposalRecipient(Base):
+    """A recipient-specific release of an attorney-approved proposal."""
+
+    __tablename__ = "mediation_proposal_recipients"
+    __table_args__ = (
+        UniqueConstraint(
+            "proposal_id",
+            "party_id",
+            name="uq_mediation_proposal_recipient",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    proposal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("mediation_proposals.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    party_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("mediation_parties.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    released_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    released_at: Mapped[datetime] = _created_at()
+    first_viewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    acknowledged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    proposal: Mapped["MediationProposal"] = relationship(
+        "MediationProposal", back_populates="recipients"
+    )

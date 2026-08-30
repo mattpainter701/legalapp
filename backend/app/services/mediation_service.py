@@ -6,11 +6,13 @@ internal (``/api/plugins/mediation``) and external portal
 """
 
 import hashlib
+import hmac
 import os
 import uuid
+from urllib.parse import quote
 
 import aiofiles
-from fastapi import HTTPException, UploadFile
+from fastapi import HTTPException, Response, UploadFile
 
 from app.config import get_settings
 from app.models.mediation import (
@@ -133,6 +135,7 @@ def asset_to_response(a: MediationAsset) -> AssetResponse:
 
 
 def document_to_response(d: MediationDocument) -> DocumentResponse:
+    recipients = list(d.recipients or [])
     return DocumentResponse(
         id=str(d.id),
         case_id=str(d.case_id),
@@ -140,6 +143,7 @@ def document_to_response(d: MediationDocument) -> DocumentResponse:
         filename=d.filename,
         content_type=d.content_type,
         file_size=d.file_size,
+        content_sha256=d.content_sha256,
         description=d.description,
         uploaded_by_party_id=(
             str(d.uploaded_by_party_id) if d.uploaded_by_party_id else None
@@ -147,6 +151,9 @@ def document_to_response(d: MediationDocument) -> DocumentResponse:
         uploaded_by_user_id=(
             str(d.uploaded_by_user_id) if d.uploaded_by_user_id else None
         ),
+        is_released=bool(recipients),
+        recipient_party_ids=[str(r.party_id) for r in recipients],
+        released_at=(min(r.released_at for r in recipients) if recipients else None),
         created_at=d.created_at,
     )
 
@@ -154,6 +161,7 @@ def document_to_response(d: MediationDocument) -> DocumentResponse:
 def proposal_to_response(
     p: MediationProposal, proposed_by_name: str | None = None
 ) -> ProposalResponse:
+    recipients = list(p.recipients or [])
     return ProposalResponse(
         id=str(p.id),
         case_id=str(p.case_id),
@@ -167,15 +175,60 @@ def proposal_to_response(
         title=p.title,
         body=p.body,
         status=p.status,
+        review_state=p.review_state,
+        review_notes=p.review_notes,
+        reviewed_by_user_id=(
+            str(p.reviewed_by_user_id) if p.reviewed_by_user_id else None
+        ),
+        reviewed_at=p.reviewed_at,
+        released_by_user_id=(
+            str(p.released_by_user_id) if p.released_by_user_id else None
+        ),
+        released_at=p.released_at,
+        created_by_user_id=(
+            str(p.created_by_user_id) if p.created_by_user_id else None
+        ),
+        content_sha256=p.content_sha256,
+        is_released=bool(recipients),
+        recipient_party_ids=[str(r.party_id) for r in recipients],
         created_at=p.created_at,
     )
 
 
+def proposal_content_sha256(
+    *, title: str, body: str | None, parent_proposal_id: uuid.UUID | None
+) -> str:
+    """Bind review/release evidence to the exact proposal text and lineage."""
+    payload = "\n".join(
+        (
+            title.strip(),
+            (body or "").strip(),
+            str(parent_proposal_id or ""),
+        )
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def assert_proposal_integrity(proposal: MediationProposal) -> None:
+    """Fail closed if reviewed proposal content no longer matches its digest."""
+    if not proposal.content_sha256:
+        return
+    digest = proposal_content_sha256(
+        title=proposal.title,
+        body=proposal.body,
+        parent_proposal_id=proposal.parent_proposal_id,
+    )
+    if not hmac.compare_digest(digest, proposal.content_sha256):
+        raise HTTPException(
+            status_code=409,
+            detail="The mediation proposal failed its integrity check",
+        )
+
+
 async def save_case_upload(
     file: UploadFile, tenant_id: uuid.UUID, case_id: str, doc_id: uuid.UUID
-) -> tuple[str, int]:
-    """Persist an uploaded file to disk; returns (storage_path, size). Mirrors
-    the matter-documents storage convention."""
+) -> tuple[str, int, str]:
+    """Persist an upload and return its path, size, and immutable digest."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="Filename is required")
 
@@ -201,4 +254,39 @@ async def save_case_upload(
     async with aiofiles.open(storage_path, "wb") as out_file:
         await out_file.write(file_bytes)
 
-    return storage_path, len(file_bytes)
+    return storage_path, len(file_bytes), hashlib.sha256(file_bytes).hexdigest()
+
+
+async def case_document_download_response(
+    document: MediationDocument,
+) -> Response:
+    """Read once, verify the recorded digest, and return an attachment."""
+    if not document.storage_path or not os.path.exists(document.storage_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    try:
+        async with aiofiles.open(document.storage_path, "rb") as source:
+            content = await source.read()
+    except OSError as exc:
+        raise HTTPException(status_code=404, detail="File not found") from exc
+
+    digest = hashlib.sha256(content).hexdigest()
+    if document.content_sha256 and not hmac.compare_digest(
+        digest, document.content_sha256
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="The stored mediation document failed its integrity check",
+        )
+
+    safe_name = (document.filename or "document").replace("\r", "").replace("\n", "")
+    fallback_name = safe_name.encode("ascii", "ignore").decode() or "document"
+    fallback_name = fallback_name.replace('"', "'").replace("\\", "_")
+    disposition = (
+        f'attachment; filename="{fallback_name}"; '
+        f"filename*=UTF-8''{quote(safe_name, safe='')}"
+    )
+    return Response(
+        content=content,
+        media_type=document.content_type or "application/octet-stream",
+        headers={"Content-Disposition": disposition},
+    )

@@ -3,6 +3,7 @@ import {
   getClientPortalSession,
   logoutClientPortal,
   getClientPortalMatter,
+  getClientPortalMediation,
   listClientPortalMessages,
   sendClientPortalMessage,
   markClientPortalMessagesRead,
@@ -19,7 +20,7 @@ import {
 import {
   ShieldCheck, MessageSquare, FileText, Receipt, Send,
   Upload, Download, AlertTriangle, Scale, PenLine, CheckCircle2, LockKeyhole,
-  LogOut, CalendarClock, CreditCard, RefreshCw, Paperclip, Clock,
+  LogOut, CalendarClock, CreditCard, RefreshCw, Paperclip, Clock, Handshake,
 } from 'lucide-react'
 
 const TABS = [
@@ -89,6 +90,7 @@ function errorMessage(err, fallback) {
 
 export default function ClientPortalMatterPage() {
   const [matter, setMatter] = useState(null)
+  const [mediation, setMediation] = useState(null)
   const [session, setSession] = useState(null)
   const [tab, setTab] = useState('overview')
   const [loadError, setLoadError] = useState('')
@@ -111,6 +113,14 @@ export default function ClientPortalMatterPage() {
       getClientPortalMatter()
         .then((data) => {
           setMatter(data)
+          setMediation(null)
+          // Mediation is an optional add-on. A missing entitlement, a stale
+          // deployment, or a transient failure must never hide the core matter.
+          getClientPortalMediation()
+            .then((data) => setMediation(normalizeClientPortalMediation(data)))
+            .catch((err) => {
+              if (!handleSessionExpiry(err)) setMediation(null)
+            })
           return data
         })
         .catch((err) => {
@@ -125,6 +135,10 @@ export default function ClientPortalMatterPage() {
     refreshMatter()
     getClientPortalSession().then(setSession).catch(() => {})
   }, [refreshMatter])
+
+  useEffect(() => {
+    if (!mediation && tab === 'mediation') setTab('overview')
+  }, [mediation, tab])
 
   const signOut = async () => {
     setSigningOut(true)
@@ -211,7 +225,7 @@ export default function ClientPortalMatterPage() {
       <div className="max-w-5xl mx-auto px-4">
         <nav role="tablist" aria-label="Client portal sections"
           className="flex gap-1 border-b border-brand-line overflow-x-auto">
-          {TABS.map(({ key, label, icon: Icon }) => (
+          {[...TABS, ...(mediation ? [{ key: 'mediation', label: 'Mediation', icon: Handshake }] : [])].map(({ key, label, icon: Icon }) => (
             <button
               key={key}
               role="tab"
@@ -249,6 +263,7 @@ export default function ClientPortalMatterPage() {
           {tab === 'documents' && <DocumentsTab {...tabProps} />}
           {tab === 'signatures' && <SignaturesTab {...tabProps} />}
           {tab === 'invoices' && <InvoicesTab {...tabProps} />}
+          {tab === 'mediation' && mediation && <ClientPortalMediationTab mediation={mediation} />}
         </div>
       </div>
     </div>
@@ -313,6 +328,106 @@ function Spinner({ label }) {
     <div className="flex items-center gap-3 text-sm text-brand-ink-2">
       <div className="w-4 h-4 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" />
       {label}
+    </div>
+  )
+}
+
+function normalizeClientPortalMediation(data) {
+  if (!data || typeof data !== 'object') return null
+  if (!data.mediation && !data.case && !data.id && !data.case_id) return null
+  const value = data.mediation || data.case || data
+  if (!value || typeof value !== 'object') return null
+  // The endpoint is responsible for authorization. Keep the rendering
+  // contract deliberately narrow so a future response cannot accidentally
+  // render a private opposing-party collection.
+  return {
+    ...value,
+    own_assets: data.own_assets || value.own_assets || [],
+    shared_assets: data.shared_assets || value.shared_assets || [],
+    documents: data.documents || value.documents || [],
+    proposals: data.proposals || value.proposals || [],
+  }
+}
+
+function mediationLabel(value) {
+  return String(value || '—').replace(/_/g, ' ')
+}
+
+function mediationReleaseLabel(item) {
+  if (item.release_state === 'released_to_you') return 'Released to you'
+  if (item.release_state === 'released') return 'Released by your legal team'
+  return item.is_own ? 'Private · attorney review' : 'Not released'
+}
+
+function ClientPortalMediationTab({ mediation }) {
+  const ownAssets = Array.isArray(mediation.own_assets) ? mediation.own_assets : []
+  const sharedAssets = Array.isArray(mediation.shared_assets) ? mediation.shared_assets : []
+  const documents = Array.isArray(mediation.documents) ? mediation.documents : []
+  const proposals = Array.isArray(mediation.proposals) ? mediation.proposals : []
+
+  return (
+    <div className="space-y-4" data-testid="client-portal-mediation">
+      <Card>
+        <CardHeading>Mediation workflow</CardHeading>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm font-sans">
+          <Field label="Case" value={mediation.case_name || mediation.title} />
+          <Field label="Status" value={mediation.status} />
+          <Field label="Stage" value={mediation.mediation_stage || mediation.stage} />
+        </div>
+        {mediation.scheduled_session && (
+          <p className="text-xs text-brand-ink-2 mt-4">Next session: {fmtDateTime(mediation.scheduled_session)}</p>
+        )}
+      </Card>
+
+      <Card>
+        <CardHeading>Assets</CardHeading>
+        <div className="space-y-3 text-sm">
+          {[...ownAssets.map((item) => ({ ...item, _label: 'Your submission' })), ...sharedAssets.map((item) => ({ ...item, _label: 'Shared with you' }))].map((item, index) => (
+            <div key={item.id || `${item.description}-${index}`} className="border-b border-brand-line last:border-0 pb-3 last:pb-0">
+              <div className="flex items-start justify-between gap-3">
+                <span className="text-brand-ink font-medium">{item.description || item.name || 'Asset'}</span>
+                <span className="text-xs text-brand-ink-2 capitalize">{item._label}</span>
+              </div>
+              <p className="text-xs text-brand-ink-2 mt-1">{item.status ? mediationLabel(item.status) : 'No status recorded'}{item.value != null ? ` · ${item.value}` : ''}</p>
+            </div>
+          ))}
+          {ownAssets.length + sharedAssets.length === 0 && <p className="text-sm text-brand-ink-2">No assets are available yet.</p>}
+        </div>
+      </Card>
+
+      <Card>
+        <CardHeading>Mediation documents</CardHeading>
+        <div className="space-y-3 text-sm">
+          {documents.map((document, index) => {
+            const href = typeof document.download_url === 'string' && document.download_url.startsWith('/') && !document.download_url.startsWith('//')
+              ? document.download_url
+              : null
+            return (
+              <div key={document.id || `${document.filename}-${index}`} className="flex items-center justify-between gap-3 border-b border-brand-line last:border-0 pb-3 last:pb-0">
+                <div className="min-w-0">
+                  <p className="text-brand-ink font-medium truncate">{document.filename || document.name || 'Document'}</p>
+                  <p className="text-xs text-brand-ink-2">{fmtDate(document.created_at)} · {mediationReleaseLabel(document)}</p>
+                </div>
+                {href && <a href={href} className="inline-flex items-center gap-1.5 text-brand-accent hover:underline shrink-0"><Download size={14} /> Download</a>}
+              </div>
+            )
+          })}
+          {documents.length === 0 && <p className="text-sm text-brand-ink-2">No documents are available yet.</p>}
+        </div>
+      </Card>
+
+      <Card>
+        <CardHeading>Proposal review</CardHeading>
+        <div className="space-y-3 text-sm">
+          {proposals.map((proposal, index) => (
+            <div key={proposal.id || `${proposal.title}-${index}`} className="border-b border-brand-line last:border-0 pb-3 last:pb-0">
+              <p className="text-brand-ink font-medium">{proposal.title || 'Settlement proposal'}</p>
+              <p className="text-xs text-brand-ink-2 mt-1">Review: <span className="capitalize">{mediationLabel(proposal.review_state || proposal.status)}</span> · {mediationReleaseLabel(proposal)}</p>
+            </div>
+          ))}
+          {proposals.length === 0 && <p className="text-sm text-brand-ink-2">No proposals are available yet.</p>}
+        </div>
+      </Card>
     </div>
   )
 }

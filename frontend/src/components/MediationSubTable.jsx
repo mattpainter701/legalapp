@@ -16,6 +16,7 @@ import { useConfirm } from './dialog/ConfirmProvider'
  *   createFn   — (payload) => Promise<row> | null to hide add button
  *   updateFn   — (rowId, payload) => Promise<row> | null to hide edit
  *   deleteFn   — (rowId) => Promise<void> | null to hide delete
+ *   updateCondition/deleteCondition — optional row predicates for immutable states
  *   actions    — optional [{ label, icon, onClick, condition? }]
  *   onChanged  — optional callback after any mutation
  *   headerSlot — optional node rendered above the table
@@ -52,6 +53,7 @@ export function fmtMoney(v) {
 export default function MediationSubTable({
   caseId, title, columns, fields, emptyText,
   listFn, createFn, updateFn, deleteFn,
+  updateCondition, deleteCondition,
   actions, onChanged, headerSlot, uploadFn,
 }) {
   const formId = React.useId()
@@ -245,8 +247,8 @@ export default function MediationSubTable({
                           const Icon = a.icon
                           return <button key={i} onClick={() => a.onClick(row)} className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-sans font-semibold uppercase tracking-wide rounded-md border transition-colors hover:bg-brand-bg-soft" title={a.label}><Icon size={13} /> {a.label}</button>
                         })}
-                        {updateFn && <button onClick={() => startEdit(row)} className="p-1.5 text-brand-ink-2 hover:text-brand-ink transition-colors rounded" title="Edit"><Pencil size={14} /></button>}
-                        {deleteFn && <button onClick={() => handleDelete(row.id)} className="p-1.5 text-brand-ink-2 hover:text-brand-rose transition-colors rounded" title="Delete"><Trash2 size={14} /></button>}
+                        {updateFn && (!updateCondition || updateCondition(row)) && <button onClick={() => startEdit(row)} className="p-1.5 text-brand-ink-2 hover:text-brand-ink transition-colors rounded" title="Edit"><Pencil size={14} /></button>}
+                        {deleteFn && (!deleteCondition || deleteCondition(row)) && <button onClick={() => handleDelete(row.id)} className="p-1.5 text-brand-ink-2 hover:text-brand-rose transition-colors rounded" title="Delete"><Trash2 size={14} /></button>}
                       </div>
                     </td>
                   )}
