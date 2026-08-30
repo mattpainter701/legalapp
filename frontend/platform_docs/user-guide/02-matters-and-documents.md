@@ -71,3 +71,9 @@ Matter settings may include memory, add-on configuration, sharing, and matter de
 When work is complete, update the task or matter status and leave enough context for the next person. Do not delete or overwrite history merely to make a record look tidy. If information is wrong, correct it in the supported field and preserve the audit trail where one exists.
 
 > If a document contains unusually sensitive information, follow your firm's handling policy before uploading or sharing it. LawHand permissions complement that policy; they do not replace professional judgment.
+
+## Check a litigation brief
+
+From a matter, open [Brief Check](/matters/brief-check) to upload a DOCX or PDF brief and, optionally, an opposing brief. The review records citation normalization, accessible-source matches, pin and quotation evidence, bounded supporting or contrary-authority candidates, and unresolved or ambiguous items. Select each item to record an attorney decision; the workflow does not decide that an authority is good law from an absence of negative evidence.
+
+Brief Check is bounded to 15 MB and 300 PDF pages / 1.5 million extracted characters. It preserves unknown and unavailable states when a source, provider, or currentness signal cannot be verified. Export the linked review report or table-of-authorities draft only after reviewing the original authorities and pin cites.

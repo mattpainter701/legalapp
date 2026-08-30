@@ -106,6 +106,7 @@ from app.routers.marketing import router as marketing_router
 from app.routers.matter_document_revisions import (
     router as matter_document_revisions_router,
 )
+from app.routers.brief_checks import router as brief_checks_router
 from app.routers.demo import router as demo_router
 
 settings = get_settings()
@@ -468,6 +469,7 @@ app.include_router(roles_router)
 app.include_router(office_assistant_router)
 app.include_router(marketing_router)
 app.include_router(matter_document_revisions_router)
+app.include_router(brief_checks_router)
 
 
 # ─────────────────────────────────────────────────────

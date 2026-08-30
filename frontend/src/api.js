@@ -2084,6 +2084,17 @@ export const renderTemplateFile = (id, data) =>
     throw error
   })
 
+export const createBriefCheck = (matterId, { file, selectedDocumentId, opposingFile }) => {
+  const form = new FormData()
+  if (file) form.append('file', file)
+  if (selectedDocumentId) form.append('selected_document_id', selectedDocumentId)
+  if (opposingFile) form.append('opposing_file', opposingFile)
+  return api.post(`/matters/${matterId}/brief-checks`, form, { headers: { 'Content-Type': 'multipart/form-data' } }).then((response) => response.data)
+}
+export const listBriefChecks = (matterId) => api.get(`/matters/${matterId}/brief-checks`).then((response) => response.data)
+export const decideBriefCheckItem = (matterId, checkId, data) => api.post(`/matters/${matterId}/brief-checks/${checkId}/decisions`, data).then((response) => response.data)
+export const exportBriefCheck = (matterId, checkId, kind) => api.get(`/matters/${matterId}/brief-checks/${checkId}/export/${kind}`, { responseType: 'blob' }).then((response) => response.data)
+
 export const discoverTemplateVariables = (id, data = {}) =>
   api.post(`/templates/${id}/smart-fill-preview`, data).then(r => r.data)
 

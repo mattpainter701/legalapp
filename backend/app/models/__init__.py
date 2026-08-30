@@ -141,6 +141,7 @@ from app.models.operating_trust import (
     OffboardingCase,
     OffboardingApproval,
 )
+from app.models.brief_check import BriefCheck, BriefCheckAudit
 
 __all__ = [
     "Tenant",
@@ -277,4 +278,6 @@ __all__ = [
     "PublicIncidentUpdate",
     "OffboardingCase",
     "OffboardingApproval",
+    "BriefCheck",
+    "BriefCheckAudit",
 ]

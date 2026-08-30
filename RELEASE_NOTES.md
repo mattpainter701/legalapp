@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.30.1 — Review-first Brief Check
+
+Released August 30, 2026.
+
+Firms can review brief citations, quotations, pin cites, opposing-brief differences, and bounded authority candidates with linked evidence before exporting work product.
+
+- **Inspect evidence before relying on a brief.** DOCX/PDF checks preserve source identity, location, confidence, ambiguity, retrieval evidence, and explicit unknown or unavailable states.
+- **Keep attorney decisions auditable.** Reviewers can accept, reject, or follow up on findings; decisions are tenant-scoped and recorded in an immutable audit trail.
+- **Export linked review work product.** Download a review report and table-of-authorities draft while bounded recall and currentness limitations remain visible.
+
 ## 2026.08.29.1 — Operating trust workflows and evidence
 
 Released August 29, 2026.

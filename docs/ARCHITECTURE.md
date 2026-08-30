@@ -255,6 +255,11 @@ See [PDF template operations](PDF_TEMPLATE_OPERATIONS.md).
 
 ## 7. Retrieval and cloud data
 
+Brief Check reuses the existing document extraction, source ledger, and research
+MCP boundaries. It stores tenant/matter-scoped review evidence and does not send
+customer brief content to an external provider unless a separately approved
+source integration supplies accessible authority text.
+
 Clarity has three distinct context paths:
 
 1. **Session attachments:** stored for download, extracted on demand, and

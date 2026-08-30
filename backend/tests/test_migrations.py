@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["143_operating_trust"]
+    assert heads == ["144_brief_checks"]
 
 
 def test_background_value_cutover_never_backfills_existing_spend_as_free():
