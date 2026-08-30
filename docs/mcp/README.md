@@ -206,10 +206,12 @@ The page must state which label applies; do not infer availability from a tool n
 Authority control mutations are exposed by the backend gateway only to signed
 platform principals with `platform:write`. The gateway forwards a short-lived,
 HMAC-bound assertion containing actor, credential/JTI, scope, method, path,
-nonce, and expiry. The private MCP service requires both the internal service
-key and this assertion; it rejects tampering, route/method mismatch, expiry,
-and nonce replay. `X-Operator-Identity` is informational and cannot override
-the signed actor.
+canonical request-body hash, nonce, and expiry. The private MCP service requires
+both the internal service key and this assertion; it rejects tampering, body or
+route/method mismatch, and expiry. Nonce replay protection is process-local in
+the current scaffold; a shared durable replay store is required before running
+the service across replicas. `X-Operator-Identity` is informational and cannot
+override the signed actor.
 
 The MCP control service is a network-private downstream. Its internal key is
 defence in depth, not a browser credential: firewall/service-network policy
