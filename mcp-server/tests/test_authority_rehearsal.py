@@ -1326,6 +1326,29 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
                 ],
             )
             cur.execute(
+                """INSERT INTO authority_case_clusters
+                     (corpus_version, cluster_id, case_name, date_filed)
+                   VALUES (%s, %s, 'Synthetic citator case', '2026-01-01')""",
+                [version, opinion_id],
+            )
+            cur.execute(
+                """INSERT INTO authority_case_opinions
+                     (corpus_version, opinion_id, cluster_id, source_url, plain_text)
+                   VALUES (%s, %s, %s, 'https://example.test/case',
+                     'Synthetic citator source-bound authority text')""",
+                [version, opinion_id, opinion_id],
+            )
+            cur.execute(
+                """INSERT INTO authority_case_chunks
+                     (corpus_version, opinion_id, cluster_id, court_id, chunk_index, content,
+                      embedding, embedding_model, embedding_version)
+                   VALUES (%s, %s, %s, 'rehearsal-court', 0,
+                     'Synthetic citator source-bound authority text',
+                     ('[' || array_to_string(array_fill(0, ARRAY[1024]), ',') || ']')::vector,
+                     'mixedbread-ai/mxbai-embed-large-v1', '1')""",
+                [version, opinion_id, opinion_id],
+            )
+            cur.execute(
                 """INSERT INTO authority_history_facts
                      (corpus_version, authority_key, fact_kind, event_date, source_url,
                       evidence_span, evidence_locator, source_hash)
