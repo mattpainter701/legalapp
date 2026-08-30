@@ -18,7 +18,7 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |scripts/tabs3_export/requirements.txt|python requirements|no|none|2|
 |frontend/package.json|npm package|yes|frontend/package-lock.json|32|
 |office-addin/package.json|npm package|yes|office-addin/package-lock.json|6|
-|agent/pyproject.toml|python project|no|none|14|
+|agent/pyproject.toml|python project|no|none|15|
 
 ## Dependency inputs to track
 
@@ -76,6 +76,7 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |pypi|smbprotocol|>=1.16.1|runtime|agent/pyproject.toml|
 |pypi|tomli|>=2.0;python_version<'3.11'|runtime|agent/pyproject.toml|
 |pypi|tomli_w|>=1.0|runtime|agent/pyproject.toml|
+|pypi|truststore|>=0.10.1|runtime|agent/pyproject.toml|
 |pypi|aiofiles|==24.1.0|runtime/dev|backend/requirements.txt|
 |pypi|aiosmtplib|==5.1.2|runtime/dev|backend/requirements.txt|
 |pypi|alembic|==1.14.0|runtime/dev|backend/requirements.txt|

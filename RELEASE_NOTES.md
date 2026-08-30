@@ -5,6 +5,15 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.30.5 — Reliable file-share agent setup on managed Windows networks
+
+Released August 30, 2026.
+
+The LawHand file-share agent now uses Windows' managed certificate trust when connecting to LawHand, improving enrollment reliability on firms' inspected HTTPS networks.
+
+- **Enroll without weakening TLS.** The agent recognizes approved enterprise certificate authorities deployed by the firm's Windows administration while continuing to validate the LawHand hostname and certificate.
+- **Keep the same secure connection.** No inbound network access or certificate-validation bypass is required; the agent continues to use outbound HTTPS for its assigned file-share work.
+
 ## 2026.08.30.4 — Controlled client and matter import promotion
 
 Released August 30, 2026.
