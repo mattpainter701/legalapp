@@ -22,6 +22,10 @@
   native Windows ACL trimming, or semantic retrieval.
 
 ### Fixed
+- **Windows file-share agent enrollment works with managed TLS inspection:**
+  the packaged agent now validates HTTPS through the Windows certificate store
+  instead of only its embedded CA bundle. Enterprise roots deployed by Group
+  Policy are trusted without weakening hostname or certificate verification.
 - **Zoom Phone setup reports each independent connection stage:** tenant
   administrators now return from Phone OAuth to the Zoom integration panel,
   see actionable recovery for rejected credentials and other safe provider

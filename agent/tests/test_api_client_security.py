@@ -1,7 +1,9 @@
+import ssl
 from types import SimpleNamespace
 
 import pytest
 
+from clarity_agent import api_client
 from clarity_agent.api_client import SaaSClient
 
 
@@ -54,3 +56,41 @@ async def test_agent_allows_https_and_loopback_http(url):
 async def test_agent_allows_loopback_http_names(url):
     client = SaaSClient(_config(url))
     await client.close()
+
+
+def test_agent_uses_the_operating_system_certificate_store(monkeypatch):
+    captured = {}
+
+    class FakeTruststore:
+        @staticmethod
+        def SSLContext(protocol):
+            captured["protocol"] = protocol
+            return ssl.create_default_context()
+
+    monkeypatch.setattr(api_client, "truststore", FakeTruststore)
+
+    context = api_client._system_trust_context()
+
+    assert captured["protocol"] == ssl.PROTOCOL_TLS_CLIENT
+    assert isinstance(context, ssl.SSLContext)
+
+
+@pytest.mark.asyncio
+async def test_client_passes_the_system_trust_context_to_httpx(monkeypatch):
+    captured = {}
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def aclose(self):
+            pass
+
+    context = ssl.create_default_context()
+    monkeypatch.setattr(api_client, "_system_trust_context", lambda: context)
+    monkeypatch.setattr(api_client.httpx, "AsyncClient", FakeAsyncClient)
+
+    client = SaaSClient(_config("https://files.example.com"))
+    await client.close()
+
+    assert captured["verify"] is context

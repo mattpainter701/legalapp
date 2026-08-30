@@ -2,14 +2,29 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import ssl
 from urllib.parse import urlparse
 
 import httpx
+import truststore
 
 logger = logging.getLogger("clarity_agent.api")
 
 _MAX_RETRIES = 3
 _BASE_DELAY = 1.0
+
+
+def _system_trust_context() -> ssl.SSLContext:
+    """Return a TLS context backed by the host operating system's trust store.
+
+    The packaged agent runs on managed Windows file servers.  Those networks
+    commonly install their HTTPS-inspection root through the Windows
+    certificate store, which an embedded certifi bundle cannot see.  Keep
+    normal hostname and certificate validation while using the same trust
+    source as Windows' own HTTPS clients.
+    """
+
+    return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 
 
 class SaaSClient:
@@ -58,6 +73,7 @@ class SaaSClient:
             base_url=self.base_url,
             headers={"X-Agent-API-Key": self.api_key},
             timeout=30.0,
+            verify=_system_trust_context(),
         )
 
     async def close(self) -> None:

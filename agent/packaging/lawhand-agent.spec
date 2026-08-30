@@ -21,6 +21,7 @@ hidden = [
     "docx",
     "aiosqlite",
     "tomli_w",
+    "truststore",
 ]
 
 if sys.platform == "win32":
