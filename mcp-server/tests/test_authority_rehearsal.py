@@ -1086,6 +1086,7 @@ def test_legal_only_upgrade_bootstrap_rehearsal():
                     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), document_id uuid NOT NULL,
                     chunk_index integer NOT NULL, heading_path jsonb NOT NULL DEFAULT '[]'::jsonb,
                     content text NOT NULL, content_hash text NOT NULL, token_count integer,
+                    fts tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED,
                     embedding vector(1024), embedding_model text NOT NULL DEFAULT 'mixedbread-ai/mxbai-embed-large-v1',
                     embedding_version integer NOT NULL DEFAULT 0, metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
                     created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now())"""
@@ -1187,7 +1188,8 @@ def test_legacy_upgrade_bootstrap_rehearsal():
                 """CREATE TABLE opinion_chunks (
                     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), opinion_id bigint,
                     cluster_id bigint, court_id text, chunk_index integer,
-                    content text, embedding vector(1024), embedding_model text,
+                    content text, fts tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED,
+                    embedding vector(1024), embedding_model text,
                     embedding_version integer, corpus_version text)"""
             )
             cur.execute(
