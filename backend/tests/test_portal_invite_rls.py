@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.middleware.rate_limit import AUTH_LIMITS
 from app.models.client_portal import ClientPortalInvite
 from app.models.mediation import MediationInvite, MediationParty
-from app.models.plugin import Matter, MediationCase
+from app.models.plugin import Matter, MediationCase, TenantPluginEntitlement
 from app.routers import client_portal, mediation_portal
 from app.schemas.client_portal import ClientPortalAcceptRequest
 from app.schemas.mediation import PortalAcceptRequest
@@ -31,7 +31,12 @@ async def _seed_invites(db_session, tenant, user):
         matter_name="Opaque Invite Matter",
         portal_enabled=True,
     )
-    db_session.add_all([case, matter])
+    entitlement = TenantPluginEntitlement(
+        tenant_id=tenant.id,
+        plugin_name="mediation-legal",
+        status="included",
+    )
+    db_session.add_all([case, matter, entitlement])
     await db_session.flush()
     party = MediationParty(
         tenant_id=tenant.id,

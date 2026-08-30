@@ -1,40 +1,42 @@
-# Firm Memory — bounded local case-file search surfaces
-
 ## Summary
 
-Adds the customer-facing layer over the local SQLite FTS5 control index: an
-outbound-polled, matter-scoped `local_search` relay for the portal, Chat
-structured sources, and user-bound Workspace MCP `search_firm_memory` tool.
-Results are bounded and opaque, with same-origin links that recheck access and
-offer Copy UNC. Query text is not persisted or logged. This is a measured
-representative-corpus control PoC; it does not claim 4 TB/Tika/OCR/OpenSearch,
-semantic retrieval, or native Windows ACL preservation.
+Establishes the mediation add-on as a safe extension of its linked Matter and
+the native My Matters portal. Client and external-party submissions remain
+private until attorney review and recipient-specific release; released
+documents/proposals and approved assets are immutable and carry integrity and
+audit evidence. Eligible firm clients receive a read-only Mediation tab only
+while the tenant has an active `mediation-legal` entitlement. The same live
+entitlement now gates the staff and external-party mediation surfaces, while
+legal approval and release require the `approve_legal_work` capability.
+
+This is the secure workflow foundation, not the final granular demand ledger or
+e-sign packet flow. `docs/mediation-addon-architecture.md` records those next
+slices and their platform integration contract.
 
 ## Validation
 
-- agent: `156 passed`
-- backend focused contracts: `35 passed`
-- frontend: `440 passed`; ESLint has two existing `no-alert` warnings and no errors
-- frontend production build: passed
-- `ruff check` on changed Python files and `compileall`: passed
-- release-catalog generation check: passed
-- PostgreSQL-backed integration remains for GitHub CI because the local Docker
-  service could not be started without host service privileges.
+- frontend `npm run check`: 448 tests, lint with two pre-existing `no-alert`
+  warnings and no errors, production build passed
+- focused backend static/unit contracts: 34 passed
+- mediation and native-portal PostgreSQL integration suite: 19 tests collect;
+  execution is delegated to GitHub CI because local PostgreSQL/Redis services
+  are unavailable
+- Ruff lint and format checks, Python `compileall`, and `git diff --check` passed
+- Alembic graph/offline SQL and migration-safety checks passed
+- release-catalog generation check passed
 
 ## Merge policy attestations
 
 - [x] Documentation updated
 - [ ] No documentation impact
-- [x] Customer release notes updated (`2026.08.30.3`)
+- [x] Customer release notes updated (`2026.08.30.7`)
 - [ ] No customer-facing release note
 - [x] Security and privacy impact reviewed
 
 ## MCP documentation handoff
 
-- [x] MCP documentation updated
-- [ ] MCP documentation not needed
-- MCP area: Workspace MCP / tenant isolation / client compatibility.
-- Wiki handoff note: canonical Workspace MCP documentation now names
-  `search_firm_memory`, its `matters:read` + `documents:read` boundary, bounded
-  matter-scoped inputs/results, safe portal links, privacy boundary, and the
-  separation from Research MCP.
+- [ ] MCP documentation updated
+- [x] MCP documentation not needed
+- MCP area: Shared architecture and client-portal authorization boundary
+- Wiki handoff note: This change affects mediation and client-portal REST
+  surfaces only; no MCP endpoint, tool, protocol, or client contract changed.

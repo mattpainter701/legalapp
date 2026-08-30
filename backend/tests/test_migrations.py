@@ -12,7 +12,29 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["144_brief_checks"]
+    assert heads == ["145_mediation_confidentiality"]
+
+
+def test_mediation_confidentiality_migration_is_additive_and_tenant_scoped():
+    backend_dir = Path(__file__).resolve().parents[1]
+    source = (
+        backend_dir / "migrations" / "versions" / "145_mediation_confidentiality.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'revision = "145_mediation_confidentiality"' in source
+    assert 'down_revision = "144_brief_checks"' in source
+    for table in (
+        "mediation_document_recipients",
+        "mediation_proposal_recipients",
+    ):
+        assert f'_enable_tenant_rls("{table}")' in source
+        assert "CREATE POLICY {table}_tenant_isolation" in source
+        assert '"tenant_id"' in source
+
+    assert "content_sha256" in source
+    assert "review_state" in source
+    assert "released_by_user_id" in source
+    assert "first_viewed_at" in source
 
 
 def test_background_value_cutover_never_backfills_existing_spend_as_free():

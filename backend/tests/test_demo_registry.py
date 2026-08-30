@@ -44,3 +44,14 @@ def test_assistant_runtime_state_is_purged_but_never_cloned():
     assert runtime_tables <= set(DEMO_TABLE_REGISTRY)
     assert all(DEMO_TABLE_REGISTRY[table].purge for table in runtime_tables)
     assert all(not DEMO_TABLE_REGISTRY[table].clone for table in runtime_tables)
+
+
+def test_mediation_release_grants_clone_with_portal_business_content():
+    release_grant_tables = {
+        "mediation_document_recipients",
+        "mediation_proposal_recipients",
+    }
+
+    assert release_grant_tables <= set(DEMO_TABLE_REGISTRY)
+    assert all(DEMO_TABLE_REGISTRY[table].clone for table in release_grant_tables)
+    assert all(DEMO_TABLE_REGISTRY[table].purge for table in release_grant_tables)

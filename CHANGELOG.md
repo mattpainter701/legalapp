@@ -10,6 +10,19 @@
   checkboxes remain open until those acceptance gates are demonstrably met.
 
 ### Added
+- **Mediation review and native portal overlay:** the licensed mediation module
+  now extends its linked matter in the native My Matters portal while retaining
+  a separate invite surface for external parties. Documents and proposals are
+  private to their submitter and firm until recipient-specific release;
+  proposals require attorney review, counters require same-case released
+  parents, and supersession occurs only on release. Released documents,
+  proposals, and approved asset rows are immutable, release races serialize on
+  the protected record, portal responses mask other recipients and internal
+  user identifiers, and new document downloads verify their recorded SHA-256
+  digest. Firm and party surfaces now require the live paid add-on entitlement,
+  and approval/release actions require the `approve_legal_work` capability.
+  The native overlay fails closed for inactive entitlements, ambiguous matter
+  links, or mismatched contacts without disrupting the base portal.
 - **Versioned public-authority coverage control plane:** reviewed rights and
   provenance fields, immutable corpus release/audit ledgers, harvest evidence,
   claim-safe coverage projection, and exact embedding compatibility now back the

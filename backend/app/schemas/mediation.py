@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 # ── Sessions (activity log) ────────────────────────────────────────────────────
@@ -233,10 +233,18 @@ class DocumentResponse(BaseModel):
     filename: str
     content_type: Optional[str] = None
     file_size: Optional[int] = None
+    content_sha256: Optional[str] = None
     description: Optional[str] = None
     uploaded_by_party_id: Optional[str] = None
     uploaded_by_user_id: Optional[str] = None
+    is_released: bool = False
+    recipient_party_ids: List[str] = Field(default_factory=list)
+    released_at: Optional[datetime] = None
     created_at: datetime
+
+
+class RecipientRelease(BaseModel):
+    party_ids: List[str] = Field(min_length=1, max_length=100)
 
 
 # ── Proposals ───────────────────────────────────────────────────────────────────
@@ -246,10 +254,12 @@ class ProposalCreate(BaseModel):
     title: str
     body: Optional[str] = None
     parent_proposal_id: Optional[str] = None
+    proposed_by_party_id: Optional[str] = None
 
 
-class ProposalStatusUpdate(BaseModel):
-    status: str  # accepted | rejected
+class ProposalReviewRequest(BaseModel):
+    decision: str  # approved | changes_requested | rejected
+    notes: Optional[str] = None
 
 
 class ProposalResponse(BaseModel):
@@ -261,6 +271,16 @@ class ProposalResponse(BaseModel):
     title: str
     body: Optional[str] = None
     status: str
+    review_state: str
+    review_notes: Optional[str] = None
+    reviewed_by_user_id: Optional[str] = None
+    reviewed_at: Optional[datetime] = None
+    released_by_user_id: Optional[str] = None
+    released_at: Optional[datetime] = None
+    created_by_user_id: Optional[str] = None
+    content_sha256: Optional[str] = None
+    is_released: bool = False
+    recipient_party_ids: List[str] = Field(default_factory=list)
     created_at: datetime
 
 

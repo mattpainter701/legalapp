@@ -1085,12 +1085,21 @@ export const uploadMediationDocument = (id, file, description) => {
 export const downloadMediationDocumentUrl = (id, docId) =>
   `${BASE_URL}/plugins/mediation/cases/${id}/documents/${docId}/download`
 
+export const releaseMediationDocument = (id, docId, partyIds) =>
+  api.post(`/plugins/mediation/cases/${id}/documents/${docId}/release`, { party_ids: partyIds }).then(r => r.data)
+
 // Proposals
 export const listMediationProposals = (id) =>
   api.get(`/plugins/mediation/cases/${id}/proposals`).then(r => r.data)
 
 export const createMediationProposal = (id, data) =>
   api.post(`/plugins/mediation/cases/${id}/proposals`, data).then(r => r.data)
+
+export const reviewMediationProposal = (id, proposalId, decision, notes) =>
+  api.post(`/plugins/mediation/cases/${id}/proposals/${proposalId}/review`, { decision, notes }).then(r => r.data)
+
+export const releaseMediationProposal = (id, proposalId, partyIds) =>
+  api.post(`/plugins/mediation/cases/${id}/proposals/${proposalId}/release`, { party_ids: partyIds }).then(r => r.data)
 
 // ── Mediation Portal (client / opposing party) ──────────────────────────────
 const portalApi = axios.create({
@@ -1159,6 +1168,9 @@ export const logoutClientPortal = () =>
 
 export const getClientPortalMatter = () =>
   clientPortalApi.get('/portal/client/matter').then((r) => r.data)
+
+export const getClientPortalMediation = () =>
+  clientPortalApi.get('/portal/client/mediation').then((r) => r.data)
 
 export const listClientPortalMessages = (params) =>
   clientPortalApi.get('/portal/client/messages', { params }).then((r) => r.data)

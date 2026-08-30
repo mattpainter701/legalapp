@@ -5,6 +5,7 @@ import ClientPortalMatterPage from './ClientPortalMatterPage'
 import {
   getClientPortalSession,
   getClientPortalMatter,
+  getClientPortalMediation,
   listClientPortalMessages,
   sendClientPortalMessage,
   markClientPortalMessagesRead,
@@ -18,6 +19,7 @@ vi.mock('../api', () => ({
   getClientPortalSession: vi.fn(),
   logoutClientPortal: vi.fn(),
   getClientPortalMatter: vi.fn(),
+  getClientPortalMediation: vi.fn(),
   listClientPortalMessages: vi.fn(),
   sendClientPortalMessage: vi.fn(),
   markClientPortalMessagesRead: vi.fn(),
@@ -66,6 +68,7 @@ beforeEach(() => {
     invite_expires_at: '2030-01-01T00:00:00Z',
   })
   getClientPortalMatter.mockResolvedValue(matterView)
+  getClientPortalMediation.mockResolvedValue({ status: 404 })
   listClientPortalMessages.mockResolvedValue({ messages: [], unread_count: 0, total: 0, has_more: false })
   markClientPortalMessagesRead.mockResolvedValue({ messages_seen_at: '2026-01-01T00:00:00Z', unread_count: 0 })
   listClientPortalDocuments.mockResolvedValue([])
@@ -79,6 +82,42 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('ClientPortalMatterPage', () => {
+  it('shows the optional read-only mediation overlay without changing the base portal', async () => {
+    getClientPortalMediation.mockResolvedValue({
+      mediation: { case_name: 'Rivera mediation', status: 'active', mediation_stage: 'proposal' },
+      own_assets: [{ id: 'a1', description: 'Your disclosure', status: 'submitted' }],
+      shared_assets: [{ id: 'a2', description: 'Shared schedule', status: 'sent' }],
+      documents: [{ id: 'd1', filename: 'released.pdf', is_own: false, release_state: 'released_to_you', download_url: '/api/portal/client/mediation/documents/d1/download' }],
+      proposals: [{ id: 'p1', title: 'Opening proposal', is_own: false, review_state: 'approved', release_state: 'released_to_you', released_at: '2026-08-20T00:00:00Z' }],
+    })
+    const user = userEvent.setup()
+    render(<ClientPortalMatterPage />)
+
+    const mediationTab = await screen.findByRole('tab', { name: 'Mediation' })
+    await user.click(mediationTab)
+    expect(await screen.findByText('Rivera mediation')).toBeInTheDocument()
+    expect(screen.getByText('Your disclosure')).toBeInTheDocument()
+    expect(screen.getByText('Shared schedule')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Download/ })).toHaveAttribute('href', '/api/portal/client/mediation/documents/d1/download')
+    expect(screen.getAllByText(/Released to you/)).toHaveLength(2)
+  })
+
+  it('keeps the base portal available when the mediation add-on is unavailable', async () => {
+    getClientPortalMediation.mockRejectedValue({ response: { status: 404 } })
+    render(<ClientPortalMatterPage />)
+
+    expect(await screen.findByText('Unread messages')).toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: 'Mediation' })).not.toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Overview' })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('does not hide an expired session as an unavailable mediation add-on', async () => {
+    getClientPortalMediation.mockRejectedValue(sessionExpired())
+    render(<ClientPortalMatterPage />)
+
+    expect(await screen.findByText("You've been signed out")).toBeInTheDocument()
+  })
+
   it('lands on a summary of what is waiting on the client', async () => {
     render(<ClientPortalMatterPage />)
 

@@ -26,7 +26,6 @@ from fastapi import (
     Response,
     UploadFile,
 )
-from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -37,9 +36,11 @@ from app.middleware.tenant import get_current_user
 from app.models.mediation import (
     MediationAsset,
     MediationDocument,
+    MediationDocumentRecipient,
     MediationInvite,
     MediationParty,
     MediationProposal,
+    MediationProposalRecipient,
 )
 from app.models.plugin import Matter, MediationCase, MediationCaseEvent
 from app.models.task import Task
@@ -61,7 +62,9 @@ from app.schemas.mediation import (
     PartyResponse,
     PartyUpdate,
     ProposalCreate,
+    ProposalReviewRequest,
     ProposalResponse,
+    RecipientRelease,
     SessionCreate,
     SessionResponse,
 )
@@ -71,19 +74,68 @@ from app.services.email import (
     email_delivery_http_error,
     send_portal_invite,
 )
+from app.services.plugin_entitlements import (
+    load_plugin_entitlement,
+    plugin_entitlement_is_active,
+)
+from app.services.rbac_service import get_user_capabilities
 
 settings = get_settings()
 
-router = APIRouter(prefix="/api/plugins/mediation", tags=["mediation"])
-
+MEDIATION_PLUGIN_NAME = "mediation-legal"
 INVITE_TTL_DAYS = 14
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 
+async def _require_mediation_entitlement(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Apply the paid add-on boundary to every firm mediation endpoint."""
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    entitlement = await load_plugin_entitlement(
+        db,
+        user.tenant_id,
+        MEDIATION_PLUGIN_NAME,
+    )
+    if plugin_entitlement_is_active(entitlement):
+        return
+    if entitlement is not None and entitlement.status in {"disabled", "locked"}:
+        raise HTTPException(
+            status_code=403,
+            detail="The Mediation add-on is turned off for this firm",
+        )
+    raise HTTPException(
+        status_code=402,
+        detail="The Mediation add-on is not active for this firm",
+    )
+
+
+async def _require_legal_approval(db: AsyncSession, user: User) -> None:
+    if "approve_legal_work" not in await get_user_capabilities(db, user.id):
+        raise HTTPException(
+            status_code=403,
+            detail="Legal approval authority is required for this action",
+        )
+
+
+router = APIRouter(
+    prefix="/api/plugins/mediation",
+    tags=["mediation"],
+    dependencies=[Depends(_require_mediation_entitlement)],
+)
+
+
 def _as_uuid(value: str | None) -> uuid.UUID | None:
-    return uuid.UUID(value) if value else None
+    if not value:
+        return None
+    try:
+        return uuid.UUID(value)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="Invalid UUID") from None
 
 
 def _matter_slug(name: str) -> str:
@@ -762,15 +814,21 @@ async def revoke_portal_invite(
 
 
 async def _get_asset_or_404(
-    db: AsyncSession, asset_id: str, case_id: str, tenant_id: uuid.UUID
+    db: AsyncSession,
+    asset_id: str,
+    case_id: str,
+    tenant_id: uuid.UUID,
+    *,
+    for_update: bool = False,
 ) -> MediationAsset:
-    result = await db.execute(
-        select(MediationAsset).where(
-            MediationAsset.id == asset_id,
-            MediationAsset.case_id == case_id,
-            MediationAsset.tenant_id == tenant_id,
-        )
+    statement = select(MediationAsset).where(
+        MediationAsset.id == asset_id,
+        MediationAsset.case_id == case_id,
+        MediationAsset.tenant_id == tenant_id,
     )
+    if for_update:
+        statement = statement.with_for_update()
+    result = await db.execute(statement)
     obj = result.scalar_one_or_none()
     if obj is None:
         raise HTTPException(status_code=404, detail="Asset not found")
@@ -834,7 +892,14 @@ async def update_asset(
 ):
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
-    asset = await _get_asset_or_404(db, asset_id, case_id, user.tenant_id)
+    asset = await _get_asset_or_404(
+        db, asset_id, case_id, user.tenant_id, for_update=True
+    )
+    if asset.status not in ("draft", "submitted"):
+        raise HTTPException(
+            status_code=409,
+            detail="Approved or released assets are immutable; create a replacement entry",
+        )
     for field, value in body.model_dump(exclude_unset=True).items():
         setattr(asset, field, value)
     asset.updated_at = datetime.now(timezone.utc)
@@ -852,7 +917,14 @@ async def delete_asset(
 ):
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
-    asset = await _get_asset_or_404(db, asset_id, case_id, user.tenant_id)
+    asset = await _get_asset_or_404(
+        db, asset_id, case_id, user.tenant_id, for_update=True
+    )
+    if asset.status not in ("draft", "submitted"):
+        raise HTTPException(
+            status_code=409,
+            detail="Approved or released assets cannot be deleted",
+        )
     await db.delete(asset)
     await db.commit()
 
@@ -866,12 +938,15 @@ async def approve_asset(
 ):
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
+    await _require_legal_approval(db, user)
     case = await _get_case_or_404(db, case_id, user.tenant_id)
-    asset = await _get_asset_or_404(db, asset_id, case_id, user.tenant_id)
-    if asset.status not in ("submitted", "draft", "attorney_approved"):
+    asset = await _get_asset_or_404(
+        db, asset_id, case_id, user.tenant_id, for_update=True
+    )
+    if asset.status != "submitted":
         raise HTTPException(
             status_code=409,
-            detail=f"Cannot approve an asset in status '{asset.status}'",
+            detail="Only a submitted asset can be approved",
         )
     asset.status = "attorney_approved"
     asset.attorney_approved_by_user_id = user.id
@@ -898,8 +973,11 @@ async def send_asset(
 ):
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
+    await _require_legal_approval(db, user)
     case = await _get_case_or_404(db, case_id, user.tenant_id)
-    asset = await _get_asset_or_404(db, asset_id, case_id, user.tenant_id)
+    asset = await _get_asset_or_404(
+        db, asset_id, case_id, user.tenant_id, for_update=True
+    )
     if asset.status != "attorney_approved":
         raise HTTPException(
             status_code=409,
@@ -925,16 +1003,54 @@ async def send_asset(
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-async def _get_doc_or_404(
-    db: AsyncSession, doc_id: str, case_id: str, tenant_id: uuid.UUID
-) -> MediationDocument:
+def _parse_uuid(value: str, label: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(value)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail=f"Invalid {label} ID") from None
+
+
+async def _release_parties(
+    db: AsyncSession,
+    *,
+    case_id: str,
+    tenant_id: uuid.UUID,
+    party_ids: list[str],
+) -> list[MediationParty]:
+    parsed = {_parse_uuid(value, "party") for value in party_ids}
     result = await db.execute(
-        select(MediationDocument).where(
+        select(MediationParty).where(
+            MediationParty.id.in_(parsed),
+            MediationParty.case_id == _parse_uuid(case_id, "case"),
+            MediationParty.tenant_id == tenant_id,
+        )
+    )
+    parties = list(result.scalars().all())
+    if len(parties) != len(parsed):
+        raise HTTPException(status_code=404, detail="Release party not found on case")
+    return parties
+
+
+async def _get_doc_or_404(
+    db: AsyncSession,
+    doc_id: str,
+    case_id: str,
+    tenant_id: uuid.UUID,
+    *,
+    for_update: bool = False,
+) -> MediationDocument:
+    statement = (
+        select(MediationDocument)
+        .options(selectinload(MediationDocument.recipients))
+        .where(
             MediationDocument.id == doc_id,
             MediationDocument.case_id == case_id,
             MediationDocument.tenant_id == tenant_id,
         )
     )
+    if for_update:
+        statement = statement.with_for_update()
+    result = await db.execute(statement)
     obj = result.scalar_one_or_none()
     if obj is None:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -950,6 +1066,7 @@ async def list_documents(
     await _verify_case(db, case_id, user.tenant_id)
     result = await db.execute(
         select(MediationDocument)
+        .options(selectinload(MediationDocument.recipients))
         .where(
             MediationDocument.case_id == case_id,
             MediationDocument.tenant_id == user.tenant_id,
@@ -977,19 +1094,25 @@ async def upload_document(
     await _verify_case(db, case_id, user.tenant_id)
 
     doc_id = uuid.uuid4()
-    storage_path, size = await ms.save_case_upload(
+    asset_uuid = None
+    if asset_id:
+        asset = await _get_asset_or_404(db, asset_id, case_id, user.tenant_id)
+        asset_uuid = asset.id
+
+    storage_path, size, content_sha256 = await ms.save_case_upload(
         file, user.tenant_id, case_id, doc_id
     )
     doc = MediationDocument(
         id=doc_id,
         tenant_id=user.tenant_id,
         case_id=uuid.UUID(case_id),
-        asset_id=_as_uuid(asset_id),
+        asset_id=asset_uuid,
         uploaded_by_user_id=user.id,
         filename=os.path.basename(file.filename),
         content_type=file.content_type,
         file_size=size,
         storage_path=storage_path,
+        content_sha256=content_sha256,
         description=description,
     )
     db.add(doc)
@@ -1008,13 +1131,67 @@ async def download_document(
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
     doc = await _get_doc_or_404(db, doc_id, case_id, user.tenant_id)
+    return await ms.case_document_download_response(doc)
+
+
+@router.post(
+    "/cases/{case_id}/documents/{doc_id}/release",
+    response_model=DocumentResponse,
+)
+async def release_document(
+    case_id: str,
+    doc_id: str,
+    body: RecipientRelease,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    await _require_legal_approval(db, user)
+    case = await _get_case_or_404(db, case_id, user.tenant_id)
+    doc = await _get_doc_or_404(db, doc_id, case_id, user.tenant_id, for_update=True)
     if not doc.storage_path or not os.path.exists(doc.storage_path):
-        raise HTTPException(status_code=404, detail="File not found on disk")
-    return FileResponse(
-        path=doc.storage_path,
-        filename=doc.filename,
-        media_type=doc.content_type or "application/octet-stream",
+        raise HTTPException(status_code=409, detail="Document file is unavailable")
+    # Release only the exact bytes whose digest was captured at upload.
+    await ms.case_document_download_response(doc)
+
+    parties = await _release_parties(
+        db,
+        case_id=case_id,
+        tenant_id=user.tenant_id,
+        party_ids=body.party_ids,
     )
+    if doc.uploaded_by_party_id and any(
+        party.id == doc.uploaded_by_party_id for party in parties
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="A document is already available to its uploading party",
+        )
+    existing = {recipient.party_id for recipient in doc.recipients}
+    added = [party for party in parties if party.id not in existing]
+    for party in added:
+        recipient = MediationDocumentRecipient(
+            id=uuid.uuid4(),
+            tenant_id=user.tenant_id,
+            document_id=doc.id,
+            party_id=party.id,
+            released_by_user_id=user.id,
+        )
+        db.add(recipient)
+        doc.recipients.append(recipient)
+
+    if added:
+        await _append_event(
+            db,
+            case,
+            event_type="document_release",
+            title=f"Released document: {doc.filename}",
+            content=f"Recipients: {', '.join(party.name for party in added)}",
+            added_by=user.full_name or user.email,
+        )
+        await db.commit()
+    return ms.document_to_response(doc)
 
 
 @router.delete("/cases/{case_id}/documents/{doc_id}", status_code=204)
@@ -1026,22 +1203,54 @@ async def delete_document(
 ):
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
-    doc = await _get_doc_or_404(db, doc_id, case_id, user.tenant_id)
-    if doc.storage_path and os.path.exists(doc.storage_path):
+    doc = await _get_doc_or_404(db, doc_id, case_id, user.tenant_id, for_update=True)
+    if doc.recipients:
+        raise HTTPException(
+            status_code=409,
+            detail="Released documents are immutable and cannot be deleted",
+        )
+    storage_path = doc.storage_path
+    await db.delete(doc)
+    await db.commit()
+    if storage_path and os.path.exists(storage_path):
         try:
-            os.remove(doc.storage_path)
-            parent = os.path.dirname(doc.storage_path)
+            os.remove(storage_path)
+            parent = os.path.dirname(storage_path)
             if os.path.isdir(parent) and not os.listdir(parent):
                 os.rmdir(parent)
         except OSError:
             pass
-    await db.delete(doc)
-    await db.commit()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Proposals
 # ═══════════════════════════════════════════════════════════════════════════
+
+
+async def _get_proposal_or_404(
+    db: AsyncSession,
+    proposal_id: str,
+    case_id: str,
+    tenant_id: uuid.UUID,
+    *,
+    for_update: bool = False,
+) -> MediationProposal:
+    statement = (
+        select(MediationProposal)
+        .options(selectinload(MediationProposal.recipients))
+        .where(
+            MediationProposal.id == proposal_id,
+            MediationProposal.case_id == case_id,
+            MediationProposal.tenant_id == tenant_id,
+        )
+    )
+    if for_update:
+        statement = statement.with_for_update()
+    result = await db.execute(statement)
+    proposal = result.scalar_one_or_none()
+    if proposal is None:
+        raise HTTPException(status_code=404, detail="Proposal not found")
+    return proposal
 
 
 @router.get("/cases/{case_id}/proposals", response_model=List[ProposalResponse])
@@ -1053,6 +1262,7 @@ async def list_proposals(
     await _verify_case(db, case_id, user.tenant_id)
     result = await db.execute(
         select(MediationProposal)
+        .options(selectinload(MediationProposal.recipients))
         .where(
             MediationProposal.case_id == case_id,
             MediationProposal.tenant_id == user.tenant_id,
@@ -1079,22 +1289,181 @@ async def create_proposal(
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
     await _verify_case(db, case_id, user.tenant_id)
+
+    parent_id = _as_uuid(body.parent_proposal_id)
+    if parent_id:
+        parent = await _get_proposal_or_404(
+            db, str(parent_id), case_id, user.tenant_id, for_update=True
+        )
+        if parent.status != "open":
+            raise HTTPException(
+                status_code=409,
+                detail="Only an active proposal can receive a counterproposal",
+            )
+
+    proposed_by_party_id = _as_uuid(body.proposed_by_party_id)
+    if proposed_by_party_id:
+        await _get_party_or_404(db, str(proposed_by_party_id), case_id, user.tenant_id)
+
     proposal = MediationProposal(
         id=uuid.uuid4(),
         tenant_id=user.tenant_id,
         case_id=uuid.UUID(case_id),
-        parent_proposal_id=_as_uuid(body.parent_proposal_id),
+        proposed_by_party_id=proposed_by_party_id,
+        parent_proposal_id=parent_id,
         title=body.title,
         body=body.body,
         status="open",
+        review_state="pending",
+        created_by_user_id=user.id,
+        content_sha256=ms.proposal_content_sha256(
+            title=body.title,
+            body=body.body,
+            parent_proposal_id=parent_id,
+        ),
     )
-    if body.parent_proposal_id:
-        parent = await db.get(MediationProposal, _as_uuid(body.parent_proposal_id))
-        if parent is not None and parent.tenant_id == user.tenant_id:
-            parent.status = "superseded"
     db.add(proposal)
     await db.commit()
     await db.refresh(proposal)
+    return ms.proposal_to_response(proposal)
+
+
+@router.post(
+    "/cases/{case_id}/proposals/{proposal_id}/review",
+    response_model=ProposalResponse,
+)
+async def review_proposal(
+    case_id: str,
+    proposal_id: str,
+    body: ProposalReviewRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    await _require_legal_approval(db, user)
+    case = await _get_case_or_404(db, case_id, user.tenant_id)
+    proposal = await _get_proposal_or_404(
+        db, proposal_id, case_id, user.tenant_id, for_update=True
+    )
+    ms.assert_proposal_integrity(proposal)
+    if proposal.status != "open":
+        raise HTTPException(
+            status_code=409,
+            detail="Only an active proposal can be reviewed",
+        )
+    if proposal.recipients:
+        raise HTTPException(
+            status_code=409,
+            detail="Released proposals are immutable and cannot be re-reviewed",
+        )
+    if body.decision not in {"approved", "changes_requested", "rejected"}:
+        raise HTTPException(status_code=400, detail="Invalid review decision")
+
+    proposal.review_state = body.decision
+    proposal.review_notes = body.notes
+    proposal.reviewed_by_user_id = user.id
+    proposal.reviewed_at = datetime.now(timezone.utc)
+    proposal.updated_at = proposal.reviewed_at
+    await _append_event(
+        db,
+        case,
+        event_type="proposal_review",
+        title=f"Proposal {body.decision.replace('_', ' ')}: {proposal.title}",
+        content=body.notes,
+        added_by=user.full_name or user.email,
+    )
+    await db.commit()
+    return ms.proposal_to_response(proposal)
+
+
+@router.post(
+    "/cases/{case_id}/proposals/{proposal_id}/release",
+    response_model=ProposalResponse,
+)
+async def release_proposal(
+    case_id: str,
+    proposal_id: str,
+    body: RecipientRelease,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    await _require_legal_approval(db, user)
+    case = await _get_case_or_404(db, case_id, user.tenant_id)
+    proposal = await _get_proposal_or_404(
+        db, proposal_id, case_id, user.tenant_id, for_update=True
+    )
+    ms.assert_proposal_integrity(proposal)
+    if proposal.status != "open":
+        raise HTTPException(
+            status_code=409,
+            detail="Only an active proposal can be released",
+        )
+    if proposal.review_state != "approved":
+        raise HTTPException(
+            status_code=409,
+            detail="Proposal must be attorney-approved before release",
+        )
+
+    parties = await _release_parties(
+        db,
+        case_id=case_id,
+        tenant_id=user.tenant_id,
+        party_ids=body.party_ids,
+    )
+    if proposal.proposed_by_party_id and any(
+        party.id == proposal.proposed_by_party_id for party in parties
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="A proposal cannot be released back to its proposing party",
+        )
+
+    existing = {recipient.party_id for recipient in proposal.recipients}
+    added = [party for party in parties if party.id not in existing]
+    now = datetime.now(timezone.utc)
+    for party in added:
+        recipient = MediationProposalRecipient(
+            id=uuid.uuid4(),
+            tenant_id=user.tenant_id,
+            proposal_id=proposal.id,
+            party_id=party.id,
+            released_by_user_id=user.id,
+            released_at=now,
+        )
+        db.add(recipient)
+        proposal.recipients.append(recipient)
+
+    if added:
+        proposal.released_at = proposal.released_at or now
+        proposal.released_by_user_id = proposal.released_by_user_id or user.id
+        proposal.updated_at = now
+        if proposal.parent_proposal_id:
+            parent = await _get_proposal_or_404(
+                db,
+                str(proposal.parent_proposal_id),
+                case_id,
+                user.tenant_id,
+                for_update=True,
+            )
+            if parent.status != "open":
+                raise HTTPException(
+                    status_code=409,
+                    detail="The parent proposal is no longer active",
+                )
+            parent.status = "superseded"
+            parent.updated_at = now
+        await _append_event(
+            db,
+            case,
+            event_type="proposal_release",
+            title=f"Released proposal: {proposal.title}",
+            content=f"Recipients: {', '.join(party.name for party in added)}",
+            added_by=user.full_name or user.email,
+        )
+        await db.commit()
     return ms.proposal_to_response(proposal)
 
 
