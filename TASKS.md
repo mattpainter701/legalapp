@@ -61,16 +61,17 @@ reopened because the merged Brief Check is a safe review-first scaffold but does
 not yet satisfy the full citation-resolution, pin-cite, treatment/currentness,
 omitted-authority, linked-export, and end-to-end acceptance below; and `COMP-06`
 remains open after independent review of hardened draft PR #280 through
-`6ccef170`. Version-keyed legal and caselaw snapshots, same-identity
+`9faf8006`. Version-keyed legal and caselaw snapshots, same-identity
 cutover/rollback fixtures, snapshot-backed search/detail/worker/metrics paths,
 and post-promotion mutation guards are material progress. They still do not form
 one production-shaped release chain: initial legacy snapshot backfill, atomic
 loader-to-chunker completion, promotion-time content/integrity checks, composite
 snapshot relationships, and a real loader/worker rehearsal are absent.
-Execution-resumable rights-gated harvest, scheduled retries/dead letters, signed
-platform authorization, worker failure/drain/reopen and measured telemetry,
-concurrency, latest version-bound audits/currentness/partitions/isolation, and
-Brief Check currentness also remain open. See
+Execution-resumable rights-gated harvest, scheduled retries/dead letters,
+complete platform-token middleware/audit/denial coverage, worker
+failure/drain/reopen and measured telemetry, concurrency, latest version-bound
+audits/currentness/partitions/isolation, and Brief Check currentness also remain
+open. See
 [`docs/core-milestone-status.md`](docs/core-milestone-status.md) for the evidence
 matrix and claim boundaries. Feature PRs do not self-certify these checkboxes.
 
