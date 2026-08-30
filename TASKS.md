@@ -61,7 +61,7 @@ reopened because the merged Brief Check is a safe review-first scaffold but does
 not yet satisfy the full citation-resolution, pin-cite, treatment/currentness,
 omitted-authority, linked-export, and end-to-end acceptance below; and `COMP-06`
 remains open after independent review of hardened draft PR #280 through
-`99af2fa4`. Version-keyed legal and caselaw snapshots, same-identity
+`6ccef170`. Version-keyed legal and caselaw snapshots, same-identity
 cutover/rollback fixtures, snapshot-backed search/detail/worker/metrics paths,
 and post-promotion mutation guards are material progress. They still do not form
 one production-shaped release chain: initial legacy snapshot backfill, atomic

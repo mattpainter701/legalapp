@@ -16,20 +16,23 @@ production-shaped rehearsal. Live deployment evidence remains release-specific.
 | `COMP-03` | Open — closure active | PR #270 supplies spam-resistant conditional intake, source attribution, conflict triage, published-slot booking, guarded lead promotion, recovery candidates, and funnel counters. Provider-backed reminders, consented SMS (`ECO-23–ECO-29`), signed-fee-agreement-gated promotion, and the complete lead-to-retainer rehearsal are not proven at this baseline. |
 | `COMP-04` | Accepted | PR #273 merged as `9375fdfb`; the versioned operating contract, public status/incident lifecycle, support policy, signed tenant export, migration receipt, legal-hold/two-operator offboarding evidence, subprocessor/DPA/BAA boundaries, Trust Center, and synthetic production-shaped tests meet the v1 acceptance without claiming unattained SLAs, certifications, or pen tests. Backup, restore, and deployment proof must still be refreshed for each production release. |
 | `COMP-05` | Reopened | PR #275 merged as `7e0745b3` and provides bounded DOCX/PDF parsing, isolation, review decisions, missing/ambiguous reporting, and DOCX report/TOA export. Current behavior remains partial or absent for provider-backed citation resolution, page/pin-cite quote verification, available treatment/currentness evidence, genuinely omitted-authority discovery, opposing-brief analysis beyond citation-set difference, source hyperlinks, existing-document UI, and a full retrieval-to-export rehearsal. `BK20` therefore remains open. |
-| `COMP-06` | Open — lifecycle acceptance blocked | Draft PR #280 at independently reviewed head `99af2fa4` now has version-keyed caselaw cluster/opinion/chunk/citation snapshots, candidate cloning, explicit opinion-to-cluster identity, snapshot-backed search/detail/similarity/coverage/worker paths, atomic cutover/rollback, and post-promotion mutation guards. Same-ID, two-cluster fixture assertions and the mandatory pgvector rehearsal are meaningful progress, but they still bypass the production CSV ingest/loader, rights, embedding-worker, authorization, retry, concurrency, currentness, and isolation paths. Initial legacy-to-snapshot backfill, atomic load-to-searchable completion, promotion-time content/integrity checks, composite snapshot relationships, immutable-ledger negative tests, signed platform authorization, and latest same-version audit/currentness evidence remain open. Private Firm Memory remains a separate tenant/matter-scoped corpus and must not feed public-authority telemetry. |
+| `COMP-06` | Open — lifecycle acceptance blocked | Draft PR #280 at independently reviewed head `6ccef170` now has version-keyed caselaw cluster/opinion/chunk/citation snapshots, candidate cloning, explicit opinion-to-cluster identity, snapshot-backed search/detail/similarity/coverage/worker paths, atomic cutover/rollback, and post-promotion mutation guards. Same-ID, two-cluster fixture assertions and the mandatory pgvector rehearsal are meaningful progress, but they still bypass the production CSV ingest/loader, rights, embedding-worker, authorization, retry, concurrency, currentness, and isolation paths. Initial legacy-to-snapshot backfill, atomic load-to-searchable completion, promotion-time content/integrity checks, composite snapshot relationships, immutable-ledger negative tests, signed platform authorization, and latest same-version audit/currentness evidence remain open. Private Firm Memory remains a separate tenant/matter-scoped corpus and must not feed public-authority telemetry. |
 
 ## COMP-06 draft acceptance review
 
 PR #280 was re-reviewed read-only through exact hardened head
-`99af2fa49c7abb6c9450828cb805ccf2c9ceb1d5`, based on `origin/main`
+`6ccef170d5b80f31dc01b5b11a59329e6a6a11b4`, based on `origin/main`
 `42b486e791d182010f4e476dd9df293fb9ccd206`. At handoff the owned worktree was
 clean and pushed, and the PR remained open, draft, and blocked. The earlier
 snapshot rehearsal failure at `3f1e4883` was corrected; the mandatory
 `Authority control-plane DB rehearsal` passed on superseded head `2664aa9d` and
-again on exact head `99af2fa4`; tenant safety and both CodeQL analyses were also
+again on exact head `6ccef170`. The only delta after `99af2fa4` aligns the backend
+release test with the canonical `.5` highlight, “Preserve retrieval boundaries”;
+the three focused release tests passed independently. Tenant safety, both CodeQL
+analyses, lint, Office, policy, release, security, and dependency checks were
 green, while backend pytest, frontend build, and browser E2E were still pending
-at the latest snapshot. Passing the synthetic job is necessary but does not
-close the broader acceptance matrix:
+at the latest snapshot. Passing the synthetic job is necessary but does not close
+the broader acceptance matrix:
 
 - **Version-safe service:** cluster, opinion, chunk, and citation snapshots now
   share a corpus version; opinions carry an explicit cluster ID; search, detail,
