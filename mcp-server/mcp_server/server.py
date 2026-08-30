@@ -224,15 +224,7 @@ def run_control_audit(
                     {
                         "ready": row[0] in {"official", "open", "licensed"}
                         and row[1] is not None
-                        and row[2]
-                        not in {
-                            "failed",
-                            "retryable",
-                            "retryable_failure",
-                            "quarantined",
-                            "dead_letter",
-                            "missing",
-                        }
+                        and row[2] in {"complete", "indexed"}
                         and row[3] > 0
                     }
                     for row in cur.fetchall()

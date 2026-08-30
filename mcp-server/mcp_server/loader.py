@@ -385,7 +385,7 @@ def refresh_courtlistener_coverage_ledger(
     filters = ""
     params: list[object] = []
     if court_ids:
-        filters = "WHERE d.court_id = ANY(%s)"
+        filters = "AND ch.court_id = ANY(%s)"
         params.append(sorted(court_ids))
     with conn.cursor() as cur:
         if source_release is None:
@@ -408,7 +408,7 @@ def refresh_courtlistener_coverage_ledger(
                 rows_loaded, chunks_loaded, vectors_loaded, first_document_date,
                 last_document_date, last_checked_at, metadata, updated_at
             )
-            SELECT 'courtlistener:ohio-caselaw', d.court_id,
+            SELECT 'courtlistener:ohio-caselaw', ch.court_id,
                    jsonb_build_object('court_id', d.court_id, 'source', 'CourtListener bulk'),
                    CASE WHEN COUNT(ch.chunk_id) = 0 THEN 'loading'
                         WHEN COUNT(ch.chunk_id) = COUNT(ch.chunk_id) FILTER (WHERE ch.embedding IS NOT NULL)
@@ -419,13 +419,11 @@ def refresh_courtlistener_coverage_ledger(
                    MIN(ac.date_filed), MAX(ac.date_filed), now(),
                    jsonb_build_object('dockets', COUNT(DISTINCT ac.docket_id),
                                       'clusters', COUNT(DISTINCT ch.cluster_id)), now()
-            FROM dockets d
-            LEFT JOIN authority_case_chunks ch
-              ON ch.corpus_version = %s AND ch.court_id = d.court_id
+            FROM authority_case_chunks ch
             LEFT JOIN authority_case_clusters ac
               ON ac.corpus_version = %s AND ac.cluster_id = ch.cluster_id
-            {filters}
-            GROUP BY d.court_id
+            WHERE ch.corpus_version = %s {filters}
+            GROUP BY ch.court_id
             ON CONFLICT (source_key, partition_key, source_release) DO UPDATE SET
                 rows_loaded = EXCLUDED.rows_loaded,
                 chunks_loaded = EXCLUDED.chunks_loaded,
@@ -437,7 +435,7 @@ def refresh_courtlistener_coverage_ledger(
                 metadata = EXCLUDED.metadata,
                 updated_at = now()
             """,
-            [source_release, source_release, source_release, *params],
+            [source_release, source_release, *params],
         )
 
 

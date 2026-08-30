@@ -26,6 +26,7 @@ from mcp_server.loader import (
     backfill_promoted_caselaw_snapshot,
     create_snapshot_chunks,
     init_schema,
+    refresh_courtlistener_coverage_ledger,
 )
 from mcp_server.repository import CourtListenerRepository
 
@@ -72,6 +73,18 @@ def test_authority_release_rehearsal():
                     [source_key],
                 )
                 cur.execute(
+                    """INSERT INTO legal_sources
+                    (source_key, publisher, source_type, canonical_url, enabled,
+                     storage_policy, rights_decision, reviewed_at, reviewed_by,
+                     expected_cadence, claim_safe_wording, metadata)
+                    VALUES ('courtlistener:ohio-caselaw', 'Rehearsal', 'case_law',
+                            'https://example.test/caselaw', TRUE, 'normalized_text',
+                            'official', now(), 'rehearsal-admin', 'daily',
+                            'Fixture caselaw source only',
+                            '{"catalog_schema_version":"rehearsal","implementation_status":"fixture"}')
+                    ON CONFLICT DO NOTHING"""
+                )
+                cur.execute(
                     """INSERT INTO legal_documents
                     (source_key, external_id, document_type, title, authority_tier,
                      canonical_url, corpus_version, text_content)
@@ -115,8 +128,8 @@ def test_authority_release_rehearsal():
                 )
                 cur.execute(
                     """INSERT INTO authority_case_chunks
-                    (corpus_version, opinion_id, cluster_id, chunk_index, content)
-                    VALUES (%s, %s, %s, 0, %s)
+                    (corpus_version, opinion_id, cluster_id, court_id, chunk_index, content)
+                    VALUES (%s, %s, %s, 'ohio', 0, %s)
                     ON CONFLICT (corpus_version, opinion_id, chunk_index) DO UPDATE
                     SET content=EXCLUDED.content""",
                     [version_name, cluster_id, cluster_id, suffix + " case authority"],
@@ -144,8 +157,8 @@ def test_authority_release_rehearsal():
                 )
                 cur.execute(
                     """INSERT INTO authority_case_chunks
-                    (corpus_version, opinion_id, cluster_id, chunk_index, content)
-                    VALUES (%s, %s, %s, 0, %s)
+                    (corpus_version, opinion_id, cluster_id, court_id, chunk_index, content)
+                    VALUES (%s, %s, %s, 'ohio', 0, %s)
                     ON CONFLICT (corpus_version, opinion_id, chunk_index) DO UPDATE
                     SET cluster_id=EXCLUDED.cluster_id, content=EXCLUDED.content""",
                     [
@@ -183,6 +196,7 @@ def test_authority_release_rehearsal():
         )
         add_fixture(version, "old")
         create_snapshot_chunks(conn, version)
+        refresh_courtlistener_coverage_ledger(conn, source_release=version)
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT COUNT(DISTINCT cluster_id) FROM authority_case_chunks WHERE corpus_version=%s",
