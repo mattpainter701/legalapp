@@ -1053,6 +1053,7 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
             embedding_dimension=follow_dimension,
         )
         add_fixture(follow_up, "new")
+        conn.commit()
         follow_config = WorkerConfig(
             worker_id=0,
             total_workers=1,
