@@ -1127,8 +1127,19 @@ def test_legal_only_upgrade_bootstrap_rehearsal():
             assert cur.fetchone() == (("legacy-bootstrap", "legacy-bootstrap"))
             result = CourtListenerRepository(conn).search_legal_authorities("Legacy statute")
             assert result and result[0]["title"] == "Legacy statute"
+            cur.execute(
+                """SELECT convalidated FROM pg_constraint
+                    WHERE conname='fk_legal_document_chunks_same_version'"""
+            )
+            assert cur.fetchone() == (True,)
         conn.commit()
     init_schema(scoped_url)
+    with connect(scoped_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT COUNT(*) FROM legal_documents WHERE external_id='statute-1'"""
+            )
+            assert cur.fetchone()[0] == 1
 
 
 def test_legacy_upgrade_bootstrap_rehearsal():
