@@ -396,6 +396,40 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
         replay_counts = load_staged_core(bulk_dir, db_url)
         assert replay_counts == bulk_counts
         assert create_chunks(db_url) == 0
+        # A changed replay must invalidate the old vector contract while an
+        # unchanged replay remains idempotent.  The production CSV path is
+        # used here rather than updating snapshot rows directly.
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE authority_case_chunks
+                   SET embedding=('[' || array_to_string(array_fill(0, ARRAY[1024]), ',') || ']')::vector,
+                       embedding_model='fixture-model', embedding_version='1'
+                 WHERE corpus_version=%s AND opinion_id=97100001 AND chunk_index=0""",
+                [version],
+            )
+        conn.commit()
+        write_bulk(
+            "opinions-rehearsal.csv.bz2",
+            ["id", "cluster_id", "type", "author_id", "html_with_citations", "plain_text", "sha1", "download_url"],
+            [{
+                "id": "97100001", "cluster_id": "97100001", "type": "010combined",
+                "author_id": "judge", "html_with_citations": "",
+                "plain_text": "Bulk fixture opinion changed", "sha1": "bulk-sha-2",
+                "download_url": "https://example.test/bulk",
+            }],
+        )
+        assert load_staged_core(bulk_dir, db_url)["opinions"] == 1
+        assert create_chunks(db_url) > 0
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT content, embedding, embedding_model, embedding_version
+                   FROM authority_case_chunks
+                  WHERE corpus_version=%s AND opinion_id=97100001 AND chunk_index=0""",
+                [version],
+            )
+            changed_chunk = cur.fetchone()
+        assert changed_chunk[0] == "Bulk fixture opinion changed"
+        assert changed_chunk[1:] == (None, None, None)
         add_fixture(version, "old")
         monkeypatch.setenv("AUTHORITY_INGEST_CORPUS_VERSION", version)
         ingest_input = {

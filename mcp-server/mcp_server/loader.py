@@ -625,7 +625,7 @@ def _load_csv(
         """,
     }
     corpus_version = None
-    if table_name == "opinion_clusters":
+    if table_name in {"opinion_clusters", "opinions", "citations", "citation_map"}:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT version FROM authority_corpus_versions WHERE status IN ('staged','canary') ORDER BY created_at DESC LIMIT 1"
@@ -985,12 +985,11 @@ def create_chunks(db_url: str | None = None, limit: int | None = None) -> int:
             )
             version_row = cur.fetchone()
         if version_row:
-            # Snapshot-backed serving must not depend on the singleton legacy
-            # opinion_chunks table.  Generate candidate chunks directly from
-            # the candidate opinion snapshot, then copy any legacy metadata
-            # that is still needed for compatibility.
-            created += create_snapshot_chunks(conn, version_row[0], limit=limit)
             materialize_caselaw_snapshot(conn, version_row[0])
+            # Snapshot-backed serving is generated from the candidate
+            # opinions after one-way seeding. Legacy singleton rows must not
+            # overwrite candidate text or vector contracts on replay.
+            created += create_snapshot_chunks(conn, version_row[0], limit=limit)
         refresh_courtlistener_coverage_ledger(
             conn, source_release=version_row[0] if version_row else None
         )
@@ -1033,10 +1032,7 @@ def materialize_caselaw_snapshot(conn, corpus_version: str) -> None:
                    oc.embedding_version::text
             FROM opinion_chunks oc JOIN opinion_clusters cl ON cl.cluster_id=oc.cluster_id
             WHERE cl.corpus_version=%s AND oc.corpus_version=%s
-            ON CONFLICT (corpus_version, opinion_id, chunk_index) DO UPDATE SET
-              content=EXCLUDED.content, embedding=EXCLUDED.embedding,
-              embedding_model=EXCLUDED.embedding_model,
-              embedding_version=EXCLUDED.embedding_version
+            ON CONFLICT (corpus_version, opinion_id, chunk_index) DO NOTHING
         """,
             [corpus_version, corpus_version, corpus_version],
         )
@@ -1095,7 +1091,11 @@ def create_snapshot_chunks(conn, corpus_version: str, limit: int | None = None) 
                        chunk_index, content)
                     VALUES (%s, %s, %s, %s, %s, %s)
                     ON CONFLICT (corpus_version, opinion_id, chunk_index)
-                    DO UPDATE SET content=EXCLUDED.content
+                    DO UPDATE SET
+                      content=EXCLUDED.content,
+                      embedding=NULL,
+                      embedding_model=NULL,
+                      embedding_version=NULL
                     WHERE authority_case_chunks.content IS DISTINCT FROM EXCLUDED.content
                     """,
                     [corpus_version, opinion_id, cluster_id, court_id, idx, content],
