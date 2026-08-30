@@ -112,7 +112,14 @@ async def test_list_decision_and_exports_are_matter_scoped(monkeypatch):
         input_sha256="a" * 64,
         input_size=5,
         result_json={
-            "citations": [{"id": "citation-1"}],
+            "citations": [
+                {
+                    "id": "citation-1",
+                    "input": "123 F.3d 456",
+                    "status": "missing_source",
+                    "location": "paragraph 1",
+                }
+            ],
             "quotations": [],
             "omitted_authority_candidates": [],
         },
