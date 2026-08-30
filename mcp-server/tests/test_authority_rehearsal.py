@@ -38,6 +38,8 @@ from mcp_server.loader import (
 from mcp_server.authority_ingest import FetchedDocument, ingest_document
 from mcp_server.repository import CourtListenerRepository
 from mcp_server.server import ControlPlaneRequest, run_control_audit
+from mcp_server.jetson_worker import process_once
+from mcp_server.worker_config import WorkerConfig
 
 
 def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
@@ -1047,6 +1049,75 @@ def consume_operator_assertion_with_db(db_url, claims):
                 conn.rollback()
                 raise RuntimeError("replayed signed operator context")
         conn.commit()
+
+
+def test_process_once_rehearsal_both_corpora():
+    """Exercise the production worker path with a deterministic model."""
+    db_url = os.getenv("AUTHORITY_REHEARSAL_DATABASE_URL")
+    if not db_url:
+        pytest.skip("set AUTHORITY_REHEARSAL_DATABASE_URL for the disposable DB rehearsal")
+    init_schema(db_url)
+
+    class DeterministicModel:
+        def encode(self, texts, **_kwargs):
+            return [[1.0] + [0.0] * 1023 for _ in texts]
+
+    with connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT version, embedding_model, embedding_version, embedding_dimension
+                     FROM authority_corpus_versions
+                    WHERE status IN ('staged', 'canary', 'promoted')
+                    ORDER BY CASE status WHEN 'staged' THEN 0 WHEN 'canary' THEN 1 ELSE 2 END,
+                             created_at DESC LIMIT 1"""
+            )
+            contract = cur.fetchone()
+            if not contract:
+                pytest.skip("release rehearsal has not produced a corpus version")
+            version, model_name, model_version, dimension = contract
+            cur.execute(
+                """SELECT COUNT(*) FROM legal_document_chunks c
+                     JOIN legal_documents d ON d.id=c.document_id
+                    WHERE d.corpus_version=%s AND c.embedding IS NULL""",
+                [version],
+            )
+            legal_before = cur.fetchone()[0]
+            cur.execute(
+                """SELECT COUNT(*) FROM authority_case_chunks
+                    WHERE corpus_version=%s AND embedding IS NULL""",
+                [version],
+            )
+            authority_before = cur.fetchone()[0]
+        conn.commit()
+    if not legal_before and not authority_before:
+        pytest.skip("release rehearsal has no unembedded candidate chunks")
+    config = WorkerConfig(
+        worker_id=0,
+        total_workers=1,
+        batch_size=8,
+        model=model_name,
+        model_version=str(model_version),
+        dim=dimension,
+        db_url=db_url,
+    )
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setenv("AUTHORITY_EMBEDDING_CORPUS_VERSION", version)
+    monkeypatch.setenv("AUTHORITY_HEARTBEAT_INTERVAL_SECONDS", "0.01")
+    try:
+        embedded = process_once(config, DeterministicModel())
+    finally:
+        monkeypatch.undo()
+    assert embedded == legal_before + authority_before
+    with connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT COUNT(*) FROM authority_embedding_shards
+                    WHERE corpus_version=%s AND status='complete'
+                      AND throughput_per_minute IS NOT NULL
+                      AND capacity_evidence->>'observed_at' IS NOT NULL""",
+                [version],
+            )
+            assert cur.fetchone()[0] >= 1
 
 
 def test_legal_only_upgrade_bootstrap_rehearsal():
