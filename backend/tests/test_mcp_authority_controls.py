@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from jose import jwt
 from sqlalchemy import select
 
 from app.models.operator_audit import OperatorAuditLog
@@ -103,13 +104,9 @@ async def test_real_authority_route_session_and_denials_are_audited(
             ]
         ),
     )
-    monkeypatch.setattr(
-        platform_auth.settings, "PLATFORM_TOKEN_SIGNING_KEY", "z" * 48
-    )
+    monkeypatch.setattr(platform_auth.settings, "PLATFORM_TOKEN_SIGNING_KEY", "z" * 48)
     monkeypatch.setattr(mcp_router.settings, "MCP_SERVER_URL", "http://mcp.test")
-    monkeypatch.setattr(
-        mcp_router.settings, "MCP_OPERATOR_ASSERTION_SECRET", "s" * 48
-    )
+    monkeypatch.setattr(mcp_router.settings, "MCP_OPERATOR_ASSERTION_SECRET", "s" * 48)
     calls = []
 
     async def fake_proxy(path, request, payload, *, extra_headers=None):
@@ -135,7 +132,13 @@ async def test_real_authority_route_session_and_denials_are_audited(
     assert accepted.status_code == 200, accepted.text
     assert calls[0][2]["X-Operator-Identity"] == "authority-operator"
 
-    for headers in ({}, {"Authorization": "Bearer malformed"}):
+    for headers in (
+        {"Authorization": ""},
+        {"Authorization": "Bearer malformed"},
+        {
+            "Authorization": f"Bearer {jwt.encode({'sub': 'wrong-issuer', 'jti': 'bad'}, 'z' * 48, algorithm='HS256')}"
+        },
+    ):
         denied = await client.post(
             "/api/mcp/authority/stage",
             headers=headers,
@@ -144,11 +147,43 @@ async def test_real_authority_route_session_and_denials_are_audited(
         assert denied.status_code == 403
     read_only = await client.post(
         "/api/mcp/authority/stage",
-        headers={"Authorization": f"Bearer {platform_auth.issue_platform_token(subject='read-only', scopes=['platform:read'], allowed_scopes=['platform:read'])[0]}"},
+        headers={
+            "Authorization": f"Bearer {platform_auth.issue_platform_token(subject='read-only', scopes=['platform:read'], allowed_scopes=['platform:read'])[0]}"
+        },
         json={"version": "v-test", "reason": "read-only fixture"},
     )
     assert read_only.status_code == 403
-    assert len(calls) == 1
+    tenant_jwt = await client.post(
+        "/api/mcp/authority/stage",
+        json={"version": "v-test", "reason": "tenant fixture"},
+    )
+    assert tenant_jwt.status_code == 403
+
+    minted = await client.post(
+        "/api/platform/api-keys",
+        headers=session_headers,
+        json={"label": "authority-matrix", "scopes": ["platform:write"]},
+    )
+    assert minted.status_code == 201, minted.text
+    minted_headers = {"Authorization": f"Bearer {minted.json()['key']}"}
+    minted_success = await client.post(
+        "/api/mcp/authority/stage",
+        headers=minted_headers,
+        json={"version": "v-test", "reason": "minted fixture"},
+    )
+    assert minted_success.status_code == 200
+    revoked = await client.delete(
+        f"/api/platform/api-keys/{minted.json()['id']}",
+        headers=session_headers,
+    )
+    assert revoked.status_code == 200
+    revoked_denial = await client.post(
+        "/api/mcp/authority/stage",
+        headers=minted_headers,
+        json={"version": "v-test", "reason": "revoked fixture"},
+    )
+    assert revoked_denial.status_code == 403
+    assert len(calls) == 2
 
     logs = (
         (
@@ -161,7 +196,9 @@ async def test_real_authority_route_session_and_denials_are_audited(
         .scalars()
         .all()
     )
-    operator_logs = [row for row in logs if row.resource_id == "/api/mcp/authority/stage"]
+    operator_logs = [
+        row for row in logs if row.resource_id == "/api/mcp/authority/stage"
+    ]
     assert any(
         row.actor_id == "authority-operator"
         and row.metadata_json.get("scope") == "platform:write"
@@ -169,8 +206,12 @@ async def test_real_authority_route_session_and_denials_are_audited(
         for row in operator_logs
     )
     assert any(
-        row.actor_id == "authority-operator"
+        row.actor_id == "read-only"
         and row.metadata_json.get("scope") == "platform:write"
         and row.metadata_json.get("status_code") == 403
+        for row in operator_logs
+    )
+    assert any(
+        row.actor_id is None and row.metadata_json.get("status_code") == 403
         for row in operator_logs
     )

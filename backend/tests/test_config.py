@@ -28,9 +28,7 @@ def _demo_settings(**overrides):
 
 
 def test_durable_worker_concurrency_is_bounded():
-    validate_worker_settings(
-        SimpleNamespace(DURABLE_JOB_TENANT_CONCURRENCY=4)
-    )
+    validate_worker_settings(SimpleNamespace(DURABLE_JOB_TENANT_CONCURRENCY=4))
     for concurrency in (0, 17):
         with pytest.raises(ValueError, match="DURABLE_JOB_TENANT_CONCURRENCY"):
             validate_worker_settings(
@@ -144,9 +142,7 @@ def test_token_encryption_key_invalid_raises(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://test")
     monkeypatch.setenv("SECRET_KEY", "test-secret")
 
-    with pytest.raises(
-        ValueError, match="must be a valid Fernet key"
-    ):
+    with pytest.raises(ValueError, match="must be a valid Fernet key"):
         settings = Settings(_env_file=None)
         validate_token_encryption_key(settings)
 
@@ -171,9 +167,7 @@ def test_research_mcp_shorthand_is_public_origin_only():
         RESEARCH_MCP_PUBLIC_URL="https://research.getlawhand.com/api/mcp",
     )
 
-    assert settings.research_mcp_endpoint == (
-        "https://research.getlawhand.com/api/mcp"
-    )
+    assert settings.research_mcp_endpoint == ("https://research.getlawhand.com/api/mcp")
     assert settings.research_mcp_shorthand == "https://research.getlawhand.com"
 
 
@@ -227,6 +221,15 @@ def test_mcp_operator_assertion_signer_cannot_reuse_platform_or_encryption_secre
     with pytest.raises(ValueError, match="token-encryption"):
         validate_mcp_security_settings(
             Settings(**{**base, "TOKEN_ENCRYPTION_KEY": "s" * 40})
+        )
+    with pytest.raises(ValueError, match="token-encryption"):
+        validate_mcp_security_settings(
+            Settings(
+                **{
+                    **base,
+                    "TOKEN_ENCRYPTION_KEYS": "first-key,s" + "s" * 39,
+                }
+            )
         )
 
 

@@ -293,7 +293,6 @@ def _production_env(**overrides: str) -> str:
         "MCP_SERVER_URL": "http://courtlistener-mcp:8000",
         "MCP_UPSTREAM_API_KEY": "mcp-upstream-key-0123456789-abcdef",
         "MCP_OPERATOR_ASSERTION_SECRET": "mcp-operator-signer-0123456789-abcdef",
-        "MCP_OPERATOR_ASSERTION_SECRET": "mcp-operator-signer-0123456789-abcdef",
         "UPLOADS_HOST_DIR": "/srv/legalapp/uploads",
         "HOST_STATUS_HOST_DIR": "/srv/legalapp/host-status",
         "HOST_DISK_STATUS_FILE": "/run/legalapp-host-status/disk-status.json",
@@ -1187,6 +1186,32 @@ def test_production_preflight_rejects_launch_flags_and_unstaged_credentials(
     assert OLD_FERNET_KEY not in output
 
 
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ("", "MCP_OPERATOR_ASSERTION_SECRET must be at least 32 characters"),
+        ("short", "MCP_OPERATOR_ASSERTION_SECRET must be at least 32 characters"),
+        (
+            "ops-secret-key-0123456789-abcdefghijklmnopqrstuvwxyz",
+            "distinct from SECRET_KEY",
+        ),
+        (NEW_FERNET_KEY, "token-encryption key"),
+    ],
+)
+def test_production_preflight_rejects_unsafe_mcp_assertion_signer(
+    tmp_path: Path, value: str, message: str
+) -> None:
+    result = _run_preflight(
+        tmp_path,
+        _production_env(MCP_OPERATOR_ASSERTION_SECRET=value),
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert message in output
+    if value:
+        assert value not in output
+
+
 def test_production_preflight_rejects_public_signup_flag_drift(tmp_path: Path) -> None:
     result = _run_preflight(
         tmp_path,
@@ -1602,7 +1627,9 @@ def test_litellm_release_contract_is_pinned_and_fail_closed() -> None:
         assert proxy["depends_on"] == {
             "litellm-schema-migrator": {"condition": "service_completed_successfully"}
         }
-        expected_start_period = "240s" if compose_name == "docker-compose.hypervisor.yml" else "90s"
+        expected_start_period = (
+            "240s" if compose_name == "docker-compose.hypervisor.yml" else "90s"
+        )
         assert proxy["healthcheck"]["start_period"] == expected_start_period
         assert proxy["healthcheck"]["retries"] == 5
         assert services["litellm-migrator"]["entrypoint"] == ["prisma"]
@@ -1967,7 +1994,7 @@ def test_skynet_installers_separate_runner_from_runtime_owner() -> None:
 
     dev1_compose = (ROOT / "docker-compose.dev1.yml").read_text(encoding="utf-8")
     assert 'profiles: ["office-addin-disabled-on-dev1"]' in dev1_compose
-    assert 'extra_hosts:' in dev1_compose
+    assert "extra_hosts:" in dev1_compose
     assert '- "office-addin=127.0.0.1"' in dev1_compose
 
     for installer in (dev1, dr):

@@ -809,7 +809,13 @@ def validate_mcp_security_settings(settings: Settings) -> None:
                 raise ValueError(
                     f"MCP_OPERATOR_ASSERTION_SECRET must be distinct from {name}"
                 )
-        encryption_values = list(getattr(settings, "TOKEN_ENCRYPTION_KEYS", []) or [])
+        encryption_values = [
+            item.strip()
+            for item in str(getattr(settings, "TOKEN_ENCRYPTION_KEYS", "") or "")
+            .replace("\n", ",")
+            .split(",")
+            if item.strip()
+        ]
         legacy_encryption = str(
             getattr(settings, "TOKEN_ENCRYPTION_KEY", "") or ""
         ).strip()
