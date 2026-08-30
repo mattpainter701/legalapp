@@ -23,6 +23,7 @@ def test_authority_platform_paths_use_segment_boundaries():
 async def test_authority_control_forwards_signed_principal_and_ignores_spoofed_actor(
     monkeypatch,
 ):
+    monkeypatch.setattr(mcp_router.settings, "MCP_SERVER_URL", "http://mcp.test")
     principal = SimpleNamespace(actor_id="signed-operator", credential_id="key-1")
     captured = {}
 
