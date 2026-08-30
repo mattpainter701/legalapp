@@ -231,6 +231,14 @@ def promote_corpus_version(conn: Any, *, version: str, actor: str, reason: str) 
         if not target or target[0] not in {"staged", "canary"}:
             raise ValueError("corpus version is missing or not staged/canary")
         cur.execute(
+            """SELECT embedding_model, embedding_version, embedding_dimension
+                 FROM authority_corpus_versions WHERE version=%s""",
+            [version],
+        )
+        target_contract = cur.fetchone()
+        if not target_contract or any(value is None for value in target_contract):
+            raise PermissionError("target corpus embedding contract is incomplete")
+        cur.execute(
             """
             SELECT COUNT(*) FROM (
                 SELECT DISTINCT ON (audit_kind) audit_kind, passed
@@ -258,6 +266,31 @@ def promote_corpus_version(conn: Any, *, version: str, actor: str, reason: str) 
         if not cur.fetchone()[0]:
             raise PermissionError(
                 "a corpus version must contain searchable authority snapshot chunks"
+            )
+        cur.execute(
+            """SELECT COUNT(*) FROM legal_document_chunks c
+                 JOIN legal_documents d ON d.id=c.document_id
+                WHERE d.corpus_version=%s
+                  AND (c.embedding IS NULL
+                       OR c.embedding_model IS DISTINCT FROM %s
+                       OR c.embedding_version::text IS DISTINCT FROM %s
+                       OR vector_dims(c.embedding) IS DISTINCT FROM %s)""",
+            [version, target_contract[0], target_contract[1], target_contract[2]],
+        )
+        legal_invalid = cur.fetchone()[0]
+        cur.execute(
+            """SELECT COUNT(*) FROM authority_case_chunks
+                WHERE corpus_version=%s
+                  AND (embedding IS NULL
+                       OR embedding_model IS DISTINCT FROM %s
+                       OR embedding_version IS DISTINCT FROM %s
+                       OR vector_dims(embedding) IS DISTINCT FROM %s)""",
+            [version, target_contract[0], target_contract[1], target_contract[2]],
+        )
+        authority_invalid = cur.fetchone()[0]
+        if legal_invalid or authority_invalid:
+            raise PermissionError(
+                "target corpus contains chunks without complete matching embeddings"
             )
         cur.execute(
             """

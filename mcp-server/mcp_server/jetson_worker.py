@@ -7,6 +7,7 @@ import time
 import json
 import platform
 import shutil
+import threading
 from collections import Counter
 from typing import Iterable
 
@@ -132,6 +133,43 @@ def embed_batch(model, texts: list[str], batch_size: int) -> list[list[float]]:
     return [vector.tolist() if hasattr(vector, "tolist") else list(vector) for vector in vectors]
 
 
+class _LeaseHeartbeat:
+    """Renew a shard lease on an independent connection during inference."""
+
+    def __init__(self, db_url, shard_key: str, worker_id: str, interval: float = 30.0):
+        self.db_url = db_url
+        self.shard_key = shard_key
+        self.worker_id = worker_id
+        self.interval = max(float(interval), 0.01)
+        self.lost = threading.Event()
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self) -> None:
+        while not self.stop.wait(self.interval):
+            try:
+                with connect(self.db_url) as heartbeat_conn:
+                    if not heartbeat_embedding_shard(
+                        heartbeat_conn,
+                        shard_key=self.shard_key,
+                        worker_id=self.worker_id,
+                        lease_seconds=900,
+                    ):
+                        self.lost.set()
+                        return
+            except Exception:
+                self.lost.set()
+                return
+
+    def __enter__(self):
+        self.thread.start()
+        return self
+
+    def __exit__(self, *_exc):
+        self.stop.set()
+        self.thread.join(timeout=max(self.interval * 2, 1.0))
+
+
 def process_once(config: WorkerConfig, model) -> int:
     config.validate()
     overall_total = 0
@@ -180,7 +218,13 @@ def process_once(config: WorkerConfig, model) -> int:
             started = time.monotonic()
             total = 0
             try:
-                while True:
+                with _LeaseHeartbeat(
+                    config.db_url,
+                    shard_key,
+                    str(config.worker_id),
+                    os.getenv("AUTHORITY_HEARTBEAT_INTERVAL_SECONDS", "30"),
+                ) as lease:
+                  while True:
                     if not heartbeat_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id), lease_seconds=900):
                         raise RuntimeError("embedding lease lost before batch")
                     with conn.cursor() as cur:
@@ -197,6 +241,8 @@ def process_once(config: WorkerConfig, model) -> int:
                         vectors = embed_batch(model, texts, config.batch_size)
                         if len(vectors) != len(ids) or any(len(vector) != config.dim for vector in vectors):
                             raise RuntimeError("embedding output count or dimension mismatch")
+                        if lease.lost.is_set():
+                            raise RuntimeError("embedding lease lost during inference")
                         if not heartbeat_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id), lease_seconds=900):
                             raise RuntimeError("embedding lease lost before writes")
                         updates = [(format_embedding(vector), config.model, config.model_version, chunk_id) for chunk_id, vector in zip(ids, vectors)]
@@ -212,6 +258,23 @@ def process_once(config: WorkerConfig, model) -> int:
                                 )
                         conn.commit()
                         total += len(updates)
+                        elapsed_batch = max(time.monotonic() - started, 0.001)
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                """UPDATE authority_embedding_shards
+                                   SET throughput_per_minute=%s, temperature_c=%s,
+                                       capacity_evidence=%s::jsonb, updated_at=now()
+                                 WHERE shard_key=%s AND status='leased'
+                                   AND lease_owner=%s""",
+                                [
+                                    total / elapsed_batch * 60,
+                                    telemetry["temperature_c"],
+                                    json.dumps({**telemetry, "batch_observed_at": time.time()}),
+                                    shard_key,
+                                    str(config.worker_id),
+                                ],
+                            )
+                        conn.commit()
                 elapsed = max(time.monotonic() - started, 0.001)
                 finish_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id), success=True, throughput_per_minute=total / elapsed * 60)
                 overall_total += total
