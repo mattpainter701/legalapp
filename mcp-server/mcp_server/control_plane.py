@@ -374,7 +374,7 @@ def stage_corpus_version(
     if (
         not manifest_hash
         or not as_of
-        or not embedding_model.strip()
+        or not str(embedding_model or "").strip()
         or not str(embedding_version).strip()
         or embedding_dimension != 1024
     ):
@@ -592,7 +592,8 @@ def finish_embedding_shard(
                                       ELSE 'retryable' END,
                            last_error=%s, dead_letter_reason=%s,
                            throughput_per_minute=%s, updated_at=now()
-                       WHERE shard_key=%s AND status='leased' AND lease_owner=%s""",
+                       WHERE shard_key=%s AND status='leased' AND lease_owner=%s
+                         AND lease_expires_at > now()""",
             [
                 success,
                 None if success else (error or "")[:2000],

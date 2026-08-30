@@ -957,9 +957,29 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 "UPDATE authority_embedding_shards SET lease_expires_at=now() - interval '1 second' WHERE shard_key=%s",
                 [shard],
             )
+        assert not heartbeat_embedding_shard(
+            conn, shard_key=shard, worker_id="worker-a", lease_seconds=30
+        )
+        with pytest.raises(PermissionError):
+            finish_embedding_shard(
+                conn,
+                shard_key=shard,
+                worker_id="worker-a",
+                success=True,
+            )
         assert claim_embedding_shard(
             conn, shard_key=shard, worker_id="worker-b", lease_seconds=30
         )
+        assert not heartbeat_embedding_shard(
+            conn, shard_key=shard, worker_id="worker-a", lease_seconds=30
+        )
+        with pytest.raises(PermissionError):
+            finish_embedding_shard(
+                conn,
+                shard_key=shard,
+                worker_id="worker-a",
+                success=True,
+            )
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE authority_embedding_shards SET attempts=3 WHERE shard_key=%s",
@@ -979,10 +999,9 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
             )
             shard_status, shard_error = cur.fetchone()
             assert shard_status == "dead_letter" and shard_error
-        with pytest.raises(PermissionError):
-            heartbeat_embedding_shard(
-                conn, shard_key=shard, worker_id="worker-a", lease_seconds=30
-            )
+        assert not heartbeat_embedding_shard(
+            conn, shard_key=shard, worker_id="worker-a", lease_seconds=30
+        )
         with pytest.raises(PermissionError):
             finish_embedding_shard(
                 conn,
