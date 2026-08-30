@@ -62,8 +62,52 @@ def init_schema(db_url: str | None = None) -> None:
     with connect(db_url) as conn:
         with conn.cursor() as cur:
             cur.execute(SCHEMA_SQL)
+        _ensure_legacy_bootstrap_version(conn)
         backfill_promoted_caselaw_snapshot(conn)
         conn.commit()
+
+
+def _ensure_legacy_bootstrap_version(conn) -> str | None:
+    """Create a deterministic served version for a pre-control-plane DB.
+
+    Older installations have searchable singleton rows but no corpus ledger.
+    Snapshot-backed readers must not silently return an empty corpus during
+    their first upgrade, so bind those rows to one explicit legacy release
+    before the normal idempotent snapshot backfill runs.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT version FROM authority_corpus_versions WHERE status='promoted' LIMIT 1"
+        )
+        if cur.fetchone():
+            return None
+        cur.execute(
+            """SELECT EXISTS (SELECT 1 FROM opinion_clusters)
+                    OR EXISTS (SELECT 1 FROM opinions)
+                    OR EXISTS (SELECT 1 FROM opinion_chunks)
+                    OR EXISTS (SELECT 1 FROM opinion_citations)"""
+        )
+        if not cur.fetchone()[0]:
+            return None
+        version = "legacy-bootstrap"
+        cur.execute(
+            """INSERT INTO authority_corpus_versions
+                 (version, status, manifest_hash, as_of, promoted_at,
+                  reason, metadata)
+               VALUES (%s, 'promoted', 'legacy-bootstrap', now(), now(),
+                       'Initial snapshot upgrade of the legacy served corpus',
+                       '{\"bootstrap\":true}'::jsonb)
+               ON CONFLICT (version) DO UPDATE
+                 SET status='promoted', promoted_at=COALESCE(
+                       authority_corpus_versions.promoted_at, EXCLUDED.promoted_at)""",
+            [version],
+        )
+        for table in ("opinion_clusters", "opinion_chunks", "legal_documents"):
+            cur.execute(
+                f"UPDATE {table} SET corpus_version=%s WHERE corpus_version IS NULL",
+                [version],
+            )
+        return version
 
 
 def backfill_promoted_caselaw_snapshot(conn) -> int:
@@ -128,7 +172,7 @@ def backfill_promoted_caselaw_snapshot(conn) -> int:
             FROM opinion_citations cit
             WHERE cit.citing_opinion_id IN (
                 SELECT opinion_id FROM authority_case_opinions WHERE corpus_version=%s
-            ) AND cit.cited_opinion_id IS NOT NULL
+            )
             ON CONFLICT DO NOTHING
         """,
             [version, version],
