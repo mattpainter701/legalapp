@@ -236,7 +236,12 @@ def promote_corpus_version(conn: Any, *, version: str, actor: str, reason: str) 
             [version],
         )
         target_contract = cur.fetchone()
-        if not target_contract or any(value is None for value in target_contract):
+        if (
+            not target_contract
+            or any(value is None for value in target_contract)
+            or not str(target_contract[0]).strip()
+            or not str(target_contract[1]).strip()
+        ):
             raise PermissionError("target corpus embedding contract is incomplete")
         cur.execute(
             """
@@ -366,7 +371,13 @@ def stage_corpus_version(
 ) -> None:
     """Create a staged immutable release and record its rollback target."""
     actor, reason = _authorized(actor, reason)
-    if not manifest_hash or not as_of or embedding_dimension != 1024:
+    if (
+        not manifest_hash
+        or not as_of
+        or not embedding_model.strip()
+        or not str(embedding_version).strip()
+        or embedding_dimension != 1024
+    ):
         raise ValueError(
             "manifest hash, as-of date, and 1024-dimensional embedding contract are required"
         )

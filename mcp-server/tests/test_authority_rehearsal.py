@@ -979,6 +979,17 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
             )
             shard_status, shard_error = cur.fetchone()
             assert shard_status == "dead_letter" and shard_error
+        with pytest.raises(PermissionError):
+            heartbeat_embedding_shard(
+                conn, shard_key=shard, worker_id="worker-a", lease_seconds=30
+            )
+        with pytest.raises(PermissionError):
+            finish_embedding_shard(
+                conn,
+                shard_key=shard,
+                worker_id="worker-a",
+                success=True,
+            )
 
         # Private material is rejected at the public namespace boundary and
         # cannot pass the isolation audit as public authority evidence.
@@ -1395,14 +1406,55 @@ def test_process_once_rehearsal_both_corpora():
     with connect(db_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """SELECT embedding, status FROM authority_case_chunks c
-                     JOIN authority_embedding_shards s ON s.corpus_version=c.corpus_version
-                    WHERE c.corpus_version=%s AND c.chunk_index=3
-                    ORDER BY s.updated_at DESC LIMIT 1""",
+                """SELECT c.embedding, s.status FROM authority_case_chunks c
+                     JOIN authority_embedding_shards s
+                       ON s.shard_key=%s
+                    WHERE c.corpus_version=%s AND c.chunk_index=3""",
+                [f"authority_case_chunks:0:1:{version}", version],
+            )
+            embedding, status = cur.fetchone()
+            assert embedding is None
+            assert status == "retryable"
+
+    # Repeated production failures consume bounded attempts and terminate in
+    # dead-letter without ever writing a vector. This also proves the
+    # telemetry health object is retained on the shard record.
+    with connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO authority_case_chunks
+                    (corpus_version, opinion_id, cluster_id, court_id, chunk_index, content)
+                    VALUES (%s, 98200001, 98200001, 'worker-court', 4, 'terminal failure')""",
                 [version],
             )
-            embedding, _status = cur.fetchone()
-            assert embedding is None
+        conn.commit()
+
+    class FailingModel:
+        def encode(self, _texts, **_kwargs):
+            raise RuntimeError("deterministic inference failure")
+
+    for _ in range(3):
+        process_once(config, FailingModel())
+    with connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT c.embedding, s.status, s.attempts,
+                           s.capacity_evidence->'health'->>'state',
+                           s.capacity_evidence->'health'->>'sample_age_seconds'
+                      FROM authority_case_chunks c
+                      JOIN authority_embedding_shards s
+                        ON s.corpus_version=c.corpus_version
+                       AND s.corpus_table='authority_case_chunks'
+                     WHERE c.corpus_version=%s AND c.chunk_index=4
+                     ORDER BY s.updated_at DESC LIMIT 1""",
+                [version],
+            )
+            failed_embedding, failed_status, attempts, health_state, sample_age = cur.fetchone()
+            assert failed_embedding is None
+            assert failed_status == "dead_letter"
+            assert attempts >= 3
+            assert health_state in {"healthy", "unavailable", "threshold_exceeded"}
+            assert sample_age is not None
 
 
 def test_legal_only_upgrade_bootstrap_rehearsal():

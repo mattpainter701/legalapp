@@ -60,6 +60,29 @@ def measured_host_telemetry() -> dict:
         telemetry["capacity_source"] = "psutil"
     except (ImportError, OSError, RuntimeError):
         pass
+    max_temperature = float(os.getenv("AUTHORITY_MAX_TEMPERATURE_C", "85"))
+    min_disk_free = int(os.getenv("AUTHORITY_MIN_DISK_FREE_BYTES", "0"))
+    if telemetry["temperature_c"] is None or telemetry["capacity"]["disk_free_bytes"] is None:
+        health_state = "unavailable"
+        health_reason = "temperature or disk capacity telemetry unavailable"
+    elif telemetry["temperature_c"] > max_temperature:
+        health_state = "threshold_exceeded"
+        health_reason = "measured temperature exceeds configured threshold"
+    elif telemetry["capacity"]["disk_free_bytes"] < min_disk_free:
+        health_state = "threshold_exceeded"
+        health_reason = "measured free disk is below configured threshold"
+    else:
+        health_state = "healthy"
+        health_reason = None
+    telemetry["health"] = {
+        "state": health_state,
+        "reason": health_reason,
+        "thresholds": {
+            "max_temperature_c": max_temperature,
+            "min_disk_free_bytes": min_disk_free,
+        },
+        "sample_age_seconds": 0,
+    }
     return telemetry
 
 
@@ -203,7 +226,8 @@ def process_once(config: WorkerConfig, model) -> int:
                 cur.execute(
                     f"""UPDATE authority_embedding_shards SET status='queued',
                            lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL,
-                           updated_at=now()
+                           attempts=0, last_error=NULL, dead_letter_reason=NULL,
+                           dead_letter_at=NULL, updated_at=now()
                         WHERE shard_key=%s AND status='complete'
                           AND EXISTS (SELECT 1 FROM {corpus}
                                       WHERE (embedding IS NULL

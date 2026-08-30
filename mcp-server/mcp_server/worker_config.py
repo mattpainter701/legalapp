@@ -26,6 +26,8 @@ class WorkerConfig:
             raise ValueError("total_workers must be positive")
         if self.batch_size <= 0:
             raise ValueError("batch_size must be positive")
+        if not self.model.strip() or not str(self.model_version).strip():
+            raise ValueError("embedding model and model version are required")
         if self.dim != DEFAULT_DIM:
             raise ValueError("mxbai CourtListener embeddings must be 1024-dimensional")
 
