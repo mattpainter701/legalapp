@@ -1,7 +1,7 @@
 # Core milestone acceptance status
 
 Last independently revalidated: 2026-08-30
-Baseline: `origin/main` `330c14a5312392dd680d89de6095a9144e8ea4be`
+Baseline: `origin/main` `7a29f551c216d2b3db78dbc8dd7c49658f2a4842`
 
 This is the evidence ledger for the competitive P0 milestones in `TASKS.md`.
 A merged feature PR is implementation evidence, not automatic milestone
@@ -16,76 +16,39 @@ production-shaped rehearsal. Live deployment evidence remains release-specific.
 | `COMP-03` | Open — closure active | PR #270 supplies spam-resistant conditional intake, source attribution, conflict triage, published-slot booking, guarded lead promotion, recovery candidates, and funnel counters. Provider-backed reminders, consented SMS (`ECO-23–ECO-29`), signed-fee-agreement-gated promotion, and the complete lead-to-retainer rehearsal are not proven at this baseline. |
 | `COMP-04` | Accepted | PR #273 merged as `9375fdfb`; the versioned operating contract, public status/incident lifecycle, support policy, signed tenant export, migration receipt, legal-hold/two-operator offboarding evidence, subprocessor/DPA/BAA boundaries, Trust Center, and synthetic production-shaped tests meet the v1 acceptance without claiming unattained SLAs, certifications, or pen tests. Backup, restore, and deployment proof must still be refreshed for each production release. |
 | `COMP-05` | Reopened | PR #275 merged as `7e0745b3` and provides bounded DOCX/PDF parsing, isolation, review decisions, missing/ambiguous reporting, and DOCX report/TOA export. Current behavior remains partial or absent for provider-backed citation resolution, page/pin-cite quote verification, available treatment/currentness evidence, genuinely omitted-authority discovery, opposing-brief analysis beyond citation-set difference, source hyperlinks, existing-document UI, and a full retrieval-to-export rehearsal. `BK20` therefore remains open. |
-| `COMP-06` | Open — lifecycle acceptance blocked | Draft PR #280 at independently reviewed head `5a14d029` now has version-keyed caselaw cluster/opinion/chunk/citation snapshots, candidate cloning, explicit opinion-to-cluster identity, snapshot-backed search/detail/similarity/coverage/worker paths, atomic cutover/rollback, post-promotion mutation guards, and a signed `platform:write` backend proxy whose minted-key resolution and operator request audit cover exact authority path segments. Helper-level tests prove segment matching, signed-actor forwarding over a spoofed header, and denial before upstream invocation. Same-ID, two-cluster fixture assertions and the mandatory pgvector rehearsal are meaningful progress, but they still bypass the production CSV ingest/loader, rights, embedding-worker, retry, concurrency, currentness, and isolation paths. Initial legacy-to-snapshot backfill, atomic load-to-searchable completion, promotion-time content/integrity checks, composite snapshot relationships, immutable-ledger negative tests, the full authority credential/revocation/audit/status matrix, and latest same-version audit/currentness evidence remain open. Private Firm Memory remains a separate tenant/matter-scoped corpus and must not feed public-authority telemetry. |
+| `COMP-06` | Open — implementation merged; boundary follow-up | PR #280 merged as `7a29f551` from tested head `09a58a23`. It supplies versioned legal and caselaw snapshots, reviewed source/rights metadata, resumable harvest and quarantine evidence, same-version audit gates, exact embedding contracts and leased Jetson shards, keyword degradation, controlled promote/rollback, signed backend-to-MCP operator assertions with durable replay protection, and metadata-only customer coverage/currentness UI. Exact-head CI passed the mandatory PostgreSQL lifecycle rehearsal, 2,814 backend tests, frontend/E2E, tenant safety, both CodeQL analyses, policy/security/release checks, and Merge Gate. `AIP-19` is accepted. Parent acceptance remains open because an explicit `public-authority` allowlist is not yet enforced fail-closed across every catalog, ingest, snapshot, promotion, coverage/audit, retrieval, and telemetry path; arbitrary custom-private source negatives are not yet proven. Brief Check corpus-version/currentness propagation remains separate open `COMP-05` work. Private Firm Memory remains a separate tenant/matter-scoped corpus and must not feed public-authority telemetry. |
 
-## COMP-06 draft acceptance review
+## COMP-06 post-merge acceptance review
 
-PR #280 was re-reviewed read-only through exact hardened head
-`5a14d029fb623e02159afcafd5c50e870505384e`, rebased onto `origin/main`
-`330c14a5312392dd680d89de6095a9144e8ea4be`. At handoff the owned worktree was
-clean and pushed, and the PR remained open and draft. Local post-rebase evidence
-was 155 MCP tests passed with one database rehearsal skipped, plus passing Ruff,
-format, compile, and diff checks; fresh GitHub checks had not yet published for
-that rebased head. The earlier
-snapshot rehearsal failure at `3f1e4883` was corrected; the mandatory
-`Authority control-plane DB rehearsal` passed on superseded hardened heads through
-`76837ec9`, while exact-head CI for the superseded `9faf8006` had not completed
-at its handoff. The
-intermediate release-test correction at `6ccef170` matches the canonical `.5`
-highlight, “Preserve retrieval boundaries”; three focused release tests and six
-focused platform/authority authentication tests passed independently. Passing the
-synthetic job is necessary but does not close the broader acceptance matrix:
+PR #280 merged at `7a29f551c216d2b3db78dbc8dd7c49658f2a4842` from exact
+tested head `09a58a23ae3f95e7dd632f69eba4a7aadf118e73`. CI run
+`33335827740` passed, including backend job `99322425911` with 2,814 passed and
+one skipped, mandatory authority rehearsal job `99322426050`, frontend build,
+browser E2E, tenant migration/RLS safety, both CodeQL analyses, policy, release,
+security/SBOM, dependency review, Office, and Merge Gate `99324125386`.
 
-- **Version-safe service:** cluster, opinion, chunk, and citation snapshots now
-  share a corpus version; opinions carry an explicit cluster ID; search, detail,
-  similarity, citation, court/docket, worker, and operator-count paths mostly use
-  the promoted snapshot; and promoted/retired/rolled-back rows have mutation
-  guards. There is still no idempotent initial migration from existing legacy
-  caselaw into the first promoted snapshot, no production-shaped upgrade fixture
-  proving the strict opinion-cluster backfill, no composite foreign-key integrity,
-  and no promotion gate proving that every staged opinion has complete searchable
-  chunks and required relationships.
-- **Harvest and rights:** failure continuation, version-aware evidence, and
-  rights fields improved, but the checkpoint is still a document URL rather than
-  a consumed upstream pagination cursor; no runner consumes `next_retry_at`; and
-  repeat failure attempts are not demonstrated as append-only, bounded work.
-- **Loader and embedding operations:** the loader can populate candidate
-  snapshots, snapshot chunk generation joins the explicit opinion/cluster
-  relationship, and the worker targets snapshot chunks. `load_mvp_corpus()` and
-  chunk creation remain separate operator steps, however, and the rehearsal does
-  not execute the real CSV loader or embedding worker. Temperature/capacity are
-  operator-supplied values rather than measured evidence; long-inference
-  heartbeat, completed-shard reopening, failure/retry/drain, and first-corpus
-  starvation are not closed.
-- **Operator and query isolation:** authority mutations require the shared signed
-  `platform:write` principal contract and forward its actor identity rather than a
-  tenant admin or caller-supplied header. Minted-key resolution and platform
-  request auditing share an exact-segment helper for `/api/platform` and
-  `/api/mcp/authority`; focused unit tests cover path overmatch, actor-header
-  spoofing, and denial before proxy invocation. They mock token resolution and do
-  not yet prove real missing/invalid/expired/read-scope/tenant-JWT denial,
-  session/minted-key success and revocation, actor/JTI/scope audit persistence, or
-  upstream status mapping through the served route. The downstream MCP service
-  still treats its private internal key holder as trusted to supply the actor, so
-  that service must remain network-private or receive a cryptographically bound
-  proxy identity. Concurrent promote/rollback, relationship-integrity, and
-  fail-closed unsupported-path tests remain absent.
-- **Coverage truth:** display claims now require three passing audit kinds, but
-  any historical passing row can mask a newer failure. Completeness and freshness
-  draw from global, non-versioned ledgers/timestamps, isolation is not a promotion
-  gate, and source-health fallback does not consistently preserve partition data.
-- **Executable acceptance:** the PostgreSQL job now stages before FK-bound data,
-  uses the same two case identities across old/new versions, generates snapshot
-  chunks, exercises repository search/coverage, and asserts cutover/rollback.
-  Its fixtures still insert snapshot rows directly, so it does not prove schema
-  upgrade/backfill, real source rights/CSV ingest, retry/dead-letter execution,
-  worker leases/failure, signed authorization, concurrency, partition-level
-  currentness, isolation, or mutation rejection. Brief Check and citation
-  currentness remain only partially connected to this control plane.
+The merged rehearsal covers legacy-schema bootstrap/backfill, version-keyed
+legal and caselaw fixtures, production ingest and bulk-loader paths, malformed
+quarantine, retry/dead-letter checkpoints, sampled release/completeness/
+freshness/isolation audits, atomic promote/rollback, mutation rejection,
+operator assertion replay, and embedding-worker contract, lease, heartbeat,
+reclaim, retry/dead-letter, drain, replay, and telemetry behavior. This closes
+the independently reviewed `AIP-19` worker row and replaces the former draft
+evidence matrix.
 
-The feature branch remains the implementation owner's responsibility. It must
-stay draft until a fresh exact-head review closes these rows; no production
-harvest, comprehensive-coverage claim, or deployment is implied.
+The parent milestone remains open for one P0 boundary: every public-authority
+path must require an explicit, immutable `public-authority` classification, not
+only reviewed rights fields or blocked-prefix checks. The follow-up must prevent
+caller metadata from overriding classification and prove that tenant, firm,
+private, and arbitrary custom-private legal or caselaw records cannot ingest,
+promote, appear in coverage/audit/telemetry, or serve through search, detail,
+citation, network, court, or docket surfaces. Until then, `COMP-06` and the
+aggregate `AIP-17–AIP-21` row remain unchecked.
+
+Brief Check propagation of promoted corpus version, currentness, caveats, and
+version-mismatch states remains separate `COMP-05` acceptance work. No
+production harvest, comprehensive-coverage/current-law claim, or deployment is
+implied by the merge or its synthetic CI evidence.
 
 ## Production deployment snapshot
 
@@ -94,7 +57,7 @@ At 2026-08-30 15:21 UTC, the read-only IONOS runner verification succeeded on
 at `9375fdfb01b106c3ad2d0437737dca6fb0f1b4b1`, while available `origin/main`
 was `42b486e791d182010f4e476dd9df293fb9ccd206`. The merges after COMP-04 were
 therefore not deployed at this snapshot; green merge CI must not be described as
-production rollout evidence. The current ledger baseline is `330c14a5`; no later
+production rollout evidence. The current ledger baseline is `7a29f551`; no later
 production verification is recorded here. Verification run:
 <https://github.com/mattpainter701/legalapp/actions/runs/33319412188>.
 

@@ -60,10 +60,11 @@ and exposes that limitation. No padded vectors or semantic-completeness claim
 is permitted. The canonical control-plane details and operator rehearsal
 contract are in [Authority coverage control plane](../AUTHORITY_COVERAGE_CONTROL_PLANE.md).
 
-**Release state:** scaffolded in code and release-gated; COMP-06 acceptance
-remains pending merged implementation, operator rehearsal, and an independent
-AIP-17–AIP-21 evidence matrix. No production corpus harvest, coverage claim, or
-deployment is implied by this documentation.
+**Release state:** implemented in code and release-gated; PR #280 merged with
+mandatory operator and lifecycle rehearsal evidence. COMP-06 acceptance remains
+open for fail-closed explicit-public classification across every authority path.
+No production corpus harvest, coverage claim, or deployment is implied by this
+documentation.
 
 ### Firm Memory Workspace MCP tool
 
@@ -216,10 +217,12 @@ expiry cleanup, so replay is rejected across service instances.
 The MCP control service is a network-private downstream. Its internal key is
 defence in depth, not a browser credential: firewall/service-network policy
 must prevent direct external reachability, and operators must use the signed
-platform gateway. Authority coverage responses contain metadata-only public
-source health and promoted-corpus/version/currentness evidence; tenant/private
-documents and query content are excluded. COMP-06 remains scaffolded and
-release-gated; no production harvest, coverage claim, or deployment is implied.
+platform gateway. Authority coverage responses project source health and
+promoted-corpus/version/currentness metadata, not tenant IDs, document content,
+or query text. Explicit-public classification still must prevent arbitrary
+custom-private source metadata from entering that projection. COMP-06 is
+implemented and release-gated while that boundary acceptance remains open; no
+production harvest, coverage claim, or deployment is implied.
 
 - Generate a complete workspace tool catalog from `backend/app/services/capabilities.py` and `backend/app/services/matter_workspace_capabilities.py`, emitting checked-in Markdown and JSON artifacts. Add CI drift checking so the catalog is regenerated and compared whenever the registry or tool contract changes.
 - Add an end-to-end attorney scenario with sanitized sample matter and document data.
