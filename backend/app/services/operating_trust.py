@@ -3,18 +3,24 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from itsdangerous import BadData, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy import func, literal, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.models  # noqa: F401 -- register the complete tenant model inventory
+from app.config import get_settings
 from app.database import Base
 from app.models.operating_trust import CustomerLifecycleReceipt
+
+TENANT_EXPORT_SNAPSHOT_MAX_AGE_SECONDS = 3600
+_TENANT_EXPORT_SNAPSHOT_SALT = "operating-trust-tenant-export-snapshot-v1"
 
 _SENSITIVE_KEYS = {
     "authorization",
@@ -156,6 +162,108 @@ def reconcile_counts(
                 }
             )
     return discrepancies
+
+
+def _tenant_export_snapshot_serializer() -> URLSafeTimedSerializer:
+    return URLSafeTimedSerializer(
+        get_settings().SECRET_KEY,
+        salt=_TENANT_EXPORT_SNAPSHOT_SALT,
+        signer_kwargs={"digest_method": hashlib.sha256},
+    )
+
+
+def issue_tenant_export_snapshot(
+    inventory: dict[str, Any], *, tenant_id, contract_version: str
+) -> dict[str, Any]:
+    """Sign a point-in-time inventory so later audit writes cannot move it."""
+
+    issued_at = utcnow()
+    snapshot_inventory = {
+        key: inventory[key]
+        for key in (
+            "schema",
+            "counts",
+            "categories",
+            "tenant_table_count",
+            "providers",
+            "retention_policy_version",
+            "legal_hold",
+            "boundary",
+        )
+    }
+    payload = {
+        "version": 1,
+        "tenant_id": str(tenant_id),
+        "contract_version": contract_version,
+        "issued_at": issued_at.isoformat(),
+        "inventory": snapshot_inventory,
+    }
+    assert_safe_evidence(payload)
+    return {
+        "snapshot_token": _tenant_export_snapshot_serializer().dumps(payload),
+        "snapshot_sha256": evidence_hash(payload),
+        "snapshot_issued_at": issued_at.isoformat(),
+        "snapshot_expires_at": (
+            issued_at + timedelta(seconds=TENANT_EXPORT_SNAPSHOT_MAX_AGE_SECONDS)
+        ).isoformat(),
+        "snapshot_max_age_seconds": TENANT_EXPORT_SNAPSHOT_MAX_AGE_SECONDS,
+    }
+
+
+def verify_tenant_export_snapshot(
+    token: str, *, tenant_id, contract_version: str
+) -> dict[str, Any]:
+    """Return a verified tenant inventory snapshot or fail closed."""
+
+    detail = "Tenant export inventory snapshot is invalid or expired"
+    if len(token) > 250_000:
+        raise ValueError(detail)
+    try:
+        payload = _tenant_export_snapshot_serializer().loads(
+            token,
+            max_age=TENANT_EXPORT_SNAPSHOT_MAX_AGE_SECONDS,
+        )
+    except (SignatureExpired, BadData) as exc:
+        raise ValueError(detail) from exc
+    claims_match = (
+        isinstance(payload, dict)
+        and payload.get("version") == 1
+        and hmac.compare_digest(str(payload.get("tenant_id") or ""), str(tenant_id))
+        and hmac.compare_digest(
+            str(payload.get("contract_version") or ""), contract_version
+        )
+    )
+    inventory = payload.get("inventory") if isinstance(payload, dict) else None
+    required_inventory_fields = {
+        "schema",
+        "counts",
+        "categories",
+        "tenant_table_count",
+        "providers",
+        "retention_policy_version",
+        "legal_hold",
+        "boundary",
+    }
+    if (
+        not claims_match
+        or not isinstance(inventory, dict)
+        or set(inventory) != required_inventory_fields
+        or inventory.get("schema") != "lawhand.tenant-export-inventory"
+        or not isinstance(inventory.get("categories"), list)
+        or not isinstance(inventory.get("providers"), list)
+        or not isinstance(inventory.get("tenant_table_count"), int)
+        or not isinstance(inventory.get("retention_policy_version"), int)
+        or not isinstance(inventory.get("legal_hold"), bool)
+        or not isinstance(inventory.get("boundary"), str)
+    ):
+        raise ValueError(detail)
+    inventory["counts"] = normalized_counts(inventory.get("counts"))
+    assert_safe_evidence(payload)
+    return {
+        "inventory": inventory,
+        "snapshot_sha256": evidence_hash(payload),
+        "snapshot_issued_at": str(payload.get("issued_at") or ""),
+    }
 
 
 def support_acknowledgement_due(

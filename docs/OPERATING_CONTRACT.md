@@ -72,13 +72,17 @@ Tenant export evidence dynamically inventories every current database table
 carrying `tenant_id`, plus recorded local and customer-cloud file-provider
 classes, and then reuses existing product/provider export paths. A new tenant
 table therefore becomes a required category without waiting for a copied list
-to be updated. The final exported artifact is not stored in the receipt.
-Instead, the administrator records an opaque artifact reference and SHA-256,
-exact category counts, connected-provider inventory, explicit scope, signer,
-and outcome. Missing, extra, or mismatched categories—including zero-count
-categories—produce a blocked receipt. Credential stores export bounded security
-metadata without secret values, and immutable contractual/audit categories use
-evidence summaries rather than bypassing retention protections.
+to be updated. The inventory response includes a one-hour, tenant-bound signed
+snapshot so audit records created while the artifact is assembled cannot move
+the reconciliation boundary. The final exported artifact and snapshot token
+are not stored in the receipt. Instead, the administrator records an opaque
+artifact reference and SHA-256, exact category counts, connected-provider
+inventory, snapshot hash and timestamp, explicit scope, signer, and outcome.
+Missing, extra, or mismatched categories—including zero-count categories—or an
+invalid, expired, or cross-tenant snapshot produce no completed receipt.
+Credential stores export bounded security metadata without secret values, and
+immutable contractual/audit categories use evidence summaries rather than
+bypassing retention protections.
 
 Offboarding is non-destructive by design:
 

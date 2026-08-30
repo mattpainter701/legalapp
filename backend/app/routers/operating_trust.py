@@ -32,6 +32,7 @@ from app.services.operating_trust import (
     assert_safe_evidence,
     assert_support_transition,
     evidence_hash,
+    issue_tenant_export_snapshot,
     opaque_evidence_reference,
     receipt_hash,
     receipt_payload,
@@ -39,6 +40,7 @@ from app.services.operating_trust import (
     support_acknowledgement_due,
     tenant_export_inventory,
     utcnow,
+    verify_tenant_export_snapshot,
 )
 from app.services.operator_audit import record_operator_audit
 from app.services.platform_auth import require_platform_token
@@ -72,6 +74,7 @@ class LifecycleReceiptCreate(BaseModel):
     source_import_run_id: uuid.UUID | None = None
     artifact_reference: str | None = Field(default=None, max_length=1000)
     artifact_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    inventory_snapshot_token: str | None = Field(default=None, max_length=250_000)
     signer_title: str = Field(min_length=1, max_length=255)
     authority_attested: bool
     outcome: str = Field(min_length=1, max_length=2000)
@@ -453,22 +456,38 @@ async def create_lifecycle_receipt(
         )
         artifact_reference = artifact_reference or f"import-run:{run.id}"
     else:
-        if not artifact_sha256 or not artifact_reference:
+        if (
+            not artifact_sha256
+            or not artifact_reference
+            or not body.inventory_snapshot_token
+        ):
             raise HTTPException(
                 status_code=400,
-                detail="Tenant export requires an artifact reference and SHA-256",
+                detail=(
+                    "Tenant export requires an artifact reference, SHA-256, and "
+                    "server-issued inventory snapshot"
+                ),
             )
-        retention = await retention_inventory(db, admin.tenant_id)
-        inventory = await tenant_export_inventory(
-            db, admin.tenant_id, retention=retention
-        )
-        inventory["contract_version"] = CONTRACT_VERSION
+        try:
+            snapshot = verify_tenant_export_snapshot(
+                body.inventory_snapshot_token,
+                tenant_id=admin.tenant_id,
+                contract_version=CONTRACT_VERSION,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        inventory = snapshot["inventory"]
         expected = inventory["counts"]
         actual = body.actual_counts
         body.scope["inventory_policy_version"] = inventory["retention_policy_version"]
         body.scope["tenant_table_count"] = inventory["tenant_table_count"]
         body.scope["inventory_categories"] = inventory["categories"]
         body.scope["provider_inventory"] = inventory["providers"]
+        body.scope["inventory_snapshot_sha256"] = snapshot["snapshot_sha256"]
+        body.scope["inventory_snapshot_issued_at"] = snapshot["snapshot_issued_at"]
+        body.scope["inventory_snapshot_boundary"] = (
+            "server-signed point-in-time tenant inventory"
+        )
     discrepancies = reconcile_counts(expected, actual)
     status = (
         "accepted" if body.receipt_type in {"onboarding", "migration"} else "completed"
@@ -508,6 +527,13 @@ async def get_tenant_export_inventory(
     retention = await retention_inventory(db, admin.tenant_id)
     inventory = await tenant_export_inventory(db, admin.tenant_id, retention=retention)
     inventory["contract_version"] = CONTRACT_VERSION
+    inventory.update(
+        issue_tenant_export_snapshot(
+            inventory,
+            tenant_id=admin.tenant_id,
+            contract_version=CONTRACT_VERSION,
+        )
+    )
     return inventory
 
 

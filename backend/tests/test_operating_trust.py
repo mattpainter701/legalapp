@@ -1,5 +1,6 @@
 """Production-shaped customer lifecycle rehearsal for COMP-04."""
 
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -12,8 +13,10 @@ from app.models.external_import import ExternalImportRun, ExternalSystemConnecti
 from app.services import platform_auth
 from app.services.operating_trust import (
     assert_public_safe_text,
+    issue_tenant_export_snapshot,
     reconcile_counts,
     support_acknowledgement_due,
+    verify_tenant_export_snapshot,
 )
 from tests.platform_auth_helpers import TEST_PLATFORM_SIGNING_KEY, platform_headers
 
@@ -37,6 +40,55 @@ def test_reconciliation_and_public_safety_fail_closed():
     assert reconcile_counts({"empty": 0}, {})[0]["reason"] == "missing_category"
 
 
+def test_tenant_export_snapshot_is_signed_and_tenant_bound():
+    tenant_id = uuid.uuid4()
+    inventory = {
+        "schema": "lawhand.tenant-export-inventory",
+        "counts": {"database:matters": 2},
+        "categories": [
+            {
+                "category": "database:matters",
+                "record_count": 2,
+                "export_mode": "existing-product-export-path",
+            }
+        ],
+        "tenant_table_count": 1,
+        "providers": [],
+        "retention_policy_version": 3,
+        "legal_hold": False,
+        "boundary": "Point-in-time test inventory.",
+    }
+    issued = issue_tenant_export_snapshot(
+        inventory, tenant_id=tenant_id, contract_version="test-contract"
+    )
+    verified = verify_tenant_export_snapshot(
+        issued["snapshot_token"],
+        tenant_id=tenant_id,
+        contract_version="test-contract",
+    )
+    assert verified["inventory"]["counts"] == inventory["counts"]
+    assert verified["snapshot_sha256"] == issued["snapshot_sha256"]
+    token = issued["snapshot_token"]
+    token_index = len(token) // 2
+    tampered_token = (
+        token[:token_index]
+        + ("A" if token[token_index] != "A" else "B")
+        + token[token_index + 1 :]
+    )
+    with pytest.raises(ValueError):
+        verify_tenant_export_snapshot(
+            tampered_token,
+            tenant_id=tenant_id,
+            contract_version="test-contract",
+        )
+    with pytest.raises(ValueError):
+        verify_tenant_export_snapshot(
+            token,
+            tenant_id=uuid.uuid4(),
+            contract_version="test-contract",
+        )
+
+
 def test_support_clock_pauses_outside_published_s2_hours():
     friday = datetime(2026, 8, 28, 16, 0, tzinfo=ZoneInfo("America/Chicago"))
     due = support_acknowledgement_due(friday, severity="S2", objective_minutes=240)
@@ -46,15 +98,23 @@ def test_support_clock_pauses_outside_published_s2_hours():
 
 
 def test_operating_trust_migration_forces_rls_and_immutable_ledgers():
-    source = (Path(__file__).parents[1] / "migrations" / "versions" / "143_operating_trust.py").read_text()
+    source = (
+        Path(__file__).parents[1] / "migrations" / "versions" / "143_operating_trust.py"
+    ).read_text()
     for table in (
-        "customer_lifecycle_receipts", "support_requests",
-        "offboarding_cases", "offboarding_approvals",
+        "customer_lifecycle_receipts",
+        "support_requests",
+        "offboarding_cases",
+        "offboarding_approvals",
     ):
-        assert f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY" in source.replace("{table}", table)
+        assert f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY" in source.replace(
+            "{table}", table
+        )
     for table in (
-        "customer_lifecycle_receipts", "offboarding_approvals",
-        "public_incidents", "public_incident_updates",
+        "customer_lifecycle_receipts",
+        "offboarding_approvals",
+        "public_incidents",
+        "public_incident_updates",
     ):
         assert table in source
     assert "reject_operating_trust_ledger_mutation" in source
@@ -101,7 +161,10 @@ async def test_support_and_public_incident_lifecycle(client, test_tenant):
     resolved = await client.post(
         f"/api/platform/operating-trust/incidents/{public_id}/updates",
         headers=platform_headers(["platform:write"]),
-        json={"state": "resolved", "message": "Access has recovered and monitoring is complete."},
+        json={
+            "state": "resolved",
+            "message": "Access has recovered and monitoring is complete.",
+        },
     )
     assert resolved.status_code == 200, resolved.text
 
@@ -202,17 +265,43 @@ async def test_bk28_migration_and_tenant_export_receipts_reconcile(
     inventory = await client.get("/api/compliance/operating/export-inventory")
     assert inventory.status_code == 200, inventory.text
     counts = inventory.json()["counts"]
+    snapshot_token = inventory.json()["snapshot_token"]
+    snapshot_sha256 = inventory.json()["snapshot_sha256"]
+    assert inventory.json()["snapshot_max_age_seconds"] == 3600
     assert inventory.json()["tenant_table_count"] > 50
     assert "database:external_import_runs" in counts
     assert "database:tenant_agreement_acceptances" in counts
     assert "database:customer_lifecycle_receipts" in counts
     assert "file-store:local-references" in counts
     category_modes = {
-        item["category"]: item["export_mode"]
-        for item in inventory.json()["categories"]
+        item["category"]: item["export_mode"] for item in inventory.json()["categories"]
     }
     assert category_modes["database:users"] == "security-metadata-only-no-secret-values"
-    assert category_modes["database:customer_lifecycle_receipts"] == "immutable-evidence-summary"
+    assert (
+        category_modes["database:customer_lifecycle_receipts"]
+        == "immutable-evidence-summary"
+    )
+    token_index = len(snapshot_token) // 2
+    tampered_token = (
+        snapshot_token[:token_index]
+        + ("A" if snapshot_token[token_index] != "A" else "B")
+        + snapshot_token[token_index + 1 :]
+    )
+    rejected_export = await client.post(
+        "/api/compliance/operating/receipts",
+        json={
+            "receipt_type": "tenant_export",
+            "scope": {"format": "customer-authorized export bundle"},
+            "actual_counts": counts,
+            "artifact_reference": "tenant-export:rehearsal-001",
+            "artifact_sha256": "a" * 64,
+            "inventory_snapshot_token": tampered_token,
+            "signer_title": "Firm administrator",
+            "authority_attested": True,
+            "outcome": "Every declared inventory category reconciled to the export manifest.",
+        },
+    )
+    assert rejected_export.status_code == 409
     export = await client.post(
         "/api/compliance/operating/receipts",
         json={
@@ -221,6 +310,7 @@ async def test_bk28_migration_and_tenant_export_receipts_reconcile(
             "actual_counts": counts,
             "artifact_reference": "tenant-export:rehearsal-001",
             "artifact_sha256": "a" * 64,
+            "inventory_snapshot_token": snapshot_token,
             "signer_title": "Firm administrator",
             "authority_attested": True,
             "outcome": "Every declared inventory category reconciled to the export manifest.",
@@ -229,6 +319,8 @@ async def test_bk28_migration_and_tenant_export_receipts_reconcile(
     assert export.status_code == 200, export.text
     assert export.json()["status"] == "completed"
     assert export.json()["expected_counts"] == counts
+    assert export.json()["scope"]["inventory_snapshot_sha256"] == snapshot_sha256
+    assert "snapshot_token" not in export.json()["scope"]
     assert export.json()["receipt_hash"]
 
 
@@ -284,10 +376,28 @@ async def test_offboarding_requires_no_hold_two_operators_and_disposition_proof(
                 "database:messages": 0,
                 "database:matter_documents": 0,
             },
-            "providers": [{"provider": "customer cloud", "status": "customer_controlled", "evidence_reference": "provider-disposition:001"}],
+            "providers": [
+                {
+                    "provider": "customer cloud",
+                    "status": "customer_controlled",
+                    "evidence_reference": "provider-disposition:001",
+                }
+            ],
             "backups": [
-                {"backup_class": "application-database", "expires_at": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(), "evidence_reference": "backup-expiry:database-001"},
-                {"backup_class": "tenant-file-store", "expires_at": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(), "evidence_reference": "backup-expiry:files-001"},
+                {
+                    "backup_class": "application-database",
+                    "expires_at": (
+                        datetime.now(timezone.utc) + timedelta(days=30)
+                    ).isoformat(),
+                    "evidence_reference": "backup-expiry:database-001",
+                },
+                {
+                    "backup_class": "tenant-file-store",
+                    "expires_at": (
+                        datetime.now(timezone.utc) + timedelta(days=30)
+                    ).isoformat(),
+                    "evidence_reference": "backup-expiry:files-001",
+                },
             ],
             "evidence_reference": "deletion-proof:001",
             "evidence_sha256": "c" * 64,

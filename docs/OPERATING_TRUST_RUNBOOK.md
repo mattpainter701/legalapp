@@ -35,12 +35,16 @@ promote data through this contract workflow.
 ## Tenant export
 
 1. Capture `GET /api/compliance/operating/export-inventory`. It enumerates
-   every current tenant-id database table and recorded file provider; do not
-   substitute the narrower retention summary.
+   every current tenant-id database table and recorded file provider and issues
+   a tenant-bound signed snapshot valid for one hour; do not substitute the
+   narrower retention summary.
 2. Use existing product and customer-authorized provider export paths to build
-   the artifact; do not place customer data in receipt metadata.
+   the artifact within that snapshot window; do not place customer data in
+   receipt metadata. Capture a new inventory if the snapshot expires.
 3. Hash the final artifact, count every declared category, and issue a
-   `tenant_export` receipt with an opaque artifact reference.
+   `tenant_export` receipt with an opaque artifact reference and the signed
+   snapshot token. The receipt retains the snapshot hash and timestamp, not the
+   token.
 4. Deliver the artifact through an approved customer channel. The receipt is
    evidence of scope/count/hash reconciliation, not the artifact itself.
 5. A missing, extra, or mismatched category is blocked and must not be described
