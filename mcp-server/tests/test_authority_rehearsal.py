@@ -19,6 +19,7 @@ from mcp_server.control_plane import (
 )
 from mcp_server.database import connect
 from mcp_server.loader import init_schema
+from mcp_server.repository import CourtListenerRepository
 
 
 def test_authority_release_rehearsal():
@@ -29,6 +30,38 @@ def test_authority_release_rehearsal():
     init_schema(db_url)
     version = "rehearsal-authority-" + uuid.uuid4().hex
     with connect(db_url) as conn:
+        source_key = "rehearsal:source:" + version
+        def add_fixture(version_name, suffix):
+            with conn.cursor() as cur:
+                cur.execute("""INSERT INTO legal_sources
+                    (source_key, publisher, source_type, canonical_url, enabled,
+                     storage_policy, rights_decision, reviewed_at, reviewed_by,
+                     expected_cadence, claim_safe_wording)
+                    VALUES (%s, 'Rehearsal', 'statute', 'https://example.test', TRUE,
+                            'normalized_text', 'official', now(), 'rehearsal-admin',
+                            'daily', 'Fixture source only') ON CONFLICT DO NOTHING""", [source_key])
+                cur.execute("""INSERT INTO legal_documents
+                    (source_key, external_id, document_type, title, authority_tier,
+                     canonical_url, corpus_version, text_content)
+                    VALUES (%s, 'same-document', 'statute', %s, 'binding_primary',
+                            'https://example.test/doc', %s, %s) RETURNING id""",
+                            [source_key, 'Fixture ' + suffix, version_name, suffix + ' authority'])
+                document_id = cur.fetchone()[0]
+                cur.execute("""INSERT INTO legal_document_chunks
+                    (document_id, chunk_index, content, content_hash, corpus_version)
+                    VALUES (%s, 0, %s, md5(%s), %s)""",
+                            [document_id, suffix + ' authority', suffix + ' authority', version_name])
+                cur.execute("""INSERT INTO authority_case_clusters
+                    (corpus_version, cluster_id, case_name, date_filed)
+                    VALUES (%s, %s, %s, '2026-01-01')""", [version_name, abs(hash(version_name)) % 100000000, 'Fixture ' + suffix])
+                cluster_id = abs(hash(version_name)) % 100000000
+                cur.execute("""INSERT INTO authority_case_opinions
+                    (corpus_version, opinion_id, source_url, plain_text)
+                    VALUES (%s, %s, 'https://example.test/case', %s)""", [version_name, cluster_id, suffix + ' case'])
+                cur.execute("""INSERT INTO authority_case_chunks
+                    (corpus_version, opinion_id, cluster_id, chunk_index, content)
+                    VALUES (%s, %s, %s, 0, %s)""", [version_name, cluster_id, cluster_id, suffix + ' case authority'])
+        add_fixture(version, 'old')
         stage_corpus_version(
             conn, version=version, manifest_hash="fixture-manifest-hash",
             as_of="2026-08-30T00:00:00Z", actor="rehearsal-admin",
@@ -54,6 +87,10 @@ def test_authority_release_rehearsal():
                          methodology="negative mismatch", thresholds={},
                          result={"passed": False}, passed=True, auditor="rehearsal-admin")
         promote_corpus_version(conn, version=version, actor="rehearsal-admin", reason="all fixture audits passed")
+        authority_results = CourtListenerRepository(conn).search_legal_authorities('old authority')
+        case_results = CourtListenerRepository(conn).search_caselaw('old case')
+        assert authority_results and authority_results[0]['title'] == 'Fixture old'
+        assert case_results and case_results[0]['case_name'] == 'Fixture old'
         with conn.cursor() as cur:
             cur.execute("SELECT status FROM authority_corpus_versions WHERE version=%s", [version])
             assert cur.fetchone()[0] == "promoted"
@@ -66,6 +103,7 @@ def test_authority_release_rehearsal():
             reason="rollback fixture", embedding_model="mixedbread-ai/mxbai-embed-large-v1",
             embedding_version="1", embedding_dimension=1024,
         )
+        add_fixture(follow_up, 'new')
         for kind in ("release", "completeness", "freshness"):
             result = sampled_audit([{"ready": True}] if kind == "release" else
                                    ([{"expected": True, "observed": True}] if kind == "completeness" else [{"lag_seconds": 1}]),
@@ -74,7 +112,11 @@ def test_authority_release_rehearsal():
                          methodology="fixture rollback sample", thresholds={}, result=result,
                          passed=True, auditor="rehearsal-admin")
         promote_corpus_version(conn, version=follow_up, actor="rehearsal-admin", reason="cutover fixture")
+        assert CourtListenerRepository(conn).search_legal_authorities('new authority')[0]['title'] == 'Fixture new'
+        assert CourtListenerRepository(conn).search_caselaw('new case')[0]['case_name'] == 'Fixture new'
         rollback_corpus_version(conn, version=follow_up, actor="rehearsal-admin", reason="bad release fixture")
         with conn.cursor() as cur:
             cur.execute("SELECT version FROM authority_corpus_versions WHERE status='promoted'")
             assert cur.fetchone()[0] == version
+        assert CourtListenerRepository(conn).search_legal_authorities('old authority')[0]['title'] == 'Fixture old'
+        assert CourtListenerRepository(conn).search_caselaw('old case')[0]['case_name'] == 'Fixture old'

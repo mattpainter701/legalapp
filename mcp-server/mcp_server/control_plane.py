@@ -176,6 +176,32 @@ def stage_corpus_version(conn: Any, *, version: str, manifest_hash: str,
                    reason, json.dumps({"staged_by": actor})])
         if cur.rowcount != 1:
             raise ValueError("corpus version already exists")
+        if current:
+            # Seed a side-by-side candidate from the last good snapshot. New
+            # harvest/chunk material can then replace only the candidate rows.
+            cur.execute("""
+                INSERT INTO authority_case_clusters
+                  (corpus_version, cluster_id, docket_id, case_name, date_filed, citations)
+                SELECT %s, cluster_id, docket_id, case_name, date_filed, citations
+                FROM authority_case_clusters WHERE corpus_version=%s
+                ON CONFLICT DO NOTHING
+            """, [version, current[0]])
+            cur.execute("""
+                INSERT INTO authority_case_opinions
+                  (corpus_version, opinion_id, source_url, plain_text)
+                SELECT %s, opinion_id, source_url, plain_text
+                FROM authority_case_opinions WHERE corpus_version=%s
+                ON CONFLICT DO NOTHING
+            """, [version, current[0]])
+            cur.execute("""
+                INSERT INTO authority_case_chunks
+                  (corpus_version, opinion_id, cluster_id, court_id, chunk_index,
+                   content, embedding, embedding_model, embedding_version)
+                SELECT %s, opinion_id, cluster_id, court_id, chunk_index,
+                       content, embedding, embedding_model, embedding_version
+                FROM authority_case_chunks WHERE corpus_version=%s
+                ON CONFLICT DO NOTHING
+            """, [version, current[0]])
     conn.commit()
 
 

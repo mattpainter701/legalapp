@@ -4,6 +4,7 @@ import argparse
 import os
 import sys
 import time
+import json
 from collections import Counter
 from typing import Iterable
 
@@ -101,9 +102,11 @@ def process_once(config: WorkerConfig, model) -> int:
                 version = version_row[0]
                 shard_key = f"{corpus}:{config.worker_id}:{config.total_workers}:{version}"
                 cur.execute("""INSERT INTO authority_embedding_shards
-                    (shard_key, corpus_version, corpus_table, model, model_version, dimension)
-                    VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING""",
-                    [shard_key, version, corpus, config.model, config.model_version, config.dim])
+                    (shard_key, corpus_version, corpus_table, model, model_version, dimension,
+                     temperature_c, capacity_evidence)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb) ON CONFLICT DO NOTHING""",
+                    [shard_key, version, corpus, config.model, config.model_version, config.dim,
+                     config.temperature_c, json.dumps(config.capacity_evidence or {})])
             conn.commit()
             if not claim_embedding_shard(conn, shard_key=shard_key, worker_id=str(config.worker_id)):
                 continue
@@ -158,6 +161,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", default="mxbai")
     parser.add_argument("--model-version", default=os.environ.get("EMBEDDING_MODEL_VERSION", "1"))
     parser.add_argument("--dim", type=int, default=1024)
+    parser.add_argument("--temperature-c", type=float, default=None)
+    parser.add_argument("--capacity-evidence", default="{}")
     parser.add_argument("--ollama-url", default=os.environ.get("OLLAMA_EMBEDDING_URL", ""))
     parser.add_argument(
         "--ollama-model",
@@ -184,6 +189,8 @@ def main() -> None:
         model_version=args.model_version,
         dim=args.dim,
         db_url=args.db_url,
+        temperature_c=args.temperature_c,
+        capacity_evidence=json.loads(args.capacity_evidence),
     )
     if not config.db_url:
         raise SystemExit("--db-url, VECTORDB_URL, or DATABASE_URL is required")

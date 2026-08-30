@@ -396,10 +396,43 @@ CREATE TABLE IF NOT EXISTS authority_embedding_shards (
     attempts integer NOT NULL DEFAULT 0,
     dead_letter_reason text,
     throughput_per_minute numeric,
+    temperature_c numeric,
+    capacity_evidence jsonb NOT NULL DEFAULT '{}'::jsonb,
     last_error text,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     CHECK (status IN ('queued', 'leased', 'complete', 'retryable', 'dead_letter'))
+);
+
+CREATE TABLE IF NOT EXISTS authority_case_clusters (
+    corpus_version text NOT NULL REFERENCES authority_corpus_versions(version),
+    cluster_id bigint NOT NULL,
+    docket_id bigint,
+    case_name text,
+    date_filed date,
+    citations jsonb NOT NULL DEFAULT '[]'::jsonb,
+    PRIMARY KEY (corpus_version, cluster_id)
+);
+CREATE TABLE IF NOT EXISTS authority_case_chunks (
+    corpus_version text NOT NULL REFERENCES authority_corpus_versions(version),
+    chunk_id uuid NOT NULL DEFAULT gen_random_uuid(),
+    opinion_id bigint NOT NULL,
+    cluster_id bigint NOT NULL,
+    court_id text,
+    chunk_index integer NOT NULL,
+    content text NOT NULL,
+    fts tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED,
+    embedding vector(1024),
+    embedding_model text,
+    embedding_version text,
+    PRIMARY KEY (corpus_version, opinion_id, chunk_index)
+);
+CREATE TABLE IF NOT EXISTS authority_case_opinions (
+    corpus_version text NOT NULL REFERENCES authority_corpus_versions(version),
+    opinion_id bigint NOT NULL,
+    source_url text,
+    plain_text text,
+    PRIMARY KEY (corpus_version, opinion_id)
 );
 
 CREATE INDEX IF NOT EXISTS ix_opinion_chunks_court ON opinion_chunks(court_id);

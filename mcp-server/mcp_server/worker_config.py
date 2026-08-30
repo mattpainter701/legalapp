@@ -16,6 +16,8 @@ class WorkerConfig:
     model_version: str = "1"
     dim: int = DEFAULT_DIM
     db_url: str | None = None
+    temperature_c: float | None = None
+    capacity_evidence: dict | None = None
 
     def validate(self) -> None:
         if self.worker_id < 0 or self.worker_id >= self.total_workers:

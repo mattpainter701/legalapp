@@ -315,9 +315,9 @@ class CourtListenerRepository:
                    ts_rank_cd(oc.fts, websearch_to_tsquery('english', %s)) AS keyword_rank,
                    NULL::float AS similarity,
                    'fts' AS search_source
-            FROM opinion_chunks oc
-            JOIN opinion_clusters cl ON cl.cluster_id = oc.cluster_id
-            LEFT JOIN opinions o ON o.opinion_id = oc.opinion_id
+            FROM authority_case_chunks oc
+            JOIN authority_case_clusters cl ON cl.corpus_version = oc.corpus_version AND cl.cluster_id = oc.cluster_id
+            LEFT JOIN authority_case_opinions o ON o.corpus_version = oc.corpus_version AND o.opinion_id = oc.opinion_id
             LEFT JOIN courts c ON c.court_id = oc.court_id
             WHERE oc.fts @@ websearch_to_tsquery('english', %s)
               AND {' AND '.join(filters)}
@@ -350,9 +350,9 @@ class CourtListenerRepository:
                        COALESCE(NULLIF(o.source_url, ''), '/opinion/' || oc.opinion_id::text || '/') AS source_url,
                        COALESCE(cl.citations #>> '{{0,cite}}', cl.citations #>> '{{0}}', '') AS citation,
                        oc.fts, oc.embedding
-                FROM opinion_chunks oc
-                JOIN opinion_clusters cl ON cl.cluster_id = oc.cluster_id
-                LEFT JOIN opinions o ON o.opinion_id = oc.opinion_id
+                FROM authority_case_chunks oc
+                JOIN authority_case_clusters cl ON cl.corpus_version = oc.corpus_version AND cl.cluster_id = oc.cluster_id
+                LEFT JOIN authority_case_opinions o ON o.corpus_version = oc.corpus_version AND o.opinion_id = oc.opinion_id
                 LEFT JOIN courts c ON c.court_id = oc.court_id
                 WHERE {' AND '.join(filters)}
             ),
@@ -536,6 +536,7 @@ class CourtListenerRepository:
                 LEFT JOIN dockets d ON d.docket_id = cl.docket_id
                 LEFT JOIN courts c ON c.court_id = d.court_id
                 WHERE cit.cited_volume = %s AND cit.cited_reporter = %s AND cit.cited_page = %s
+                  AND cl.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
                 LIMIT 20
                 """,
                 [parsed["volume"], parsed["reporter"], parsed["page"]],
@@ -574,12 +575,17 @@ class CourtListenerRepository:
     def citation_network(self, opinion_id: int) -> dict[str, list[dict[str, Any]]]:
         with self.conn.cursor() as cur:
             cur.execute(
-                "SELECT cited_opinion_id, cited_reporter, cited_volume, cited_page, depth FROM opinion_citations WHERE citing_opinion_id = %s LIMIT 100",
+                """SELECT cit.cited_opinion_id, cit.cited_reporter, cit.cited_volume, cit.cited_page, cit.depth
+                   FROM opinion_citations cit JOIN opinion_clusters cl ON cl.cluster_id = cit.cited_cluster_id
+                   WHERE cit.citing_opinion_id = %s AND cl.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1) LIMIT 100""",
                 [opinion_id],
             )
             cited = dict_rows(cur)
             cur.execute(
-                "SELECT citing_opinion_id, depth FROM opinion_citations WHERE cited_opinion_id = %s LIMIT 100",
+                """SELECT cit.citing_opinion_id, cit.depth
+                   FROM opinion_citations cit JOIN opinions o ON o.opinion_id = cit.citing_opinion_id
+                   JOIN opinion_clusters cl ON cl.cluster_id = o.cluster_id
+                   WHERE cit.cited_opinion_id = %s AND cl.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1) LIMIT 100""",
                 [opinion_id],
             )
             citing = dict_rows(cur)
@@ -614,6 +620,8 @@ class CourtListenerRepository:
                 LEFT JOIN opinion_chunks oc ON oc.court_id = c.court_id
                 LEFT JOIN opinion_clusters cl ON cl.cluster_id = oc.cluster_id
                 WHERE c.court_id = %s
+                  AND oc.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
+                  AND cl.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
                 GROUP BY c.court_id, c.short_name, c.full_name, c.jurisdiction
                 """,
                 [court_id],
@@ -626,7 +634,8 @@ class CourtListenerRepository:
         court_id: str | None = None,
         jurisdiction: str | None = None,
     ) -> list[dict[str, Any]]:
-        filters = ["TRUE"]
+        promoted = "(SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)"
+        filters = [f"oc.corpus_version = {promoted}", f"ch.corpus_version = {promoted}"]
         params: list[Any] = []
         if court_id:
             filters.append("c.court_id = %s")
@@ -668,6 +677,8 @@ class CourtListenerRepository:
         top_k: int = 20,
     ) -> list[dict[str, Any]]:
         filters = ["(d.docket_number ILIKE %s OR d.case_name ILIKE %s OR oc.case_name ILIKE %s)"]
+        promoted = "(SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)"
+        filters.append(f"oc.corpus_version = {promoted}")
         pattern = f"%{query}%"
         params: list[Any] = [pattern, pattern, pattern]
         if court_id:

@@ -501,7 +501,9 @@ def _load_csv(
         "opinion_clusters": """
             INSERT INTO opinion_clusters (cluster_id, docket_id, case_name, date_filed, precedential_status, citations, metadata, corpus_version)
             VALUES (%s, %s, %s, %s, %s, COALESCE(%s::jsonb, '[]'::jsonb), %s::jsonb, %s)
-            ON CONFLICT (cluster_id) DO UPDATE SET corpus_version=EXCLUDED.corpus_version
+            -- A cluster identity is not allowed to mutate an older release.
+            -- Versioned snapshots are materialized before promotion.
+            ON CONFLICT (cluster_id) DO NOTHING
         """,
         "opinions": """
             INSERT INTO opinions (opinion_id, cluster_id, type, author_id, html_with_citations, plain_text, sha1, source_url)
@@ -605,6 +607,7 @@ def _load_csv(
             nonlocal count
             if not pending:
                 return
+            batch_values = list(pending)
             # execute_batch turns hundreds of client/server round trips into a
             # single request while preserving every table's existing conflict
             # and idempotency behavior.  The fallback keeps lightweight test
@@ -616,6 +619,25 @@ def _load_csv(
             else:
                 for values in pending:
                     cur.execute(statements[table_name], values)
+            if table_name == "opinion_clusters":
+                for values in batch_values:
+                    cur.execute("""INSERT INTO authority_case_clusters
+                      (corpus_version, cluster_id, docket_id, case_name, date_filed, citations)
+                      VALUES (%s, %s, %s, %s, %s, COALESCE(%s::jsonb, '[]'::jsonb))
+                      ON CONFLICT (corpus_version, cluster_id) DO UPDATE SET
+                        docket_id=EXCLUDED.docket_id, case_name=EXCLUDED.case_name,
+                        date_filed=EXCLUDED.date_filed, citations=EXCLUDED.citations""",
+                               [values[-1], values[0], values[1], values[2], values[3], values[5]])
+            elif table_name == "opinions":
+                for values in batch_values:
+                    cur.execute("""INSERT INTO authority_case_opinions
+                      (corpus_version, opinion_id, source_url, plain_text)
+                      SELECT cl.corpus_version, %s, %s, COALESCE(%s, %s)
+                      FROM authority_case_clusters cl
+                      WHERE cl.cluster_id=%s AND cl.corpus_version IS NOT NULL
+                      ON CONFLICT (corpus_version, opinion_id) DO UPDATE SET
+                        source_url=EXCLUDED.source_url, plain_text=EXCLUDED.plain_text""",
+                               [values[0], values[7], values[5], values[4], values[1]])
             count += len(pending)
             pending.clear()
             if count % budget_check_every == 0:
@@ -834,8 +856,47 @@ def create_chunks(db_url: str | None = None, limit: int | None = None) -> int:
                     created += cur.rowcount
         conn.commit()
         refresh_courtlistener_coverage_ledger(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT version FROM authority_corpus_versions WHERE status IN ('staged','canary') ORDER BY created_at DESC LIMIT 1")
+            version_row = cur.fetchone()
+        if version_row:
+            materialize_caselaw_snapshot(conn, version_row[0])
         conn.commit()
     return created
+
+
+def materialize_caselaw_snapshot(conn, corpus_version: str) -> None:
+    """Copy one staged caselaw release into immutable version-keyed tables."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO authority_case_clusters
+              (corpus_version, cluster_id, docket_id, case_name, date_filed, citations)
+            SELECT corpus_version, cluster_id, docket_id, case_name, date_filed, citations
+            FROM opinion_clusters WHERE corpus_version=%s
+            ON CONFLICT (corpus_version, cluster_id) DO NOTHING
+        """, [corpus_version])
+        cur.execute("""
+            INSERT INTO authority_case_opinions
+              (corpus_version, opinion_id, source_url, plain_text)
+            SELECT %s, o.opinion_id, o.source_url, COALESCE(o.plain_text, o.html_with_citations)
+            FROM opinions o JOIN opinion_clusters cl ON cl.cluster_id=o.cluster_id
+            WHERE cl.corpus_version=%s
+            ON CONFLICT (corpus_version, opinion_id) DO NOTHING
+        """, [corpus_version, corpus_version])
+        cur.execute("""
+            INSERT INTO authority_case_chunks
+              (corpus_version, chunk_id, opinion_id, cluster_id, court_id,
+               chunk_index, content, embedding, embedding_model, embedding_version)
+            SELECT %s, oc.id, oc.opinion_id, oc.cluster_id, oc.court_id,
+                   oc.chunk_index, oc.content, oc.embedding, oc.embedding_model,
+                   oc.embedding_version::text
+            FROM opinion_chunks oc JOIN opinion_clusters cl ON cl.cluster_id=oc.cluster_id
+            WHERE cl.corpus_version=%s AND oc.corpus_version=%s
+            ON CONFLICT (corpus_version, opinion_id, chunk_index) DO UPDATE SET
+              content=EXCLUDED.content, embedding=EXCLUDED.embedding,
+              embedding_model=EXCLUDED.embedding_model,
+              embedding_version=EXCLUDED.embedding_version
+        """, [corpus_version, corpus_version, corpus_version])
 
 
 def main() -> None:
