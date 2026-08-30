@@ -48,7 +48,8 @@ async def test_authority_control_forwards_signed_principal_and_ignores_spoofed_a
 
     assert result == {"ok": True}
     assert captured["path"] == "/api/mcp/control/promote"
-    assert captured["headers"] == {"X-Operator-Identity": "signed-operator"}
+    assert captured["headers"]["X-Operator-Identity"] == "signed-operator"
+    assert captured["headers"]["X-Operator-Assertion"]
     assert captured["payload"]["reason"] == "promote fixture"
 
 

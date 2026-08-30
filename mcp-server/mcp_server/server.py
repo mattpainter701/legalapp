@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import hmac
 import os
+import time
+from fastapi import Request
 from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, Header, HTTPException
@@ -18,6 +23,7 @@ from .tools import build_tool_manifest
 
 app = FastAPI(title="WellPled CourtListener MCP", version="0.1.0")
 query_embedder = QueryEmbeddingClient.from_env()
+_USED_OPERATOR_NONCES: set[str] = set()
 
 
 @app.on_event("startup")
@@ -42,10 +48,34 @@ class ControlPlaneRequest(BaseModel):
     embedding_dimension: int = 1024
 
 
-def operator_identity(value: str = Header(default="", alias="X-Operator-Identity")) -> str:
-    if not value.strip():
-        raise HTTPException(status_code=403, detail="operator identity is required")
-    return value.strip()
+def operator_identity(
+    request: Request,
+    value: str = Header(default="", alias="X-Operator-Identity"),
+    assertion: str = Header(default="", alias="X-Operator-Assertion"),
+) -> str:
+    if not value.strip() or not assertion.strip():
+        raise HTTPException(status_code=403, detail="signed operator context is required")
+    try:
+        padded = assertion + "=" * (-len(assertion) % 4)
+        decoded = base64.urlsafe_b64decode(padded.encode())
+        payload, signature = decoded.rsplit(b"|", 1)
+        actor, credential, scope, method, route, issued, expires, nonce = payload.decode().split("|")
+        issued_i, expires_i = int(issued), int(expires)
+    except (ValueError, UnicodeError, TypeError, binascii.Error) as exc:
+        raise HTTPException(status_code=403, detail="invalid signed operator context") from exc
+    expected = hmac.new(os.getenv("MCP_UPSTREAM_API_KEY", "").encode(), payload, hashlib.sha256).digest()
+    now = int(time.time())
+    if (not hmac.compare_digest(signature, expected) or actor != value.strip()
+            or scope != "platform:write" or method != request.method
+            or route != request.url.path or issued_i > now + 5
+            or expires_i < now or expires_i - issued_i > 60):
+        raise HTTPException(status_code=403, detail="invalid or expired signed operator context")
+    if nonce in _USED_OPERATOR_NONCES:
+        raise HTTPException(status_code=403, detail="replayed signed operator context")
+    _USED_OPERATOR_NONCES.add(nonce)
+    if len(_USED_OPERATOR_NONCES) > 10000:
+        _USED_OPERATOR_NONCES.clear()
+    return actor
 
 
 def require_internal_service_key(

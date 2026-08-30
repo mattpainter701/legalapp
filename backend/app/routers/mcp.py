@@ -7,7 +7,11 @@ adapter. Legacy ``X-API-Key`` tenant credentials are rejected and cannot be
 issued.
 """
 
+import base64
+import hashlib
+import hmac
 import logging
+import secrets
 import time
 import uuid
 from datetime import datetime
@@ -365,11 +369,21 @@ async def _authority_control(
         raise HTTPException(
             status_code=503, detail="Authority control plane is unavailable"
         )
+    route = f"/api/mcp/control/{action}"
+    issued = int(time.time())
+    expires = issued + 60
+    actor = str(principal.actor_id)
+    credential = str(principal.credential_id or "session")
+    payload = "|".join((actor, credential, "platform:write", request.method,
+                         route, str(issued), str(expires), secrets.token_urlsafe(18)))
+    signature = hmac.new(str(settings.MCP_UPSTREAM_API_KEY or "").encode(),
+                         payload.encode(), hashlib.sha256).digest()
+    assertion = base64.urlsafe_b64encode(payload.encode() + b"|" + signature).decode().rstrip("=")
     return await _proxy_post(
-        f"/api/mcp/control/{action}",
+        route,
         request,
         body.model_dump(),
-        extra_headers={"X-Operator-Identity": str(principal.actor_id)},
+        extra_headers={"X-Operator-Identity": actor, "X-Operator-Assertion": assertion},
     )
 
 

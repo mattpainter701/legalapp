@@ -201,6 +201,24 @@ The page must state which label applies; do not infer availability from a tool n
 
 ## Known documentation backlog
 
+### Public-authority operator boundary
+
+Authority control mutations are exposed by the backend gateway only to signed
+platform principals with `platform:write`. The gateway forwards a short-lived,
+HMAC-bound assertion containing actor, credential/JTI, scope, method, path,
+nonce, and expiry. The private MCP service requires both the internal service
+key and this assertion; it rejects tampering, route/method mismatch, expiry,
+and nonce replay. `X-Operator-Identity` is informational and cannot override
+the signed actor.
+
+The MCP control service is a network-private downstream. Its internal key is
+defence in depth, not a browser credential: firewall/service-network policy
+must prevent direct external reachability, and operators must use the signed
+platform gateway. Authority coverage responses contain metadata-only public
+source health and promoted-corpus/version/currentness evidence; tenant/private
+documents and query content are excluded. COMP-06 remains scaffolded and
+release-gated; no production harvest, coverage claim, or deployment is implied.
+
 - Generate a complete workspace tool catalog from `backend/app/services/capabilities.py` and `backend/app/services/matter_workspace_capabilities.py`, emitting checked-in Markdown and JSON artifacts. Add CI drift checking so the catalog is regenerated and compared whenever the registry or tool contract changes.
 - Add an end-to-end attorney scenario with sanitized sample matter and document data.
 - Add a precise tenant-cloud versus LawHand metadata/data-residency diagram.
