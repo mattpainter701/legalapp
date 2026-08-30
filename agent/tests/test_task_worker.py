@@ -101,7 +101,9 @@ SHARE = {
 }
 
 
-def _worker(smb, client, scan_callback=None, update_callback=None):
+def _worker(
+    smb, client, scan_callback=None, update_callback=None, local_search_index=None
+):
     from clarity_agent.smb_reader import SmbReader
     from clarity_agent.task_worker import TaskWorker
 
@@ -115,7 +117,138 @@ def _worker(smb, client, scan_callback=None, update_callback=None):
         share_provider=shares,
         scan_callback=scan_callback,
         update_callback=update_callback,
+        local_search_index=local_search_index,
     )
+
+
+class FakeSearchIndex:
+    available = True
+
+    def __init__(self, result=None):
+        self.result = result or {
+            "hits": [
+                {
+                    "share_id": "share-1",
+                    "relative_path": "Cases\\brief.pdf",
+                    "filename": "brief.pdf",
+                    "ext": ".pdf",
+                    "snippet": "matching text",
+                    "page_number": 4,
+                    "score": 2.5,
+                    "path": "\\\\FS01\\Legal\\Cases\\brief.pdf",
+                }
+            ],
+            "index_state": "ready",
+            "indexed_files": 9,
+            "pending_files": 2,
+        }
+        self.calls = []
+
+    async def search(self, query, scopes, assigned_shares, extensions, limit):
+        self.calls.append((query, scopes, assigned_shares, extensions, limit))
+        return self.result
+
+
+@pytest.mark.asyncio
+async def test_local_search_returns_bounded_safe_hits_and_correlation(smb):
+    client = FakeClient(
+        [
+            {
+                "task_id": "search-1",
+                "kind": "local_search",
+                "query": "summary judgment",
+                "scopes": [{"share_id": "share-1", "folder_path": "Cases"}],
+                "file_extensions": ["pdf"],
+                "limit": 10,
+                "correlation_id": "run-abc",
+            }
+        ]
+    )
+    index = FakeSearchIndex()
+
+    await _worker(smb, client, local_search_index=index).poll_and_execute()
+
+    result = client.results[0]
+    assert result["ok"] is True
+    assert result["detail"]["schema_version"] == 1
+    assert result["detail"]["correlation_id"] == "run-abc"
+    assert result["detail"]["hits"][0]["relative_path"] == "Cases\\brief.pdf"
+    assert "path" not in result["detail"]["hits"][0]
+    assert index.calls[0][0] == "summary judgment"
+
+
+@pytest.mark.asyncio
+async def test_local_search_fails_closed_when_index_unavailable(smb):
+    index = FakeSearchIndex()
+    index.available = False
+    client = FakeClient(
+        [
+            {
+                "task_id": "search-2",
+                "kind": "local_search",
+                "query": "secret",
+                "scopes": [{"share_id": "share-1"}],
+                "correlation_id": "run-unavailable",
+            }
+        ]
+    )
+
+    await _worker(smb, client, local_search_index=index).poll_and_execute()
+
+    assert client.results[0]["ok"] is False
+    assert "unavailable" in client.results[0]["error"]
+    assert client.results[0]["detail"]["hits"] == []
+
+
+@pytest.mark.asyncio
+async def test_local_search_rejects_unassigned_scope_without_calling_index(smb):
+    index = FakeSearchIndex()
+    client = FakeClient(
+        [
+            {
+                "task_id": "search-3",
+                "kind": "local_search",
+                "query": "secret",
+                "scopes": [{"share_id": "other"}],
+                "correlation_id": "run-scope",
+            }
+        ]
+    )
+
+    await _worker(smb, client, local_search_index=index).poll_and_execute()
+
+    assert client.results[0]["ok"] is False
+    assert "not assigned" in client.results[0]["error"]
+    assert index.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("query", "q" * 1001),
+        ("limit", 51),
+        ("correlation_id", "c" * 129),
+        ("scopes", [{"share_id": "share-1", "folder_path": "..\\private"}]),
+    ],
+)
+async def test_local_search_rejects_invalid_bounded_input_without_leaking_query(
+    smb, caplog, field, value
+):
+    task = {
+        "task_id": "search-4",
+        "kind": "local_search",
+        "query": "safe-query",
+        "scopes": [{"share_id": "share-1"}],
+        "correlation_id": "run-invalid",
+    }
+    task[field] = value
+    client = FakeClient([task])
+
+    await _worker(smb, client, local_search_index=FakeSearchIndex()).poll_and_execute()
+
+    assert client.results[0]["ok"] is False
+    assert "safe-query" not in caplog.text
 
 
 @pytest.mark.asyncio
