@@ -51,12 +51,16 @@ and [Westlaw docket coverage](https://legal.thomsonreuters.com/en/products/westl
 ### P0 — remove switching and research-trust blockers
 
 **PM acceptance snapshot (2026-08-30):** Independently revalidated against
-`origin/main` at `1453002e`. `COMP-01` and `COMP-04` remain accepted;
-`COMP-02` and `COMP-03` remain open for their missing production-shaped closure
-evidence; `COMP-05` is reopened because the merged Brief Check is a safe
-review-first scaffold but does not yet satisfy the full citation-resolution,
-pin-cite, treatment/currentness, omitted-authority, linked-export, and end-to-end
-acceptance below; and `COMP-06` is in implementation. See
+`origin/main` at `42b486e7`. `COMP-01` and `COMP-04` remain accepted. `COMP-02`
+remains open: PR #279 adds a narrow approval-bound client/matter import slice,
+but production-shaped closure still requires broader import reconciliation,
+provider-specific billing/trust/history handling, customer sign-off, and one
+rehearsed imported-client-to-payment-to-signed-closeout lifecycle. `COMP-03`
+remains open for its missing provider-backed conversion evidence; `COMP-05` is
+reopened because the merged Brief Check is a safe review-first scaffold but does
+not yet satisfy the full citation-resolution, pin-cite, treatment/currentness,
+omitted-authority, linked-export, and end-to-end acceptance below; and `COMP-06`
+is in implementation. See
 [`docs/core-milestone-status.md`](docs/core-milestone-status.md) for the evidence
 matrix and claim boundaries. Feature PRs do not self-certify these checkboxes.
 
