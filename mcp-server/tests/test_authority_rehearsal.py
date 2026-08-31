@@ -816,6 +816,78 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
         assert authority_results and authority_results[0]["title"] == "Fixture old"
         assert case_results and case_results[0]["case_name"] == "Fixture old"
 
+        # Required public-lineage mutation matrix.  Each mutation is made
+        # after promotion and independently restored; public projections must
+        # fail closed rather than continue serving stale admitted metadata.
+        lineage_repo = CourtListenerRepository(conn)
+        lineage_mutations = [
+            ("enabled", "FALSE", "TRUE"),
+            ("rights_decision", "'prohibited'", "'official'"),
+            ("storage_policy", "'prohibited'", "'public'"),
+            ("reviewed_at", "NULL", "now()"),
+            ("reviewed_by", "NULL", "'fixture-reviewer'"),
+            ("public_namespace", "'private'", "'public-authority'"),
+        ]
+        for column, bad_value, good_value in lineage_mutations:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE legal_sources SET {column}={bad_value} WHERE source_key=%s",
+                    [source_key],
+                )
+            conn.commit()
+            assert lineage_repo.search_legal_authorities("old authority") == []
+            assert source_key not in {
+                row["source_key"] for row in lineage_repo.sync_status()["sources"]
+            }
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE legal_sources SET {column}={good_value} WHERE source_key=%s",
+                    [source_key],
+                )
+            conn.commit()
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE citator_public_source_admissions SET active=FALSE WHERE source_key=%s",
+                [source_key],
+            )
+        conn.commit()
+        assert lineage_repo.search_legal_authorities("old authority") == []
+        assert source_key not in {
+            row["source_key"] for row in lineage_repo.authority_coverage()["sources"]
+        }
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE citator_public_source_admissions SET active=TRUE WHERE source_key=%s",
+                [source_key],
+            )
+        conn.commit()
+        with conn.cursor() as cur:
+            cur.execute(
+                'UPDATE legal_sources SET metadata=metadata || \'{"catalog_schema_version":"spoofed"}\'::jsonb WHERE source_key=%s',
+                [source_key],
+            )
+        conn.commit()
+        assert lineage_repo.search_legal_authorities("old authority") == []
+        with conn.cursor() as cur:
+            cur.execute(
+                'UPDATE legal_sources SET metadata=metadata || \'{"catalog_schema_version":"rehearsal"}\'::jsonb WHERE source_key=%s',
+                [source_key],
+            )
+        conn.commit()
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE citator_public_source_admissions SET manifest_sha256=repeat('c', 64) WHERE source_key=%s",
+                [source_key],
+            )
+        conn.commit()
+        assert lineage_repo.search_legal_authorities("old authority") == []
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE citator_public_source_admissions SET manifest_sha256=repeat('a', 64) WHERE source_key=%s",
+                [source_key],
+            )
+        conn.commit()
+
         # The upgrade path is exercised against legacy-shaped rows after a
         # promoted version exists.  Backfill is idempotent and must preserve
         # the served release without leaving NULL-version snapshot rows.
