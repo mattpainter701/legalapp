@@ -86,10 +86,12 @@ the same request returns the same run; reusing it with different input returns
 409. Apply requires the exact preview hash and an explicit `confirm_apply`.
 The service locks the run and matter, then takes a transaction-scoped shared
 tenant workflow-configuration lock. It locks the selected template/version,
-ordered definition rows, every current matter-field definition, and all
-resolved assignee users before recomputing the hashes. Field and template
-configuration writers take the matching exclusive tenant lock before their
-row locks. This prevents active-field insert/reactivation phantoms and ensures
+ordered definition rows, and every current matter-field definition before
+recomputing the hashes. It then resolves the concrete assignees, validates and
+locks the rows that remain active, and rejects missing or inactive assignees
+before any stage, evidence, or task side effect. Field and template
+configuration writers take the matching exclusive tenant lock before their row
+locks. This prevents active-field insert/reactivation phantoms and ensures
 apply cannot cross an archive, definition change, or assignee deactivation.
 The deterministic order is run (apply only), matter, tenant configuration,
 template definition, field definitions, then assignee users. A stale matter,

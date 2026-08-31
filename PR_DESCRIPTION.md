@@ -4,7 +4,8 @@ Closes the post-merge COMP-09 preview/apply TOCTOU gap without a schema change.
 Preview and apply now take a shared, transaction-scoped tenant workflow-config
 lock and deterministic dependency row locks; field/template configuration
 writers take the matching exclusive lock. Apply also locks every resolved
-assignee row before stale revalidation and before creating evidence or tasks.
+active assignee row after hash/config revalidation and before creating evidence
+or tasks; missing or inactive assignees are rejected before side effects.
 
 The resulting order is run (apply only), matter, tenant config, template
 definition, field definitions, and assignee users. Active-field phantoms,
