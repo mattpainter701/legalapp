@@ -34,7 +34,7 @@ Firms can configure provider-backed SMS that stays reviewable, consent-bound, te
 - **Send only with current consent.** Each outbound message rechecks verified phone ownership, consent provenance, approved message category, quiet hours, matter access, and provider configuration.
 - **Honor replies and opt-outs safely.** Signed inbound messages require an active owned sender, handle STOP, START, and HELP, deduplicate retries, and route ambiguous matches to staff review.
 - **Keep provider truth distinct.** Exact-generation callbacks and reconciliation update authorized timeline evidence without regressing known truth; provider acceptance remains distinct from confirmed delivery.
-- **Review assistant proposals first.** Workspace SMS proposals create review work for one verified matter party and require an explicit retry key; they cannot dispatch autonomously.
+- **Review assistant proposals first.** Workspace SMS proposals require current matter access and an explicit retry key, stay inside LawHand instead of email or third-party calendars, and cannot dispatch autonomously.
 
 ## 2026.08.31.5 — Revalidate authority evidence before alerts
 

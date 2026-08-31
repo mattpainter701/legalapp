@@ -2507,6 +2507,14 @@ async def delete_task(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     await _require_sms_task_access(db, task, current_user)
+    if await _task_contains_sms(db, task):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "SMS proposal and event evidence cannot be hard-deleted. "
+                "Cancel the task to preserve its review history."
+            ),
+        )
 
     delivery_audit_id = await db.scalar(
         select(TaskAutomationRun.id)

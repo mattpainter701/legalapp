@@ -154,13 +154,15 @@ async def delete_task_event(
             },
         )
         if search_resp.status_code != 200:
-            return False
+            raise RuntimeError("Google Calendar task-event lookup failed")
         items = search_resp.json().get("items", [])
         for item in items:
-            await client.delete(
+            delete_resp = await client.delete(
                 f"{CALENDAR_BASE}/calendars/primary/events/{item['id']}",
                 headers=headers,
             )
+            if delete_resp.status_code not in (200, 204, 404):
+                raise RuntimeError("Google Calendar task-event deletion failed")
             logger.info(
                 "Deleted Google Calendar event %s for task %s",
                 item["id"],

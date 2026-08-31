@@ -65,6 +65,11 @@ _SMS_IMMUTABLE_TABLES = (
     "sms_number_suppression_events",
     "sms_consent_events",
 )
+_SMS_CREDENTIAL_PURGE_ORDER = (
+    "sms_provider_credentials",
+    "sms_provider_configs",
+)
+_SMS_CREDENTIAL_TABLES = frozenset(_SMS_CREDENTIAL_PURGE_ORDER)
 _SMS_TABLES = frozenset(
     {
         "sms_provider_configs",
@@ -404,6 +409,7 @@ async def _purge_demo_tenant_locked(
                 or name in _STUDIO_TABLES
                 or name in _CONFIG_WORKFLOW_TABLES
                 or name in _SMS_IMMUTABLE_TABLES
+                or name in _SMS_CREDENTIAL_TABLES
             ):
                 continue
             values = {}
@@ -417,12 +423,25 @@ async def _purge_demo_tenant_locked(
                     update(table).where(table.c.tenant_id == tenant_id).values(**values)
                 )
 
+        if sms_schema_present:
+            # Generic FK clearing has detached nullable message references, but
+            # must never null retired_by_user_id: retirement evidence requires
+            # its actor. Delete bounded credential history, then live config,
+            # before the generic plan can remove users.
+            for name in _SMS_CREDENTIAL_PURGE_ORDER:
+                table = tables[name]
+                result = await db.execute(
+                    delete(table).where(table.c.tenant_id == tenant_id)
+                )
+                deleted[name] = int(result.rowcount or 0)
+
         for name in _delete_order(tables):
             if (
                 name in _RESEARCH_IMMUTABLE_TABLES
                 or name in _STUDIO_TABLES
                 or name in _CONFIG_WORKFLOW_TABLES
                 or name in _SMS_IMMUTABLE_TABLES
+                or name in _SMS_CREDENTIAL_TABLES
             ):
                 continue
             table = tables[name]

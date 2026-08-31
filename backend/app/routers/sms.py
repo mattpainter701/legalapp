@@ -36,6 +36,7 @@ from app.services.sms import (
     apply_status,
     archive_current_provider_credentials,
     ensure_provider_config_credential,
+    lock_provider_config_admission,
     normalize_e164,
     provider_auth_token,
     provider_credentials_for_generation,
@@ -58,6 +59,7 @@ async def update_sms_config(
 ):
     tenant_id = current_user.tenant_id
     await set_tenant_context(db, str(tenant_id))
+    await lock_provider_config_admission(db, tenant_id=tenant_id)
     row = await db.scalar(
         select(SmsProviderConfig)
         .where(

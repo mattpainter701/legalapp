@@ -192,14 +192,18 @@ async def create_communication_log(
 ):
     tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
+    if payload.channel == "sms":
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Provider SMS communication evidence can only be created by the "
+                "signed SMS lifecycle"
+            ),
+        )
     _require_sms_access(
         channel=payload.channel,
         allowed=await _can_access_sms(db, current_user.id),
     )
-    if payload.channel == "sms" and not await _can_access_sms_record(
-        db, current_user, payload.matter_id
-    ):
-        raise HTTPException(status_code=404, detail="Communication log not found")
 
     data = payload.model_dump(exclude_none=True)
     if "occurred_at" not in data:

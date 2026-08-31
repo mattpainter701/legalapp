@@ -59,13 +59,7 @@ async def _find_event_ids(
         },
     )
     if resp.status_code != 200:
-        logger.warning(
-            "Outlook event lookup failed for task %s: %s %s",
-            task_id,
-            resp.status_code,
-            resp.text[:200],
-        )
-        return []
+        raise RuntimeError("Outlook Calendar task-event lookup failed")
     return [item["id"] for item in resp.json().get("value", []) if item.get("id")]
 
 
@@ -186,10 +180,12 @@ async def delete_task_event(
     async with httpx.AsyncClient() as client:
         event_ids = await _find_event_ids(client, headers, task_id)
         for event_id in event_ids:
-            await client.delete(
+            delete_resp = await client.delete(
                 f"{GRAPH_BASE}/me/events/{event_id}",
                 headers=headers,
             )
+            if delete_resp.status_code not in (200, 204, 404):
+                raise RuntimeError("Outlook Calendar task-event deletion failed")
             logger.info(
                 "Deleted Outlook Calendar event %s for task %s",
                 event_id,

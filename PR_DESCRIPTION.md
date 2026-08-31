@@ -44,7 +44,9 @@ routing, and provider-unknown reconciliation without reporting fake delivery.
 Inbound webhooks require an active sender and bind the exact provider account
 and configured destination; active provider destinations are unique within
 each provider account, and shared provider-config fences prevent rotation or
-deactivation from racing an in-flight dispatch or reconciliation lookup.
+deactivation from racing an in-flight dispatch or reconciliation lookup. Send
+admission and credential rotation also share one transaction fence, so bounded
+credential retirement cannot race a newly durable dispatch reservation.
 When durable recovery succeeds, unknown outcomes converge on one authorized
 customer-timeline marker plus sanitized audit evidence, and matching in-flight
 task runs are rebound for reconciliation instead of being reported as sent.
@@ -56,8 +58,12 @@ interfaces expose restricted review and informed SMS approval workflows;
 provider credentials and unresolved message content remain out of unauthorized
 responses and audit metadata; unauthorized SMS tasks are omitted from generic
 task, report, calendar, and Workspace MCP reads. Provider-generated SMS
-timeline rows are API-immutable, while delivery state changes remain confined
-to the signed callback/reconciliation service. This PR does not
+timeline rows cannot be fabricated through generic communication creation and
+remain API-immutable, while delivery state changes remain confined to the signed
+callback/reconciliation service. SMS proposals stay inside LawHand instead of
+assignment email or third-party calendars; assignment revocation synchronously
+removes legacy calendar copies or fails closed, and SMS task/event evidence
+cannot be hard-deleted. This PR does not
 close COMP-02 or COMP-03 and does not deploy or configure a production provider.
 
 ## Validation
@@ -65,16 +71,18 @@ close COMP-02 or COMP-03 and does not deploy or configure a production provider.
 - Ruff lint/format and Python compilation passed; 85 database-independent
   backend, migration, demo-purge, Workspace MCP, CI-contract, and release-note
   tests passed.
-- The complete SMS CI target collects 80 tests, including 64 PostgreSQL/provider-
+- The complete SMS CI target collects 84 tests, including 68 PostgreSQL/provider-
   shaped rehearsals covering
   concurrent idempotency, tenant constraints/RLS, consent provenance and
   conflicts, quiet hours/categories, signed webhook replay/order, STOP/START/HELP,
   durable unmatched-number suppression, exact account/destination ownership,
-  review routing and lock order, exact-provider reconciliation, actor and config
-  revocation ordering, callback-before-worker-finalization truth, unknown-outcome
+  exact-candidate review routing and lock order, exact-provider reconciliation,
+  actor, assignment, and config revocation ordering, credential-rotation admission,
+  callback-before-worker-finalization truth, unknown-outcome
   timeline/audit evidence, crash recovery for unbound task runs,
-  rolling-upgrade/full demo purge, generic/Workspace-MCP task omission,
-  custom-role gating, and credential non-leakage.
+  retired-credential/full demo purge, generic/Workspace-MCP task omission,
+  calendar/email non-disclosure, SMS task/event preservation, custom-role
+  gating, export-copy classification, and credential non-leakage.
 - The full frontend suite passed (92 files, 514 tests), along with frontend lint
   and the production build; the focused SMS queue subset passed 6 tests.
   Alembic reports migration 149 as the sole head and renders its offline SQL
@@ -113,4 +121,6 @@ of native ACL trimming.
   source bindings/hashes plus an explicit stable `X-Idempotency-Key`; approval
   revalidates sources, consent, category, quiet-hours eligibility, live actor
   authority, and matter access before a tenant-bound provider dispatch is
-  attempted.
+  attempted. Creation and replay also require the actor's current matter
+  ownership or assignment, and proposal content stays inside LawHand rather
+  than assignment email or third-party calendars.

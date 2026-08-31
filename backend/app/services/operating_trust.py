@@ -95,6 +95,12 @@ _SMS_COPY_EXPORT_MODES: dict[str, ExportMode] = {
     "task_events:sms": "immutable-evidence-summary",
     "task_automation_runs:sms": "immutable-evidence-summary",
 }
+_SMS_RETENTION_COPY_NAMES = {
+    "sms_timeline_copies": "communication_logs:sms",
+    "sms_task_proposal_copies": "tasks:sms",
+    "sms_task_event_copies": "task_events:sms",
+    "sms_automation_action_snapshots": "task_automation_runs:sms",
+}
 _EXPORT_MODES = frozenset(
     {
         "existing-product-export-path",
@@ -508,6 +514,25 @@ async def tenant_export_inventory(
                 "category": f"database:{table.name}",
                 "record_count": counts[f"database:{table.name}"],
                 "export_mode": export_mode,
+            }
+        )
+
+    retention_categories = {
+        str(item.get("name")): item
+        for item in retention.get("categories", [])
+        if isinstance(item, dict)
+    }
+    for retention_name, copy_name in _SMS_RETENTION_COPY_NAMES.items():
+        category = f"database-copy:{copy_name}"
+        record_count = int(
+            retention_categories.get(retention_name, {}).get("record_count") or 0
+        )
+        counts[category] = record_count
+        categories.append(
+            {
+                "category": category,
+                "record_count": record_count,
+                "export_mode": sms_copy_export_mode(copy_name),
             }
         )
 

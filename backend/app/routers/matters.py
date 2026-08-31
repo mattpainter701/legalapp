@@ -68,6 +68,8 @@ from app.services.matter_budget import (
     expense_client_amount_expression,
     load_matter_billable_totals,
 )
+from app.services.task_notifications import remove_task_from_calendars_now
+from app.services.task_visibility import task_is_sms_expression
 
 _cloud_search = CloudSearchService()
 _cloud_sync = CloudSyncService()
@@ -1399,15 +1401,44 @@ async def remove_assignment(
     matter = await _get_matter_or_404(db, matter_id, user.tenant_id)
 
     result = await db.execute(
-        select(MatterAssignment).where(
+        select(MatterAssignment)
+        .where(
             MatterAssignment.id == assignment_id,
             MatterAssignment.matter_id == matter.id,
             MatterAssignment.tenant_id == user.tenant_id,
         )
+        .with_for_update()
     )
     assignment = result.scalar_one_or_none()
     if not assignment:
         raise HTTPException(status_code=404, detail="Assignment not found")
+
+    revoked_user_id = assignment.user_id
+    sms_calendar_rows = (
+        await db.execute(
+            select(Task.id, Task.assigned_to_user_id, Task.created_by_user_id).where(
+                Task.tenant_id == user.tenant_id,
+                Task.matter_id == matter.id,
+                task_is_sms_expression(tenant_id=user.tenant_id),
+            )
+        )
+    ).all()
+    cleanup_task_ids = [
+        task_id
+        for task_id, assigned_to_user_id, created_by_user_id in sms_calendar_rows
+        if (assigned_to_user_id or created_by_user_id) == revoked_user_id
+    ]
+    try:
+        for task_id in cleanup_task_ids:
+            await remove_task_from_calendars_now(
+                str(task_id), str(user.tenant_id), str(revoked_user_id)
+            )
+    except RuntimeError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail="External calendar cleanup is unavailable; assignment was not removed",
+        ) from exc
 
     await db.delete(assignment)
     await db.commit()

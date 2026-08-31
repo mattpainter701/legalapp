@@ -61,7 +61,10 @@ bounded credential generations. It separately counts SMS copies in
 `communication_logs`, `tasks`, `task_events`, and `task_automation_runs`,
 including approved action snapshots. Provider configuration and credential
 generations are security metadata only; encrypted authentication tokens and
-configured provider/sender values are never part of this response.
+configured provider/sender values are never part of this response. The tenant
+export inventory exposes those four shared-copy categories explicitly: timeline
+and task copies use their existing authorized export path, while task-event and
+automation snapshots use bounded immutable-evidence summaries.
 
 The only automated deletion category in this release is an expired `Document`
 that is linked to a conversation, is not linked to a matter, has an expiry time,
@@ -86,7 +89,9 @@ expirable chat attachments from their original creation time and create an
 audit action containing before/after values.
 The legal-hold snapshot covers dedicated SMS stores and every reported
 shared-table copy: an active hold requires preserving their content, workflow
-snapshots, compliance state, and evidence. A hold does
+snapshots, compliance state, and evidence. SMS proposal tasks and events cannot
+be hard-deleted with or without an automation run, including while a hold is
+active; cancellation preserves their review history. A hold does
 not create a new SMS deletion path, and lifting it does not authorize deletion;
 any future SMS disposition workflow requires a separately reviewed policy,
 customer authority, provider/backup handling, and auditable execution.

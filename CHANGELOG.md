@@ -65,18 +65,23 @@
   and quiet-hours evidence are configured. Outbound messages require verified,
   provenance-bearing consent and stable idempotency; provider account and
   account-scoped active destination ownership, locked configuration-generation
-  checks, and signed tenant-bound inbound/status callbacks fail closed on
+  checks, dispatch-admission/credential-rotation serialization, and signed
+  tenant-bound inbound/status callbacks fail closed on
   cross-tenant routing; inactive senders cannot ingest new inbound messages.
   Durable unknown-outcome recovery retains one authorized timeline marker and
   sanitized audit record, rebinds matching in-flight task runs, and does not
   claim delivery. Unauthorized SMS tasks are omitted from generic task, report,
-  calendar, and Workspace MCP reads. Provider timeline rows cannot be edited or
-  deleted through the generic communications API. STOP-family replies revoke consent,
-  ambiguous inbound routes require access to every candidate matter before
-  content is listed or a route is resolved, and
-  assistant proposals remain human-approved with explicit retry identity and
-  approval-time consent checks. Demo purge treats pre-SMS and complete-SMS
-  schemas coherently and refuses a partially installed SMS table family.
+  calendar, and Workspace MCP reads. SMS proposals are never copied to assignment
+  email or third-party calendars, legacy calendar copies are removed before
+  assignment revocation, and provider timeline rows cannot be fabricated,
+  edited, or deleted through the generic communications API. SMS proposal and
+  task-event evidence cannot be hard-deleted. STOP-family replies revoke consent;
+  ambiguous inbound routes require access to every candidate matter and may be
+  resolved only to exact stored candidates. Assistant proposals require live
+  matter access before creation and idempotent replay, remain human-approved,
+  and recheck consent at approval. Demo purge treats pre-SMS and complete-SMS
+  schemas coherently, including retired credential history, and refuses a
+  partially installed SMS table family.
 - **Template Studio Phase 1 shell:** the existing document-template library is
   now a first-class Template Studio with response-derived continue-setup,
   needs-attention, ready-to-generate, and recent queues; canonical persistent

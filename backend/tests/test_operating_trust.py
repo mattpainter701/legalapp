@@ -364,6 +364,22 @@ async def test_bk28_migration_and_tenant_export_receipts_reconcile(
         category_modes["database:sms_provider_configs"]
         == "security-metadata-only-no-secret-values"
     )
+    assert (
+        category_modes["database:sms_provider_credentials"]
+        == "security-metadata-only-no-secret-values"
+    )
+    assert (
+        category_modes["database-copy:communication_logs:sms"]
+        == "existing-product-export-path"
+    )
+    assert category_modes["database-copy:tasks:sms"] == "existing-product-export-path"
+    assert (
+        category_modes["database-copy:task_events:sms"] == "immutable-evidence-summary"
+    )
+    assert (
+        category_modes["database-copy:task_automation_runs:sms"]
+        == "immutable-evidence-summary"
+    )
     token_index = len(snapshot_token) // 2
     tampered_token = (
         snapshot_token[:token_index]

@@ -31,8 +31,9 @@ unmatched, ambiguous, expired, or otherwise invalid START stays suppressed.
 Inbound messages with missing, duplicate, or ambiguous contact/matter matches
 become review items and are not attached to a matter timeline automatically.
 Authorized staff must select an exact contact and matter or reject the item;
-both decisions are audited without copying message content into operator
-metadata.
+the selected rows must be exact candidates captured on that review item, so an
+otherwise accessible same-phone contact or matter cannot be substituted. Both
+decisions are audited without copying message content into operator metadata.
 
 ## Provider configuration
 
@@ -61,7 +62,10 @@ Webhook endpoints verify Twilio's request signature with the tenant's actual
 Account Auth Token; there is no second application-defined webhook secret. They
 deduplicate provider message IDs and ignore unknown, replayed, or out-of-order
 status regressions. Credential rotation should be followed by a signed callback
-test and a review of the provider configuration audit trail. Audit metadata
+test and a review of the provider configuration audit trail. Send admission and
+rotation share one tenant/provider transaction fence until the dispatch
+reservation is durable; bounded generation retirement therefore sees every
+in-flight reservation before discarding credential bytes. Audit metadata
 records tenant, actor, provider, readiness, activation, and ownership model,
 but never credentials.
 
@@ -75,7 +79,12 @@ server revalidates sources, consent, category, and party membership at approval
 and immediately before dispatch. External or mutable citations are displayed as
 unverified and block approval until exact local evidence exists. Workspace MCP
 request identities are idempotent and cannot be reused for changed proposal
-content. No model action sends SMS autonomously, and provider outages or
+content. Creation and replay require the actor's current matter ownership or
+assignment before recipient, source, consent, or idempotency details are read.
+SMS proposal content stays in LawHand: it is not copied into assignment email or
+third-party calendar events. Assignment revocation synchronously removes any
+legacy calendar copy and fails closed if a connected provider cannot complete
+that cleanup. No model action sends SMS autonomously, and provider outages or
 uncertain outcomes remain visible for operator review.
 
 ## Retention, export, and legal hold
@@ -108,3 +117,11 @@ records, all shared-table SMS copies, and applicable backups. Lifting the hold d
 deletion. Counsel and operations must approve a future disposition policy that
 covers customer authority, provider copies, backups, and immutable compliance
 evidence before any destructive workflow is introduced.
+
+Generic communication creation cannot manufacture an SMS timeline row; only the
+provider-backed lifecycle writes those records. SMS proposal tasks and their
+event evidence cannot be hard-deleted, even before an automation run exists or
+while a legal hold is active. Operators cancel review work instead, preserving
+the proposal and decision trail. Expired disposable-demo purge remains a
+separate authorized boundary and deletes message/review content plus current and
+retired provider credentials in dependency-safe order without cloning them.

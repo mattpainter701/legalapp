@@ -567,6 +567,36 @@ async def _require_matter(context: ChatToolContext, matter_id: uuid.UUID) -> Mat
     return matter
 
 
+async def _require_live_matter_access(
+    context: ChatToolContext,
+    matter_id: uuid.UUID,
+    *,
+    lock: bool = False,
+) -> Matter:
+    """Require the individual actor's current ownership/assignment to a matter."""
+    matter_stmt = select(Matter).where(
+        Matter.id == matter_id,
+        Matter.tenant_id == context.tenant_id,
+    )
+    if lock:
+        matter_stmt = matter_stmt.with_for_update(read=True)
+    matter = await context.db.scalar(matter_stmt)
+    if matter is None:
+        raise ChatToolError("matter_not_found", "Matter not found")
+    if context.user.role == "admin" or matter.user_id == context.actor_user_id:
+        return matter
+    assignment_stmt = select(MatterAssignment.id).where(
+        MatterAssignment.tenant_id == context.tenant_id,
+        MatterAssignment.matter_id == matter_id,
+        MatterAssignment.user_id == context.actor_user_id,
+    )
+    if lock:
+        assignment_stmt = assignment_stmt.with_for_update(read=True)
+    if await context.db.scalar(assignment_stmt) is None:
+        raise ChatToolError("matter_not_found", "Matter not found")
+    return matter
+
+
 async def _active_reviewer(
     context: ChatToolContext, user_id: uuid.UUID | None
 ) -> User | None:
@@ -822,6 +852,7 @@ async def _create_proposed_task(
     idempotency_prefix: str | None = None,
     idempotency_key_digest: str | None = None,
     idempotency_request_digest: str | None = None,
+    require_live_matter_access: bool = False,
 ) -> Task:
     staged = review_policy == "staff_then_attorney"
     if staged and (staff_reviewer_user_id is None or attorney_reviewer_user_id is None):
@@ -840,6 +871,11 @@ async def _create_proposed_task(
         await require_task_references_for_tenant(context.db, context.tenant_id, values)
     except TaskWorkflowError as exc:
         raise ChatToolError("invalid_task_reference", exc.detail) from exc
+    if require_live_matter_access:
+        # This second check is share-locked through task creation or replay.
+        # Assignment revocation therefore either commits first and denies the
+        # operation, or waits until no recipient/action data can be returned.
+        await _require_live_matter_access(context, matter_id, lock=True)
 
     idempotency_values = (
         external_ref,
@@ -1226,7 +1262,9 @@ async def propose_client_sms(
     context: ChatToolContext, args: ProposeClientSmsArgs
 ) -> dict[str, Any]:
     """Create reviewable SMS work only for currently consented matter parties."""
-    await _require_matter(context, args.matter_id)
+    # Fail before recipient, consent, source, or idempotency work so a scoped
+    # external actor cannot use this tool as a restricted-matter oracle.
+    await _require_live_matter_access(context, args.matter_id)
     requested = list(dict.fromkeys(args.recipient_party_ids))
     rows = (
         await context.db.execute(
@@ -1315,6 +1353,7 @@ async def propose_client_sms(
             idempotency_prefix=idempotency_prefix,
             idempotency_key_digest=idempotency_key_digest,
             idempotency_request_digest=idempotency_request_digest,
+            require_live_matter_access=True,
         )
         action = SmsClientAction.model_validate(task.pending_action)
     return {

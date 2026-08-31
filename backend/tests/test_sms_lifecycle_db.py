@@ -21,6 +21,7 @@ import app.services.chat_tools.handlers as chat_handlers
 from app.config import get_settings
 from app.database import set_tenant_context
 from app.models.communication_log import CommunicationLog
+from app.models.compliance import RetentionPolicy
 from app.models.contact import Contact, Lead
 from app.models.conversion_loop import LeadChannelConsent, SmsConsentEvent
 from app.models.demo_session import DemoSession
@@ -49,6 +50,7 @@ from app.schemas.chat_action import (
 from app.schemas.workspace_mcp import GetTaskArgs, SearchTasksArgs
 from app.services import sms as sms_service
 from app.services import task_automation
+from app.services import task_notifications
 from app.services import workspace_lifecycle_capabilities as workspace_lifecycle
 from app.services.automation_capabilities import CapabilityContext, CapabilityError
 from app.services.chat_tools import ChatToolError, resolve_tool
@@ -243,6 +245,51 @@ async def _seed_lifecycle(
         config=config,
         auth_token=provider_token,
     )
+
+
+async def _rotate_provider_generation(
+    db,
+    *,
+    tenant_id,
+    actor_user_id,
+    account_sid: str,
+    auth_token: str,
+    messaging_service_sid: str,
+    ready: asyncio.Event | None = None,
+    release: asyncio.Event | None = None,
+) -> int:
+    await set_tenant_context(db, str(tenant_id))
+    await sms_service.lock_provider_config_admission(db, tenant_id=tenant_id)
+    config = await db.scalar(
+        select(SmsProviderConfig)
+        .where(
+            SmsProviderConfig.tenant_id == tenant_id,
+            SmsProviderConfig.provider == "twilio",
+        )
+        .with_for_update()
+    )
+    await sms_service.archive_current_provider_credentials(
+        db,
+        config=config,
+        actor_user_id=actor_user_id,
+    )
+    config.generation += 1
+    config.account_sid = account_sid
+    config.encrypted_auth_token = encrypt_token(auth_token)
+    config.messaging_service_sid = messaging_service_sid
+    config.from_number = None
+    config.sender_ready = True
+    config.is_active = True
+    config.updated_by_user_id = actor_user_id
+    await db.flush()
+    await sms_service.ensure_provider_config_credential(db, config=config)
+    if ready is not None:
+        ready.set()
+    if release is not None:
+        await release.wait()
+    generation = config.generation
+    await db.commit()
+    return generation
 
 
 def _signed_headers(
@@ -2851,6 +2898,234 @@ async def test_provider_config_update_waits_for_exact_generation_dispatch_truth(
 
 
 @pytest.mark.asyncio
+async def test_send_admission_precedes_sixth_generation_rotation_and_crash_recovery(
+    db_session, test_engine, test_tenant, test_user, monkeypatch
+):
+    seeded = await _seed_lifecycle(
+        db_session,
+        tenant=test_tenant,
+        user=test_user,
+        suffix="admission-before-rotation",
+    )
+    tenant_id = test_tenant.id
+    user_id = test_user.id
+    contact_id = seeded.contact.id
+    matter_id = seeded.matter.id
+    maker = async_sessionmaker(test_engine, expire_on_commit=False)
+    for generation in range(2, 6):
+        async with maker() as config_db:
+            assert (
+                await _rotate_provider_generation(
+                    config_db,
+                    tenant_id=tenant_id,
+                    actor_user_id=user_id,
+                    account_sid=f"AC-ADMISSION-{generation}",
+                    auth_token=f"admission-token-{generation}",
+                    messaging_service_sid=f"MG-ADMISSION-{generation}",
+                )
+                == generation
+            )
+
+    admitted = asyncio.Event()
+    release_admission = asyncio.Event()
+    rotation_done = asyncio.Event()
+    original_config = sms_service._config
+    initial_reads = 0
+
+    async def pause_with_admission_lock(
+        db, current_tenant_id, *, lock_for_provider_io=False
+    ):
+        nonlocal initial_reads
+        config = await original_config(
+            db,
+            current_tenant_id,
+            lock_for_provider_io=lock_for_provider_io,
+        )
+        if not lock_for_provider_io:
+            initial_reads += 1
+            if initial_reads == 1:
+                admitted.set()
+                await release_admission.wait()
+        return config
+
+    original_suppression_lock = sms_service.lock_sms_number_suppression
+
+    async def wait_for_rotation_after_reservation(*args, **kwargs):
+        suppression = await original_suppression_lock(*args, **kwargs)
+        await rotation_done.wait()
+        return suppression
+
+    monkeypatch.setattr(sms_service, "_config", pause_with_admission_lock)
+    monkeypatch.setattr(
+        sms_service,
+        "lock_sms_number_suppression",
+        wait_for_rotation_after_reservation,
+    )
+
+    async def uncertain_provider(**kwargs):
+        assert kwargs["auth"] == ("AC-ADMISSION-6", "admission-token-6")
+        raise TimeoutError("provider result unavailable after admission")
+
+    provider = _Provider(uncertain_provider)
+    _install_provider(monkeypatch, provider)
+
+    async def dispatch():
+        async with maker() as send_db:
+            await set_tenant_context(send_db, str(tenant_id))
+            with pytest.raises(SmsError) as uncertain:
+                await send_sms(
+                    send_db,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    contact_id=contact_id,
+                    matter_id=matter_id,
+                    body="Admission survives rotation crash",
+                    category="appointment",
+                    idempotency_key="admission-before-rotation-crash",
+                )
+            return uncertain.value.sms_message_id
+
+    async def rotate_sixth():
+        async with maker() as config_db:
+            generation = await _rotate_provider_generation(
+                config_db,
+                tenant_id=tenant_id,
+                actor_user_id=user_id,
+                account_sid="AC-ADMISSION-6",
+                auth_token="admission-token-6",
+                messaging_service_sid="MG-ADMISSION-6",
+            )
+            rotation_done.set()
+            return generation
+
+    send_task = asyncio.create_task(dispatch())
+    await asyncio.wait_for(admitted.wait(), timeout=5)
+    rotation_task = asyncio.create_task(rotate_sixth())
+    await asyncio.sleep(0.1)
+    assert not rotation_task.done()
+    release_admission.set()
+    assert await asyncio.wait_for(rotation_task, timeout=5) == 6
+    message_id = await asyncio.wait_for(send_task, timeout=5)
+
+    await set_tenant_context(db_session, str(tenant_id))
+    db_session.expire_all()
+    message = await db_session.get(SmsMessage, message_id)
+    assert message.status == "provider_unknown"
+    assert message.provider_config_generation == 6
+    assert message.provider_credential_id is not None
+    credentials = list(
+        (
+            await db_session.scalars(
+                select(SmsProviderCredential)
+                .where(SmsProviderCredential.tenant_id == tenant_id)
+                .order_by(SmsProviderCredential.generation)
+            )
+        ).all()
+    )
+    assert [row.generation for row in credentials] == [1, 2, 3, 4, 5, 6]
+    assert credentials[0].retired_at is not None
+    assert credentials[0].encrypted_auth_token is None
+    assert [row.generation for row in credentials if row.retired_at is None] == [
+        2,
+        3,
+        4,
+        5,
+        6,
+    ]
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_sixth_generation_rotation_precedes_send_reservation(
+    db_session, test_engine, test_tenant, test_user, monkeypatch
+):
+    seeded = await _seed_lifecycle(
+        db_session,
+        tenant=test_tenant,
+        user=test_user,
+        suffix="rotation-before-admission",
+    )
+    tenant_id = test_tenant.id
+    user_id = test_user.id
+    contact_id = seeded.contact.id
+    matter_id = seeded.matter.id
+    maker = async_sessionmaker(test_engine, expire_on_commit=False)
+    for generation in range(2, 6):
+        async with maker() as config_db:
+            await _rotate_provider_generation(
+                config_db,
+                tenant_id=tenant_id,
+                actor_user_id=user_id,
+                account_sid=f"AC-ROTATION-{generation}",
+                auth_token=f"rotation-token-{generation}",
+                messaging_service_sid=f"MG-ROTATION-{generation}",
+            )
+
+    rotation_ready = asyncio.Event()
+    release_rotation = asyncio.Event()
+
+    async def accepted(**kwargs):
+        assert kwargs["auth"] == ("AC-ROTATION-6", "rotation-token-6")
+        return _Response(201, {"sid": "SM-ROTATION-FIRST", "status": "queued"})
+
+    provider = _Provider(accepted)
+    _install_provider(monkeypatch, provider)
+
+    async def rotate_sixth():
+        async with maker() as config_db:
+            return await _rotate_provider_generation(
+                config_db,
+                tenant_id=tenant_id,
+                actor_user_id=user_id,
+                account_sid="AC-ROTATION-6",
+                auth_token="rotation-token-6",
+                messaging_service_sid="MG-ROTATION-6",
+                ready=rotation_ready,
+                release=release_rotation,
+            )
+
+    async def dispatch():
+        async with maker() as send_db:
+            await set_tenant_context(send_db, str(tenant_id))
+            return await send_sms(
+                send_db,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                contact_id=contact_id,
+                matter_id=matter_id,
+                body="Rotation commits before admission",
+                category="appointment",
+                idempotency_key="rotation-before-admission",
+            )
+
+    rotation_task = asyncio.create_task(rotate_sixth())
+    await asyncio.wait_for(rotation_ready.wait(), timeout=5)
+    send_task = asyncio.create_task(dispatch())
+    await asyncio.sleep(0.1)
+    assert not send_task.done()
+    async with maker() as probe_db:
+        await set_tenant_context(probe_db, str(tenant_id))
+        assert (
+            await probe_db.scalar(
+                select(func.count())
+                .select_from(SmsMessage)
+                .where(
+                    SmsMessage.tenant_id == tenant_id,
+                    SmsMessage.idempotency_key == "rotation-before-admission",
+                )
+            )
+            == 0
+        )
+    release_rotation.set()
+    assert await asyncio.wait_for(rotation_task, timeout=5) == 6
+    submitted = await asyncio.wait_for(send_task, timeout=5)
+    assert submitted.status == "submitted"
+    assert submitted.provider_config_generation == 6
+    assert submitted.provider_account_sid == "AC-ROTATION-6"
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_task_automation_retains_unknown_sms_identity_for_reconciliation(
     db_session, test_tenant, test_user, monkeypatch
 ):
@@ -3575,6 +3850,17 @@ async def test_expired_demo_purge_removes_sms_secrets_content_and_review_but_kee
             "quiet_hours_policy": "recipient-timezone",
         },
     )
+    retired_by = User(
+        tenant_id=demo.id,
+        email=f"sms-purge-operator-{uuid.uuid4().hex}@example.invalid",
+        full_name="Retired credential operator",
+        role="admin",
+        oauth_provider="fixture",
+        oauth_subject=uuid.uuid4().hex,
+    )
+    db_session.add_all([session, config, retired_by])
+    await db_session.flush()
+    credential_id = uuid.uuid4()
     message = SmsMessage(
         tenant_id=demo.id,
         idempotency_key="demo-sensitive-message",
@@ -3587,16 +3873,21 @@ async def test_expired_demo_purge_removes_sms_secrets_content_and_review_but_kee
         to_number="+15558880000",
         body="Sensitive prospective-client message",
         category="customer_reply",
+        provider_credential_id=credential_id,
     )
     credential = SmsProviderCredential(
+        id=credential_id,
         tenant_id=demo.id,
         provider="twilio",
         generation=1,
         account_sid=config.account_sid,
-        encrypted_auth_token=encrypt_token("demo-historical-auth-token"),
+        encrypted_auth_token=None,
         messaging_service_sid=config.messaging_service_sid,
+        retired_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+        retired_by_user_id=retired_by.id,
+        retirement_reason="bounded_rotation_after_resolution",
     )
-    db_session.add_all([session, config, credential, message])
+    db_session.add_all([credential, message])
     await db_session.flush()
     contact = Contact(
         tenant_id=demo.id,
@@ -4963,6 +5254,48 @@ async def test_custom_role_capability_controls_staff_sms_send(
         str(hidden_matter.id),
     }
     assert visible_review["body"] == "Route this reply"
+    noncandidate_contact = Contact(
+        tenant_id=test_tenant.id,
+        first_name="Accessible",
+        last_name="Noncandidate",
+        phone=seeded.contact.phone,
+        created_by_user_id=test_user.id,
+    )
+    db_session.add(noncandidate_contact)
+    await db_session.flush()
+    noncandidate_matter = Matter(
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        slug=f"sms-noncandidate-{uuid.uuid4().hex[:8]}",
+        matter_name="Accessible noncandidate matter",
+        client_contact_id=noncandidate_contact.id,
+    )
+    db_session.add(noncandidate_matter)
+    await db_session.flush()
+    db_session.add(
+        MatterAssignment(
+            tenant_id=test_tenant.id,
+            matter_id=noncandidate_matter.id,
+            user_id=allowed.id,
+            role="associate",
+        )
+    )
+    await db_session.commit()
+    for contact_id, matter_id in (
+        (noncandidate_contact.id, seeded.matter.id),
+        (seeded.contact.id, noncandidate_matter.id),
+    ):
+        noncandidate = await client.post(
+            f"/api/sms/review/{review_item.id}",
+            json={
+                "decision": "resolve",
+                "contact_id": str(contact_id),
+                "matter_id": str(matter_id),
+            },
+            headers=allowed_headers,
+        )
+        assert noncandidate.status_code == 409
+        assert "stored route candidate" in noncandidate.text
     resolved_visible_candidate = await client.post(
         f"/api/sms/review/{review_item.id}",
         json={
@@ -4984,6 +5317,30 @@ async def test_custom_role_capability_controls_staff_sms_send(
         headers=allowed_headers,
     )
     assert allowed_reconciliation_detail.status_code == 200
+    fabricated_sms_log = await client.post(
+        "/api/communications",
+        json={
+            "direction": "outbound",
+            "channel": "sms",
+            "status": "delivered",
+            "subject": "Fabricated provider delivery",
+            "body": "Fabricated provider body",
+            "matter_id": str(seeded.matter.id),
+            "contact_id": str(seeded.contact.id),
+            "external_ref": "twilio:SM-FABRICATED",
+        },
+        headers=allowed_headers,
+    )
+    assert fabricated_sms_log.status_code == 422
+    assert "signed SMS lifecycle" in fabricated_sms_log.text
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(CommunicationLog)
+            .where(CommunicationLog.external_ref == "twilio:SM-FABRICATED")
+        )
+        == 0
+    )
     for mutation in (
         {"body": "fabricated provider body"},
         {"status": "sent"},
@@ -5008,16 +5365,58 @@ async def test_custom_role_capability_controls_staff_sms_send(
     )
     assert immutable_log.body == "Permission-bound reminder"
     assert immutable_log.status != "deleted"
-    await db_session.delete(
-        await db_session.scalar(
-            select(MatterAssignment).where(
-                MatterAssignment.tenant_id == test_tenant.id,
-                MatterAssignment.matter_id == seeded.matter.id,
-                MatterAssignment.user_id == allowed.id,
-            )
+    mcp_tool = resolve_tool("propose_client_sms")
+    mcp_arguments = mcp_tool.parse_arguments(
+        {
+            "matter_id": str(seeded.matter.id),
+            "recipient_party_ids": [str(seeded.party.id)],
+            "title": "Review RBAC-bound workspace SMS",
+            "body": "RBAC-bound workspace proposal",
+            "category": "appointment",
+        }
+    )
+    with pytest.raises(ChatToolError) as unassigned_mcp:
+        await mcp_tool.handler(
+            ChatToolContext(
+                db=db_session,
+                user=unassigned,
+                channel="workspace_mcp",
+                request_id="sms-rbac-unassigned-mcp",
+                idempotency_key="sms-rbac-unassigned-mcp",
+            ),
+            mcp_arguments,
+        )
+    assert unassigned_mcp.value.code == "matter_not_found"
+    allowed_mcp_context = ChatToolContext(
+        db=db_session,
+        user=allowed,
+        channel="workspace_mcp",
+        request_id="sms-rbac-allowed-mcp",
+        idempotency_key="sms-rbac-allowed-mcp",
+    )
+    allowed_mcp = await mcp_tool.handler(allowed_mcp_context, mcp_arguments)
+    assert allowed_mcp["pending_action"]["recipient_bindings"][0]["phone"]
+    allowed_assignment = await db_session.scalar(
+        select(MatterAssignment).where(
+            MatterAssignment.tenant_id == test_tenant.id,
+            MatterAssignment.matter_id == seeded.matter.id,
+            MatterAssignment.user_id == allowed.id,
         )
     )
+    await db_session.delete(allowed_assignment)
     await db_session.commit()
+    with pytest.raises(ChatToolError) as unauthorized_mcp_replay:
+        await mcp_tool.handler(
+            ChatToolContext(
+                db=db_session,
+                user=allowed,
+                channel="workspace_mcp",
+                request_id="sms-rbac-replay-mcp",
+                idempotency_key="sms-rbac-allowed-mcp",
+            ),
+            mcp_arguments,
+        )
+    assert unauthorized_mcp_replay.value.code == "matter_not_found"
     unauthorized_replay = await client.post(
         "/api/sms/send", json=payload, headers=allowed_headers
     )
@@ -5336,6 +5735,242 @@ async def test_generic_task_surfaces_redact_or_hide_sms_for_unauthorized_users(
         GetTaskArgs(task_id=historical_task.id),
     )
     assert assigned_detail["events"][0]["note"] == "SMS-TASK-SECRET-EVENT"
+
+
+@pytest.mark.asyncio
+async def test_sms_task_without_run_cannot_hard_delete_with_or_without_legal_hold(
+    db_session, client, test_tenant, test_user
+):
+    seeded = await _seed_lifecycle(
+        db_session,
+        tenant=test_tenant,
+        user=test_user,
+        suffix="task-delete-preservation",
+    )
+    task = Task(
+        tenant_id=test_tenant.id,
+        title="Preserve SMS proposal",
+        description="Sensitive SMS proposal evidence",
+        status="review",
+        matter_id=seeded.matter.id,
+        contact_id=seeded.contact.id,
+        created_by_user_id=test_user.id,
+        pending_action={"type": "sms_client", "body": "Preserve this evidence"},
+    )
+    db_session.add(task)
+    await db_session.flush()
+    event = TaskEvent(
+        tenant_id=test_tenant.id,
+        task_id=task.id,
+        event_type="created",
+        actor_user_id=test_user.id,
+        note="Reviewable SMS proposal created",
+        metadata_json={"action_type": "sms_client"},
+    )
+    db_session.add(event)
+    await db_session.commit()
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(TaskAutomationRun)
+            .where(TaskAutomationRun.task_id == task.id)
+        )
+        == 0
+    )
+
+    no_run_delete = await client.delete(f"/api/tasks/{task.id}")
+    assert no_run_delete.status_code == 409
+    assert "cannot be hard-deleted" in no_run_delete.text
+    assert await db_session.get(Task, task.id) is not None
+    assert await db_session.get(TaskEvent, event.id) is not None
+
+    db_session.add(
+        RetentionPolicy(
+            tenant_id=test_tenant.id,
+            legal_hold=True,
+            legal_hold_reason="Preserve SMS review evidence",
+            legal_hold_set_at=datetime.now(timezone.utc),
+            policy_json={},
+            updated_by_user_id=test_user.id,
+        )
+    )
+    await db_session.commit()
+    held_delete = await client.delete(f"/api/tasks/{task.id}")
+    assert held_delete.status_code == 409
+    assert await db_session.get(Task, task.id) is not None
+    assert await db_session.get(TaskEvent, event.id) is not None
+
+
+@pytest.mark.asyncio
+async def test_sms_assignment_revocation_never_discloses_and_cleans_legacy_calendars(
+    db_session, test_engine, client, test_tenant, test_user, monkeypatch
+):
+    seeded = await _seed_lifecycle(
+        db_session,
+        tenant=test_tenant,
+        user=test_user,
+        suffix="notification-revocation",
+    )
+    assignee = User(
+        tenant_id=test_tenant.id,
+        email=f"sms-calendar-{uuid.uuid4().hex}@example.invalid",
+        full_name="SMS calendar assignee",
+        role="user",
+    )
+    role = Role(
+        tenant_id=test_tenant.id,
+        name=f"SMS notification role {uuid.uuid4().hex[:8]}",
+        capabilities=["manage_matters"],
+    )
+    db_session.add_all([assignee, role])
+    await db_session.flush()
+    assignment = MatterAssignment(
+        tenant_id=test_tenant.id,
+        matter_id=seeded.matter.id,
+        user_id=assignee.id,
+        role="associate",
+    )
+    task = Task(
+        tenant_id=test_tenant.id,
+        title="Private SMS calendar proposal",
+        description=f"{seeded.contact.phone}\nSensitive proposed SMS body",
+        status="review",
+        due_date=datetime.now(timezone.utc).date(),
+        matter_id=seeded.matter.id,
+        contact_id=seeded.contact.id,
+        assigned_to_user_id=assignee.id,
+        reviewer_user_id=assignee.id,
+        created_by_user_id=test_user.id,
+        pending_action={"type": "sms_client", "body": "Sensitive proposed SMS body"},
+    )
+    db_session.add_all(
+        [
+            assignment,
+            task,
+            UserRole(
+                tenant_id=test_tenant.id,
+                user_id=assignee.id,
+                role_id=role.id,
+                source="manual",
+            ),
+        ]
+    )
+    await db_session.commit()
+    tenant_id = test_tenant.id
+    matter_id = seeded.matter.id
+    assignment_id = assignment.id
+    assignee_id = assignee.id
+    task_id = task.id
+    contact_phone = seeded.contact.phone
+
+    disclosures: list[tuple[str, dict]] = []
+    cleanup: list[tuple[str, dict]] = []
+
+    async def unexpected_upsert(**kwargs):
+        disclosures.append(("calendar", kwargs))
+        return {"id": "unexpected"}
+
+    async def unexpected_email(**kwargs):
+        disclosures.append(("email", kwargs))
+        return True
+
+    async def cleaned_google(**kwargs):
+        cleanup.append(("google", kwargs))
+        return True
+
+    async def cleaned_microsoft(**kwargs):
+        cleanup.append(("microsoft", kwargs))
+        return True
+
+    monkeypatch.setattr(
+        task_notifications.google_calendar, "upsert_task_event", unexpected_upsert
+    )
+    monkeypatch.setattr(
+        task_notifications.microsoft_calendar, "upsert_task_event", unexpected_upsert
+    )
+    monkeypatch.setattr(
+        task_notifications.email_service,
+        "send_task_assignment_alert",
+        unexpected_email,
+    )
+    monkeypatch.setattr(
+        task_notifications.google_calendar, "delete_task_event", cleaned_google
+    )
+    monkeypatch.setattr(
+        task_notifications.microsoft_calendar, "delete_task_event", cleaned_microsoft
+    )
+
+    sms_classified = asyncio.Event()
+    release_notification = asyncio.Event()
+    original_task_contains_sms = task_notifications.task_contains_sms
+
+    async def pause_after_sms_classification(db, candidate):
+        result = await original_task_contains_sms(db, candidate)
+        sms_classified.set()
+        await release_notification.wait()
+        return result
+
+    monkeypatch.setattr(
+        task_notifications, "task_contains_sms", pause_after_sms_classification
+    )
+    maker = async_sessionmaker(test_engine, expire_on_commit=False)
+
+    async def notify():
+        async with maker() as notify_db:
+            await set_tenant_context(notify_db, str(tenant_id))
+            candidate = await notify_db.get(Task, task_id)
+            return await task_notifications.notify_task_created(
+                notify_db, candidate, str(tenant_id)
+            )
+
+    notification_task = asyncio.create_task(notify())
+    await asyncio.wait_for(sms_classified.wait(), timeout=5)
+    async with maker() as revoke_db:
+        await set_tenant_context(revoke_db, str(tenant_id))
+        revoked = await revoke_db.scalar(
+            select(User)
+            .where(User.id == assignee_id, User.tenant_id == tenant_id)
+            .with_for_update()
+        )
+        revoked.is_active = False
+        await revoke_db.commit()
+    release_notification.set()
+    await asyncio.wait_for(notification_task, timeout=5)
+    assert disclosures == []
+
+    async def failed_google_cleanup(**kwargs):
+        cleanup.append(("google-failed", kwargs))
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(
+        task_notifications.google_calendar,
+        "delete_task_event",
+        failed_google_cleanup,
+    )
+    failed_removal = await client.delete(
+        f"/api/matters/{matter_id}/assignments/{assignment_id}"
+    )
+    assert failed_removal.status_code == 503
+    assert "assignment was not removed" in failed_removal.text
+    assert await db_session.get(MatterAssignment, assignment_id) is not None
+
+    cleanup.clear()
+    monkeypatch.setattr(
+        task_notifications.google_calendar, "delete_task_event", cleaned_google
+    )
+    removed = await client.delete(
+        f"/api/matters/{matter_id}/assignments/{assignment_id}"
+    )
+    assert removed.status_code == 204
+    assert {provider for provider, _kwargs in cleanup} == {"google", "microsoft"}
+    for _provider, kwargs in cleanup:
+        assert kwargs == {
+            "tenant_id": str(tenant_id),
+            "task_id": str(task_id),
+            "user_id": str(assignee_id),
+        }
+    assert contact_phone not in repr(cleanup)
+    assert "Sensitive proposed SMS body" not in repr(cleanup)
 
 
 async def _mutate_sms_actor(
@@ -5963,9 +6598,14 @@ async def test_review_resolution_contact_lock_order_avoids_dispatch_deadlock(
 
     send_task = asyncio.create_task(dispatch())
     await asyncio.wait_for(contact_locked_by_send.wait(), timeout=5)
+    # Dispatch now owns Contact but has not taken its final actor/Matter fence.
+    # Resolution must wait on Contact without holding actor/Matter, so releasing
+    # dispatch cannot form the previous Contact <-> actor/Matter lock cycle.
     resolve_task = asyncio.create_task(resolve())
     await asyncio.sleep(0.1)
     assert not resolve_task.done()
+    assert not send_task.done()
+    assert provider.calls == []
     release_send.set()
     assert await asyncio.wait_for(send_task, timeout=5) == "submitted"
     assert await asyncio.wait_for(resolve_task, timeout=5) == "resolved"

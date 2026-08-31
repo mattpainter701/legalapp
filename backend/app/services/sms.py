@@ -79,6 +79,21 @@ class SmsError(ValueError):
         }
 
 
+async def lock_provider_config_admission(db: AsyncSession, *, tenant_id) -> None:
+    """Serialize durable send admission with provider credential rotation."""
+    await db.execute(
+        text(
+            "SELECT pg_catalog.pg_advisory_xact_lock("
+            "pg_catalog.hashtextextended(:sms_provider_lock, 0))"
+        ),
+        {
+            "sms_provider_lock": (
+                f"lawhand:sms-provider-config-admission:v1:{tenant_id}:twilio"
+            )
+        },
+    )
+
+
 def normalize_e164(value: str | None) -> str:
     raw = re.sub(r"[ ().-]", "", str(value or ""))
     if raw.startswith("00"):
@@ -1428,6 +1443,10 @@ async def send_sms(
         consent=consent, to_number=to_number, category=category, now=now
     ):
         raise SmsError("SMS follow-up is not currently consented", 403)
+    # Hold the same transaction advisory fence as config rotation until the
+    # dispatching reservation commits. A sixth-generation rotation must see
+    # this row before deciding whether its credential can be retired.
+    await lock_provider_config_admission(db, tenant_id=tenant_id)
     initial_config = await _config(db, tenant_id)
     provider_auth_token(initial_config)
     initial_credential = await ensure_provider_config_credential(
@@ -2066,6 +2085,43 @@ async def resolve_review_item(
     if message is None or message.direction != "inbound":
         raise SmsError("Inbound SMS evidence was not found", 404)
     now = datetime.now(timezone.utc)
+    candidate_contact_ids = {
+        uuid.UUID(str(value)) for value in (item.candidate_contact_ids or [])
+    }
+    candidate_matter_ids = sorted(
+        {uuid.UUID(str(value)) for value in (item.candidate_matter_ids or [])},
+        key=str,
+    )
+    if decision not in {"resolve", "reject"}:
+        raise SmsError("Unsupported SMS review decision", 422)
+    contact = None
+    if decision == "resolve":
+        if not contact_id or not matter_id:
+            raise SmsError("Resolution requires one contact and matter", 422)
+        if (
+            uuid.UUID(str(contact_id)) not in candidate_contact_ids
+            or uuid.UUID(str(matter_id)) not in candidate_matter_ids
+        ):
+            raise SmsError("Resolution target is not a stored route candidate", 409)
+        # Match outbound dispatch and inbound routing: once the review/message
+        # evidence is fenced, take the target Contact before actor/matter locks.
+        # Dispatch takes Contact before its final actor/matter fence, so review
+        # must use the same order or the two paths can deadlock deterministically.
+        contact = await db.scalar(
+            select(Contact)
+            .where(Contact.id == contact_id, Contact.tenant_id == tenant_id)
+            .with_for_update()
+        )
+        if contact is None:
+            raise SmsError("Resolution target was not found", 404)
+        try:
+            current_phone = normalize_e164(contact.phone)
+        except SmsError as exc:
+            raise SmsError(
+                "Resolution contact does not match the inbound phone", 409
+            ) from exc
+        if current_phone != message.from_number:
+            raise SmsError("Resolution contact does not match the inbound phone", 409)
     reviewer = await _lock_sms_actor(
         db,
         tenant_id=tenant_id,
@@ -2074,10 +2130,6 @@ async def resolve_review_item(
     )
     if reviewer is None:
         raise SmsError("SMS review item was not found", 404)
-    candidate_matter_ids = sorted(
-        {uuid.UUID(str(value)) for value in (item.candidate_matter_ids or [])},
-        key=str,
-    )
     if not candidate_matter_ids and reviewer.role != "admin":
         raise SmsError("SMS review item was not found", 404)
     for candidate_matter_id in candidate_matter_ids:
@@ -2097,27 +2149,6 @@ async def resolve_review_item(
         item.reviewed_at = now
         message.status = "route_rejected"
         return item
-    if decision != "resolve" or not contact_id or not matter_id:
-        raise SmsError("Resolution requires one contact and matter", 422)
-    # Match outbound dispatch and inbound routing: once the review/message
-    # evidence is fenced, take the target Contact before actor/matter locks.
-    # Taking actor/matter first can deadlock with dispatch holding Contact while
-    # it performs its final live authorization check.
-    contact = await db.scalar(
-        select(Contact)
-        .where(Contact.id == contact_id, Contact.tenant_id == tenant_id)
-        .with_for_update()
-    )
-    if contact is None:
-        raise SmsError("Resolution target was not found", 404)
-    try:
-        current_phone = normalize_e164(contact.phone)
-    except SmsError as exc:
-        raise SmsError(
-            "Resolution contact does not match the inbound phone", 409
-        ) from exc
-    if current_phone != message.from_number:
-        raise SmsError("Resolution contact does not match the inbound phone", 409)
     if (
         await _lock_sms_matter_authorization(
             db,
