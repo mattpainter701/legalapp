@@ -16,6 +16,7 @@ from app.schemas.file_open_intent import (
     FileOpenIntentRedeemed,
 )
 from app.services import file_open_intents as service
+from app.services.demo_registry import DEMO_TABLE_REGISTRY
 
 
 class _Result:
@@ -77,6 +78,8 @@ def test_file_open_is_default_off_and_contract_has_no_path():
         "nonce",
     }.issubset(FileOpenIntentRedeemed.model_fields)
     assert "path" not in FileOpenIntentRedeemed.model_fields
+    assert DEMO_TABLE_REGISTRY["file_open_intents"].purge is True
+    assert DEMO_TABLE_REGISTRY["file_open_intents"].clone is False
 
 
 @pytest.mark.asyncio
