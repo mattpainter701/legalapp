@@ -200,6 +200,10 @@ def test_windows_build_copies_signed_agent_to_opener_and_requires_both_on_reuse(
     assert "Copy-Item -LiteralPath $ExePath -Destination $OpenerExePath" in script
     assert "-SkipExe requires an existing signed opener" in script
     assert '-d "OpenerExe=$OpenerExePath"' in script
+    upgrade = (
+        Path(__file__).parents[1] / "packaging" / "windows" / "test-upgrade.ps1"
+    ).read_text(encoding="utf-8")
+    assert '-d "OpenerExe=$exe"' in upgrade
 
 
 def test_release_signs_and_verifies_both_windows_executables():
