@@ -84,6 +84,14 @@
   native Windows ACL trimming, or semantic retrieval.
 
 ### Fixed
+- **Authority alerts and claims revalidate their evidence lineage:** queued
+  citator alerts persist the exact history or citation fact they represent and
+  re-resolve its current promoted public-source lineage before a delivery can be
+  recorded as sent. Customer coverage claims are invalidated by changes to any
+  served source/admission/manifest fact until fresh production audits pass, and
+  citation edges require each linked opinion to belong to the same reviewed
+  source as its authority. This adds no production harvest, deployment, or
+  comprehensive-currentness claim.
 - **Windows file-share agent enrollment works with managed TLS inspection:**
   the packaged agent now validates HTTPS through the operating system trust
   store instead of only its embedded CA bundle. Enterprise roots deployed by

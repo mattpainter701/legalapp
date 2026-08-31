@@ -15,7 +15,7 @@ import hashlib
 import hmac
 import json
 import time
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 from pathlib import Path
 from datetime import date, datetime, timezone
 
@@ -1685,6 +1685,17 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
         # customer claim is state-digested.  A change suppresses claims until
         # the production audits are recomputed for that exact state.
         audited_claim_mutations = [
+            ("coverage_kind", "'complete'", "'bounded'"),
+            ("coverage_start", "DATE '2025-01-01'", "NULL"),
+            ("coverage_end", "DATE '2026-12-31'", "NULL"),
+            ("jurisdiction", "'US-OH'", "NULL"),
+            (
+                "canonical_url",
+                "'https://example.test/changed-source'",
+                "'https://example.test'",
+            ),
+            ("display_name", "'Changed rehearsal source'", "NULL"),
+            ("publisher", "'Changed publisher'", "'Rehearsal'"),
             (
                 "geographic_scope",
                 '\'["US-OH","US-FED"]\'::jsonb',
@@ -2174,6 +2185,35 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 )
                 assert cur.fetchone()[0] > 0
         _run_production_audits(conn, version=follow_up, auditor="rehearsal-admin")
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT coverage_kind FROM legal_sources WHERE source_key=%s",
+                [source_key],
+            )
+            original_coverage_kind = cur.fetchone()[0]
+            changed_coverage_kind = (
+                "bounded" if original_coverage_kind == "complete" else "complete"
+            )
+            cur.execute(
+                "UPDATE legal_sources SET coverage_kind=%s WHERE source_key=%s",
+                [changed_coverage_kind, source_key],
+            )
+        conn.commit()
+        with pytest.raises(PermissionError, match="stale, fabricated, or invalid"):
+            promote_corpus_version(
+                conn,
+                version=follow_up,
+                actor="rehearsal-admin",
+                reason="claim metadata changed after audit",
+            )
+        conn.rollback()
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE legal_sources SET coverage_kind=%s WHERE source_key=%s",
+                [original_coverage_kind, source_key],
+            )
+        conn.commit()
+        _run_production_audits(conn, version=follow_up, auditor="rehearsal-admin")
         promote_corpus_version(
             conn, version=follow_up, actor="rehearsal-admin", reason="cutover fixture"
         )
@@ -2575,6 +2615,12 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
             assert cur.fetchone() == (True,)
             cur.execute(
                 """SELECT convalidated FROM pg_constraint
+                     WHERE conrelid='citator_alert_events'::regclass
+                       AND conname='citator_alert_events_evidence_check'"""
+            )
+            assert cur.fetchone() == (True,)
+            cur.execute(
+                """SELECT convalidated FROM pg_constraint
                      WHERE conrelid='citator_alert_deliveries'::regclass
                        AND conname='citator_alert_deliveries_event_tenant_fk'"""
             )
@@ -2851,6 +2897,52 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
             actor="rehearsal-admin",
             reason="citator rehearsal cutover",
         )
+        mismatched_version = version + "-mismatched-citation"
+        stage_corpus_version(
+            conn,
+            version=mismatched_version,
+            manifest_hash="citator-rehearsal-manifest",
+            as_of="2026-08-30T00:00:00Z",
+            actor="rehearsal-admin",
+            reason="citation authority/opinion identity negative",
+            embedding_model="mixedbread-ai/mxbai-embed-large-v1",
+            embedding_version="1",
+            embedding_dimension=1024,
+        )
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO authority_citation_facts
+                     (corpus_version, citing_authority_key, cited_authority_key,
+                      citing_opinion_id, depth, source_url, evidence_span,
+                      evidence_locator, source_hash)
+                   VALUES (%s, %s, %s, %s, 0,
+                     'https://example.test/mismatched-citing-edge',
+                     'Unrelated public opinion cannot launder a citing authority',
+                     '{"paragraph":5}', 'mismatched-citing-edge-sha')
+                   RETURNING id::text""",
+                [
+                    mismatched_version,
+                    citing_authority_key,
+                    authority_key,
+                    opinion_id,
+                ],
+            )
+            mismatched_citation_fact_id = cur.fetchone()[0]
+            cur.execute(
+                """SELECT COUNT(*) FROM public_authority_citation_facts
+                    WHERE id=%s::uuid""",
+                [mismatched_citation_fact_id],
+            )
+            assert cur.fetchone()[0] == 0
+        conn.commit()
+        mismatch_isolation, _ = run_and_record_control_audit(
+            conn,
+            version=mismatched_version,
+            audit_kind="isolation",
+            auditor="rehearsal-admin",
+        )
+        assert mismatch_isolation["passed"] is False
+        assert mismatch_isolation["isolated"] < mismatch_isolation["sample_size"]
         for unsafe_authority_key in (
             custom_authority_key,
             private_shaped_authority_key,
@@ -3632,6 +3724,55 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
             != "unavailable"
         )
 
+        lineage_delivery_watch = save_race_watch("rehearsal-lineage-delivery")
+        healthy_lineage_alert = enqueue_citator_alert(
+            conn,
+            tenant_id=tenant_id,
+            watch_id=lineage_delivery_watch,
+            corpus_version=version,
+            authority_key=authority_key,
+            event_fingerprint="two-sided-lineage-healthy",
+            event_kind="treatment",
+            evidence_fact_id=two_sided_citation_fact_id,
+        )
+        assert healthy_lineage_alert
+        record_citator_alert_delivery(
+            conn,
+            tenant_id=tenant_id,
+            alert_event_id=healthy_lineage_alert,
+            channel="in_app",
+            delivery_key="two-sided-lineage-healthy",
+            attempted_outcome="sent",
+            now=datetime(2026, 8, 30, 12, tzinfo=timezone.utc),
+        )
+        revoked_lineage_alert = enqueue_citator_alert(
+            conn,
+            tenant_id=tenant_id,
+            watch_id=lineage_delivery_watch,
+            corpus_version=version,
+            authority_key=authority_key,
+            event_fingerprint="two-sided-lineage-revoked-before-delivery",
+            event_kind="treatment",
+            evidence_fact_id=two_sided_citation_fact_id,
+        )
+        assert revoked_lineage_alert
+        with conn.cursor() as cur:
+            cur.execute("SET LOCAL app.current_tenant_id = %s", [tenant_id])
+            cur.execute(
+                """SELECT e.evidence_fact_id::text, e.evidence_type, d.outcome
+                     FROM citator_alert_events e
+                     JOIN citator_alert_deliveries d ON d.alert_event_id=e.id
+                    WHERE e.id=%s::uuid
+                      AND d.delivery_key='two-sided-lineage-healthy'""",
+                [healthy_lineage_alert],
+            )
+            assert cur.fetchone() == (
+                two_sided_citation_fact_id,
+                "citation",
+                "sent",
+            )
+        conn.commit()
+
         citation_assessment_id = record_treatment_assessment(
             conn,
             corpus_version=version,
@@ -3649,12 +3790,44 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
                 [citing_source_key],
             )
         conn.commit()
+        record_citator_alert_delivery(
+            conn,
+            tenant_id=tenant_id,
+            alert_event_id=revoked_lineage_alert,
+            channel="in_app",
+            delivery_key="two-sided-lineage-revoked-before-delivery",
+            attempted_outcome="sent",
+            now=datetime(2026, 8, 30, 12, tzinfo=timezone.utc),
+        )
         with conn.cursor() as cur:
+            cur.execute("SET LOCAL app.current_tenant_id = %s", [tenant_id])
+            cur.execute(
+                """SELECT outcome, detail FROM citator_alert_deliveries
+                    WHERE alert_event_id=%s::uuid
+                      AND delivery_key='two-sided-lineage-revoked-before-delivery'""",
+                [revoked_lineage_alert],
+            )
+            assert cur.fetchone() == (
+                "revoked",
+                "authority evidence lineage is no longer admitted",
+            )
+            cur.execute(
+                """SELECT COUNT(*) FROM citator_alert_deliveries
+                    WHERE alert_event_id=%s::uuid AND outcome='sent'""",
+                [revoked_lineage_alert],
+            )
+            assert cur.fetchone()[0] == 0
             cur.execute(
                 "SELECT COUNT(*) FROM public_authority_citation_facts WHERE id=%s::uuid",
                 [two_sided_citation_fact_id],
             )
             assert cur.fetchone()[0] == 0
+            cur.execute(
+                "SELECT COUNT(*) FROM public_authority_citation_facts WHERE id=%s::uuid",
+                [mismatched_citation_fact_id],
+            )
+            assert cur.fetchone()[0] == 0
+        conn.commit()
         two_sided_suppressed = CourtListenerRepository(conn).authority_treatment(
             opinion_id
         )
@@ -4170,6 +4343,197 @@ def test_process_once_rehearsal_both_corpora(monkeypatch):
             assert attempts >= 3
             assert health_state in {"healthy", "unavailable", "threshold_exceeded"}
             assert sample_age is not None
+
+
+def test_citator_evidence_constraint_force_rls_owner_upgrade():
+    """Legacy alert evidence upgrades safely for a FORCE-RLS table owner."""
+    db_url = os.getenv("AUTHORITY_REHEARSAL_DATABASE_URL")
+    if not db_url:
+        pytest.skip(
+            "set AUTHORITY_REHEARSAL_DATABASE_URL for the disposable DB rehearsal"
+        )
+    role = "citator_upgrade_" + uuid.uuid4().hex[:12]
+    password = "Upgrade" + uuid.uuid4().hex
+    schema = "citator_upgrade_" + uuid.uuid4().hex[:12]
+    parts = urlsplit(db_url)
+    host = parts.hostname or "127.0.0.1"
+    port = f":{parts.port}" if parts.port else ""
+    role_netloc = f"{quote(role, safe='')}:{quote(password, safe='')}@{host}{port}"
+    options = "options=-csearch_path%3D" + quote(schema + ",public", safe="")
+    role_query = "&".join(value for value in (parts.query, options) if value)
+    role_url = urlunsplit(
+        (parts.scheme, role_netloc, parts.path, role_query, parts.fragment)
+    )
+    tenant_id = str(uuid.uuid4())
+    evidence_fact_id = str(uuid.uuid4())
+    version = "legacy-alert-evidence-" + uuid.uuid4().hex
+    role_created = False
+    try:
+        with connect(db_url) as admin:
+            admin.autocommit = True
+            with admin.cursor() as cur:
+                cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+                cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+                cur.execute(
+                    f"CREATE ROLE \"{role}\" LOGIN PASSWORD '{password}' "
+                    "NOSUPERUSER NOBYPASSRLS"
+                )
+                role_created = True
+                cur.execute(f'CREATE SCHEMA "{schema}" AUTHORIZATION "{role}"')
+                cur.execute(f'GRANT USAGE ON SCHEMA public TO "{role}"')
+                cur.execute(
+                    "SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname=%s",
+                    [role],
+                )
+                assert cur.fetchone() == (False, False)
+
+        # Create the full production schema as the same least-privilege owner
+        # that will later run the additive migration.
+        init_schema(role_url)
+        with connect(role_url) as owner:
+            with owner.cursor() as cur:
+                cur.execute(
+                    "ALTER TABLE citator_alert_events "
+                    "DROP CONSTRAINT citator_alert_events_evidence_check"
+                )
+                cur.execute(
+                    "ALTER TABLE citator_alert_events "
+                    "ALTER COLUMN evidence_fact_id DROP NOT NULL, "
+                    "ALTER COLUMN evidence_type DROP NOT NULL"
+                )
+                cur.execute(
+                    """INSERT INTO authority_corpus_versions
+                         (version, status, manifest_hash, as_of)
+                       VALUES (%s, 'staged', %s, now())""",
+                    [version, "legacy-alert-manifest-" + uuid.uuid4().hex],
+                )
+                cur.execute("SET LOCAL app.current_tenant_id=%s", [tenant_id])
+                cur.execute(
+                    """INSERT INTO citator_watches
+                         (tenant_id, authority_key, created_by, consented,
+                          delivery_channels, state)
+                       VALUES (%s::uuid, 'case:legacy-alert', 'legacy-owner', TRUE,
+                         '["in_app"]'::jsonb, 'active')
+                       RETURNING id::text""",
+                    [tenant_id],
+                )
+                watch_id = cur.fetchone()[0]
+                cur.execute(
+                    """INSERT INTO citator_alert_events
+                         (watch_id, tenant_id, corpus_version, authority_key,
+                          event_fingerprint, event_kind, source_url, payload)
+                       VALUES (%s::uuid, %s::uuid, %s, 'case:legacy-alert',
+                         'legacy-before-evidence-columns', 'history',
+                         'https://example.test/legacy-alert', %s::jsonb)
+                       RETURNING id::text""",
+                    [
+                        watch_id,
+                        tenant_id,
+                        version,
+                        json.dumps(
+                            {
+                                "evidence_fact_id": evidence_fact_id,
+                                "evidence_type": "history",
+                            }
+                        ),
+                    ],
+                )
+                legacy_event_id = cur.fetchone()[0]
+            owner.commit()
+
+        # FORCE RLS makes the owner's no-GUC SELECT see no rows—the exact
+        # deployment shape that made a pre-query unsafe as validation proof.
+        with connect(role_url) as owner:
+            with owner.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM citator_alert_events")
+                assert cur.fetchone()[0] == 0
+
+        # The real initializer must succeed without a tenant GUC. Constraint
+        # validation sees the physical legacy row, catches only its CHECK
+        # violation, and leaves NOT VALID enforcement for future writes.
+        init_schema(role_url)
+        with connect(role_url) as owner:
+            with owner.cursor() as cur:
+                cur.execute(
+                    """SELECT convalidated FROM pg_constraint
+                        WHERE conrelid='citator_alert_events'::regclass
+                          AND conname='citator_alert_events_evidence_check'"""
+                )
+                assert cur.fetchone() == (False,)
+                cur.execute("SET LOCAL app.current_tenant_id=%s", [tenant_id])
+                cur.execute(
+                    """SELECT evidence_fact_id, evidence_type,
+                              COALESCE(evidence_fact_id::text,
+                                       payload->>'evidence_fact_id'),
+                              COALESCE(evidence_type, payload->>'evidence_type')
+                         FROM citator_alert_events WHERE id=%s::uuid""",
+                    [legacy_event_id],
+                )
+                assert cur.fetchone() == (
+                    None,
+                    None,
+                    evidence_fact_id,
+                    "history",
+                )
+                cur.execute("SAVEPOINT invalid_new_alert_evidence")
+                with pytest.raises(DatabaseError):
+                    cur.execute(
+                        """INSERT INTO citator_alert_events
+                             (watch_id, tenant_id, corpus_version, authority_key,
+                              event_fingerprint, event_kind, source_url, payload)
+                           VALUES (%s::uuid, %s::uuid, %s, 'case:legacy-alert',
+                             'invalid-new-evidence', 'history',
+                             'https://example.test/invalid-new', '{}'::jsonb)""",
+                        [watch_id, tenant_id, version],
+                    )
+                cur.execute("ROLLBACK TO SAVEPOINT invalid_new_alert_evidence")
+                cur.execute("RELEASE SAVEPOINT invalid_new_alert_evidence")
+                cur.execute(
+                    """INSERT INTO citator_alert_events
+                         (watch_id, tenant_id, corpus_version, authority_key,
+                          event_fingerprint, event_kind, evidence_fact_id,
+                          evidence_type, source_url, payload)
+                       VALUES (%s::uuid, %s::uuid, %s, 'case:legacy-alert',
+                         'valid-new-evidence', 'history', %s::uuid, 'history',
+                         'https://example.test/valid-new', '{}'::jsonb)
+                       RETURNING id::text""",
+                    [watch_id, tenant_id, version, str(uuid.uuid4())],
+                )
+                assert cur.fetchone()[0]
+            owner.commit()
+
+            # Payload fallback never grants delivery authority: the legacy
+            # event is re-resolved, finds no promoted public fact lineage, and
+            # is durably suppressed rather than recorded as sent.
+            assert record_citator_alert_delivery(
+                owner,
+                tenant_id=tenant_id,
+                alert_event_id=legacy_event_id,
+                channel="in_app",
+                delivery_key="legacy-fallback-revalidation",
+                attempted_outcome="sent",
+            )
+            with owner.cursor() as cur:
+                cur.execute("SET LOCAL app.current_tenant_id=%s", [tenant_id])
+                cur.execute(
+                    """SELECT outcome, detail FROM citator_alert_deliveries
+                        WHERE alert_event_id=%s::uuid
+                          AND delivery_key='legacy-fallback-revalidation'""",
+                    [legacy_event_id],
+                )
+                assert cur.fetchone() == (
+                    "revoked",
+                    "authority evidence lineage is no longer admitted",
+                )
+            owner.commit()
+    finally:
+        if role_created:
+            with connect(db_url) as admin:
+                admin.autocommit = True
+                with admin.cursor() as cur:
+                    cur.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+                    cur.execute(f'DROP OWNED BY "{role}"')
+                    cur.execute(f'DROP ROLE IF EXISTS "{role}"')
 
 
 def test_legal_only_upgrade_bootstrap_rehearsal():

@@ -236,13 +236,23 @@ def corpus_state_digest(conn: Any, *, version: str) -> str:
         ),
         (
             "sources",
-            """SELECT s.source_key, s.enabled, s.reviewed_at, s.reviewed_by,
-                      s.rights_decision, s.storage_policy, s.public_namespace,
+            """SELECT s.source_key, s.display_name, s.description, s.publisher,
+                      s.source_type, s.jurisdiction, s.court_id,
+                      s.canonical_url, s.authority_tier, s.official_status,
+                      s.ingestion_mode, s.storage_policy, s.access_type,
+                      s.license_status, s.terms_url, s.sync_frequency,
+                      s.data_format, s.corpus_table, s.enabled, s.priority,
+                      s.coverage_start, s.coverage_end, s.coverage_kind,
+                      s.last_attempted_at, s.last_successful_sync_at,
+                      s.item_count, s.chunk_count, s.embedded_chunk_count,
+                      s.parser_version, s.embedding_model,
+                      s.embedding_version, s.current_error,
+                      s.licensing_notes, s.metadata, s.rights_decision,
                       s.source_tier, s.geographic_scope, s.temporal_scope,
                       s.expected_cadence, s.completeness_caveats,
-                      s.claim_safe_wording,
+                      s.claim_safe_wording, s.reviewed_at, s.reviewed_by,
+                      s.review_reason, s.public_namespace,
                       p.catalog_schema_version,
-                      s.metadata->>'implementation_status',
                       p.manifest_reference, p.manifest_sha256, p.namespace,
                       p.reviewed_at, p.reviewed_by, p.active
                  FROM legal_sources s
@@ -1774,6 +1784,30 @@ def _citator_alert_evidence(
     }
 
 
+def _lock_citator_release_lineage(conn: Any, *, corpus_version: str) -> None:
+    """Hold the release and its reviewed source admissions through delivery.
+
+    Delivery revalidation and its append-only outcome must observe one lineage
+    state.  These shared row locks make a concurrent source/admission revoke
+    wait until the non-sent/sent decision is durably recorded.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT s.source_key
+              FROM authority_corpus_versions v
+              JOIN citator_public_source_admissions p
+                ON p.manifest_sha256=v.manifest_hash
+              JOIN legal_sources s ON s.source_key=p.source_key
+             WHERE v.version=%s
+             ORDER BY s.source_key
+             FOR SHARE OF v, p, s
+            """,
+            [corpus_version],
+        )
+        cur.fetchall()
+
+
 def enqueue_citator_alert(
     conn: Any,
     *,
@@ -1820,8 +1854,10 @@ def enqueue_citator_alert(
         cur.execute(
             """INSERT INTO citator_alert_events
                  (watch_id, tenant_id, corpus_version, authority_key,
-                  event_fingerprint, event_kind, source_url, payload)
-               VALUES (%s::uuid, %s::uuid, %s, %s, %s, %s, %s, %s::jsonb)
+                  event_fingerprint, event_kind, evidence_fact_id,
+                  evidence_type, source_url, payload)
+               VALUES (%s::uuid, %s::uuid, %s, %s, %s, %s,
+                       %s::uuid, %s, %s, %s::jsonb)
                ON CONFLICT (watch_id, event_fingerprint) DO NOTHING
                RETURNING id::text""",
             [
@@ -1831,6 +1867,8 @@ def enqueue_citator_alert(
                 authority_key,
                 event_fingerprint,
                 event_kind,
+                payload["evidence_fact_id"],
+                payload["evidence_type"],
                 source_url,
                 json.dumps(payload),
             ],
@@ -1889,34 +1927,60 @@ def record_citator_alert_delivery(
     """
     if attempted_outcome not in {"queued", "sent", "failed"}:
         raise ValueError("attempted alert outcome must be queued, sent, or failed")
+    delivery_detail = detail
     with conn.cursor() as cur:
         cur.execute("SET LOCAL app.current_tenant_id = %s", [tenant_id])
         cur.execute(
             """
             SELECT w.state, w.consented, w.quiet_hours, w.delivery_channels,
-                   e.corpus_version, e.authority_key
+                   e.corpus_version, e.authority_key,
+                   COALESCE(e.evidence_fact_id::text,
+                            e.payload->>'evidence_fact_id'),
+                   COALESCE(e.evidence_type, e.payload->>'evidence_type')
             FROM citator_alert_events e
             JOIN citator_watches w ON w.id=e.watch_id
             WHERE e.id=%s::uuid AND e.tenant_id=%s::uuid
-            FOR UPDATE OF w
+            FOR UPDATE OF w, e
             """,
             [alert_event_id, tenant_id],
         )
         watch = cur.fetchone()
         if not watch or watch[0] in {"revoked", "deleted"}:
             outcome = "revoked"
-        elif not _citator_authority_is_permitted(
-            conn, corpus_version=str(watch[4]), authority_key=str(watch[5])
-        ):
-            outcome = "revoked"
-        elif channel not in set(watch[3] or []):
-            raise PermissionError("alert channel is not consented for this watch")
-        elif not watch[1]:
-            outcome = "suppressed_no_consent"
-        elif quiet_hours_active(watch[2], now=now):
-            outcome = "suppressed_quiet_hours"
         else:
-            outcome = attempted_outcome
+            corpus_version = str(watch[4])
+            authority_key = str(watch[5])
+            _lock_citator_release_lineage(conn, corpus_version=corpus_version)
+            evidence_current = False
+            if watch[6] and watch[7]:
+                try:
+                    _, current_evidence = _citator_alert_evidence(
+                        conn,
+                        corpus_version=corpus_version,
+                        authority_key=authority_key,
+                        evidence_fact_id=str(watch[6]),
+                    )
+                    evidence_current = current_evidence.get("evidence_type") == str(
+                        watch[7]
+                    )
+                except PermissionError:
+                    evidence_current = False
+            if (
+                not _citator_authority_is_permitted(
+                    conn, corpus_version=corpus_version, authority_key=authority_key
+                )
+                or not evidence_current
+            ):
+                outcome = "revoked"
+                delivery_detail = "authority evidence lineage is no longer admitted"
+            elif channel not in set(watch[3] or []):
+                raise PermissionError("alert channel is not consented for this watch")
+            elif not watch[1]:
+                outcome = "suppressed_no_consent"
+            elif quiet_hours_active(watch[2], now=now):
+                outcome = "suppressed_quiet_hours"
+            else:
+                outcome = attempted_outcome
         cur.execute(
             """
             INSERT INTO citator_alert_deliveries
@@ -1931,7 +1995,7 @@ def record_citator_alert_delivery(
                 channel[:100],
                 delivery_key[:200],
                 outcome,
-                (detail or "")[:2000] or None,
+                (delivery_detail or "")[:2000] or None,
             ],
         )
         row = cur.fetchone()
