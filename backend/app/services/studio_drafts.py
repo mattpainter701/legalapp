@@ -35,7 +35,10 @@ from app.schemas.studio_draft import (
     canonical_placement_anchor,
 )
 from app.services.automation_capabilities import CapabilityError
+from app.services.docx_templates import TemplateDocxError, validate_docx_package
 from app.services.document_template_workspace import verified_template_source
+from app.services.pdf_templates import TemplatePdfError, pdf_page_metadata
+from app.services.template_intake import _docx_has_tracked_changes
 
 MAX_JSON_BYTES = 256_000
 MAX_JSON_DEPTH = 7
@@ -94,6 +97,16 @@ _ALLOWED_FIELD_DEFINITION_KEYS = {
 _SOURCE_RESOLVER_PATTERN = re.compile(
     r"^studio-db:v1:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 )
+_CANONICAL_SOURCE_MEDIA = {
+    "markdown": "text/markdown",
+    "pdf": "application/pdf",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+_ACCEPTED_SOURCE_MEDIA = {
+    "markdown": {"text/markdown", "text/plain"},
+    "pdf": {"application/pdf"},
+    "docx": {"application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+}
 
 
 class StudioError(Exception):
@@ -225,6 +238,7 @@ def source_contract(draft: StudioDraft) -> dict[str, Any]:
         "artifact_id": draft.source_artifact_id,
         "sha256": draft.source_sha256,
         "media_type": draft.source_media_type,
+        "format": draft.format,
     }
 
 
@@ -249,6 +263,71 @@ def _published_template_base(template: DocumentTemplate) -> str:
     )
 
 
+async def _verified_compatibility_source(template: DocumentTemplate) -> bytes:
+    if template.source_storage_path:
+        try:
+            return await verified_template_source(template)
+        except CapabilityError as exc:
+            raise StudioError(409, {"code": exc.code, "message": exc.message}) from exc
+    content = str(template.body or "").encode("utf-8")
+    digest = hashlib.sha256(content).hexdigest()
+    if template.source_sha256 and template.source_sha256 != digest:
+        raise StudioError(
+            409,
+            {
+                "code": "template_integrity_failed",
+                "message": "published template body failed its integrity check",
+            },
+        )
+    return content
+
+
+def _canonical_source_bytes(
+    content: bytes, format_name: str, claimed_media_type: str
+) -> tuple[bytes, str]:
+    """Validate bytes independently of MIME and return the canonical contract."""
+
+    canonical_media = _CANONICAL_SOURCE_MEDIA.get(format_name)
+    normalized_media = str(claimed_media_type or "").split(";", 1)[0].strip().lower()
+    if canonical_media is None or normalized_media not in _ACCEPTED_SOURCE_MEDIA.get(
+        format_name, set()
+    ):
+        raise StudioError(
+            422,
+            {
+                "code": "source_format_media_mismatch",
+                "message": "source media type is not allowed for the selected format",
+            },
+        )
+    try:
+        if format_name == "pdf":
+            pdf_page_metadata(content)
+        elif format_name == "docx":
+            validate_docx_package(content)
+            if _docx_has_tracked_changes(content):
+                raise TemplateDocxError(
+                    "Word documents with tracked changes are not supported as reusable templates."
+                )
+        else:
+            text_value = content.decode("utf-8")
+            if any(
+                ord(character) < 32 and character not in {"\n", "\r", "\t"}
+                for character in text_value
+            ):
+                raise UnicodeError("markdown source contains invalid control text")
+            text_value = text_value.replace("\r\n", "\n").replace("\r", "\n")
+            content = text_value.encode("utf-8")
+    except (TemplatePdfError, TemplateDocxError, UnicodeError) as exc:
+        raise StudioError(
+            422,
+            {
+                "code": "invalid_source_content",
+                "message": str(exc) or "source content failed format validation",
+            },
+        ) from exc
+    return bytes(content), canonical_media
+
+
 class StudioSourceRegistry:
     """Server-owned, tenant-scoped registration and verified source read boundary."""
 
@@ -260,14 +339,15 @@ class StudioSourceRegistry:
         self.actor_user_id = actor_user_id
         self.settings = get_settings()
 
-    async def register(self, content: bytes, media_type: str) -> StudioSourceArtifact:
-        normalized_media = str(media_type or "").split(";", 1)[0].strip().lower()
-        if (
-            not normalized_media
-            or len(normalized_media) > 100
-            or any(ord(char) < 32 or ord(char) == 127 for char in normalized_media)
-        ):
-            raise StudioError(422, {"code": "invalid_source_media_type"})
+    async def _admission_lock(self) -> None:
+        await self.db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
+            {"scope": f"studio-source-admission:{self.tenant_id}"},
+        )
+
+    async def register(
+        self, content: bytes, format_name: str, claimed_media_type: str
+    ) -> StudioSourceArtifact:
         max_bytes = self.settings.MAX_FILE_SIZE_MB * 1024 * 1024
         if not content or len(content) > max_bytes:
             raise StudioError(
@@ -277,32 +357,61 @@ class StudioSourceRegistry:
                     "message": "source bytes must be non-empty and within the upload limit",
                 },
             )
-        digest = hashlib.sha256(content).hexdigest()
-        scope = f"studio-source:{self.tenant_id}:{digest}:{normalized_media}"
-        await self.db.execute(
-            text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
-            {"scope": scope},
+        content, canonical_media = _canonical_source_bytes(
+            content, format_name, claimed_media_type
         )
+        digest = hashlib.sha256(content).hexdigest()
+        await self._admission_lock()
         existing = await self.db.scalar(
             select(StudioSourceArtifact).where(
                 StudioSourceArtifact.tenant_id == self.tenant_id,
                 StudioSourceArtifact.sha256 == digest,
-                StudioSourceArtifact.media_type == normalized_media,
+                StudioSourceArtifact.media_type == canonical_media,
+                StudioSourceArtifact.format == format_name,
             )
         )
         if existing is not None:
             await self.read(
                 existing.id,
                 expected_sha256=digest,
-                expected_media_type=normalized_media,
+                expected_media_type=canonical_media,
+                expected_format=format_name,
             )
             return existing
+        artifact_count, aggregate_bytes = (
+            await self.db.execute(
+                select(
+                    func.count(StudioSourceArtifact.id),
+                    func.coalesce(func.sum(StudioSourceArtifact.byte_size), 0),
+                ).where(StudioSourceArtifact.tenant_id == self.tenant_id)
+            )
+        ).one()
+        if artifact_count >= self.settings.TEMPLATE_STUDIO_SOURCE_ARTIFACT_QUOTA:
+            raise StudioError(
+                429,
+                {
+                    "code": "source_artifact_quota_exceeded",
+                    "message": "tenant source artifact quota reached",
+                },
+            )
+        if (
+            int(aggregate_bytes or 0) + len(content)
+            > self.settings.TEMPLATE_STUDIO_SOURCE_BYTES_QUOTA
+        ):
+            raise StudioError(
+                429,
+                {
+                    "code": "source_bytes_quota_exceeded",
+                    "message": "tenant source byte quota reached",
+                },
+            )
         artifact_id = uuid.uuid4()
         artifact = StudioSourceArtifact(
             id=artifact_id,
             tenant_id=self.tenant_id,
             sha256=digest,
-            media_type=normalized_media,
+            media_type=canonical_media,
+            format=format_name,
             byte_size=len(content),
             resolver_key=f"studio-db:v1:{uuid.uuid4()}",
             content_bytes=bytes(content),
@@ -329,19 +438,35 @@ class StudioSourceRegistry:
         *,
         expected_sha256: str | None = None,
         expected_media_type: str | None = None,
+        expected_format: str | None = None,
     ) -> bytes:
         artifact = await self.resolve(artifact_id)
         content = bytes(artifact.content_bytes or b"")
         digest = hashlib.sha256(content).hexdigest()
+        try:
+            canonical_content, canonical_media = _canonical_source_bytes(
+                content, artifact.format, artifact.media_type
+            )
+        except StudioError as exc:
+            raise StudioError(
+                409,
+                {
+                    "code": "source_integrity_failed",
+                    "message": "registered source failed format validation",
+                },
+            ) from exc
         if (
             not _SOURCE_RESOLVER_PATTERN.fullmatch(artifact.resolver_key or "")
             or artifact.byte_size != len(content)
             or artifact.sha256 != digest
+            or canonical_content != content
+            or canonical_media != artifact.media_type
             or (expected_sha256 is not None and expected_sha256 != digest)
             or (
                 expected_media_type is not None
                 and expected_media_type != artifact.media_type
             )
+            or (expected_format is not None and expected_format != artifact.format)
         ):
             raise StudioError(
                 409,
@@ -359,25 +484,71 @@ class StudioSourceRegistry:
             "artifact_id": artifact.id,
             "sha256": artifact.sha256,
             "media_type": artifact.media_type,
+            "format": artifact.format,
         }
 
+    async def purge_expired_orphans(self, *, limit: int = 100) -> int:
+        """Bounded caller-owned cleanup seam; Phase 2 wires no scheduler."""
 
-async def authorize_studio_retention_purge(
-    db: AsyncSession, tenant_id: uuid.UUID, reason: str
+        if not 1 <= limit <= 500:
+            raise ValueError("orphan cleanup limit must be between 1 and 500")
+        await self._admission_lock()
+        cutoff = datetime.now(timezone.utc) - timedelta(
+            hours=self.settings.TEMPLATE_STUDIO_SOURCE_ORPHAN_TTL_HOURS
+        )
+        await authorize_studio_orphan_cleanup(self.db, self.tenant_id, cutoff)
+        referenced = select(StudioDraft.id).where(
+            StudioDraft.tenant_id == self.tenant_id,
+            StudioDraft.source_artifact_id == StudioSourceArtifact.id,
+        )
+        rows = list(
+            (
+                await self.db.scalars(
+                    select(StudioSourceArtifact)
+                    .where(
+                        StudioSourceArtifact.tenant_id == self.tenant_id,
+                        StudioSourceArtifact.created_at <= cutoff,
+                        ~referenced.exists(),
+                    )
+                    .order_by(StudioSourceArtifact.created_at, StudioSourceArtifact.id)
+                    .limit(limit)
+                    .with_for_update(skip_locked=True)
+                )
+            ).all()
+        )
+        for row in rows:
+            await self.db.delete(row)
+        await self.db.flush()
+        return len(rows)
+
+
+async def authorize_studio_demo_purge(
+    db: AsyncSession, tenant_id: uuid.UUID, demo_session_id: uuid.UUID
 ) -> None:
-    """Authorize append-only row deletion for this transaction and tenant only."""
+    """Present demo claim identifiers; the trigger verifies authoritative rows."""
 
-    if reason not in {"demo", "retention"}:
-        raise ValueError("Studio purge reason must be demo or retention")
     await db.execute(
-        text(
-            "SELECT set_config('app.studio_retention_purge_tenant_id', :tenant, true)"
-        ),
+        text("SELECT set_config('app.studio_demo_purge_tenant_id', :tenant, true)"),
         {"tenant": str(tenant_id)},
     )
     await db.execute(
-        text("SELECT set_config('app.studio_retention_purge_reason', :reason, true)"),
-        {"reason": reason},
+        text("SELECT set_config('app.studio_demo_purge_session_id', :session, true)"),
+        {"session": str(demo_session_id)},
+    )
+
+
+async def authorize_studio_orphan_cleanup(
+    db: AsyncSession, tenant_id: uuid.UUID, cutoff: datetime
+) -> None:
+    """Present a bounded orphan cutoff; the trigger verifies age and references."""
+
+    await db.execute(
+        text("SELECT set_config('app.studio_orphan_cleanup_tenant_id', :tenant, true)"),
+        {"tenant": str(tenant_id)},
+    )
+    await db.execute(
+        text("SELECT set_config('app.studio_orphan_cleanup_cutoff', :cutoff, true)"),
+        {"cutoff": cutoff.isoformat()},
     )
 
 
@@ -464,8 +635,10 @@ class StudioDraftService:
             raise StudioError(404, "Template Studio draft not found")
         return draft
 
-    async def register_source(self, content: bytes, media_type: str) -> dict[str, Any]:
-        artifact = await self.sources.register(content, media_type)
+    async def register_source(
+        self, content: bytes, format_name: str, claimed_media_type: str
+    ) -> dict[str, Any]:
+        artifact = await self.sources.register(content, format_name, claimed_media_type)
         response = self.sources.contract(artifact)
         await self.db.commit()
         return response
@@ -476,6 +649,7 @@ class StudioDraftService:
         *,
         expected_sha256: str | None = None,
         expected_media_type: str | None = None,
+        expected_format: str | None = None,
     ) -> bytes:
         """Authoritative internal worker read with tenant and integrity checks."""
 
@@ -483,7 +657,13 @@ class StudioDraftService:
             artifact_id,
             expected_sha256=expected_sha256,
             expected_media_type=expected_media_type,
+            expected_format=expected_format,
         )
+
+    async def purge_expired_source_orphans(self, *, limit: int = 100) -> int:
+        deleted = await self.sources.purge_expired_orphans(limit=limit)
+        await self.db.commit()
+        return deleted
 
     async def _tenant_admission_lock(self) -> None:
         await self.db.execute(
@@ -551,6 +731,23 @@ class StudioDraftService:
             ).all()
         )
         return fields, placements
+
+    async def _validate_source_contract(self, draft: StudioDraft) -> None:
+        artifact = await self.sources.resolve(draft.source_artifact_id)
+        if artifact.format != draft.format:
+            raise StudioError(
+                422,
+                {
+                    "code": "source_format_mismatch",
+                    "message": "persisted source format does not match the draft",
+                },
+            )
+        await self.sources.read(
+            artifact.id,
+            expected_sha256=draft.source_sha256,
+            expected_media_type=draft.source_media_type,
+            expected_format=draft.format,
+        )
 
     @staticmethod
     def _validate_parts(
@@ -753,10 +950,19 @@ class StudioDraftService:
         await self._tenant_admission_lock()
         await self._enforce_active_quota()
         artifact = await self.sources.resolve(request.source_artifact_id)
+        if artifact.format != request.format:
+            raise StudioError(
+                422,
+                {
+                    "code": "source_format_mismatch",
+                    "message": "source artifact format must match the draft format",
+                },
+            )
         await self.sources.read(
             artifact.id,
             expected_sha256=artifact.sha256,
             expected_media_type=artifact.media_type,
+            expected_format=request.format,
         )
         draft = StudioDraft(
             tenant_id=self.tenant_id,
@@ -838,28 +1044,14 @@ class StudioDraftService:
         )
         if template is None:
             raise StudioError(404, "Published template not found")
-        if template.source_storage_path:
-            try:
-                source_bytes = await verified_template_source(template)
-            except CapabilityError as exc:
-                raise StudioError(
-                    409,
-                    {"code": exc.code, "message": exc.message},
-                ) from exc
-        else:
-            source_bytes = str(template.body or "").encode("utf-8")
-            body_sha = hashlib.sha256(source_bytes).hexdigest()
-            if template.source_sha256 and template.source_sha256 != body_sha:
-                raise StudioError(
-                    409,
-                    {
-                        "code": "template_integrity_failed",
-                        "message": "published template body failed its integrity check",
-                    },
-                )
+        source_bytes = await _verified_compatibility_source(template)
+        template_format = template.format or "markdown"
+        if template_format not in _CANONICAL_SOURCE_MEDIA:
+            raise StudioError(422, {"code": "unsupported_source_format"})
         artifact = await self.sources.register(
             source_bytes,
-            template.source_content_type or "text/markdown",
+            template_format,
+            _CANONICAL_SOURCE_MEDIA[template_format],
         )
         raw_schema = template.variable_schema or {}
         if not isinstance(raw_schema, dict):
@@ -1031,7 +1223,7 @@ class StudioDraftService:
             create_request = StudioDraftCreate.model_validate(
                 {
                     "title": request.title or template.title,
-                    "format": template.format or "markdown",
+                    "format": template_format,
                     "source_artifact_id": artifact.id,
                     "fields": fields,
                     "placements": placements,
@@ -1208,10 +1400,19 @@ class StudioDraftService:
                 invalidation_reason = "placement_contract_changed"
             elif item.op == "replace_source":
                 artifact = await self.sources.resolve(item.source_artifact_id)
+                if artifact.format != draft.format:
+                    raise StudioError(
+                        422,
+                        {
+                            "code": "source_format_mismatch",
+                            "message": "source artifact format must match the draft format",
+                        },
+                    )
                 await self.sources.read(
                     artifact.id,
                     expected_sha256=artifact.sha256,
                     expected_media_type=artifact.media_type,
+                    expected_format=draft.format,
                 )
                 draft.source_artifact_id = artifact.id
                 draft.source_sha256 = artifact.sha256
@@ -1237,6 +1438,7 @@ class StudioDraftService:
         draft.updated_by_user_id = self.actor_user_id
         draft.updated_at = datetime.now(timezone.utc)
         await self.db.flush()
+        await self._validate_source_contract(draft)
         fields, placements = await self._parts(draft.id)
         self._validate_parts(draft, fields, placements, raise_on_invalid=True)
         if identity_changed:
@@ -1266,6 +1468,7 @@ class StudioDraftService:
     ) -> dict[str, Any]:
         draft = await self._locked_draft(draft_id)
         self._check_revision(draft, request.expected_revision)
+        await self._validate_source_contract(draft)
         fields, placements = await self._parts(draft.id)
         issues = self._validate_parts(draft, fields, placements)
         if draft.lifecycle_state == "archived":
@@ -1288,6 +1491,7 @@ class StudioDraftService:
             return replay
         draft = await self._locked_draft(draft_id)
         self._check_revision(draft, request.expected_revision)
+        await self._validate_source_contract(draft)
         existing = await self.db.scalar(
             select(StudioDraftSnapshot).where(
                 StudioDraftSnapshot.tenant_id == self.tenant_id,
@@ -1412,6 +1616,8 @@ class StudioDraftService:
             draft.evidence_invalidated_at = None
             draft.evidence_invalidation_reason = None
             await self.db.commit()
+        else:
+            await self.db.rollback()
         return current
 
     @staticmethod
@@ -1513,10 +1719,13 @@ class StudioDraftService:
                     "message": "published compatibility record changed since import",
                 },
             )
-        current_source_hash = (
-            template.source_sha256
-            or hashlib.sha256(template.body.encode("utf-8")).hexdigest()
+        current_source = await _verified_compatibility_source(template)
+        current_source, _ = _canonical_source_bytes(
+            current_source,
+            draft.format,
+            _CANONICAL_SOURCE_MEDIA[draft.format],
         )
+        current_source_hash = hashlib.sha256(current_source).hexdigest()
         if current_source_hash != draft.source_sha256:
             raise StudioError(
                 409,
@@ -1529,6 +1738,7 @@ class StudioDraftService:
             draft.source_artifact_id,
             expected_sha256=draft.source_sha256,
             expected_media_type=draft.source_media_type,
+            expected_format=draft.format,
         )
         fields, placements = await self._parts(draft.id)
         self._validate_parts(draft, fields, placements, raise_on_invalid=True)

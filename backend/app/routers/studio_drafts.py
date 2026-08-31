@@ -8,6 +8,7 @@ from fastapi import (
     APIRouter,
     Depends,
     File,
+    Form,
     Header,
     HTTPException,
     Response,
@@ -25,6 +26,7 @@ from app.schemas.studio_draft import (
     StudioRevisionRequest,
     StudioSnapshotResponse,
     StudioSourceContract,
+    StudioFormat,
     StudioValidationResponse,
 )
 from app.services.access_control import require_capability
@@ -53,6 +55,7 @@ def _set_etag(response: Response, payload: dict) -> dict:
 
 @router.post("/sources", response_model=StudioSourceContract, status_code=201)
 async def register_studio_source(
+    format: StudioFormat = Form(...),
     source: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
     current_user=Depends(require_capability("manage_documents")),
@@ -62,7 +65,9 @@ async def register_studio_source(
     content = await source.read(max_bytes + 1)
     return await _result(
         service.register_source(
-            content, source.content_type or "application/octet-stream"
+            content,
+            format,
+            source.content_type or "application/octet-stream",
         )
     )
 

@@ -38,6 +38,7 @@ class StudioSourceArtifact(Base):
             "id",
             "sha256",
             "media_type",
+            "format",
             name="uq_studio_source_artifacts_contract",
         ),
         CheckConstraint(
@@ -52,11 +53,18 @@ class StudioSourceArtifact(Base):
             "resolver_key ~ '^studio-db:v1:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'",
             name="ck_studio_source_artifacts_resolver",
         ),
+        CheckConstraint(
+            "(format = 'markdown' AND media_type = 'text/markdown') OR "
+            "(format = 'pdf' AND media_type = 'application/pdf') OR "
+            "(format = 'docx' AND media_type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')",
+            name="ck_studio_source_artifacts_format_media",
+        ),
         UniqueConstraint("resolver_key", name="uq_studio_source_artifacts_resolver"),
         UniqueConstraint(
             "tenant_id",
             "sha256",
             "media_type",
+            "format",
             name="uq_studio_source_artifacts_content",
         ),
         Index("ix_studio_source_artifacts_tenant_created", "tenant_id", "created_at"),
@@ -73,6 +81,7 @@ class StudioSourceArtifact(Base):
     )
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     media_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    format: Mapped[str] = mapped_column(String(30), nullable=False)
     byte_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
     resolver_key: Mapped[str] = mapped_column(String(80), nullable=False)
     content_bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
@@ -101,12 +110,19 @@ class StudioDraft(Base):
             name="ck_studio_drafts_lifecycle",
         ),
         ForeignKeyConstraint(
-            ["tenant_id", "source_artifact_id", "source_sha256", "source_media_type"],
+            [
+                "tenant_id",
+                "source_artifact_id",
+                "source_sha256",
+                "source_media_type",
+                "format",
+            ],
             [
                 "studio_source_artifacts.tenant_id",
                 "studio_source_artifacts.id",
                 "studio_source_artifacts.sha256",
                 "studio_source_artifacts.media_type",
+                "studio_source_artifacts.format",
             ],
             ondelete="RESTRICT",
         ),

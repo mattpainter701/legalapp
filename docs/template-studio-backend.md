@@ -13,9 +13,13 @@ All Studio routes use the existing `manage_documents` capability and tenant
 context. Every Studio table has `ENABLE ROW LEVEL SECURITY`, `FORCE ROW LEVEL
 SECURITY`, and a fail-closed tenant policy. Source, snapshot, and audit rows are
 append-only to ordinary application transactions: both UPDATE and DELETE are
-rejected. Deletion exists only through a transaction-scoped, tenant-bound
-demo/retention purge boundary; retention is not scheduled automatically and
-these rows are not claimed to be legally permanent. Durable Studio JSON rejects
+rejected. The database permits deletion only for an authoritatively verified,
+expired disposable-demo purge or for the bounded source-orphan cleanup seam.
+The demo trigger verifies the tenant, exact demo session, expiry, inactive and
+purging state, and non-fixture provenance from database rows; caller-set session
+variables alone grant no authority. Generic retention deletion is deferred until
+Phase 3 defines expiry and legal-hold authorization. These rows are append-only
+until an authorized purge, not claimed to be legally permanent. Durable Studio JSON rejects
 raw variable values, document body/text, provider paths or item IDs, and
 signed/download URLs.
 
@@ -23,14 +27,23 @@ signed/download URLs.
 
 A draft has a stable UUID, a monotonic positive revision, a canonical SHA-256
 identity, and an `active` or `archived` lifecycle. Its source is identified by
-an application-owned opaque UUID, SHA-256, and media type. Clients first upload
+an application-owned opaque UUID, SHA-256, canonical format, and media type. Clients first upload
 bytes to `POST /api/template-studio/drafts/sources`; the server computes SHA-256,
-stores the exact immutable bytes with a private resolver binding, and returns
+stores immutable canonical bytes with a private resolver binding, and returns
 only the safe projection below. Draft creation can reference only an existing
 artifact visible to the same tenant. It cannot mint metadata from a caller's
 hash or media assertion. Published-template import reads and verifies the
 current stored template source (or its markdown body), then registers those
 exact bytes. Provider locations and credentials remain private to the reader.
+
+Registration requires a declared format and uses a closed canonical contract:
+Markdown is bounded UTF-8 text normalized to LF and stored as `text/markdown`;
+PDF is `application/pdf` and must pass the existing magic, parser, encryption,
+active-content, and page-count checks; DOCX uses the standard OOXML media type
+and must pass the existing ZIP-bomb, encryption, macro, ActiveX, embedded-payload,
+and tracked-change checks. MIME is only an input consistency check and never
+establishes file trust. Create, replace, persisted validation, import, worker
+read, snapshot, and promotion all recheck format/media compatibility.
 
 The only worker-safe source projection is:
 
@@ -39,15 +52,27 @@ The only worker-safe source projection is:
   "contract_version": 1,
   "artifact_id": "opaque-uuid",
   "sha256": "64-lowercase-hex-characters",
-  "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+  "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "format": "docx"
 }
 ```
 
 Workers must call the authoritative internal source reader under the already
 authenticated tenant context. It resolves `(tenant, artifact_id)`, reads the
-exact bytes, and rechecks resolver binding, byte count, media type, and SHA-256
+exact bytes, and rechecks resolver binding, byte count, canonical format/media,
+file safety, and SHA-256
 before returning. This projection is not a signed URL and confers no storage
 authority by itself.
+
+Source admission is serialized per tenant. Exact canonical-content deduplication
+runs first and does not consume a second quota slot; then the transaction checks
+both artifact count and aggregate byte usage before inserting. Conservative,
+configurable defaults are 100 source artifacts and 250 MiB total source bytes per
+tenant, so unattached rows remain bounded even when no cleanup caller runs. A
+tenant-scoped cleanup seam deletes at most 500 unreferenced artifacts per call
+after a configurable 24-hour orphan TTL (minimum one hour). The database rejects
+deletion if a draft references the artifact. Phase 2 wires no scheduler; Phase 3
+owns the caller and long-term object-storage architecture.
 
 Fields have stable UUIDs independent from their editable automation keys.
 The server generates source, field, and placement UUIDs; request-local bounded
@@ -76,25 +101,31 @@ revision. A stale revision returns structured HTTP 409 detail with
 `stale_revision`, the supplied and current revisions, and the current strong
 ETag. Reusing an idempotency key with a different canonical request returns
 structured HTTP 409 `idempotency_key_mismatch`. Keys are unique per tenant,
-actor, and bounded operation and default to 24-hour retention.
+actor, and bounded operation and default to 24-hour retention. The domain exposes
+a bounded expiry method, but Phase 2 wires no scheduler or caller; Phase 3 must
+own that invocation and operational policy.
 
 Every successful mutable draft transaction advances the revision exactly once.
 Source, field, placement, lifecycle, cancellation, metadata, and promotion
 changes invalidate prior preview/approval evidence. Render output is only a
 candidate until `mark_render_evidence_if_current` re-locks the draft and proves
 that the draft is active, not cancelled, and still has the rendered revision
-and identity hash. A stale or cancelled job output must remain an artifact/job
+and identity hash. A failed adoption rolls back the transaction so it does not
+retain a lock. This Phase 2 seam does not yet bind an actual render job or output
+artifact and is therefore not sufficient by itself to establish production
+evidence; Phase 3 must extend the transaction with those bindings. A stale or cancelled job output must remain an artifact/job
 result, never current approval evidence.
 
 Phase 3 owns render jobs, artifact output, cancellation execution, job-status
 polling, and the preview artifact lifecycle. Launches should return the existing
 202/job-status shape used by durable work. Draft archive and cancellation state
 remain owned here; Phase 3 must recheck them before launch and before evidence
-promotion. Conservative defaults are configurable: 100 active drafts per
-tenant, 100 snapshots per draft, 30-day draft TTL for future cleanup policy,
-and 24-hour idempotency retention. No automated deletion is introduced by this
-phase; Phase 3 must define safe cleanup and artifact ownership before using the
-TTL.
+promotion. Other conservative defaults are configurable: 100 active drafts per
+tenant, 100 snapshots per draft, a 30-day draft TTL reserved for future cleanup
+policy, and 24-hour idempotency retention. Apart from the caller-owned
+source-orphan seam, no automated deletion is introduced by this phase; Phase 3
+must define safe cleanup, legal-hold handling, and artifact ownership before
+using draft or idempotency TTLs.
 
 ## REST and service boundary
 

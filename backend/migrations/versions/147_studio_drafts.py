@@ -43,6 +43,7 @@ def upgrade() -> None:
         sa.Column("tenant_id", u, nullable=False),
         sa.Column("sha256", sa.String(64), nullable=False),
         sa.Column("media_type", sa.String(100), nullable=False),
+        sa.Column("format", sa.String(30), nullable=False),
         sa.Column("byte_size", sa.BigInteger(), nullable=False),
         sa.Column("resolver_key", sa.String(80), nullable=False),
         sa.Column("content_bytes", sa.LargeBinary(), nullable=False),
@@ -63,6 +64,7 @@ def upgrade() -> None:
             "id",
             "sha256",
             "media_type",
+            "format",
             name="uq_studio_source_artifacts_contract",
         ),
         sa.UniqueConstraint("resolver_key", name="uq_studio_source_artifacts_resolver"),
@@ -70,6 +72,7 @@ def upgrade() -> None:
             "tenant_id",
             "sha256",
             "media_type",
+            "format",
             name="uq_studio_source_artifacts_content",
         ),
         sa.CheckConstraint(
@@ -83,6 +86,12 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "resolver_key ~ '^studio-db:v1:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'",
             name="ck_studio_source_artifacts_resolver",
+        ),
+        sa.CheckConstraint(
+            "(format = 'markdown' AND media_type = 'text/markdown') OR "
+            "(format = 'pdf' AND media_type = 'application/pdf') OR "
+            "(format = 'docx' AND media_type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')",
+            name="ck_studio_source_artifacts_format_media",
         ),
     )
     op.create_index(
@@ -128,12 +137,19 @@ def upgrade() -> None:
         ),
         sa.ForeignKeyConstraint(["tenant_id"], ["tenants.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(
-            ["tenant_id", "source_artifact_id", "source_sha256", "source_media_type"],
+            [
+                "tenant_id",
+                "source_artifact_id",
+                "source_sha256",
+                "source_media_type",
+                "format",
+            ],
             [
                 "studio_source_artifacts.tenant_id",
                 "studio_source_artifacts.id",
                 "studio_source_artifacts.sha256",
                 "studio_source_artifacts.media_type",
+                "studio_source_artifacts.format",
             ],
             ondelete="RESTRICT",
         ),
@@ -402,8 +418,32 @@ def upgrade() -> None:
         CREATE FUNCTION prevent_studio_immutable_mutation() RETURNS trigger AS $$
         BEGIN
             IF TG_OP = 'DELETE'
-               AND current_setting('app.studio_retention_purge_tenant_id', true) = OLD.tenant_id::text
-               AND current_setting('app.studio_retention_purge_reason', true) IN ('demo', 'retention')
+               AND current_setting('app.studio_demo_purge_tenant_id', true) = OLD.tenant_id::text
+               AND EXISTS (
+                   SELECT 1
+                   FROM tenants tenant
+                   JOIN demo_sessions demo ON demo.tenant_id = tenant.id
+                   WHERE tenant.id = OLD.tenant_id
+                     AND tenant.billing_tier = 'demo'
+                     AND tenant.domain LIKE '%.demo.invalid'
+                     AND tenant.is_active = false
+                     AND tenant.expires_at <= now()
+                     AND demo.id::text = current_setting('app.studio_demo_purge_session_id', true)
+                     AND demo.status = 'purging'
+                     AND demo.fixture_tenant_id <> demo.tenant_id
+                     AND demo.purge_started_at IS NOT NULL
+               )
+            THEN RETURN OLD; END IF;
+            IF TG_OP = 'DELETE'
+               AND TG_TABLE_NAME = 'studio_source_artifacts'
+               AND current_setting('app.studio_orphan_cleanup_tenant_id', true) = OLD.tenant_id::text
+               AND NULLIF(current_setting('app.studio_orphan_cleanup_cutoff', true), '')::timestamptz <= now() - interval '1 hour'
+               AND OLD.created_at <= NULLIF(current_setting('app.studio_orphan_cleanup_cutoff', true), '')::timestamptz
+               AND NOT EXISTS (
+                   SELECT 1 FROM studio_drafts draft
+                   WHERE draft.tenant_id = OLD.tenant_id
+                     AND draft.source_artifact_id = OLD.id
+               )
             THEN RETURN OLD; END IF;
             RAISE EXCEPTION 'studio source, snapshot, and audit rows are append-only until authorized purge';
         END;

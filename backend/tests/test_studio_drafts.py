@@ -3,10 +3,17 @@
 import asyncio
 import hashlib
 import uuid
+import zipfile
+from datetime import datetime, timedelta, timezone
+from io import BytesIO
 
 import pytest
+from docx import Document
+from pypdf import PdfWriter
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from app.config import get_settings
 from app.models.document_template import DocumentTemplate
 from app.models.rbac import Role, UserRole
 from app.models.studio_draft import (
@@ -41,18 +48,65 @@ async def _grant_manage_documents(db_session, test_tenant, test_user):
     await db_session.commit()
 
 
-async def _register_source(
-    client,
-    content=b"studio source",
-    media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-):
+def _docx_bytes(text="Studio source"):
+    output = BytesIO()
+    document = Document()
+    document.add_paragraph(text)
+    document.save(output)
+    return output.getvalue()
+
+
+def _pdf_bytes():
+    output = BytesIO()
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    writer.write(output)
+    return output.getvalue()
+
+
+def _tracked_change_docx_bytes():
+    source = BytesIO(_docx_bytes())
+    output = BytesIO()
+    with (
+        zipfile.ZipFile(source) as archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as rewritten,
+    ):
+        for item in archive.infolist():
+            content = archive.read(item.filename)
+            if item.filename == "word/document.xml":
+                content = content.replace(
+                    b"<w:body>",
+                    b'<w:body><w:ins w:id="1" w:author="Editor"><w:r><w:t>change</w:t></w:r></w:ins>',
+                    1,
+                )
+            rewritten.writestr(item, content)
+    return output.getvalue()
+
+
+async def _register_source(client, content=None, format_name="docx", media_type=None):
+    content = content if content is not None else _docx_bytes()
+    media_type = (
+        media_type
+        or {
+            "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "pdf": "application/pdf",
+            "markdown": "text/markdown",
+        }[format_name]
+    )
     response = await client.post(
         "/api/template-studio/drafts/sources",
+        data={"format": format_name},
         files={"source": ("template.bin", content, media_type)},
     )
     assert response.status_code == 201, response.text
     payload = response.json()
-    assert set(payload) == {"contract_version", "artifact_id", "sha256", "media_type"}
+    assert set(payload) == {
+        "contract_version",
+        "artifact_id",
+        "sha256",
+        "media_type",
+        "format",
+    }
     assert payload["sha256"] == hashlib.sha256(content).hexdigest()
     return payload
 
@@ -208,8 +262,12 @@ async def test_registered_source_reader_rechecks_exact_bytes(
     db_session, test_tenant, test_user
 ):
     service = StudioDraftService(db_session, test_tenant.id, test_user.id)
-    registered = await service.register_source(b"trusted bytes", "text/markdown")
-    replay = await service.register_source(b"trusted bytes", "text/markdown")
+    registered = await service.register_source(
+        b"trusted bytes", "markdown", "text/markdown"
+    )
+    replay = await service.register_source(
+        b"trusted bytes", "markdown", "text/markdown"
+    )
     assert replay["artifact_id"] == registered["artifact_id"]
     assert (
         await service.read_source_bytes(registered["artifact_id"]) == b"trusted bytes"
@@ -224,6 +282,181 @@ async def test_registered_source_reader_rechecks_exact_bytes(
     assert caught.value.status_code == 409
     assert caught.value.detail["code"] == "source_integrity_failed"
     await db_session.rollback()
+
+
+async def test_source_registration_rejects_spoofed_and_hostile_content(client):
+    spoofed = await client.post(
+        "/api/template-studio/drafts/sources",
+        data={"format": "docx"},
+        files={"source": ("source.docx", _docx_bytes(), "application/pdf")},
+    )
+    assert spoofed.status_code == 422
+    assert spoofed.json()["detail"]["code"] == "source_format_media_mismatch"
+
+    malformed_pdf = await client.post(
+        "/api/template-studio/drafts/sources",
+        data={"format": "pdf"},
+        files={"source": ("source.pdf", b"not a PDF", "application/pdf")},
+    )
+    assert malformed_pdf.status_code == 422
+    assert malformed_pdf.json()["detail"]["code"] == "invalid_source_content"
+
+    tracked = await client.post(
+        "/api/template-studio/drafts/sources",
+        data={"format": "docx"},
+        files={
+            "source": (
+                "source.docx",
+                _tracked_change_docx_bytes(),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+    assert tracked.status_code == 422
+    assert tracked.json()["detail"]["code"] == "invalid_source_content"
+
+    invalid_text = await client.post(
+        "/api/template-studio/drafts/sources",
+        data={"format": "markdown"},
+        files={"source": ("source.md", b"hello\x00secret", "text/plain")},
+    )
+    assert invalid_text.status_code == 422
+    assert invalid_text.json()["detail"]["code"] == "invalid_source_content"
+
+
+async def test_source_format_is_enforced_on_create_and_replace(client):
+    markdown = await _register_source(
+        client, b"Hello {{client_name}}", "markdown", "text/plain"
+    )
+    wrong_create = await client.post(
+        "/api/template-studio/drafts",
+        json=_create_payload(markdown["artifact_id"]),
+        headers={"Idempotency-Key": "wrong-format-create"},
+    )
+    assert wrong_create.status_code == 422
+    assert wrong_create.json()["detail"]["code"] == "source_format_mismatch"
+
+    docx = await _register_source(client)
+    created = await client.post(
+        "/api/template-studio/drafts",
+        json=_create_payload(docx["artifact_id"]),
+        headers={"Idempotency-Key": "right-format-create"},
+    )
+    assert created.status_code == 201, created.text
+    wrong_replace = await client.patch(
+        f"/api/template-studio/drafts/{created.json()['id']}",
+        json={
+            "base_revision": 1,
+            "operations": [
+                {
+                    "op": "replace_source",
+                    "source_artifact_id": markdown["artifact_id"],
+                }
+            ],
+        },
+        headers={"Idempotency-Key": "wrong-format-replace"},
+    )
+    assert wrong_replace.status_code == 422
+    assert wrong_replace.json()["detail"]["code"] == "source_format_mismatch"
+
+
+async def test_source_quota_admission_is_atomic_and_dedupes_before_charge(
+    db_session, test_engine, test_tenant, test_user, monkeypatch
+):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "TEMPLATE_STUDIO_SOURCE_ARTIFACT_QUOTA", 1)
+    monkeypatch.setattr(settings, "TEMPLATE_STUDIO_SOURCE_BYTES_QUOTA", 1024 * 1024)
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+
+    async def register(content):
+        async with factory() as session:
+            service = StudioDraftService(session, test_tenant.id, test_user.id)
+            try:
+                return await service.register_source(
+                    content, "markdown", "text/markdown"
+                )
+            except StudioError as exc:
+                await session.rollback()
+                return exc
+
+    identical = await asyncio.gather(
+        register(b"same tenant source"), register(b"same tenant source")
+    )
+    assert identical[0]["artifact_id"] == identical[1]["artifact_id"]
+
+    rejected = await register(b"distinct tenant source")
+    assert isinstance(rejected, StudioError)
+    assert rejected.status_code == 429
+    assert rejected.detail["code"] == "source_artifact_quota_exceeded"
+
+    rows = list(
+        (
+            await db_session.scalars(
+                select(StudioSourceArtifact).where(
+                    StudioSourceArtifact.tenant_id == test_tenant.id
+                )
+            )
+        ).all()
+    )
+    assert len(rows) == 1
+
+
+async def test_source_aggregate_byte_quota_has_stable_rejection(
+    db_session, test_tenant, test_user, monkeypatch
+):
+    service = StudioDraftService(db_session, test_tenant.id, test_user.id)
+    monkeypatch.setattr(service.settings, "TEMPLATE_STUDIO_SOURCE_ARTIFACT_QUOTA", 10)
+    monkeypatch.setattr(service.settings, "TEMPLATE_STUDIO_SOURCE_BYTES_QUOTA", 20)
+    await service.register_source(b"1234567890", "markdown", "text/markdown")
+    with pytest.raises(StudioError) as caught:
+        await service.register_source(b"abcdefghijk", "markdown", "text/markdown")
+    assert caught.value.status_code == 429
+    assert caught.value.detail["code"] == "source_bytes_quota_exceeded"
+    await db_session.rollback()
+
+
+async def test_orphan_cleanup_is_bounded_and_never_deletes_referenced_source(
+    db_session, test_tenant, test_user, monkeypatch
+):
+    old_time = datetime.now(timezone.utc) - timedelta(hours=3)
+
+    def old_source(content: bytes) -> StudioSourceArtifact:
+        return StudioSourceArtifact(
+            tenant_id=test_tenant.id,
+            sha256=hashlib.sha256(content).hexdigest(),
+            media_type="text/markdown",
+            format="markdown",
+            byte_size=len(content),
+            resolver_key=f"studio-db:v1:{uuid.uuid4()}",
+            content_bytes=content,
+            created_by_user_id=test_user.id,
+            created_at=old_time,
+        )
+
+    referenced = old_source(b"Referenced {{name}}")
+    orphan = old_source(b"Unreferenced source")
+    db_session.add_all([referenced, orphan])
+    await db_session.commit()
+
+    service = StudioDraftService(db_session, test_tenant.id, test_user.id)
+    monkeypatch.setattr(service.settings, "TEMPLATE_STUDIO_SOURCE_ORPHAN_TTL_HOURS", 1)
+    await service.create(
+        StudioDraftCreate.model_validate(
+            {
+                "title": "Referenced markdown",
+                "format": "markdown",
+                "source_artifact_id": str(referenced.id),
+                "fields": [],
+                "placements": [],
+            }
+        ),
+        "orphan-cleanup-reference",
+    )
+
+    assert await service.purge_expired_source_orphans(limit=1) == 1
+    assert await db_session.get(StudioSourceArtifact, orphan.id) is None
+    assert await db_session.get(StudioSourceArtifact, referenced.id) is not None
+    assert await service.purge_expired_source_orphans(limit=1) == 0
 
 
 async def test_leaked_field_and_placement_ids_match_nonexistent_behavior(client):
@@ -390,6 +623,71 @@ async def test_published_template_import_and_safe_compatibility_promote(
     assert template.body == body
 
 
+async def test_compatibility_import_infers_pdf_contract_and_rejects_bad_bytes(
+    client, db_session, test_tenant, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(get_settings(), "UPLOAD_DIR", str(tmp_path))
+    source = _pdf_bytes()
+    template = DocumentTemplate(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        title="Existing PDF",
+        body="",
+        format="pdf",
+        status="draft",
+        source_sha256=hashlib.sha256(source).hexdigest(),
+        source_content_type="text/plain",
+        source_file_size=len(source),
+        variable_schema={"fields": []},
+    )
+    source_dir = tmp_path / str(test_tenant.id) / "templates" / str(template.id)
+    source_dir.mkdir(parents=True)
+    source_path = source_dir / "source.pdf"
+    source_path.write_bytes(source)
+    template.source_storage_path = str(source_path)
+    db_session.add(template)
+    await db_session.commit()
+
+    imported = await client.post(
+        "/api/template-studio/drafts/imports",
+        json={"template_id": str(template.id)},
+        headers={"Idempotency-Key": "import-pdf-canonical-media"},
+    )
+    assert imported.status_code == 201, imported.text
+    contract = imported.json()["source"]
+    assert contract["format"] == "pdf"
+    assert contract["media_type"] == "application/pdf"
+
+    malformed = b"%PDF-malformed"
+    bad_template = DocumentTemplate(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        title="Bad PDF",
+        body="",
+        format="pdf",
+        status="draft",
+        source_sha256=hashlib.sha256(malformed).hexdigest(),
+        source_content_type="application/pdf",
+        source_file_size=len(malformed),
+        variable_schema={"fields": []},
+    )
+    bad_dir = tmp_path / str(test_tenant.id) / "templates" / str(bad_template.id)
+    bad_dir.mkdir(parents=True)
+    bad_path = bad_dir / "source.pdf"
+    bad_path.write_bytes(malformed)
+    bad_template.source_storage_path = str(bad_path)
+    db_session.add(bad_template)
+    await db_session.commit()
+
+    rejected = await client.post(
+        "/api/template-studio/drafts/imports",
+        json={"template_id": str(bad_template.id)},
+        headers={"Idempotency-Key": "import-pdf-malformed"},
+    )
+    assert rejected.status_code == 422
+    assert rejected.json()["detail"]["code"] == "invalid_source_content"
+
+
 async def test_promotion_rejects_concurrent_compatibility_edit_and_invalid_state(
     client, db_session, test_tenant
 ):
@@ -474,7 +772,8 @@ async def test_active_quota_is_atomic_for_concurrent_create_and_restore(
 ):
     bootstrap = StudioDraftService(db_session, test_tenant.id, test_user.id)
     source = await bootstrap.register_source(
-        b"quota source",
+        _docx_bytes("quota source"),
+        "docx",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
     monkeypatch.setattr(bootstrap.settings, "TEMPLATE_STUDIO_ACTIVE_DRAFT_QUOTA", 1)
@@ -532,7 +831,8 @@ async def test_proposal_acceptance_seam_advances_exactly_one_revision(
     from app.schemas.studio_draft import StudioDraftCreate
 
     source = await service.register_source(
-        b"proposal seam",
+        _docx_bytes("proposal seam"),
+        "docx",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
     draft = await service.create(

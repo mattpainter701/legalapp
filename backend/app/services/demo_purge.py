@@ -23,7 +23,7 @@ from app.models.demo_session import DemoSession
 from app.models.operator_audit import OperatorAuditLog
 from app.models.tenant import Tenant
 from app.services.demo_registry import DEMO_TABLE_REGISTRY
-from app.services.studio_drafts import authorize_studio_retention_purge
+from app.services.studio_drafts import authorize_studio_demo_purge
 
 _DEMO_DOMAIN_SUFFIX = ".demo.invalid"
 _RESEARCH_IMMUTABLE_TABLES = (
@@ -239,7 +239,7 @@ async def _purge_demo_tenant_locked(
         deleted = await _purge_immutable_research_history(
             db, tables, tenant_id=tenant_id, session_id=session_id
         )
-        await authorize_studio_retention_purge(db, tenant_id, "demo")
+        await authorize_studio_demo_purge(db, tenant_id, session_id)
         # Break optional cycles (invoice/retainer and self-references) first.
         for name, table in tables.items():
             if name in _RESEARCH_IMMUTABLE_TABLES or name in _STUDIO_IMMUTABLE_TABLES:

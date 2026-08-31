@@ -242,6 +242,7 @@ class StudioSourceContract(StrictModel):
     artifact_id: uuid.UUID
     sha256: str
     media_type: str
+    format: StudioFormat
 
 
 class StudioFieldResponse(StrictModel):

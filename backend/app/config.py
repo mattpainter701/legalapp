@@ -159,6 +159,9 @@ class Settings(BaseSettings):
     # administration expose explicit retention controls.
     TEMPLATE_STUDIO_ACTIVE_DRAFT_QUOTA: int = 100
     TEMPLATE_STUDIO_SNAPSHOT_QUOTA: int = 100
+    TEMPLATE_STUDIO_SOURCE_ARTIFACT_QUOTA: int = 100
+    TEMPLATE_STUDIO_SOURCE_BYTES_QUOTA: int = 250 * 1024 * 1024
+    TEMPLATE_STUDIO_SOURCE_ORPHAN_TTL_HOURS: int = 24
     TEMPLATE_STUDIO_DRAFT_TTL_DAYS: int = 30
     TEMPLATE_STUDIO_IDEMPOTENCY_TTL_HOURS: int = 24
 
@@ -1214,6 +1217,18 @@ def validate_template_studio_settings(settings: Settings) -> None:
         )
     if not 1 <= settings.TEMPLATE_STUDIO_SNAPSHOT_QUOTA <= 1000:
         raise ValueError("TEMPLATE_STUDIO_SNAPSHOT_QUOTA must be between 1 and 1000")
+    if not 1 <= settings.TEMPLATE_STUDIO_SOURCE_ARTIFACT_QUOTA <= 10_000:
+        raise ValueError(
+            "TEMPLATE_STUDIO_SOURCE_ARTIFACT_QUOTA must be between 1 and 10000"
+        )
+    if not 1_048_576 <= settings.TEMPLATE_STUDIO_SOURCE_BYTES_QUOTA <= 10_737_418_240:
+        raise ValueError(
+            "TEMPLATE_STUDIO_SOURCE_BYTES_QUOTA must be between 1 MiB and 10 GiB"
+        )
+    if not 1 <= settings.TEMPLATE_STUDIO_SOURCE_ORPHAN_TTL_HOURS <= 168:
+        raise ValueError(
+            "TEMPLATE_STUDIO_SOURCE_ORPHAN_TTL_HOURS must be between 1 and 168"
+        )
     if not 1 <= settings.TEMPLATE_STUDIO_DRAFT_TTL_DAYS <= 365:
         raise ValueError("TEMPLATE_STUDIO_DRAFT_TTL_DAYS must be between 1 and 365")
     if not 1 <= settings.TEMPLATE_STUDIO_IDEMPOTENCY_TTL_HOURS <= 168:

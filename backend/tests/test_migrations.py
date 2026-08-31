@@ -520,8 +520,15 @@ def test_studio_draft_migration_is_post_146_force_rls_and_immutable():
         assert f'"{table}"' in immutable_upgrade
     assert "CREATE TRIGGER {table}_immutable BEFORE UPDATE OR DELETE ON" in source
     assert "prevent_studio_immutable_mutation" in source
-    assert "app.studio_retention_purge_tenant_id" in source
-    assert "app.studio_retention_purge_reason" in source
+    assert "app.studio_demo_purge_tenant_id" in source
+    assert "app.studio_demo_purge_session_id" in source
+    assert "demo.status = 'purging'" in source
+    assert "demo.fixture_tenant_id <> demo.tenant_id" in source
+    assert "app.studio_retention_purge_reason" not in source
+    assert "ck_studio_source_artifacts_format_media" in source
+    assert "app.studio_orphan_cleanup_tenant_id" in source
+    assert "app.studio_orphan_cleanup_cutoff" in source
+    assert "NOT EXISTS (" in immutable_upgrade
 
 
 def test_studio_model_and_migration_table_column_parity():

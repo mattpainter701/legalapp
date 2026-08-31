@@ -2,6 +2,7 @@
 
 import os
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import text
@@ -67,8 +68,8 @@ async def _seed_tenant(conn, tenant_id, marker):
     await conn.execute(
         text(
             "INSERT INTO studio_source_artifacts "
-            "(id, tenant_id, sha256, media_type, byte_size, resolver_key, content_bytes, created_by_user_id) "
-            "VALUES (:id, :tenant, :hash, 'text/markdown', 1, :resolver, :content, :user)"
+            "(id, tenant_id, sha256, media_type, format, byte_size, resolver_key, content_bytes, created_by_user_id) "
+            "VALUES (:id, :tenant, :hash, 'text/markdown', 'markdown', 1, :resolver, :content, :user)"
         ),
         {
             "id": source_id,
@@ -158,6 +159,7 @@ async def _seed_tenant(conn, tenant_id, marker):
         {"id": audit_id, "tenant": tenant_id, "draft": draft_id, "user": user_id},
     )
     return {
+        "_user_id": user_id,
         "studio_source_artifacts": source_id,
         "studio_drafts": draft_id,
         "studio_draft_fields": field_id,
@@ -197,7 +199,7 @@ async def test_studio_force_rls_isolates_reads_and_writes(test_engine, table):
             )
         )
         await conn.execute(text(f"GRANT USAGE ON SCHEMA public TO {ROLE}"))
-        await conn.execute(text(f"GRANT SELECT, UPDATE ON {table} TO {ROLE}"))
+        await conn.execute(text(f"GRANT SELECT, INSERT, UPDATE ON {table} TO {ROLE}"))
 
     role_engine = create_async_engine(ROLE_URL, echo=False)
     try:
@@ -235,6 +237,60 @@ async def test_studio_force_rls_isolates_reads_and_writes(test_engine, table):
             )
             assert result.rowcount == 0
             await session.rollback()
+            await set_tenant_context(session, str(tenant_a))
+            insert_sql = {
+                "studio_source_artifacts": """
+                    INSERT INTO studio_source_artifacts
+                    (id, tenant_id, sha256, media_type, format, byte_size, resolver_key, content_bytes)
+                    VALUES (gen_random_uuid(), :tenant, :hash, 'text/markdown', 'markdown', 1, :resolver, 'z')
+                """,
+                "studio_drafts": """
+                    INSERT INTO studio_drafts
+                    (id, tenant_id, source_artifact_id, source_sha256, source_media_type, title, format, identity_sha256)
+                    VALUES (gen_random_uuid(), :tenant, :source, :source_hash, 'text/markdown', 'Cross', 'markdown', :hash)
+                """,
+                "studio_draft_fields": """
+                    INSERT INTO studio_draft_fields
+                    (id, tenant_id, draft_id, automation_key, label, field_type)
+                    VALUES (gen_random_uuid(), :tenant, :draft, 'cross_field', 'Cross', 'text')
+                """,
+                "studio_draft_placements": """
+                    INSERT INTO studio_draft_placements
+                    (id, tenant_id, draft_id, field_id, format, anchor_kind, anchor)
+                    VALUES (gen_random_uuid(), :tenant, :draft, :field, 'markdown', 'template_token', '{"token":"cross_field"}'::json)
+                """,
+                "studio_draft_snapshots": """
+                    INSERT INTO studio_draft_snapshots
+                    (id, tenant_id, draft_id, revision, identity_sha256, content_sha256, payload)
+                    VALUES (gen_random_uuid(), :tenant, :draft, 2, :hash, :hash, '{}'::json)
+                """,
+                "studio_draft_idempotency": """
+                    INSERT INTO studio_draft_idempotency
+                    (id, tenant_id, actor_user_id, operation, idempotency_key, request_sha256, expires_at)
+                    VALUES (gen_random_uuid(), :tenant, :user, 'patch', 'cross-key', :hash, now() + interval '1 hour')
+                """,
+                "studio_draft_audit_events": """
+                    INSERT INTO studio_draft_audit_events
+                    (id, tenant_id, draft_id, event_type, revision)
+                    VALUES (gen_random_uuid(), :tenant, :draft, 'cross', 2)
+                """,
+            }[table]
+            with pytest.raises(DBAPIError):
+                await session.execute(
+                    text(insert_sql),
+                    {
+                        "tenant": tenant_b,
+                        "hash": "d" * 64,
+                        "source_hash": "b" * 64,
+                        "resolver": f"studio-db:v1:{uuid.uuid4()}",
+                        "source": ids_b["studio_source_artifacts"],
+                        "draft": ids_b["studio_drafts"],
+                        "field": ids_b["studio_draft_fields"],
+                        "user": ids_b["_user_id"],
+                    },
+                )
+                await session.flush()
+            await session.rollback()
     finally:
         await role_engine.dispose()
         async with test_engine.begin() as conn:
@@ -243,32 +299,8 @@ async def test_studio_force_rls_isolates_reads_and_writes(test_engine, table):
                     text(f"ALTER TABLE {name} DISABLE ROW LEVEL SECURITY")
                 )
             await conn.execute(
-                text(
-                    "SELECT set_config('app.studio_retention_purge_tenant_id', :tenant, true)"
-                ),
-                {"tenant": str(tenant_a)},
+                text(f"TRUNCATE {', '.join(TABLES)} RESTART IDENTITY CASCADE")
             )
-            await conn.execute(
-                text(
-                    "SELECT set_config('app.studio_retention_purge_reason', 'retention', true)"
-                )
-            )
-            for name in reversed(TABLES):
-                await conn.execute(
-                    text(f"DELETE FROM {name} WHERE tenant_id = :tenant"),
-                    {"tenant": tenant_a},
-                )
-            await conn.execute(
-                text(
-                    "SELECT set_config('app.studio_retention_purge_tenant_id', :tenant, true)"
-                ),
-                {"tenant": str(tenant_b)},
-            )
-            for name in reversed(TABLES):
-                await conn.execute(
-                    text(f"DELETE FROM {name} WHERE tenant_id = :tenant"),
-                    {"tenant": tenant_b},
-                )
             await conn.execute(
                 text("DELETE FROM tenants WHERE id IN (:a, :b)"),
                 {"a": tenant_a, "b": tenant_b},
@@ -287,10 +319,19 @@ async def test_studio_force_rls_isolates_reads_and_writes(test_engine, table):
 
 async def test_studio_append_only_rows_require_transaction_scoped_purge(test_engine):
     tenant_id = uuid.uuid4()
+    fixture_id = uuid.uuid4()
+    demo_session_id = uuid.uuid4()
     async with test_engine.begin() as conn:
         for name in TABLES:
             await conn.execute(text(f"ALTER TABLE {name} DISABLE ROW LEVEL SECURITY"))
         ids = await _seed_tenant(conn, tenant_id, "c")
+        await conn.execute(
+            text(
+                "INSERT INTO tenants (id, name, domain, billing_tier, is_active) "
+                "VALUES (:id, 'Fixture', :domain, 'fixture', true)"
+            ),
+            {"id": fixture_id, "domain": f"fixture-{fixture_id}.invalid"},
+        )
         for name in TABLES:
             await conn.execute(text(f"ALTER TABLE {name} ENABLE ROW LEVEL SECURITY"))
             await conn.execute(text(f"ALTER TABLE {name} FORCE ROW LEVEL SECURITY"))
@@ -313,19 +354,161 @@ async def test_studio_append_only_rows_require_transaction_scoped_purge(test_eng
                     {"id": ids[table]},
                 )
 
+    # Predictable settings alone do not authorize a normal tenant.
+    with pytest.raises(DBAPIError, match="append-only"):
+        async with test_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "SELECT set_config('app.studio_demo_purge_tenant_id', :tenant, true)"
+                ),
+                {"tenant": str(tenant_id)},
+            )
+            await conn.execute(
+                text(
+                    "SELECT set_config('app.studio_demo_purge_session_id', :session, true)"
+                ),
+                {"session": str(demo_session_id)},
+            )
+            await conn.execute(
+                text("DELETE FROM studio_draft_audit_events WHERE id = :id"),
+                {"id": ids["studio_draft_audit_events"]},
+            )
+
+    now = datetime.now(timezone.utc)
     async with test_engine.begin() as conn:
-        for name in TABLES:
-            await conn.execute(text(f"ALTER TABLE {name} DISABLE ROW LEVEL SECURITY"))
         await conn.execute(
             text(
-                "SELECT set_config('app.studio_retention_purge_tenant_id', :tenant, true)"
+                "UPDATE tenants SET billing_tier='demo', domain=:domain, is_active=true, expires_at=:future WHERE id=:id"
             ),
+            {
+                "domain": f"candidate-{tenant_id}.demo.invalid",
+                "future": now + timedelta(hours=1),
+                "id": tenant_id,
+            },
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO demo_sessions (id, tenant_id, fixture_tenant_id, fixture_version, prospect_name, prospect_email, status, quota, expires_at) "
+                "VALUES (:id, :tenant, :fixture, 'test', 'Prospect', 'prospect@example.invalid', 'active', 20, :future)"
+            ),
+            {
+                "id": demo_session_id,
+                "tenant": tenant_id,
+                "fixture": fixture_id,
+                "future": now + timedelta(hours=1),
+            },
+        )
+
+    # Active/nonexpired demo, arbitrary retention convention, and wrong session fail.
+    for tenant_setting, session_setting in (
+        (tenant_id, demo_session_id),
+        (tenant_id, uuid.uuid4()),
+        (uuid.uuid4(), demo_session_id),
+    ):
+        with pytest.raises(DBAPIError, match="append-only"):
+            async with test_engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "SELECT set_config('app.studio_demo_purge_tenant_id', :tenant, true)"
+                    ),
+                    {"tenant": str(tenant_setting)},
+                )
+                await conn.execute(
+                    text(
+                        "SELECT set_config('app.studio_demo_purge_session_id', :session, true)"
+                    ),
+                    {"session": str(session_setting)},
+                )
+                await conn.execute(
+                    text(
+                        "SELECT set_config('app.studio_retention_purge_reason', 'retention', true)"
+                    )
+                )
+                await conn.execute(
+                    text("DELETE FROM studio_draft_audit_events WHERE id = :id"),
+                    {"id": ids["studio_draft_audit_events"]},
+                )
+
+    async with test_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE tenants SET is_active=false, expires_at=:past WHERE id=:id"),
+            {"past": now - timedelta(minutes=1), "id": tenant_id},
+        )
+    # Expired/inactive is still insufficient until the demo claim is purging.
+    with pytest.raises(DBAPIError, match="append-only"):
+        async with test_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "SELECT set_config('app.studio_demo_purge_tenant_id', :tenant, true)"
+                ),
+                {"tenant": str(tenant_id)},
+            )
+            await conn.execute(
+                text(
+                    "SELECT set_config('app.studio_demo_purge_session_id', :session, true)"
+                ),
+                {"session": str(demo_session_id)},
+            )
+            await conn.execute(
+                text("DELETE FROM studio_draft_audit_events WHERE id = :id"),
+                {"id": ids["studio_draft_audit_events"]},
+            )
+
+    async with test_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE demo_sessions SET status='purging', purge_started_at=:now WHERE id=:id"
+            ),
+            {"now": now, "id": demo_session_id},
+        )
+
+    # The removed generic retention convention cannot authorize even an otherwise
+    # purge-eligible demo without the exact tenant/session claims.
+    with pytest.raises(DBAPIError, match="append-only"):
+        async with test_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "SELECT set_config('app.studio_retention_purge_reason', 'retention', true)"
+                )
+            )
+            await conn.execute(
+                text("DELETE FROM studio_draft_audit_events WHERE id = :id"),
+                {"id": ids["studio_draft_audit_events"]},
+            )
+
+    for tenant_setting, session_setting in (
+        (tenant_id, uuid.uuid4()),
+        (uuid.uuid4(), demo_session_id),
+    ):
+        with pytest.raises(DBAPIError, match="append-only"):
+            async with test_engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "SELECT set_config('app.studio_demo_purge_tenant_id', :tenant, true)"
+                    ),
+                    {"tenant": str(tenant_setting)},
+                )
+                await conn.execute(
+                    text(
+                        "SELECT set_config('app.studio_demo_purge_session_id', :session, true)"
+                    ),
+                    {"session": str(session_setting)},
+                )
+                await conn.execute(
+                    text("DELETE FROM studio_draft_audit_events WHERE id = :id"),
+                    {"id": ids["studio_draft_audit_events"]},
+                )
+
+    async with test_engine.begin() as conn:
+        await conn.execute(
+            text("SELECT set_config('app.studio_demo_purge_tenant_id', :tenant, true)"),
             {"tenant": str(tenant_id)},
         )
         await conn.execute(
             text(
-                "SELECT set_config('app.studio_retention_purge_reason', 'retention', true)"
-            )
+                "SELECT set_config('app.studio_demo_purge_session_id', :session, true)"
+            ),
+            {"session": str(demo_session_id)},
         )
         for name in reversed(TABLES):
             await conn.execute(
@@ -333,8 +516,10 @@ async def test_studio_append_only_rows_require_transaction_scoped_purge(test_eng
                 {"tenant": tenant_id},
             )
         await conn.execute(
-            text("DELETE FROM tenants WHERE id = :tenant"), {"tenant": tenant_id}
+            text("DELETE FROM demo_sessions WHERE id = :session"),
+            {"session": demo_session_id},
         )
-        for name in TABLES:
-            await conn.execute(text(f"ALTER TABLE {name} ENABLE ROW LEVEL SECURITY"))
-            await conn.execute(text(f"ALTER TABLE {name} FORCE ROW LEVEL SECURITY"))
+        await conn.execute(
+            text("DELETE FROM tenants WHERE id IN (:tenant, :fixture)"),
+            {"tenant": tenant_id, "fixture": fixture_id},
+        )
