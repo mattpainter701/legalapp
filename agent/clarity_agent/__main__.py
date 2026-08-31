@@ -16,6 +16,12 @@ from clarity_agent import __version__, updater
 from clarity_agent.api_client import SaaSClient
 from clarity_agent.config import AgentConfig
 from clarity_agent.db import FileLedger
+from clarity_agent.file_opener import (
+    FileOpenError,
+    run_broker,
+    run_protocol_handler,
+    wake_broker,
+)
 from clarity_agent.heartbeat import HeartbeatService, host_info
 from clarity_agent.local_index import (
     LocalSearchIndex,
@@ -194,6 +200,9 @@ async def _scan_share(
         raise
 
     new_and_changed = result.new_files + result.changed_files
+    identity_backfill = [
+        finfo for finfo in result.unchanged_files if not finfo.get("source_id")
+    ]
     if local_index is not None:
         try:
             # Seed missing rows from unchanged ledger entries so an upgrade can
@@ -213,7 +222,12 @@ async def _scan_share(
     synced_count = 0
     sync_error: str | None = None
 
-    if new_and_changed or result.deleted_files:
+    sync_candidates = new_and_changed + identity_backfill
+    backfill_paths = {str(finfo["path"]) for finfo in identity_backfill}
+    accepted_backfills = 0
+    if sync_candidates or result.deleted_files:
+        for finfo in sync_candidates:
+            await ledger.assign_source_identity(finfo)
         sync_files = [
             {
                 "path": f["path"],
@@ -224,8 +238,10 @@ async def _scan_share(
                 "size_bytes": f.get("size_bytes", 0),
                 "modified_time": f["modified_time"],
                 "content_hash": f["content_hash"],
+                "source_id": f["source_id"],
+                "file_revision": f["file_revision"],
             }
-            for f in new_and_changed
+            for f in sync_candidates
         ]
         try:
             for offset in range(0, len(sync_files) or 1, SYNC_BATCH_SIZE):
@@ -246,7 +262,7 @@ async def _scan_share(
                     not isinstance(item, dict) or not item.get("path")
                     for item in response_errors
                 )
-                ledger_batch = new_and_changed[offset : offset + SYNC_BATCH_SIZE]
+                ledger_batch = sync_candidates[offset : offset + SYNC_BATCH_SIZE]
                 accepted_batch = [
                     finfo
                     for finfo in ledger_batch
@@ -254,6 +270,8 @@ async def _scan_share(
                 ]
                 for finfo in accepted_batch:
                     finfo["share_id"] = share_id
+                    if str(finfo["path"]) in backfill_paths:
+                        accepted_backfills += 1
                 await ledger.upsert_files(accepted_batch)
                 accepted_deletions = [
                     path
@@ -273,7 +291,7 @@ async def _scan_share(
                         f"Sync rejected {len(response_errors)} item(s): {details}"
                     )
             logger.info(
-                "Synced %d new/changed, %d deleted",
+                "Synced %d new/changed or identity-backfill rows, %d deleted",
                 synced_count,
                 len(result.deleted_files),
             )
@@ -286,7 +304,10 @@ async def _scan_share(
     for err in result.errors:
         logger.error("Scan error: %s", err)
 
-    indexed = synced_count + len(result.unchanged_files)
+    # Backfilled rows are also in unchanged_files, so count each indexed file
+    # once rather than inflating the scan status during an upgrade.
+    accepted_changes = max(0, synced_count - accepted_backfills)
+    indexed = accepted_changes + len(result.unchanged_files)
     error = sync_error or (result.errors[0] if result.errors else None)
     status = (
         "failed" if (error and not indexed) else ("partial" if error else "success")
@@ -625,6 +646,14 @@ async def run_daemon(
         asyncio.create_task(task_loop(), name="lawhand-task"),
         asyncio.create_task(heartbeat_loop(), name="lawhand-heartbeat"),
     ]
+    file_opener_enabled = getattr(config, "file_opener_enabled", False)
+    if file_opener_enabled:
+        workers.append(
+            asyncio.create_task(
+                run_broker(config, client, ledger, shares.get, stop_event),
+                name="lawhand-file-opener-broker",
+            )
+        )
     stop_waiter = asyncio.create_task(stop_event.wait(), name="lawhand-stop")
     try:
         await asyncio.wait(
@@ -638,6 +667,9 @@ async def run_daemon(
         # A loop that exits unexpectedly must not leave the other loops running
         # in a partially healthy process either. Keep cancellation in finally
         # so an outside cancellation of run_daemon cannot strand worker tasks.
+        stop_event.set()
+        if file_opener_enabled:
+            await asyncio.to_thread(wake_broker, config.agent_id)
         for worker in workers:
             if not worker.done():
                 worker.cancel()
@@ -964,6 +996,16 @@ def cmd_update(args) -> None:
         raise SystemExit(f"Update failed: {exc}") from exc
 
 
+def cmd_file_opener(args) -> None:
+    """Handle one protocol launch in the signed-in user's session."""
+    try:
+        run_protocol_handler(args.uri)
+    except FileOpenError as exc:
+        # This process is launched by Windows. Keep output path/token-free;
+        # installers may later replace this with a native notification UI.
+        raise SystemExit(str(exc)) from None
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="lawhand-agent", description="LawHand File Share Relay Agent"
@@ -1026,6 +1068,12 @@ def main():
         help="Download, verify, and apply",
     )
     update.set_defaults(func=cmd_update, check=True)
+
+    opener = sub.add_parser(
+        "file-opener", help="Handle a LawHand one-time file-open link"
+    )
+    opener.add_argument("--uri", required=True, help=argparse.SUPPRESS)
+    opener.set_defaults(func=cmd_file_opener)
 
     args = parser.parse_args()
     args.func(args)

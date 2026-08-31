@@ -238,3 +238,31 @@ class SaaSClient:
             f"/api/v1/smb/agents/{self.agent_id}/shares",
         )
         return result if isinstance(result, list) else result.get("shares", [])
+
+    async def redeem_open_intent(
+        self,
+        handle: str,
+        *,
+        action: str,
+        session_id: str,
+        user_sid: str,
+    ) -> dict:
+        """Redeem a browser-created intent through the authenticated agent."""
+        return await self._request(
+            "POST",
+            f"/api/v1/smb/agents/{self.agent_id}/open-intents/redeem",
+            json={
+                "handle": handle,
+                "action": action,
+                "session_id": session_id,
+                "user_sid": user_sid,
+            },
+        )
+
+    async def report_open_outcome(self, intent_id: str, outcome: str) -> dict:
+        """Report a bounded outcome; paths and launch handles are never sent."""
+        return await self._request(
+            "POST",
+            f"/api/v1/smb/agents/{self.agent_id}/open-intents/{intent_id}/outcome",
+            json={"outcome": outcome},
+        )

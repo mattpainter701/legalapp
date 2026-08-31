@@ -1,12 +1,13 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import FirmMemoryPage from './FirmMemoryPage'
-import { getFirmMemoryFile, getMattersV2, searchFirmMemory } from '../api'
+import { createFirmMemoryOpenIntent, getFirmMemoryFile, getMattersV2, searchFirmMemory } from '../api'
 
 vi.mock('../api', () => ({
   getMattersV2: vi.fn(),
   getFirmMemoryFile: vi.fn(),
   searchFirmMemory: vi.fn(),
+  createFirmMemoryOpenIntent: vi.fn(),
 }))
 
 describe('FirmMemoryPage', () => {
@@ -47,6 +48,7 @@ describe('FirmMemoryPage', () => {
     expect(screen.getByRole('link', { name: 'View result' })).toHaveAttribute('href', '/firm-memory?matter=matter-1&file=opaque-1')
     expect(document.querySelector('a[href^="file:"]')).toBeNull()
     expect(document.querySelector('a[href^="smb:"]')).toBeNull()
+    expect(createFirmMemoryOpenIntent).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: /copy unc path/i }))
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('\\\\server\\cases\\Order.pdf'))
   })

@@ -66,6 +66,20 @@ from app.services.rbac_service import get_user_capabilities
 from app.services.operator_audit import record_operator_audit
 from app.services.token_vault import decrypt_token, encrypt_token
 from app.config import get_settings
+from app.schemas.file_open_intent import (
+    FileOpenIntentCreate,
+    FileOpenIntentCreated,
+    FileOpenIntentRedeemRequest,
+    FileOpenIntentRedeemed,
+    FileOpenIntentOutcomeRequest,
+    FileOpenIntentOutcomeResponse,
+)
+from app.services.file_open_intents import (
+    OpenIntentError,
+    create_intent,
+    redeem_intent,
+    record_outcome,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +106,98 @@ async def require_firm_memory_user(
     }.issubset(capabilities):
         raise HTTPException(status_code=403, detail="Firm Memory access required")
     return user
+
+
+@router.post("/files/open-intents", response_model=FileOpenIntentCreated)
+async def create_file_open_intent(
+    body: FileOpenIntentCreate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_firm_memory_user),
+):
+    try:
+        intent, handle = await create_intent(
+            db,
+            tenant_id=str(user.tenant_id),
+            user_id=str(user.id),
+            file_id=body.file_id,
+            matter_id=body.matter_id,
+            action=body.action,
+        )
+    except OpenIntentError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return FileOpenIntentCreated(
+        launch_url=f"lawhand-file://{intent.action}/{intent.agent_id}/{handle}",
+        expires_at=intent.expires_at,
+        file_id=str(intent.file_id),
+        agent_id=str(intent.agent_id),
+        share_id=str(intent.share_id),
+        source_id=str(intent.source_id),
+        file_revision=intent.revision,
+        action=intent.action,
+    )
+
+
+@router.post(
+    "/agents/{agent_id}/open-intents/redeem", response_model=FileOpenIntentRedeemed
+)
+async def redeem_file_open_intent(
+    agent_id: str,
+    body: FileOpenIntentRedeemRequest,
+    db: AsyncSession = Depends(get_db),
+    agent: SmbAgent = Depends(get_smb_agent),
+):
+    if str(agent.id) != agent_id:
+        raise HTTPException(status_code=403, detail="Agent ID mismatch")
+    try:
+        intent = await redeem_intent(
+            db,
+            tenant_id=str(agent.tenant_id),
+            agent_id=agent_id,
+            handle=body.handle,
+            action=body.action,
+            session_id=body.session_id,
+            user_sid=body.user_sid,
+        )
+    except OpenIntentError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return FileOpenIntentRedeemed(
+        intent_id=str(intent.id),
+        file_id=str(intent.file_id),
+        source_id=str(intent.source_id),
+        file_revision=str(intent.revision),
+        agent_id=agent_id,
+        share_id=str(intent.share_id),
+        matter_id=str(intent.matter_id) if intent.matter_id else None,
+        action=intent.action,
+        nonce=intent.nonce,
+    )
+
+
+@router.post(
+    "/agents/{agent_id}/open-intents/{intent_id}/outcome",
+    response_model=FileOpenIntentOutcomeResponse,
+)
+async def file_open_intent_outcome(
+    agent_id: str,
+    intent_id: str,
+    body: FileOpenIntentOutcomeRequest,
+    db: AsyncSession = Depends(get_db),
+    agent: SmbAgent = Depends(get_smb_agent),
+):
+    if str(agent.id) != agent_id:
+        raise HTTPException(status_code=403, detail="Agent ID mismatch")
+    try:
+        await record_outcome(
+            db,
+            tenant_id=str(agent.tenant_id),
+            agent_id=agent_id,
+            intent_id=intent_id,
+            outcome=body.outcome,
+        )
+    except OpenIntentError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return FileOpenIntentOutcomeResponse(status="recorded")
 
 
 def _registration_receipt_key(pairing_code: str) -> str:

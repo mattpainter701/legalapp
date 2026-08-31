@@ -240,6 +240,14 @@ class SmbScanner:
             ):
                 cs.changed_files.append(finfo)
             else:
+                # Carry locally-owned opener identity into the unchanged scan
+                # row. Legacy rows leave these absent exactly once, allowing
+                # the daemon to backfill them without resending every file on
+                # every later scan.
+                if existing.get("source_id"):
+                    finfo["source_id"] = existing["source_id"]
+                if existing.get("file_revision"):
+                    finfo["file_revision"] = existing["file_revision"]
                 cs.unchanged_files.append(finfo)
 
         scanned_paths = {f["path"] for f in current_files}

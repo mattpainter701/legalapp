@@ -12,6 +12,13 @@
         {"title": "Keep evidence exact", "description": "Completed output is hash-verified and can become current evidence only when the immutable snapshot, draft revision, and identity still match."},
         {"title": "Protect private document data", "description": "Job metadata excludes document values, bytes, storage paths, provider identifiers, signed URLs, and raw exception text."},
         {"title": "Keep activation review-gated", "description": "The production worker remains disabled until encrypted CAS backup and restore rehearsal are added to the release gate."}
+      "title": "Secure opening for on-premise Firm Memory files",
+      "published_at": "2026-08-31",
+      "summary": "When a firm explicitly enables the Windows helper, authorized Firm Memory results can open through the signed-in user's Windows session without placing a network path in a browser link.",
+      "highlights": [
+        {"title": "Open with one-time authorization", "description": "Each action uses a short-lived, single-use request bound to the tenant, user, source file, assigned agent, revision, and requested action."},
+        {"title": "Keep network paths local", "description": "The browser and launch link carry no UNC, file, or SMB path; the local agent resolves the opaque source identity only after redemption."},
+        {"title": "Honor current Windows access", "description": "Windows rechecks reachability and the signed-in user's SMB/NTFS access; moved, expired, offline, and denied requests fail closed with a copy-path fallback."}
       ]
     },
     {

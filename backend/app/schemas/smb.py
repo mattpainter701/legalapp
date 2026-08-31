@@ -264,6 +264,8 @@ class ShareScanStatus(BaseModel):
 
 
 class FileSyncEntry(BaseModel):
+    source_id: uuid.UUID | None = None
+    file_revision: str | None = Field(None, max_length=200)
     path: str = Field(..., min_length=5, max_length=32768)
     filename: str = Field(..., max_length=500)
     ext: str | None = Field(None, max_length=20)
@@ -431,6 +433,8 @@ class FirmMemorySearchHit(UuidStringModel):
     score: float | None
     owner: str | None
     size_bytes: int | None
+    source_id: str | None = None
+    file_revision: str | None = None
     modified_time: datetime | None
     created_time: datetime | None
     share_id: str

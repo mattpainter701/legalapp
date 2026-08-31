@@ -19,6 +19,8 @@ def test_release_catalog_returns_latest_release_and_history():
     assert latest["is_recent"] is True
     assert len(latest["highlights"]) == 4
     assert latest["highlights"][-1]["title"] == "Keep activation review-gated"
+    assert len(latest["highlights"]) == 3
+    assert latest["highlights"][-1]["title"] == "Honor current Windows access"
     assert catalog["release_notes"][0] == latest
 
 

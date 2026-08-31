@@ -80,6 +80,7 @@ _ENV_MAP = {
     "native_authz_enabled": "CLARITY_NATIVE_AUTHZ_ENABLED",
     "search_identity_public_key": "CLARITY_SEARCH_IDENTITY_PUBLIC_KEY",
     "acl_max_age_seconds": "CLARITY_ACL_MAX_AGE_SECONDS",
+    "file_opener_enabled": "LAWHAND_FILE_OPENER_ENABLED",
 }
 
 _INT_FIELDS = (
@@ -246,6 +247,8 @@ class AgentConfig:
     native_authz_enabled: bool = False
     search_identity_public_key: str = ""
     acl_max_age_seconds: int = 3600
+    # Protocol registration and the session-aware broker are rollout opt-ins.
+    file_opener_enabled: bool = False
     _encrypted_smb_password: str = field(default="", repr=False)
     _encrypted_opensearch_password: str = field(default="", repr=False)
     _encrypted_search_gateway_token: str = field(default="", repr=False)
@@ -286,7 +289,8 @@ class AgentConfig:
                 if field_name in _INT_FIELDS:
                     val = int(val)
                 elif field_name in _BOOL_FIELDS or field_name in {
-                    "native_authz_enabled"
+                    "native_authz_enabled",
+                    "file_opener_enabled",
                 }:
                     val = val.strip().lower() not in {"0", "false", "no", "off"}
                 setattr(cfg, field_name, val)
@@ -350,6 +354,7 @@ class AgentConfig:
                 "native_authz_enabled": self.native_authz_enabled,
                 "search_identity_public_key": self.search_identity_public_key,
                 "acl_max_age_seconds": self.acl_max_age_seconds,
+                "file_opener_enabled": self.file_opener_enabled,
             }
         }
         temp_path = CONFIG_FILE.with_suffix(".tmp")
