@@ -19,6 +19,7 @@ from mcp_server.jetson_worker import DEFAULT_MODEL, WorkerConfig, process_once
 from mcp_server.opinion_backfill import (
     OpinionBackfillConfig,
     process_once as process_opinion_backfill_once,
+    require_queue_index,
 )
 
 
@@ -93,6 +94,8 @@ def main() -> None:
         )
     )
     config.validate()
+    if args.opinion_stage:
+        require_queue_index(config.db_url)
     model = DirectCudaMxbai()
     cursor_created_at = None
     cursor_chunk_id = None

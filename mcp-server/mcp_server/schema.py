@@ -961,8 +961,6 @@ END $$;
 
 CREATE INDEX IF NOT EXISTS ix_opinion_chunks_court ON opinion_chunks(court_id);
 CREATE INDEX IF NOT EXISTS ix_opinion_chunks_embedding_version ON opinion_chunks(embedding_version);
-CREATE INDEX IF NOT EXISTS ix_opinion_chunks_unembedded_queue
-    ON opinion_chunks(created_at, id) WHERE embedding IS NULL;
 CREATE INDEX IF NOT EXISTS ix_opinions_source_modified_at ON opinions(source_modified_at);
 CREATE INDEX IF NOT EXISTS ix_source_sync_states_status ON source_sync_states(status, updated_at);
 CREATE INDEX IF NOT EXISTS ix_corpus_coverage_ledger_state ON corpus_coverage_ledger(acquisition_state, updated_at);

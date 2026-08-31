@@ -81,7 +81,16 @@ Jetson batch worker has passed SSH, model, database, and throughput acceptance.
 
 Large legacy `opinion_chunks` backfills must not maintain the live HNSW graph
 one vector at a time when that write path is the measured bottleneck. Apply the
-schema first, then launch `scripts/opinion_backfill_worker.py` on Jetsons or
+schema first. Before worker launch, verify the queue index exists and is valid;
+if it is absent, build it outside a transaction so live writes are not blocked:
+
+```sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_opinion_chunks_unembedded_queue
+    ON opinion_chunks(created_at, id) WHERE embedding IS NULL;
+```
+
+The worker refuses to start when that exact access path is absent or invalid.
+Then launch `scripts/opinion_backfill_worker.py` on Jetsons or
 `scripts/direct_cuda_embed_worker.py --opinion-stage` on the CUDA workstation.
 All workers use one shared, indexed keyset queue with `FOR UPDATE SKIP LOCKED`
 and bulk-insert into the logged `opinion_embedding_backfill_stage` table. The

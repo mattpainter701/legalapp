@@ -10,11 +10,13 @@ from mcp_server.opinion_backfill import (  # noqa: E402
     BatchResult,
     OpinionBackfillConfig,
     QUERY_PREFIX,
+    QUEUE_INDEX,
     embed_batch,
     selection_sql,
     stage_insert_sql,
 )
 from mcp_server.schema import SCHEMA_SQL  # noqa: E402
+import mcp_server.opinion_backfill as opinion_backfill  # noqa: E402
 
 
 class RecordingModel:
@@ -24,6 +26,38 @@ class RecordingModel:
     def encode(self, texts, **_kwargs):
         self.texts = texts
         return [[0.0] * 1024 for _ in texts]
+
+
+class QueueIndexCursor:
+    def __init__(self, row):
+        self.row = row
+        self.params = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def execute(self, _sql, params):
+        self.params = params
+
+    def fetchone(self):
+        return self.row
+
+
+class QueueIndexConnection:
+    def __init__(self, row):
+        self.cursor_instance = QueueIndexCursor(row)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def cursor(self):
+        return self.cursor_instance
 
 
 def test_stage_schema_is_durable_and_dimension_checked():
@@ -53,7 +87,36 @@ def test_stage_selection_supports_indexed_keyset_progress():
     sql = selection_sql(after_cursor=True)
     assert "(oc.created_at, oc.id) > (%s::timestamptz, %s::uuid)" in sql
     assert "ORDER BY oc.created_at, oc.id" in sql
-    assert "ix_opinion_chunks_unembedded_queue" in SCHEMA_SQL
+    assert QUEUE_INDEX not in SCHEMA_SQL
+
+
+def test_queue_index_validation_accepts_expected_access_path(monkeypatch):
+    connection = QueueIndexConnection(
+        (
+            True,
+            "CREATE INDEX ix_opinion_chunks_unembedded_queue "
+            "ON opinion_chunks (created_at, id) WHERE (embedding IS NULL)",
+        )
+    )
+    monkeypatch.setattr(opinion_backfill, "connect", lambda _url: connection)
+    opinion_backfill.require_queue_index("postgresql://db")
+    assert connection.cursor_instance.params == [f"public.{QUEUE_INDEX}"]
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        None,
+        (False, "CREATE INDEX invalid"),
+        (True, "CREATE INDEX wrong_order ON opinion_chunks (id)"),
+    ],
+)
+def test_queue_index_validation_rejects_missing_or_wrong_index(monkeypatch, row):
+    monkeypatch.setattr(
+        opinion_backfill, "connect", lambda _url: QueueIndexConnection(row)
+    )
+    with pytest.raises(RuntimeError, match=QUEUE_INDEX):
+        opinion_backfill.require_queue_index("postgresql://db")
 
 
 def test_stage_insert_is_idempotent():

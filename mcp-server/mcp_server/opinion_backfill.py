@@ -19,6 +19,7 @@ DEFAULT_MODEL = "mixedbread-ai/mxbai-embed-large-v1"
 DEFAULT_DIM = 1024
 QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 STAGE_TABLE = "opinion_embedding_backfill_stage"
+QUEUE_INDEX = "ix_opinion_chunks_unembedded_queue"
 
 
 @dataclass(frozen=True)
@@ -101,6 +102,28 @@ def stage_insert_sql() -> str:
         ON CONFLICT (chunk_id) DO NOTHING
         RETURNING chunk_id
     """
+
+
+def require_queue_index(db_url: str) -> None:
+    """Refuse a legacy backfill unless its nonblocking queue index is valid."""
+    with connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT i.indisvalid, pg_get_indexdef(i.indexrelid)
+                FROM pg_index AS i
+                WHERE i.indexrelid = to_regclass(%s)
+                """,
+                [f"public.{QUEUE_INDEX}"],
+            )
+            row = cur.fetchone()
+    if not row or not row[0]:
+        raise RuntimeError(
+            f"{QUEUE_INDEX} is required; build it CONCURRENTLY before launch"
+        )
+    definition = row[1].lower()
+    if "(created_at, id)" not in definition or "embedding is null" not in definition:
+        raise RuntimeError(f"{QUEUE_INDEX} does not match the required queue order")
 
 
 def format_embedding(values: Iterable[float]) -> str:
@@ -235,6 +258,7 @@ def main() -> None:
         db_url=args.db_url or "",
     )
     config.validate()
+    require_queue_index(config.db_url)
     model = load_model(config.model)
     cursor_created_at = None
     cursor_chunk_id = None
