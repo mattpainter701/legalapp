@@ -124,8 +124,23 @@ class LeadChannelConsent(Base):
     sms_allowed: Mapped[bool] = mapped_column(
         nullable=False, default=False, server_default="false"
     )
+    sms_status: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="unknown", server_default="unknown"
+    )
     phone_verified: Mapped[bool] = mapped_column(
         nullable=False, default=False, server_default="false"
+    )
+    mobile_e164: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    consented_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    consent_source: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    consent_language: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    consent_timezone: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    quiet_hours_start: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    quiet_hours_end: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    allowed_categories: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]"
     )
     disclosure_version: Mapped[str | None] = mapped_column(String(80), nullable=True)
     source: Mapped[str] = mapped_column(

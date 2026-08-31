@@ -212,7 +212,7 @@ async def test_public_booking_creates_local_event_and_appointment(monkeypatch):
 @pytest.mark.asyncio
 async def test_consent_and_triage_cover_revocation_and_review(monkeypatch):
     monkeypatch.setattr(conversion, "set_tenant_context", AsyncMock())
-    db = FakeDB([None])
+    db = FakeDB([_lead(), None])
     revoked = await conversion.update_consent(
         LEAD_ID, ConsentUpdate(disclosure_version="v1"), USER, db
     )

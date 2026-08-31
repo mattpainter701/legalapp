@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import re
 import uuid
 from pathlib import Path
 from typing import Any
@@ -24,7 +25,8 @@ from typing import Any
 from sqlalchemy import and_, func, or_, select
 
 from app.config import get_settings
-from app.models.contact import Contact
+from app.models.contact import Contact, Lead
+from app.models.conversion_loop import LeadChannelConsent
 from app.models.document import Chunk, Document
 from app.models.matter_assignment import MatterAssignment
 from app.models.matter_party import MatterParty
@@ -37,10 +39,13 @@ from app.schemas.chat_action import (
     ListMatterRecipientsArgs,
     ListMatterTasksArgs,
     ProposeClientEmailArgs,
+    ProposeClientSmsArgs,
     ProposeMatterDocumentArgs,
     MatterDocumentDraftAction,
     ProposeTaskArgs,
     ResolvedRecipientBinding,
+    ResolvedSmsRecipientBinding,
+    SmsClientAction,
     normalize_single_mailbox,
 )
 from app.schemas.workspace_mcp import ProposeDocumentFromTemplateArgs
@@ -988,6 +993,109 @@ async def propose_client_email(
         "approval_effect": (
             f"Approving sends this email to {', '.join(to)}. "
             "Edit the draft first if anything is wrong."
+        ),
+        "pending_action": action.model_dump(mode="json"),
+        "sources": chips,
+    }
+
+
+async def propose_client_sms(
+    context: ChatToolContext, args: ProposeClientSmsArgs
+) -> dict[str, Any]:
+    """Create reviewable SMS work only for currently consented matter parties."""
+    await _require_matter(context, args.matter_id)
+    requested = list(dict.fromkeys(args.recipient_party_ids))
+    rows = (
+        await context.db.execute(
+            select(
+                MatterParty.id,
+                MatterParty.contact_id,
+                Contact.phone,
+                LeadChannelConsent.sms_allowed,
+                LeadChannelConsent.sms_status,
+                LeadChannelConsent.phone_verified,
+                LeadChannelConsent.mobile_e164,
+                LeadChannelConsent.revoked_at,
+            )
+            .join(Contact, MatterParty.contact_id == Contact.id)
+            .join(Lead, Lead.contact_id == Contact.id)
+            .join(LeadChannelConsent, LeadChannelConsent.lead_id == Lead.id)
+            .where(
+                MatterParty.id.in_(requested),
+                MatterParty.tenant_id == context.tenant_id,
+                MatterParty.matter_id == args.matter_id,
+                Contact.tenant_id == context.tenant_id,
+                Lead.tenant_id == context.tenant_id,
+                LeadChannelConsent.tenant_id == context.tenant_id,
+            )
+        )
+    ).all()
+    resolved: dict[uuid.UUID, tuple[uuid.UUID, str]] = {}
+    for party_id, contact_id, phone, allowed, status, verified, mobile, revoked in rows:
+        try:
+            stored = re.sub(r"[ ().-]", "", str(phone or ""))
+            if stored.startswith("00"):
+                stored = "+" + stored[2:]
+            if (
+                allowed
+                and status == "active"
+                and verified
+                and mobile == stored
+                and not revoked
+                and re.fullmatch(r"\+[1-9]\d{7,14}", stored)
+            ):
+                if party_id in resolved and resolved[party_id][1] != stored:
+                    raise ChatToolError("invalid_recipient", "SMS consent is ambiguous")
+                resolved[party_id] = (contact_id, stored)
+        except (TypeError, ValueError):
+            continue
+    missing = [party_id for party_id in requested if party_id not in resolved]
+    if missing:
+        raise ChatToolError(
+            "sms_consent_required",
+            "One or more recipients are not verified, currently consented SMS parties",
+        )
+    bindings = [
+        ResolvedSmsRecipientBinding(
+            party_id=party_id,
+            contact_id=resolved[party_id][0],
+            phone=resolved[party_id][1],
+        )
+        for party_id in requested
+    ]
+    async with context.db.begin_nested():
+        chips = await _resolve_source_chips(
+            context, args.source_ids, matter_id=args.matter_id
+        )
+        action = SmsClientAction(
+            type="sms_client",
+            recipient_bindings=bindings,
+            body=args.body,
+            category=args.category,
+            matter_id=args.matter_id,
+            source_ids=args.source_ids[:10],
+            idempotency_key=f"chat-sms-{uuid.uuid4()}",
+        )
+        task = await _create_proposed_task(
+            context,
+            matter_id=args.matter_id,
+            title=args.title,
+            description=f"Drafted client SMS to {', '.join(binding.phone for binding in bindings)}.\n\n{args.body}",
+            due_date=args.due_date,
+            source_ids=args.source_ids,
+            pending_action=action.model_dump(mode="json"),
+        )
+    return {
+        "task_id": str(task.id),
+        "version": task.version,
+        "title": task.title,
+        "status": task.status,
+        "matter_id": str(task.matter_id),
+        "due_date": task.due_date.isoformat() if task.due_date else None,
+        "action_type": action.type,
+        "approval_effect": (
+            "Approving sends this consented SMS to the verified matter party. "
+            "The provider must accept it; delivery is reconciled separately."
         ),
         "pending_action": action.model_dump(mode="json"),
         "sources": chips,

@@ -164,6 +164,18 @@ class ProposeClientEmailArgs(ChatActionModel):
     source_ids: list[str] = Field(default_factory=list, max_length=10)
 
 
+class ProposeClientSmsArgs(ChatActionModel):
+    """Draft a consented client SMS as reviewable board work."""
+
+    matter_id: UUID
+    recipient_party_ids: list[UUID] = Field(min_length=1, max_length=10)
+    title: str = Field(min_length=1, max_length=500)
+    body: str = Field(min_length=1, max_length=1_600)
+    category: str = Field(default="staff_authored", min_length=1, max_length=50)
+    due_date: date | None = None
+    source_ids: list[str] = Field(default_factory=list, max_length=10)
+
+
 class ProposeMatterDocumentArgs(ChatActionModel):
     """Draft cloud-backed Word work for a matter and route it for review."""
 
@@ -222,6 +234,14 @@ class ResolvedRecipientBinding(ChatActionModel):
         return normalize_single_mailbox(value)
 
 
+class ResolvedSmsRecipientBinding(ChatActionModel):
+    """Matter-party identity and verified mobile approved for SMS delivery."""
+
+    party_id: UUID
+    contact_id: UUID
+    phone: str = Field(pattern=r"^\+[1-9]\d{7,14}$")
+
+
 class SourceDocumentBinding(ChatActionModel):
     """Exact local evidence version an attorney reviewed."""
 
@@ -277,6 +297,20 @@ class EmailClientAction(ChatActionModel):
                 "Every local source document must have an exact content binding"
             )
         return self
+
+
+class SmsClientAction(ChatActionModel):
+    """A consent- and phone-bound SMS that still requires human approval."""
+
+    type: Literal["sms_client"]
+    recipient_bindings: list[ResolvedSmsRecipientBinding] = Field(
+        min_length=1, max_length=10
+    )
+    body: str = Field(min_length=1, max_length=1_600)
+    category: str = Field(default="staff_authored", min_length=1, max_length=50)
+    matter_id: UUID
+    source_ids: list[str] = Field(default_factory=list, max_length=10)
+    idempotency_key: str = Field(min_length=8, max_length=200)
 
 
 class MatterDocumentDraftAction(ChatActionModel):
@@ -358,7 +392,7 @@ class MatterDocumentDraftAction(ChatActionModel):
 
 
 PendingAction = Annotated[
-    Union[EmailClientAction, MatterDocumentDraftAction],
+    Union[EmailClientAction, SmsClientAction, MatterDocumentDraftAction],
     Field(discriminator="type"),
 ]
 

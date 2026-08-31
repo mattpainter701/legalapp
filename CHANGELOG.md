@@ -60,6 +60,13 @@
   rollback reviewable without destructive history deletion. This slice does
   not add arbitrary triggers/actions, outbound email,
   native DOCX/Smart Fill, generalized Studio automation, or a no-code builder.
+- **Consent-aware provider-backed SMS:** tenant administrators can keep SMS
+  inactive until provider credentials, sender readiness, ownership, consent,
+  and quiet-hours evidence are configured. Outbound messages require verified,
+  provenance-bearing consent and stable idempotency; signed tenant-bound inbound
+  and status callbacks deduplicate and preserve provider-vs-delivery truth.
+  STOP-family replies revoke consent, ambiguous inbound routes enter review, and
+  assistant proposals remain human-approved with approval-time consent checks.
 - **Template Studio Phase 1 shell:** the existing document-template library is
   now a first-class Template Studio with response-derived continue-setup,
   needs-attention, ready-to-generate, and recent queues; canonical persistent

@@ -33,6 +33,10 @@ class IntakeSubmissionCreate(BaseModel):
     email_consent: bool = False
     sms_consent: bool = False
     disclosure_version: str | None = Field(default=None, max_length=80)
+    consent_language: str | None = Field(default=None, max_length=20)
+    consent_timezone: str | None = Field(default=None, max_length=100)
+    quiet_hours_start: str | None = Field(default=None, max_length=5)
+    quiet_hours_end: str | None = Field(default=None, max_length=5)
 
 
 class BookingCreate(BaseModel):
@@ -48,6 +52,13 @@ class ConsentUpdate(BaseModel):
     sms_allowed: bool = False
     phone_verified: bool = False
     disclosure_version: str = Field(min_length=1, max_length=80)
+    mobile_e164: str | None = Field(default=None, max_length=30)
+    consent_source: str = Field(default="staff_recorded", min_length=1, max_length=80)
+    consent_language: str | None = Field(default=None, max_length=20)
+    consent_timezone: str | None = Field(default=None, max_length=100)
+    quiet_hours_start: str | None = Field(default=None, max_length=5)
+    quiet_hours_end: str | None = Field(default=None, max_length=5)
+    allowed_categories: list[str] = Field(default_factory=list, max_length=20)
 
 
 class TriageDecision(BaseModel):

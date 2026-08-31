@@ -77,6 +77,7 @@ from app.models.matter_document import MatterDocument
 from app.models.task import Task, TaskAutomationRun, TaskEvent
 from app.models.scheduled_event import ScheduledEvent
 from app.models.communication_log import CommunicationLog
+from app.models.sms import SmsMessage, SmsProviderConfig, SmsReviewItem  # noqa: F401
 from app.models.document_template import DocumentTemplate
 from app.models.studio_render import (
     StudioPreferredRenderEvidence,

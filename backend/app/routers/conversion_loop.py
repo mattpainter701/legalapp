@@ -35,6 +35,7 @@ from app.schemas.conversion_loop import (
     TriageDecision,
 )
 from app.services.email import EmailDeliveryResult, email_service
+from app.services.sms import SmsError, normalize_e164, send_sms
 
 router = APIRouter(tags=["conversion-loop"])
 staff = APIRouter(prefix="/api/intake", tags=["conversion-loop"])
@@ -213,13 +214,27 @@ async def submit_public_form(
         ).hexdigest(),
     )
     db.add(submission)
+    mobile_e164 = None
+    if body.sms_consent:
+        try:
+            mobile_e164 = normalize_e164(phone)
+        except SmsError as exc:
+            raise HTTPException(exc.status_code, str(exc)) from exc
     db.add(
         LeadChannelConsent(
             tenant_id=row.tenant_id,
             lead_id=lead.id,
             email_allowed=body.email_consent,
             sms_allowed=body.sms_consent,
+            sms_status="pending_verification" if body.sms_consent else "unknown",
             disclosure_version=body.disclosure_version,
+            mobile_e164=mobile_e164,
+            consented_at=datetime.now(timezone.utc) if body.sms_consent else None,
+            consent_source="public_intake" if body.sms_consent else None,
+            consent_language=body.consent_language,
+            consent_timezone=body.consent_timezone,
+            quiet_hours_start=body.quiet_hours_start,
+            quiet_hours_end=body.quiet_hours_end,
         )
     )
     db.add(
@@ -338,6 +353,11 @@ async def update_consent(
     db: AsyncSession = Depends(get_db),
 ):
     await set_tenant_context(db, str(current_user.tenant_id))
+    lead = await db.scalar(
+        select(Lead).where(Lead.id == lead_id, Lead.tenant_id == current_user.tenant_id)
+    )
+    if not lead:
+        raise HTTPException(404, "Lead not found")
     row = await db.scalar(
         select(LeadChannelConsent).where(
             LeadChannelConsent.tenant_id == current_user.tenant_id,
@@ -347,19 +367,53 @@ async def update_consent(
     if not row:
         row = LeadChannelConsent(tenant_id=current_user.tenant_id, lead_id=lead_id)
         db.add(row)
+    mobile_e164 = None
+    if body.sms_allowed:
+        try:
+            mobile_e164 = normalize_e164(body.mobile_e164)
+        except SmsError as exc:
+            raise HTTPException(exc.status_code, str(exc)) from exc
+        if not body.phone_verified:
+            raise HTTPException(422, "SMS consent requires a verified E.164 mobile")
     (
         row.email_allowed,
         row.sms_allowed,
+        row.sms_status,
         row.phone_verified,
         row.disclosure_version,
+        row.mobile_e164,
+        row.consented_at,
+        row.consent_source,
+        row.consent_language,
+        row.consent_timezone,
+        row.quiet_hours_start,
+        row.quiet_hours_end,
+        row.allowed_categories,
         row.revoked_at,
     ) = (
         body.email_allowed,
         body.sms_allowed,
+        "active" if body.sms_allowed and body.phone_verified else "unknown",
         body.phone_verified,
         body.disclosure_version,
+        mobile_e164,
+        datetime.now(timezone.utc) if body.sms_allowed else None,
+        body.consent_source,
+        body.consent_language,
+        body.consent_timezone,
+        body.quiet_hours_start,
+        body.quiet_hours_end,
+        body.allowed_categories,
         None if body.email_allowed or body.sms_allowed else datetime.now(timezone.utc),
     )
+    contact = await db.scalar(
+        select(Contact).where(
+            Contact.id == lead.contact_id, Contact.tenant_id == current_user.tenant_id
+        )
+    )
+    if contact:
+        contact.sms_opt_in = row.sms_status == "active"
+        contact.sms_opt_in_at = row.consented_at if contact.sms_opt_in else None
     await db.commit()
     return {
         "lead_id": str(lead_id),
@@ -444,9 +498,25 @@ async def send_follow_up(
     if not allowed:
         raise HTTPException(403, f"{body.channel.upper()} follow-up is not consented")
     if body.channel == "sms":
-        raise HTTPException(
-            503, "SMS follow-up is unavailable until a compliant provider is configured"
-        )
+        try:
+            message = await send_sms(
+                db,
+                tenant_id=lead.tenant_id,
+                user_id=current_user.id,
+                contact_id=lead.contact_id,
+                matter_id=lead.matter_id,
+                body=body.body,
+                category="lead_follow_up",
+                idempotency_key=body.idempotency_key,
+            )
+        except SmsError as exc:
+            raise HTTPException(exc.status_code, str(exc)) from exc
+        return {
+            "lead_id": str(lead.id),
+            "channel": body.channel,
+            "status": message.status,
+            "provider_message_id": message.provider_message_id,
+        }
     if not contact or not contact.email:
         raise HTTPException(422, "Lead has no email destination")
     external_ref = f"lead-follow-up:{body.idempotency_key}"

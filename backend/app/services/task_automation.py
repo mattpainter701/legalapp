@@ -38,12 +38,14 @@ from app.models.matter_document import MatterDocument
 from app.models.plugin import Matter
 from app.models.task import Task, TaskAutomationRun
 from app.models.tenant import Tenant, TenantSettings
-from app.models.contact import Contact
+from app.models.contact import Contact, Lead
+from app.models.conversion_loop import LeadChannelConsent
 from app.models.document import Document
 from app.models.matter_party import MatterParty
 from app.schemas.chat_action import (
     EmailClientAction,
     MatterDocumentDraftAction,
+    SmsClientAction,
     normalize_single_mailbox,
 )
 from app.services.document_accountability import append_document_integrity_event
@@ -55,6 +57,7 @@ from app.services.connected_mail import (
     send_client_email,
 )
 from app.services.email import email_service
+from app.services.sms import SmsError, send_sms
 from app.services.task_workflow import (
     append_task_event,
     staged_review_is_approved,
@@ -385,6 +388,66 @@ async def _run_email_client(
     )
 
 
+async def _run_sms_client(
+    db: AsyncSession,
+    task: Task,
+    payload: dict[str, Any],
+    actor_user_id,
+) -> ActionExecutionResult:
+    """Send an approved, server-bound SMS through the fail-closed adapter."""
+    try:
+        action = SmsClientAction.model_validate(payload)
+    except ValidationError:
+        return ActionExecutionResult(
+            False,
+            "The stored SMS draft is not a valid action payload",
+            delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+        )
+    if task.matter_id != action.matter_id or not await _sms_bindings_are_current(
+        db, task, action
+    ):
+        return ActionExecutionResult(
+            False,
+            "Not sent: SMS consent, phone, or matter-party binding changed",
+            delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+        )
+    binding = action.recipient_bindings[0]
+    if len(action.recipient_bindings) != 1:
+        return ActionExecutionResult(
+            False,
+            "Not sent: SMS actions must target exactly one matter party",
+            delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+        )
+    try:
+        async with async_session_maker() as delivery_db:
+            await set_tenant_context(delivery_db, str(task.tenant_id))
+            message = await send_sms(
+                delivery_db,
+                tenant_id=task.tenant_id,
+                user_id=actor_user_id,
+                contact_id=binding.contact_id,
+                matter_id=action.matter_id,
+                body=action.body,
+                category=action.category,
+                idempotency_key=action.idempotency_key,
+            )
+    except SmsError as exc:
+        return ActionExecutionResult(
+            False,
+            str(exc),
+            provider="twilio",
+            provider_message_id=None,
+            delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+        )
+    return ActionExecutionResult(
+        True,
+        "SMS was accepted by the configured provider; delivery remains webhook-reconciled.",
+        provider="twilio",
+        provider_message_id=message.provider_message_id,
+        delivery_certainty=DELIVERY_CONFIRMED_SENT,
+    )
+
+
 async def _run_matter_document_draft(
     db: AsyncSession,
     task: Task,
@@ -635,6 +698,67 @@ async def _recipient_bindings_are_current(
     return True
 
 
+async def _sms_bindings_are_current(
+    db: AsyncSession,
+    task: Task,
+    action: SmsClientAction,
+) -> bool:
+    """Revalidate verified consent immediately before an approved SMS send."""
+    requested_ids = [binding.party_id for binding in action.recipient_bindings]
+    rows = (
+        await db.execute(
+            select(
+                MatterParty.id,
+                MatterParty.contact_id,
+                Contact.phone,
+                LeadChannelConsent.sms_allowed,
+                LeadChannelConsent.sms_status,
+                LeadChannelConsent.phone_verified,
+                LeadChannelConsent.mobile_e164,
+                LeadChannelConsent.revoked_at,
+            )
+            .join(Contact, MatterParty.contact_id == Contact.id)
+            .join(Lead, Lead.contact_id == Contact.id)
+            .join(LeadChannelConsent, LeadChannelConsent.lead_id == Lead.id)
+            .where(
+                MatterParty.id.in_(requested_ids),
+                MatterParty.tenant_id == task.tenant_id,
+                MatterParty.matter_id == action.matter_id,
+                Contact.tenant_id == task.tenant_id,
+                Lead.tenant_id == task.tenant_id,
+                LeadChannelConsent.tenant_id == task.tenant_id,
+            )
+            .with_for_update()
+        )
+    ).all()
+    current = {
+        party_id: (contact_id, phone, allowed, status, verified, mobile, revoked)
+        for party_id, contact_id, phone, allowed, status, verified, mobile, revoked in rows
+    }
+    if len(current) != len(set(requested_ids)):
+        return False
+    for binding in action.recipient_bindings:
+        row = current.get(binding.party_id)
+        if row is None or row[0] != binding.contact_id:
+            return False
+        try:
+            from app.services.sms import normalize_e164
+
+            current_phone = normalize_e164(row[1])
+        except SmsError:
+            return False
+        if (
+            current_phone != binding.phone
+            or not row[2]
+            or row[3] != "active"
+            or not row[4]
+            or row[5] != current_phone
+            or row[6]
+        ):
+            return False
+    return True
+
+
 async def _action_sources_are_current(
     db: AsyncSession,
     task: Task,
@@ -707,6 +831,7 @@ ACTION_HANDLERS: dict[
     Callable[[AsyncSession, Task, dict, Any], Awaitable[ActionExecutionResult]],
 ] = {
     "email_client": _run_email_client,
+    "sms_client": _run_sms_client,
     "matter_document_draft": _run_matter_document_draft,
 }
 
@@ -1085,6 +1210,21 @@ async def enqueue_durable_automation(
             raise ActionApprovalConflict(
                 "A cited local document is no longer available or no longer "
                 "belongs to this matter. Restore the evidence or create a new draft."
+            )
+    elif str(task.pending_action.get("type") or "") == "sms_client":
+        try:
+            pending_sms = SmsClientAction.model_validate(task.pending_action)
+        except ValidationError as exc:
+            raise ActionApprovalConflict(
+                "The stored SMS draft has invalid or missing consent bindings. "
+                "Create a new draft before approval."
+            ) from exc
+        if len(
+            pending_sms.recipient_bindings
+        ) != 1 or not await _sms_bindings_are_current(db, task, pending_sms):
+            raise ActionApprovalConflict(
+                "SMS consent, verified phone, or matter-party membership changed. "
+                "Create and review a new draft."
             )
     elif str(task.pending_action.get("type") or "") == "matter_document_draft":
         try:
