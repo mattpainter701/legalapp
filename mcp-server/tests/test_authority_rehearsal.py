@@ -1871,7 +1871,7 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
         stage_corpus_version(
             conn,
             version=failed_version,
-            manifest_hash="failed-manifest",
+            manifest_hash="f" * 64,
             as_of="2026-08-30T00:00:00Z",
             actor="rehearsal-admin",
             reason="latest-failure gate",
