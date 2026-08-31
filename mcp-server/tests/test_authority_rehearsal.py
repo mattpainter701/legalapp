@@ -1565,7 +1565,11 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 )
             conn.commit()
             if column == "enabled":
-                PostgresSyncStore(conn).ensure_source(date(2025, 1, 1))
+                with pytest.raises(
+                    PermissionError,
+                    match="current reviewed public-authority admission",
+                ):
+                    PostgresSyncStore(conn).ensure_source(date(2025, 1, 1))
                 with conn.cursor() as cur:
                     cur.execute(
                         """SELECT enabled FROM legal_sources
