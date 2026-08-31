@@ -74,7 +74,9 @@ def test_foreground_worker_failure_does_not_echo_process_arguments(monkeypatch):
         def wait(self):
             return 255
 
-    monkeypatch.setattr(dispatcher, "run_ssh_command", lambda *_args, **_kwargs: FailedProcess())
+    monkeypatch.setattr(
+        dispatcher, "run_ssh_command", lambda *_args, **_kwargs: FailedProcess()
+    )
 
     with pytest.raises(JetsonDispatchError) as raised:
         dispatch_targets(
@@ -120,7 +122,9 @@ def test_retry_delay_is_exponential_and_capped(failures, expected):
     assert retry_delay_seconds(failures, 60, 300) == expected
 
 
-def test_scheduler_log_redacts_database_password_and_uses_retry_delay(monkeypatch, capsys):
+def test_scheduler_log_redacts_database_password_and_uses_retry_delay(
+    monkeypatch, capsys
+):
     secret = "scheduler-secret"
 
     def fail_connect(_db_url):
@@ -179,15 +183,16 @@ def test_scheduler_counts_only_retrievable_authority_chunks():
     connection = Connection()
 
     assert unembedded_chunk_count(connection) == 0
-    assert (
-        "JOIN legal_documents d ON d.id = c.document_id" in connection.cursor_obj.sql
-    )
+    assert "JOIN legal_documents d ON d.id = c.document_id" in connection.cursor_obj.sql
     assert (
         "JOIN legal_sources s ON s.source_key = d.source_key"
         in connection.cursor_obj.sql
     )
     assert "d.document_status = 'current'" in connection.cursor_obj.sql
     assert "s.enabled IS TRUE" in connection.cursor_obj.sql
+    assert "public_authority_source_lineage" in connection.cursor_obj.sql
+    assert "authority_case_clusters" in connection.cursor_obj.sql
+    assert "public_namespace='public-authority'" in connection.cursor_obj.sql
 
 
 def test_jetson_systemd_unit_restarts_query_embedding_service():

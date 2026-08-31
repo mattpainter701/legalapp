@@ -401,11 +401,21 @@ def admit_public_source(
     This is intentionally separate from catalog seeding: a catalog entry is
     descriptive, while admission is an operator-owned authorization decision.
     """
-    if len(manifest_sha256.strip()) < 16:
+    catalog_schema_version = str(catalog_schema_version or "").strip()
+    manifest_reference = str(manifest_reference or "").strip()
+    manifest_sha256 = str(manifest_sha256 or "").strip()
+    reviewed_by = str(reviewed_by or "").strip()
+    if not catalog_schema_version or not manifest_reference or not reviewed_by:
+        raise CatalogValidationError(
+            "catalog schema, manifest reference, and reviewer are required"
+        )
+    if len(manifest_sha256) < 16:
         raise CatalogValidationError("manifest_sha256 must be a stable digest")
     with conn.cursor() as cursor:
         cursor.execute(
-            """SELECT rights_decision, reviewed_at, reviewed_by, storage_policy
+            """SELECT rights_decision, reviewed_at, reviewed_by, storage_policy,
+                      enabled, metadata->>'catalog_schema_version',
+                      metadata->>'implementation_status', claim_safe_wording
                FROM legal_sources WHERE source_key=%s""",
             [source_key],
         )
@@ -414,8 +424,21 @@ def admit_public_source(
             raise CatalogValidationError(
                 "source is not rights-approved for public admission"
             )
-        if not source[1] or not source[2] or source[3] == "prohibited":
+        if (
+            not source[1]
+            or not source[2]
+            or source[3] == "prohibited"
+            or source[4] is not True
+        ):
             raise CatalogValidationError("source requires independent review evidence")
+        if (
+            source[5] != catalog_schema_version
+            or not str(source[6] or "").strip()
+            or not str(source[7] or "").strip()
+        ):
+            raise CatalogValidationError(
+                "source catalog lineage does not match the reviewed admission"
+            )
         cursor.execute(
             """INSERT INTO citator_public_source_admissions
                  (source_key, catalog_schema_version, manifest_reference,
@@ -436,9 +459,32 @@ def admit_public_source(
             ],
         )
         cursor.execute(
-            """UPDATE legal_sources SET public_namespace='public-authority'
-               WHERE source_key=%s""",
-            [source_key],
+            """UPDATE legal_sources
+                  SET public_namespace='public-authority',
+                      metadata=jsonb_set(metadata, '{manifest_reference}', to_jsonb(%s::text), true)
+                WHERE source_key=%s""",
+            [manifest_reference, source_key],
+        )
+        # Candidate snapshots are cloned before a new release can be admitted.
+        # Reclassify only rows whose version carries this exact reviewed
+        # manifest; the storage triggers re-evaluate the same lineage view.
+        cursor.execute(
+            """UPDATE legal_documents d
+                  SET public_namespace='public-authority'
+                 FROM authority_corpus_versions v
+                WHERE d.source_key=%s AND d.corpus_version=v.version
+                  AND v.manifest_hash=%s
+                  AND d.public_namespace IS DISTINCT FROM 'public-authority'""",
+            [source_key, manifest_sha256],
+        )
+        cursor.execute(
+            """UPDATE authority_case_clusters cl
+                  SET public_namespace='public-authority'
+                 FROM authority_corpus_versions v
+                WHERE cl.source_key=%s AND cl.corpus_version=v.version
+                  AND v.manifest_hash=%s
+                  AND cl.public_namespace IS DISTINCT FROM 'public-authority'""",
+            [source_key, manifest_sha256],
         )
     conn.commit()
 

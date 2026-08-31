@@ -35,6 +35,12 @@ citation/network, court/docket, coverage, isolation, and promotion paths
 require the same active admission and public classification. Unknown, private,
 custom, tenant, and firm sources therefore remain non-searchable and cannot
 support a coverage claim, even when their payload says `public-authority`.
+Reviewed-manifest, CourtListener bulk, U.S. Code, eCFR/CMS, and other adapter
+writes resolve the same admitted staged/canary version before persistence.
+Protected metadata keys are replaced by server-derived provenance. Embedding
+selection, source-health counters, corpus aggregates, and partition evidence
+use that same lineage; error/details metadata is redacted from public status
+responses.
 
 Query embeddings must match corpus model, version, and dimension exactly. A
 vector outage or mismatch degrades to keyword/source search; vectors are never

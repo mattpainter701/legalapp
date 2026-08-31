@@ -21,6 +21,7 @@ from .bulk_manifest import (
     federal_appellate_court_ids,
     priority_court_ids,
 )
+from .public_lineage import require_public_candidate_version
 from .schema import SCHEMA_SQL
 
 S3_BUCKET_XML = "https://com-courtlistener-storage.s3-us-west-2.amazonaws.com/?list-type=2&prefix=bulk-data/&max-keys=1000"
@@ -28,6 +29,7 @@ S3_OBJECT_URL = "https://com-courtlistener-storage.s3-us-west-2.amazonaws.com/{k
 csv.field_size_limit(min(sys.maxsize, 256 * 1024 * 1024))
 
 DEFAULT_MVP_STATES = ("ND", "MT", "MN", "SD")
+COURTLISTENER_PUBLIC_SOURCE_KEY = "courtlistener:ohio-caselaw"
 _STATE_ALIASES = {
     "ND": ("north dakota",),
     "MT": ("montana",),
@@ -242,12 +244,10 @@ def backfill_promoted_citator_facts(conn) -> int:
               WHERE c.corpus_version=op.corpus_version AND c.opinion_id=op.opinion_id
               ORDER BY chunk_index LIMIT 1
             ) ch ON TRUE
-            JOIN legal_sources s ON s.source_key='courtlistener:ohio-caselaw'
-            WHERE op.corpus_version=%s AND s.enabled IS TRUE
-              AND s.rights_decision IN ('official','open','licensed')
-              AND s.reviewed_at IS NOT NULL AND s.reviewed_by IS NOT NULL
-              AND s.metadata->>'catalog_schema_version' IS NOT NULL
-              AND s.metadata->>'implementation_status' IS NOT NULL
+            JOIN legal_sources s ON s.source_key=cl.source_key
+            JOIN public_authority_source_lineage pas
+              ON pas.source_key=cl.source_key AND pas.corpus_version=cl.corpus_version
+            WHERE op.corpus_version=%s
             ON CONFLICT (corpus_version, authority_key) DO NOTHING
             """,
             [as_of, version],
@@ -273,14 +273,9 @@ def backfill_promoted_citator_facts(conn) -> int:
                                       'source_classification', s.rights_decision)
             FROM legal_documents d
             JOIN legal_sources s ON s.source_key=d.source_key
-            WHERE d.corpus_version=%s AND s.enabled IS TRUE
-              AND s.rights_decision IN ('official','open','licensed')
-              AND s.reviewed_at IS NOT NULL AND s.reviewed_by IS NOT NULL
-              AND s.metadata->>'catalog_schema_version' IS NOT NULL
-              AND s.metadata->>'implementation_status' IS NOT NULL
-              AND NOT starts_with(d.source_key, 'tenant:')
-              AND NOT starts_with(d.source_key, 'firm:')
-              AND NOT starts_with(d.source_key, 'private:')
+            JOIN public_authority_source_lineage pas
+              ON pas.source_key=d.source_key AND pas.corpus_version=d.corpus_version
+            WHERE d.corpus_version=%s
             ON CONFLICT (corpus_version, authority_key) DO NOTHING
             """,
             [as_of, version],
@@ -764,6 +759,18 @@ def _existing_ids(conn, table_name: str, id_column: str) -> set[str]:
         return {str(row[0]) for row in cur.fetchall()}
 
 
+def _staged_public_courtlistener_version(conn) -> str:
+    """Resolve one candidate only when its reviewed source lineage is current."""
+    return require_public_candidate_version(
+        conn,
+        source_key=COURTLISTENER_PUBLIC_SOURCE_KEY,
+        error_message=(
+            "caselaw loading requires a staged release with current reviewed "
+            "public-source lineage"
+        ),
+    )
+
+
 def _load_csv(
     conn,
     path: Path,
@@ -835,16 +842,7 @@ def _load_csv(
     }
     corpus_version = None
     if table_name in {"opinion_clusters", "opinions", "citations", "citation_map"}:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT version FROM authority_corpus_versions WHERE status IN ('staged','canary') ORDER BY created_at DESC LIMIT 1"
-            )
-            version_row = cur.fetchone()
-        if not version_row:
-            raise PermissionError(
-                "caselaw loading requires a staged or canary corpus version"
-            )
-        corpus_version = version_row[0]
+        corpus_version = _staged_public_courtlistener_version(conn)
     if table_name not in statements:
         raise ValueError(f"Unsupported bulk table: {table_name}")
 
@@ -994,6 +992,7 @@ def load_staged_core(
     ]
     counts: dict[str, int] = {}
     with connect(db_url) as conn:
+        _staged_public_courtlistener_version(conn)
         for pattern, table_name in load_order:
             matches = sorted(bulk_dir.glob(pattern))
             if not matches:
@@ -1020,6 +1019,7 @@ def load_mvp_corpus(
 ) -> dict[str, int]:
     counts: dict[str, int] = {}
     with connect(db_url) as conn:
+        _staged_public_courtlistener_version(conn)
         courts = sorted(bulk_dir.glob("courts-*.csv.bz2"))
         if courts:
             counts["courts"] = _load_csv(conn, courts[-1], "courts")
@@ -1150,6 +1150,7 @@ def chunk_text(text: str, max_chars: int = 2400, overlap_chars: int = 240) -> li
 def create_chunks(db_url: str | None = None, limit: int | None = None) -> int:
     created = 0
     with connect(db_url) as conn:
+        version = _staged_public_courtlistener_version(conn)
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1188,20 +1189,12 @@ def create_chunks(db_url: str | None = None, limit: int | None = None) -> int:
                     )
                     created += cur.rowcount
         conn.commit()
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT version FROM authority_corpus_versions WHERE status IN ('staged','canary') ORDER BY created_at DESC LIMIT 1"
-            )
-            version_row = cur.fetchone()
-        if version_row:
-            materialize_caselaw_snapshot(conn, version_row[0])
-            # Snapshot-backed serving is generated from the candidate
-            # opinions after one-way seeding. Legacy singleton rows must not
-            # overwrite candidate text or vector contracts on replay.
-            created += create_snapshot_chunks(conn, version_row[0], limit=limit)
-        refresh_courtlistener_coverage_ledger(
-            conn, source_release=version_row[0] if version_row else None
-        )
+        materialize_caselaw_snapshot(conn, version)
+        # Snapshot-backed serving is generated from the candidate opinions
+        # after one-way seeding. Legacy singleton rows must not overwrite
+        # candidate text or vector contracts on replay.
+        created += create_snapshot_chunks(conn, version, limit=limit)
+        refresh_courtlistener_coverage_ledger(conn, source_release=version)
         conn.commit()
     return created
 

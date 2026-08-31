@@ -750,15 +750,21 @@ JOIN citator_public_source_admissions p
 JOIN authority_corpus_versions v
   ON p.manifest_sha256=v.manifest_hash
  AND p.catalog_schema_version=s.metadata->>'catalog_schema_version'
+ AND p.manifest_reference=s.metadata->>'manifest_reference'
 WHERE s.enabled IS TRUE
   AND s.reviewed_at IS NOT NULL
-  AND s.reviewed_by IS NOT NULL
+  AND length(trim(s.reviewed_by)) > 0
   AND s.rights_decision IN ('official','open','licensed')
   AND s.storage_policy <> 'prohibited'
   AND s.public_namespace='public-authority'
-  AND s.metadata->>'implementation_status' IS NOT NULL
-  AND p.manifest_reference <> ''
-  AND p.manifest_sha256 <> '';
+  AND length(trim(s.claim_safe_wording)) > 0
+  AND length(trim(s.metadata->>'catalog_schema_version')) > 0
+  AND length(trim(s.metadata->>'implementation_status')) > 0
+  AND length(trim(s.metadata->>'manifest_reference')) > 0
+  AND length(trim(p.manifest_reference)) > 0
+  AND length(trim(p.manifest_sha256)) > 0
+  AND p.reviewed_at IS NOT NULL
+  AND length(trim(p.reviewed_by)) > 0;
 
 -- The admission table is the sole public-source allowlist.  Storage rows may
 -- carry a display label, but that label cannot grant public authority access.
@@ -767,20 +773,13 @@ LANGUAGE plpgsql AS $$
 DECLARE admitted boolean;
 BEGIN
     SELECT EXISTS (
-        SELECT 1 FROM citator_public_source_admissions p
-        WHERE p.source_key = NEW.source_key
-          AND p.active IS TRUE
-          AND p.namespace = 'public-authority'
+        SELECT 1 FROM public_authority_source_lineage pas
+        WHERE pas.source_key = NEW.source_key
+          AND pas.corpus_version = NEW.corpus_version
     ) INTO admitted;
     IF TG_TABLE_NAME = 'legal_documents' THEN
-        IF NEW.public_namespace = 'public-authority' AND NOT admitted THEN
-            RAISE EXCEPTION 'source % is not an admitted public authority source', NEW.source_key;
-        END IF;
         NEW.public_namespace := CASE WHEN admitted THEN 'public-authority' ELSE 'unknown' END;
     ELSIF TG_TABLE_NAME = 'authority_case_clusters' THEN
-        IF NEW.public_namespace = 'public-authority' AND NOT admitted THEN
-            RAISE EXCEPTION 'caselaw source % is not an admitted public authority source', NEW.source_key;
-        END IF;
         NEW.public_namespace := CASE WHEN admitted THEN 'public-authority' ELSE 'unknown' END;
     END IF;
     RETURN NEW;

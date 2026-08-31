@@ -325,15 +325,14 @@ def promote_corpus_version(conn: Any, *, version: str, actor: str, reason: str) 
             raise PermissionError("corpus snapshot contains orphaned chunks")
         cur.execute(
             """SELECT COUNT(*)
-                 FROM authority_case_chunks ch
-                 JOIN authority_case_clusters cl
-                   ON cl.corpus_version=ch.corpus_version AND cl.cluster_id=ch.cluster_id
+                 FROM authority_case_clusters cl
                  JOIN legal_sources s ON s.source_key=cl.source_key
                 LEFT JOIN citator_public_source_admissions pa
                    ON pa.source_key=cl.source_key AND pa.active IS TRUE
                   AND pa.namespace='public-authority'
-                WHERE ch.corpus_version=%s
+                WHERE cl.corpus_version=%s
                   AND (cl.public_namespace IS DISTINCT FROM 'public-authority'
+                       OR NOT EXISTS (SELECT 1 FROM public_authority_source_lineage pas WHERE pas.source_key=cl.source_key AND pas.corpus_version=cl.corpus_version)
                        OR s.public_namespace IS DISTINCT FROM 'public-authority'
                        OR s.enabled IS DISTINCT FROM TRUE
                        OR s.storage_policy = 'prohibited'
@@ -359,6 +358,7 @@ def promote_corpus_version(conn: Any, *, version: str, actor: str, reason: str) 
                   AND pa.namespace='public-authority'
                 WHERE d.corpus_version=%s
                   AND (d.public_namespace IS DISTINCT FROM 'public-authority'
+                       OR NOT EXISTS (SELECT 1 FROM public_authority_source_lineage pas WHERE pas.source_key=d.source_key AND pas.corpus_version=d.corpus_version)
                        OR s.public_namespace IS DISTINCT FROM 'public-authority'
                        OR s.enabled IS DISTINCT FROM TRUE
                        OR s.storage_policy = 'prohibited'
@@ -373,6 +373,45 @@ def promote_corpus_version(conn: Any, *, version: str, actor: str, reason: str) 
         if cur.fetchone()[0]:
             raise PermissionError(
                 "corpus contains legal material without public authority lineage"
+            )
+        cur.execute(
+            """SELECT COUNT(*)
+                 FROM authority_records r
+                WHERE r.corpus_version=%s
+                  AND NOT EXISTS (
+                    SELECT 1 FROM public_authority_source_lineage pas
+                     WHERE pas.source_key=r.source_key
+                       AND pas.corpus_version=r.corpus_version
+                  )""",
+            [version],
+        )
+        if cur.fetchone()[0]:
+            raise PermissionError(
+                "corpus contains citator records without public authority lineage"
+            )
+        cur.execute(
+            """SELECT COUNT(*) FROM (
+                 SELECT cp.source_key
+                   FROM authority_harvest_checkpoints cp
+                  WHERE cp.corpus_version=%s
+                    AND NOT EXISTS (
+                      SELECT 1 FROM public_authority_source_lineage pas
+                       WHERE pas.source_key=cp.source_key
+                         AND pas.corpus_version=cp.corpus_version)
+                 UNION ALL
+                 SELECT l.source_key
+                   FROM corpus_coverage_ledger l
+                  WHERE l.source_release=%s
+                    AND NOT EXISTS (
+                      SELECT 1 FROM public_authority_source_lineage pas
+                       WHERE pas.source_key=l.source_key
+                         AND pas.corpus_version=l.source_release)
+               ) invalid_telemetry""",
+            [version, version],
+        )
+        if cur.fetchone()[0]:
+            raise PermissionError(
+                "corpus contains telemetry without public authority lineage"
             )
         cur.execute(
             "UPDATE authority_corpus_versions SET status='retired' WHERE status='promoted' AND version <> %s",
@@ -478,8 +517,10 @@ def stage_corpus_version(
             cur.execute(
                 """
                 INSERT INTO authority_case_clusters
-                  (corpus_version, cluster_id, docket_id, case_name, date_filed, citations)
-                SELECT %s, cluster_id, docket_id, case_name, date_filed, citations
+                  (corpus_version, source_key, public_namespace, cluster_id,
+                   docket_id, case_name, date_filed, citations)
+                SELECT %s, source_key, public_namespace, cluster_id,
+                       docket_id, case_name, date_filed, citations
                 FROM authority_case_clusters WHERE corpus_version=%s
                 ON CONFLICT DO NOTHING
             """,
@@ -873,6 +914,8 @@ def _citator_authority_is_permitted(
             JOIN legal_sources s ON s.source_key=r.source_key
             JOIN citator_public_source_admissions p ON p.source_key=r.source_key
             JOIN authority_corpus_versions v ON v.version=r.corpus_version
+            JOIN public_authority_source_lineage pas
+              ON pas.source_key=r.source_key AND pas.corpus_version=r.corpus_version
             WHERE r.corpus_version=%s AND r.authority_key=%s
               AND v.status='promoted' AND p.active=TRUE
               AND p.namespace='public-authority'
@@ -1084,12 +1127,27 @@ def review_treatment_assessment(
             raise PermissionError(
                 "reviewer is not an authorized citator review principal"
             )
+        # Reviewing a previously-created assessment is still a public
+        # authority mutation.  Re-check the current promoted lineage in the
+        # INSERT statement so a source revocation that races the review cannot
+        # preserve an apparently valid attorney decision for suppressed data.
         cur.execute(
             """INSERT INTO authority_treatment_reviews
                  (assessment_id, reviewer, decision, override_label, note, metadata)
-               VALUES (%s::uuid, %s, %s, %s, %s, %s::jsonb) RETURNING id::text""",
+               SELECT a.id, %s, %s, %s, %s, %s::jsonb
+                 FROM authority_treatment_assessments a
+                 JOIN authority_records r
+                   ON r.corpus_version=a.corpus_version
+                  AND r.authority_key=a.authority_key
+                 JOIN authority_corpus_versions v
+                   ON v.version=a.corpus_version AND v.status='promoted'
+                 JOIN public_authority_source_lineage pas
+                   ON pas.source_key=r.source_key
+                  AND pas.corpus_version=r.corpus_version
+                WHERE a.id=%s::uuid
+                  AND r.currentness_state='current'
+               RETURNING id::text""",
             [
-                assessment_id,
                 reviewer,
                 decision,
                 override_label if decision == "overridden" else None,
@@ -1101,9 +1159,14 @@ def review_treatment_assessment(
                         "principal": reviewer,
                     }
                 ),
+                assessment_id,
             ],
         )
         row = cur.fetchone()
+        if not row:
+            raise PermissionError(
+                "treatment review requires current promoted public authority evidence"
+            )
     conn.commit()
     return str(row[0])
 
@@ -1376,7 +1439,8 @@ def record_citator_alert_delivery(
         cur.execute("SET LOCAL app.current_tenant_id = %s", [tenant_id])
         cur.execute(
             """
-            SELECT w.state, w.consented, w.quiet_hours, w.delivery_channels
+            SELECT w.state, w.consented, w.quiet_hours, w.delivery_channels,
+                   e.corpus_version, e.authority_key
             FROM citator_alert_events e
             JOIN citator_watches w ON w.id=e.watch_id
             WHERE e.id=%s::uuid AND e.tenant_id=%s::uuid
@@ -1386,6 +1450,10 @@ def record_citator_alert_delivery(
         )
         watch = cur.fetchone()
         if not watch or watch[0] in {"revoked", "deleted"}:
+            outcome = "revoked"
+        elif not _citator_authority_is_permitted(
+            conn, corpus_version=str(watch[4]), authority_key=str(watch[5])
+        ):
             outcome = "revoked"
         elif channel not in set(watch[3] or []):
             raise PermissionError("alert channel is not consented for this watch")

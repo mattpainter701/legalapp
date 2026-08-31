@@ -27,6 +27,7 @@ import httpx
 
 from .database import connect
 from .loader import chunk_text, init_schema
+from .public_lineage import public_authority_metadata, require_public_candidate_version
 from .source_catalog import load_catalog, seed_catalog
 
 MANIFEST_PATH = Path(__file__).with_name("authority_manifest.json")
@@ -366,50 +367,19 @@ def ingest_document(
     ):
         if field in document:
             metadata[field] = document[field]
-    metadata.update(document.get("metadata", {}))
+    metadata = public_authority_metadata(document.get("metadata"), trusted=metadata)
     with conn.cursor() as cursor:
         requested_version = os.environ.get(
             "AUTHORITY_INGEST_CORPUS_VERSION", ""
         ).strip()
-        cursor.execute(
-            """SELECT version FROM authority_corpus_versions
-               WHERE status IN ('staged', 'canary')
-                 AND (%s = '' OR version = %s)
-               ORDER BY CASE WHEN version = %s THEN 0 ELSE 1 END,
-                        promoted_at DESC NULLS LAST, created_at DESC LIMIT 1""",
-            [requested_version, requested_version, requested_version],
-        )
-        version_row = cursor.fetchone()
-        if not version_row:
-            raise PermissionError(
-                "ingest requires an explicitly staged or canary corpus version"
-            )
-        corpus_version = version_row[0]
-        cursor.execute(
-            """
-            SELECT s.rights_decision, s.reviewed_at, s.reviewed_by, s.storage_policy,
-                   s.public_namespace, p.source_key IS NOT NULL
-            FROM legal_sources s
-            LEFT JOIN citator_public_source_admissions p
-              ON p.source_key=s.source_key AND p.active IS TRUE
-             AND p.namespace='public-authority'
-            WHERE s.source_key=%s
-        """,
-            [document["source_key"]],
-        )
-        source_row = cursor.fetchone()
-        if (
-            not source_row
-            or source_row[0] not in {"official", "open", "licensed"}
-            or not source_row[1]
-            or not source_row[2]
-            or source_row[3] == "prohibited"
-            or source_row[4] != "public-authority"
-            or not source_row[5]
-        ):
-            raise PermissionError(
+        corpus_version = require_public_candidate_version(
+            conn,
+            source_key=document["source_key"],
+            requested_version=requested_version,
+            error_message=(
                 "source requires a reviewed public-authority admission before ingestion"
-            )
+            ),
+        )
         cursor.execute(
             """
             SELECT id, content_hash

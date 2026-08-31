@@ -54,6 +54,11 @@ isolation, and promotion paths require the same admission and source lineage.
 Unknown or non-admitted rows are suppressed and cannot support a coverage
 claim. This is metadata-only control-plane evidence: it does not imply a
 production harvest, comprehensive currentness, or a Brief Check integration.
+Public ingestion adapters and embedding workers resolve the identical
+version-bound lineage before they write or process content. Source-health and
+corpus-status projections recompute admitted release counts and expose only
+redacted failure metadata, so private URLs, document metadata, or query text do
+not enter the public authority status contract.
 
 Coverage claims are fail-closed. A source must have a reviewed rights decision
 (`official`, `open`, `licensed`, `prohibited`, or `pending_review`), a promoted

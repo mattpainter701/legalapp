@@ -54,7 +54,7 @@ def test_citator_schema_separates_snapshot_facts_from_machine_interpretation():
     loader = (ROOT / "mcp_server" / "loader.py").read_text()
     assert "backfill_promoted_citator_facts" in loader
     assert "d.termination_date IS NOT NULL" in loader
-    assert "rights_decision IN ('official','open','licensed')" in loader
+    assert "JOIN public_authority_source_lineage pas" in loader
 
 
 def test_citator_watch_schema_has_tenant_rls_dedupe_and_revocation_states():
@@ -100,8 +100,12 @@ def test_watch_requires_matter_scope_and_consent_channel_before_database_access(
 
 def test_watch_scope_assertion_fails_closed_when_unconfigured_or_invalid(monkeypatch):
     args = dict(
-        tenant_id="tenant", matter_id="matter", authority_key="case:1", created_by="principal",
-        delivery_channels=["in_app"], matter_scope_assertion="not-an-assertion",
+        tenant_id="tenant",
+        matter_id="matter",
+        authority_key="case:1",
+        created_by="principal",
+        delivery_channels=["in_app"],
+        matter_scope_assertion="not-an-assertion",
     )
     monkeypatch.delenv("MCP_CITATOR_SCOPE_ASSERTION_SECRET", raising=False)
     with pytest.raises(PermissionError, match="not configured"):

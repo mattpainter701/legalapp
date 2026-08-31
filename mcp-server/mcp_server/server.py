@@ -201,7 +201,8 @@ def run_control_audit(
                     SELECT s.rights_decision, s.reviewed_at,
                            COALESCE(cp.status, l.acquisition_state, 'missing'),
                            GREATEST(COUNT(DISTINCT d.id), COALESCE(MAX(l.rows_loaded), 0))
-                    FROM legal_sources s
+                    FROM public_authority_source_lineage pas
+                    JOIN legal_sources s ON s.source_key=pas.source_key AND pas.corpus_version=%s
                     LEFT JOIN authority_harvest_checkpoints cp
                       ON cp.source_key=s.source_key AND cp.corpus_version=%s
                     LEFT JOIN legal_documents d
@@ -210,7 +211,6 @@ def run_control_audit(
                       ON l.source_key=s.source_key AND l.source_release=%s
                     WHERE s.enabled IS TRUE
                       AND s.public_namespace = 'public-authority'
-                      AND EXISTS (SELECT 1 FROM citator_public_source_admissions pa WHERE pa.source_key=s.source_key AND pa.active IS TRUE AND pa.namespace='public-authority')
                       AND s.storage_policy <> 'prohibited'
                       AND s.rights_decision IN ('official','open','licensed')
                       AND s.reviewed_by IS NOT NULL
@@ -223,7 +223,7 @@ def run_control_audit(
                     GROUP BY s.source_key, s.rights_decision, s.reviewed_at,
                              cp.status, l.acquisition_state
                 """,
-                    [body.version, body.version, body.version],
+                    [body.version, body.version, body.version, body.version],
                 )
                 records = [
                     {
@@ -259,22 +259,15 @@ def run_control_audit(
                             AND cp.corpus_version=l.source_release
                         )
                     ) e
-                    JOIN legal_sources s ON s.source_key=e.source_key
-                    JOIN citator_public_source_admissions pa ON pa.source_key=e.source_key
-                    WHERE s.enabled IS TRUE
-                      AND s.public_namespace = 'public-authority'
-                      AND pa.active IS TRUE AND pa.namespace='public-authority'
-                      AND s.rights_decision IN ('official','open','licensed')
-                      AND s.reviewed_at IS NOT NULL AND s.reviewed_by IS NOT NULL
+                    JOIN public_authority_source_lineage pas
+                      ON pas.source_key=e.source_key AND pas.corpus_version=%s
                 """,
-                    [body.version, body.version],
+                    [body.version, body.version, body.version],
                 )
                 records = [
                     {
                         "expected": max(row[2] or 0, 1),
-                        "observed": row[3]
-                        if row[4] in {"complete", "active", "indexed"}
-                        else 0,
+                        "observed": row[3] if row[4] in {"complete", "indexed"} else 0,
                         "declared": row[2] is not None and row[2] > 0,
                     }
                     for row in cur.fetchall()
@@ -286,7 +279,8 @@ def run_control_audit(
                            CASE WHEN l.acquisition_state IN ('complete', 'indexed')
                                 THEN l.last_checked_at ELSE NULL END),
                            s.expected_cadence, COALESCE(cp.status, l.acquisition_state)
-                    FROM legal_sources s
+                    FROM public_authority_source_lineage pas
+                    JOIN legal_sources s ON s.source_key=pas.source_key AND pas.corpus_version=%s
                     LEFT JOIN authority_harvest_checkpoints cp
                       ON cp.source_key=s.source_key AND cp.corpus_version=%s
                     LEFT JOIN corpus_coverage_ledger l
@@ -294,11 +288,10 @@ def run_control_audit(
                     WHERE (cp.source_key IS NOT NULL OR l.source_key IS NOT NULL)
                       AND s.enabled IS TRUE
                       AND s.public_namespace = 'public-authority'
-                      AND EXISTS (SELECT 1 FROM citator_public_source_admissions pa WHERE pa.source_key=s.source_key AND pa.active IS TRUE AND pa.namespace='public-authority')
                       AND s.rights_decision IN ('official','open','licensed')
                       AND s.reviewed_at IS NOT NULL AND s.reviewed_by IS NOT NULL
                 """,
-                    [body.version, body.version],
+                    [body.version, body.version, body.version],
                 )
                 now = datetime.now(timezone.utc)
                 records = [
@@ -325,13 +318,12 @@ def run_control_audit(
             else:
                 cur.execute(
                     """
-                    SELECT d.source_key, d.metadata->>'namespace',
-                           (d.metadata->>'namespace' IS DISTINCT FROM 'public-authority'
-                            OR d.public_namespace IS DISTINCT FROM 'public-authority'
+                    SELECT d.source_key, d.public_namespace,
+                           (d.public_namespace IS DISTINCT FROM 'public-authority'
                             OR starts_with(d.source_key, 'tenant:') OR starts_with(d.source_key, 'firm:')
                             OR starts_with(d.source_key, 'private:') OR s.storage_policy = 'prohibited'
                             OR s.public_namespace IS DISTINCT FROM 'public-authority'
-                            OR NOT EXISTS (SELECT 1 FROM citator_public_source_admissions pa WHERE pa.source_key=d.source_key AND pa.active IS TRUE AND pa.namespace='public-authority')
+                            OR NOT EXISTS (SELECT 1 FROM public_authority_source_lineage pas WHERE pas.source_key=d.source_key AND pas.corpus_version=d.corpus_version)
                             OR s.metadata->>'catalog_schema_version' IS NULL)
                     FROM legal_documents d
                     LEFT JOIN legal_sources s ON s.source_key=d.source_key
@@ -339,11 +331,25 @@ def run_control_audit(
                     UNION ALL
                     SELECT cl.source_key, cl.public_namespace,
                            (cl.public_namespace IS DISTINCT FROM 'public-authority'
-                            OR NOT EXISTS (SELECT 1 FROM citator_public_source_admissions pa WHERE pa.source_key=cl.source_key AND pa.active IS TRUE AND pa.namespace='public-authority'))
+                            OR NOT EXISTS (SELECT 1 FROM public_authority_source_lineage pas WHERE pas.source_key=cl.source_key AND pas.corpus_version=cl.corpus_version))
                     FROM authority_case_clusters cl
                     WHERE cl.corpus_version=%s
+                    UNION ALL
+                    SELECT cp.source_key, 'public-authority',
+                           NOT EXISTS (SELECT 1 FROM public_authority_source_lineage pas
+                                       WHERE pas.source_key=cp.source_key
+                                         AND pas.corpus_version=cp.corpus_version)
+                    FROM authority_harvest_checkpoints cp
+                    WHERE cp.corpus_version=%s
+                    UNION ALL
+                    SELECT l.source_key, 'public-authority',
+                           NOT EXISTS (SELECT 1 FROM public_authority_source_lineage pas
+                                       WHERE pas.source_key=l.source_key
+                                         AND pas.corpus_version=l.source_release)
+                    FROM corpus_coverage_ledger l
+                    WHERE l.source_release=%s
                 """,
-                    [body.version, body.version],
+                    [body.version, body.version, body.version, body.version],
                 )
                 records = [
                     {"namespace": row[1], "private": bool(row[2])}

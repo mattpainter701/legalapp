@@ -20,6 +20,7 @@ import httpx
 
 from .database import connect
 from .loader import chunk_text, init_schema
+from .public_lineage import public_authority_metadata, require_public_candidate_version
 from .source_catalog import load_catalog, seed_catalog
 
 USCODE_DOWNLOAD_PAGE = "https://uscode.house.gov/download/download.shtml"
@@ -154,7 +155,9 @@ def discover_artifacts(
         artifacts[(title, release_point)] = artifact
 
     if not artifacts:
-        raise RuntimeError("no matching official U.S. Code USLM title artifacts discovered")
+        raise RuntimeError(
+            "no matching official U.S. Code USLM title artifacts discovered"
+        )
     newest_release = max(
         (artifact.release_point for artifact in artifacts.values()),
         key=_release_sort_key,
@@ -364,22 +367,40 @@ def parse_uslm_sections(
     return sorted(emitted.values(), key=lambda item: item.section)
 
 
-def iter_sections(downloaded: DownloadedArtifact, limit: int | None = None) -> Iterator[USCodeSection]:
+def iter_sections(
+    downloaded: DownloadedArtifact, limit: int | None = None
+) -> Iterator[USCodeSection]:
     if limit is not None and limit <= 0:
         raise ValueError("limit must be positive when supplied")
     sections = parse_uslm_sections(downloaded)
     yield from sections[:limit]
 
 
-def _upsert_section(conn: Any, section: USCodeSection, artifact_sha256: str) -> dict[str, Any]:
+def _upsert_section(
+    conn: Any,
+    section: USCodeSection,
+    artifact_sha256: str,
+    *,
+    corpus_version: str,
+) -> dict[str, Any]:
     """Idempotently persist a section and replace chunks only if its text changed."""
+    require_public_candidate_version(
+        conn,
+        source_key=SOURCE_KEY,
+        requested_version=corpus_version,
+        error_message=(
+            "U.S. Code ingestion requires current reviewed public-source lineage"
+        ),
+    )
     document = section.document(artifact_sha256=artifact_sha256)
     content_hash = hashlib.sha256(section.text.encode("utf-8")).hexdigest()
     retrieved_at = datetime.now(timezone.utc)
+    metadata = public_authority_metadata(document["metadata"])
     with conn.cursor() as cursor:
         cursor.execute(
-            "SELECT id, content_hash FROM legal_documents WHERE source_key = %s AND external_id = %s",
-            [SOURCE_KEY, section.external_id],
+            """SELECT id, content_hash FROM legal_documents
+                WHERE source_key = %s AND external_id = %s AND corpus_version = %s""",
+            [SOURCE_KEY, section.external_id, corpus_version],
         )
         existing = cursor.fetchone()
         changed = existing is None or existing[1] != content_hash
@@ -389,9 +410,10 @@ def _upsert_section(conn: Any, section: USCodeSection, artifact_sha256: str) -> 
                 source_key, external_id, document_type, title, citation, jurisdiction,
                 authority_tier, document_status, publication_date, effective_date,
                 canonical_url, retrieved_at, content_hash, raw_media_type,
-                parser_version, text_content, metadata
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
-            ON CONFLICT (source_key, external_id) DO UPDATE SET
+                parser_version, text_content, metadata, public_namespace,
+                corpus_version
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s)
+            ON CONFLICT (source_key, external_id, corpus_version) DO UPDATE SET
                 title = EXCLUDED.title, citation = EXCLUDED.citation,
                 document_status = EXCLUDED.document_status, canonical_url = EXCLUDED.canonical_url,
                 retrieved_at = EXCLUDED.retrieved_at, content_hash = EXCLUDED.content_hash,
@@ -400,29 +422,73 @@ def _upsert_section(conn: Any, section: USCodeSection, artifact_sha256: str) -> 
                 metadata = legal_documents.metadata || EXCLUDED.metadata, updated_at = now()
             RETURNING id
             """,
-            [SOURCE_KEY, section.external_id, document["document_type"], document["title"],
-             document["citation"], document["jurisdiction"], document["authority_tier"],
-             document["document_status"], None, None, document["canonical_url"], retrieved_at,
-             content_hash, "application/xml", PARSER_VERSION, section.text,
-             json.dumps(document["metadata"])],
+            [
+                SOURCE_KEY,
+                section.external_id,
+                document["document_type"],
+                document["title"],
+                document["citation"],
+                document["jurisdiction"],
+                document["authority_tier"],
+                document["document_status"],
+                None,
+                None,
+                document["canonical_url"],
+                retrieved_at,
+                content_hash,
+                "application/xml",
+                PARSER_VERSION,
+                section.text,
+                json.dumps(metadata),
+                "public-authority",
+                corpus_version,
+            ],
         )
         document_id = cursor.fetchone()[0]
         chunk_count = 0
         if changed:
-            cursor.execute("DELETE FROM legal_document_chunks WHERE document_id = %s", [document_id])
+            cursor.execute(
+                "DELETE FROM legal_document_chunks WHERE document_id = %s",
+                [document_id],
+            )
             for index, content in enumerate(chunk_text(section.text)):
                 cursor.execute(
                     """INSERT INTO legal_document_chunks
-                    (document_id, chunk_index, content, content_hash, embedding, embedding_version, metadata)
-                    VALUES (%s, %s, %s, %s, NULL, 0, %s::jsonb)""",
-                    [document_id, index, content, hashlib.sha256(content.encode("utf-8")).hexdigest(),
-                     json.dumps({"citation": section.citation, "section_number": section.section})],
+                    (document_id, chunk_index, content, content_hash, embedding,
+                     embedding_version, metadata, corpus_version)
+                    VALUES (%s, %s, %s, %s, NULL, 0, %s::jsonb, %s)""",
+                    [
+                        document_id,
+                        index,
+                        content,
+                        hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                        json.dumps(
+                            {
+                                "citation": section.citation,
+                                "section_number": section.section,
+                                "namespace": "public-authority",
+                            }
+                        ),
+                        corpus_version,
+                    ],
                 )
                 chunk_count += 1
-    return {"external_id": section.external_id, "changed": changed, "chunks_created": chunk_count}
+    return {
+        "external_id": section.external_id,
+        "changed": changed,
+        "chunks_created": chunk_count,
+    }
 
 
-def _checkpoint(conn: Any, artifact: USCodeArtifact, *, rows: int, chunks: int, artifact_sha256: str, status: str) -> None:
+def _checkpoint(
+    conn: Any,
+    artifact: USCodeArtifact,
+    *,
+    rows: int,
+    chunks: int,
+    artifact_sha256: str,
+    status: str,
+) -> None:
     with conn.cursor() as cursor:
         cursor.execute(
             """INSERT INTO source_sync_states
@@ -437,46 +503,103 @@ def _checkpoint(conn: Any, artifact: USCodeArtifact, *, rows: int, chunks: int, 
               rows_processed = source_sync_states.rows_processed + EXCLUDED.rows_processed,
               chunks_created = source_sync_states.chunks_created + EXCLUDED.chunks_created,
               last_error = NULL, metadata = EXCLUDED.metadata, updated_at = now()""",
-            [SOURCE_KEY, f"title-{artifact.title}", status, status, rows, chunks,
-             json.dumps({"release_point": artifact.release_point, "artifact_sha256": artifact_sha256,
-                         "artifact_url": artifact.url, "parser_version": PARSER_VERSION})],
+            [
+                SOURCE_KEY,
+                f"title-{artifact.title}",
+                status,
+                status,
+                rows,
+                chunks,
+                json.dumps(
+                    {
+                        "release_point": artifact.release_point,
+                        "artifact_sha256": artifact_sha256,
+                        "artifact_url": artifact.url,
+                        "parser_version": PARSER_VERSION,
+                    }
+                ),
+            ],
         )
 
 
-def sync_downloaded_artifact(conn: Any, downloaded: DownloadedArtifact, *, limit: int | None = None) -> dict[str, Any]:
+def sync_downloaded_artifact(
+    conn: Any, downloaded: DownloadedArtifact, *, limit: int | None = None
+) -> dict[str, Any]:
     """Upsert a title incrementally, checkpointing after every committed section."""
+    corpus_version = require_public_candidate_version(
+        conn,
+        source_key=SOURCE_KEY,
+        error_message=(
+            "U.S. Code ingestion requires a staged release with current reviewed "
+            "public-source lineage"
+        ),
+    )
     rows = chunks = 0
     for section in iter_sections(downloaded, limit=limit):
-        result = _upsert_section(conn, section, downloaded.sha256)
+        result = _upsert_section(
+            conn,
+            section,
+            downloaded.sha256,
+            corpus_version=corpus_version,
+        )
         rows += 1
         chunks += result["chunks_created"]
-        _checkpoint(conn, downloaded.artifact, rows=1, chunks=result["chunks_created"], artifact_sha256=downloaded.sha256, status="running")
+        _checkpoint(
+            conn,
+            downloaded.artifact,
+            rows=1,
+            chunks=result["chunks_created"],
+            artifact_sha256=downloaded.sha256,
+            status="running",
+        )
         conn.commit()
-    _checkpoint(conn, downloaded.artifact, rows=0, chunks=0, artifact_sha256=downloaded.sha256, status="complete")
+    _checkpoint(
+        conn,
+        downloaded.artifact,
+        rows=0,
+        chunks=0,
+        artifact_sha256=downloaded.sha256,
+        status="complete",
+    )
     with conn.cursor() as cursor:
         cursor.execute(
             """UPDATE legal_documents
                SET document_status = 'superseded', termination_date = CURRENT_DATE,
                    updated_at = now()
                WHERE source_key = %s
+                 AND corpus_version = %s
                  AND metadata->>'title_number' = %s
                  AND metadata->>'release_point' <> %s
                  AND document_status = 'current'""",
-            [SOURCE_KEY, str(downloaded.artifact.title), downloaded.artifact.release_point],
+            [
+                SOURCE_KEY,
+                corpus_version,
+                str(downloaded.artifact.title),
+                downloaded.artifact.release_point,
+            ],
         )
         cursor.execute(
             """UPDATE legal_sources SET last_attempted_at = now(), last_successful_sync_at = now(),
             current_error = NULL, item_count = (SELECT COUNT(*) FROM legal_documents WHERE source_key = %s),
             chunk_count = (SELECT COUNT(*) FROM legal_document_chunks c JOIN legal_documents d ON d.id = c.document_id WHERE d.source_key = %s),
-            updated_at = now() WHERE source_key = %s""", [SOURCE_KEY, SOURCE_KEY, SOURCE_KEY]
+            updated_at = now() WHERE source_key = %s""",
+            [SOURCE_KEY, SOURCE_KEY, SOURCE_KEY],
         )
     conn.commit()
-    return {"title": downloaded.artifact.title, "release_point": downloaded.artifact.release_point,
-            "rows_processed": rows, "chunks_created": chunks, "artifact_sha256": downloaded.sha256}
+    return {
+        "title": downloaded.artifact.title,
+        "release_point": downloaded.artifact.release_point,
+        "rows_processed": rows,
+        "chunks_created": chunks,
+        "artifact_sha256": downloaded.sha256,
+    }
 
 
 def sync_official_titles(
-    *, titles: Iterable[int] = DEFAULT_TITLES, db_url: str | None = None, limit: int | None = None,
+    *,
+    titles: Iterable[int] = DEFAULT_TITLES,
+    db_url: str | None = None,
+    limit: int | None = None,
     client: httpx.Client | None = None,
 ) -> list[dict[str, Any]]:
     """Discover, download, and resumably upsert the requested official U.S. Code titles."""
@@ -497,8 +620,14 @@ def main() -> None:
     )
     parser.add_argument("--title", type=int, action="append", dest="titles")
     parser.add_argument("--limit", type=int, help="Maximum sections per title")
-    parser.add_argument("--dry-run", action="store_true", help="Download and parse without database writes")
-    parser.add_argument("--sync", action="store_true", help="Download and upsert parsed sections")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Download and parse without database writes",
+    )
+    parser.add_argument(
+        "--sync", action="store_true", help="Download and upsert parsed sections"
+    )
     parser.add_argument("--db-url")
     args = parser.parse_args()
     if args.dry_run and args.sync:
@@ -509,13 +638,28 @@ def main() -> None:
         for artifact in artifacts:
             downloaded = download_artifact(artifact)
             sections = list(iter_sections(downloaded, args.limit))
-            preview.append({"title": artifact.title, "release_point": artifact.release_point,
-                            "sections": len(sections), "artifact_sha256": downloaded.sha256,
-                            "first_external_id": sections[0].external_id if sections else None})
+            preview.append(
+                {
+                    "title": artifact.title,
+                    "release_point": artifact.release_point,
+                    "sections": len(sections),
+                    "artifact_sha256": downloaded.sha256,
+                    "first_external_id": sections[0].external_id if sections else None,
+                }
+            )
         print(json.dumps(preview, indent=2))
         return
     if args.sync:
-        print(json.dumps(sync_official_titles(titles=args.titles or DEFAULT_TITLES, db_url=args.db_url, limit=args.limit), indent=2))
+        print(
+            json.dumps(
+                sync_official_titles(
+                    titles=args.titles or DEFAULT_TITLES,
+                    db_url=args.db_url,
+                    limit=args.limit,
+                ),
+                indent=2,
+            )
+        )
         return
     print(
         json.dumps(
