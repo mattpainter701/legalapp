@@ -116,8 +116,13 @@ def require_queue_index(db_url: str) -> None:
                     i.indnkeyatts = 2,
                     pg_get_indexdef(i.indexrelid, 1, true) = 'created_at',
                     pg_get_indexdef(i.indexrelid, 2, true) = 'id',
-                    pg_get_expr(i.indpred, i.indrelid) = '(embedding IS NULL)'
+                    pg_get_expr(i.indpred, i.indrelid) = '(embedding IS NULL)',
+                    am.amname = 'btree'
                 FROM pg_index AS i
+                JOIN pg_class AS index_class
+                  ON index_class.oid = i.indexrelid
+                JOIN pg_am AS am
+                  ON am.oid = index_class.relam
                 WHERE i.indexrelid = to_regclass(%s)
                 """,
                 [f"public.{QUEUE_INDEX}"],

@@ -91,7 +91,7 @@ def test_stage_selection_supports_indexed_keyset_progress():
 
 
 def test_queue_index_validation_accepts_expected_access_path(monkeypatch):
-    connection = QueueIndexConnection((True, True, True, True, True, True))
+    connection = QueueIndexConnection((True, True, True, True, True, True, True))
     monkeypatch.setattr(opinion_backfill, "connect", lambda _url: connection)
     opinion_backfill.require_queue_index("postgresql://db")
     assert connection.cursor_instance.params == [f"public.{QUEUE_INDEX}"]
@@ -101,12 +101,13 @@ def test_queue_index_validation_accepts_expected_access_path(monkeypatch):
     "row",
     [
         None,
-        (False, True, True, True, True, True),
-        (True, False, True, True, True, True),
-        (True, True, False, True, True, True),
-        (True, True, True, False, True, True),
-        (True, True, True, True, False, True),
-        (True, True, True, True, True, False),
+        (False, True, True, True, True, True, True),
+        (True, False, True, True, True, True, True),
+        (True, True, False, True, True, True, True),
+        (True, True, True, False, True, True, True),
+        (True, True, True, True, False, True, True),
+        (True, True, True, True, True, False, True),
+        (True, True, True, True, True, True, False),
     ],
 )
 def test_queue_index_validation_rejects_missing_or_wrong_index(monkeypatch, row):

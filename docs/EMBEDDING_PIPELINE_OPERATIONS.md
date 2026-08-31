@@ -101,9 +101,24 @@ CREATE INDEX CONCURRENTLY ix_opinion_chunks_unembedded_queue
 
 Do not drop a valid matching queue index. The worker structurally verifies the
 indexed table, both ordered keys, exact predicate, and validity, and refuses to
-start when that access path is absent, invalid, or mismatched.
-Then launch `scripts/opinion_backfill_worker.py` on Jetsons or
-`scripts/direct_cuda_embed_worker.py --opinion-stage` on the CUDA workstation.
+start when that B-tree access path is absent, invalid, or mismatched.
+
+Launch each Jetson with its assigned worker identity and continuous-loop flag:
+
+```bash
+python3 scripts/opinion_backfill_worker.py \
+    --worker-id 0 --total-workers 3 --batch-size 32 --loop
+```
+
+Launch the CUDA workstation with both staging and continuous-loop flags:
+
+```powershell
+python scripts/direct_cuda_embed_worker.py --opinion-stage `
+    --worker-id 1 --total-workers 3 --batch-size 128 --loop
+```
+
+Supply `VECTORDB_URL` or `DATABASE_URL` through the private supervisor
+environment; never place the credential in the runbook or process logs.
 All workers use one shared, indexed keyset queue with `FOR UPDATE SKIP LOCKED`
 and bulk-insert into the logged `opinion_embedding_backfill_stage` table. The
 primary key makes retries idempotent, and each row records its model, version,
