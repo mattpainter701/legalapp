@@ -41,6 +41,7 @@ from app.services.access_control import (
     require_capability,
 )
 from app.services.configurable_workflows import (
+    acquire_workflow_config_lock,
     append_run_event,
     apply_run,
     build_preview,
@@ -149,6 +150,7 @@ async def create_field_definition(
     user=Depends(require_capability("manage_workflows")),
 ):
     await set_tenant_context(db, str(user.tenant_id))
+    await acquire_workflow_config_lock(db, user.tenant_id, shared=False)
     field = CustomFieldDefinition(
         tenant_id=user.tenant_id,
         entity_type=body.entity_type,
@@ -183,6 +185,7 @@ async def update_field_definition(
     user=Depends(require_capability("manage_workflows")),
 ):
     await set_tenant_context(db, str(user.tenant_id))
+    await acquire_workflow_config_lock(db, user.tenant_id, shared=False)
     field = await db.scalar(
         select(CustomFieldDefinition)
         .where(
@@ -573,6 +576,7 @@ async def create_workflow_template(
     user=Depends(require_capability("manage_workflows")),
 ):
     await set_tenant_context(db, str(user.tenant_id))
+    await acquire_workflow_config_lock(db, user.tenant_id, shared=False)
     template = MatterWorkflowTemplate(
         tenant_id=user.tenant_id,
         name=" ".join(body.name.split()),
@@ -617,6 +621,7 @@ async def create_workflow_template_version(
     user=Depends(require_capability("manage_workflows")),
 ):
     await set_tenant_context(db, str(user.tenant_id))
+    await acquire_workflow_config_lock(db, user.tenant_id, shared=False)
     template = await db.scalar(
         select(MatterWorkflowTemplate)
         .where(
@@ -737,6 +742,7 @@ async def approve_workflow_template_version(
     user=Depends(require_capability("approve_legal_work")),
 ):
     await set_tenant_context(db, str(user.tenant_id))
+    await acquire_workflow_config_lock(db, user.tenant_id, shared=False)
     template, version, stages, checklist, fields = await load_template_bundle(
         db, user.tenant_id, version_id, lock=True
     )
@@ -768,6 +774,7 @@ async def archive_workflow_template(
     user=Depends(require_capability("manage_workflows")),
 ):
     await set_tenant_context(db, str(user.tenant_id))
+    await acquire_workflow_config_lock(db, user.tenant_id, shared=False)
     template = await db.scalar(
         select(MatterWorkflowTemplate)
         .where(
@@ -847,7 +854,7 @@ async def preview_matter_workflow(
     user=Depends(require_capability("manage_matters")),
 ):
     await set_tenant_context(db, str(user.tenant_id))
-    matter = await _matter_or_404(db, user.tenant_id, matter_id)
+    matter = await _matter_or_404(db, user.tenant_id, matter_id, lock=True)
     request_payload = {
         "matter_id": str(matter_id),
         "template_version_id": str(template_version_id),
@@ -876,11 +883,13 @@ async def preview_matter_workflow(
             **existing.preview_json,
             "preview_sha256": existing.preview_sha256,
         }
+    await acquire_workflow_config_lock(db, user.tenant_id, shared=True)
     preview, preview_sha256, template_sha256, matter_sha256 = await build_preview(
         db,
         matter=matter,
         version_id=template_version_id,
         as_of=date.today(),
+        lock_dependencies=True,
     )
     run = MatterWorkflowRun(
         tenant_id=user.tenant_id,

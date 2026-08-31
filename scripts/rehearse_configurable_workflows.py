@@ -2285,6 +2285,562 @@ async def assert_concurrent_apply(
         await engine.dispose()
 
 
+async def assert_workflow_dependency_serialization(
+    owner_url: str,
+    runtime_url: str,
+    fixture: dict[str, Any],
+) -> dict[str, Any]:
+    """Prove apply sees one coherent config/data/assignee snapshot.
+
+    Every case uses two READ COMMITTED runtime-role sessions with production
+    ``autoflush=False``. We exercise both commit orders and verify the second
+    transaction really waits in PostgreSQL before the first is released.
+    """
+
+    from fastapi import HTTPException
+    from sqlalchemy import delete, func, select, text
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.database import set_tenant_context
+    from app.models.configurable_workflow import (
+        CustomFieldDefinition,
+        MatterCustomFieldValue,
+        MatterWorkflowRun,
+        MatterWorkflowRunEvent,
+        MatterWorkflowRunStep,
+        MatterWorkflowTemplate,
+    )
+    from app.models.task import Task
+    from app.models.user import User
+    from app.routers.configurable_workflows import _matter_or_404, _run_or_404
+    from app.services.configurable_workflows import (
+        acquire_workflow_config_lock,
+        append_run_event,
+        apply_run,
+        build_preview,
+        digest_payload,
+    )
+
+    tenant_id = fixture["tenants"][0]
+    matter_id = fixture["matters"][0]
+    actor_user_id = fixture["users"][0]
+    record = fixture["records"][0]
+    version_id = record["version"]
+    template_id = record["template"]
+    field_id = record["field"]
+    value_id = record["matter_value"]
+    engine = create_async_engine(runtime_url, pool_size=4, max_overflow=0)
+    sessions = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
+
+    def wait_for_backend_lock(pid: int, label: str) -> None:
+        monitor = connect(owner_url)
+        try:
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline:
+                with monitor.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT wait_event_type
+                          FROM pg_catalog.pg_stat_activity
+                         WHERE pid=%s
+                        """,
+                        (pid,),
+                    )
+                    row = cursor.fetchone()
+                monitor.commit()
+                if row is not None and row[0] == "Lock":
+                    return
+                time.sleep(0.05)
+        finally:
+            monitor.close()
+        raise AssertionError(f"{label} did not enter a PostgreSQL lock wait")
+
+    async def backend_pid(session) -> int:
+        return int(await session.scalar(text("SELECT pg_backend_pid()")))
+
+    async def create_planned_run(label: str) -> tuple[uuid.UUID, str, str]:
+        async with sessions() as session:
+            await set_tenant_context(session, str(tenant_id))
+            matter = await _matter_or_404(session, tenant_id, matter_id, lock=True)
+            await acquire_workflow_config_lock(session, tenant_id, shared=True)
+            preview, preview_sha, template_sha, matter_sha = await build_preview(
+                session,
+                matter=matter,
+                version_id=version_id,
+                as_of=date.today(),
+                lock_dependencies=True,
+            )
+            run = MatterWorkflowRun(
+                tenant_id=tenant_id,
+                matter_id=matter_id,
+                template_version_id=version_id,
+                idempotency_key=f"dependency-{label}-{uuid.uuid4()}",
+                request_sha256=digest_payload(
+                    {
+                        "matter_id": str(matter_id),
+                        "template_version_id": str(version_id),
+                    }
+                ),
+                template_sha256=template_sha,
+                matter_sha256=matter_sha,
+                preview_sha256=preview_sha,
+                preview_json=preview,
+                prior_stage=matter.stage,
+                planned_by_user_id=actor_user_id,
+            )
+            session.add(run)
+            await session.flush()
+            await append_run_event(
+                session,
+                run,
+                event_type="previewed",
+                actor_user_id=actor_user_id,
+                detail={"preview_sha256": preview_sha},
+            )
+            await session.commit()
+            return run.id, preview_sha, run.prior_stage
+
+    async def apply_attempt(
+        run_id: uuid.UUID,
+        preview_sha: str,
+        pid_ready: asyncio.Future[int],
+        applied_ready: asyncio.Event | None = None,
+        release: asyncio.Event | None = None,
+    ) -> int:
+        async with sessions() as session:
+            await set_tenant_context(session, str(tenant_id))
+            pid_ready.set_result(await backend_pid(session))
+            try:
+                run = await _run_or_404(
+                    session,
+                    tenant_id=tenant_id,
+                    matter_id=matter_id,
+                    run_id=run_id,
+                    lock=True,
+                )
+                matter = await _matter_or_404(session, tenant_id, matter_id, lock=True)
+                await apply_run(
+                    session,
+                    run=run,
+                    matter=matter,
+                    actor_user_id=actor_user_id,
+                    preview_sha256=preview_sha,
+                )
+                if applied_ready is not None:
+                    applied_ready.set()
+                if release is not None:
+                    await release.wait()
+                await session.commit()
+                return 200
+            except HTTPException as exc:
+                await session.rollback()
+                return exc.status_code
+
+    async def preview_attempt(
+        pid_ready: asyncio.Future[int],
+        preview_ready: asyncio.Event | None = None,
+        release: asyncio.Event | None = None,
+    ) -> dict[str, Any]:
+        async with sessions() as session:
+            await set_tenant_context(session, str(tenant_id))
+            pid_ready.set_result(await backend_pid(session))
+            matter = await _matter_or_404(session, tenant_id, matter_id, lock=True)
+            await acquire_workflow_config_lock(session, tenant_id, shared=True)
+            preview, _preview_sha, _template_sha, matter_sha = await build_preview(
+                session,
+                matter=matter,
+                version_id=version_id,
+                as_of=date.today(),
+                lock_dependencies=True,
+            )
+            if preview_ready is not None:
+                preview_ready.set()
+            if release is not None:
+                await release.wait()
+            await session.commit()
+            return {
+                "matter_sha256": matter_sha,
+                "can_apply": preview["can_apply"],
+            }
+
+    async def assert_applied_once(run_id: uuid.UUID, preview_sha: str) -> None:
+        # An applied replay must not re-run stale checks or duplicate evidence.
+        replay_pid = asyncio.get_running_loop().create_future()
+        if await apply_attempt(run_id, preview_sha, replay_pid) != 200:
+            raise AssertionError("applied run did not replay idempotently")
+        async with sessions() as session:
+            await set_tenant_context(session, str(tenant_id))
+            run = await _run_or_404(
+                session,
+                tenant_id=tenant_id,
+                matter_id=matter_id,
+                run_id=run_id,
+            )
+            task_count = await session.scalar(
+                select(func.count(Task.id)).where(
+                    Task.tenant_id == tenant_id,
+                    Task.external_ref.like(f"workflow:{run_id}:%"),
+                )
+            )
+            approved_events = await session.scalar(
+                select(func.count(MatterWorkflowRunEvent.id)).where(
+                    MatterWorkflowRunEvent.tenant_id == tenant_id,
+                    MatterWorkflowRunEvent.run_id == run_id,
+                    MatterWorkflowRunEvent.event_type == "approved",
+                )
+            )
+            applied_events = await session.scalar(
+                select(func.count(MatterWorkflowRunEvent.id)).where(
+                    MatterWorkflowRunEvent.tenant_id == tenant_id,
+                    MatterWorkflowRunEvent.run_id == run_id,
+                    MatterWorkflowRunEvent.event_type == "applied",
+                )
+            )
+            task_steps = await session.scalar(
+                select(func.count(MatterWorkflowRunStep.id)).where(
+                    MatterWorkflowRunStep.tenant_id == tenant_id,
+                    MatterWorkflowRunStep.run_id == run_id,
+                    MatterWorkflowRunStep.step_type == "task_create",
+                )
+            )
+        evidence = (
+            run.status,
+            task_count,
+            approved_events,
+            applied_events,
+            task_steps,
+        )
+        if evidence != ("applied", 2, 1, 1, 2):
+            raise AssertionError(f"apply/replay was not exactly once: {evidence}")
+
+    async def assert_stale_zero_effects(
+        run_id: uuid.UUID, prior_stage: str, status: int
+    ) -> None:
+        async with sessions() as session:
+            await set_tenant_context(session, str(tenant_id))
+            run = await _run_or_404(
+                session,
+                tenant_id=tenant_id,
+                matter_id=matter_id,
+                run_id=run_id,
+            )
+            matter = await _matter_or_404(session, tenant_id, matter_id)
+            task_count = await session.scalar(
+                select(func.count(Task.id)).where(
+                    Task.tenant_id == tenant_id,
+                    Task.external_ref.like(f"workflow:{run_id}:%"),
+                )
+            )
+            apply_events = await session.scalar(
+                select(func.count(MatterWorkflowRunEvent.id)).where(
+                    MatterWorkflowRunEvent.tenant_id == tenant_id,
+                    MatterWorkflowRunEvent.run_id == run_id,
+                    MatterWorkflowRunEvent.event_type.in_(("approved", "applied")),
+                )
+            )
+            steps = await session.scalar(
+                select(func.count(MatterWorkflowRunStep.id)).where(
+                    MatterWorkflowRunStep.tenant_id == tenant_id,
+                    MatterWorkflowRunStep.run_id == run_id,
+                )
+            )
+        evidence = (
+            status,
+            run.status,
+            matter.stage,
+            task_count,
+            apply_events,
+            steps,
+        )
+        if evidence != (409, "planned", prior_stage, 0, 0, 0):
+            raise AssertionError(f"stale apply left partial effects: {evidence}")
+
+    async def mutate_archive(session, active: bool) -> None:
+        await acquire_workflow_config_lock(session, tenant_id, shared=False)
+        template = await session.scalar(
+            select(MatterWorkflowTemplate)
+            .where(
+                MatterWorkflowTemplate.tenant_id == tenant_id,
+                MatterWorkflowTemplate.id == template_id,
+            )
+            .with_for_update(of=MatterWorkflowTemplate)
+        )
+        template.active = active
+
+    async def mutate_field_active(session, active: bool) -> None:
+        await acquire_workflow_config_lock(session, tenant_id, shared=False)
+        field = await session.scalar(
+            select(CustomFieldDefinition)
+            .where(
+                CustomFieldDefinition.tenant_id == tenant_id,
+                CustomFieldDefinition.id == field_id,
+            )
+            .with_for_update(of=CustomFieldDefinition)
+        )
+        field.active = active
+        field.schema_version += 1
+
+    phantom_id = uuid.uuid4()
+
+    async def insert_phantom(session) -> None:
+        await acquire_workflow_config_lock(session, tenant_id, shared=False)
+        session.add(
+            CustomFieldDefinition(
+                id=phantom_id,
+                tenant_id=tenant_id,
+                entity_type="matter",
+                field_key=f"race_phantom_{phantom_id.hex}",
+                label="Race phantom",
+                field_type="text",
+                created_by_user_id=actor_user_id,
+            )
+        )
+        await session.flush()
+
+    async def delete_phantom(session) -> None:
+        await acquire_workflow_config_lock(session, tenant_id, shared=False)
+        await session.execute(
+            delete(CustomFieldDefinition).where(
+                CustomFieldDefinition.tenant_id == tenant_id,
+                CustomFieldDefinition.id == phantom_id,
+            )
+        )
+
+    async def mutate_value(session, value: str, value_digest: str) -> None:
+        await _matter_or_404(session, tenant_id, matter_id, lock=True)
+        stored = await session.scalar(
+            select(MatterCustomFieldValue)
+            .where(
+                MatterCustomFieldValue.tenant_id == tenant_id,
+                MatterCustomFieldValue.id == value_id,
+            )
+            .with_for_update(of=MatterCustomFieldValue)
+        )
+        stored.value_json = value
+        stored.value_hmac = value_digest
+        stored.updated_by_user_id = actor_user_id
+
+    async def mutate_user_active(session, active: bool) -> None:
+        user = await session.scalar(
+            select(User)
+            .where(User.tenant_id == tenant_id, User.id == actor_user_id)
+            .with_for_update(of=User)
+        )
+        user.is_active = active
+
+    async def run_writer(
+        mutation,
+        pid_ready: asyncio.Future[int],
+        mutated_ready: asyncio.Event | None = None,
+        release: asyncio.Event | None = None,
+    ) -> None:
+        async with sessions() as session:
+            await set_tenant_context(session, str(tenant_id))
+            pid_ready.set_result(await backend_pid(session))
+            await mutation(session)
+            if mutated_ready is not None:
+                mutated_ready.set()
+            if release is not None:
+                await release.wait()
+            await session.commit()
+
+    async def reset(mutation) -> None:
+        async with sessions() as session:
+            await set_tenant_context(session, str(tenant_id))
+            await mutation(session)
+            await session.commit()
+
+    scenarios = [
+        (
+            "archive",
+            lambda session: mutate_archive(session, False),
+            lambda session: mutate_archive(session, True),
+        ),
+        (
+            "field_deactivation",
+            lambda session: mutate_field_active(session, False),
+            lambda session: mutate_field_active(session, True),
+        ),
+        ("active_field_phantom", insert_phantom, delete_phantom),
+        (
+            "matter_value",
+            lambda session: mutate_value(session, "P2", HASH_B),
+            lambda session: mutate_value(session, "P1", HASH_A),
+        ),
+        (
+            "assignee_deactivation",
+            lambda session: mutate_user_active(session, False),
+            lambda session: mutate_user_active(session, True),
+        ),
+    ]
+    evidence: dict[str, Any] = {}
+    try:
+        for label, mutation, restore in scenarios:
+            # Apply owns its dependency locks first; the writer must wait, then
+            # apply commits exactly once and replay remains idempotent.
+            run_id, preview_sha, _prior_stage = await create_planned_run(
+                f"{label}-apply-first"
+            )
+            apply_pid = asyncio.get_running_loop().create_future()
+            applied_ready = asyncio.Event()
+            release_apply = asyncio.Event()
+            apply_task = asyncio.create_task(
+                apply_attempt(
+                    run_id,
+                    preview_sha,
+                    apply_pid,
+                    applied_ready,
+                    release_apply,
+                )
+            )
+            await applied_ready.wait()
+            writer_pid = asyncio.get_running_loop().create_future()
+            writer_task = asyncio.create_task(run_writer(mutation, writer_pid))
+            try:
+                await asyncio.to_thread(
+                    wait_for_backend_lock,
+                    await writer_pid,
+                    f"{label} apply-first writer",
+                )
+            finally:
+                release_apply.set()
+            apply_status, _ = await asyncio.gather(apply_task, writer_task)
+            if apply_status != 200:
+                raise AssertionError(f"{label} apply-first returned {apply_status}")
+            await assert_applied_once(run_id, preview_sha)
+            await reset(restore)
+
+            # The writer owns its lock first; apply must wait and then reject
+            # the stale preview without any stage/task/run-evidence effects.
+            run_id, preview_sha, prior_stage = await create_planned_run(
+                f"{label}-writer-first"
+            )
+            writer_pid = asyncio.get_running_loop().create_future()
+            mutated_ready = asyncio.Event()
+            release_writer = asyncio.Event()
+            writer_task = asyncio.create_task(
+                run_writer(
+                    mutation,
+                    writer_pid,
+                    mutated_ready,
+                    release_writer,
+                )
+            )
+            await mutated_ready.wait()
+            apply_pid = asyncio.get_running_loop().create_future()
+            apply_task = asyncio.create_task(
+                apply_attempt(run_id, preview_sha, apply_pid)
+            )
+            try:
+                await asyncio.to_thread(
+                    wait_for_backend_lock,
+                    await apply_pid,
+                    f"{label} writer-first apply",
+                )
+            finally:
+                release_writer.set()
+            _, apply_status = await asyncio.gather(writer_task, apply_task)
+            await assert_stale_zero_effects(run_id, prior_stage, apply_status)
+            await reset(restore)
+            evidence[label] = {
+                "apply_first_writer_blocked": True,
+                "apply_first_exactly_once_and_replayed": True,
+                "writer_first_apply_blocked": True,
+                "writer_first_stale_409_zero_effects": True,
+            }
+
+        preview_scenarios = [
+            (
+                "matter_value",
+                lambda session: mutate_value(session, "P2", HASH_B),
+                lambda session: mutate_value(session, "P1", HASH_A),
+                True,
+            ),
+            (
+                "field_deactivation",
+                lambda session: mutate_field_active(session, False),
+                lambda session: mutate_field_active(session, True),
+                False,
+            ),
+        ]
+        preview_evidence: dict[str, Any] = {}
+        for label, mutation, restore, writer_first_can_apply in preview_scenarios:
+            baseline_pid = asyncio.get_running_loop().create_future()
+            baseline = await preview_attempt(baseline_pid)
+
+            # Preview owns matter/config/dependency locks; the writer waits and
+            # the returned preview remains the pre-mutation snapshot.
+            preview_pid = asyncio.get_running_loop().create_future()
+            preview_ready = asyncio.Event()
+            release_preview = asyncio.Event()
+            preview_task = asyncio.create_task(
+                preview_attempt(preview_pid, preview_ready, release_preview)
+            )
+            await preview_ready.wait()
+            writer_pid = asyncio.get_running_loop().create_future()
+            writer_task = asyncio.create_task(run_writer(mutation, writer_pid))
+            try:
+                await asyncio.to_thread(
+                    wait_for_backend_lock,
+                    await writer_pid,
+                    f"{label} preview-first writer",
+                )
+            finally:
+                release_preview.set()
+            preview_result, _ = await asyncio.gather(preview_task, writer_task)
+            if preview_result != baseline:
+                raise AssertionError(
+                    f"{label} preview crossed a blocked writer: "
+                    f"baseline={baseline}, result={preview_result}"
+                )
+            await reset(restore)
+
+            # The writer owns matter/config first; preview waits and then must
+            # include the committed value or active-field membership change.
+            writer_pid = asyncio.get_running_loop().create_future()
+            mutated_ready = asyncio.Event()
+            release_writer = asyncio.Event()
+            writer_task = asyncio.create_task(
+                run_writer(
+                    mutation,
+                    writer_pid,
+                    mutated_ready,
+                    release_writer,
+                )
+            )
+            await mutated_ready.wait()
+            preview_pid = asyncio.get_running_loop().create_future()
+            preview_task = asyncio.create_task(preview_attempt(preview_pid))
+            try:
+                await asyncio.to_thread(
+                    wait_for_backend_lock,
+                    await preview_pid,
+                    f"{label} writer-first preview",
+                )
+            finally:
+                release_writer.set()
+            _, preview_result = await asyncio.gather(writer_task, preview_task)
+            if (
+                preview_result["matter_sha256"] == baseline["matter_sha256"]
+                or preview_result["can_apply"] is not writer_first_can_apply
+            ):
+                raise AssertionError(
+                    f"{label} writer-first preview missed committed state: "
+                    f"baseline={baseline}, result={preview_result}"
+                )
+            await reset(restore)
+            preview_evidence[label] = {
+                "preview_first_writer_blocked": True,
+                "preview_first_snapshot_coherent": True,
+                "writer_first_preview_blocked": True,
+                "writer_first_snapshot_includes_mutation": True,
+            }
+        evidence["preview_snapshot_races"] = preview_evidence
+        return evidence
+    finally:
+        await engine.dispose()
+
+
 def main() -> int:
     owner_url = os.environ.get("MIGRATOR_DATABASE_URL") or os.environ.get(
         "DATABASE_URL"
@@ -2325,6 +2881,9 @@ def main() -> int:
         )
         concurrent = assert_concurrent_idempotency(runtime_url, fixture)
         concurrent_apply = asyncio.run(assert_concurrent_apply(runtime_url, fixture))
+        dependency_serialization = asyncio.run(
+            assert_workflow_dependency_serialization(owner_url, runtime_url, fixture)
+        )
 
     print(
         json.dumps(
@@ -2342,6 +2901,7 @@ def main() -> int:
                 "approval_child_serialization": approval_serialization,
                 "concurrent_claim_rowcounts": concurrent,
                 "concurrent_apply": concurrent_apply,
+                "workflow_dependency_serialization": dependency_serialization,
             },
             sort_keys=True,
         )

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy.dialects import postgresql
 
 from app.models.configurable_workflow import (
     CustomFieldDefinition,
@@ -38,6 +39,7 @@ class _SequenceDB:
         self.sequence = sequence
         self.rows = rows or []
         self.execute_count = 0
+        self.executed_queries = []
         self.added = []
         self.flush_count = 0
 
@@ -45,6 +47,7 @@ class _SequenceDB:
         return self.sequence
 
     async def execute(self, query, params=None):
+        self.executed_queries.append((query, params))
         rows = (
             self.rows[self.execute_count]
             if self.rows and isinstance(self.rows[0], list)
@@ -58,6 +61,83 @@ class _SequenceDB:
 
     async def flush(self):
         self.flush_count += 1
+
+
+@pytest.mark.asyncio
+async def test_workflow_config_lock_uses_dedicated_shared_and_exclusive_namespace():
+    tenant_id = uuid.uuid4()
+    db = _SequenceDB()
+
+    await workflows.acquire_workflow_config_lock(db, tenant_id, shared=True)
+    await workflows.acquire_workflow_config_lock(db, tenant_id, shared=False)
+
+    shared_query, exclusive_query = db.executed_queries
+    assert "pg_advisory_xact_lock_shared" in str(shared_query[0])
+    assert "pg_advisory_xact_lock(" in str(exclusive_query[0])
+    assert (
+        shared_query[1]
+        == exclusive_query[1]
+        == {
+            "namespace": workflows.WORKFLOW_CONFIG_LOCK_NAMESPACE,
+            "tenant_id": str(tenant_id),
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_template_bundle_locks_fields_by_id_but_returns_field_key_order():
+    tenant_id = uuid.uuid4()
+    version_id = uuid.uuid4()
+    version = SimpleNamespace(id=version_id)
+    template = SimpleNamespace(id=uuid.uuid4())
+    fields = [
+        SimpleNamespace(id=uuid.uuid4(), field_key="zoning"),
+        SimpleNamespace(id=uuid.uuid4(), field_key="court"),
+    ]
+
+    class Result:
+        def __init__(self, value):
+            self.value = value
+
+        def one_or_none(self):
+            return self.value
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            return self.value
+
+    class BundleDB:
+        def __init__(self):
+            self.results = [(version, template), [], [], fields]
+            self.queries = []
+
+        async def execute(self, query, params=None):
+            self.queries.append((query, params))
+            return Result(self.results.pop(0))
+
+    db = BundleDB()
+    (
+        _template,
+        _version,
+        _stages,
+        _checklist,
+        returned_fields,
+    ) = await workflows.load_template_bundle(
+        db,
+        tenant_id,
+        version_id,
+        share=True,
+    )
+
+    assert [field.field_key for field in returned_fields] == ["court", "zoning"]
+    field_lock_sql = str(db.queries[-1][0].compile(dialect=postgresql.dialect()))
+    assert "ORDER BY custom_field_definitions.id" in field_lock_sql
+    assert (
+        "FOR SHARE OF matter_workflow_field_requirements, custom_field_definitions"
+        in field_lock_sql
+    )
 
 
 def _run(**overrides):
@@ -181,6 +261,109 @@ async def test_apply_sets_transactional_target_state_before_evidence_flush(monke
 
 
 @pytest.mark.asyncio
+async def test_apply_locks_config_and_dependencies_before_revalidation(monkeypatch):
+    run = _run()
+    matter = SimpleNamespace(id=run.matter_id, tenant_id=run.tenant_id, stage="New")
+    order = []
+
+    async def record_config_lock(db, tenant_id, *, shared):
+        order.append(("config", tenant_id, shared))
+
+    async def current_preview(*args, **kwargs):
+        order.append(("preview", kwargs["lock_dependencies"]))
+        return (
+            {
+                "initial_stage": {"stage_key": "intake", "label": "Intake"},
+                "tasks": [],
+                "can_apply": True,
+            },
+            run.preview_sha256,
+            run.template_sha256,
+            run.matter_sha256,
+        )
+
+    async def noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(workflows, "acquire_workflow_config_lock", record_config_lock)
+    monkeypatch.setattr(workflows, "build_preview", current_preview)
+    monkeypatch.setattr(workflows, "append_run_event", noop)
+    monkeypatch.setattr(workflows, "append_run_step", noop)
+
+    await workflows.apply_run(
+        _SequenceDB(),
+        run=run,
+        matter=matter,
+        actor_user_id=uuid.uuid4(),
+        preview_sha256=run.preview_sha256,
+    )
+
+    assert order[:2] == [
+        ("config", run.tenant_id, True),
+        ("preview", True),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_apply_rejects_inactive_locked_assignee_before_side_effects(monkeypatch):
+    run = _run()
+    actor_id = uuid.uuid4()
+    matter = SimpleNamespace(id=run.matter_id, tenant_id=run.tenant_id, stage="New")
+    task = {
+        "item_key": "review",
+        "stage_key": "intake",
+        "title": "Review",
+        "description": None,
+        "task_type": "review",
+        "priority": "medium",
+        "due_date": "2026-08-30",
+        "assigned_to_user_id": "approval_actor",
+    }
+    appended = []
+
+    async def current_preview(*args, **kwargs):
+        return (
+            {
+                "initial_stage": {"stage_key": "intake", "label": "Intake"},
+                "tasks": [task],
+                "can_apply": True,
+            },
+            run.preview_sha256,
+            run.template_sha256,
+            run.matter_sha256,
+        )
+
+    async def no_active_users(*args, **kwargs):
+        return set()
+
+    async def record_append(*args, **kwargs):
+        appended.append(kwargs)
+
+    monkeypatch.setattr(workflows, "build_preview", current_preview)
+    monkeypatch.setattr(workflows, "_lock_active_same_tenant_users", no_active_users)
+    monkeypatch.setattr(workflows, "append_run_event", record_append)
+    monkeypatch.setattr(workflows, "append_run_step", record_append)
+    db = _SequenceDB()
+
+    with pytest.raises(HTTPException) as error:
+        await workflows.apply_run(
+            db,
+            run=run,
+            matter=matter,
+            actor_user_id=actor_id,
+            preview_sha256=run.preview_sha256,
+        )
+
+    assert error.value.status_code == 409
+    assert "no longer active" in error.value.detail
+    assert run.status == "planned"
+    assert run.approved_by_user_id is None
+    assert matter.stage == "New"
+    assert appended == []
+    assert db.added == []
+
+
+@pytest.mark.asyncio
 async def test_run_event_and_step_evidence_hashes_are_deterministic():
     run = _run()
     actor = uuid.uuid4()
@@ -270,15 +453,19 @@ async def test_sensitive_field_classification_cannot_be_downgraded():
         async def scalar(self, query):
             return field
 
+    db = FieldDB()
     with pytest.raises(HTTPException) as error:
         await update_field_definition(
             field.id,
             CustomFieldDefinitionUpdate(expected_schema_version=3, sensitive=False),
-            FieldDB(),
+            db,
             SimpleNamespace(tenant_id=field.tenant_id),
         )
     assert error.value.status_code == 409
     assert "cannot be removed" in error.value.detail
+    assert any(
+        "pg_advisory_xact_lock(" in str(query) for query, _params in db.executed_queries
+    )
 
 
 @pytest.mark.asyncio
@@ -495,3 +682,33 @@ def test_lock_helpers_scope_postgresql_row_locks_to_canonical_tables():
     assert "with_for_update(of=MatterWorkflowRun)" in router_source
     assert "with_for_update(of=MatterWorkflowTemplate)" in router_source
     assert "with_for_update(of=Task)" in service_source
+    assert service_source.count("read=True") >= 2
+    assert service_source.count("read=share") >= 4
+
+
+def test_all_workflow_config_writers_take_the_exclusive_tenant_lock():
+    router_source = (
+        Path(__file__)
+        .parents[1]
+        .joinpath("app/routers/configurable_workflows.py")
+        .read_text()
+    )
+    writer_names = (
+        "create_field_definition",
+        "update_field_definition",
+        "create_workflow_template",
+        "create_workflow_template_version",
+        "approve_workflow_template_version",
+        "archive_workflow_template",
+    )
+    for index, name in enumerate(writer_names):
+        start = router_source.index(f"async def {name}(")
+        following = [
+            router_source.find("\nasync def ", start + 1),
+            router_source.find("\n@router.", start + 1),
+        ]
+        ends = [position for position in following if position != -1]
+        end = min(ends) if ends else len(router_source)
+        body = router_source[start:end]
+        assert "acquire_workflow_config_lock(" in body, (index, name)
+        assert "shared=False" in body, (index, name)

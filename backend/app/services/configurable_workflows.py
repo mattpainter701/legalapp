@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -31,6 +31,32 @@ from app.models.task import Task
 from app.models.user import User
 from app.schemas.configurable_workflow import WorkflowDefinitionInput
 from app.services.task_workflow import append_task_event, transition_task
+
+
+# Dedicated two-key advisory-lock namespace for tenant workflow configuration.
+# The second key is PostgreSQL's stable hash of the tenant UUID string. Keep
+# this distinct from preview idempotency locks and other application locks.
+WORKFLOW_CONFIG_LOCK_NAMESPACE = 0x57464C4B  # "WFLK"
+
+
+async def acquire_workflow_config_lock(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    shared: bool,
+) -> None:
+    query = (
+        text("SELECT pg_advisory_xact_lock_shared(:namespace, hashtext(:tenant_id))")
+        if shared
+        else text("SELECT pg_advisory_xact_lock(:namespace, hashtext(:tenant_id))")
+    )
+    await db.execute(
+        query,
+        {
+            "namespace": WORKFLOW_CONFIG_LOCK_NAMESPACE,
+            "tenant_id": str(tenant_id),
+        },
+    )
 
 
 def canonical_json(payload: Any) -> str:
@@ -86,6 +112,7 @@ async def load_template_bundle(
     version_id: uuid.UUID,
     *,
     lock: bool = False,
+    share: bool = False,
 ) -> tuple[
     MatterWorkflowTemplate,
     MatterWorkflowTemplateVersion,
@@ -105,63 +132,66 @@ async def load_template_bundle(
             MatterWorkflowTemplate.tenant_id == tenant_id,
         )
     )
-    if lock:
+    if lock and share:
+        raise ValueError("Template bundle cannot be locked in two modes")
+    if lock or share:
         query = query.with_for_update(
-            of=(MatterWorkflowTemplateVersion, MatterWorkflowTemplate)
+            of=(MatterWorkflowTemplateVersion, MatterWorkflowTemplate),
+            read=share,
         )
     row = (await db.execute(query)).one_or_none()
     if row is None:
         raise HTTPException(status_code=404, detail="Workflow template not found")
     version, template = row
-    stages = (
-        (
-            await db.execute(
-                select(MatterWorkflowStageDefinition)
-                .where(
-                    MatterWorkflowStageDefinition.tenant_id == tenant_id,
-                    MatterWorkflowStageDefinition.template_version_id == version.id,
-                )
-                .order_by(MatterWorkflowStageDefinition.position)
-            )
+    stage_query = (
+        select(MatterWorkflowStageDefinition)
+        .where(
+            MatterWorkflowStageDefinition.tenant_id == tenant_id,
+            MatterWorkflowStageDefinition.template_version_id == version.id,
         )
-        .scalars()
-        .all()
+        .order_by(MatterWorkflowStageDefinition.position)
     )
-    checklist = (
-        (
-            await db.execute(
-                select(MatterWorkflowChecklistDefinition)
-                .where(
-                    MatterWorkflowChecklistDefinition.tenant_id == tenant_id,
-                    MatterWorkflowChecklistDefinition.template_version_id == version.id,
-                )
-                .order_by(MatterWorkflowChecklistDefinition.position)
-            )
+    checklist_query = (
+        select(MatterWorkflowChecklistDefinition)
+        .where(
+            MatterWorkflowChecklistDefinition.tenant_id == tenant_id,
+            MatterWorkflowChecklistDefinition.template_version_id == version.id,
         )
-        .scalars()
-        .all()
+        .order_by(MatterWorkflowChecklistDefinition.position)
     )
-    fields = (
-        (
-            await db.execute(
-                select(CustomFieldDefinition)
-                .join(
-                    MatterWorkflowFieldRequirement,
-                    MatterWorkflowFieldRequirement.field_definition_id
-                    == CustomFieldDefinition.id,
-                )
-                .where(
-                    MatterWorkflowFieldRequirement.tenant_id == tenant_id,
-                    MatterWorkflowFieldRequirement.template_version_id == version.id,
-                    CustomFieldDefinition.tenant_id == tenant_id,
-                )
-                .order_by(CustomFieldDefinition.field_key)
-            )
+    field_query = (
+        select(CustomFieldDefinition)
+        .join(
+            MatterWorkflowFieldRequirement,
+            MatterWorkflowFieldRequirement.field_definition_id
+            == CustomFieldDefinition.id,
         )
-        .scalars()
-        .all()
+        .where(
+            MatterWorkflowFieldRequirement.tenant_id == tenant_id,
+            MatterWorkflowFieldRequirement.template_version_id == version.id,
+            CustomFieldDefinition.tenant_id == tenant_id,
+        )
+        .order_by(CustomFieldDefinition.id)
     )
-    return template, version, list(stages), list(checklist), list(fields)
+    if lock or share:
+        stage_query = stage_query.with_for_update(
+            of=MatterWorkflowStageDefinition, read=share
+        )
+        checklist_query = checklist_query.with_for_update(
+            of=MatterWorkflowChecklistDefinition, read=share
+        )
+        field_query = field_query.with_for_update(
+            of=(MatterWorkflowFieldRequirement, CustomFieldDefinition),
+            read=share,
+        )
+    stages = (await db.execute(stage_query)).scalars().all()
+    checklist = (await db.execute(checklist_query)).scalars().all()
+    locked_fields = (await db.execute(field_query)).scalars().all()
+    # PostgreSQL acquires field rows in UUID order above. Restore the existing
+    # human-facing field-key order after every required row is locked so API
+    # and preview arrays remain stable and readable.
+    fields = sorted(locked_fields, key=lambda field: field.field_key)
+    return template, version, list(stages), list(checklist), fields
 
 
 def stored_definition_payload(
@@ -195,7 +225,22 @@ def stored_definition_payload(
 async def matter_snapshot(
     db: AsyncSession,
     matter: Matter,
+    *,
+    lock_definitions: bool = False,
 ) -> tuple[dict[str, Any], dict[uuid.UUID, MatterCustomFieldValue]]:
+    if lock_definitions:
+        # Lock every current matter-field definition, including inactive rows,
+        # in deterministic order. The tenant advisory lock prevents route-level
+        # inserts/reactivations from appearing as active-field phantoms.
+        await db.execute(
+            select(CustomFieldDefinition.id)
+            .where(
+                CustomFieldDefinition.tenant_id == matter.tenant_id,
+                CustomFieldDefinition.entity_type == "matter",
+            )
+            .order_by(CustomFieldDefinition.id)
+            .with_for_update(of=CustomFieldDefinition, read=True)
+        )
     rows = (
         await db.execute(
             select(CustomFieldDefinition, MatterCustomFieldValue)
@@ -274,9 +319,13 @@ async def build_preview(
     matter: Matter,
     version_id: uuid.UUID,
     as_of: date,
+    lock_dependencies: bool = False,
 ) -> tuple[dict[str, Any], str, str, str]:
     template, version, stages, checklist, required_fields = await load_template_bundle(
-        db, matter.tenant_id, version_id
+        db,
+        matter.tenant_id,
+        version_id,
+        share=lock_dependencies,
     )
     if not template.active or version.status != "approved":
         raise HTTPException(
@@ -297,7 +346,11 @@ async def build_preview(
         raise HTTPException(
             status_code=409, detail="Workflow template has no valid initial stage"
         )
-    matter_evidence, values = await matter_snapshot(db, matter)
+    matter_evidence, values = await matter_snapshot(
+        db,
+        matter,
+        lock_definitions=lock_dependencies,
+    )
     missing = [
         {
             "field_definition_id": str(field.id),
@@ -432,17 +485,31 @@ async def append_run_step(
     return step
 
 
-async def _active_same_tenant_user(
-    db: AsyncSession, tenant_id: uuid.UUID, user_id: uuid.UUID
-) -> bool:
-    found = await db.scalar(
-        select(User.id).where(
-            User.id == user_id,
-            User.tenant_id == tenant_id,
-            User.is_active.is_(True),
+async def _lock_active_same_tenant_users(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    user_ids: set[uuid.UUID],
+) -> set[uuid.UUID]:
+    if not user_ids:
+        return set()
+    ordered_ids = sorted(user_ids, key=str)
+    found = (
+        (
+            await db.execute(
+                select(User.id)
+                .where(
+                    User.id.in_(ordered_ids),
+                    User.tenant_id == tenant_id,
+                    User.is_active.is_(True),
+                )
+                .order_by(User.id)
+                .with_for_update(of=User, read=True)
+            )
         )
+        .scalars()
+        .all()
     )
-    return found is not None
+    return set(found)
 
 
 async def apply_run(
@@ -465,6 +532,7 @@ async def apply_run(
         raise HTTPException(
             status_code=409, detail="Preview evidence does not match this run"
         )
+    await acquire_workflow_config_lock(db, run.tenant_id, shared=True)
     (
         current_preview,
         current_preview_sha,
@@ -475,6 +543,7 @@ async def apply_run(
         matter=matter,
         version_id=run.template_version_id,
         as_of=date.fromisoformat(run.preview_json["as_of"]),
+        lock_dependencies=True,
     )
     if (
         template_sha != run.template_sha256
@@ -490,6 +559,26 @@ async def apply_run(
             status_code=409,
             detail="Preview has unresolved required fields or assignees",
         )
+
+    resolved_assignees: list[tuple[dict[str, Any], uuid.UUID | None]] = []
+    user_ids: set[uuid.UUID] = set()
+    for item in current_preview["tasks"]:
+        assigned_to_user_id: uuid.UUID | None = None
+        preview_assignee = item["assigned_to_user_id"]
+        if preview_assignee == "approval_actor":
+            assigned_to_user_id = actor_user_id
+        elif preview_assignee:
+            assigned_to_user_id = uuid.UUID(preview_assignee)
+        resolved_assignees.append((item, assigned_to_user_id))
+        if assigned_to_user_id:
+            user_ids.add(assigned_to_user_id)
+    active_user_ids = await _lock_active_same_tenant_users(db, run.tenant_id, user_ids)
+    for item, assigned_to_user_id in resolved_assignees:
+        if assigned_to_user_id and assigned_to_user_id not in active_user_ids:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Assignee for {item['item_key']} is no longer active in this firm",
+            )
 
     run.approved_by_user_id = actor_user_id
     run.approved_at = datetime.now(timezone.utc)
@@ -516,20 +605,7 @@ async def apply_run(
         evidence={"before": run.prior_stage, "after": initial_stage["label"]},
     )
 
-    for item in current_preview["tasks"]:
-        assigned_to_user_id: uuid.UUID | None = None
-        preview_assignee = item["assigned_to_user_id"]
-        if preview_assignee == "approval_actor":
-            assigned_to_user_id = actor_user_id
-        elif preview_assignee:
-            assigned_to_user_id = uuid.UUID(preview_assignee)
-        if assigned_to_user_id and not await _active_same_tenant_user(
-            db, run.tenant_id, assigned_to_user_id
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail=f"Assignee for {item['item_key']} is no longer active in this firm",
-            )
+    for item, assigned_to_user_id in resolved_assignees:
         task = Task(
             tenant_id=run.tenant_id,
             title=item["title"],
