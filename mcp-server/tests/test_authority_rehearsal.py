@@ -15,7 +15,7 @@ import hashlib
 import hmac
 import json
 import time
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 from pathlib import Path
 from datetime import date, datetime, timezone
 
@@ -4343,6 +4343,197 @@ def test_process_once_rehearsal_both_corpora(monkeypatch):
             assert attempts >= 3
             assert health_state in {"healthy", "unavailable", "threshold_exceeded"}
             assert sample_age is not None
+
+
+def test_citator_evidence_constraint_force_rls_owner_upgrade():
+    """Legacy alert evidence upgrades safely for a FORCE-RLS table owner."""
+    db_url = os.getenv("AUTHORITY_REHEARSAL_DATABASE_URL")
+    if not db_url:
+        pytest.skip(
+            "set AUTHORITY_REHEARSAL_DATABASE_URL for the disposable DB rehearsal"
+        )
+    role = "citator_upgrade_" + uuid.uuid4().hex[:12]
+    password = "Upgrade" + uuid.uuid4().hex
+    schema = "citator_upgrade_" + uuid.uuid4().hex[:12]
+    parts = urlsplit(db_url)
+    host = parts.hostname or "127.0.0.1"
+    port = f":{parts.port}" if parts.port else ""
+    role_netloc = f"{quote(role, safe='')}:{quote(password, safe='')}@{host}{port}"
+    options = "options=-csearch_path%3D" + quote(schema + ",public", safe="")
+    role_query = "&".join(value for value in (parts.query, options) if value)
+    role_url = urlunsplit(
+        (parts.scheme, role_netloc, parts.path, role_query, parts.fragment)
+    )
+    tenant_id = str(uuid.uuid4())
+    evidence_fact_id = str(uuid.uuid4())
+    version = "legacy-alert-evidence-" + uuid.uuid4().hex
+    role_created = False
+    try:
+        with connect(db_url) as admin:
+            admin.autocommit = True
+            with admin.cursor() as cur:
+                cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+                cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+                cur.execute(
+                    f"CREATE ROLE \"{role}\" LOGIN PASSWORD '{password}' "
+                    "NOSUPERUSER NOBYPASSRLS"
+                )
+                role_created = True
+                cur.execute(f'CREATE SCHEMA "{schema}" AUTHORIZATION "{role}"')
+                cur.execute(f'GRANT USAGE ON SCHEMA public TO "{role}"')
+                cur.execute(
+                    "SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname=%s",
+                    [role],
+                )
+                assert cur.fetchone() == (False, False)
+
+        # Create the full production schema as the same least-privilege owner
+        # that will later run the additive migration.
+        init_schema(role_url)
+        with connect(role_url) as owner:
+            with owner.cursor() as cur:
+                cur.execute(
+                    "ALTER TABLE citator_alert_events "
+                    "DROP CONSTRAINT citator_alert_events_evidence_check"
+                )
+                cur.execute(
+                    "ALTER TABLE citator_alert_events "
+                    "ALTER COLUMN evidence_fact_id DROP NOT NULL, "
+                    "ALTER COLUMN evidence_type DROP NOT NULL"
+                )
+                cur.execute(
+                    """INSERT INTO authority_corpus_versions
+                         (version, status, manifest_hash, as_of)
+                       VALUES (%s, 'staged', %s, now())""",
+                    [version, "legacy-alert-manifest-" + uuid.uuid4().hex],
+                )
+                cur.execute("SET LOCAL app.current_tenant_id=%s", [tenant_id])
+                cur.execute(
+                    """INSERT INTO citator_watches
+                         (tenant_id, authority_key, created_by, consented,
+                          delivery_channels, state)
+                       VALUES (%s::uuid, 'case:legacy-alert', 'legacy-owner', TRUE,
+                         '["in_app"]'::jsonb, 'active')
+                       RETURNING id::text""",
+                    [tenant_id],
+                )
+                watch_id = cur.fetchone()[0]
+                cur.execute(
+                    """INSERT INTO citator_alert_events
+                         (watch_id, tenant_id, corpus_version, authority_key,
+                          event_fingerprint, event_kind, source_url, payload)
+                       VALUES (%s::uuid, %s::uuid, %s, 'case:legacy-alert',
+                         'legacy-before-evidence-columns', 'history',
+                         'https://example.test/legacy-alert', %s::jsonb)
+                       RETURNING id::text""",
+                    [
+                        watch_id,
+                        tenant_id,
+                        version,
+                        json.dumps(
+                            {
+                                "evidence_fact_id": evidence_fact_id,
+                                "evidence_type": "history",
+                            }
+                        ),
+                    ],
+                )
+                legacy_event_id = cur.fetchone()[0]
+            owner.commit()
+
+        # FORCE RLS makes the owner's no-GUC SELECT see no rows—the exact
+        # deployment shape that made a pre-query unsafe as validation proof.
+        with connect(role_url) as owner:
+            with owner.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM citator_alert_events")
+                assert cur.fetchone()[0] == 0
+
+        # The real initializer must succeed without a tenant GUC. Constraint
+        # validation sees the physical legacy row, catches only its CHECK
+        # violation, and leaves NOT VALID enforcement for future writes.
+        init_schema(role_url)
+        with connect(role_url) as owner:
+            with owner.cursor() as cur:
+                cur.execute(
+                    """SELECT convalidated FROM pg_constraint
+                        WHERE conrelid='citator_alert_events'::regclass
+                          AND conname='citator_alert_events_evidence_check'"""
+                )
+                assert cur.fetchone() == (False,)
+                cur.execute("SET LOCAL app.current_tenant_id=%s", [tenant_id])
+                cur.execute(
+                    """SELECT evidence_fact_id, evidence_type,
+                              COALESCE(evidence_fact_id::text,
+                                       payload->>'evidence_fact_id'),
+                              COALESCE(evidence_type, payload->>'evidence_type')
+                         FROM citator_alert_events WHERE id=%s::uuid""",
+                    [legacy_event_id],
+                )
+                assert cur.fetchone() == (
+                    None,
+                    None,
+                    evidence_fact_id,
+                    "history",
+                )
+                cur.execute("SAVEPOINT invalid_new_alert_evidence")
+                with pytest.raises(DatabaseError):
+                    cur.execute(
+                        """INSERT INTO citator_alert_events
+                             (watch_id, tenant_id, corpus_version, authority_key,
+                              event_fingerprint, event_kind, source_url, payload)
+                           VALUES (%s::uuid, %s::uuid, %s, 'case:legacy-alert',
+                             'invalid-new-evidence', 'history',
+                             'https://example.test/invalid-new', '{}'::jsonb)""",
+                        [watch_id, tenant_id, version],
+                    )
+                cur.execute("ROLLBACK TO SAVEPOINT invalid_new_alert_evidence")
+                cur.execute("RELEASE SAVEPOINT invalid_new_alert_evidence")
+                cur.execute(
+                    """INSERT INTO citator_alert_events
+                         (watch_id, tenant_id, corpus_version, authority_key,
+                          event_fingerprint, event_kind, evidence_fact_id,
+                          evidence_type, source_url, payload)
+                       VALUES (%s::uuid, %s::uuid, %s, 'case:legacy-alert',
+                         'valid-new-evidence', 'history', %s::uuid, 'history',
+                         'https://example.test/valid-new', '{}'::jsonb)
+                       RETURNING id::text""",
+                    [watch_id, tenant_id, version, str(uuid.uuid4())],
+                )
+                assert cur.fetchone()[0]
+            owner.commit()
+
+            # Payload fallback never grants delivery authority: the legacy
+            # event is re-resolved, finds no promoted public fact lineage, and
+            # is durably suppressed rather than recorded as sent.
+            assert record_citator_alert_delivery(
+                owner,
+                tenant_id=tenant_id,
+                alert_event_id=legacy_event_id,
+                channel="in_app",
+                delivery_key="legacy-fallback-revalidation",
+                attempted_outcome="sent",
+            )
+            with owner.cursor() as cur:
+                cur.execute("SET LOCAL app.current_tenant_id=%s", [tenant_id])
+                cur.execute(
+                    """SELECT outcome, detail FROM citator_alert_deliveries
+                        WHERE alert_event_id=%s::uuid
+                          AND delivery_key='legacy-fallback-revalidation'""",
+                    [legacy_event_id],
+                )
+                assert cur.fetchone() == (
+                    "revoked",
+                    "authority evidence lineage is no longer admitted",
+                )
+            owner.commit()
+    finally:
+        if role_created:
+            with connect(db_url) as admin:
+                admin.autocommit = True
+                with admin.cursor() as cur:
+                    cur.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+                    cur.execute(f'DROP OWNED BY "{role}"')
+                    cur.execute(f'DROP ROLE IF EXISTS "{role}"')
 
 
 def test_legal_only_upgrade_bootstrap_rehearsal():

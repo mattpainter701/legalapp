@@ -94,6 +94,16 @@ opinion/source identities. If either endpoint is no longer reviewed and
 admitted, the attempt is recorded as `revoked`, not `sent`. Callers cannot
 supply an alert URL or free-form payload.
 
+The additive alert-evidence migration keeps its check constraint `NOT VALID`
+only when a pre-release row lacks the new identity columns; PostgreSQL still
+enforces the constraint for every new or updated row. Delivery reads the
+immutable legacy payload identity only as a compatibility fallback and applies
+the same current-lineage revalidation, so an absent or unresolved legacy fact
+is suppressed as `revoked`. Initialization performs constraint validation as a
+DDL operation rather than trusting an RLS-filtered row count, allowing a
+least-privilege FORCE-RLS table owner to upgrade safely without making legacy
+rows public.
+
 This release contains no production notification delivery. A production sender
 must honor quiet-hour configuration, record every delivery attempt, recheck
 revocation immediately before the external send, and use a separately

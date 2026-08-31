@@ -1172,14 +1172,17 @@ DO $$ BEGIN
         CHECK (evidence_fact_id IS NOT NULL
                AND evidence_type IN ('history','citation')) NOT VALID;
     END IF;
-    IF NOT EXISTS (
-      SELECT 1 FROM citator_alert_events
-       WHERE evidence_fact_id IS NULL
-          OR evidence_type NOT IN ('history','citation')
-    ) THEN
+    -- VALIDATE performs an internal table scan rather than an RLS-filtered
+    -- SELECT.  A FORCE-RLS table owner without a tenant GUC must not mistake
+    -- invisible legacy rows for an empty table and abort startup.  Keep the
+    -- constraint NOT VALID only when real historical rows violate it; PostgreSQL
+    -- still enforces a NOT VALID check for every new or updated row.
+    BEGIN
       ALTER TABLE citator_alert_events
         VALIDATE CONSTRAINT citator_alert_events_evidence_check;
-    END IF;
+    EXCEPTION WHEN check_violation THEN
+      NULL;
+    END;
 END $$;
 CREATE TABLE IF NOT EXISTS citator_watch_audits (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
