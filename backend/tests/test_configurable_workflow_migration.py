@@ -23,7 +23,7 @@ TABLES = {
 def test_revision_and_down_revision_are_current_chain() -> None:
     source = MIGRATION.read_text()
     assert 'revision = "148_configurable_workflows"' in source
-    assert 'down_revision = "146_research_workspaces"' in source
+    assert 'down_revision = "147_studio_drafts"' in source
 
 
 def test_every_comp09_table_has_forced_fail_closed_rls() -> None:

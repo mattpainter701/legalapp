@@ -10,6 +10,17 @@
   checkboxes remain open until those acceptance gates are demonstrably met.
 
 ### Added
+- **Configurable matter data and review-first workflow execution:** tenant
+  administrators can define bounded typed matter/contact fields and immutable
+  approved matter-template versions containing ordered stages, checklists,
+  relative tasks, assignee roles, and required-field rules. Matter teams preview
+  the exact template, matter, field, and task snapshot before a separately
+  authorized apply creates work in one transaction. Stable idempotency keys,
+  stale-preview rejection, append-only database-protected run/step evidence,
+  tenant-safe composite foreign keys, FORCE RLS, and compensating cancellation
+  or archival make retries and rollback reviewable without destructive history
+  deletion. This slice does not add arbitrary triggers/actions, outbound email,
+  native DOCX/Smart Fill, generalized Studio automation, or a no-code builder.
 - **Template Studio Phase 1 shell:** the existing document-template library is
   now a first-class Template Studio with response-derived continue-setup,
   needs-attention, ready-to-generate, and recent queues; canonical persistent
