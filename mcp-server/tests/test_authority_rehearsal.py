@@ -2822,19 +2822,6 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
                 [version, citing_authority_key, authority_key],
             )
             two_sided_citation_fact_id = cur.fetchone()[0]
-            cur.execute(
-                """INSERT INTO authority_citation_facts
-                     (corpus_version, citing_authority_key, cited_authority_key,
-                      citing_opinion_id, depth, source_url, evidence_span,
-                      evidence_locator, source_hash)
-                   VALUES (%s, %s, %s, %s, 0,
-                     'https://example.test/mismatched-citing-edge',
-                     'Unrelated public opinion cannot launder a citing authority',
-                     '{"paragraph":5}', 'mismatched-citing-edge-sha')
-                   RETURNING id::text""",
-                [version, citing_authority_key, authority_key, opinion_id],
-            )
-            mismatched_citation_fact_id = cur.fetchone()[0]
             foreign_version = version + "-foreign"
             stage_corpus_version(
                 conn,
@@ -2910,13 +2897,52 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
             actor="rehearsal-admin",
             reason="citator rehearsal cutover",
         )
+        mismatched_version = version + "-mismatched-citation"
+        stage_corpus_version(
+            conn,
+            version=mismatched_version,
+            manifest_hash="citator-rehearsal-manifest",
+            as_of="2026-08-30T00:00:00Z",
+            actor="rehearsal-admin",
+            reason="citation authority/opinion identity negative",
+            embedding_model="mixedbread-ai/mxbai-embed-large-v1",
+            embedding_version="1",
+            embedding_dimension=1024,
+        )
         with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO authority_citation_facts
+                     (corpus_version, citing_authority_key, cited_authority_key,
+                      citing_opinion_id, depth, source_url, evidence_span,
+                      evidence_locator, source_hash)
+                   VALUES (%s, %s, %s, %s, 0,
+                     'https://example.test/mismatched-citing-edge',
+                     'Unrelated public opinion cannot launder a citing authority',
+                     '{"paragraph":5}', 'mismatched-citing-edge-sha')
+                   RETURNING id::text""",
+                [
+                    mismatched_version,
+                    citing_authority_key,
+                    authority_key,
+                    opinion_id,
+                ],
+            )
+            mismatched_citation_fact_id = cur.fetchone()[0]
             cur.execute(
                 """SELECT COUNT(*) FROM public_authority_citation_facts
                     WHERE id=%s::uuid""",
                 [mismatched_citation_fact_id],
             )
             assert cur.fetchone()[0] == 0
+        conn.commit()
+        mismatch_isolation, _ = run_and_record_control_audit(
+            conn,
+            version=mismatched_version,
+            audit_kind="isolation",
+            auditor="rehearsal-admin",
+        )
+        assert mismatch_isolation["passed"] is False
+        assert mismatch_isolation["isolated"] < mismatch_isolation["sample_size"]
         for unsafe_authority_key in (
             custom_authority_key,
             private_shaped_authority_key,
