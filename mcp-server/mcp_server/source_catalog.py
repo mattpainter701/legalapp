@@ -440,6 +440,17 @@ def admit_public_source(
                 "source catalog lineage does not match the reviewed admission"
             )
         cursor.execute(
+            """SELECT EXISTS (
+                 SELECT 1 FROM authority_corpus_versions
+                  WHERE manifest_hash=%s
+                    AND status IN ('staged', 'canary', 'promoted'))""",
+            [manifest_sha256],
+        )
+        if not cursor.fetchone()[0]:
+            raise CatalogValidationError(
+                "admission manifest is not a known staged, canary, or promoted release"
+            )
+        cursor.execute(
             """INSERT INTO citator_public_source_admissions
                  (source_key, catalog_schema_version, manifest_reference,
                   manifest_sha256, reviewed_by)

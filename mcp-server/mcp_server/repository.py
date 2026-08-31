@@ -557,9 +557,9 @@ class CourtListenerRepository:
                     JOIN public_authority_source_lineage pas
                       ON pas.source_key=acl.source_key
                      AND pas.corpus_version=authority_case_chunks.corpus_version
-                    WHERE chunk_id = %s
+                    WHERE authority_case_chunks.chunk_id = %s
                       AND acl.public_namespace = 'public-authority'
-                      AND corpus_version = (
+                      AND authority_case_chunks.corpus_version = (
                           SELECT version FROM authority_corpus_versions
                           WHERE status='promoted'
                           ORDER BY promoted_at DESC NULLS LAST LIMIT 1
@@ -712,7 +712,8 @@ class CourtListenerRepository:
                  AND pa.catalog_schema_version=s.metadata->>'catalog_schema_version'
                 JOIN public_authority_source_lineage pas
                   ON pas.source_key=r.source_key AND pas.corpus_version=r.corpus_version
-                WHERE r.authority_key=%s AND r.corpus_version=(
+                WHERE r.authority_key=%s AND r.currentness_state='current'
+                  AND r.corpus_version=(
                   SELECT version FROM authority_corpus_versions WHERE status='promoted'
                   ORDER BY promoted_at DESC NULLS LAST LIMIT 1
                 )
@@ -1452,7 +1453,7 @@ class CourtListenerRepository:
                 FROM authority_harvest_checkpoints cp
                 JOIN legal_sources s ON s.source_key = cp.source_key
                 JOIN public_authority_source_lineage pas ON pas.source_key=cp.source_key AND pas.corpus_version=cp.corpus_version
-                WHERE corpus_version = %s
+                WHERE cp.corpus_version = %s
                   AND s.enabled IS TRUE
                   AND s.rights_decision IN ('official', 'open', 'licensed')
                   AND s.reviewed_at IS NOT NULL AND s.reviewed_by IS NOT NULL

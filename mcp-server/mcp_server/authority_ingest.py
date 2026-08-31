@@ -339,7 +339,11 @@ def fetch_document(
 
 
 def ingest_document(
-    conn: Any, document: dict[str, Any], fetched: FetchedDocument
+    conn: Any,
+    document: dict[str, Any],
+    fetched: FetchedDocument,
+    *,
+    corpus_version: str | None = None,
 ) -> dict[str, Any]:
     extraction_status = extracted_text_status(fetched.text)
     if extraction_status != "passed_heuristic":
@@ -369,9 +373,11 @@ def ingest_document(
             metadata[field] = document[field]
     metadata = public_authority_metadata(document.get("metadata"), trusted=metadata)
     with conn.cursor() as cursor:
-        requested_version = os.environ.get(
-            "AUTHORITY_INGEST_CORPUS_VERSION", ""
-        ).strip()
+        requested_version = (
+            str(corpus_version).strip()
+            if corpus_version is not None
+            else os.environ.get("AUTHORITY_INGEST_CORPUS_VERSION", "").strip()
+        )
         corpus_version = require_public_candidate_version(
             conn,
             source_key=document["source_key"],
@@ -420,7 +426,7 @@ def ingest_document(
                 parser_version = EXCLUDED.parser_version,
                 text_content = EXCLUDED.text_content,
                 corpus_version = EXCLUDED.corpus_version,
-                metadata = legal_documents.metadata || EXCLUDED.metadata,
+                metadata = EXCLUDED.metadata,
                 updated_at = now()
             RETURNING id
             """,
@@ -743,19 +749,30 @@ def sync_documents(
     results = []
     with connect(db_url) as conn:
         seed_catalog(conn, catalog)
+        candidate_versions = {
+            source_key: require_public_candidate_version(
+                conn,
+                source_key=source_key,
+                error_message=(
+                    "source requires a reviewed public-authority admission before sync"
+                ),
+            )
+            for source_key in {str(document["source_key"]) for document in documents}
+        }
         with httpx.Client(
             timeout=45.0,
             follow_redirects=True,
             headers={"User-Agent": user_agent, "Accept": "text/html"},
         ) as client:
             for index, document in enumerate(documents):
+                corpus_version = candidate_versions[str(document["source_key"])]
                 partition_key = f"manifest:{document['source_key']}"
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """SELECT cursor_url, status FROM authority_harvest_checkpoints
-                                      WHERE source_key=%s AND partition_key=%s
-                                      AND corpus_version=(SELECT version FROM authority_corpus_versions WHERE status IN ('staged','canary') ORDER BY created_at DESC LIMIT 1)""",
-                        [document["source_key"], partition_key],
+                                       WHERE source_key=%s AND partition_key=%s
+                                       AND corpus_version=%s""",
+                        [document["source_key"], partition_key, corpus_version],
                     )
                     cursor.fetchone()
                 # A successful URL is only a checkpoint hint.  Re-fetch it so
@@ -763,16 +780,18 @@ def sync_documents(
                 # and cadence staleness; dedupe remains enforced at ingest.
                 try:
                     fetched = fetch_document(document, client=client)
-                    results.append(ingest_document(conn, document, fetched))
+                    results.append(
+                        ingest_document(
+                            conn,
+                            document,
+                            fetched,
+                            corpus_version=corpus_version,
+                        )
+                    )
                 except Exception as exc:
                     conn.rollback()
                     with conn.cursor() as cursor:
                         failure_text = str(exc)[:2000]
-                        cursor.execute(
-                            "SELECT version FROM authority_corpus_versions WHERE status IN ('staged','canary') ORDER BY created_at DESC LIMIT 1"
-                        )
-                        version_row = cursor.fetchone()
-                        corpus_version = version_row[0] if version_row else None
                         cursor.execute(
                             "SELECT retry_count FROM source_sync_states WHERE source_key=%s AND partition_key=%s",
                             [

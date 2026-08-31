@@ -41,9 +41,20 @@ def cadence_seconds(value: str | None) -> int | None:
     return CADENCE_SECONDS.get(key)
 
 
-def public_namespace(source_key: str) -> str:
-    if not source_key or source_key.startswith(("tenant:", "firm:", "private:")):
-        raise ValueError("private sources cannot enter the public authority namespace")
+def public_namespace(source_key: str, *, admitted: bool = False) -> str:
+    """Return the public label only after the canonical admission was verified.
+
+    Source-key shape is not authorization.  Database callers must first resolve
+    the source/version through ``public_authority_source_lineage`` and pass the
+    resulting admission decision explicitly; arbitrary non-reserved keys fail
+    closed just like tenant/private prefixes.
+    """
+    if (
+        not admitted
+        or not source_key
+        or source_key.startswith(("tenant:", "firm:", "private:"))
+    ):
+        raise ValueError("reviewed public-source admission is required")
     return "public-authority"
 
 

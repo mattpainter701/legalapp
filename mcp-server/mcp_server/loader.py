@@ -85,14 +85,33 @@ def _ensure_legacy_bootstrap_version(conn) -> str | None:
         if cur.fetchone():
             return None
         cur.execute(
-            """SELECT EXISTS (SELECT 1 FROM opinion_clusters)
-                    OR EXISTS (SELECT 1 FROM opinions)
-                    OR EXISTS (SELECT 1 FROM opinion_chunks)
-                    OR EXISTS (SELECT 1 FROM opinion_citations)
-                    OR EXISTS (SELECT 1 FROM legal_documents)"""
+            """SELECT (EXISTS (SELECT 1 FROM opinion_clusters)
+                        OR EXISTS (SELECT 1 FROM opinions)
+                        OR EXISTS (SELECT 1 FROM opinion_chunks)
+                        OR EXISTS (SELECT 1 FROM opinion_citations)) AS has_cases,
+                       EXISTS (SELECT 1 FROM legal_documents) AS has_legal"""
         )
-        if not cur.fetchone()[0]:
+        has_cases, has_legal = cur.fetchone()
+        if not has_cases and not has_legal:
             return None
+        if has_cases:
+            # Historical singleton caselaw had no source key.  Preserve it
+            # under a disabled, unreviewed placeholder so the new FK/backfill
+            # is safe, but never infer public rights from legacy table shape or
+            # a CourtListener URL.  An operator must later review and admit the
+            # exact bootstrap manifest before retrieval can expose these rows.
+            cur.execute(
+                """INSERT INTO legal_sources
+                     (source_key, publisher, source_type, canonical_url,
+                      enabled, storage_policy, rights_decision,
+                      public_namespace, claim_safe_wording, metadata)
+                   VALUES (%s, 'CourtListener legacy upgrade', 'case_law',
+                           'https://www.courtlistener.com/', FALSE,
+                           'metadata_only', 'pending_review', 'unknown', NULL,
+                           '{"implementation_status":"legacy-bootstrap-unreviewed"}'::jsonb)
+                   ON CONFLICT (source_key) DO NOTHING""",
+                [COURTLISTENER_PUBLIC_SOURCE_KEY],
+            )
         version = "legacy-bootstrap"
         cur.execute(
             """INSERT INTO authority_corpus_versions

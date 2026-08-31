@@ -419,7 +419,7 @@ def _upsert_section(
                 retrieved_at = EXCLUDED.retrieved_at, content_hash = EXCLUDED.content_hash,
                 raw_media_type = EXCLUDED.raw_media_type, parser_version = EXCLUDED.parser_version,
                 text_content = EXCLUDED.text_content,
-                metadata = legal_documents.metadata || EXCLUDED.metadata, updated_at = now()
+                metadata = EXCLUDED.metadata, updated_at = now()
             RETURNING id
             """,
             [

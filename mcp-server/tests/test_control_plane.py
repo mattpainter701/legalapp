@@ -31,9 +31,14 @@ def test_cadence_mapping_is_explicit_and_unknown_is_not_healthy():
 
 
 def test_public_namespace_rejects_private_sources():
-    assert public_namespace("uscourts:federal-rules") == "public-authority"
+    assert (
+        public_namespace("uscourts:federal-rules", admitted=True)
+        == "public-authority"
+    )
     with pytest.raises(ValueError):
-        public_namespace("tenant:firm-documents")
+        public_namespace("custom-private:unreviewed")
+    with pytest.raises(ValueError):
+        public_namespace("tenant:firm-documents", admitted=True)
 
 
 def test_source_identity_is_deduplicable_without_private_content():

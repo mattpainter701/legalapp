@@ -267,8 +267,8 @@ class PostgresSyncStore:
                 )
                 VALUES (
                     %s, %s, %s, %s, %s, %s, %s, 'binding_primary', 'aggregator',
-                    'api', 'normalized_text', 'api_key', 'membership_terms',
-                    'daily', 'json', 'opinions/opinion_chunks', true, 10,
+                    'api', 'metadata_only', 'api_key', 'review_required',
+                    'daily', 'json', 'opinions/opinion_chunks', false, 10,
                     %s, 'bounded', %s, %s, %s, %s, %s::jsonb
                 )
                 ON CONFLICT (source_key) DO UPDATE
@@ -277,13 +277,10 @@ class PostgresSyncStore:
                     authority_tier = EXCLUDED.authority_tier,
                     official_status = EXCLUDED.official_status,
                     ingestion_mode = EXCLUDED.ingestion_mode,
-                    storage_policy = EXCLUDED.storage_policy,
                     access_type = EXCLUDED.access_type,
-                    license_status = EXCLUDED.license_status,
                     sync_frequency = EXCLUDED.sync_frequency,
                     data_format = EXCLUDED.data_format,
                     corpus_table = EXCLUDED.corpus_table,
-                    enabled = EXCLUDED.enabled,
                     priority = EXCLUDED.priority,
                     coverage_start = EXCLUDED.coverage_start,
                     parser_version = EXCLUDED.parser_version,

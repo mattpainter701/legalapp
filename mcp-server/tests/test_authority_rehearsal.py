@@ -17,7 +17,7 @@ import json
 import time
 from urllib.parse import quote
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 from fastapi import HTTPException
@@ -53,6 +53,8 @@ from mcp_server.authority_ingest import FetchedDocument, ingest_document
 from mcp_server.authority_adapter_store import AdapterDocument, upsert_adapter_document
 from mcp_server.repository import CourtListenerRepository
 from mcp_server.server import ControlPlaneRequest, run_control_audit
+from mcp_server.source_catalog import admit_public_source
+from mcp_server.sync import PostgresSyncStore
 import mcp_server.server as authority_server
 from mcp_server.jetson_worker import process_once
 from mcp_server.worker_config import WorkerConfig
@@ -631,9 +633,14 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
             cur.execute(
                 """INSERT INTO legal_sources
                    (source_key, publisher, source_type, canonical_url, enabled,
-                    storage_policy, rights_decision, reviewed_at, reviewed_by)
+                    storage_policy, rights_decision, reviewed_at, reviewed_by,
+                    public_namespace, claim_safe_wording, metadata)
                    VALUES (%s, 'Fixture', 'case_law', 'https://example.test/private', TRUE,
-                           'normalized_text', 'official', now(), 'rehearsal-admin')""",
+                           'normalized_text', 'official', now(), 'rehearsal-admin',
+                           'public-authority', 'Spoofed public source claim',
+                           '{"catalog_schema_version":"rehearsal",
+                             "implementation_status":"fixture",
+                             "manifest_reference":"fixture-manifest"}')""",
                 [custom_private_source],
             )
         with pytest.raises(
@@ -875,6 +882,34 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 [source_key, f"manifest:{source_key}"],
             )
             assert cur.fetchone() == (version, "complete")
+            cur.execute(
+                """UPDATE legal_documents
+                      SET metadata=metadata ||
+                        '{"namespace":"custom-private:stale",
+                          "manifest_reference":"stale-private-manifest",
+                          "private_query":"must-not-survive-refresh"}'::jsonb
+                    WHERE source_key=%s
+                      AND external_id='production-ingest-document'
+                      AND corpus_version=%s""",
+                [source_key, version],
+            )
+        # An idempotent refresh replaces, rather than merges, old protected or
+        # private metadata.  Unchanged content therefore cannot retain a
+        # pre-boundary spoofed namespace/query payload.
+        refreshed = ingest_document(conn, ingest_input, fetched)
+        assert refreshed["changed"] is False
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT metadata->>'namespace',
+                          metadata->>'manifest_reference',
+                          metadata->>'private_query'
+                     FROM legal_documents
+                    WHERE source_key=%s
+                      AND external_id='production-ingest-document'
+                      AND corpus_version=%s""",
+                [source_key, version],
+            )
+            assert cur.fetchone() == ("public-authority", None, None)
         create_snapshot_chunks(conn, version)
         refresh_courtlistener_coverage_ledger(conn, source_release=version)
         with conn.cursor() as cur:
@@ -1043,10 +1078,11 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 """INSERT INTO legal_sources
                    (source_key, publisher, source_type, canonical_url, enabled,
                     storage_policy, rights_decision, reviewed_at, reviewed_by,
-                    metadata)
+                    public_namespace, claim_safe_wording, metadata)
                    VALUES (%s, 'Private fixture', 'case_law',
                            'https://example.test/custom-private', TRUE,
                            'normalized_text', 'official', now(), 'rehearsal-admin',
+                           'public-authority', 'Spoofed public source claim',
                            '{"catalog_schema_version":"rehearsal","implementation_status":"fixture","manifest_reference":"spoofed"}')""",
                 [custom_private_source],
             )
@@ -1156,10 +1192,11 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 """INSERT INTO legal_sources
                    (source_key, publisher, source_type, canonical_url, enabled,
                     storage_policy, rights_decision, reviewed_at, reviewed_by,
-                    metadata)
+                    public_namespace, claim_safe_wording, metadata)
                    VALUES (%s, 'Private telemetry', 'case_law',
                            'https://private.example.test/secret', TRUE,
                            'normalized_text', 'official', now(), 'private-operator',
+                           'public-authority', 'Spoofed public telemetry claim',
                            '{"catalog_schema_version":"private","implementation_status":"private","secret":"must-not-leak"}')""",
                 [private_telemetry_source],
             )
@@ -1280,6 +1317,37 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 )
                 assert result["audit"]["passed"] is False
 
+        def assert_public_surfaces_recovered():
+            """Prove every mutation is independent, not masked by prior failures."""
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT source_key FROM public_authority_source_lineage
+                        WHERE corpus_version=%s ORDER BY source_key""",
+                    [version],
+                )
+                assert set(row[0] for row in cur.fetchall()) == {
+                    source_key,
+                    "courtlistener:ohio-caselaw",
+                }
+            assert lineage_repo.search_legal_authorities("old authority")
+            assert lineage_repo.search_caselaw("old case")
+            for audit_kind in ("release", "completeness", "freshness", "isolation"):
+                result = run_control_audit(
+                    ControlPlaneRequest(
+                        version=version,
+                        reason=f"lineage recovery passes {audit_kind}",
+                        audit_kind=audit_kind,
+                    ),
+                    actor="rehearsal-admin",
+                )
+                assert result["audit"]["passed"] is True
+            coverage = lineage_repo.authority_coverage()
+            assert coverage["available"] is True
+            assert coverage["claim_state"] == "supported"
+            assert {source_key, "courtlistener:ohio-caselaw"}.issubset(
+                {row["source_key"] for row in coverage["sources"]}
+            )
+
         lineage_mutations = [
             ("enabled", "FALSE", "TRUE"),
             ("rights_decision", "'prohibited'", "'official'"),
@@ -1300,6 +1368,14 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                     [source_key],
                 )
             conn.commit()
+            if column == "enabled":
+                PostgresSyncStore(conn).ensure_source(date(2025, 1, 1))
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """SELECT enabled FROM legal_sources
+                            WHERE source_key='courtlistener:ohio-caselaw'"""
+                    )
+                    assert cur.fetchone() == (False,)
             assert_public_surfaces_suppressed()
             with conn.cursor() as cur:
                 cur.execute(
@@ -1307,6 +1383,7 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                     [source_key],
                 )
             conn.commit()
+            assert_public_surfaces_recovered()
         db_reject(
             "UPDATE citator_public_source_admissions SET namespace='private' WHERE source_key=%s",
             [source_key],
@@ -1328,6 +1405,7 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 [source_key],
             )
         conn.commit()
+        assert_public_surfaces_recovered()
         db_reject(
             "UPDATE citator_public_source_admissions SET reviewed_at=NULL WHERE source_key=%s",
             [source_key],
@@ -1349,6 +1427,7 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 [source_key],
             )
         conn.commit()
+        assert_public_surfaces_recovered()
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE citator_public_source_admissions SET manifest_reference='changed-manifest' WHERE source_key IN (%s, 'courtlistener:ohio-caselaw')",
@@ -1362,6 +1441,7 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 [source_key],
             )
         conn.commit()
+        assert_public_surfaces_recovered()
         with conn.cursor() as cur:
             cur.execute(
                 """UPDATE legal_sources
@@ -1381,6 +1461,7 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 [source_key],
             )
         conn.commit()
+        assert_public_surfaces_recovered()
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE legal_sources SET metadata=metadata || '{\"catalog_schema_version\":\"spoofed\"}'::jsonb WHERE source_key IN (%s, 'courtlistener:ohio-caselaw')",
@@ -1394,6 +1475,7 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 [source_key],
             )
         conn.commit()
+        assert_public_surfaces_recovered()
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE legal_sources SET metadata=metadata - 'implementation_status' WHERE source_key IN (%s, 'courtlistener:ohio-caselaw')",
@@ -1407,6 +1489,7 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 [source_key],
             )
         conn.commit()
+        assert_public_surfaces_recovered()
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE citator_public_source_admissions SET manifest_sha256=repeat('c', 64) WHERE source_key IN (%s, 'courtlistener:ohio-caselaw')",
@@ -1423,6 +1506,7 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 [version, source_key],
             )
         conn.commit()
+        assert_public_surfaces_recovered()
 
         # The upgrade path is exercised against legacy-shaped rows after a
         # promoted version exists.  Backfill is idempotent and must preserve
@@ -1713,7 +1797,7 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
         from mcp_server.control_plane import public_namespace
 
         with pytest.raises(ValueError):
-            public_namespace("tenant:private-matter")
+            public_namespace("tenant:private-matter", admitted=True)
         private_audit = sampled_audit(
             [{"namespace": "tenant:private-matter", "private": True}],
             audit_kind="isolation",
@@ -2738,7 +2822,12 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
                 actor="rehearsal-worker",
             )
 
-        def assert_citator_lineage_suppressed(label: str, review_assessment_id: str):
+        def assert_citator_lineage_suppressed(
+            label: str,
+            review_assessment_id: str,
+            *,
+            expect_release_unavailable: bool = True,
+        ):
             treatment = CourtListenerRepository(conn).authority_treatment(opinion_id)
             assert treatment["status"] == "unavailable"
             assert treatment["deterministic_facts"] == {
@@ -2746,8 +2835,12 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
                 "citing_references": [],
             }
             citator_status = CourtListenerRepository(conn).citator_status()
-            assert citator_status["available"] is False
-            assert citator_status["release"] is None
+            if expect_release_unavailable:
+                assert citator_status["available"] is False
+                assert citator_status["release"] is None
+            else:
+                assert citator_status["available"] is True
+                assert citator_status["release"]["reviewed_assessment_count"] == 0
             with pytest.raises(
                 PermissionError, match="promoted, reviewed public authority evidence"
             ):
@@ -2918,6 +3011,27 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
                     [source_key],
                 )
             conn.commit()
+
+        currentness_review = new_lineage_review_candidate("authority-currentness")
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE authority_records SET currentness_state='stale'
+                    WHERE corpus_version=%s AND authority_key=%s""",
+                [version, authority_key],
+            )
+        conn.commit()
+        assert_citator_lineage_suppressed(
+            "authority-currentness",
+            currentness_review,
+            expect_release_unavailable=False,
+        )
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE authority_records SET currentness_state='current'
+                    WHERE corpus_version=%s AND authority_key=%s""",
+                [version, authority_key],
+            )
+        conn.commit()
 
         with pytest.raises(DatabaseError):
             with conn.cursor() as cur:
@@ -3485,6 +3599,32 @@ def test_legal_only_upgrade_bootstrap_rehearsal():
                     WHERE d.external_id='statute-1'"""
             )
             assert cur.fetchone() == (("legacy-bootstrap", "legacy-bootstrap"))
+            # Migration preserves the historical rows but does not infer a
+            # public classification from their old table/source shape.
+            result = CourtListenerRepository(conn).search_legal_authorities(
+                "Legacy statute"
+            )
+            assert result == []
+            cur.execute(
+                """UPDATE legal_sources
+                      SET reviewed_at=now(), reviewed_by='legacy-upgrade-reviewer',
+                          claim_safe_wording='Reviewed legacy statute fixture only',
+                          metadata=metadata ||
+                            '{"catalog_schema_version":"legacy-rehearsal",
+                              "implementation_status":"legacy-bootstrap",
+                              "manifest_reference":"legacy-bootstrap-manifest"}'::jsonb
+                    WHERE source_key='legacy:statute'"""
+            )
+        conn.commit()
+        admit_public_source(
+            conn,
+            source_key="legacy:statute",
+            catalog_schema_version="legacy-rehearsal",
+            manifest_reference="legacy-bootstrap-manifest",
+            manifest_sha256="legacy-bootstrap",
+            reviewed_by="legacy-upgrade-reviewer",
+        )
+        with conn.cursor() as cur:
             result = CourtListenerRepository(conn).search_legal_authorities(
                 "Legacy statute"
             )
@@ -3678,10 +3818,52 @@ def test_legacy_upgrade_bootstrap_rehearsal():
             )
             assert cur.fetchone() == (None, "Legacy Reporter", "9", "99")
             cur.execute(
+                """SELECT source_key, public_namespace
+                     FROM authority_case_clusters
+                    WHERE corpus_version='legacy-bootstrap'
+                      AND cluster_id=98000001"""
+            )
+            assert cur.fetchone() == ("courtlistener:ohio-caselaw", "unknown")
+            cur.execute(
                 """SELECT COUNT(*) FROM authority_case_chunks
                    WHERE corpus_version IS NULL"""
             )
             assert cur.fetchone()[0] == 0
+            assert CourtListenerRepository(conn).search_caselaw(
+                "Legacy served opinion"
+            ) == []
+            cur.execute(
+                """UPDATE legal_sources
+                      SET enabled=TRUE, storage_policy='normalized_text',
+                          rights_decision='official', reviewed_at=now(),
+                          reviewed_by='legacy-upgrade-reviewer',
+                          claim_safe_wording='Reviewed legacy caselaw fixture only',
+                          metadata=metadata ||
+                            '{"catalog_schema_version":"legacy-rehearsal",
+                              "implementation_status":"legacy-bootstrap",
+                              "manifest_reference":"legacy-bootstrap-manifest"}'::jsonb
+                    WHERE source_key='courtlistener:ohio-caselaw'"""
+            )
+        conn.commit()
+        admit_public_source(
+            conn,
+            source_key="courtlistener:ohio-caselaw",
+            catalog_schema_version="legacy-rehearsal",
+            manifest_reference="legacy-bootstrap-manifest",
+            manifest_sha256="legacy-bootstrap",
+            reviewed_by="legacy-upgrade-reviewer",
+        )
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT public_namespace FROM authority_case_clusters
+                    WHERE corpus_version='legacy-bootstrap'
+                      AND cluster_id=98000001"""
+            )
+            assert cur.fetchone() == ("public-authority",)
+            served = CourtListenerRepository(conn).search_caselaw(
+                "Legacy served opinion"
+            )
+            assert served and served[0]["opinion_id"] == 98000001
         conn.commit()
     # A populated upgrade is idempotent and must not duplicate immutable rows.
     init_schema(scoped_url)

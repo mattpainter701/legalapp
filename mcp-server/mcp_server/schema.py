@@ -710,11 +710,11 @@ CREATE TABLE IF NOT EXISTS authority_records (
     CHECK (currentness_state IN ('current', 'stale', 'unknown', 'unavailable'))
 );
 
--- This is intentionally a narrow citator admission list, not a substitute for
--- the still-open, system-wide explicit-public boundary.  A source must be
--- named by a reviewed catalog/manifest record before this feature can make a
--- treatment, watch, or alert claim from it.  Metadata on an arbitrary source
--- row is never an admission.
+-- This reviewed admission list is the explicit-public allowlist shared by
+-- ingestion, retrieval, coverage, release audits, and citator operations. A
+-- source must be bound to the exact catalog/manifest release before any public
+-- authority surface can use it. Metadata on an arbitrary source row is never
+-- an admission.
 CREATE TABLE IF NOT EXISTS citator_public_source_admissions (
     source_key text PRIMARY KEY REFERENCES legal_sources(source_key) ON DELETE RESTRICT,
     catalog_schema_version text NOT NULL,
