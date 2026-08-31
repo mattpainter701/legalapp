@@ -289,7 +289,9 @@ def test_qa_acceptance_deploys_and_validates_exact_main() -> None:
     assert "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" in workflow
     assert "LAWHAND_QA_DEMO_ACCESS_CODE" in workflow
     assert "python scripts/demo_live_smoke.py" in workflow
-    assert "secrets.LAWHAND_QA_DEMO_ACCESS_CODE != ''" in workflow
+    assert "QA_DEMO_ACCESS_CODE: ${{ secrets.LAWHAND_QA_DEMO_ACCESS_CODE }}" in workflow
+    assert "if: secrets.LAWHAND_QA_DEMO_ACCESS_CODE" not in workflow
+    assert "if: env.QA_DEMO_ACCESS_CODE != ''" in workflow
     assert "Synthetic smoke: optional" in workflow
 
     assert "vars.LAWHAND_DEV1_ENABLED == 'true'" in health

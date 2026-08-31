@@ -82,6 +82,8 @@ jobs:
     environment:
       name: skynet-development
       url: https://${{ vars.LAWHAND_QA_HOSTNAME }}
+    env:
+      QA_DEMO_ACCESS_CODE: ${{ secrets.LAWHAND_QA_DEMO_ACCESS_CODE }}
     timeout-minutes: 60
     steps:
       - name: Deploy pinned main commit through the fixed root entrypoint
@@ -154,11 +156,11 @@ jobs:
           ref: ${{ needs.release-gate.outputs.release_sha }}
 
       - name: Exercise normal authenticated QA APIs with synthetic demo data
-        if: secrets.LAWHAND_QA_DEMO_ACCESS_CODE != ''
+        if: env.QA_DEMO_ACCESS_CODE != ''
         env:
           DEMO_BASE_URL: https://${{ vars.LAWHAND_QA_HOSTNAME }}
           DEMO_EMAIL: qa-promotion-gate@demo.example.com
-          DEMO_ACCESS_CODE: ${{ secrets.LAWHAND_QA_DEMO_ACCESS_CODE }}
+          DEMO_ACCESS_CODE: ${{ env.QA_DEMO_ACCESS_CODE }}
           CLOUDFLARE_ACCESS_CLIENT_ID: ${{ secrets.LAWHAND_QA_ACCESS_CLIENT_ID }}
           CLOUDFLARE_ACCESS_CLIENT_SECRET: ${{ secrets.LAWHAND_QA_ACCESS_CLIENT_SECRET }}
         run: |
@@ -166,7 +168,7 @@ jobs:
           python scripts/demo_live_smoke.py
 
       - name: Note optional synthetic smoke status
-        if: secrets.LAWHAND_QA_DEMO_ACCESS_CODE == ''
+        if: env.QA_DEMO_ACCESS_CODE == ''
         run: echo "Synthetic authenticated smoke skipped; configure LAWHAND_QA_DEMO_ACCESS_CODE to enable it."
 
       - name: Record QA acceptance summary
