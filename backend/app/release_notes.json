@@ -2,6 +2,18 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.31.4",
+      "version": "2026.08.31.4",
+      "title": "Fail-closed public-authority source boundaries",
+      "published_at": "2026-08-31",
+      "summary": "Public legal research now serves and describes only reviewed official, open, or licensed sources that are explicitly admitted to the promoted authority release.",
+      "highlights": [
+        {"title": "Require explicit public admission", "description": "A source key or caller-supplied metadata cannot make legal documents or case law public; the reviewed catalog, admission, and promoted manifest must agree."},
+        {"title": "Suppress revoked or mismatched sources", "description": "Source-rights, review, storage, schema, implementation, namespace, or manifest changes immediately suppress public results, status, coverage, and claims."},
+        {"title": "Keep private firm data out", "description": "Tenant, firm, private, custom, and unknown records cannot enter the public-authority corpus, telemetry, counts, audits, or customer coverage projection."}
+      ]
+    },
+    {
       "id": "2026.08.31.3",
       "version": "2026.08.31.3",
       "title": "Reliable file-share agent setup on managed Windows networks",

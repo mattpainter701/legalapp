@@ -48,8 +48,10 @@ padded and semantic completeness is never implied. This control plane does not
 claim comprehensive coverage, current law, or good law from corpus volume or
 absence of a negative record.
 
-Release boundary: the versioned control plane is merged and release-gated; the
-explicit-public boundary requires fresh PostgreSQL negative evidence before a
-new production corpus claim. No production harvest, deploy, comprehensive
+Release boundary: the versioned control plane and fail-closed explicit-public
+lineage contract are implemented and release-gated. The mandatory PostgreSQL
+rehearsal mutates each admission and source-lineage dimension independently and
+requires every public content, identifier, aggregate, audit, and claim surface
+to suppress mismatched data. No production harvest, deploy, comprehensive
 coverage, currentness, or good-law claim is implied. Brief Check
 promoted-version/currentness integration remains separate COMP-05 work.

@@ -76,11 +76,13 @@ and exposes that limitation. No padded vectors or semantic-completeness claim
 is permitted. The canonical control-plane details and operator rehearsal
 contract are in [Authority coverage control plane](../AUTHORITY_COVERAGE_CONTROL_PLANE.md).
 
-**Release state:** implemented in code and release-gated; PR #280 merged with
-mandatory operator and lifecycle rehearsal evidence. COMP-06 acceptance remains
-open for fail-closed explicit-public classification across every authority path.
-No production corpus harvest, coverage claim, or deployment is implied by this
-documentation.
+**Release state:** implemented and release-gated. The mandatory PostgreSQL
+authority rehearsal covers the versioned lifecycle and fail-closed
+explicit-public lineage across ingestion, retrieval, citation, court/docket,
+status, coverage, audit, and promotion surfaces. This is metadata-only control
+plane evidence; no production corpus harvest, deployment, comprehensive
+coverage, currentness, or good-law claim is implied. Brief Check
+promoted-version/currentness integration remains separate COMP-05 work.
 
 ### Research MCP citator contract
 
@@ -257,10 +259,10 @@ defence in depth, not a browser credential: firewall/service-network policy
 must prevent direct external reachability, and operators must use the signed
 platform gateway. Authority coverage responses project source health and
 promoted-corpus/version/currentness metadata, not tenant IDs, document content,
-or query text. Explicit-public classification still must prevent arbitrary
-custom-private source metadata from entering that projection. COMP-06 is
-implemented and release-gated while that boundary acceptance remains open; no
-production harvest, coverage claim, or deployment is implied.
+or query text. The version-bound explicit-public lineage contract suppresses
+arbitrary custom-private source metadata from that projection and from every
+public aggregate or claim. COMP-06 is implemented and release-gated; no
+production harvest, coverage claim, current-law claim, or deployment is implied.
 
 - Generate a complete workspace tool catalog from `backend/app/services/capabilities.py` and `backend/app/services/matter_workspace_capabilities.py`, emitting checked-in Markdown and JSON artifacts. Add CI drift checking so the catalog is regenerated and compared whenever the registry or tool contract changes.
 - Add an end-to-end attorney scenario with sanitized sample matter and document data.
