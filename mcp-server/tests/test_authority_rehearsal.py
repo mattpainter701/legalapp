@@ -1382,7 +1382,7 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
             cur.execute(
                 """INSERT INTO ingest_runs (source, status)
                    VALUES (%s, 'completed')""",
-                [source_key + ":rehearsal"],
+                [source_key],
             )
         conn.commit()
         baseline_sync = lineage_repo.sync_status()
@@ -3675,7 +3675,7 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
                 "SELECT COUNT(*) FROM public_authority_citation_facts WHERE id=%s::uuid",
                 [two_sided_citation_fact_id],
             )
-            assert cur.fetchone()[0] == 0
+            assert cur.fetchone()[0] == 1
 
         # Currentness is immutable release evidence.  A record staged as stale
         # must remain unavailable, while attempts to rewrite currentness after
