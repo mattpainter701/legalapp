@@ -30,11 +30,6 @@ class SmsProviderConfig(Base):
         UniqueConstraint(
             "tenant_id", "provider", name="uq_sms_provider_configs_tenant_provider"
         ),
-        UniqueConstraint(
-            "messaging_service_sid",
-            name="uq_sms_provider_configs_messaging_service_sid",
-        ),
-        UniqueConstraint("from_number", name="uq_sms_provider_configs_from_number"),
         ForeignKeyConstraint(
             ["tenant_id", "updated_by_user_id"],
             ["users.tenant_id", "users.id"],
@@ -74,6 +69,20 @@ class SmsProviderConfig(Base):
             name="ck_sms_provider_configs_from_number_e164",
         ),
         Index("idx_sms_provider_configs_tenant", "tenant_id", "is_active"),
+        Index(
+            "uq_sms_provider_configs_active_account_service",
+            "account_sid",
+            "messaging_service_sid",
+            unique=True,
+            postgresql_where=text("is_active AND messaging_service_sid IS NOT NULL"),
+        ),
+        Index(
+            "uq_sms_provider_configs_active_account_number",
+            "account_sid",
+            "from_number",
+            unique=True,
+            postgresql_where=text("is_active AND from_number IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

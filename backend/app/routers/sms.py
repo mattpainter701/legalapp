@@ -239,19 +239,18 @@ async def _signed_params(
     if require_inbound_ownership:
         configured_service = str(config.messaging_service_sid or "").strip()
         supplied_service = str(params.get("MessagingServiceSid") or "").strip()
-        service_matches = bool(
-            configured_service and supplied_service == configured_service
-        )
-        number_matches = False
-        configured_number = str(config.from_number or "").strip()
-        if configured_number:
+        if configured_service:
+            destination_matches = supplied_service == configured_service
+        else:
+            destination_matches = False
+            configured_number = str(config.from_number or "").strip()
             try:
-                number_matches = normalize_e164(params.get("To")) == normalize_e164(
-                    configured_number
-                )
+                destination_matches = bool(configured_number) and normalize_e164(
+                    params.get("To")
+                ) == normalize_e164(configured_number)
             except SmsError:
-                number_matches = False
-        if not (service_matches or number_matches):
+                destination_matches = False
+        if not destination_matches:
             raise HTTPException(401, "SMS webhook destination is not tenant-owned")
     return params
 

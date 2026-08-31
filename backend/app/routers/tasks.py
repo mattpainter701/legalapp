@@ -301,6 +301,42 @@ async def _can_access_sms_task(db: AsyncSession, task: Task, user) -> bool:
     )
 
 
+async def _sms_aggregate_visibility(db: AsyncSession, user):
+    """Return the SQL visibility fence and matter set for aggregate task reads."""
+    from app.services.rbac_service import get_user_capabilities
+
+    tenant_id = uuid.UUID(str(user.tenant_id))
+    capabilities = await get_user_capabilities(db, user.id)
+    visible_matter_ids = (
+        await accessible_matter_ids(
+            db,
+            tenant_id=tenant_id,
+            user_id=user.id,
+            is_admin=user.role == "admin",
+        )
+        if "manage_matters" in capabilities
+        else set()
+    )
+    historical_sms = (
+        select(TaskAutomationRun.id)
+        .where(
+            TaskAutomationRun.tenant_id == tenant_id,
+            TaskAutomationRun.task_id == Task.id,
+            TaskAutomationRun.action_type == "sms_client",
+        )
+        .correlate(Task)
+        .exists()
+    )
+    is_sms = or_(
+        func.coalesce(Task.pending_action["type"].as_string(), "") == "sms_client",
+        historical_sms,
+    )
+    visible_sms_matter = Task.matter_id.is_not(None)
+    if visible_matter_ids is not None:
+        visible_sms_matter = Task.matter_id.in_(visible_matter_ids)
+    return or_(~is_sms, visible_sms_matter), visible_matter_ids
+
+
 async def _require_sms_task_access(db: AsyncSession, task: Task, user) -> None:
     if not await _can_access_sms_task(db, task, user):
         # Do not reveal whether a matter-bound SMS task exists.
@@ -457,32 +493,23 @@ async def get_overdue_tasks(
 ):
     tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
+    sms_visibility, _ = await _sms_aggregate_visibility(db, current_user)
 
     today = date.today()
     stmt = select(Task).where(
         Task.tenant_id == uuid.UUID(tenant_id),
         Task.due_date < today,
         Task.status.notin_(["completed", "cancelled"]),
+        sms_visibility,
     )
     if matter_id:
         stmt = stmt.where(Task.matter_id == matter_id)
     if assigned_to:
         stmt = stmt.where(Task.assigned_to_user_id == assigned_to)
 
-    stmt = stmt.order_by(Task.due_date)
-    result = await db.execute(stmt)
-    tasks = result.scalars().all()
-
-    count_stmt = select(func.count()).select_from(
-        select(Task)
-        .where(
-            Task.tenant_id == uuid.UUID(tenant_id),
-            Task.due_date < today,
-            Task.status.notin_(["completed", "cancelled"]),
-        )
-        .subquery()
-    )
+    count_stmt = select(func.count()).select_from(stmt.subquery())
     total = (await db.execute(count_stmt)).scalar_one()
+    tasks = (await db.scalars(stmt.order_by(Task.due_date))).all()
 
     return TaskListResponse(
         items=await _task_list_items(db, tasks, current_user),
@@ -502,6 +529,7 @@ async def get_upcoming_tasks(
 
     tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
+    sms_visibility, _ = await _sms_aggregate_visibility(db, current_user)
 
     today = date.today()
     end_date = today + timedelta(days=days)
@@ -511,6 +539,7 @@ async def get_upcoming_tasks(
         Task.due_date >= today,
         Task.due_date <= end_date,
         Task.status.notin_(["completed", "cancelled"]),
+        sms_visibility,
     )
     if matter_id:
         stmt = stmt.where(Task.matter_id == matter_id)
@@ -545,8 +574,12 @@ async def list_tasks(
 ):
     tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
+    sms_visibility, _ = await _sms_aggregate_visibility(db, current_user)
 
-    stmt = select(Task).where(Task.tenant_id == uuid.UUID(tenant_id))
+    stmt = select(Task).where(
+        Task.tenant_id == uuid.UUID(tenant_id),
+        sms_visibility,
+    )
 
     if matter_id:
         stmt = stmt.where(Task.matter_id == matter_id)
@@ -678,19 +711,10 @@ async def get_task_board(
     elif due_window == "none":
         base_conditions.append(Task.due_date.is_(None))
 
-    from app.services.rbac_service import get_user_capabilities
-
-    board_capabilities = await get_user_capabilities(db, current_user.id)
-    board_visible_matter_ids = (
-        await accessible_matter_ids(
-            db,
-            tenant_id=tenant_uuid,
-            user_id=current_user.id,
-            is_admin=current_user.role == "admin",
-        )
-        if "manage_matters" in board_capabilities
-        else set()
+    sms_visibility, board_visible_matter_ids = await _sms_aggregate_visibility(
+        db, current_user
     )
+    base_conditions.append(sms_visibility)
 
     open_conditions = [Task.status.in_(OPEN_TASK_STATUSES)]
     risk_counts = TaskBoardRiskCounts(

@@ -37,7 +37,7 @@ from app.models.sms import (
     SmsProviderConfig,
     SmsReviewItem,
 )
-from app.models.task import Task, TaskAutomationRun
+from app.models.task import Task, TaskAutomationRun, TaskEvent
 from app.models.tenant import Tenant, TenantSettings
 from app.models.user import User
 from app.schemas.chat_action import (
@@ -345,6 +345,7 @@ async def test_concurrent_idempotency_reserves_before_exactly_one_provider_call(
         )
         == 1
     )
+
     communication = await db_session.scalar(
         select(CommunicationLog).where(
             CommunicationLog.tenant_id == test_tenant.id,
@@ -542,6 +543,7 @@ async def test_signed_inbound_requires_exact_account_and_destination_ownership(
         auth_token=seeded.auth_token,
     )
     other.config.account_sid = seeded.config.account_sid
+    seeded.config.from_number = base["To"]
     await db_session.commit()
 
     misrouted = {
@@ -577,6 +579,103 @@ async def test_signed_inbound_requires_exact_account_and_destination_ownership(
         )
         == 1
     )
+
+    seeded.config.messaging_service_sid = None
+    await db_session.commit()
+    fixed_destination = {
+        key: value for key, value in base.items() if key != "MessagingServiceSid"
+    }
+    fixed_destination["MessageSid"] = "SM-INBOUND-FIXED-DESTINATION"
+    accepted_fixed = await client.post(
+        path,
+        data=fixed_destination,
+        headers=_signed_headers(
+            path=path,
+            params=fixed_destination,
+            secret=seeded.auth_token,
+        ),
+    )
+    assert accepted_fixed.status_code == 200
+
+    wrong_fixed_destination = {
+        **fixed_destination,
+        "MessageSid": "SM-INBOUND-WRONG-FIXED-DESTINATION",
+        "To": "+15550009999",
+    }
+    refused_wrong_fixed = await client.post(
+        path,
+        data=wrong_fixed_destination,
+        headers=_signed_headers(
+            path=path,
+            params=wrong_fixed_destination,
+            secret=seeded.auth_token,
+        ),
+    )
+    assert refused_wrong_fixed.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_active_provider_destination_ownership_is_unique_per_account(
+    db_session, test_tenant, test_user
+):
+    seeded = await _seed_lifecycle(
+        db_session,
+        tenant=test_tenant,
+        user=test_user,
+        suffix="provider-ownership-unique",
+    )
+    fixed_number = "+15550007777"
+    seeded.config.from_number = fixed_number
+    await db_session.commit()
+
+    other_tenant = Tenant(
+        name="Provider ownership contender",
+        domain=f"provider-owner-{uuid.uuid4().hex}.invalid",
+        billing_tier="payg",
+        is_active=True,
+    )
+    db_session.add(other_tenant)
+    await db_session.flush()
+    other_user = User(
+        tenant_id=other_tenant.id,
+        email=f"provider-owner-{uuid.uuid4().hex}@example.invalid",
+        full_name="Provider ownership contender",
+        role="admin",
+        oauth_provider="fixture",
+        oauth_subject=uuid.uuid4().hex,
+    )
+    db_session.add(other_user)
+    await db_session.flush()
+
+    async def rejected(*, service_sid: str, from_number: str | None):
+        savepoint = await db_session.begin_nested()
+        db_session.add(
+            SmsProviderConfig(
+                tenant_id=other_tenant.id,
+                provider="twilio",
+                account_sid=seeded.config.account_sid,
+                encrypted_auth_token=encrypt_token("ownership-contender-token"),
+                messaging_service_sid=service_sid,
+                from_number=from_number,
+                sender_ready=True,
+                is_active=True,
+                compliance_snapshot={
+                    "ownership_model": "firm-owned",
+                    "consent_policy": "documented-opt-in",
+                    "quiet_hours_policy": "recipient-timezone",
+                },
+                updated_by_user_id=other_user.id,
+            )
+        )
+        with pytest.raises(IntegrityError):
+            await db_session.flush()
+        await savepoint.rollback()
+
+    await rejected(
+        service_sid=seeded.config.messaging_service_sid,
+        from_number="+15550008888",
+    )
+    await rejected(service_sid="MG-UNIQUE-CONTENDER", from_number=fixed_number)
 
 
 @pytest.mark.asyncio
@@ -2305,17 +2404,31 @@ async def test_signed_callback_overrides_operator_attestation_without_regression
         idempotency_key="operator-attestation-callback",
     )
     message.reconciliation_required_at = datetime.now(timezone.utc)
+    message_id = message.id
+    tenant_id = test_tenant.id
+    communication_id = message.communication_log_id
     await db_session.commit()
 
     attested = await client.post(
-        f"/api/sms/messages/{message.id}/reconcile",
+        f"/api/sms/messages/{message_id}/reconcile",
         json={"resolution": "operator_attested_unknown"},
     )
     assert attested.status_code == 200
     assert attested.json()["status"] == "provider_unknown"
     assert attested.json()["reconciliation_resolved_at"] is None
+    await set_tenant_context(db_session, str(tenant_id))
+    db_session.expire_all()
+    attested_communication = await db_session.get(CommunicationLog, communication_id)
+    assert attested_communication.status == "unknown"
+    unknown_audit = await db_session.scalar(
+        select(OperatorAuditLog).where(
+            OperatorAuditLog.action == "sms.dispatch.outcome_unknown",
+            OperatorAuditLog.resource_id == str(message_id),
+        )
+    )
+    assert unknown_audit.metadata_json["reason"] == "operator_attested_unknown"
 
-    path = f"/api/sms/webhooks/{test_tenant.id}/status"
+    path = f"/api/sms/webhooks/{tenant_id}/status"
     for status in ("delivered", "delivered", "failed"):
         params = {
             "MessageSid": "SM-ATTESTATION-CALLBACK",
@@ -2334,7 +2447,7 @@ async def test_signed_callback_overrides_operator_attestation_without_regression
         assert callback.json()["status"] == "delivered"
 
     db_session.expire_all()
-    resolved = await db_session.get(SmsMessage, message.id)
+    resolved = await db_session.get(SmsMessage, message_id)
     assert resolved.delivery_certainty == "confirmed_sent"
     assert (
         resolved.reconciliation_resolution
@@ -2521,6 +2634,107 @@ async def test_task_automation_retains_unknown_sms_identity_for_reconciliation(
 
 
 @pytest.mark.asyncio
+async def test_expired_dispatch_replay_creates_one_unknown_timeline_and_audit(
+    db_session, test_tenant, test_user, monkeypatch
+):
+    seeded = await _seed_lifecycle(
+        db_session,
+        tenant=test_tenant,
+        user=test_user,
+        suffix="stale-replay-evidence",
+    )
+    body = "Expired dispatch replay evidence"
+    message = SmsMessage(
+        tenant_id=test_tenant.id,
+        contact_id=seeded.contact.id,
+        matter_id=seeded.matter.id,
+        idempotency_key="stale-replay-evidence",
+        request_digest=sms_service._request_digest(
+            contact_id=seeded.contact.id,
+            matter_id=seeded.matter.id,
+            to_number=seeded.contact.phone,
+            body=body,
+            category="appointment",
+        ),
+        direction="outbound",
+        status="dispatching",
+        dispatch_attempt_id=uuid.uuid4(),
+        dispatch_started_at=datetime.now(timezone.utc) - timedelta(minutes=3),
+        to_number=seeded.contact.phone,
+        body=body,
+        category="appointment",
+        created_by_user_id=test_user.id,
+    )
+    db_session.add(message)
+    message_id = message.id
+    tenant_id = test_tenant.id
+    user_id = test_user.id
+    contact_id = seeded.contact.id
+    matter_id = seeded.matter.id
+    await db_session.commit()
+    _install_provider(
+        monkeypatch,
+        _Provider(lambda **_kwargs: pytest.fail("replay must not call provider")),
+    )
+
+    async def replay():
+        with pytest.raises(SmsError) as error:
+            await send_sms(
+                db_session,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                contact_id=contact_id,
+                matter_id=matter_id,
+                body=body,
+                category="appointment",
+                idempotency_key="stale-replay-evidence",
+            )
+        assert error.value.delivery_certainty == "outcome_unknown"
+
+    await replay()
+    await set_tenant_context(db_session, str(tenant_id))
+    db_session.expire_all()
+    persisted = await db_session.get(SmsMessage, message_id)
+    communication_id = persisted.communication_log_id
+    communication = await db_session.get(
+        CommunicationLog, persisted.communication_log_id
+    )
+    assert persisted.status == "provider_unknown"
+    assert communication.status == "unknown"
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(OperatorAuditLog)
+            .where(
+                OperatorAuditLog.action == "sms.dispatch.outcome_unknown",
+                OperatorAuditLog.resource_id == str(message_id),
+            )
+        )
+        == 1
+    )
+    await replay()
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(CommunicationLog)
+            .where(CommunicationLog.id == communication_id)
+        )
+        == 1
+    )
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(OperatorAuditLog)
+            .where(
+                OperatorAuditLog.action == "sms.dispatch.outcome_unknown",
+                OperatorAuditLog.resource_id == str(message_id),
+            )
+        )
+        == 1
+    )
+
+
+@pytest.mark.asyncio
 async def test_stale_dispatch_lease_becomes_reconciliation_work_without_resend(
     db_session, test_tenant, test_user, monkeypatch
 ):
@@ -2571,6 +2785,18 @@ async def test_stale_dispatch_lease_becomes_reconciliation_work_without_resend(
     await db_session.refresh(stale)
     assert stale.status == "provider_unknown"
     assert stale.reconciliation_required_at is not None
+    stale_communication = await db_session.get(
+        CommunicationLog, stale.communication_log_id
+    )
+    assert stale_communication.status == "unknown"
+    stale_audit = await db_session.scalar(
+        select(OperatorAuditLog).where(
+            OperatorAuditLog.action == "sms.dispatch.outcome_unknown",
+            OperatorAuditLog.resource_id == str(stale.id),
+        )
+    )
+    assert stale_audit.metadata_json["reason"] == ("scheduler:dispatch_lease_expired")
+    assert stale_audit.actor_type == "system"
     await db_session.refresh(stale_submitted)
     assert stale_submitted.status == "submitted"
     assert stale_submitted.reconciliation_required_at is not None
@@ -3584,6 +3810,167 @@ async def test_task_cancellation_conflicts_while_sms_provider_dispatch_is_claime
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("callback_status", "expected_run_status", "expected_certainty", "event_type"),
+    [
+        ("delivered", "sent", "confirmed_sent", "automation_succeeded"),
+        (
+            "failed",
+            "failed",
+            "provider_failed_after_acceptance",
+            "automation_failed",
+        ),
+    ],
+)
+async def test_signed_callback_before_worker_finalize_controls_immutable_event_truth(
+    callback_status,
+    expected_run_status,
+    expected_certainty,
+    event_type,
+    db_session,
+    client,
+    test_tenant,
+    test_user,
+    monkeypatch,
+):
+    seeded = await _seed_lifecycle(
+        db_session,
+        tenant=test_tenant,
+        user=test_user,
+        suffix=f"callback-finalize-{callback_status}",
+    )
+    settings = await db_session.scalar(
+        select(TenantSettings).where(TenantSettings.tenant_id == test_tenant.id)
+    )
+    if settings is None:
+        settings = TenantSettings(
+            tenant_id=test_tenant.id,
+            enable_chat_actions=True,
+        )
+        db_session.add(settings)
+    else:
+        settings.enable_chat_actions = True
+    provider_sid = f"SM-CALLBACK-FINALIZE-{callback_status.upper()}"
+    action = SmsClientAction(
+        type="sms_client",
+        recipient_bindings=[
+            ResolvedSmsRecipientBinding(
+                party_id=seeded.party.id,
+                contact_id=seeded.contact.id,
+                phone=seeded.contact.phone,
+            )
+        ],
+        body=f"Callback finalization truth {callback_status}",
+        category="appointment",
+        matter_id=seeded.matter.id,
+        consent_evidence=[_consent_evidence(seeded)],
+        idempotency_key=f"sms-callback-finalize-{callback_status}",
+    )
+    task = Task(
+        tenant_id=test_tenant.id,
+        title=f"Callback finalization {callback_status}",
+        matter_id=seeded.matter.id,
+        contact_id=seeded.contact.id,
+        status="in_progress",
+        source="assistant",
+        pending_action=action.model_dump(mode="json"),
+        created_by_user_id=test_user.id,
+    )
+    db_session.add(task)
+    await db_session.flush()
+    task_id = task.id
+    tenant_id = test_tenant.id
+    user_id = test_user.id
+    approval_key = task_automation.automation_idempotency_key(task, "review")
+    await task_automation.enqueue_automation_run(
+        db_session,
+        task,
+        from_status="review",
+        actor_user_id=test_user.id,
+        idempotency_key=approval_key,
+    )
+    await db_session.commit()
+
+    async def accepted(**_kwargs):
+        return _Response(
+            201,
+            {"sid": provider_sid, "status": "queued", "from": "+15550001111"},
+        )
+
+    provider = _Provider(accepted)
+    _install_provider(monkeypatch, provider)
+    original_handler = task_automation.ACTION_HANDLERS["sms_client"]
+
+    async def callback_before_finalize(db, handler_task, payload, actor_user_id):
+        result = await original_handler(db, handler_task, payload, actor_user_id)
+        assert result.succeeded is True
+        path = f"/api/sms/webhooks/{tenant_id}/status"
+        params = {
+            "MessageSid": provider_sid,
+            "MessageStatus": callback_status,
+        }
+        callback = await client.post(
+            path,
+            data=params,
+            headers=_signed_headers(
+                path=path,
+                params=params,
+                secret=seeded.auth_token,
+            ),
+        )
+        assert callback.status_code == 200, callback.text
+        return result
+
+    monkeypatch.setitem(
+        task_automation.ACTION_HANDLERS,
+        "sms_client",
+        callback_before_finalize,
+    )
+    await task_automation.run_task_automation(
+        task_id,
+        tenant_id,
+        from_status="review",
+        to_status="in_progress",
+        actor_user_id=user_id,
+        approval_idempotency_key=approval_key,
+    )
+
+    await set_tenant_context(db_session, str(tenant_id))
+    db_session.expire_all()
+    final_task = await db_session.get(Task, task_id)
+    final_run = await db_session.scalar(
+        select(TaskAutomationRun).where(TaskAutomationRun.task_id == task_id)
+    )
+    events = list(
+        (
+            await db_session.scalars(
+                select(TaskEvent).where(
+                    TaskEvent.task_id == task_id,
+                    TaskEvent.event_type.in_(
+                        ("automation_succeeded", "automation_failed")
+                    ),
+                )
+            )
+        ).all()
+    )
+    assert final_run.status == expected_run_status
+    assert final_run.delivery_certainty == expected_certainty
+    assert final_run.provider_message_id == provider_sid
+    assert len(events) == 1
+    assert events[0].event_type == event_type
+    assert events[0].metadata_json["delivery_status"] == expected_run_status
+    assert events[0].metadata_json["delivery_certainty"] == expected_certainty
+    if callback_status == "delivered":
+        assert "signed provider callback" in events[0].metadata_json["detail"]
+        assert events[0].note is None
+        assert final_task.pending_action is None
+    else:
+        assert "failed after provider acceptance" in events[0].note
+        assert final_task.pending_action is not None
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_failed_sms_attempt_requires_a_new_exact_reviewed_action_before_approval(
     db_session, test_tenant, test_user
 ):
@@ -4317,6 +4704,7 @@ async def test_generic_task_surfaces_redact_or_hide_sms_for_unauthorized_users(
         ),
     )
     task = await db_session.get(Task, uuid.UUID(produced["task_id"]))
+    task.due_date = datetime.now(timezone.utc).date()
     action = task.pending_action
     historical_task = Task(
         tenant_id=test_tenant.id,
@@ -4324,7 +4712,7 @@ async def test_generic_task_surfaces_redact_or_hide_sms_for_unauthorized_users(
         description=f"Historical SMS to {secret_phone}.\n\n{secret_body}",
         task_type="follow_up",
         status="in_progress",
-        due_date=datetime.now(timezone.utc).date(),
+        due_date=(datetime.now(timezone.utc) - timedelta(days=1)).date(),
         matter_id=seeded.matter.id,
         contact_id=seeded.contact.id,
         assigned_to_user_id=unassigned.id,
@@ -4355,34 +4743,41 @@ async def test_generic_task_surfaces_redact_or_hide_sms_for_unauthorized_users(
 
     for restricted_user in (denied, unassigned):
         headers = {"Authorization": f"Bearer {_user_token(restricted_user)}"}
-        listed = await client.get("/api/tasks", headers=headers)
-        assert listed.status_code == 200, listed.text
-        listed_by_id = {row["id"]: row for row in listed.json()["items"]}
-        for restricted_task in (task, historical_task):
-            row = listed_by_id[str(restricted_task.id)]
-            assert row["pending_action"] is None
-            assert row["pending_action_sha256"] is None
-            assert row["delivery"] is None
-            assert row["delivery_history"] == []
-        assert secret_body not in listed.text
-        assert secret_phone not in listed.text
-        assert "SMS-TASK-SECRET" not in listed.text
+        aggregate_paths = (
+            "/api/tasks",
+            "/api/tasks/overdue",
+            "/api/tasks/upcoming?days=7",
+        )
+        restricted_ids = {str(task.id), str(historical_task.id)}
+        for path in aggregate_paths:
+            response = await client.get(path, headers=headers)
+            assert response.status_code == 200, response.text
+            body = response.json()
+            assert restricted_ids.isdisjoint({row["id"] for row in body["items"]})
+            assert body["total"] == len(body["items"])
+            assert secret_body not in response.text
+            assert secret_phone not in response.text
+            assert "SMS-TASK-SECRET" not in response.text
+            assert str(seeded.contact.id) not in response.text
+            assert str(seeded.matter.id) not in response.text
 
         board = await client.get("/api/tasks/board?scope=firm", headers=headers)
         assert board.status_code == 200, board.text
-        cards = {
-            row["id"]: row
-            for column in board.json()["columns"]
-            for row in column["items"]
+        board_body = board.json()
+        card_ids = {
+            row["id"] for column in board.json()["columns"] for row in column["items"]
         }
-        for restricted_task in (task, historical_task):
-            card = cards[str(restricted_task.id)]
-            assert card["pending_action"] is None
-            assert card["pending_action_sha256"] is None
-            assert card["delivery"] is None
+        assert restricted_ids.isdisjoint(card_ids)
+        assert all(
+            column["total"] == len(column["items"]) for column in board_body["columns"]
+        )
+        assert board_body["risk_counts"]["overdue"] == 0
+        assert board_body["risk_counts"]["due_today"] == 0
         assert secret_body not in board.text
         assert secret_phone not in board.text
         assert "SMS-TASK-SECRET" not in board.text
+        assert str(seeded.contact.id) not in board.text
+        assert str(seeded.matter.id) not in board.text
 
         direct_calls = (
             ("get", f"/api/tasks/{task.id}", None),
@@ -4724,6 +5119,103 @@ async def test_reconciliation_holds_live_actor_fence_through_provider_lookup(
     await asyncio.wait_for(mutation_task, timeout=5)
     assert await asyncio.wait_for(rotation_task, timeout=5) == 3
     assert len(provider.lookup_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_serializes_before_locking_two_target_messages(
+    db_session, test_engine, test_tenant, test_user, monkeypatch
+):
+    seeded = await _seed_lifecycle(
+        db_session,
+        tenant=test_tenant,
+        user=test_user,
+        suffix="reconcile-two-target",
+    )
+    targets = [
+        await _seed_uncertain_reconciliation_message(
+            db_session,
+            tenant_id=test_tenant.id,
+            user_id=test_user.id,
+            seeded=seeded,
+            suffix=f"two-target-{index}",
+        )
+        for index in (1, 2)
+    ]
+    target_by_sid = {target.provider_message_id: target for target in targets}
+    first_lookup_entered = asyncio.Event()
+    release_first_lookup = asyncio.Event()
+
+    async def lookup(*, url, **_kwargs):
+        sid = url.rsplit("/", 1)[-1].removesuffix(".json")
+        target = target_by_sid[sid]
+        if len(provider.lookup_calls) == 1:
+            first_lookup_entered.set()
+            await release_first_lookup.wait()
+        return _Response(
+            200,
+            {
+                "sid": sid,
+                "account_sid": target.provider_account_sid,
+                "to": target.to_number,
+                "from": "+15550001111",
+                "body": target.body,
+                "messaging_service_sid": target.provider_messaging_service_sid,
+                "direction": "outbound-api",
+                "date_created": target.provider_submission_started_at.isoformat(),
+                "uri": (
+                    f"/2010-04-01/Accounts/{target.provider_account_sid}/Messages/"
+                    f"{sid}.json"
+                ),
+                "status": "delivered",
+            },
+        )
+
+    provider = _Provider(
+        lambda **_kwargs: pytest.fail("reconciliation must not dispatch"),
+        lookup_handler=lookup,
+    )
+    _install_provider(monkeypatch, provider)
+    maker = async_sessionmaker(test_engine, expire_on_commit=False)
+
+    async def reconcile(target):
+        async with maker() as reconcile_db:
+            await set_tenant_context(reconcile_db, str(test_tenant.id))
+            row = await sms_service.reconcile_sms_message(
+                reconcile_db,
+                tenant_id=test_tenant.id,
+                operator_user_id=test_user.id,
+                sms_message_id=target.message_id,
+                resolution="provider_lookup",
+                provider_message_id=target.provider_message_id,
+            )
+            await reconcile_db.commit()
+            return row.status
+
+    first = asyncio.create_task(reconcile(targets[0]))
+    await asyncio.wait_for(first_lookup_entered.wait(), timeout=5)
+    second = asyncio.create_task(reconcile(targets[1]))
+    await asyncio.sleep(0.1)
+    assert len(provider.lookup_calls) == 1
+    assert not second.done()
+
+    # The second transaction must still be outside every SmsMessage row lock;
+    # otherwise two nearby candidate scans can form a lock cycle.
+    async with maker() as probe_db:
+        await set_tenant_context(probe_db, str(test_tenant.id))
+        assert (
+            await probe_db.scalar(
+                select(SmsMessage.id)
+                .where(SmsMessage.id == targets[1].message_id)
+                .with_for_update(nowait=True)
+            )
+            == targets[1].message_id
+        )
+        await probe_db.rollback()
+
+    release_first_lookup.set()
+    assert await asyncio.wait_for(first, timeout=5) == "delivered"
+    assert await asyncio.wait_for(second, timeout=5) == "delivered"
+    assert len(provider.lookup_calls) == 2
 
 
 @pytest.mark.asyncio

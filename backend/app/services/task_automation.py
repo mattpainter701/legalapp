@@ -1195,6 +1195,7 @@ async def run_task_automation(
                     TaskAutomationRun.id == claimed_run_id,
                     TaskAutomationRun.tenant_id == locked_tenant_id,
                 )
+                .execution_options(populate_existing=True)
                 .with_for_update()
             )
             if run is None:
@@ -1223,28 +1224,50 @@ async def run_task_automation(
                 )
                 run.sms_message_id = result.sms_message_id
                 run.reconciliation_required = result.reconciliation_required
+            final_succeeded = (
+                run.status in {"submitted", "sent"}
+                if signed_sms_truth_already_won
+                else result.succeeded
+            )
+            final_detail = (
+                run.delivery_detail or run.error_message or result.detail
+                if signed_sms_truth_already_won
+                else result.detail
+            )
+            final_provider = (
+                run.provider or result.provider
+                if signed_sms_truth_already_won
+                else result.provider
+            )
+            final_provider_message_id = (
+                run.provider_message_id or result.provider_message_id
+                if signed_sms_truth_already_won
+                else result.provider_message_id
+            )
             run.completed_at = run.completed_at or datetime.now(timezone.utc)
             audit_snapshot = run.action_snapshot or {}
             append_task_event(
                 db,
                 task,
                 event_type=(
-                    "automation_succeeded" if result.succeeded else "automation_failed"
+                    "automation_succeeded" if final_succeeded else "automation_failed"
                 ),
                 actor_user_id=actor_user_id,
-                note=None if result.succeeded else result.detail[:500],
+                note=None if final_succeeded else final_detail[:500],
                 metadata={
                     "action_type": action_type,
-                    "detail": result.detail[:200],
+                    "detail": final_detail[:200],
                     "action_sha256": run.action_sha256,
-                    "provider": result.provider,
-                    "provider_message_id": result.provider_message_id,
+                    "provider": final_provider,
+                    "provider_message_id": final_provider_message_id,
+                    "delivery_certainty": run.delivery_certainty,
+                    "delivery_status": run.status,
                     "to": list(audit_snapshot.get("to") or [])[:10],
                     "subject": audit_snapshot.get("subject"),
                     "source_ids": list(audit_snapshot.get("source_ids") or [])[:10],
                 },
             )
-            if result.succeeded:
+            if final_succeeded:
                 # Clear the draft so a later manual transition of the same task
                 # cannot re-enter the automation path at all.
                 task.pending_action = None

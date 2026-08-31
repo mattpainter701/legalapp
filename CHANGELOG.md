@@ -63,10 +63,16 @@
 - **Consent-aware provider-backed SMS:** tenant administrators can keep SMS
   inactive until provider credentials, sender readiness, ownership, consent,
   and quiet-hours evidence are configured. Outbound messages require verified,
-  provenance-bearing consent and stable idempotency; signed tenant-bound inbound
-  and status callbacks deduplicate and preserve provider-vs-delivery truth.
-  STOP-family replies revoke consent, ambiguous inbound routes enter review, and
-  assistant proposals remain human-approved with approval-time consent checks.
+  provenance-bearing consent and stable idempotency; provider account and
+  account-scoped active destination ownership, shared configuration-generation
+  fences, and signed tenant-bound inbound/status callbacks prevent cross-tenant
+  routing and preserve provider-vs-delivery truth. Unknown outcomes retain one
+  timeline marker and sanitized audit record, while unauthorized SMS tasks are
+  omitted from generic task aggregates and counts. STOP-family replies revoke consent,
+  ambiguous inbound routes enter capability- and matter-scoped review, and
+  assistant proposals remain human-approved with explicit retry identity and
+  approval-time consent checks. Demo purge treats pre-SMS and complete-SMS
+  schemas coherently and refuses a partially installed SMS table family.
 - **Template Studio Phase 1 shell:** the existing document-template library is
   now a first-class Template Studio with response-derived continue-setup,
   needs-attention, ready-to-generate, and recent queues; canonical persistent

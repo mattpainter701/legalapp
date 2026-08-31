@@ -264,11 +264,6 @@ def upgrade() -> None:
         sa.UniqueConstraint(
             "tenant_id", "provider", name="uq_sms_provider_configs_tenant_provider"
         ),
-        sa.UniqueConstraint(
-            "messaging_service_sid",
-            name="uq_sms_provider_configs_messaging_service_sid",
-        ),
-        sa.UniqueConstraint("from_number", name="uq_sms_provider_configs_from_number"),
         sa.ForeignKeyConstraint(
             ["tenant_id", "updated_by_user_id"],
             ["users.tenant_id", "users.id"],
@@ -705,6 +700,20 @@ def upgrade() -> None:
         "idx_sms_provider_configs_tenant",
         "sms_provider_configs",
         ["tenant_id", "is_active"],
+    )
+    op.create_index(
+        "uq_sms_provider_configs_active_account_service",
+        "sms_provider_configs",
+        ["account_sid", "messaging_service_sid"],
+        unique=True,
+        postgresql_where=sa.text("is_active AND messaging_service_sid IS NOT NULL"),
+    )
+    op.create_index(
+        "uq_sms_provider_configs_active_account_number",
+        "sms_provider_configs",
+        ["account_sid", "from_number"],
+        unique=True,
+        postgresql_where=sa.text("is_active AND from_number IS NOT NULL"),
     )
     op.create_index(
         "idx_sms_number_suppressions_tenant_state",

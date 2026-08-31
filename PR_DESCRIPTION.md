@@ -41,27 +41,40 @@ provenance-bearing consent, category and quiet-hours approval, race-safe
 idempotency, and review-first staff approval. Signed inbound/status webhooks
 handle STOP/START/HELP, replay and out-of-order delivery callbacks, ambiguous
 routing, and provider-unknown reconciliation without reporting fake delivery.
+Inbound webhooks bind the exact provider account and configured destination;
+active provider destinations are unique within each provider account, and
+shared provider-config fences prevent rotation or deactivation from racing an
+in-flight dispatch or reconciliation lookup. Unknown outcomes always leave a
+single customer-timeline marker and sanitized audit evidence.
 
 Migration 149 follows the merged configurable-workflow migration 148 and adds
 tenant-composite constraints, immutable consent evidence, RLS, reconciliation
-state, and demo-purge coverage. The intake and task interfaces expose restricted
-review and informed SMS approval workflows; provider credentials and unresolved
-message content remain out of unauthorized responses and audit metadata.
+state, and rolling-upgrade-safe demo-purge coverage. The intake and task
+interfaces expose restricted review and informed SMS approval workflows;
+provider credentials and unresolved message content remain out of unauthorized
+responses and audit metadata; unauthorized SMS tasks are omitted from generic
+task aggregates and their counts. This PR does not close COMP-02 or COMP-03
+and does not deploy or configure a production provider.
 
 ## Validation
 
-- Ruff lint/format and Python compilation passed; the 15 SMS unit and migration
-  contract tests passed.
-- The PostgreSQL/provider-shaped lifecycle suite collects 48 rehearsals covering
+- Ruff lint/format and Python compilation passed; 61 database-independent
+  backend, migration, demo-purge, Workspace MCP, CI-contract, and release-note
+  tests passed.
+- The complete SMS CI target collects 79 tests, including 63 PostgreSQL/provider-
+  shaped rehearsals covering
   concurrent idempotency, tenant constraints/RLS, consent provenance and
   conflicts, quiet hours/categories, signed webhook replay/order, STOP/START/HELP,
-  durable unmatched-number suppression, review routing, exact-provider
-  reconciliation, actor deactivation/role-revocation ordering, demo purge,
-  generic-Task redaction, custom-role gating, and credential non-leakage.
+  durable unmatched-number suppression, exact account/destination ownership,
+  review routing and lock order, exact-provider reconciliation, actor and config
+  revocation ordering, callback-before-worker-finalization truth, unknown-outcome
+  timeline/audit evidence, rolling-upgrade/full demo purge, generic-Task omission,
+  custom-role gating, and credential non-leakage.
 - The full frontend suite passed (92 files, 514 tests), along with frontend lint
   and the production build; the focused SMS queue subset passed 6 tests.
   Alembic reports migration 149 as the sole head and renders its offline SQL
-  from migration 148 successfully.
+  from migration 148 successfully. The release catalog is sequenced at
+  `2026.08.31.6`, generated notes are current, and CI YAML parses successfully.
 - This Windows host has no usable PostgreSQL listener, and its Docker Desktop
   engine fails before startup on an inaccessible local runtime socket. The
   mandatory hosted PostgreSQL rehearsal, full CI, CodeQL, Merge Gate, and fresh
@@ -92,5 +105,7 @@ of native ACL trimming.
 - [ ] MCP documentation not needed
 - MCP area: review-first `propose_client_sms` action schema and approval contract.
 - Wiki handoff note: SMS proposals are limited to one recipient and must carry
-  source bindings/hashes; approval revalidates sources, consent, category, and
-  quiet-hours eligibility before a tenant-bound provider dispatch is attempted.
+  source bindings/hashes plus an explicit stable `X-Idempotency-Key`; approval
+  revalidates sources, consent, category, quiet-hours eligibility, live actor
+  authority, and matter access before a tenant-bound provider dispatch is
+  attempted.

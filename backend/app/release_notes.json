@@ -24,6 +24,14 @@
         {"title": "Keep evidence exact", "description": "Completed output is hash-verified and can become current evidence only when the immutable snapshot, draft revision, and identity still match."},
         {"title": "Protect private document data", "description": "Job metadata excludes document values, bytes, storage paths, provider identifiers, signed URLs, and raw exception text."},
         {"title": "Keep activation review-gated", "description": "The production worker remains disabled until encrypted CAS backup and restore rehearsal are added to the release gate."}
+      "title": "Consent-aware SMS with review and opt-out controls",
+      "published_at": "2026-08-31",
+      "summary": "Firms can configure provider-backed SMS that stays reviewable, consent-bound, tenant-scoped, and honest about provider acceptance and delivery.",
+      "highlights": [
+        {"title": "Send only with current consent", "description": "Each outbound message rechecks verified phone ownership, consent provenance, approved message category, quiet hours, matter access, and provider configuration."},
+        {"title": "Honor replies and opt-outs safely", "description": "Signed inbound messages handle STOP, START, and HELP, deduplicate retries, and place ambiguous client or matter matches into a staff review queue."},
+        {"title": "Keep provider truth visible", "description": "Provider acceptance stays separate from delivery, unknown outcomes remain visible on the client timeline, and signed callbacks or reconciliation cannot regress known truth."},
+        {"title": "Review assistant proposals first", "description": "Workspace SMS proposals create review work for one verified matter party and require an explicit retry key; they cannot dispatch autonomously."}
       ]
     },
     {

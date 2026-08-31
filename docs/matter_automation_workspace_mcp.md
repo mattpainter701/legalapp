@@ -155,7 +155,7 @@ a client, or file a document as final.
 ### SMS proposal contract
 
 Workspace MCP treats request correlation and proposal idempotency as separate
-identities. Mutating clients should send a stable `X-Idempotency-Key`; a fresh
+identities. Mutating clients must send a stable `X-Idempotency-Key`; a fresh
 `X-Request-ID` may be used when retrying the same logical proposal. LawHand
 binds the idempotency key to the tenant, tool, and canonical request digest.
 Reusing it for changed content fails closed instead of returning or creating a

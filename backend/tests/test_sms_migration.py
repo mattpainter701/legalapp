@@ -56,8 +56,6 @@ def test_sms_migration_enforces_rls_and_tenant_composite_references():
         "uq_sms_number_suppressions_tenant_id",
         "fk_sms_number_suppression_events_tenant_suppression",
         "uq_sms_messages_tenant_id",
-        "uq_sms_provider_configs_messaging_service_sid",
-        "uq_sms_provider_configs_from_number",
         "fk_sms_provider_configs_tenant_user",
         "fk_sms_messages_tenant_contact",
         "fk_sms_messages_tenant_matter",
@@ -74,6 +72,8 @@ def test_sms_migration_enforces_rls_and_tenant_composite_references():
     assert "sms_demo_purge_authorized" in source
     for index_name in (
         "idx_sms_provider_configs_tenant",
+        "uq_sms_provider_configs_active_account_service",
+        "uq_sms_provider_configs_active_account_number",
         "idx_sms_number_suppressions_tenant_state",
         "idx_sms_number_suppression_events_tenant_number",
         "idx_sms_messages_tenant_contact",
@@ -83,6 +83,8 @@ def test_sms_migration_enforces_rls_and_tenant_composite_references():
         "idx_task_automation_runs_tenant_sms_message",
     ):
         assert index_name in source
+    assert "is_active AND messaging_service_sid IS NOT NULL" in source
+    assert "is_active AND from_number IS NOT NULL" in source
     for check_name in (
         "ck_lead_channel_consents_sms_status",
         "ck_lead_channel_consents_mobile_e164",

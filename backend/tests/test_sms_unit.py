@@ -288,12 +288,15 @@ def test_sms_evidence_models_expose_database_coherence_guards():
     assert {
         "ck_sms_consent_events_active_evidence",
         "ck_sms_provider_configs_active_evidence",
-        "uq_sms_provider_configs_messaging_service_sid",
-        "uq_sms_provider_configs_from_number",
         "ck_sms_number_suppression_events_state",
         "ck_sms_messages_status_certainty",
         "ck_sms_review_items_review_evidence",
     } <= constraints
+    provider_indexes = {index.name for index in SmsProviderConfig.__table__.indexes}
+    assert {
+        "uq_sms_provider_configs_active_account_service",
+        "uq_sms_provider_configs_active_account_number",
+    } <= provider_indexes
     assert TaskAutomationRun.__table__.c.delivery_certainty.type.length == 50
 
 

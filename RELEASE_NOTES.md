@@ -25,6 +25,16 @@ Template Studio now has a tenant-isolated durable job and artifact foundation fo
 - **Keep evidence exact.** Completed output is hash-verified and can become current evidence only when the immutable snapshot, draft revision, and identity still match.
 - **Protect private document data.** Job metadata excludes document values, bytes, storage paths, provider identifiers, signed URLs, and raw exception text.
 - **Keep activation review-gated.** The production worker remains disabled until encrypted CAS backup and restore rehearsal are added to the release gate.
+## 2026.08.31.6 — Consent-aware SMS with review and opt-out controls
+
+Released August 31, 2026.
+
+Firms can configure provider-backed SMS that stays reviewable, consent-bound, tenant-scoped, and honest about provider acceptance and delivery.
+
+- **Send only with current consent.** Each outbound message rechecks verified phone ownership, consent provenance, approved message category, quiet hours, matter access, and provider configuration.
+- **Honor replies and opt-outs safely.** Signed inbound messages handle STOP, START, and HELP, deduplicate retries, and place ambiguous client or matter matches into a staff review queue.
+- **Keep provider truth visible.** Provider acceptance stays separate from delivery, unknown outcomes remain visible on the client timeline, and signed callbacks or reconciliation cannot regress known truth.
+- **Review assistant proposals first.** Workspace SMS proposals create review work for one verified matter party and require an explicit retry key; they cannot dispatch autonomously.
 
 ## 2026.08.31.5 — Revalidate authority evidence before alerts
 

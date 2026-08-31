@@ -15,7 +15,7 @@ from typing import Awaitable, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -218,12 +218,13 @@ def _append_sms_outcome_audit(
     actor_user_id,
     outcome: str,
     metadata: dict | None = None,
+    actor_type: str | None = None,
 ) -> None:
     """Append sanitized evidence in the same transaction as SMS truth."""
     db.add(
         OperatorAuditLog(
             action=f"sms.dispatch.{outcome}",
-            actor_type="tenant_user" if actor_user_id else "provider",
+            actor_type=(actor_type or ("tenant_user" if actor_user_id else "provider")),
             actor_id=str(actor_user_id) if actor_user_id else None,
             resource_type="sms_message",
             resource_id=str(message.id),
@@ -903,6 +904,51 @@ def _record_communication(
     db.add(log)
 
 
+async def _ensure_unknown_delivery_evidence(
+    db: AsyncSession,
+    *,
+    tenant_id,
+    message: SmsMessage,
+    actor_user_id,
+    reason: str,
+    audit_actor_type: str | None = None,
+) -> None:
+    """Atomically retain one timeline row and one audit marker per unknown cause."""
+    communication = None
+    if message.communication_log_id:
+        communication = await db.scalar(
+            select(CommunicationLog).where(
+                CommunicationLog.tenant_id == tenant_id,
+                CommunicationLog.id == message.communication_log_id,
+            )
+        )
+    if communication is None:
+        _record_communication(
+            db,
+            tenant_id=tenant_id,
+            message=message,
+            user_id=actor_user_id,
+            status="unknown",
+        )
+    else:
+        communication.status = "unknown"
+
+    raw_event = dict(message.raw_provider_event or {})
+    evidence_reasons = list(raw_event.get("unknown_evidence_reasons") or [])
+    if reason not in evidence_reasons:
+        _append_sms_outcome_audit(
+            db,
+            message=message,
+            actor_user_id=actor_user_id,
+            outcome="outcome_unknown",
+            metadata={"reason": reason},
+            actor_type=audit_actor_type,
+        )
+        evidence_reasons.append(reason)
+        raw_event["unknown_evidence_reasons"] = evidence_reasons
+        message.raw_provider_event = raw_event
+
+
 def _terminal_replay(message: SmsMessage) -> SmsMessage:
     """Return only provider-accepted truth; preserve failed attempts as failures."""
     if message.status in {"submitted", "delivered"}:
@@ -949,6 +995,7 @@ async def _resolve_replay(
     replay: SmsMessage,
     request_digest: str,
     now: datetime,
+    actor_user_id,
 ) -> SmsMessage:
     if replay.request_digest != request_digest:
         raise SmsError("Idempotency key was reused for a different SMS", 409)
@@ -973,6 +1020,13 @@ async def _resolve_replay(
                     **(locked_replay.raw_provider_event or {}),
                     "reconciliation_reason": "dispatch_lease_expired",
                 }
+                await _ensure_unknown_delivery_evidence(
+                    db,
+                    tenant_id=tenant_id,
+                    message=locked_replay,
+                    actor_user_id=actor_user_id,
+                    reason="dispatch_lease_expired_replay",
+                )
                 await db.commit()
                 raise SmsError(
                     "The original SMS dispatch lease expired with an unknown outcome",
@@ -1058,20 +1112,12 @@ async def _persist_unknown_dispatch(
                 **(message.raw_provider_event or {}),
                 "failure": failure_type,
             }
-            if message.communication_log_id is None:
-                _record_communication(
-                    db,
-                    tenant_id=tenant_id,
-                    message=message,
-                    user_id=user_id,
-                    status="unknown",
-                )
-            _append_sms_outcome_audit(
+            await _ensure_unknown_delivery_evidence(
                 db,
+                tenant_id=tenant_id,
                 message=message,
                 actor_user_id=user_id,
-                outcome="outcome_unknown",
-                metadata={"failure_type": failure_type},
+                reason=f"provider_boundary:{failure_type}",
             )
         await db.commit()
     except Exception:
@@ -1115,6 +1161,7 @@ async def send_sms(
             replay=replay,
             request_digest=replay_digest,
             now=now,
+            actor_user_id=user_id,
         )
         if before_success_commit:
             await before_success_commit(resolved)
@@ -1860,6 +1907,17 @@ async def reconcile_sms_message(
     provider_message_id: str | None = None,
 ) -> SmsMessage:
     """Record operator context or resolve uncertainty with exact provider truth."""
+    await db.execute(
+        text(
+            "SELECT pg_catalog.pg_advisory_xact_lock("
+            "pg_catalog.hashtextextended(:sms_reconciliation_lock, 0))"
+        ),
+        {
+            "sms_reconciliation_lock": (
+                f"lawhand:sms-reconciliation:v1:{tenant_id}:twilio"
+            )
+        },
+    )
     message = await db.scalar(
         select(SmsMessage)
         .where(
@@ -1914,6 +1972,13 @@ async def reconcile_sms_message(
             **(message.raw_provider_event or {}),
             "operator_attestation": "not_seen_in_provider_console",
         }
+        await _ensure_unknown_delivery_evidence(
+            db,
+            tenant_id=tenant_id,
+            message=message,
+            actor_user_id=operator_user_id,
+            reason="operator_attested_unknown",
+        )
         automation_run = await db.scalar(
             select(TaskAutomationRun)
             .where(
@@ -2242,6 +2307,15 @@ async def mark_stale_sms_dispatches_for_reconciliation() -> int:
                     **(row.raw_provider_event or {}),
                     "reconciliation_reason": reason,
                 }
+                if row.status == "provider_unknown":
+                    await _ensure_unknown_delivery_evidence(
+                        db,
+                        tenant_id=tenant_id,
+                        message=row,
+                        actor_user_id=None,
+                        reason=f"scheduler:{reason}",
+                        audit_actor_type="system",
+                    )
             if rows:
                 await db.commit()
                 changed += len(rows)
@@ -2353,19 +2427,30 @@ async def apply_status(
         if automation_run:
             automation_run.sms_message_id = message.id
             automation_run.reconciliation_required = False
+            automation_run.provider = "twilio"
+            automation_run.provider_message_id = sid
             if incoming in {"delivered", "read"}:
                 automation_run.status = "sent"
                 automation_run.delivery_certainty = "confirmed_sent"
                 automation_run.error_message = None
+                automation_run.delivery_detail = (
+                    "SMS delivery was confirmed by a signed provider callback."
+                )
             elif incoming in {"failed", "undelivered"}:
                 automation_run.status = "failed"
                 automation_run.delivery_certainty = "provider_failed_after_acceptance"
                 automation_run.error_message = (
                     "SMS delivery failed after provider acceptance"
                 )
+                automation_run.delivery_detail = automation_run.error_message
             else:
                 automation_run.status = "submitted"
                 automation_run.delivery_certainty = "provider_accepted"
+                automation_run.error_message = None
+                automation_run.delivery_detail = (
+                    "SMS was accepted by the provider; delivery remains "
+                    "signed-callback reconciled."
+                )
         _append_sms_outcome_audit(
             db,
             message=message,
