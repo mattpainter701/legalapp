@@ -911,63 +911,6 @@ WHERE s.enabled IS TRUE
   AND length(trim(p.reviewed_by)) > 0
   AND v.metadata->>'bootstrap' IS DISTINCT FROM 'true';
 
-CREATE OR REPLACE VIEW public_authority_history_facts AS
-SELECT h.*
-  FROM authority_history_facts h
-  JOIN authority_records r
-    ON r.corpus_version=h.corpus_version
-   AND r.authority_key=h.authority_key
-  JOIN public_authority_source_lineage pas
-    ON pas.source_key=r.source_key
-   AND pas.corpus_version=r.corpus_version
- WHERE h.related_authority_key IS NULL
-    OR EXISTS (
-      SELECT 1 FROM authority_records related
-      JOIN public_authority_source_lineage related_pas
-        ON related_pas.source_key=related.source_key
-       AND related_pas.corpus_version=related.corpus_version
-      WHERE related.corpus_version=h.corpus_version
-        AND related.authority_key=h.related_authority_key
-    );
-
--- Citation evidence is public only when both the cited target and the citing
--- authority/opinion retain exact current lineage.  Revoking either endpoint
--- suppresses the edge and every derived treatment/alert that depends on it.
-CREATE OR REPLACE VIEW public_authority_citation_facts AS
-SELECT c.*
-  FROM authority_citation_facts c
-  JOIN authority_records cited
-    ON cited.corpus_version=c.corpus_version
-   AND cited.authority_key=c.cited_authority_key
-  JOIN public_authority_source_lineage cited_pas
-    ON cited_pas.source_key=cited.source_key
-   AND cited_pas.corpus_version=cited.corpus_version
- WHERE (
-       c.citing_authority_key IS NOT NULL
-       AND EXISTS (
-         SELECT 1 FROM authority_records citing
-         JOIN public_authority_source_lineage citing_pas
-           ON citing_pas.source_key=citing.source_key
-          AND citing_pas.corpus_version=citing.corpus_version
-         WHERE citing.corpus_version=c.corpus_version
-           AND citing.authority_key=c.citing_authority_key
-       )
-   ) OR (
-       c.citing_opinion_id IS NOT NULL
-       AND EXISTS (
-         SELECT 1 FROM authority_case_opinions o
-         JOIN authority_case_clusters cl
-           ON cl.corpus_version=o.corpus_version
-          AND cl.cluster_id=o.cluster_id
-         JOIN public_authority_source_lineage citing_pas
-           ON citing_pas.source_key=cl.source_key
-          AND citing_pas.corpus_version=cl.corpus_version
-         WHERE o.corpus_version=c.corpus_version
-           AND o.opinion_id=c.citing_opinion_id
-           AND cl.public_namespace='public-authority'
-       )
-   );
-
 -- The admission table is the sole public-source allowlist.  Storage rows may
 -- carry a display label, but that label cannot grant public authority access.
 CREATE OR REPLACE FUNCTION apply_public_authority_admission() RETURNS trigger
@@ -1049,6 +992,66 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_authority_citation_fact_identity
       COALESCE(citing_opinion_id, 0), COALESCE(cited_opinion_id, 0),
       COALESCE(source_hash, ''), COALESCE(evidence_span, '')
     );
+
+-- These projections depend on the fact tables above.  Keep them after table
+-- creation so both fresh installs and isolated historical-upgrade schemas can
+-- initialize atomically.
+CREATE OR REPLACE VIEW public_authority_history_facts AS
+SELECT h.*
+  FROM authority_history_facts h
+  JOIN authority_records r
+    ON r.corpus_version=h.corpus_version
+   AND r.authority_key=h.authority_key
+  JOIN public_authority_source_lineage pas
+    ON pas.source_key=r.source_key
+   AND pas.corpus_version=r.corpus_version
+ WHERE h.related_authority_key IS NULL
+    OR EXISTS (
+      SELECT 1 FROM authority_records related
+      JOIN public_authority_source_lineage related_pas
+        ON related_pas.source_key=related.source_key
+       AND related_pas.corpus_version=related.corpus_version
+      WHERE related.corpus_version=h.corpus_version
+        AND related.authority_key=h.related_authority_key
+    );
+
+-- Citation evidence is public only when both the cited target and the citing
+-- authority/opinion retain exact current lineage.  Revoking either endpoint
+-- suppresses the edge and every derived treatment/alert that depends on it.
+CREATE OR REPLACE VIEW public_authority_citation_facts AS
+SELECT c.*
+  FROM authority_citation_facts c
+  JOIN authority_records cited
+    ON cited.corpus_version=c.corpus_version
+   AND cited.authority_key=c.cited_authority_key
+  JOIN public_authority_source_lineage cited_pas
+    ON cited_pas.source_key=cited.source_key
+   AND cited_pas.corpus_version=cited.corpus_version
+ WHERE (
+       c.citing_authority_key IS NOT NULL
+       AND EXISTS (
+         SELECT 1 FROM authority_records citing
+         JOIN public_authority_source_lineage citing_pas
+           ON citing_pas.source_key=citing.source_key
+          AND citing_pas.corpus_version=citing.corpus_version
+         WHERE citing.corpus_version=c.corpus_version
+           AND citing.authority_key=c.citing_authority_key
+       )
+   ) OR (
+       c.citing_opinion_id IS NOT NULL
+       AND EXISTS (
+         SELECT 1 FROM authority_case_opinions o
+         JOIN authority_case_clusters cl
+           ON cl.corpus_version=o.corpus_version
+          AND cl.cluster_id=o.cluster_id
+         JOIN public_authority_source_lineage citing_pas
+           ON citing_pas.source_key=cl.source_key
+          AND citing_pas.corpus_version=cl.corpus_version
+         WHERE o.corpus_version=c.corpus_version
+           AND o.opinion_id=c.citing_opinion_id
+           AND cl.public_namespace='public-authority'
+       )
+   );
 
 CREATE TABLE IF NOT EXISTS authority_treatment_assessments (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
