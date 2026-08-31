@@ -44,6 +44,17 @@ cannot use it to access Workspace MCP data. The public/private boundary remains
 explicit across storage, authorization, provenance, retention, deletion,
 retrieval, logs, and tests.
 
+Public authority eligibility is an explicit active row in
+`citator_public_source_admissions`, containing reviewed catalog/manifest
+identity, digest, reviewer, and namespace. Database admission triggers protect
+the `public_namespace` fields on legal documents and caselaw clusters; source
+payload metadata cannot promote a tenant, firm, private, custom, or unknown
+source. Public search, detail, citation/network, court/docket, coverage,
+isolation, and promotion paths require the same admission and source lineage.
+Unknown or non-admitted rows are suppressed and cannot support a coverage
+claim. This is metadata-only control-plane evidence: it does not imply a
+production harvest, comprehensive currentness, or a Brief Check integration.
+
 Coverage claims are fail-closed. A source must have a reviewed rights decision
 (`official`, `open`, `licensed`, `prohibited`, or `pending_review`), a promoted
 corpus version, and passing audit evidence before it can report a supported
