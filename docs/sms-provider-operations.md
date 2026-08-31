@@ -11,8 +11,11 @@ updated only by a valid signed status callback.
 Public intake records the disclosure version, language, source, timestamp,
 timezone, quiet-hours window, verified mobile, and allowed message categories.
 Outbound SMS requires active consent, a verified E.164 mobile matching the
-contact, and a non-revoked consent row. STOP-family replies revoke SMS consent;
-START/UNSTOP can restore it only when the verified mobile still matches.
+contact, a non-revoked consent row, and an explicit grant for the message
+category. STOP-family replies revoke SMS consent; START/UNSTOP can restore it
+only when the verified mobile, disclosure, category grants, and consent expiry
+remain valid. LawHand records HELP and opt-out keywords; the provider messaging
+service remains responsible for its configured regulatory keyword responses.
 
 Inbound messages are matched inside the tenant. Missing, duplicate, or
 ambiguous contact/matter matches become review items and are not attached to a
@@ -30,7 +33,8 @@ accepted the first request.
 Webhook endpoints require the provider signature and tenant-specific secret.
 They deduplicate provider message IDs and ignore out-of-order status regressions.
 Credential rotation should be followed by a signed callback test and a review of
-the provider configuration audit trail.
+the provider configuration audit trail. Audit metadata records tenant, actor,
+provider, readiness, activation, and ownership model, but never credentials.
 
 ## Assistant behavior
 

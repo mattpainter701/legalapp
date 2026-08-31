@@ -38,8 +38,7 @@ from app.models.matter_document import MatterDocument
 from app.models.plugin import Matter
 from app.models.task import Task, TaskAutomationRun
 from app.models.tenant import Tenant, TenantSettings
-from app.models.contact import Contact, Lead
-from app.models.conversion_loop import LeadChannelConsent
+from app.models.contact import Contact
 from app.models.document import Document
 from app.models.matter_party import MatterParty
 from app.schemas.chat_action import (
@@ -57,7 +56,13 @@ from app.services.connected_mail import (
     send_client_email,
 )
 from app.services.email import email_service
-from app.services.sms import SmsError, send_sms
+from app.services.sms import (
+    SmsError,
+    consent_authorizes_sms,
+    load_sms_consent,
+    normalize_e164,
+    send_sms,
+)
 from app.services.task_workflow import (
     append_task_event,
     staged_review_is_approved,
@@ -76,7 +81,7 @@ APPROVAL_TO_STATUSES = frozenset({"in_progress"})
 TASK_AUTOMATION_JOB = "task_automation"
 
 # Delivery states an attorney may see. Only "sent" means the client was contacted.
-DELIVERY_STATUSES = ("queued", "sending", "sent", "failed")
+DELIVERY_STATUSES = ("queued", "sending", "submitted", "sent", "failed")
 TERMINAL_DELIVERY_STATUSES = ("sent", "failed")
 
 
@@ -411,13 +416,13 @@ async def _run_sms_client(
             "Not sent: SMS consent, phone, or matter-party binding changed",
             delivery_certainty=DELIVERY_NOT_ATTEMPTED,
         )
-    binding = action.recipient_bindings[0]
     if len(action.recipient_bindings) != 1:
         return ActionExecutionResult(
             False,
             "Not sent: SMS actions must target exactly one matter party",
             delivery_certainty=DELIVERY_NOT_ATTEMPTED,
         )
+    binding = action.recipient_bindings[0]
     try:
         async with async_session_maker() as delivery_db:
             await set_tenant_context(delivery_db, str(task.tenant_id))
@@ -444,7 +449,7 @@ async def _run_sms_client(
         "SMS was accepted by the configured provider; delivery remains webhook-reconciled.",
         provider="twilio",
         provider_message_id=message.provider_message_id,
-        delivery_certainty=DELIVERY_CONFIRMED_SENT,
+        delivery_certainty="provider_accepted",
     )
 
 
@@ -707,66 +712,18 @@ async def _sms_bindings_are_current(
     requested_ids = [binding.party_id for binding in action.recipient_bindings]
     rows = (
         await db.execute(
-            select(
-                MatterParty.id,
-                MatterParty.contact_id,
-                Contact.phone,
-                LeadChannelConsent.sms_allowed,
-                LeadChannelConsent.sms_status,
-                LeadChannelConsent.phone_verified,
-                LeadChannelConsent.mobile_e164,
-                LeadChannelConsent.revoked_at,
-                LeadChannelConsent.consented_at,
-                LeadChannelConsent.consent_expires_at,
-                LeadChannelConsent.consent_source,
-                LeadChannelConsent.disclosure_version,
-                LeadChannelConsent.allowed_categories,
-            )
+            select(MatterParty.id, MatterParty.contact_id, Contact.phone)
             .join(Contact, MatterParty.contact_id == Contact.id)
-            .join(Lead, Lead.contact_id == Contact.id)
-            .join(LeadChannelConsent, LeadChannelConsent.lead_id == Lead.id)
             .where(
                 MatterParty.id.in_(requested_ids),
                 MatterParty.tenant_id == task.tenant_id,
                 MatterParty.matter_id == action.matter_id,
                 Contact.tenant_id == task.tenant_id,
-                Lead.tenant_id == task.tenant_id,
-                LeadChannelConsent.tenant_id == task.tenant_id,
             )
             .with_for_update()
         )
     ).all()
-    current = {
-        party_id: (
-            contact_id,
-            phone,
-            allowed,
-            status,
-            verified,
-            mobile,
-            revoked,
-            consented_at,
-            consent_expires_at,
-            consent_source,
-            disclosure_version,
-            allowed_categories,
-        )
-        for (
-            party_id,
-            contact_id,
-            phone,
-            allowed,
-            status,
-            verified,
-            mobile,
-            revoked,
-            consented_at,
-            consent_expires_at,
-            consent_source,
-            disclosure_version,
-            allowed_categories,
-        ) in rows
-    }
+    current = {party_id: (contact_id, phone) for party_id, contact_id, phone in rows}
     if len(current) != len(set(requested_ids)):
         return False
     for binding in action.recipient_bindings:
@@ -774,23 +731,16 @@ async def _sms_bindings_are_current(
         if row is None or row[0] != binding.contact_id:
             return False
         try:
-            from app.services.sms import normalize_e164
-
             current_phone = normalize_e164(row[1])
         except SmsError:
             return False
-        if (
-            current_phone != binding.phone
-            or not row[2]
-            or row[3] != "active"
-            or not row[4]
-            or row[5] != current_phone
-            or row[6]
-            or not row[7]
-            or not row[8]
-            or not row[9]
-            or (row[10] and row[10] <= datetime.now(timezone.utc))
-            or (row[11] and action.category not in row[11])
+        consent = await load_sms_consent(
+            db, task.tenant_id, binding.contact_id, lock=True
+        )
+        if current_phone != binding.phone or not consent_authorizes_sms(
+            consent=consent,
+            to_number=current_phone,
+            category=action.category,
         ):
             return False
     return True
@@ -1122,7 +1072,11 @@ async def run_task_automation(
             # OAuth token refresh may commit inside the delivery handler, which
             # clears SET LOCAL. Rebind before writing the durable outcome.
             await set_tenant_context(db, str(locked_tenant_id))
-            run.status = "sent" if result.succeeded else "failed"
+            run.status = (
+                "submitted"
+                if result.succeeded and result.delivery_certainty == "provider_accepted"
+                else ("sent" if result.succeeded else "failed")
+            )
             run.error_message = None if result.succeeded else result.detail[:500]
             run.delivery_detail = result.detail[:500]
             run.delivery_certainty = result.delivery_certainty
@@ -1282,14 +1236,14 @@ async def enqueue_durable_automation(
         .where(
             TaskAutomationRun.tenant_id == task.tenant_id,
             TaskAutomationRun.task_id == task.id,
-            TaskAutomationRun.status.in_(("queued", "sending")),
+            TaskAutomationRun.status.in_(("queued", "sending", "submitted")),
         )
         .order_by(TaskAutomationRun.created_at.desc(), TaskAutomationRun.id.desc())
         .limit(1)
     )
     if active_run is not None:
         raise ActionApprovalConflict(
-            "An earlier email delivery is still queued or in progress. Wait for "
+            "An earlier delivery is still queued, submitted, or in progress. Wait for "
             "its outcome before approving another draft."
         )
 

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -6,13 +6,16 @@ import pytest
 
 from app.models.sms import SmsMessage, SmsProviderConfig, SmsReviewItem
 from app.services.sms import (
+    consent_authorizes_sms,
     in_quiet_hours,
     normalize_e164,
+    provider_status_transition_allowed,
     twilio_signature,
     verify_twilio_signature,
 )
 from app.services.sms import _request_digest
 from app.schemas.chat_action import SmsClientAction, ResolvedSmsRecipientBinding
+from app.schemas.conversion_loop import ConsentUpdate, IntakeSubmissionCreate
 from app.schemas.sms import SmsProviderConfigUpdate
 
 
@@ -81,6 +84,7 @@ def test_sms_provider_activation_requires_explicit_compliance_evidence():
         account_sid="AC123",
         auth_token="auth-token",
         webhook_secret="webhook-secret",
+        messaging_service_sid="MG123",
         sender_ready=True,
         is_active=True,
         compliance_snapshot={
@@ -143,3 +147,86 @@ def test_sms_request_digest_is_stable_and_request_bound():
     }
     assert _request_digest(**args) == _request_digest(**args)
     assert _request_digest(**args) != _request_digest(**{**args, "body": "Changed"})
+
+
+def _active_consent(**overrides):
+    values = {
+        "sms_allowed": True,
+        "sms_status": "active",
+        "phone_verified": True,
+        "mobile_e164": "+15551234567",
+        "revoked_at": None,
+        "consented_at": datetime.now(timezone.utc) - timedelta(minutes=5),
+        "consent_expires_at": datetime.now(timezone.utc) + timedelta(days=30),
+        "consent_source": "public_intake",
+        "disclosure_version": "sms-v3",
+        "allowed_categories": ["appointment", "lead_follow_up"],
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def test_sms_consent_requires_provenance_expiry_and_explicit_category_grant():
+    assert consent_authorizes_sms(
+        consent=_active_consent(),
+        to_number="+15551234567",
+        category="appointment",
+    )
+    for override in (
+        {"consented_at": None},
+        {"consent_source": None},
+        {"disclosure_version": None},
+        {"revoked_at": datetime.now(timezone.utc)},
+        {"consent_expires_at": datetime.now(timezone.utc) - timedelta(seconds=1)},
+        {"allowed_categories": []},
+        {"allowed_categories": ["billing"]},
+    ):
+        assert not consent_authorizes_sms(
+            consent=_active_consent(**override),
+            to_number="+15551234567",
+            category="appointment",
+        )
+
+
+def test_provider_status_replay_and_out_of_order_events_cannot_regress_truth():
+    assert provider_status_transition_allowed(current="queued", incoming="sent")
+    assert provider_status_transition_allowed(current="sent", incoming="delivered")
+    assert provider_status_transition_allowed(current="delivered", incoming="read")
+    assert provider_status_transition_allowed(current="delivered", incoming="delivered")
+    assert not provider_status_transition_allowed(current="delivered", incoming="sent")
+    assert not provider_status_transition_allowed(
+        current="delivered", incoming="failed"
+    )
+    assert not provider_status_transition_allowed(
+        current="failed", incoming="delivered"
+    )
+    assert not provider_status_transition_allowed(
+        current="sent", incoming="provider-made-this-up"
+    )
+
+
+def test_active_sms_consent_contract_requires_disclosure_mobile_and_categories():
+    with pytest.raises(ValueError, match="disclosure version"):
+        IntakeSubmissionCreate(
+            answers={},
+            idempotency_key="intake-sms-consent",
+            sms_consent=True,
+        )
+    with pytest.raises(ValueError, match="allowed categories"):
+        ConsentUpdate(
+            sms_allowed=True,
+            phone_verified=True,
+            mobile_e164="+15551234567",
+            disclosure_version="sms-v3",
+            allowed_categories=[],
+        )
+    consent = ConsentUpdate(
+        sms_allowed=True,
+        phone_verified=True,
+        mobile_e164="+15551234567",
+        disclosure_version="sms-v3",
+        allowed_categories=[" appointment ", "appointment", "lead_follow_up"],
+        quiet_hours_start="21:00",
+        quiet_hours_end="07:00",
+    )
+    assert consent.allowed_categories == ["appointment", "lead_follow_up"]

@@ -156,7 +156,7 @@ class ProposeClientEmailArgs(ChatActionModel):
     """
 
     matter_id: UUID
-    recipient_party_ids: list[UUID] = Field(min_length=1, max_length=10)
+    recipient_party_ids: list[UUID] = Field(min_length=1, max_length=1)
     title: str = Field(min_length=1, max_length=500)
     subject: str = Field(min_length=1, max_length=300)
     body: str = Field(min_length=1, max_length=20_000)
@@ -304,7 +304,7 @@ class SmsClientAction(ChatActionModel):
 
     type: Literal["sms_client"]
     recipient_bindings: list[ResolvedSmsRecipientBinding] = Field(
-        min_length=1, max_length=10
+        min_length=1, max_length=1
     )
     body: str = Field(min_length=1, max_length=1_600)
     category: str = Field(default="staff_authored", min_length=1, max_length=50)

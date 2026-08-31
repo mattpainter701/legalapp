@@ -4,8 +4,8 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
-revision = "148_sms_lifecycle"
-down_revision = "147_studio_drafts"
+revision = "149_sms_lifecycle"
+down_revision = "148_configurable_workflows"
 branch_labels = None
 depends_on = None
 
@@ -23,11 +23,13 @@ def _rls(table: str) -> None:
 def upgrade() -> None:
     # Parent composite keys make tenant ownership enforceable by PostgreSQL,
     # not merely by application predicates or RLS policies.
-    for table, name in (
-        ("contacts", "uq_contacts_tenant_id"),
-        ("communication_logs", "uq_communication_logs_tenant_id"),
-    ):
-        op.create_unique_constraint(name, table, ["tenant_id", "id"])
+    # Migration 148 already owns contacts.uq_contacts_tenant_id. SMS adds only
+    # the remaining composite target that did not exist at the prior head.
+    op.create_unique_constraint(
+        "uq_communication_logs_tenant_id",
+        "communication_logs",
+        ["tenant_id", "id"],
+    )
     op.add_column(
         "lead_channel_consents",
         sa.Column(
@@ -263,4 +265,3 @@ def downgrade() -> None:
     ):
         op.drop_column("lead_channel_consents", name)
     op.drop_constraint("uq_communication_logs_tenant_id", "communication_logs")
-    op.drop_constraint("uq_contacts_tenant_id", "contacts")

@@ -26,6 +26,10 @@ class SmsProviderConfigUpdate(BaseModel):
                     "Active SMS configuration requires compliance evidence: "
                     + ", ".join(missing)
                 )
+            if not self.messaging_service_sid and not self.from_number:
+                raise ValueError(
+                    "Active SMS configuration requires a messaging service or sender"
+                )
         return self
 
 

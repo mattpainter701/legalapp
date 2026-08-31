@@ -1,8 +1,8 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class IntakeFormCreate(BaseModel):
@@ -39,6 +39,17 @@ class IntakeSubmissionCreate(BaseModel):
     quiet_hours_end: str | None = Field(default=None, max_length=5)
     consent_expires_at: datetime | None = None
 
+    @model_validator(mode="after")
+    def sms_opt_in_carries_disclosure_provenance(self):
+        if self.sms_consent and not str(self.disclosure_version or "").strip():
+            raise ValueError("SMS consent requires a disclosure version")
+        if self.consent_expires_at and (
+            self.consent_expires_at.tzinfo is None
+            or self.consent_expires_at <= datetime.now(timezone.utc)
+        ):
+            raise ValueError("Consent expiry must be in the future")
+        return self
+
 
 class BookingCreate(BaseModel):
     lead_id: uuid.UUID
@@ -61,6 +72,29 @@ class ConsentUpdate(BaseModel):
     quiet_hours_end: str | None = Field(default=None, max_length=5)
     allowed_categories: list[str] = Field(default_factory=list, max_length=20)
     consent_expires_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def active_sms_consent_is_complete(self):
+        categories = list(
+            dict.fromkeys(category.strip() for category in self.allowed_categories)
+        )
+        if any(not category or len(category) > 50 for category in categories):
+            raise ValueError("SMS consent categories must be 1-50 characters")
+        self.allowed_categories = categories
+        if bool(self.quiet_hours_start) != bool(self.quiet_hours_end):
+            raise ValueError("Quiet hours require both a start and end")
+        if self.sms_allowed and (
+            not self.phone_verified or not self.mobile_e164 or not categories
+        ):
+            raise ValueError(
+                "Active SMS consent requires a verified mobile and allowed categories"
+            )
+        if self.consent_expires_at and (
+            self.consent_expires_at.tzinfo is None
+            or self.consent_expires_at <= datetime.now(timezone.utc)
+        ):
+            raise ValueError("Consent expiry must be in the future")
+        return self
 
 
 class TriageDecision(BaseModel):

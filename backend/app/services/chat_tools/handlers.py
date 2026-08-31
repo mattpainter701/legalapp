@@ -17,17 +17,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import re
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import and_, func, or_, select
 
 from app.config import get_settings
-from app.models.contact import Contact, Lead
-from app.models.conversion_loop import LeadChannelConsent
+from app.models.contact import Contact
 from app.models.document import Chunk, Document
 from app.models.matter_assignment import MatterAssignment
 from app.models.matter_party import MatterParty
@@ -57,6 +54,12 @@ from app.services.generated_artifacts import (
     GeneratedArtifactError,
     create_initial_generated_artifact,
     derive_artifact_request_id,
+)
+from app.services.sms import (
+    SmsError,
+    consent_authorizes_sms,
+    load_sms_consent,
+    normalize_e164,
 )
 from app.services.cloud_artifact_materialization import (
     CloudArtifactMaterializationError,
@@ -1008,75 +1011,29 @@ async def propose_client_sms(
     requested = list(dict.fromkeys(args.recipient_party_ids))
     rows = (
         await context.db.execute(
-            select(
-                MatterParty.id,
-                MatterParty.contact_id,
-                Contact.phone,
-                LeadChannelConsent.sms_allowed,
-                LeadChannelConsent.sms_status,
-                LeadChannelConsent.phone_verified,
-                LeadChannelConsent.mobile_e164,
-                LeadChannelConsent.revoked_at,
-                LeadChannelConsent.consented_at,
-                LeadChannelConsent.consent_expires_at,
-                LeadChannelConsent.consent_source,
-                LeadChannelConsent.disclosure_version,
-                LeadChannelConsent.allowed_categories,
-            )
+            select(MatterParty.id, MatterParty.contact_id, Contact.phone)
             .join(Contact, MatterParty.contact_id == Contact.id)
-            .join(Lead, Lead.contact_id == Contact.id)
-            .join(LeadChannelConsent, LeadChannelConsent.lead_id == Lead.id)
             .where(
                 MatterParty.id.in_(requested),
                 MatterParty.tenant_id == context.tenant_id,
                 MatterParty.matter_id == args.matter_id,
                 Contact.tenant_id == context.tenant_id,
-                Lead.tenant_id == context.tenant_id,
-                LeadChannelConsent.tenant_id == context.tenant_id,
             )
         )
     ).all()
     resolved: dict[uuid.UUID, tuple[uuid.UUID, str]] = {}
-    for (
-        party_id,
-        contact_id,
-        phone,
-        allowed,
-        status,
-        verified,
-        mobile,
-        revoked,
-        consented_at,
-        consent_expires_at,
-        consent_source,
-        disclosure_version,
-        allowed_categories,
-    ) in rows:
+    for party_id, contact_id, phone in rows:
         try:
-            stored = re.sub(r"[ ().-]", "", str(phone or ""))
-            if stored.startswith("00"):
-                stored = "+" + stored[2:]
-            if (
-                allowed
-                and status == "active"
-                and verified
-                and mobile == stored
-                and not revoked
-                and consented_at
-                and consent_source
-                and disclosure_version
-                and (
-                    not consent_expires_at
-                    or consent_expires_at > datetime.now(timezone.utc)
-                )
-                and (not allowed_categories or args.category in allowed_categories)
-                and re.fullmatch(r"\+[1-9]\d{7,14}", stored)
-            ):
-                if party_id in resolved and resolved[party_id][1] != stored:
-                    raise ChatToolError("invalid_recipient", "SMS consent is ambiguous")
-                resolved[party_id] = (contact_id, stored)
-        except (TypeError, ValueError):
+            stored = normalize_e164(phone)
+        except SmsError:
             continue
+        consent = await load_sms_consent(context.db, context.tenant_id, contact_id)
+        if consent_authorizes_sms(
+            consent=consent,
+            to_number=stored,
+            category=args.category,
+        ):
+            resolved[party_id] = (contact_id, stored)
     missing = [party_id for party_id in requested if party_id not in resolved]
     if missing:
         raise ChatToolError(

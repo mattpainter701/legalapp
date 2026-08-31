@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, set_tenant_context
-from app.middleware.tenant import get_current_user, require_admin
+from app.middleware.tenant import require_admin
 from app.models.sms import SmsProviderConfig, SmsReviewItem
 from app.schemas.sms import (
     SmsMessageResponse,
@@ -18,6 +18,8 @@ from app.schemas.sms import (
     SmsReviewResponse,
     SmsSendRequest,
 )
+from app.services.access_control import require_capability
+from app.services.operator_audit import record_operator_audit
 from app.services.sms import (
     SmsError,
     apply_inbound,
@@ -33,6 +35,7 @@ router = APIRouter(prefix="/api/sms", tags=["sms"])
 @router.put("/config", response_model=SmsProviderConfigResponse)
 async def update_sms_config(
     body: SmsProviderConfigUpdate,
+    request: Request,
     current_user=Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -56,6 +59,23 @@ async def update_sms_config(
     row.is_active = body.is_active
     row.compliance_snapshot = body.compliance_snapshot
     row.updated_by_user_id = current_user.id
+    await db.flush()
+    await record_operator_audit(
+        db,
+        request,
+        action="sms.provider_config.updated",
+        resource_type="sms_provider_config",
+        resource_id=str(row.id),
+        actor_type="tenant_user",
+        actor_id=str(current_user.id),
+        metadata={
+            "tenant_id": str(tenant_id),
+            "provider": row.provider,
+            "sender_ready": row.sender_ready,
+            "is_active": row.is_active,
+            "ownership_model": row.compliance_snapshot.get("ownership_model"),
+        },
+    )
     await db.commit()
     await db.refresh(row)
     return row
@@ -80,7 +100,7 @@ async def get_sms_config(
 @router.post("/send", response_model=SmsMessageResponse)
 async def send_sms_message(
     body: SmsSendRequest,
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_capability("manage_matters")),
     db: AsyncSession = Depends(get_db),
 ):
     await set_tenant_context(db, str(current_user.tenant_id))
@@ -162,7 +182,8 @@ async def status_sms_webhook(
 
 @router.get("/review", response_model=list[SmsReviewResponse])
 async def list_sms_review_items(
-    current_user=Depends(get_current_user), db: AsyncSession = Depends(get_db)
+    current_user=Depends(require_capability("manage_matters")),
+    db: AsyncSession = Depends(get_db),
 ):
     await set_tenant_context(db, str(current_user.tenant_id))
     return list(
