@@ -329,8 +329,7 @@ def test_repository_search_falls_back_to_fts_when_query_embedding_unavailable():
 
     assert "embedding <=>" not in sql
     assert "d.document_status" not in sql
-    assert "FROM legal_sources ls" in sql
-    assert "ls.enabled IS TRUE" in sql
+    assert "public_authority_source_lineage" in sql
     assert "websearch_to_tsquery" in sql
     assert "source_url" in sql
     assert "{0,cite}" in sql

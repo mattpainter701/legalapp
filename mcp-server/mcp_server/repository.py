@@ -54,25 +54,9 @@ def public_source_predicate(
     query parameters elsewhere.
     """
     return (
-        f"EXISTS (SELECT 1 FROM legal_sources {source_alias} "
-        f"JOIN citator_public_source_admissions {admission_alias} "
-        f"ON {admission_alias}.source_key={source_alias}.source_key "
-        f"AND {admission_alias}.active IS TRUE "
-        f"AND {admission_alias}.namespace='public-authority' "
-        f"AND {admission_alias}.manifest_sha256="
-        f"(SELECT manifest_hash FROM authority_corpus_versions WHERE version={version_expr}) "
-        f"WHERE {source_alias}.source_key={source_expr} "
-        f"AND {source_alias}.public_namespace='public-authority' "
-        f"AND {source_alias}.enabled IS TRUE "
-        f"AND {source_alias}.storage_policy <> 'prohibited' "
-        f"AND {source_alias}.rights_decision IN ('official','open','licensed') "
-        f"AND {source_alias}.reviewed_at IS NOT NULL "
-        f"AND {source_alias}.reviewed_by IS NOT NULL "
-        f"AND {source_alias}.metadata->>'catalog_schema_version'="
-        f"{admission_alias}.catalog_schema_version "
-        f"AND {source_alias}.metadata->>'implementation_status' IS NOT NULL "
-        f"AND {admission_alias}.manifest_reference <> '' "
-        f"AND {admission_alias}.manifest_sha256 <> '')"
+        "EXISTS (SELECT 1 FROM public_authority_source_lineage pas "
+        f"WHERE pas.source_key={source_expr} "
+        f"AND pas.corpus_version={version_expr})"
     )
 
 

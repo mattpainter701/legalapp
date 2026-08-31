@@ -732,6 +732,34 @@ CREATE TABLE IF NOT EXISTS citator_public_source_admissions (
     CHECK (length(trim(reviewed_by)) > 0)
 );
 
+-- Single version-bound public-source contract consumed by retrieval,
+-- coverage, audits, and operational projections.  Keeping this as a view
+-- prevents individual callers from accidentally weakening one predicate.
+CREATE OR REPLACE VIEW public_authority_source_lineage AS
+SELECT s.source_key, v.version AS corpus_version,
+       s.metadata->>'catalog_schema_version' AS catalog_schema_version,
+       p.manifest_reference, p.manifest_sha256,
+       s.enabled, s.reviewed_at, s.reviewed_by,
+       s.rights_decision, s.storage_policy, s.public_namespace,
+       s.metadata->>'implementation_status' AS implementation_status
+FROM legal_sources s
+JOIN citator_public_source_admissions p
+  ON p.source_key=s.source_key
+ AND p.active IS TRUE
+ AND p.namespace='public-authority'
+JOIN authority_corpus_versions v
+  ON p.manifest_sha256=v.manifest_hash
+ AND p.catalog_schema_version=s.metadata->>'catalog_schema_version'
+WHERE s.enabled IS TRUE
+  AND s.reviewed_at IS NOT NULL
+  AND s.reviewed_by IS NOT NULL
+  AND s.rights_decision IN ('official','open','licensed')
+  AND s.storage_policy <> 'prohibited'
+  AND s.public_namespace='public-authority'
+  AND s.metadata->>'implementation_status' IS NOT NULL
+  AND p.manifest_reference <> ''
+  AND p.manifest_sha256 <> '';
+
 -- The admission table is the sole public-source allowlist.  Storage rows may
 -- carry a display label, but that label cannot grant public authority access.
 CREATE OR REPLACE FUNCTION apply_public_authority_admission() RETURNS trigger
