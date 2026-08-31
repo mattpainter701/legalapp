@@ -29,7 +29,7 @@ class RecordingModel:
 def test_stage_schema_is_durable_and_dimension_checked():
     assert "CREATE TABLE IF NOT EXISTS opinion_embedding_backfill_stage" in SCHEMA_SQL
     assert (
-        "chunk_id uuid PRIMARY KEY REFERENCES opinion_chunks(id) ON DELETE RESTRICT"
+        "chunk_id uuid PRIMARY KEY REFERENCES opinion_chunks(id) ON DELETE CASCADE"
         in SCHEMA_SQL
     )
     assert "CHECK (vector_dims(embedding) = 1024)" in SCHEMA_SQL
@@ -47,6 +47,13 @@ def test_stage_selection_uses_shared_skip_locked_queue():
     assert "NOT EXISTS" in sql
     assert "FOR UPDATE OF oc SKIP LOCKED" in sql
     assert "HASHTEXT" not in sql
+
+
+def test_stage_selection_supports_indexed_keyset_progress():
+    sql = selection_sql(after_cursor=True)
+    assert "(oc.created_at, oc.id) > (%s::timestamptz, %s::uuid)" in sql
+    assert "ORDER BY oc.created_at, oc.id" in sql
+    assert "ix_opinion_chunks_unembedded_queue" in SCHEMA_SQL
 
 
 def test_stage_insert_is_idempotent():

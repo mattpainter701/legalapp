@@ -57,6 +57,8 @@ class BatchResult:
     serialize_seconds: float
     write_seconds: float
     total_seconds: float
+    cursor_created_at: str | None = None
+    cursor_chunk_id: str | None = None
 
     @property
     def chunks_per_second(self) -> float:
@@ -69,11 +71,17 @@ class BatchResult:
         return "opinion_stage " + json.dumps(payload, sort_keys=True)
 
 
-def selection_sql() -> str:
+def selection_sql(*, after_cursor: bool = False) -> str:
+    cursor_clause = ""
+    if after_cursor:
+        cursor_clause = """
+          AND (oc.created_at, oc.id) > (%s::timestamptz, %s::uuid)
+        """
     return f"""
-        SELECT oc.id, oc.content
+        SELECT oc.id, oc.content, oc.created_at
         FROM opinion_chunks AS oc
         WHERE oc.embedding IS NULL
+          {cursor_clause}
           AND NOT EXISTS (
               SELECT 1 FROM {STAGE_TABLE} AS staged
               WHERE staged.chunk_id = oc.id
@@ -124,13 +132,28 @@ def embed_batch(model, texts: list[str], batch_size: int) -> list[list[float]]:
     ]
 
 
-def process_once(config: OpinionBackfillConfig, model) -> BatchResult:
+def process_once(
+    config: OpinionBackfillConfig,
+    model,
+    *,
+    cursor_created_at: str | None = None,
+    cursor_chunk_id: str | None = None,
+) -> BatchResult:
     config.validate()
+    if (cursor_created_at is None) != (cursor_chunk_id is None):
+        raise ValueError("both keyset cursor values must be provided together")
     total_started = time.monotonic()
     with connect(config.db_url) as conn:
         with conn.cursor() as cur:
             select_started = time.monotonic()
-            cur.execute(selection_sql(), [config.batch_size])
+            params = (
+                [cursor_created_at, cursor_chunk_id, config.batch_size]
+                if cursor_created_at is not None
+                else [config.batch_size]
+            )
+            cur.execute(
+                selection_sql(after_cursor=cursor_created_at is not None), params
+            )
             rows = cur.fetchall()
             select_seconds = time.monotonic() - select_started
             if not rows:
@@ -182,6 +205,8 @@ def process_once(config: OpinionBackfillConfig, model) -> BatchResult:
         serialize_seconds=serialize_seconds,
         write_seconds=write_seconds,
         total_seconds=time.monotonic() - total_started,
+        cursor_created_at=rows[-1][2].isoformat(),
+        cursor_chunk_id=str(rows[-1][0]),
     )
 
 
@@ -211,11 +236,26 @@ def main() -> None:
     )
     config.validate()
     model = load_model(config.model)
+    cursor_created_at = None
+    cursor_chunk_id = None
     while True:
-        result = process_once(config, model)
+        result = process_once(
+            config,
+            model,
+            cursor_created_at=cursor_created_at,
+            cursor_chunk_id=cursor_chunk_id,
+        )
         print(result.log_line(config.worker_id), flush=True)
-        if not args.loop or result.selected == 0:
+        if not args.loop:
             return
+        if result.selected == 0:
+            if cursor_created_at is not None:
+                cursor_created_at = None
+                cursor_chunk_id = None
+                continue
+            return
+        cursor_created_at = result.cursor_created_at
+        cursor_chunk_id = result.cursor_chunk_id
         if args.loop_interval > 0:
             time.sleep(args.loop_interval)
 

@@ -94,9 +94,16 @@ def main() -> None:
     )
     config.validate()
     model = DirectCudaMxbai()
+    cursor_created_at = None
+    cursor_chunk_id = None
     while True:
         result = (
-            process_opinion_backfill_once(config, model)
+            process_opinion_backfill_once(
+                config,
+                model,
+                cursor_created_at=cursor_created_at,
+                cursor_chunk_id=cursor_chunk_id,
+            )
             if args.opinion_stage
             else process_once(config, model)
         )
@@ -107,7 +114,18 @@ def main() -> None:
             else f"direct_cuda worker={config.worker_id} embedded={count}"
         )
         print(line, flush=True)
-        if not args.loop or count == 0:
+        if not args.loop:
+            return
+        if args.opinion_stage:
+            if result.selected == 0:
+                if cursor_created_at is not None:
+                    cursor_created_at = None
+                    cursor_chunk_id = None
+                    continue
+                return
+            cursor_created_at = result.cursor_created_at
+            cursor_chunk_id = result.cursor_chunk_id
+        elif count == 0:
             return
         if args.loop_interval > 0:
             time.sleep(args.loop_interval)

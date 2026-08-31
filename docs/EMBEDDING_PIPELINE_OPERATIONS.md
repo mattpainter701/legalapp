@@ -83,10 +83,12 @@ Large legacy `opinion_chunks` backfills must not maintain the live HNSW graph
 one vector at a time when that write path is the measured bottleneck. Apply the
 schema first, then launch `scripts/opinion_backfill_worker.py` on Jetsons or
 `scripts/direct_cuda_embed_worker.py --opinion-stage` on the CUDA workstation.
-All workers use one shared `FOR UPDATE SKIP LOCKED` queue and bulk-insert into
-the logged `opinion_embedding_backfill_stage` table. The primary key makes
-retries idempotent, and each row records its model, version, content hash, and
-worker identity.
+All workers use one shared, indexed keyset queue with `FOR UPDATE SKIP LOCKED`
+and bulk-insert into the logged `opinion_embedding_backfill_stage` table. The
+primary key makes retries idempotent, and each row records its model, version,
+content hash, and worker identity. Source rechunking cascades deletion of a
+stale staged row so a changed opinion cannot block incremental synchronization
+and its replacement chunk can be staged normally.
 
 Staging does not change live `opinion_chunks.embedding` values or the HNSW
 index. Report throughput from the structured `opinion_stage` log lines and

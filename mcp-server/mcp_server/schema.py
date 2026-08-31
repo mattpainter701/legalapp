@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS opinion_chunks (
 -- write here without incrementally mutating the live HNSW graph. The staged
 -- rows remain inert until an operator separately validates and merges them.
 CREATE TABLE IF NOT EXISTS opinion_embedding_backfill_stage (
-    chunk_id uuid PRIMARY KEY REFERENCES opinion_chunks(id) ON DELETE RESTRICT,
+    chunk_id uuid PRIMARY KEY REFERENCES opinion_chunks(id) ON DELETE CASCADE,
     embedding vector(1024) NOT NULL,
     embedding_model text NOT NULL,
     embedding_version integer NOT NULL,
@@ -961,6 +961,8 @@ END $$;
 
 CREATE INDEX IF NOT EXISTS ix_opinion_chunks_court ON opinion_chunks(court_id);
 CREATE INDEX IF NOT EXISTS ix_opinion_chunks_embedding_version ON opinion_chunks(embedding_version);
+CREATE INDEX IF NOT EXISTS ix_opinion_chunks_unembedded_queue
+    ON opinion_chunks(created_at, id) WHERE embedding IS NULL;
 CREATE INDEX IF NOT EXISTS ix_opinions_source_modified_at ON opinions(source_modified_at);
 CREATE INDEX IF NOT EXISTS ix_source_sync_states_status ON source_sync_states(status, updated_at);
 CREATE INDEX IF NOT EXISTS ix_corpus_coverage_ledger_state ON corpus_coverage_ledger(acquisition_state, updated_at);
