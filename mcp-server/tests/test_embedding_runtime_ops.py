@@ -21,6 +21,8 @@ def test_desktop_cuda_supervisor_defaults_to_full_single_worker_coverage():
     assert 'default=0' in worker
     assert 'default=1' in worker
     assert "mixedbread-ai/mxbai-embed-large-v1" in worker
+    assert '"--opinion-stage"' in worker
+    assert "QUERY_PREFIX + text" not in worker
 
 
 def test_query_embedding_supervisor_is_private_and_restarting():

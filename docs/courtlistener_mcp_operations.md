@@ -548,6 +548,15 @@ The private sidecar smoke requires the server-to-server key. Public product
 smokes must remain off for the first-customer launch. When a later release is
 approved, use an existing scoped product key; raw keys are shown only once.
 
+## High-throughput legacy embedding backfill
+
+When incremental HNSW maintenance is the measured embedding bottleneck, use
+the durable sidecar procedure in
+[`EMBEDDING_PIPELINE_OPERATIONS.md`](EMBEDDING_PIPELINE_OPERATIONS.md#durable-legacy-opinion-staging).
+Staging keeps current search available and does not modify live vectors or the
+HNSW index. The later merge and one-time index rebuild remain an explicitly
+approved maintenance operation; never combine that cutover with worker launch.
+
 ## Known Pitfalls
 
 - Citation import for a trimmed corpus must not insert citation-map edges where
