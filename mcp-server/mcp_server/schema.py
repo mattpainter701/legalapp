@@ -853,23 +853,9 @@ CREATE TRIGGER public_authority_admission_lineage_immutable
 CREATE OR REPLACE FUNCTION serialize_public_source_lineage_mutation()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    IF TG_OP = 'UPDATE'
-       AND OLD.enabled IS NOT DISTINCT FROM NEW.enabled
-       AND OLD.reviewed_at IS NOT DISTINCT FROM NEW.reviewed_at
-       AND OLD.reviewed_by IS NOT DISTINCT FROM NEW.reviewed_by
-       AND OLD.rights_decision IS NOT DISTINCT FROM NEW.rights_decision
-       AND OLD.storage_policy IS NOT DISTINCT FROM NEW.storage_policy
-       AND OLD.public_namespace IS NOT DISTINCT FROM NEW.public_namespace
-       AND OLD.source_tier IS NOT DISTINCT FROM NEW.source_tier
-       AND OLD.geographic_scope IS NOT DISTINCT FROM NEW.geographic_scope
-       AND OLD.temporal_scope IS NOT DISTINCT FROM NEW.temporal_scope
-       AND OLD.expected_cadence IS NOT DISTINCT FROM NEW.expected_cadence
-       AND OLD.completeness_caveats IS NOT DISTINCT FROM NEW.completeness_caveats
-       AND OLD.claim_safe_wording IS NOT DISTINCT FROM NEW.claim_safe_wording
-       AND (OLD.metadata->>'implementation_status') IS NOT DISTINCT FROM
-           (NEW.metadata->>'implementation_status') THEN
-        RETURN NEW;
-    END IF;
+    -- Source rows feed customer-visible coverage, provenance, and health
+    -- projections.  Serialize every mutation with release promotion so a
+    -- newly added served field cannot silently escape the audited-state lock.
     PERFORM pg_advisory_xact_lock(hashtext('authority-corpus-release'));
     RETURN CASE WHEN TG_OP='DELETE' THEN OLD ELSE NEW END;
 END $$;
@@ -1027,28 +1013,41 @@ SELECT c.*
   JOIN public_authority_source_lineage cited_pas
     ON cited_pas.source_key=cited.source_key
    AND cited_pas.corpus_version=cited.corpus_version
+  JOIN authority_records citing
+    ON citing.corpus_version=c.corpus_version
+   AND citing.authority_key=c.citing_authority_key
+  JOIN public_authority_source_lineage citing_pas
+    ON citing_pas.source_key=citing.source_key
+   AND citing_pas.corpus_version=citing.corpus_version
  WHERE (
-       c.citing_authority_key IS NOT NULL
-       AND EXISTS (
-         SELECT 1 FROM authority_records citing
-         JOIN public_authority_source_lineage citing_pas
-           ON citing_pas.source_key=citing.source_key
-          AND citing_pas.corpus_version=citing.corpus_version
-         WHERE citing.corpus_version=c.corpus_version
-           AND citing.authority_key=c.citing_authority_key
-       )
-   ) OR (
-       c.citing_opinion_id IS NOT NULL
-       AND EXISTS (
+       c.citing_opinion_id IS NULL
+       OR EXISTS (
          SELECT 1 FROM authority_case_opinions o
          JOIN authority_case_clusters cl
            ON cl.corpus_version=o.corpus_version
           AND cl.cluster_id=o.cluster_id
-         JOIN public_authority_source_lineage citing_pas
-           ON citing_pas.source_key=cl.source_key
-          AND citing_pas.corpus_version=cl.corpus_version
+         JOIN public_authority_source_lineage opinion_pas
+           ON opinion_pas.source_key=cl.source_key
+          AND opinion_pas.corpus_version=cl.corpus_version
          WHERE o.corpus_version=c.corpus_version
            AND o.opinion_id=c.citing_opinion_id
+           AND cl.source_key=citing.source_key
+           AND cl.public_namespace='public-authority'
+       )
+   )
+   AND (
+       c.cited_opinion_id IS NULL
+       OR EXISTS (
+         SELECT 1 FROM authority_case_opinions o
+         JOIN authority_case_clusters cl
+           ON cl.corpus_version=o.corpus_version
+          AND cl.cluster_id=o.cluster_id
+         JOIN public_authority_source_lineage opinion_pas
+           ON opinion_pas.source_key=cl.source_key
+          AND opinion_pas.corpus_version=cl.corpus_version
+         WHERE o.corpus_version=c.corpus_version
+           AND o.opinion_id=c.cited_opinion_id
+           AND cl.source_key=cited.source_key
            AND cl.public_namespace='public-authority'
        )
    );
@@ -1150,13 +1149,41 @@ CREATE TABLE IF NOT EXISTS citator_alert_events (
     authority_key text NOT NULL,
     event_fingerprint text NOT NULL,
     event_kind text NOT NULL,
+    evidence_fact_id uuid NOT NULL,
+    evidence_type text NOT NULL,
     source_url text NOT NULL,
     payload jsonb NOT NULL DEFAULT '{}'::jsonb,
     created_at timestamptz NOT NULL DEFAULT now(),
     CHECK (event_kind IN ('history', 'treatment', 'currentness', 'source_gap')),
+    CHECK (evidence_type IN ('history', 'citation')),
     UNIQUE (watch_id, event_fingerprint),
     CONSTRAINT citator_alert_events_id_tenant_key UNIQUE (id, tenant_id)
 );
+ALTER TABLE citator_alert_events ADD COLUMN IF NOT EXISTS evidence_fact_id uuid;
+ALTER TABLE citator_alert_events ADD COLUMN IF NOT EXISTS evidence_type text;
+DO $$ BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+       WHERE conrelid='citator_alert_events'::regclass
+         AND conname='citator_alert_events_evidence_check'
+    ) THEN
+      ALTER TABLE citator_alert_events
+        ADD CONSTRAINT citator_alert_events_evidence_check
+        CHECK (evidence_fact_id IS NOT NULL
+               AND evidence_type IN ('history','citation')) NOT VALID;
+    END IF;
+    -- VALIDATE performs an internal table scan rather than an RLS-filtered
+    -- SELECT.  A FORCE-RLS table owner without a tenant GUC must not mistake
+    -- invisible legacy rows for an empty table and abort startup.  Keep the
+    -- constraint NOT VALID only when real historical rows violate it; PostgreSQL
+    -- still enforces a NOT VALID check for every new or updated row.
+    BEGIN
+      ALTER TABLE citator_alert_events
+        VALIDATE CONSTRAINT citator_alert_events_evidence_check;
+    EXCEPTION WHEN check_violation THEN
+      NULL;
+    END;
+END $$;
 CREATE TABLE IF NOT EXISTS citator_watch_audits (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     watch_id uuid NOT NULL REFERENCES citator_watches(id) ON DELETE RESTRICT,
