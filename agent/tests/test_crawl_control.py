@@ -115,6 +115,18 @@ async def test_restart_recovers_expired_lease_and_completion_is_token_fenced(tmp
 
 
 @pytest.mark.asyncio
+async def test_lease_renewal_is_generation_fenced(tmp_path):
+    stat = FileStat("a.txt", 1, 1, stable_id="one")
+    _, manifest, _, _, _, source = await setup(tmp_path, {})
+    await manifest.observe(source, stat, None)
+    expired = await manifest.claim(JobKind.EXTRACT, lease_seconds=-1)
+    current = await manifest.claim(JobKind.EXTRACT)
+
+    assert not await manifest.renew(expired)
+    assert await manifest.renew(current, lease_seconds=120)
+
+
+@pytest.mark.asyncio
 async def test_partial_reconciliation_never_tombstones(tmp_path):
     first = FileStat("a.txt", 1, 1, stable_id="one")
     second = FileStat("b.txt", 1, 1, stable_id="two")

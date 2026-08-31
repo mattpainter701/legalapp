@@ -27,8 +27,9 @@ The manifest enables SQLite WAL mode, full synchronous writes, foreign keys,
 and restrictive local permissions. Discovery, stat, extraction, indexing,
 delete, and ACL-refresh work uses unique idempotency keys and fenced leases.
 Expired leases are reclaimable after a process or host restart; a stale worker
-cannot acknowledge a newer lease. Failures back off and eventually enter the
-`dead` state for operator review.
+cannot acknowledge or renew a newer lease. Long-running adapters can renew
+their exact lease generation. Failures back off and eventually enter the `dead`
+state for operator review.
 
 Each successful full reconciliation carries a unique run ID. Files absent from
 that run are tombstoned and queued for deletion only after the source walk

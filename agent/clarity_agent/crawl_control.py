@@ -568,6 +568,25 @@ class CrawlManifest:
             await db.commit()
             return cursor.rowcount == 1
 
+    async def renew(self, job: LeasedJob, *, lease_seconds: float = 60) -> bool:
+        """Extend only the exact lease generation held by ``job``."""
+        now = time.time()
+        async with self._write_lock, self._connect() as db:
+            cursor = await db.execute(
+                """UPDATE jobs SET lease_until=?,updated_at=?
+                   WHERE job_id=? AND state='leased' AND lease_token=?
+                     AND lease_until>=?""",
+                (
+                    now + max(1, lease_seconds),
+                    now,
+                    job.job_id,
+                    job.lease_token,
+                    now,
+                ),
+            )
+            await db.commit()
+            return cursor.rowcount == 1
+
     async def retry(
         self, job: LeasedJob, error: BaseException, *, max_attempts: int = 5
     ) -> bool:
