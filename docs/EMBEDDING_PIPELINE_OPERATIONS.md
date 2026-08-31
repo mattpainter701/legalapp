@@ -76,3 +76,28 @@ an old PostgreSQL transaction snapshot for the duration of a multi-day batch.
 When the desktop is the deliberate primary worker and no Jetson batch worker is
 available, keep the scheduler container stopped. Re-enable it only after a
 Jetson batch worker has passed SSH, model, database, and throughput acceptance.
+
+## Durable legacy-opinion staging
+
+Large legacy `opinion_chunks` backfills must not maintain the live HNSW graph
+one vector at a time when that write path is the measured bottleneck. Apply the
+schema first, then launch `scripts/opinion_backfill_worker.py` on Jetsons or
+`scripts/direct_cuda_embed_worker.py --opinion-stage` on the CUDA workstation.
+All workers use one shared `FOR UPDATE SKIP LOCKED` queue and bulk-insert into
+the logged `opinion_embedding_backfill_stage` table. The primary key makes
+retries idempotent, and each row records its model, version, content hash, and
+worker identity.
+
+Staging does not change live `opinion_chunks.embedding` values or the HNSW
+index. Report throughput from the structured `opinion_stage` log lines and
+monitor both database size and staged-row count. Stop and revert worker routing
+if the clean-window committed rate is not materially better than the live-write
+baseline; staged rows remain durable and inert.
+
+Treat merge and index replacement as a separate maintenance operation. Before
+that operation, prove that every still-unembedded chunk has one staged 1,024d
+mxbai-v1 vector and the recorded content hash matches the current chunk. Obtain
+operator approval for the maintenance window, stop all embedding workers, drop
+the old HNSW index, merge in bounded commits, rebuild the index once with a
+documented memory/storage budget, validate query plans and retrieval, and keep
+the staging table until final acceptance. Never run the merge automatically.

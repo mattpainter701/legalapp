@@ -83,6 +83,20 @@ CREATE TABLE IF NOT EXISTS opinion_chunks (
     UNIQUE (opinion_id, chunk_index)
 );
 
+-- Durable sidecar for high-throughput legacy CourtListener backfills. Workers
+-- write here without incrementally mutating the live HNSW graph. The staged
+-- rows remain inert until an operator separately validates and merges them.
+CREATE TABLE IF NOT EXISTS opinion_embedding_backfill_stage (
+    chunk_id uuid PRIMARY KEY REFERENCES opinion_chunks(id) ON DELETE RESTRICT,
+    embedding vector(1024) NOT NULL,
+    embedding_model text NOT NULL,
+    embedding_version integer NOT NULL,
+    content_sha256 text NOT NULL,
+    worker_id text NOT NULL,
+    staged_at timestamptz NOT NULL DEFAULT now(),
+    CHECK (vector_dims(embedding) = 1024)
+);
+
 CREATE TABLE IF NOT EXISTS ingest_runs (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     source text NOT NULL,
