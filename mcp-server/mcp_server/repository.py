@@ -91,7 +91,7 @@ class CourtListenerRepository:
             f"oc.corpus_version = {promoted_version}",
             f"cl.corpus_version = {promoted_version}",
             "cl.public_namespace = 'public-authority'",
-            "EXISTS (SELECT 1 FROM legal_sources ls JOIN citator_public_source_admissions pa ON pa.source_key = ls.source_key AND pa.active IS TRUE AND pa.namespace = 'public-authority' WHERE ls.source_key = cl.source_key AND ls.public_namespace = 'public-authority' AND ls.enabled IS TRUE AND ls.storage_policy <> 'prohibited' AND ls.rights_decision IN ('official', 'open', 'licensed') AND ls.reviewed_at IS NOT NULL AND ls.reviewed_by IS NOT NULL AND ls.metadata->>'catalog_schema_version' = pa.catalog_schema_version AND ls.metadata->>'implementation_status' IS NOT NULL AND pa.manifest_reference <> '' AND pa.manifest_sha256 <> '')",
+            "EXISTS (SELECT 1 FROM legal_sources ls JOIN citator_public_source_admissions pa ON pa.source_key = ls.source_key AND pa.active IS TRUE AND pa.namespace = 'public-authority' WHERE ls.source_key = cl.source_key AND ls.public_namespace = 'public-authority' AND ls.enabled IS TRUE AND ls.storage_policy <> 'prohibited' AND ls.rights_decision IN ('official', 'open', 'licensed') AND ls.reviewed_at IS NOT NULL AND ls.reviewed_by IS NOT NULL AND ls.metadata->>'catalog_schema_version' = pa.catalog_schema_version AND pa.manifest_sha256 = (SELECT manifest_hash FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1) AND ls.metadata->>'implementation_status' IS NOT NULL AND pa.manifest_reference <> '' AND pa.manifest_sha256 <> '')",
         ]
         params: list[Any] = []
         if jurisdiction:
@@ -154,7 +154,7 @@ class CourtListenerRepository:
             "s.enabled IS TRUE",
             "s.public_namespace = 'public-authority'",
             "d.public_namespace = 'public-authority'",
-            "EXISTS (SELECT 1 FROM citator_public_source_admissions pa WHERE pa.source_key = s.source_key AND pa.active IS TRUE AND pa.namespace = 'public-authority')",
+            "EXISTS (SELECT 1 FROM citator_public_source_admissions pa WHERE pa.source_key = s.source_key AND pa.active IS TRUE AND pa.namespace = 'public-authority' AND pa.manifest_sha256 = (SELECT manifest_hash FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1) AND pa.catalog_schema_version = s.metadata->>'catalog_schema_version')",
             "d.document_status IN ('current', 'current_with_supplement')",
             "d.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status = 'promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)",
             "c.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status = 'promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)",
@@ -1195,17 +1195,23 @@ class CourtListenerRepository:
                     (SELECT COUNT(DISTINCT cl.docket_id) FROM authority_case_clusters cl
                      JOIN citator_public_source_admissions pa ON pa.source_key=cl.source_key AND pa.active IS TRUE AND pa.namespace='public-authority'
                      WHERE cl.public_namespace='public-authority' AND cl.corpus_version=(SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)) AS dockets,
-                    (SELECT COUNT(*) FROM authority_case_clusters cl WHERE cl.corpus_version = (
+                    (SELECT COUNT(*) FROM authority_case_clusters cl
+                     JOIN legal_sources s ON s.source_key=cl.source_key
+                     JOIN citator_public_source_admissions pa ON pa.source_key=s.source_key AND pa.active IS TRUE AND pa.namespace='public-authority'
+                     WHERE cl.public_namespace='public-authority' AND pa.manifest_sha256=(SELECT manifest_hash FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1) AND cl.corpus_version = (
                        SELECT version FROM authority_corpus_versions WHERE status='promoted'
                        ORDER BY promoted_at DESC NULLS LAST LIMIT 1)) AS clusters,
-                    (SELECT COUNT(*) FROM authority_case_opinions o WHERE o.corpus_version = (
+                    (SELECT COUNT(*) FROM authority_case_opinions o JOIN authority_case_clusters cl ON cl.corpus_version=o.corpus_version AND cl.cluster_id=o.cluster_id
+                     JOIN legal_sources s ON s.source_key=cl.source_key JOIN citator_public_source_admissions pa ON pa.source_key=s.source_key AND pa.active IS TRUE AND pa.namespace='public-authority'
+                     WHERE cl.public_namespace='public-authority' AND pa.manifest_sha256=(SELECT manifest_hash FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1) AND o.corpus_version = (
                        SELECT version FROM authority_corpus_versions WHERE status='promoted'
                        ORDER BY promoted_at DESC NULLS LAST LIMIT 1)) AS opinions,
                     (SELECT COUNT(*) FROM authority_case_chunks ch WHERE ch.corpus_version = (
                        SELECT version FROM authority_corpus_versions WHERE status='promoted'
                        ORDER BY promoted_at DESC NULLS LAST LIMIT 1)) AS chunks,
-                    (SELECT COUNT(*) FROM authority_case_chunks ch
-                     WHERE ch.embedding IS NOT NULL AND ch.corpus_version = (
+                    (SELECT COUNT(*) FROM authority_case_chunks ch JOIN authority_case_clusters cl ON cl.corpus_version=ch.corpus_version AND cl.cluster_id=ch.cluster_id
+                     JOIN legal_sources s ON s.source_key=cl.source_key JOIN citator_public_source_admissions pa ON pa.source_key=s.source_key AND pa.active IS TRUE AND pa.namespace='public-authority'
+                     WHERE cl.public_namespace='public-authority' AND pa.manifest_sha256=(SELECT manifest_hash FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1) AND ch.embedding IS NOT NULL AND ch.corpus_version = (
                        SELECT version FROM authority_corpus_versions WHERE status='promoted'
                        ORDER BY promoted_at DESC NULLS LAST LIMIT 1)) AS embedded_chunks,
                     (SELECT COUNT(*) FROM legal_sources s JOIN citator_public_source_admissions pa ON pa.source_key=s.source_key AND pa.active IS TRUE AND pa.namespace='public-authority' WHERE s.public_namespace='public-authority' AND s.storage_policy <> 'prohibited') AS legal_sources,
@@ -1213,10 +1219,10 @@ class CourtListenerRepository:
                     (SELECT COUNT(*) FROM legal_document_chunks c JOIN legal_documents d ON d.id=c.document_id JOIN legal_sources s ON s.source_key=d.source_key JOIN citator_public_source_admissions pa ON pa.source_key=s.source_key AND pa.active IS TRUE AND pa.namespace='public-authority' WHERE d.public_namespace='public-authority' AND d.corpus_version=(SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)) AS legal_document_chunks,
                     (SELECT COUNT(*) FROM legal_document_chunks c JOIN legal_documents d ON d.id=c.document_id JOIN legal_sources s ON s.source_key=d.source_key JOIN citator_public_source_admissions pa ON pa.source_key=s.source_key AND pa.active IS TRUE AND pa.namespace='public-authority' WHERE c.embedding IS NOT NULL AND d.public_namespace='public-authority' AND d.corpus_version=(SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1))
                         AS embedded_legal_document_chunks,
-                    (SELECT MIN(date_filed) FROM authority_case_clusters cl WHERE cl.corpus_version = (
+                    (SELECT MIN(cl.date_filed) FROM authority_case_clusters cl JOIN legal_sources s ON s.source_key=cl.source_key JOIN citator_public_source_admissions pa ON pa.source_key=s.source_key AND pa.active IS TRUE AND pa.namespace='public-authority' WHERE cl.public_namespace='public-authority' AND pa.manifest_sha256=(SELECT manifest_hash FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1) AND cl.corpus_version = (
                        SELECT version FROM authority_corpus_versions WHERE status='promoted'
                        ORDER BY promoted_at DESC NULLS LAST LIMIT 1)) AS first_date,
-                    (SELECT MAX(date_filed) FROM authority_case_clusters cl WHERE cl.corpus_version = (
+                    (SELECT MAX(cl.date_filed) FROM authority_case_clusters cl JOIN legal_sources s ON s.source_key=cl.source_key JOIN citator_public_source_admissions pa ON pa.source_key=s.source_key AND pa.active IS TRUE AND pa.namespace='public-authority' WHERE cl.public_namespace='public-authority' AND pa.manifest_sha256=(SELECT manifest_hash FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1) AND cl.corpus_version = (
                        SELECT version FROM authority_corpus_versions WHERE status='promoted'
                        ORDER BY promoted_at DESC NULLS LAST LIMIT 1)) AS last_date
                 """
@@ -1224,12 +1230,16 @@ class CourtListenerRepository:
             rows = dict_rows(cur)
             cur.execute(
                 """
-                SELECT source_key, partition_key, expected_coverage, expected_item_count,
+                SELECT l.source_key, l.partition_key, expected_coverage, expected_item_count,
                        acquisition_state, snapshot_date, source_release, rows_loaded,
                        chunks_loaded, vectors_loaded, bytes_loaded, first_document_date,
                        last_document_date, upstream_modified_at, last_checked_at,
                        stale_after, gap_reason, owner, metadata, updated_at
-                FROM corpus_coverage_ledger
+                FROM corpus_coverage_ledger l
+                JOIN legal_sources s ON s.source_key=l.source_key
+                JOIN citator_public_source_admissions pa ON pa.source_key=s.source_key AND pa.active IS TRUE AND pa.namespace='public-authority'
+                 AND pa.manifest_sha256=(SELECT manifest_hash FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
+                WHERE l.source_release=(SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
                 ORDER BY source_key, partition_key
                 """
             )
