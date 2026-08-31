@@ -10,6 +10,15 @@
   checkboxes remain open until those acceptance gates are demonstrably met.
 
 ### Added
+- **Template Studio Phase 1 shell:** the existing document-template library is
+  now a first-class Template Studio with response-derived continue-setup,
+  needs-attention, ready-to-generate, and recent queues; canonical persistent
+  workspaces; recoverable new/import routes; and an allowlisted UUID-only
+  `lawhand.open_studio` browser event adapter. Test, version, activity, draft,
+  proposal, and snapshot routes expose truthful unavailable states until their
+  server contracts ship. Existing upload/source review, PDF/image preparation,
+  activation, preview, Smart Fill, generation, matter-save, and `/templates`
+  behavior remain in place.
 - **Collaborative research workspace:** matter teams can keep a shared,
   tenant-isolated research trail for issues, searches, authorities, highlights,
   annotations, exclusions, outlines, and memo assembly. Records preserve their

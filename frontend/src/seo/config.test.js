@@ -78,6 +78,8 @@ describe('SEO configuration', () => {
     expect(getRouteMeta('/demo').title).toBe('Guided demo | LawHand')
     expect(getRouteMeta('/demo/session').title).toBe('Guided demo | LawHand')
     expect(getRouteMeta('/matters/customer-id').indexable).toBe(false)
+    expect(getRouteMeta('/templates/new').title).toBe('Template Studio | LawHand')
+    expect(getRouteMeta('/templates/11111111-1111-4111-8111-111111111111/studio').indexable).toBe(false)
     expect(getRouteMeta('/portal/client/matter?token=secret').indexable).toBe(false)
     expect(getRouteMeta('/unknown').indexable).toBe(false)
   })

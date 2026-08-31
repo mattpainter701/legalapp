@@ -5,6 +5,17 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.31.1 — Template Studio workspaces and resumable setup
+
+Released August 31, 2026.
+
+Document templates now have a first-class Studio home, persistent workspaces, and clearer paths from source preparation to generation.
+
+- **Resume template setup.** Studio home groups loaded templates into continue setup, needs attention, ready to generate, and recent views using the existing library status.
+- **Open a persistent workspace.** Every template links to a stable workspace for reviewing its source, fields, readiness, preview, and generation actions.
+- **Keep source preparation intact.** New and imported templates continue through the reviewed Word, PDF, and image preparation flow before opening their workspace.
+- **See current limits clearly.** Reserved test, version, activity, draft, proposal, and snapshot routes say when server-backed records are not yet available instead of showing fake controls.
+
 ## 2026.08.30.9 — Shared research workspaces with reviewable evidence
 
 Released August 30, 2026.

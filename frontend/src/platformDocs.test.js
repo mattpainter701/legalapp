@@ -28,4 +28,11 @@ describe('platform guides', () => {
     expect(chapter.headings).toEqual([{ title: 'First step', id: 'first-step' }])
     expect(slugifyHeading('AI, Search & MCP')).toBe('ai-search-mcp')
   })
+
+  it('documents Template Studio routes and current Phase 1 limits', () => {
+    const chapter = USER_GUIDE.find((entry) => entry.slug === 'document-automation-and-esignature')
+    expect(chapter.title).toBe('Template Studio & e-signature')
+    expect(chapter.content).toContain('/templates/{template-id}/studio')
+    expect(chapter.content).toContain('server records and controls are not yet available')
+  })
 })
