@@ -39,7 +39,9 @@ class SchedulerResult:
 DispatchFn = Callable[..., None]
 
 
-def retry_delay_seconds(failure_count: int, initial_seconds: int, maximum_seconds: int) -> int:
+def retry_delay_seconds(
+    failure_count: int, initial_seconds: int, maximum_seconds: int
+) -> int:
     """Calculate a capped exponential reconnect delay after dispatch failures."""
 
     if failure_count < 1:
@@ -68,13 +70,26 @@ def unembedded_chunk_count(conn) -> int:
         cur.execute(
             """
             SELECT
-                (SELECT COUNT(*) FROM opinion_chunks WHERE embedding IS NULL)
+                (SELECT COUNT(*)
+                   FROM authority_case_chunks ch
+                   JOIN authority_case_clusters cl
+                     ON cl.corpus_version=ch.corpus_version
+                    AND cl.cluster_id=ch.cluster_id
+                   JOIN public_authority_source_lineage pas
+                     ON pas.source_key=cl.source_key
+                    AND pas.corpus_version=ch.corpus_version
+                  WHERE ch.embedding IS NULL
+                    AND cl.public_namespace='public-authority')
               + (SELECT COUNT(*)
                    FROM legal_document_chunks c
                    JOIN legal_documents d ON d.id = c.document_id
                    JOIN legal_sources s ON s.source_key = d.source_key
+                   JOIN public_authority_source_lineage pas
+                     ON pas.source_key=d.source_key
+                    AND pas.corpus_version=d.corpus_version
                   WHERE c.embedding IS NULL
                     AND d.document_status = 'current'
+                    AND d.public_namespace='public-authority'
                     AND s.enabled IS TRUE)
             """
         )
@@ -124,7 +139,11 @@ def run_scheduler_once(
 
 
 def config_from_env(args: argparse.Namespace) -> SchedulerConfig:
-    db_url = args.db_url or os.environ.get("SCHEDULER_DB_URL") or os.environ.get("DATABASE_URL")
+    db_url = (
+        args.db_url
+        or os.environ.get("SCHEDULER_DB_URL")
+        or os.environ.get("DATABASE_URL")
+    )
     if not db_url:
         raise SystemExit("SCHEDULER_DB_URL, DATABASE_URL, or --db-url is required")
     worker_db_url = (
@@ -184,7 +203,9 @@ def run_scheduler(config: SchedulerConfig) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Schedule CourtListener Jetson embeddings")
+    parser = argparse.ArgumentParser(
+        description="Schedule CourtListener Jetson embeddings"
+    )
     parser.add_argument("--db-url", default="")
     parser.add_argument("--worker-db-url", default="")
     parser.add_argument("--hosts", default=os.environ.get("JETSON_HOSTS", ""))
@@ -193,7 +214,9 @@ def parse_args() -> argparse.Namespace:
         "--script-dir",
         default=os.environ.get("JETSON_SCRIPT_DIR", "/home/jetson/legalapp/scripts"),
     )
-    parser.add_argument("--batch-size", type=int, default=int(os.environ.get("BATCH_SIZE", "32")))
+    parser.add_argument(
+        "--batch-size", type=int, default=int(os.environ.get("BATCH_SIZE", "32"))
+    )
     parser.add_argument(
         "--interval-seconds",
         type=int,
@@ -207,7 +230,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--reverse-tunnel",
         action="store_true",
-        default=os.environ.get("JETSON_DB_REVERSE_TUNNEL", "").lower() in {"1", "true", "yes"},
+        default=os.environ.get("JETSON_DB_REVERSE_TUNNEL", "").lower()
+        in {"1", "true", "yes"},
     )
     parser.add_argument(
         "--tunnel-remote-port-base",
@@ -217,7 +241,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--advisory-lock-id",
         type=int,
-        default=int(os.environ.get("EMBEDDING_SCHEDULER_LOCK_ID", str(DEFAULT_LOCK_ID))),
+        default=int(
+            os.environ.get("EMBEDDING_SCHEDULER_LOCK_ID", str(DEFAULT_LOCK_ID))
+        ),
     )
     parser.add_argument(
         "--retry-initial-seconds",

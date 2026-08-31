@@ -252,10 +252,10 @@ def test_manifest_exposes_domain_scoped_legal_tools():
         "get_court_coverage",
         "search_dockets",
         "export_research_bundle",
-            "sync_status",
-            "corpus_status",
-            "authority_coverage",
-        ]
+        "sync_status",
+        "corpus_status",
+        "authority_coverage",
+    ]
 
 
 def test_case_details_contract_requires_exactly_one_identifier():
@@ -287,6 +287,7 @@ def test_full_opinion_contract_requires_exactly_one_identifier():
 
 def test_repository_hybrid_search_uses_vector_and_fts_when_embedding_available():
     conn = RecordingConnection()
+
     class CompatibleEmbedding(list):
         model = "mixedbread-ai/mxbai-embed-large-v1"
         version = "1"
@@ -329,7 +330,7 @@ def test_repository_search_falls_back_to_fts_when_query_embedding_unavailable():
 
     assert "embedding <=>" not in sql
     assert "d.document_status" not in sql
-    assert "s.enabled" not in sql
+    assert "public_authority_source_lineage" in sql
     assert "websearch_to_tsquery" in sql
     assert "source_url" in sql
     assert "{0,cite}" in sql
@@ -381,7 +382,8 @@ def test_repository_uses_hybrid_search_for_general_authority():
     CourtListenerRepository(conn).search_legal_authorities(
         "estate tax portability",
         top_k=4,
-        jurisdiction="US", query_embedding=CompatibleEmbedding([0.001] * 1024),
+        jurisdiction="US",
+        query_embedding=CompatibleEmbedding([0.001] * 1024),
     )
 
     sql = conn.cursor_obj.sql
@@ -473,8 +475,12 @@ def test_query_embedding_client_posts_to_configured_provider(monkeypatch):
             return None
 
         def json(self):
-            return {"embeddings": [[0.1] * 1024], "model": "mixedbread-ai/mxbai-embed-large-v1",
-                    "version": "1", "dimension": 1024}
+            return {
+                "embeddings": [[0.1] * 1024],
+                "model": "mixedbread-ai/mxbai-embed-large-v1",
+                "version": "1",
+                "dimension": 1024,
+            }
 
     def fake_post(url, json, timeout):
         calls.append((url, json, timeout))
@@ -599,6 +605,16 @@ def test_worker_config_locks_mxbai_1024_and_partition_query():
     assert "d.source_key" in authority_sql
     assert "s.enabled IS TRUE" in authority_sql
     assert "d.document_status = 'current'" in authority_sql
+    assert "public_authority_source_lineage" in authority_sql
+    case_sql = partition_sql(
+        "authority_case_chunks",
+        corpus_version="candidate-v1",
+        embedding_model=config.model,
+        embedding_version=config.model_version,
+        embedding_dimension=config.dim,
+    )
+    assert "public_authority_source_lineage" in case_sql
+    assert "cl.public_namespace = 'public-authority'" in case_sql
 
 
 def test_dispatcher_supports_indexed_jetson_env(monkeypatch):

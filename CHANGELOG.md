@@ -65,8 +65,13 @@
 - **Versioned public-authority coverage control plane:** reviewed rights and
   provenance fields, immutable corpus release/audit ledgers, harvest evidence,
   claim-safe coverage projection, and exact embedding compatibility now back the
-  public research source-health surface. Tenant-private corpus data remains out
-  of the authority namespace and telemetry.
+  public research source-health surface. A single version-bound lineage contract
+  now requires current reviewed source rights, storage policy, explicit public
+  admission, catalog schema, implementation state, and promoted-manifest identity
+  across ingestion, search, citation, court/docket, status, coverage, audit, and
+  promotion paths. Tenant, firm, private, custom, revoked, and mismatched records
+  fail closed and remain out of authority content, identifiers, aggregates,
+  telemetry, and customer claims.
 - **Bounded Firm Memory search relay:** an explicitly matter-scoped local
   SQLite FTS5 control index can now answer bounded searches through the
   outbound-polled file-share agent, authenticated REST/portal, Chat structured

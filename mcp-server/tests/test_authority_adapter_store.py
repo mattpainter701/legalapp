@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 
@@ -36,7 +37,7 @@ class Connection:
 class UpsertCursor(Cursor):
     def __init__(self):
         super().__init__()
-        self.results = [None, (123,)]
+        self.results = [("authority-fixture-v1",), None, (123,)]
 
     def execute(self, sql, params):
         assert sql.count("%s") == len(params)
@@ -78,9 +79,29 @@ def test_upsert_adapter_document_binds_every_insert_column():
         authority_tier="primary",
         canonical_url="https://example.test/26/1",
         text="A test regulation.",
+        metadata={
+            "namespace": "custom-private:spoof",
+            "manifest_reference": "attacker-controlled",
+            "harmless": "retained",
+        },
     )
 
     result = upsert_adapter_document(conn, document)
 
     assert result["changed"] is True
     assert result["chunks_created"] == 1
+    assert result["corpus_version"] == "authority-fixture-v1"
+    sql = "\n".join(statement for statement, _ in conn.cursor_obj.executions)
+    assert "public_authority_source_lineage" in sql
+    assert "ON CONFLICT (source_key, external_id, corpus_version)" in sql
+    assert "public_namespace, corpus_version" in sql
+    insert_params = next(
+        params
+        for statement, params in conn.cursor_obj.executions
+        if "INSERT INTO legal_documents" in statement
+    )
+    stored_metadata = json.loads(insert_params[-3])
+    assert stored_metadata == {
+        "harmless": "retained",
+        "namespace": "public-authority",
+    }

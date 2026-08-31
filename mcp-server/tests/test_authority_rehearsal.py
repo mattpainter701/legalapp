@@ -17,7 +17,7 @@ import json
 import time
 from urllib.parse import quote
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 from fastapi import HTTPException
@@ -36,6 +36,7 @@ from mcp_server.control_plane import (
     revoke_citator_watch,
     review_treatment_assessment,
     rollback_corpus_version,
+    run_and_record_control_audit,
     save_citator_watch,
     sampled_audit,
     stage_corpus_version,
@@ -47,14 +48,66 @@ from mcp_server.loader import (
     create_snapshot_chunks,
     init_schema,
     load_staged_core,
+    materialize_citator_facts,
     refresh_courtlistener_coverage_ledger,
 )
 from mcp_server.authority_ingest import FetchedDocument, ingest_document
+import mcp_server.authority_ingest as authority_ingest_module
+from mcp_server.authority_adapter_store import AdapterDocument, upsert_adapter_document
 from mcp_server.repository import CourtListenerRepository
 from mcp_server.server import ControlPlaneRequest, run_control_audit
+from mcp_server.source_catalog import admit_public_source
+from mcp_server.sync import PostgresSyncStore
 import mcp_server.server as authority_server
 from mcp_server.jetson_worker import process_once
 from mcp_server.worker_config import WorkerConfig
+
+
+def _declare_complete_partition(
+    conn,
+    *,
+    version: str,
+    source_key: str,
+    partition_key: str,
+    expected: int,
+    observed: int,
+) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO corpus_coverage_ledger
+                 (source_key, partition_key, expected_item_count,
+                  acquisition_state, source_release, rows_loaded,
+                  chunks_loaded, vectors_loaded, last_checked_at)
+               VALUES (%s, %s, %s, 'complete', %s, %s, %s, %s, now())
+               ON CONFLICT (source_key, partition_key, source_release) DO UPDATE SET
+                 expected_item_count=EXCLUDED.expected_item_count,
+                 acquisition_state='complete', rows_loaded=EXCLUDED.rows_loaded,
+                 chunks_loaded=EXCLUDED.chunks_loaded,
+                 vectors_loaded=EXCLUDED.vectors_loaded, last_checked_at=now()""",
+            [
+                source_key,
+                partition_key,
+                expected,
+                version,
+                observed,
+                observed,
+                observed,
+            ],
+        )
+    conn.commit()
+
+
+def _run_production_audits(conn, *, version: str, auditor: str) -> None:
+    for audit_kind in ("release", "completeness", "freshness", "isolation"):
+        result, immutable_hash = run_and_record_control_audit(
+            conn,
+            version=version,
+            audit_kind=audit_kind,
+            auditor=auditor,
+        )
+        assert result["passed"] is True, (audit_kind, result)
+        assert result["state_digest"]
+        assert immutable_hash
 
 
 def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
@@ -87,7 +140,13 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
         second_cluster_id = 97000002
 
         def add_fixture(version_name, suffix):
+            catalog_schema = "rehearsal-v2" if suffix == "new" else "rehearsal"
             with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO courts (court_id, full_name)
+                       VALUES ('ohio', 'Ohio rehearsal court')
+                       ON CONFLICT (court_id) DO NOTHING"""
+                )
                 cur.execute(
                     """INSERT INTO legal_sources
                     (source_key, publisher, source_type, canonical_url, enabled,
@@ -96,7 +155,7 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                     VALUES (%s, 'Rehearsal', 'statute', 'https://example.test', TRUE,
                             'normalized_text', 'official', now(), 'rehearsal-admin',
                             'daily', 'Fixture source only',
-                            '{"catalog_schema_version":"rehearsal","implementation_status":"fixture"}')
+                            '{"catalog_schema_version":"rehearsal","implementation_status":"fixture","manifest_reference":"fixture-manifest"}')
                     ON CONFLICT DO NOTHING""",
                     [source_key],
                 )
@@ -109,8 +168,63 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                             'https://example.test/caselaw', TRUE, 'normalized_text',
                             'official', now(), 'rehearsal-admin', 'daily',
                             'Fixture caselaw source only',
-                            '{"catalog_schema_version":"rehearsal","implementation_status":"fixture"}')
+                            '{"catalog_schema_version":"rehearsal","implementation_status":"fixture","manifest_reference":"fixture-manifest"}')
                     ON CONFLICT DO NOTHING"""
+                )
+                cur.execute(
+                    """UPDATE legal_sources
+                       SET public_namespace='public-authority'
+                     WHERE source_key IN (%s, 'courtlistener:ohio-caselaw')""",
+                    [source_key],
+                )
+                cur.execute(
+                    """INSERT INTO citator_public_source_admissions
+                         (source_key, catalog_schema_version, manifest_reference,
+                          manifest_sha256, reviewed_at, reviewed_by)
+                       SELECT %s, %s, %s, manifest_hash,
+                                now(), 'rehearsal-admin'
+                         FROM authority_corpus_versions WHERE version=%s
+                       ON CONFLICT (source_key, manifest_sha256) DO UPDATE SET active=TRUE,
+                         manifest_sha256=EXCLUDED.manifest_sha256""",
+                    [
+                        source_key,
+                        catalog_schema,
+                        f"fixture-manifest:{version_name}",
+                        version_name,
+                    ],
+                )
+                cur.execute(
+                    """INSERT INTO citator_public_source_admissions
+                         (source_key, catalog_schema_version, manifest_reference,
+                          manifest_sha256, reviewed_at, reviewed_by)
+                       SELECT 'courtlistener:ohio-caselaw', %s,
+                              %s, manifest_hash, now(),
+                              'rehearsal-admin'
+                         FROM authority_corpus_versions WHERE version=%s
+                       ON CONFLICT (source_key, manifest_sha256) DO UPDATE SET
+                         active=TRUE,
+                         catalog_schema_version=EXCLUDED.catalog_schema_version,
+                         manifest_reference=EXCLUDED.manifest_reference,
+                         manifest_sha256=EXCLUDED.manifest_sha256""",
+                    [
+                        catalog_schema,
+                        f"fixture-manifest:{version_name}",
+                        version_name,
+                    ],
+                )
+                cur.execute(
+                    """UPDATE legal_documents
+                          SET public_namespace='public-authority'
+                        WHERE corpus_version=%s
+                          AND source_key IN (%s, 'courtlistener:ohio-caselaw')""",
+                    [version_name, source_key],
+                )
+                cur.execute(
+                    """UPDATE authority_case_clusters
+                          SET public_namespace='public-authority'
+                        WHERE corpus_version=%s
+                          AND source_key IN (%s, 'courtlistener:ohio-caselaw')""",
+                    [version_name, source_key],
                 )
                 cur.execute(
                     """INSERT INTO legal_documents
@@ -201,16 +315,31 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                     """INSERT INTO authority_case_citations
                     (corpus_version, citing_opinion_id, cited_opinion_id,
                      cited_cluster_id, cited_reporter, cited_volume, cited_page)
-                    VALUES (%s, %s, %s, %s, 'Rehearsal', '1', %s)
+                    VALUES (%s, %s, %s, %s, 'Rehearsal', '1', '1')
                     ON CONFLICT DO NOTHING""",
                     [
                         version_name,
                         fixture_cluster_id,
                         second_cluster_id,
                         second_cluster_id,
-                        suffix,
                     ],
                 )
+            _declare_complete_partition(
+                conn,
+                version=version_name,
+                source_key=source_key,
+                partition_key=f"manifest:{source_key}",
+                expected=1,
+                observed=1,
+            )
+            _declare_complete_partition(
+                conn,
+                version=version_name,
+                source_key="courtlistener:ohio-caselaw",
+                partition_key="ohio",
+                expected=2,
+                observed=2,
+            )
 
         stage_corpus_version(
             conn,
@@ -222,7 +351,75 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
             embedding_model="mixedbread-ai/mxbai-embed-large-v1",
             embedding_version="1",
             embedding_dimension=1024,
+            inherit_current=False,
         )
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM authority_citation_facts WHERE corpus_version=%s",
+                [version],
+            )
+            cur.execute(
+                "DELETE FROM authority_history_facts WHERE corpus_version=%s", [version]
+            )
+            cur.execute(
+                "DELETE FROM authority_records WHERE corpus_version=%s", [version]
+            )
+            cur.execute(
+                "DELETE FROM authority_case_citations WHERE corpus_version=%s",
+                [version],
+            )
+            cur.execute(
+                "DELETE FROM authority_case_chunks WHERE corpus_version=%s", [version]
+            )
+            cur.execute(
+                "DELETE FROM authority_case_opinions WHERE corpus_version=%s", [version]
+            )
+            cur.execute(
+                "DELETE FROM authority_case_clusters WHERE corpus_version=%s", [version]
+            )
+        conn.commit()
+        # Production bulk loading now fails before touching even global court
+        # metadata unless the selected candidate and current reviewed source
+        # resolve through the exact public-lineage view.
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO legal_sources
+                (source_key, publisher, source_type, canonical_url, enabled,
+                 storage_policy, rights_decision, reviewed_at, reviewed_by,
+                 expected_cadence, claim_safe_wording, public_namespace, metadata)
+                VALUES ('courtlistener:ohio-caselaw', 'Rehearsal', 'case_law',
+                        'https://example.test/caselaw', TRUE, 'normalized_text',
+                        'official', now(), 'rehearsal-admin', 'daily',
+                        'Fixture caselaw source only', 'public-authority',
+                        '{"catalog_schema_version":"rehearsal","implementation_status":"fixture","manifest_reference":"fixture-manifest"}')
+                ON CONFLICT (source_key) DO UPDATE SET enabled=TRUE,
+                  storage_policy='normalized_text', rights_decision='official',
+                  reviewed_at=now(), reviewed_by='rehearsal-admin',
+                  public_namespace='public-authority',
+                  metadata=EXCLUDED.metadata"""
+            )
+            cur.execute(
+                """INSERT INTO citator_public_source_admissions
+                     (source_key, catalog_schema_version, manifest_reference,
+                      manifest_sha256, reviewed_at, reviewed_by)
+                   SELECT 'courtlistener:ohio-caselaw', 'rehearsal',
+                          'fixture-manifest', manifest_hash, now(),
+                          'rehearsal-admin'
+                     FROM authority_corpus_versions WHERE version=%s
+                   ON CONFLICT (source_key, manifest_sha256) DO UPDATE SET active=TRUE,
+                     catalog_schema_version=EXCLUDED.catalog_schema_version,
+                     manifest_reference=EXCLUDED.manifest_reference,
+                     manifest_sha256=EXCLUDED.manifest_sha256""",
+                [version],
+            )
+            cur.execute(
+                """UPDATE authority_case_clusters
+                      SET public_namespace='public-authority'
+                    WHERE corpus_version=%s
+                      AND source_key='courtlistener:ohio-caselaw'""",
+                [version],
+            )
+        conn.commit()
         bulk_dir = tmp_path / "bulk"
         bulk_dir.mkdir()
 
@@ -336,6 +533,29 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 }
             ],
         )
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE citator_public_source_admissions
+                      SET manifest_sha256=repeat('f', 64)
+                    WHERE source_key='courtlistener:ohio-caselaw'"""
+            )
+        conn.commit()
+        with pytest.raises(
+            PermissionError, match="current reviewed public-source lineage"
+        ):
+            load_staged_core(bulk_dir, db_url)
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM courts WHERE court_id='rehearsal-ohio'")
+            assert cur.fetchone()[0] == 0
+            cur.execute(
+                """UPDATE citator_public_source_admissions p
+                      SET manifest_sha256=v.manifest_hash
+                     FROM authority_corpus_versions v
+                    WHERE p.source_key='courtlistener:ohio-caselaw'
+                      AND v.version=%s""",
+                [version],
+            )
+        conn.commit()
         # A malformed opinion row must fail before a candidate can be promoted.
         write_bulk(
             "opinions-rehearsal.csv.bz2",
@@ -371,6 +591,10 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 actor="rehearsal-admin",
                 reason="partial bulk must not promote",
             )
+        # The rejected promotion deliberately takes the release advisory lock.
+        # End that failed transaction before the operator-style loader resumes
+        # on its own connection, exactly as the API transaction boundary does.
+        conn.rollback()
         write_bulk(
             "opinions-rehearsal.csv.bz2",
             [
@@ -454,13 +678,28 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
         conn.commit()
         write_bulk(
             "opinions-rehearsal.csv.bz2",
-            ["id", "cluster_id", "type", "author_id", "html_with_citations", "plain_text", "sha1", "download_url"],
-            [{
-                "id": "97100001", "cluster_id": "97100001", "type": "010combined",
-                "author_id": "97100001", "html_with_citations": "",
-                "plain_text": "Bulk fixture opinion changed", "sha1": "bulk-sha-2",
-                "download_url": "https://example.test/bulk",
-            }],
+            [
+                "id",
+                "cluster_id",
+                "type",
+                "author_id",
+                "html_with_citations",
+                "plain_text",
+                "sha1",
+                "download_url",
+            ],
+            [
+                {
+                    "id": "97100001",
+                    "cluster_id": "97100001",
+                    "type": "010combined",
+                    "author_id": "97100001",
+                    "html_with_citations": "",
+                    "plain_text": "Bulk fixture opinion changed",
+                    "sha1": "bulk-sha-2",
+                    "download_url": "https://example.test/bulk",
+                }
+            ],
         )
         assert load_staged_core(bulk_dir, db_url)["opinions"] == 1
         assert create_chunks(db_url) > 0
@@ -482,6 +721,95 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
             )
             target_model, target_version, target_dimension = cur.fetchone()
         add_fixture(version, "old")
+        custom_private_source = "custom-private:" + version
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO legal_sources
+                   (source_key, publisher, source_type, canonical_url, enabled,
+                    storage_policy, rights_decision, reviewed_at, reviewed_by,
+                    public_namespace, claim_safe_wording, metadata)
+                   VALUES (%s, 'Fixture', 'case_law', 'https://example.test/private', TRUE,
+                           'normalized_text', 'official', now(), 'rehearsal-admin',
+                           'public-authority', 'Spoofed public source claim',
+                           '{"catalog_schema_version":"rehearsal",
+                             "implementation_status":"fixture",
+                             "manifest_reference":"fixture-manifest"}')""",
+                [custom_private_source],
+            )
+        with pytest.raises(
+            PermissionError,
+            match="current reviewed public-source lineage",
+        ):
+            upsert_adapter_document(
+                conn,
+                AdapterDocument(
+                    source_key=custom_private_source,
+                    external_id="adapter-private",
+                    document_type="statute",
+                    title="Private adapter payload",
+                    citation=None,
+                    jurisdiction="US",
+                    authority_tier="binding_primary",
+                    canonical_url="https://example.test/private-adapter",
+                    text="private adapter content must never be written",
+                    metadata={"namespace": "public-authority"},
+                ),
+            )
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO legal_documents
+                   (source_key, external_id, document_type, title, authority_tier,
+                    canonical_url, corpus_version, public_namespace, text_content)
+                   VALUES (%s, 'private-doc', 'statute', 'Private', 'binding_primary',
+                           'https://example.test/private-doc', %s,
+                           'public-authority', 'private')
+                   RETURNING public_namespace""",
+                [custom_private_source, version],
+            )
+            assert cur.fetchone()[0] == "unknown"
+            cur.execute(
+                """INSERT INTO authority_case_clusters
+                   (corpus_version, source_key, public_namespace, cluster_id, case_name)
+                   VALUES (%s, %s, 'public-authority', 97999997, 'Private case')
+                   RETURNING public_namespace""",
+                [version, custom_private_source],
+            )
+            assert cur.fetchone()[0] == "unknown"
+            cur.execute(
+                "DELETE FROM authority_case_clusters WHERE corpus_version=%s AND cluster_id=97999997",
+                [version],
+            )
+            cur.execute(
+                """INSERT INTO legal_documents
+                   (source_key, external_id, document_type, title, authority_tier,
+                    canonical_url, corpus_version, text_content, metadata)
+                   VALUES (%s, 'spoof-doc', 'statute', 'Spoof', 'binding_primary',
+                           'https://example.test/spoof', %s, 'spoof',
+                           '{"namespace":"public-authority"}')
+                RETURNING public_namespace""",
+                [custom_private_source, version],
+            )
+            assert cur.fetchone()[0] == "unknown"
+            cur.execute(
+                """INSERT INTO authority_case_clusters
+                     (corpus_version, source_key, cluster_id, case_name)
+                   VALUES (%s, %s, 97999998, 'Unknown namespace case')
+                   RETURNING public_namespace""",
+                [version, custom_private_source],
+            )
+            assert cur.fetchone()[0] == "unknown"
+            cur.execute(
+                """DELETE FROM authority_case_clusters
+                    WHERE corpus_version=%s AND cluster_id=97999998""",
+                [version],
+            )
+            cur.execute(
+                "DELETE FROM legal_documents WHERE source_key=%s AND corpus_version=%s",
+                [custom_private_source, version],
+            )
+            cur.execute(
+                "DELETE FROM legal_sources WHERE source_key=%s", [custom_private_source]
+            )
         monkeypatch.setenv("AUTHORITY_INGEST_CORPUS_VERSION", version)
         ingest_input = {
             "source_key": source_key,
@@ -497,8 +825,55 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
             "official_status": "official",
             "acquisition_basis": "fixture-only",
             "coverage_notes": "bounded rehearsal input",
-            "metadata": {"namespace": "public-authority"},
+            "metadata": {
+                "namespace": "custom-private:spoof",
+                "public_namespace": "private",
+                "manifest_reference": "attacker-controlled",
+            },
         }
+        lineage_probe = FetchedDocument(
+            text="lineage probe",
+            content_hash="lineage-probe-hash",
+            media_type="text/html",
+            retrieved_at=datetime.now(timezone.utc),
+            source_modified_at=None,
+            etag=None,
+        )
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE citator_public_source_admissions
+                      SET manifest_sha256=repeat('e', 64)
+                    WHERE source_key=%s""",
+                [source_key],
+            )
+            cur.execute(
+                "UPDATE legal_sources SET public_namespace='public-authority' WHERE source_key=%s",
+                [source_key],
+            )
+        conn.commit()
+        with pytest.raises(
+            PermissionError, match="reviewed public-authority admission"
+        ):
+            ingest_document(
+                conn,
+                {**ingest_input, "external_id": "lineage-rejected"},
+                lineage_probe,
+            )
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE citator_public_source_admissions p
+                      SET manifest_sha256=v.manifest_hash
+                     FROM authority_corpus_versions v
+                    WHERE p.source_key=%s AND v.version=%s""",
+                [source_key, version],
+            )
+            cur.execute(
+                """SELECT COUNT(*) FROM legal_documents
+                    WHERE source_key=%s AND external_id='lineage-rejected'""",
+                [source_key],
+            )
+            assert cur.fetchone()[0] == 0
+        conn.commit()
         malformed = FetchedDocument(
             text="/i255 " * 200,
             content_hash="bad",
@@ -528,10 +903,35 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
         )
         ingest_result = ingest_document(conn, ingest_input, fetched)
         assert ingest_result["chunks_created"] > 0
+        adapter_result = upsert_adapter_document(
+            conn,
+            AdapterDocument(
+                source_key=source_key,
+                external_id="production-adapter-document",
+                document_type="regulation",
+                title="Fixture production adapter",
+                citation="Fixture Reg. 1",
+                jurisdiction="US",
+                authority_tier="binding_primary",
+                canonical_url="https://example.test/adapter",
+                text="production adapter authority text",
+                metadata={
+                    "namespace": "custom-private:spoof",
+                    "manifest_reference": "attacker-controlled",
+                },
+            ),
+        )
+        assert adapter_result == {
+            "external_id": "production-adapter-document",
+            "corpus_version": version,
+            "changed": True,
+            "chunks_created": 1,
+        }
         with conn.cursor() as cur:
             cur.execute(
                 """SELECT source_key, corpus_version, content_hash, parser_version,
-                                  metadata->>'namespace', text_content
+                                  metadata->>'namespace',
+                                  metadata->>'manifest_reference', text_content
                      FROM legal_documents
                     WHERE external_id='production-ingest-document'"""
             )
@@ -542,6 +942,7 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 "production-hash",
                 "fixture-parser",
                 "public-authority",
+                None,
                 "production fixture authority text",
             )
             cur.execute(
@@ -558,12 +959,50 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
             assert chunk_row[1] == chunk_row[0]
             assert chunk_row[2] == "production fixture authority text"
             cur.execute(
+                """SELECT public_namespace, metadata->>'namespace',
+                          metadata->>'manifest_reference'
+                     FROM legal_documents
+                    WHERE source_key=%s
+                      AND external_id='production-adapter-document'
+                      AND corpus_version=%s""",
+                [source_key, version],
+            )
+            assert cur.fetchone() == ("public-authority", "public-authority", None)
+            cur.execute(
                 """SELECT corpus_version, status
                      FROM authority_harvest_checkpoints
                     WHERE source_key=%s AND partition_key=%s""",
                 [source_key, f"manifest:{source_key}"],
             )
             assert cur.fetchone() == (version, "complete")
+            cur.execute(
+                """UPDATE legal_documents
+                      SET metadata=metadata ||
+                        '{"namespace":"custom-private:stale",
+                          "manifest_reference":"stale-private-manifest",
+                          "private_query":"must-not-survive-refresh"}'::jsonb
+                    WHERE source_key=%s
+                      AND external_id='production-ingest-document'
+                      AND corpus_version=%s""",
+                [source_key, version],
+            )
+        # An idempotent refresh replaces, rather than merges, old protected or
+        # private metadata.  Unchanged content therefore cannot retain a
+        # pre-boundary spoofed namespace/query payload.
+        refreshed = ingest_document(conn, ingest_input, fetched)
+        assert refreshed["changed"] is False
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT metadata->>'namespace',
+                          metadata->>'manifest_reference',
+                          metadata->>'private_query'
+                     FROM legal_documents
+                    WHERE source_key=%s
+                      AND external_id='production-ingest-document'
+                      AND corpus_version=%s""",
+                [source_key, version],
+            )
+            assert cur.fetchone() == ("public-authority", None, None)
         create_snapshot_chunks(conn, version)
         refresh_courtlistener_coverage_ledger(conn, source_release=version)
         with conn.cursor() as cur:
@@ -571,7 +1010,7 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 """INSERT INTO corpus_coverage_ledger
                 (source_key, partition_key, expected_item_count, acquisition_state,
                  source_release, rows_loaded, last_checked_at)
-                VALUES (%s, %s, 2, 'complete', %s, 2, now())
+                VALUES (%s, %s, 3, 'complete', %s, 3, now())
                 ON CONFLICT (source_key, partition_key, source_release) DO UPDATE
                 SET expected_item_count=EXCLUDED.expected_item_count,
                     acquisition_state=EXCLUDED.acquisition_state,
@@ -699,6 +1138,31 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
         assert legal_contract_counts == (0, 0, 0, 0, 0)
         assert authority_contract_counts == (0, 0, 0, 0)
         conn.commit()
+        assert materialize_citator_facts(conn, version) > 0
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM authority_records WHERE corpus_version=%s",
+                [version],
+            )
+            assert cur.fetchone()[0] >= 3
+        conn.commit()
+        _run_production_audits(conn, version=version, auditor="rehearsal-admin")
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE legal_document_chunks
+                      SET metadata=metadata || '{"post_audit_mutation":true}'::jsonb
+                    WHERE corpus_version=%s""",
+                [version],
+            )
+        conn.commit()
+        with pytest.raises(PermissionError, match="stale, fabricated, or invalid"):
+            promote_corpus_version(
+                conn,
+                version=version,
+                actor="rehearsal-admin",
+                reason="post-audit staged mutation must invalidate evidence",
+            )
+        _run_production_audits(conn, version=version, auditor="rehearsal-admin")
         with conn.cursor() as cur:
             cur.execute(
                 """SELECT embedding_model, embedding_version, embedding_dimension
@@ -728,12 +1192,92 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 [version, target_model, target_version, target_dimension],
             )
             assert cur.fetchone()[0] == 0
+            cur.execute(
+                """INSERT INTO legal_sources
+                   (source_key, publisher, source_type, canonical_url, enabled,
+                    storage_policy, rights_decision, reviewed_at, reviewed_by,
+                    public_namespace, claim_safe_wording, metadata)
+                   VALUES (%s, 'Private fixture', 'case_law',
+                           'https://example.test/custom-private', TRUE,
+                           'normalized_text', 'official', now(), 'rehearsal-admin',
+                           'public-authority', 'Spoofed public source claim',
+                           '{"catalog_schema_version":"rehearsal","implementation_status":"fixture","manifest_reference":"spoofed"}')""",
+                [custom_private_source],
+            )
+            cur.execute(
+                """INSERT INTO authority_case_clusters
+                     (corpus_version, source_key, cluster_id, case_name, date_filed)
+                   VALUES (%s, %s, 97999999, 'Custom private promoted case', '2026-01-01')
+                   RETURNING public_namespace""",
+                [version, custom_private_source],
+            )
+            assert cur.fetchone()[0] == "unknown"
+            cur.execute(
+                """INSERT INTO authority_case_opinions
+                     (corpus_version, opinion_id, cluster_id, source_url, plain_text)
+                   VALUES (%s, 97999999, 97999999,
+                           'https://example.test/custom-private-case',
+                           'custom private authority text')""",
+                [version],
+            )
+            cur.execute(
+                """INSERT INTO authority_case_chunks
+                     (corpus_version, opinion_id, cluster_id, court_id, chunk_index,
+                      content, embedding, embedding_model, embedding_version)
+                   VALUES (%s, 97999999, 97999999, 'ohio', 0,
+                           'custom private authority text',
+                           ('[' || array_to_string(array_fill(0, ARRAY[1024]), ',') || ']')::vector,
+                           %s, %s)""",
+                [version, target_model, target_version],
+            )
+        conn.commit()
+        with pytest.raises(PermissionError, match="non-public authority lineage"):
+            promote_corpus_version(
+                conn,
+                version=version,
+                actor="rehearsal-admin",
+                reason="unknown caselaw lineage must not promote",
+            )
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM authority_case_chunks WHERE corpus_version=%s AND opinion_id=97999999",
+                [version],
+            )
+            cur.execute(
+                "DELETE FROM authority_case_opinions WHERE corpus_version=%s AND opinion_id=97999999",
+                [version],
+            )
+            cur.execute(
+                "DELETE FROM authority_case_clusters WHERE corpus_version=%s AND cluster_id=97999999",
+                [version],
+            )
+            cur.execute(
+                "DELETE FROM legal_sources WHERE source_key=%s", [custom_private_source]
+            )
+        conn.commit()
+        _run_production_audits(conn, version=version, auditor="rehearsal-admin")
         promote_corpus_version(
             conn,
             version=version,
             actor="rehearsal-admin",
             reason="all fixture audits and embeddings passed",
         )
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM authority_records WHERE corpus_version=%s",
+                [version],
+            )
+            promoted_fact_count = cur.fetchone()[0]
+        with pytest.raises(PermissionError, match="staged/canary"):
+            materialize_citator_facts(conn, version)
+        conn.rollback()
+        init_schema(db_url)
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM authority_records WHERE corpus_version=%s",
+                [version],
+            )
+            assert cur.fetchone()[0] == promoted_fact_count
         authority_results = CourtListenerRepository(conn).search_legal_authorities(
             "old authority"
         )
@@ -744,9 +1288,443 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
         assert authority_results and authority_results[0]["title"] == "Fixture old"
         assert case_results and case_results[0]["case_name"] == "Fixture old"
 
-        # The upgrade path is exercised against legacy-shaped rows after a
-        # promoted version exists.  Backfill is idempotent and must preserve
-        # the served release without leaving NULL-version snapshot rows.
+        # Required public-lineage mutation matrix.  Each mutation is made
+        # after promotion and independently restored; public projections must
+        # fail closed rather than continue serving stale admitted metadata.
+        lineage_repo = CourtListenerRepository(conn)
+        fixture_chunk_id = case_results[0]["chunk_id"]
+        assert lineage_repo.case_details(opinion_id=97000001)
+        assert lineage_repo.get_full_opinion(opinion_id=97000001)["full_text"]
+        assert lineage_repo.find_similar_cases(chunk_id=fixture_chunk_id)
+        assert lineage_repo.search_by_citation("1 Rehearsal 1")
+        assert lineage_repo.normalize_citation("1 Rehearsal 1")["matches"]
+        assert lineage_repo.validate_citation("1 Rehearsal 1")["is_known_locally"]
+        assert lineage_repo.citation_network(97000001)["cited"]
+        assert lineage_repo.citation_network(97000002)["citing"]
+        assert lineage_repo.court_info("ohio")
+        assert lineage_repo.court_coverage()
+        assert lineage_repo.search_dockets("Bulk fixture")
+        assert (
+            lineage_repo.export_research_bundle(opinion_ids=[97000001])["case_count"]
+            == 1
+        )
+        baseline_corpus_status = lineage_repo.corpus_status()
+        assert baseline_corpus_status["chunks"] > 0
+        assert baseline_corpus_status["legal_documents"] > 0
+        assert {source_key, "courtlistener:ohio-caselaw"}.issubset(
+            {row["source_key"] for row in lineage_repo.sync_status()["sources"]}
+        )
+        baseline_coverage = lineage_repo.authority_coverage()
+        assert {source_key, "courtlistener:ohio-caselaw"}.issubset(
+            {row["source_key"] for row in baseline_coverage["sources"]}
+        )
+        assert {
+            (
+                row["source_key"],
+                row["catalog_schema_version"],
+                row["manifest_reference"],
+                row["manifest_sha256"],
+            )
+            for row in baseline_coverage["sources"]
+        }.issuperset(
+            {
+                (
+                    source_key,
+                    "rehearsal",
+                    f"fixture-manifest:{version}",
+                    "fixture-manifest-hash",
+                ),
+                (
+                    "courtlistener:ohio-caselaw",
+                    "rehearsal",
+                    f"fixture-manifest:{version}",
+                    "fixture-manifest-hash",
+                ),
+            }
+        )
+        assert {source_key, "courtlistener:ohio-caselaw"}.issubset(
+            {row["source_key"] for row in baseline_coverage["partitions"]}
+        )
+        private_telemetry_source = "custom-private-telemetry:" + version
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO legal_sources
+                   (source_key, publisher, source_type, canonical_url, enabled,
+                    storage_policy, rights_decision, reviewed_at, reviewed_by,
+                    public_namespace, claim_safe_wording, metadata)
+                   VALUES (%s, 'Private telemetry', 'case_law',
+                           'https://private.example.test/secret', TRUE,
+                           'normalized_text', 'official', now(), 'private-operator',
+                           'public-authority', 'Spoofed public telemetry claim',
+                           '{"catalog_schema_version":"private","implementation_status":"private","secret":"must-not-leak"}')""",
+                [private_telemetry_source],
+            )
+            cur.execute(
+                """INSERT INTO source_sync_states
+                     (source_key, partition_key, status, last_error, metadata)
+                   VALUES (%s, 'private-partition', 'failed', 'private failure text',
+                           '{"private_query":"must-not-leak"}')""",
+                [private_telemetry_source],
+            )
+            cur.execute(
+                """INSERT INTO corpus_coverage_ledger
+                     (source_key, partition_key, expected_item_count,
+                      acquisition_state, source_release, rows_loaded, metadata)
+                   VALUES (%s, 'private-partition', 1, 'complete', %s, 1,
+                           '{"private_document":"must-not-leak"}')""",
+                [private_telemetry_source, version],
+            )
+            cur.execute(
+                """INSERT INTO ingest_runs (source, status, errors)
+                   VALUES (%s, 'failed', '[{"private":"must-not-leak"}]'::jsonb)""",
+                [private_telemetry_source],
+            )
+            cur.execute(
+                """INSERT INTO ingest_runs
+                     (source, source_key, corpus_version, status)
+                   VALUES (%s, %s, %s, 'completed')""",
+                [source_key, source_key, version],
+            )
+        conn.commit()
+        baseline_sync = lineage_repo.sync_status()
+        assert any(row["source"] == source_key for row in baseline_sync["ingest_runs"])
+        assert all(
+            row["errors"].get("redacted") is True
+            for row in baseline_sync["ingest_runs"]
+        )
+        assert private_telemetry_source not in str(baseline_sync)
+        assert private_telemetry_source not in str(lineage_repo.corpus_status())
+        assert private_telemetry_source not in str(lineage_repo.authority_coverage())
+        private_isolation = run_control_audit(
+            ControlPlaneRequest(
+                version=version,
+                reason="private telemetry contamination must fail isolation",
+                audit_kind="isolation",
+            ),
+            actor="rehearsal-admin",
+        )
+        assert private_isolation["audit"]["passed"] is False
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM corpus_coverage_ledger WHERE source_key=%s",
+                [private_telemetry_source],
+            )
+            cur.execute(
+                "DELETE FROM source_sync_states WHERE source_key=%s",
+                [private_telemetry_source],
+            )
+            cur.execute(
+                "DELETE FROM ingest_runs WHERE source=%s",
+                [private_telemetry_source],
+            )
+            cur.execute(
+                "DELETE FROM legal_sources WHERE source_key=%s",
+                [private_telemetry_source],
+            )
+        conn.commit()
+        recovered_isolation = run_control_audit(
+            ControlPlaneRequest(
+                version=version,
+                reason="private telemetry cleanup restores isolation",
+                audit_kind="isolation",
+            ),
+            actor="rehearsal-admin",
+        )
+        assert recovered_isolation["audit"]["passed"] is True
+
+        def assert_public_surfaces_suppressed():
+            assert lineage_repo.search_legal_authorities("old authority") == []
+            assert lineage_repo.search_caselaw("old case") == []
+            assert lineage_repo.case_details(opinion_id=97000001) is None
+            assert lineage_repo.get_full_opinion(opinion_id=97000001) is None
+            with pytest.raises(ValueError):
+                lineage_repo.find_similar_cases(chunk_id=fixture_chunk_id)
+            assert lineage_repo.search_by_citation("1 Rehearsal 1") == []
+            assert lineage_repo.normalize_citation("1 Rehearsal 1")["matches"] == []
+            assert (
+                lineage_repo.validate_citation("1 Rehearsal 1")["is_known_locally"]
+                is False
+            )
+            assert lineage_repo.citation_network(97000001) == {
+                "cited": [],
+                "citing": [],
+            }
+            assert lineage_repo.citation_network(97000002) == {
+                "cited": [],
+                "citing": [],
+            }
+            assert lineage_repo.court_info("ohio") is None
+            assert lineage_repo.court_coverage() == []
+            assert lineage_repo.search_dockets("Bulk fixture") == []
+            suppressed_export = lineage_repo.export_research_bundle(
+                opinion_ids=[97000001]
+            )
+            assert suppressed_export["case_count"] == 0
+            assert suppressed_export["cases"] == []
+            assert suppressed_export["citations"] == []
+            coverage = lineage_repo.authority_coverage()
+            assert coverage["available"] is False
+            assert coverage["corpus_version"] is None
+            assert coverage["claim_state"] == "suppressed"
+            assert coverage["audits"] == []
+            assert coverage["partitions"] == []
+            assert all(
+                row["source_key"] not in {source_key, "courtlistener:ohio-caselaw"}
+                for row in coverage["sources"]
+            )
+            sync = lineage_repo.sync_status()
+            assert sync["ingest_runs"] == []
+            assert sync["embedded_chunks"] == 0
+            assert sync["pending_chunks"] == 0
+            assert sync["source_partitions"] == []
+            assert sync["authority_coverage"]["available"] is False
+            assert all(
+                row["source_key"] not in {source_key, "courtlistener:ohio-caselaw"}
+                for row in sync["sources"]
+            )
+            assert private_telemetry_source not in str(sync)
+            suppressed_corpus_status = lineage_repo.corpus_status()
+            for count_key in (
+                "courts",
+                "dockets",
+                "clusters",
+                "opinions",
+                "chunks",
+                "embedded_chunks",
+                "legal_sources",
+                "legal_documents",
+                "legal_document_chunks",
+                "embedded_legal_document_chunks",
+            ):
+                assert suppressed_corpus_status[count_key] == 0
+            assert suppressed_corpus_status["first_date"] is None
+            assert suppressed_corpus_status["last_date"] is None
+            assert suppressed_corpus_status["coverage"] == []
+            assert suppressed_corpus_status["coverage_ledger"] == []
+            assert private_telemetry_source not in str(suppressed_corpus_status)
+            for audit_kind in ("release", "completeness", "freshness", "isolation"):
+                result = run_control_audit(
+                    ControlPlaneRequest(
+                        version=version,
+                        reason=f"lineage mutation suppresses {audit_kind}",
+                        audit_kind=audit_kind,
+                    ),
+                    actor="rehearsal-admin",
+                )
+                assert result["audit"]["passed"] is False
+
+        def assert_public_surfaces_recovered():
+            """Prove every mutation is independent, not masked by prior failures."""
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT source_key FROM public_authority_source_lineage
+                        WHERE corpus_version=%s ORDER BY source_key""",
+                    [version],
+                )
+                assert set(row[0] for row in cur.fetchall()) == {
+                    source_key,
+                    "courtlistener:ohio-caselaw",
+                }
+            assert lineage_repo.search_legal_authorities("old authority")
+            assert lineage_repo.search_caselaw("old case")
+            for audit_kind in ("release", "completeness", "freshness", "isolation"):
+                result = run_control_audit(
+                    ControlPlaneRequest(
+                        version=version,
+                        reason=f"lineage recovery passes {audit_kind}",
+                        audit_kind=audit_kind,
+                    ),
+                    actor="rehearsal-admin",
+                )
+                assert result["audit"]["passed"] is True
+            coverage = lineage_repo.authority_coverage()
+            assert coverage["available"] is True
+            assert coverage["claim_state"] == "supported"
+            assert {source_key, "courtlistener:ohio-caselaw"}.issubset(
+                {row["source_key"] for row in coverage["sources"]}
+            )
+
+        lineage_mutations = [
+            ("enabled", "FALSE", "TRUE"),
+            ("rights_decision", "'prohibited'", "'official'"),
+            ("storage_policy", "'prohibited'", "'normalized_text'"),
+            ("reviewed_at", "NULL", "now()"),
+            ("reviewed_by", "NULL", "'fixture-reviewer'"),
+            (
+                "claim_safe_wording",
+                "NULL",
+                "'Fixture reviewed source only'",
+            ),
+            ("public_namespace", "'private'", "'public-authority'"),
+        ]
+        for column, bad_value, good_value in lineage_mutations:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE legal_sources SET {column}={bad_value} WHERE source_key IN (%s, 'courtlistener:ohio-caselaw')",
+                    [source_key],
+                )
+            conn.commit()
+            if column == "enabled":
+                with pytest.raises(
+                    PermissionError,
+                    match="current reviewed public-authority admission",
+                ):
+                    PostgresSyncStore(conn).ensure_source(date(2025, 1, 1))
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """SELECT enabled FROM legal_sources
+                            WHERE source_key='courtlistener:ohio-caselaw'"""
+                    )
+                    assert cur.fetchone() == (False,)
+            assert_public_surfaces_suppressed()
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE legal_sources SET {column}={good_value} WHERE source_key IN (%s, 'courtlistener:ohio-caselaw')",
+                    [source_key],
+                )
+            conn.commit()
+            assert_public_surfaces_recovered()
+        db_reject(
+            "UPDATE citator_public_source_admissions SET namespace='private' WHERE source_key=%s",
+            [source_key],
+        )
+        db_reject(
+            "UPDATE citator_public_source_admissions SET manifest_reference='' WHERE source_key=%s",
+            [source_key],
+        )
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE citator_public_source_admissions SET active=FALSE WHERE source_key IN (%s, 'courtlistener:ohio-caselaw')",
+                [source_key],
+            )
+        conn.commit()
+        assert_public_surfaces_suppressed()
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE citator_public_source_admissions SET active=TRUE WHERE source_key IN (%s, 'courtlistener:ohio-caselaw')",
+                [source_key],
+            )
+        conn.commit()
+        assert_public_surfaces_recovered()
+        db_reject(
+            "UPDATE citator_public_source_admissions SET reviewed_at=NULL WHERE source_key=%s",
+            [source_key],
+        )
+        db_reject(
+            "UPDATE citator_public_source_admissions SET reviewed_by='' WHERE source_key=%s",
+            [source_key],
+        )
+        db_reject(
+            "UPDATE citator_public_source_admissions SET catalog_schema_version='changed' WHERE source_key IN (%s, 'courtlistener:ohio-caselaw')",
+            [source_key],
+        )
+        assert_public_surfaces_recovered()
+        db_reject(
+            "UPDATE citator_public_source_admissions SET manifest_reference='changed-manifest' WHERE source_key IN (%s, 'courtlistener:ohio-caselaw')",
+            [source_key],
+        )
+        assert_public_surfaces_recovered()
+        # One mutable source-level reference cannot represent side-by-side
+        # releases.  The reviewed admission row is authoritative instead, so
+        # payload/global source metadata cannot revoke or redirect it.
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE legal_sources
+                      SET metadata=jsonb_set(metadata, '{manifest_reference}',
+                                            '"changed-source-manifest"'::jsonb)
+                    WHERE source_key IN (%s, 'courtlistener:ohio-caselaw')""",
+                [source_key],
+            )
+        conn.commit()
+        assert_public_surfaces_recovered()
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE legal_sources
+                      SET metadata=jsonb_set(metadata, '{manifest_reference}',
+                                            '"fixture-manifest"'::jsonb)
+                    WHERE source_key IN (%s, 'courtlistener:ohio-caselaw')""",
+                [source_key],
+            )
+        conn.commit()
+        assert_public_surfaces_recovered()
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE legal_sources SET metadata=metadata || '{\"catalog_schema_version\":\"spoofed\"}'::jsonb WHERE source_key IN (%s, 'courtlistener:ohio-caselaw')",
+                [source_key],
+            )
+        conn.commit()
+        assert_public_surfaces_recovered()
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE legal_sources SET metadata=metadata || '{\"catalog_schema_version\":\"rehearsal\"}'::jsonb WHERE source_key IN (%s, 'courtlistener:ohio-caselaw')",
+                [source_key],
+            )
+        conn.commit()
+        assert_public_surfaces_recovered()
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE legal_sources SET metadata=metadata - 'implementation_status' WHERE source_key IN (%s, 'courtlistener:ohio-caselaw')",
+                [source_key],
+            )
+        conn.commit()
+        assert_public_surfaces_suppressed()
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE legal_sources SET metadata=metadata || '{\"implementation_status\":\"fixture\"}'::jsonb WHERE source_key IN (%s, 'courtlistener:ohio-caselaw')",
+                [source_key],
+            )
+        conn.commit()
+        assert_public_surfaces_recovered()
+        db_reject(
+            "UPDATE citator_public_source_admissions SET manifest_sha256=repeat('c', 64) WHERE source_key IN (%s, 'courtlistener:ohio-caselaw')",
+            [source_key],
+        )
+        assert_public_surfaces_recovered()
+
+        # Scope/cadence/caveat fields remain live operator metadata, but every
+        # customer claim is state-digested.  A change suppresses claims until
+        # the production audits are recomputed for that exact state.
+        audited_claim_mutations = [
+            (
+                "geographic_scope",
+                '\'["US-OH","US-FED"]\'::jsonb',
+                "'[]'::jsonb",
+            ),
+            (
+                "completeness_caveats",
+                "'Reviewed fixture caveat changed after promotion'",
+                "NULL",
+            ),
+            ("expected_cadence", "'weekly'", "'daily'"),
+        ]
+        for column, changed_value, original_value in audited_claim_mutations:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE legal_sources SET {column}={changed_value} WHERE source_key=%s",
+                    [source_key],
+                )
+            conn.commit()
+            assert lineage_repo.search_legal_authorities("old authority")
+            assert lineage_repo.authority_coverage()["claim_state"] == "suppressed"
+            _run_production_audits(
+                conn, version=version, auditor="rehearsal-claim-metadata-reviewer"
+            )
+            assert lineage_repo.authority_coverage()["claim_state"] == "supported"
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE legal_sources SET {column}={original_value} WHERE source_key=%s",
+                    [source_key],
+                )
+            conn.commit()
+            assert lineage_repo.authority_coverage()["claim_state"] == "suppressed"
+            _run_production_audits(
+                conn, version=version, auditor="rehearsal-claim-metadata-reviewer"
+            )
+            assert lineage_repo.authority_coverage()["claim_state"] == "supported"
+
+        # Startup migration is one-time. Singleton rows written after a normal
+        # feature release exists can never be adopted into that promoted
+        # snapshot by a later init/backfill call.
         legacy_cluster = 97000003
         with conn.cursor() as cur:
             cur.execute(
@@ -781,7 +1759,7 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
             )
         before_backfill = backfill_promoted_caselaw_snapshot(conn)
         after_backfill = backfill_promoted_caselaw_snapshot(conn)
-        assert before_backfill >= 1 and after_backfill == 0
+        assert before_backfill == 0 and after_backfill == 0
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT COUNT(*) FROM authority_case_clusters WHERE corpus_version IS NULL"
@@ -800,12 +1778,29 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
             )
             assert cur.fetchone()[0] == 0
             cur.execute(
-                """SELECT COUNT(*) FROM authority_case_chunks
-                WHERE corpus_version=%s AND opinion_id=%s
-                  AND content='Legacy upgrade searchable text'""",
-                [version, legacy_cluster],
+                """SELECT
+                  (SELECT COUNT(*) FROM authority_case_clusters
+                    WHERE corpus_version=%s AND cluster_id=%s),
+                  (SELECT COUNT(*) FROM authority_case_opinions
+                    WHERE corpus_version=%s AND opinion_id=%s),
+                  (SELECT COUNT(*) FROM authority_case_chunks
+                    WHERE corpus_version=%s AND opinion_id=%s),
+                  (SELECT COUNT(*) FROM authority_case_citations
+                    WHERE corpus_version=%s
+                      AND (citing_opinion_id=%s OR cited_opinion_id=%s))""",
+                [
+                    version,
+                    legacy_cluster,
+                    version,
+                    legacy_cluster,
+                    version,
+                    legacy_cluster,
+                    version,
+                    legacy_cluster,
+                    legacy_cluster,
+                ],
             )
-            assert cur.fetchone()[0] == 1
+            assert cur.fetchone() == (0, 0, 0, 0)
 
         # Composite snapshot relationships reject cross-version and missing
         # parents; this is stronger than an application orphan count.
@@ -839,6 +1834,34 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
             WHERE corpus_version=%s AND cluster_id=%s""",
             [version, fixture_cluster_id],
         )
+        db_reject(
+            """INSERT INTO legal_documents
+                 (source_key, external_id, document_type, title, authority_tier,
+                  canonical_url, corpus_version, text_content)
+               VALUES (%s, 'post-promote-insert', 'statute', 'tampered',
+                       'binding_primary', 'https://example.test/tampered', %s,
+                       'tampered')""",
+            [source_key, version],
+        )
+        db_reject(
+            """UPDATE legal_documents SET title='tampered'
+                 WHERE corpus_version=%s AND source_key=%s""",
+            [version, source_key],
+        )
+        db_reject(
+            """DELETE FROM legal_documents
+                 WHERE corpus_version=%s AND source_key=%s""",
+            [version, source_key],
+        )
+        db_reject(
+            """UPDATE legal_document_chunks SET content='tampered'
+                 WHERE corpus_version=%s""",
+            [version],
+        )
+        db_reject(
+            "DELETE FROM legal_document_chunks WHERE corpus_version=%s",
+            [version],
+        )
         db_reject("DELETE FROM authority_audits WHERE corpus_version=%s", [version])
 
         # An older pass cannot keep a release eligible after the latest result
@@ -848,7 +1871,7 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
         stage_corpus_version(
             conn,
             version=failed_version,
-            manifest_hash="failed-manifest",
+            manifest_hash="f" * 64,
             as_of="2026-08-30T00:00:00Z",
             actor="rehearsal-admin",
             reason="latest-failure gate",
@@ -856,12 +1879,30 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
             embedding_version="1",
             embedding_dimension=1024,
         )
+        add_fixture(failed_version, "failed")
         with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE legal_document_chunks
+                      SET embedding=('[' || array_to_string(array_fill(0, ARRAY[1024]), ',') || ']')::vector,
+                          embedding_model='mixedbread-ai/mxbai-embed-large-v1',
+                          embedding_version=1
+                    WHERE corpus_version=%s""",
+                [failed_version],
+            )
+            cur.execute(
+                """UPDATE authority_case_chunks
+                      SET embedding=('[' || array_to_string(array_fill(0, ARRAY[1024]), ',') || ']')::vector,
+                          embedding_model='mixedbread-ai/mxbai-embed-large-v1',
+                          embedding_version='1'
+                    WHERE corpus_version=%s""",
+                [failed_version],
+            )
             cur.execute(
                 "SELECT COUNT(*) FROM authority_case_chunks WHERE corpus_version=%s",
                 [failed_version],
             )
             assert cur.fetchone()[0] >= 2
+        conn.commit()
         for kind in ("release", "completeness", "freshness", "isolation"):
             result = sampled_audit(
                 [
@@ -909,7 +1950,7 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
             passed=False,
             auditor="rehearsal-admin",
         )
-        with pytest.raises(PermissionError):
+        with pytest.raises(PermissionError, match="stale, fabricated, or invalid"):
             promote_corpus_version(
                 conn,
                 version=failed_version,
@@ -1033,7 +2074,7 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
         from mcp_server.control_plane import public_namespace
 
         with pytest.raises(ValueError):
-            public_namespace("tenant:private-matter")
+            public_namespace("tenant:private-matter", admitted=True)
         private_audit = sampled_audit(
             [{"namespace": "tenant:private-matter", "private": True}],
             audit_kind="isolation",
@@ -1068,6 +2109,23 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
         )
         add_fixture(follow_up, "new")
         conn.commit()
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT corpus_version, catalog_schema_version,
+                          manifest_reference
+                     FROM public_authority_source_lineage
+                    WHERE source_key=%s AND corpus_version=ANY(%s)
+                    ORDER BY corpus_version""",
+                [source_key, [version, follow_up]],
+            )
+            assert set(cur.fetchall()) == {
+                (version, "rehearsal", f"fixture-manifest:{version}"),
+                (
+                    follow_up,
+                    "rehearsal-v2",
+                    f"fixture-manifest:{follow_up}",
+                ),
+            }
         follow_config = WorkerConfig(
             worker_id=0,
             total_workers=1,
@@ -1077,6 +2135,7 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
             dim=follow_dimension,
             db_url=db_url,
         )
+
         class FollowupModel:
             def encode(self, texts, **_kwargs):
                 return [[1.0] + [0.0] * (follow_dimension - 1) for _ in texts]
@@ -1086,31 +2145,35 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
             assert process_once(follow_config, FollowupModel()) > 0
         finally:
             monkeypatch.delenv("AUTHORITY_EMBEDDING_CORPUS_VERSION", raising=False)
-        for kind in ("release", "completeness", "freshness", "isolation"):
-            result = sampled_audit(
-                [{"ready": True}]
-                if kind == "release"
-                else (
-                    [{"expected": True, "observed": True}]
-                    if kind == "completeness"
-                    else (
-                        [{"lag_seconds": 1}]
-                        if kind == "freshness"
-                        else [{"namespace": "public-authority", "private": False}]
-                    )
-                ),
-                audit_kind=kind,
+        assert materialize_citator_facts(conn, follow_up) > 0
+        conn.commit()
+        for table in (
+            "legal_documents",
+            "legal_document_chunks",
+            "authority_case_clusters",
+            "authority_records",
+        ):
+            db_reject(
+                f"UPDATE {table} SET corpus_version=%s WHERE corpus_version=%s",
+                [version, follow_up],
             )
-            record_audit(
-                conn,
-                corpus_version=follow_up,
-                audit_kind=kind,
-                methodology="fixture rollback sample",
-                thresholds={},
-                result=result,
-                passed=True,
-                auditor="rehearsal-admin",
+            db_reject(
+                f"UPDATE {table} SET corpus_version=%s WHERE corpus_version=%s",
+                [follow_up, version],
             )
+        with conn.cursor() as cur:
+            for table in (
+                "legal_documents",
+                "legal_document_chunks",
+                "authority_case_clusters",
+                "authority_records",
+            ):
+                cur.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE corpus_version=%s",
+                    [follow_up],
+                )
+                assert cur.fetchone()[0] > 0
+        _run_production_audits(conn, version=follow_up, auditor="rehearsal-admin")
         promote_corpus_version(
             conn, version=follow_up, actor="rehearsal-admin", reason="cutover fixture"
         )
@@ -1145,6 +2208,260 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
             CourtListenerRepository(conn).search_caselaw("old case")[0]["case_name"]
             == "Fixture old"
         )
+
+
+def test_courtlistener_sync_store_is_exact_candidate_version(monkeypatch):
+    """The normal REST sync writes snapshots/checkpoints, never legacy singletons."""
+    db_url = os.getenv("AUTHORITY_REHEARSAL_DATABASE_URL")
+    if not db_url:
+        pytest.skip(
+            "set AUTHORITY_REHEARSAL_DATABASE_URL for the disposable DB rehearsal"
+        )
+    init_schema(db_url)
+    suffix = uuid.uuid4().hex[:10]
+    old_version = f"sync-old-{suffix}"
+    new_version = f"sync-new-{suffix}"
+    opinion_id = 98500000 + int(uuid.uuid4().int % 100000)
+    cluster_id = opinion_id
+    docket_id = opinion_id
+
+    def bundle(text: str) -> dict[str, object]:
+        return {
+            "court": {
+                "id": "ohio-sync-rehearsal",
+                "short_name": "Sync rehearsal",
+                "full_name": "Ohio Sync Rehearsal Court",
+            },
+            "docket": {
+                "id": docket_id,
+                "docket_number": f"SYNC-{suffix}",
+                "case_name": "Version-bound sync fixture",
+                "date_filed": "2026-08-31",
+            },
+            "cluster": {
+                "id": cluster_id,
+                "docket_id": docket_id,
+                "case_name": "Version-bound sync fixture",
+                "date_filed": "2026-08-31",
+                "citations": [],
+                "absolute_url": f"/opinion/{opinion_id}/",
+            },
+            "opinion": {
+                "id": opinion_id,
+                "cluster_id": cluster_id,
+                "plain_text": text,
+                "absolute_url": f"/opinion/{opinion_id}/",
+            },
+        }
+
+    with connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO legal_sources
+                     (source_key, publisher, source_type, canonical_url, enabled,
+                      storage_policy, rights_decision, reviewed_at, reviewed_by,
+                      expected_cadence, claim_safe_wording, public_namespace,
+                      metadata)
+                   VALUES ('courtlistener:ohio-caselaw', 'Rehearsal', 'case_law',
+                           'https://www.courtlistener.com/', TRUE,
+                           'normalized_text', 'open', now(), 'sync-reviewer',
+                           'daily', 'Bounded sync rehearsal source',
+                           'public-authority',
+                           '{"catalog_schema_version":"rehearsal","implementation_status":"fixture"}')
+                   ON CONFLICT (source_key) DO UPDATE SET
+                     enabled=TRUE, storage_policy='normalized_text',
+                     rights_decision='open', reviewed_at=now(),
+                     reviewed_by='sync-reviewer', expected_cadence='daily',
+                     claim_safe_wording='Bounded sync rehearsal source',
+                     public_namespace='public-authority',
+                     metadata=EXCLUDED.metadata"""
+            )
+        conn.commit()
+        for version_name in (old_version, new_version):
+            stage_corpus_version(
+                conn,
+                version=version_name,
+                manifest_hash=f"sync-manifest-{version_name}",
+                as_of="2026-08-31T00:00:00Z",
+                actor="sync-reviewer",
+                reason="version-bound CourtListener sync rehearsal",
+                embedding_model="mixedbread-ai/mxbai-embed-large-v1",
+                embedding_version="1",
+                embedding_dimension=1024,
+                inherit_current=False,
+            )
+            admit_public_source(
+                conn,
+                source_key="courtlistener:ohio-caselaw",
+                catalog_schema_version="rehearsal",
+                manifest_reference=f"synthetic://sync/{version_name}",
+                manifest_sha256=f"sync-manifest-{version_name}",
+                reviewed_by="sync-reviewer",
+            )
+
+        for version_name, text in (
+            (old_version, "Old version-bound CourtListener opinion"),
+            (new_version, "New version-bound CourtListener opinion"),
+        ):
+            monkeypatch.setenv("AUTHORITY_INGEST_CORPUS_VERSION", version_name)
+            store = PostgresSyncStore(conn)
+            store.ensure_source(date(2025, 1, 1))
+            assert store.corpus_version == version_name
+            assert store.start_partition("ohio-sync-rehearsal") is not None
+            run_id = store.begin_run("ohio-sync-rehearsal", date(2025, 1, 1))
+            rows, chunks = store.ingest_bundle(bundle(text))
+            assert rows == 1 and chunks >= 1
+            store.finish_partition(
+                "ohio-sync-rehearsal",
+                run_id,
+                datetime.now(timezone.utc),
+                rows,
+                chunks,
+            )
+            store.unlock_partition("ohio-sync-rehearsal")
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT corpus_version, plain_text
+                     FROM authority_case_opinions
+                    WHERE opinion_id=%s AND corpus_version=ANY(%s)
+                    ORDER BY corpus_version""",
+                [opinion_id, [old_version, new_version]],
+            )
+            assert set(cur.fetchall()) == {
+                (old_version, "Old version-bound CourtListener opinion"),
+                (new_version, "New version-bound CourtListener opinion"),
+            }
+            cur.execute(
+                """SELECT corpus_version, source_key, status
+                     FROM authority_harvest_checkpoints
+                    WHERE partition_key='ohio-sync-rehearsal'
+                      AND corpus_version=ANY(%s)
+                    ORDER BY corpus_version""",
+                [[old_version, new_version]],
+            )
+            assert set(cur.fetchall()) == {
+                (old_version, "courtlistener:ohio-caselaw", "complete"),
+                (new_version, "courtlistener:ohio-caselaw", "complete"),
+            }
+            cur.execute(
+                """SELECT corpus_version, source_key, status
+                     FROM ingest_runs
+                    WHERE id IN (
+                      SELECT id FROM ingest_runs
+                       WHERE corpus_version=ANY(%s)
+                         AND source_key='courtlistener:ohio-caselaw')""",
+                [[old_version, new_version]],
+            )
+            assert set(cur.fetchall()) == {
+                (old_version, "courtlistener:ohio-caselaw", "completed"),
+                (new_version, "courtlistener:ohio-caselaw", "completed"),
+            }
+            cur.execute(
+                """SELECT corpus_version, authority_key, source_key
+                     FROM authority_records
+                    WHERE corpus_version=ANY(%s) AND authority_key=%s
+                    ORDER BY corpus_version""",
+                [[old_version, new_version], f"case:{opinion_id}"],
+            )
+            assert set(cur.fetchall()) == {
+                (
+                    old_version,
+                    f"case:{opinion_id}",
+                    "courtlistener:ohio-caselaw",
+                ),
+                (
+                    new_version,
+                    f"case:{opinion_id}",
+                    "courtlistener:ohio-caselaw",
+                ),
+            }
+            cur.execute(
+                "SELECT COUNT(*) FROM opinions WHERE opinion_id=%s", [opinion_id]
+            )
+            assert cur.fetchone()[0] == 0
+            cur.execute(
+                "SELECT COUNT(*) FROM opinion_clusters WHERE cluster_id=%s",
+                [cluster_id],
+            )
+            assert cur.fetchone()[0] == 0
+
+
+def test_due_retry_runner_preserves_exact_candidate_version(monkeypatch):
+    db_url = os.getenv("AUTHORITY_REHEARSAL_DATABASE_URL")
+    if not db_url:
+        pytest.skip(
+            "set AUTHORITY_REHEARSAL_DATABASE_URL for the disposable DB rehearsal"
+        )
+    init_schema(db_url)
+    suffix = uuid.uuid4().hex[:10]
+    source_key = f"retry:source:{suffix}"
+    versions = [f"retry-old-{suffix}", f"retry-new-{suffix}"]
+    with connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO legal_sources
+                     (source_key, publisher, source_type, canonical_url, enabled,
+                      storage_policy, rights_decision, reviewed_at, reviewed_by,
+                      expected_cadence, claim_safe_wording, public_namespace,
+                      metadata)
+                   VALUES (%s, 'Retry rehearsal', 'statute', 'https://example.test/retry',
+                           TRUE, 'normalized_text', 'official', now(), 'retry-reviewer',
+                           'daily', 'Bounded retry rehearsal', 'public-authority',
+                           '{"catalog_schema_version":"rehearsal","implementation_status":"fixture"}')""",
+                [source_key],
+            )
+        conn.commit()
+        for version_name in versions:
+            stage_corpus_version(
+                conn,
+                version=version_name,
+                manifest_hash=f"retry-manifest-{version_name}",
+                as_of="2026-08-31T00:00:00Z",
+                actor="retry-reviewer",
+                reason="version-bound due retry rehearsal",
+                embedding_model="mixedbread-ai/mxbai-embed-large-v1",
+                embedding_version="1",
+                embedding_dimension=1024,
+                inherit_current=False,
+            )
+            admit_public_source(
+                conn,
+                source_key=source_key,
+                catalog_schema_version="rehearsal",
+                manifest_reference=f"synthetic://retry/{version_name}",
+                manifest_sha256=f"retry-manifest-{version_name}",
+                reviewed_by="retry-reviewer",
+            )
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO authority_harvest_checkpoints
+                         (source_key, partition_key, corpus_version, status,
+                          retry_count, next_retry_at)
+                       VALUES (%s, %s, %s, 'retryable_failure', 1,
+                               now() - interval '1 minute')""",
+                    [source_key, f"manifest:{source_key}", version_name],
+                )
+            conn.commit()
+
+    calls: list[str] = []
+
+    def fake_sync(documents, _catalog, _db_url, *, corpus_versions=None):
+        assert len(documents) == 1
+        assert corpus_versions and corpus_versions[source_key] in versions
+        version_name = corpus_versions[source_key]
+        calls.append(version_name)
+        return [{"source_key": source_key, "corpus_version": version_name}]
+
+    monkeypatch.setattr(authority_ingest_module, "sync_documents", fake_sync)
+    results = authority_ingest_module.retry_due_documents(
+        [{"source_key": source_key, "external_id": "retry-doc"}],
+        {source_key: {}},
+        db_url,
+        limit=10,
+    )
+    assert set(calls) == set(versions)
+    assert {row["corpus_version"] for row in results} == set(versions)
 
 
 def _signed_citator_command(secret: str, claims: dict[str, object]) -> str:
@@ -1198,7 +2515,11 @@ def _citator_scope_assertion(
 
 def _reviewer_authorization_assertion(*, actor: str, principal: str, basis: str) -> str:
     issued = int(time.time())
-    body = {"action": "authorize_reviewer", "principal": principal, "authorization_basis": basis}
+    body = {
+        "action": "authorize_reviewer",
+        "principal": principal,
+        "authorization_basis": basis,
+    }
     return _signed_citator_command(
         os.environ["MCP_OPERATOR_ASSERTION_SECRET"],
         {
@@ -1224,14 +2545,20 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
     """
     db_url = os.getenv("AUTHORITY_REHEARSAL_DATABASE_URL")
     if not db_url:
-        pytest.skip("set AUTHORITY_REHEARSAL_DATABASE_URL for the disposable DB rehearsal")
+        pytest.skip(
+            "set AUTHORITY_REHEARSAL_DATABASE_URL for the disposable DB rehearsal"
+        )
     init_schema(db_url)
     version = "citator-rehearsal-" + uuid.uuid4().hex
     source_key = "citator:rehearsal:" + version
+    citing_source_key = "citator:citing:" + version
+    citing_authority_key = "case:citing-" + version
     custom_source_key = "custom:citator:" + version
     private_shaped_source_key = "privatefoo:citator:" + version
     opinion_id = 97900000 + int(uuid.uuid4().int % 100000)
     authority_key = f"case:{opinion_id}"
+    stale_opinion_id = opinion_id + 1000000
+    stale_authority_key = f"case:{stale_opinion_id}"
     custom_authority_key = "case:custom-" + version
     private_shaped_authority_key = "case:private-shaped-" + version
     tenant_id, other_tenant_id, matter_id = (str(uuid.uuid4()) for _ in range(3))
@@ -1262,25 +2589,44 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
             embedding_model="mixedbread-ai/mxbai-embed-large-v1",
             embedding_version="1",
             embedding_dimension=1024,
+            inherit_current=False,
         )
         with conn.cursor() as cur:
-            # Staging copies the prior promoted snapshot, including chunks
-            # whose vector contract intentionally belongs to that prior
-            # release. This isolated citator rehearsal supplies its own
-            # complete candidate snapshot instead of weakening promotion or
-            # accepting those old/null vectors.
+            # This is an explicit full-rebuild candidate. It does not inherit
+            # immutable facts or vectors from the prior promoted release.
+            cur.execute(
+                "DELETE FROM authority_citation_facts WHERE corpus_version=%s",
+                [version],
+            )
+            cur.execute(
+                "DELETE FROM authority_history_facts WHERE corpus_version=%s", [version]
+            )
+            cur.execute(
+                "DELETE FROM authority_records WHERE corpus_version=%s", [version]
+            )
+            cur.execute(
+                "DELETE FROM authority_case_citations WHERE corpus_version=%s",
+                [version],
+            )
             cur.execute(
                 "DELETE FROM authority_case_chunks WHERE corpus_version=%s", [version]
+            )
+            cur.execute(
+                "DELETE FROM authority_case_opinions WHERE corpus_version=%s", [version]
+            )
+            cur.execute(
+                "DELETE FROM authority_case_clusters WHERE corpus_version=%s", [version]
             )
             cur.execute(
                 """INSERT INTO legal_sources
                      (source_key, publisher, source_type, canonical_url, enabled,
                       storage_policy, rights_decision, reviewed_at, reviewed_by,
-                      expected_cadence, claim_safe_wording, metadata)
+                      expected_cadence, claim_safe_wording, public_namespace,
+                      metadata)
                    VALUES (%s, 'Citator rehearsal', 'case_law', 'https://example.test/citator',
                      TRUE, 'normalized_text', 'official', now(), 'rehearsal-admin',
-                     'daily', 'Synthetic rehearsal source only',
-                     '{"catalog_schema_version":"rehearsal","implementation_status":"fixture"}')""",
+                     'daily', 'Synthetic rehearsal source only', 'public-authority',
+                     '{"catalog_schema_version":"rehearsal","implementation_status":"fixture","manifest_reference":"synthetic://citator/rehearsal"}')""",
                 [source_key],
             )
             cur.execute(
@@ -1288,8 +2634,29 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
                      (source_key, catalog_schema_version, manifest_reference,
                       manifest_sha256, reviewed_at, reviewed_by)
                    VALUES (%s, 'rehearsal', 'synthetic://citator/rehearsal',
-                     'synthetic-citator-manifest-sha256', now(), 'rehearsal-admin')""",
+                     'citator-rehearsal-manifest', now(), 'rehearsal-admin')""",
                 [source_key],
+            )
+            cur.execute(
+                """INSERT INTO legal_sources
+                     (source_key, publisher, source_type, canonical_url, enabled,
+                      storage_policy, rights_decision, reviewed_at, reviewed_by,
+                      expected_cadence, claim_safe_wording, public_namespace,
+                      metadata)
+                   VALUES (%s, 'Citing-source rehearsal', 'case_law',
+                     'https://example.test/citing', TRUE, 'normalized_text',
+                     'official', now(), 'rehearsal-admin', 'daily',
+                     'Synthetic citing source only', 'public-authority',
+                     '{"catalog_schema_version":"rehearsal","implementation_status":"fixture"}')""",
+                [citing_source_key],
+            )
+            cur.execute(
+                """INSERT INTO citator_public_source_admissions
+                     (source_key, catalog_schema_version, manifest_reference,
+                      manifest_sha256, reviewed_at, reviewed_by)
+                   VALUES (%s, 'rehearsal', 'synthetic://citator/citing',
+                     'citator-rehearsal-manifest', now(), 'rehearsal-admin')""",
+                [citing_source_key],
             )
             for unsafe_source_key, unsafe_authority_key in (
                 (custom_source_key, custom_authority_key),
@@ -1330,14 +2697,30 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
                     authority_key,
                     source_key,
                     version,
-                    '{"opinion_id":' + str(opinion_id) + '}',
+                    '{"opinion_id":' + str(opinion_id) + "}",
+                ],
+            )
+            cur.execute(
+                """INSERT INTO authority_records
+                     (corpus_version, authority_key, authority_kind, source_key,
+                      title, source_url, source_as_of, source_version,
+                      currentness_state, deterministic_metadata)
+                   VALUES (%s, %s, 'case', %s, 'Stale synthetic authority',
+                     'https://example.test/stale-case', '2026-08-30T00:00:00Z',
+                     %s, 'stale', %s::jsonb)""",
+                [
+                    version,
+                    stale_authority_key,
+                    source_key,
+                    version,
+                    '{"opinion_id":' + str(stale_opinion_id) + "}",
                 ],
             )
             cur.execute(
                 """INSERT INTO authority_case_clusters
-                     (corpus_version, cluster_id, case_name, date_filed)
-                   VALUES (%s, %s, 'Synthetic citator case', '2026-01-01')""",
-                [version, opinion_id],
+                     (corpus_version, source_key, cluster_id, case_name, date_filed)
+                   VALUES (%s, %s, %s, 'Synthetic citator case', '2026-01-01')""",
+                [version, source_key, opinion_id],
             )
             cur.execute(
                 """INSERT INTO authority_case_opinions
@@ -1372,7 +2755,7 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
                       title, source_url, source_as_of, source_version, currentness_state)
                    VALUES (%s, %s, 'case', %s, 'Other synthetic authority', 'https://example.test/other',
                      '2026-08-30T00:00:00Z', %s, 'current')""",
-                [version, "case:other-" + version, source_key, version],
+                [version, citing_authority_key, citing_source_key, version],
             )
             cur.execute(
                 """INSERT INTO authority_history_facts
@@ -1380,15 +2763,30 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
                       evidence_span, evidence_locator, source_hash)
                    VALUES (%s, %s, 'direct_history', 'https://example.test/other-history',
                      'Other authority span', '{"paragraph":2}', 'other-sha') RETURNING id::text""",
-                [version, "case:other-" + version],
+                [version, citing_authority_key],
             )
             cross_authority_fact_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO authority_citation_facts
+                     (corpus_version, citing_authority_key, cited_authority_key,
+                      depth, source_url, evidence_span, evidence_locator, source_hash)
+                   VALUES (%s, %s, %s, 0, 'https://example.test/citing-edge',
+                     'Synthetic citing edge', '{"paragraph":4}',
+                     'citing-edge-sha') RETURNING id::text""",
+                [version, citing_authority_key, authority_key],
+            )
+            two_sided_citation_fact_id = cur.fetchone()[0]
             foreign_version = version + "-foreign"
             stage_corpus_version(
-                conn, version=foreign_version, manifest_hash="foreign-citator-manifest",
-                as_of="2026-08-30T00:00:00Z", actor="rehearsal-admin",
-                reason="cross-version evidence negative", embedding_model="mixedbread-ai/mxbai-embed-large-v1",
-                embedding_version="1", embedding_dimension=1024,
+                conn,
+                version=foreign_version,
+                manifest_hash="foreign-citator-manifest",
+                as_of="2026-08-30T00:00:00Z",
+                actor="rehearsal-admin",
+                reason="cross-version evidence negative",
+                embedding_model="mixedbread-ai/mxbai-embed-large-v1",
+                embedding_version="1",
+                embedding_dimension=1024,
             )
             cur.execute(
                 """INSERT INTO authority_records
@@ -1408,22 +2806,22 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
             )
             cross_version_fact_id = cur.fetchone()[0]
         conn.commit()
-        for kind in ("release", "completeness", "freshness", "isolation"):
-            result = sampled_audit(
-                ([{"ready": True}]
-                 if kind == "release"
-                 else ([{"expected": 1, "observed": 1, "declared": True}]
-                       if kind == "completeness"
-                       else ([{"lag_seconds": 0}]
-                             if kind == "freshness"
-                             else [{"namespace": "public-authority", "private": False}]))),
-                audit_kind=kind,
-            )
-            record_audit(
-                conn, corpus_version=version, audit_kind=kind,
-                methodology="citator synthetic rehearsal", thresholds={}, result=result,
-                passed=True, auditor="rehearsal-admin",
-            )
+        _declare_complete_partition(
+            conn,
+            version=version,
+            source_key=source_key,
+            partition_key="citator-rehearsal",
+            expected=1,
+            observed=1,
+        )
+        _declare_complete_partition(
+            conn,
+            version=version,
+            source_key=citing_source_key,
+            partition_key="citator-citing-rehearsal",
+            expected=1,
+            observed=1,
+        )
         with conn.cursor() as cur:
             cur.execute(
                 """SELECT embedding_model, embedding_version, vector_dims(embedding)
@@ -1431,167 +2829,308 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
                      WHERE corpus_version=%s AND opinion_id=%s AND chunk_index=0""",
                 [version, opinion_id],
             )
-            assert cur.fetchone() == (
-                "mixedbread-ai/mxbai-embed-large-v1", "1", 1024
+            assert cur.fetchone() == ("mixedbread-ai/mxbai-embed-large-v1", "1", 1024)
+        with pytest.raises(PermissionError, match="citator records without public"):
+            promote_corpus_version(
+                conn,
+                version=version,
+                actor="rehearsal-admin",
+                reason="unadmitted citator identities must not promote",
             )
+        with conn.cursor() as cur:
+            cur.execute(
+                """DELETE FROM authority_records
+                    WHERE corpus_version=%s AND authority_key=ANY(%s)""",
+                [version, [custom_authority_key, private_shaped_authority_key]],
+            )
+        conn.commit()
+        _run_production_audits(conn, version=version, auditor="rehearsal-admin")
         promote_corpus_version(
-            conn, version=version, actor="rehearsal-admin", reason="citator rehearsal cutover"
+            conn,
+            version=version,
+            actor="rehearsal-admin",
+            reason="citator rehearsal cutover",
         )
-        for unsafe_authority_key in (custom_authority_key, private_shaped_authority_key):
-            with pytest.raises(PermissionError, match="promoted, reviewed public authority evidence"):
+        for unsafe_authority_key in (
+            custom_authority_key,
+            private_shaped_authority_key,
+        ):
+            with pytest.raises(
+                PermissionError, match="promoted, reviewed public authority evidence"
+            ):
                 record_treatment_assessment(
-                    conn, corpus_version=version, authority_key=unsafe_authority_key,
-                    treatment_label="unknown", confidence=0.0,
-                    policy_version="citator-policy-rehearsal-v1", evidence_fact_ids=[],
-                    abstained=True, abstention_reason="unsafe source negative",
-                    model_version="synthetic-model-v1", actor="rehearsal-worker",
+                    conn,
+                    corpus_version=version,
+                    authority_key=unsafe_authority_key,
+                    treatment_label="unknown",
+                    confidence=0.0,
+                    policy_version="citator-policy-rehearsal-v1",
+                    evidence_fact_ids=[],
+                    abstained=True,
+                    abstention_reason="unsafe source negative",
+                    model_version="synthetic-model-v1",
+                    actor="rehearsal-worker",
                 )
-            with pytest.raises(PermissionError, match="watches require promoted, reviewed public authority evidence"):
+            with pytest.raises(
+                PermissionError,
+                match="watches require promoted, reviewed public authority evidence",
+            ):
                 save_citator_watch(
-                    conn, tenant_id=tenant_id, matter_id=matter_id,
-                    authority_key=unsafe_authority_key, created_by="rehearsal-attorney",
+                    conn,
+                    tenant_id=tenant_id,
+                    matter_id=matter_id,
+                    authority_key=unsafe_authority_key,
+                    created_by="rehearsal-attorney",
                     delivery_channels=["in_app"],
                     matter_scope_assertion=_citator_scope_assertion(
-                        tenant_id=tenant_id, matter_id=matter_id, principal="rehearsal-attorney",
-                        authority_key=unsafe_authority_key, delivery_channels=["in_app"], quiet_hours={},
+                        tenant_id=tenant_id,
+                        matter_id=matter_id,
+                        principal="rehearsal-attorney",
+                        authority_key=unsafe_authority_key,
+                        delivery_channels=["in_app"],
+                        quiet_hours={},
                     ),
                 )
-        for fact_id in (str(uuid.uuid4()), cross_authority_fact_id, cross_version_fact_id):
-            with pytest.raises(PermissionError, match="same authority and corpus version"):
+        for fact_id in (
+            str(uuid.uuid4()),
+            cross_authority_fact_id,
+            cross_version_fact_id,
+        ):
+            with pytest.raises(
+                PermissionError, match="same authority and corpus version"
+            ):
                 record_treatment_assessment(
-                    conn, corpus_version=version, authority_key=authority_key,
-                    treatment_label="negative", confidence=0.7,
+                    conn,
+                    corpus_version=version,
+                    authority_key=authority_key,
+                    treatment_label="negative",
+                    confidence=0.7,
                     policy_version="citator-policy-rehearsal-v1",
-                    evidence_fact_ids=[fact_id], model_version="synthetic-model-v1",
+                    evidence_fact_ids=[fact_id],
+                    model_version="synthetic-model-v1",
                     actor="rehearsal-worker",
                 )
         assessment_id = record_treatment_assessment(
-            conn, corpus_version=version, authority_key=authority_key,
-            treatment_label="distinguished", confidence=0.77,
+            conn,
+            corpus_version=version,
+            authority_key=authority_key,
+            treatment_label="distinguished",
+            confidence=0.77,
             policy_version="citator-policy-rehearsal-v1",
             evidence_fact_ids=[history_fact_id],
-            model_version="synthetic-model-v1", actor="rehearsal-worker",
+            model_version="synthetic-model-v1",
+            actor="rehearsal-worker",
         )
-        with pytest.raises(PermissionError, match="authorized citator review principal"):
+        with pytest.raises(
+            PermissionError, match="authorized citator review principal"
+        ):
             review_treatment_assessment(
-                conn, assessment_id=assessment_id, reviewer="unregistered-attorney",
+                conn,
+                assessment_id=assessment_id,
+                reviewer="unregistered-attorney",
                 decision="accepted",
             )
         with pytest.raises(PermissionError, match="invalid"):
             authorize_citator_reviewer(
-                conn, principal="rehearsal-attorney", authorization_basis="synthetic attorney review fixture",
-                actor="rehearsal-admin", authorization_assertion="forged",
+                conn,
+                principal="rehearsal-attorney",
+                authorization_basis="synthetic attorney review fixture",
+                actor="rehearsal-admin",
+                authorization_assertion="forged",
             )
         with pytest.raises(PermissionError, match="mismatched"):
             authorize_citator_reviewer(
-                conn, principal="rehearsal-attorney", authorization_basis="synthetic attorney review fixture",
+                conn,
+                principal="rehearsal-attorney",
+                authorization_basis="synthetic attorney review fixture",
                 actor="rehearsal-admin",
                 authorization_assertion=_signed_citator_command(
                     os.environ["MCP_OPERATOR_ASSERTION_SECRET"],
                     {
-                        "actor": "rehearsal-admin", "credential": "rehearsal-platform-jti",
-                        "purpose": "citator:watch:save", "issued": int(time.time()),
-                        "expires": int(time.time()) + 60, "nonce": "cross-action-" + uuid.uuid4().hex,
+                        "actor": "rehearsal-admin",
+                        "credential": "rehearsal-platform-jti",
+                        "purpose": "citator:watch:save",
+                        "issued": int(time.time()),
+                        "expires": int(time.time()) + 60,
+                        "nonce": "cross-action-" + uuid.uuid4().hex,
                         "body_sha256": "0" * 64,
                     },
                 ),
             )
         reviewer_assertion = _reviewer_authorization_assertion(
-            actor="rehearsal-admin", principal="rehearsal-attorney",
+            actor="rehearsal-admin",
+            principal="rehearsal-attorney",
             basis="synthetic attorney review fixture",
         )
         authorize_citator_reviewer(
-            conn, principal="rehearsal-attorney", authorization_basis="synthetic attorney review fixture",
-            actor="rehearsal-admin", authorization_assertion=reviewer_assertion,
+            conn,
+            principal="rehearsal-attorney",
+            authorization_basis="synthetic attorney review fixture",
+            actor="rehearsal-admin",
+            authorization_assertion=reviewer_assertion,
         )
         with pytest.raises(PermissionError, match="replayed"):
             authorize_citator_reviewer(
-                conn, principal="rehearsal-attorney", authorization_basis="synthetic attorney review fixture",
-                actor="rehearsal-admin", authorization_assertion=reviewer_assertion,
+                conn,
+                principal="rehearsal-attorney",
+                authorization_basis="synthetic attorney review fixture",
+                actor="rehearsal-admin",
+                authorization_assertion=reviewer_assertion,
             )
         review_treatment_assessment(
-            conn, assessment_id=assessment_id, reviewer="rehearsal-attorney",
-            decision="overridden", override_label="no_decision",
+            conn,
+            assessment_id=assessment_id,
+            reviewer="rehearsal-attorney",
+            decision="overridden",
+            override_label="no_decision",
             note="Synthetic attorney override",
         )
-        assert CourtListenerRepository(conn).citator_status()["release"]["reviewed_assessment_count"] == 1
+        assert (
+            CourtListenerRepository(conn).citator_status()["release"][
+                "reviewed_assessment_count"
+            ]
+            == 1
+        )
         watch_assertion = _citator_scope_assertion(
-            tenant_id=tenant_id, matter_id=matter_id, principal="rehearsal-attorney",
-            authority_key=authority_key, delivery_channels=["in_app"],
+            tenant_id=tenant_id,
+            matter_id=matter_id,
+            principal="rehearsal-attorney",
+            authority_key=authority_key,
+            delivery_channels=["in_app"],
             quiet_hours={"start": "22:00", "end": "07:00", "timezone": "UTC"},
         )
         watch_id = save_citator_watch(
-            conn, tenant_id=tenant_id, matter_id=matter_id,
-            authority_key=authority_key, created_by="rehearsal-attorney",
+            conn,
+            tenant_id=tenant_id,
+            matter_id=matter_id,
+            authority_key=authority_key,
+            created_by="rehearsal-attorney",
             delivery_channels=["in_app"],
             quiet_hours={"start": "22:00", "end": "07:00", "timezone": "UTC"},
             matter_scope_assertion=watch_assertion,
         )
         with pytest.raises(PermissionError, match="replayed"):
             save_citator_watch(
-                conn, tenant_id=tenant_id, matter_id=matter_id, authority_key=authority_key,
-                created_by="rehearsal-attorney", delivery_channels=["in_app"],
+                conn,
+                tenant_id=tenant_id,
+                matter_id=matter_id,
+                authority_key=authority_key,
+                created_by="rehearsal-attorney",
+                delivery_channels=["in_app"],
                 quiet_hours={"start": "22:00", "end": "07:00", "timezone": "UTC"},
                 matter_scope_assertion=watch_assertion,
             )
         with pytest.raises(PermissionError, match="mismatched"):
             save_citator_watch(
-                conn, tenant_id=tenant_id, matter_id=matter_id, authority_key="case:tampered",
-                created_by="rehearsal-attorney", delivery_channels=["in_app"],
+                conn,
+                tenant_id=tenant_id,
+                matter_id=matter_id,
+                authority_key="case:tampered",
+                created_by="rehearsal-attorney",
+                delivery_channels=["in_app"],
                 matter_scope_assertion=_citator_scope_assertion(
-                    tenant_id=tenant_id, matter_id=matter_id, principal="rehearsal-attorney",
-                    authority_key=authority_key, delivery_channels=["in_app"], quiet_hours={},
+                    tenant_id=tenant_id,
+                    matter_id=matter_id,
+                    principal="rehearsal-attorney",
+                    authority_key=authority_key,
+                    delivery_channels=["in_app"],
+                    quiet_hours={},
                 ),
             )
         with pytest.raises(PermissionError, match="expired"):
             save_citator_watch(
-                conn, tenant_id=tenant_id, matter_id=matter_id, authority_key=authority_key,
-                created_by="expired-watch", delivery_channels=["in_app"],
+                conn,
+                tenant_id=tenant_id,
+                matter_id=matter_id,
+                authority_key=authority_key,
+                created_by="expired-watch",
+                delivery_channels=["in_app"],
                 matter_scope_assertion=_citator_scope_assertion(
-                    tenant_id=tenant_id, matter_id=matter_id, principal="expired-watch",
-                    authority_key=authority_key, delivery_channels=["in_app"], quiet_hours={},
-                    issued=int(time.time()) - 400, expires=int(time.time()) - 1,
+                    tenant_id=tenant_id,
+                    matter_id=matter_id,
+                    principal="expired-watch",
+                    authority_key=authority_key,
+                    delivery_channels=["in_app"],
+                    quiet_hours={},
+                    issued=int(time.time()) - 400,
+                    expires=int(time.time()) - 1,
                 ),
             )
         alert_id = enqueue_citator_alert(
-            conn, tenant_id=tenant_id, watch_id=watch_id, corpus_version=version,
-            authority_key=authority_key, event_fingerprint="synthetic-history-v1",
-            event_kind="history", evidence_fact_id=history_fact_id,
+            conn,
+            tenant_id=tenant_id,
+            watch_id=watch_id,
+            corpus_version=version,
+            authority_key=authority_key,
+            event_fingerprint="synthetic-history-v1",
+            event_kind="history",
+            evidence_fact_id=history_fact_id,
         )
         assert alert_id
         with pytest.raises(PermissionError, match="stored same-version"):
             enqueue_citator_alert(
-                conn, tenant_id=tenant_id, watch_id=watch_id, corpus_version=version,
-                authority_key=authority_key, event_fingerprint="forged-alert-evidence",
-                event_kind="history", evidence_fact_id=str(uuid.uuid4()),
+                conn,
+                tenant_id=tenant_id,
+                watch_id=watch_id,
+                corpus_version=version,
+                authority_key=authority_key,
+                event_fingerprint="forged-alert-evidence",
+                event_kind="history",
+                evidence_fact_id=str(uuid.uuid4()),
             )
         with pytest.raises(TypeError, match="source_url"):
             enqueue_citator_alert(
-                conn, tenant_id=tenant_id, watch_id=watch_id, corpus_version=version,
-                authority_key=authority_key, event_fingerprint="forged-alert-url",
-                event_kind="history", evidence_fact_id=history_fact_id,
+                conn,
+                tenant_id=tenant_id,
+                watch_id=watch_id,
+                corpus_version=version,
+                authority_key=authority_key,
+                event_fingerprint="forged-alert-url",
+                event_kind="history",
+                evidence_fact_id=history_fact_id,
                 source_url="https://forged.example",
             )
         with pytest.raises(TypeError, match="payload"):
             enqueue_citator_alert(
-                conn, tenant_id=tenant_id, watch_id=watch_id, corpus_version=version,
-                authority_key=authority_key, event_fingerprint="forged-alert-payload",
-                event_kind="history", evidence_fact_id=history_fact_id,
+                conn,
+                tenant_id=tenant_id,
+                watch_id=watch_id,
+                corpus_version=version,
+                authority_key=authority_key,
+                event_fingerprint="forged-alert-payload",
+                event_kind="history",
+                evidence_fact_id=history_fact_id,
                 payload={"forged": True},
             )
-        assert enqueue_citator_alert(
-            conn, tenant_id=tenant_id, watch_id=watch_id, corpus_version=version,
-            authority_key=authority_key, event_fingerprint="synthetic-history-v1",
-            event_kind="history", evidence_fact_id=history_fact_id,
-        ) is None
+        assert (
+            enqueue_citator_alert(
+                conn,
+                tenant_id=tenant_id,
+                watch_id=watch_id,
+                corpus_version=version,
+                authority_key=authority_key,
+                event_fingerprint="synthetic-history-v1",
+                event_kind="history",
+                evidence_fact_id=history_fact_id,
+            )
+            is None
+        )
         with pytest.raises(PermissionError, match="not consented"):
             record_citator_alert_delivery(
-                conn, tenant_id=tenant_id, alert_event_id=alert_id, channel="email",
-                delivery_key="synthetic-email-attempt", attempted_outcome="queued",
+                conn,
+                tenant_id=tenant_id,
+                alert_event_id=alert_id,
+                channel="email",
+                delivery_key="synthetic-email-attempt",
+                attempted_outcome="queued",
             )
         assert record_citator_alert_delivery(
-            conn, tenant_id=tenant_id, alert_event_id=alert_id, channel="in_app",
-            delivery_key="synthetic-attempt-1", attempted_outcome="queued",
+            conn,
+            tenant_id=tenant_id,
+            alert_event_id=alert_id,
+            channel="in_app",
+            delivery_key="synthetic-attempt-1",
+            attempted_outcome="queued",
             now=datetime(2026, 8, 30, 23, 0, tzinfo=timezone.utc),
         )
         # The disposable DB user is a superuser and would bypass RLS. Exercise
@@ -1601,12 +3140,8 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
         rls_role = "citator_rls_" + uuid.uuid4().hex[:16]
         with conn.cursor() as cur:
             cur.execute(f'CREATE ROLE "{rls_role}" NOLOGIN')
-            cur.execute(
-                f'GRANT SELECT ON citator_watches TO "{rls_role}"'
-            )
-            cur.execute(
-                f'GRANT INSERT ON citator_alert_events TO "{rls_role}"'
-            )
+            cur.execute(f'GRANT SELECT ON citator_watches TO "{rls_role}"')
+            cur.execute(f'GRANT INSERT ON citator_alert_events TO "{rls_role}"')
             cur.execute("SET LOCAL app.current_tenant_id = %s", [other_tenant_id])
             cur.execute(f'SET LOCAL ROLE "{rls_role}"')
             cur.execute("SAVEPOINT cross_tenant_watch_event")
@@ -1621,7 +3156,9 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
                 )
             cur.execute("ROLLBACK TO SAVEPOINT cross_tenant_watch_event")
             cur.execute("RELEASE SAVEPOINT cross_tenant_watch_event")
-            cur.execute("SELECT count(*) FROM citator_watches WHERE id=%s::uuid", [watch_id])
+            cur.execute(
+                "SELECT count(*) FROM citator_watches WHERE id=%s::uuid", [watch_id]
+            )
             assert cur.fetchone()[0] == 0
             cur.execute("RESET ROLE")
             cur.execute(f'REVOKE SELECT ON citator_watches FROM "{rls_role}"')
@@ -1631,19 +3168,32 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
 
         def save_race_watch(principal: str) -> str:
             return save_citator_watch(
-                conn, tenant_id=tenant_id, matter_id=matter_id,
-                authority_key=authority_key, created_by=principal, delivery_channels=["in_app"],
+                conn,
+                tenant_id=tenant_id,
+                matter_id=matter_id,
+                authority_key=authority_key,
+                created_by=principal,
+                delivery_channels=["in_app"],
                 matter_scope_assertion=_citator_scope_assertion(
-                    tenant_id=tenant_id, matter_id=matter_id, principal=principal,
-                    authority_key=authority_key, delivery_channels=["in_app"], quiet_hours={},
+                    tenant_id=tenant_id,
+                    matter_id=matter_id,
+                    principal=principal,
+                    authority_key=authority_key,
+                    delivery_channels=["in_app"],
+                    quiet_hours={},
                 ),
             )
 
-        def lock_watch_row(target_watch_id: str, locked: threading.Event, release: threading.Event):
+        def lock_watch_row(
+            target_watch_id: str, locked: threading.Event, release: threading.Event
+        ):
             with connect(db_url) as lock_conn:
                 with lock_conn.cursor() as cur:
                     cur.execute("SET LOCAL app.current_tenant_id = %s", [tenant_id])
-                    cur.execute("SELECT id FROM citator_watches WHERE id=%s::uuid FOR UPDATE", [target_watch_id])
+                    cur.execute(
+                        "SELECT id FROM citator_watches WHERE id=%s::uuid FOR UPDATE",
+                        [target_watch_id],
+                    )
                     assert cur.fetchone()
                     locked.set()
                     assert release.wait(timeout=10)
@@ -1654,10 +3204,15 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
         # state only after revoke commits; neither may persist after revocation.
         race_watch = save_race_watch("rehearsal-race-enqueue")
         locked, release, revoke_done, enqueue_done = (
-            threading.Event(), threading.Event(), threading.Event(), threading.Event()
+            threading.Event(),
+            threading.Event(),
+            threading.Event(),
+            threading.Event(),
         )
         race_results: dict[str, object] = {}
-        locker = threading.Thread(target=lock_watch_row, args=(race_watch, locked, release))
+        locker = threading.Thread(
+            target=lock_watch_row, args=(race_watch, locked, release)
+        )
         locker.start()
         assert locked.wait(timeout=5)
 
@@ -1673,9 +3228,14 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
         def enqueue_after_revoke():
             with connect(db_url) as race_conn:
                 race_results["enqueue"] = enqueue_citator_alert(
-                    race_conn, tenant_id=tenant_id, watch_id=race_watch, corpus_version=version,
-                    authority_key=authority_key, event_fingerprint="race-enqueue-after-revoke",
-                    event_kind="history", evidence_fact_id=history_fact_id,
+                    race_conn,
+                    tenant_id=tenant_id,
+                    watch_id=race_watch,
+                    corpus_version=version,
+                    authority_key=authority_key,
+                    event_fingerprint="race-enqueue-after-revoke",
+                    event_kind="history",
+                    evidence_fact_id=history_fact_id,
                 )
             enqueue_done.set()
 
@@ -1694,16 +3254,26 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
 
         delivery_watch = save_race_watch("rehearsal-race-delivery")
         delivery_alert = enqueue_citator_alert(
-            conn, tenant_id=tenant_id, watch_id=delivery_watch, corpus_version=version,
-            authority_key=authority_key, event_fingerprint="race-delivery-before-revoke",
-            event_kind="history", evidence_fact_id=history_fact_id,
+            conn,
+            tenant_id=tenant_id,
+            watch_id=delivery_watch,
+            corpus_version=version,
+            authority_key=authority_key,
+            event_fingerprint="race-delivery-before-revoke",
+            event_kind="history",
+            evidence_fact_id=history_fact_id,
         )
         assert delivery_alert
         locked, release, revoke_done, delivery_done = (
-            threading.Event(), threading.Event(), threading.Event(), threading.Event()
+            threading.Event(),
+            threading.Event(),
+            threading.Event(),
+            threading.Event(),
         )
         delivery_results: dict[str, object] = {}
-        locker = threading.Thread(target=lock_watch_row, args=(delivery_watch, locked, release))
+        locker = threading.Thread(
+            target=lock_watch_row, args=(delivery_watch, locked, release)
+        )
         locker.start()
         assert locked.wait(timeout=5)
 
@@ -1719,8 +3289,12 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
         def delivery_after_revoke():
             with connect(db_url) as race_conn:
                 delivery_results["delivery"] = record_citator_alert_delivery(
-                    race_conn, tenant_id=tenant_id, alert_event_id=delivery_alert,
-                    channel="in_app", delivery_key="race-delivery-after-revoke", attempted_outcome="queued",
+                    race_conn,
+                    tenant_id=tenant_id,
+                    alert_event_id=delivery_alert,
+                    channel="in_app",
+                    delivery_key="race-delivery-after-revoke",
+                    attempted_outcome="queued",
                 )
             delivery_done.set()
 
@@ -1745,11 +3319,19 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
             assert cur.fetchone()[0] == "revoked"
         conn.commit()
         assert revoke_citator_watch(conn, tenant_id=tenant_id, watch_id=watch_id)
-        assert enqueue_citator_alert(
-            conn, tenant_id=tenant_id, watch_id=watch_id, corpus_version=version,
-            authority_key=authority_key, event_fingerprint="synthetic-history-v2",
-            event_kind="history", evidence_fact_id=history_fact_id,
-        ) is None
+        assert (
+            enqueue_citator_alert(
+                conn,
+                tenant_id=tenant_id,
+                watch_id=watch_id,
+                corpus_version=version,
+                authority_key=authority_key,
+                event_fingerprint="synthetic-history-v2",
+                event_kind="history",
+                evidence_fact_id=history_fact_id,
+            )
+            is None
+        )
         result = CourtListenerRepository(conn).authority_treatment(opinion_id)
         assert result["status"] == "review_ready"
         assert result["machine_interpretation"]["attorney_reviewed"] is True
@@ -1758,49 +3340,412 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
         assert "good law" in result["claim"].lower()
 
         rejected_assessment = record_treatment_assessment(
-            conn, corpus_version=version, authority_key=authority_key,
-            treatment_label="negative", confidence=0.8,
-            policy_version="citator-policy-rehearsal-v1", evidence_fact_ids=[history_fact_id],
-            model_version="synthetic-model-v1", actor="rehearsal-worker",
+            conn,
+            corpus_version=version,
+            authority_key=authority_key,
+            treatment_label="negative",
+            confidence=0.8,
+            policy_version="citator-policy-rehearsal-v1",
+            evidence_fact_ids=[history_fact_id],
+            model_version="synthetic-model-v1",
+            actor="rehearsal-worker",
         )
         review_treatment_assessment(
-            conn, assessment_id=rejected_assessment, reviewer="rehearsal-attorney",
-            decision="rejected", note="Synthetic rejection",
+            conn,
+            assessment_id=rejected_assessment,
+            reviewer="rehearsal-attorney",
+            decision="rejected",
+            note="Synthetic rejection",
         )
         rejected = CourtListenerRepository(conn).authority_treatment(opinion_id)
         assert rejected["machine_interpretation"]["review_state"] == "rejected"
         assert rejected["machine_interpretation"]["effective_label"] == "unknown"
 
         stale_assessment = record_treatment_assessment(
-            conn, corpus_version=version, authority_key=authority_key,
-            treatment_label="positive", confidence=0.8,
-            policy_version="citator-policy-rehearsal-v1", evidence_fact_ids=[history_fact_id],
-            model_version="synthetic-model-v1", actor="rehearsal-worker",
+            conn,
+            corpus_version=version,
+            authority_key=authority_key,
+            treatment_label="positive",
+            confidence=0.8,
+            policy_version="citator-policy-rehearsal-v1",
+            evidence_fact_ids=[history_fact_id],
+            model_version="synthetic-model-v1",
+            actor="rehearsal-worker",
             stale_at=datetime.now(timezone.utc),
         )
         review_treatment_assessment(
-            conn, assessment_id=stale_assessment, reviewer="rehearsal-attorney",
-            decision="accepted", note="Synthetic stale acceptance",
+            conn,
+            assessment_id=stale_assessment,
+            reviewer="rehearsal-attorney",
+            decision="accepted",
+            note="Synthetic stale acceptance",
         )
         stale = CourtListenerRepository(conn).authority_treatment(opinion_id)
         assert stale["machine_interpretation"]["review_state"] == "stale"
         assert stale["machine_interpretation"]["effective_label"] == "unknown"
 
-        with conn.cursor() as cur:
-            cur.execute("UPDATE legal_sources SET enabled=FALSE WHERE source_key=%s", [source_key])
-        conn.commit()
-        with pytest.raises(PermissionError, match="promoted, reviewed public authority evidence"):
-            record_treatment_assessment(
-                conn, corpus_version=version, authority_key=authority_key,
-                treatment_label="negative", confidence=0.8,
-                policy_version="citator-policy-rehearsal-v1", evidence_fact_ids=[history_fact_id],
+        # Keep one active event through the lineage mutation matrix.  Delivery
+        # must re-check the source at attempt time; an event that was valid
+        # when queued cannot become deliverable after its authority lineage is
+        # disabled, revoked, or changed.
+        lineage_delivery_watch = save_race_watch("rehearsal-lineage-delivery")
+        lineage_delivery_alert = enqueue_citator_alert(
+            conn,
+            tenant_id=tenant_id,
+            watch_id=lineage_delivery_watch,
+            corpus_version=version,
+            authority_key=authority_key,
+            event_fingerprint="lineage-delivery-baseline",
+            event_kind="history",
+            evidence_fact_id=history_fact_id,
+        )
+        assert lineage_delivery_alert
+
+        def new_lineage_review_candidate(label: str) -> str:
+            return record_treatment_assessment(
+                conn,
+                corpus_version=version,
+                authority_key=authority_key,
+                treatment_label="distinguished",
+                confidence=0.6,
+                policy_version="citator-policy-rehearsal-v1",
+                evidence_fact_ids=[history_fact_id],
+                model_version=f"lineage-{label}",
                 actor="rehearsal-worker",
             )
-        disabled = CourtListenerRepository(conn).authority_treatment(opinion_id)
-        assert disabled["status"] == "incomplete"
-        assert disabled["machine_interpretation"]["review_state"] == "source_suppressed"
-        assert disabled["machine_interpretation"]["effective_label"] == "unknown"
-        assert disabled["machine_interpretation"]["attorney_reviewed"] is False
+
+        def assert_citator_lineage_suppressed(
+            label: str,
+            review_assessment_id: str,
+            *,
+            expect_release_unavailable: bool = True,
+        ):
+            treatment = CourtListenerRepository(conn).authority_treatment(opinion_id)
+            assert treatment["status"] == "unavailable"
+            assert treatment["deterministic_facts"] == {
+                "history": [],
+                "citing_references": [],
+            }
+            citator_status = CourtListenerRepository(conn).citator_status()
+            if expect_release_unavailable:
+                assert citator_status["available"] is False
+                assert citator_status["release"] is None
+            else:
+                assert citator_status["available"] is True
+                assert citator_status["release"]["reviewed_assessment_count"] == 0
+            with pytest.raises(
+                PermissionError, match="promoted, reviewed public authority evidence"
+            ):
+                record_treatment_assessment(
+                    conn,
+                    corpus_version=version,
+                    authority_key=authority_key,
+                    treatment_label="negative",
+                    confidence=0.8,
+                    policy_version="citator-policy-rehearsal-v1",
+                    evidence_fact_ids=[history_fact_id],
+                    actor="rehearsal-worker",
+                )
+            with pytest.raises(
+                PermissionError,
+                match="watches require promoted, reviewed public authority evidence",
+            ):
+                save_citator_watch(
+                    conn,
+                    tenant_id=tenant_id,
+                    matter_id=matter_id,
+                    authority_key=authority_key,
+                    created_by=f"lineage-{label}",
+                    delivery_channels=["in_app"],
+                    matter_scope_assertion=_citator_scope_assertion(
+                        tenant_id=tenant_id,
+                        matter_id=matter_id,
+                        principal=f"lineage-{label}",
+                        authority_key=authority_key,
+                        delivery_channels=["in_app"],
+                        quiet_hours={},
+                    ),
+                )
+            with pytest.raises(
+                PermissionError,
+                match="alerts require promoted, reviewed public authority evidence",
+            ):
+                enqueue_citator_alert(
+                    conn,
+                    tenant_id=tenant_id,
+                    watch_id=watch_id,
+                    corpus_version=version,
+                    authority_key=authority_key,
+                    event_fingerprint=f"lineage-{label}",
+                    event_kind="history",
+                    evidence_fact_id=history_fact_id,
+                )
+            with pytest.raises(
+                PermissionError,
+                match="current promoted public authority evidence",
+            ):
+                review_treatment_assessment(
+                    conn,
+                    assessment_id=review_assessment_id,
+                    reviewer="rehearsal-attorney",
+                    decision="accepted",
+                    note=f"must fail closed for {label}",
+                )
+            delivery_id = record_citator_alert_delivery(
+                conn,
+                tenant_id=tenant_id,
+                alert_event_id=lineage_delivery_alert,
+                channel="in_app",
+                delivery_key=f"lineage-{label}",
+                attempted_outcome="queued",
+            )
+            with conn.cursor() as cur:
+                cur.execute("SET LOCAL app.current_tenant_id = %s", [tenant_id])
+                cur.execute(
+                    "SELECT outcome FROM citator_alert_deliveries WHERE id=%s::uuid",
+                    [delivery_id],
+                )
+                assert cur.fetchone() == ("revoked",)
+            conn.commit()
+
+        citator_source_mutations = [
+            ("enabled", "FALSE", "TRUE"),
+            ("rights_decision", "'prohibited'", "'official'"),
+            ("storage_policy", "'prohibited'", "'normalized_text'"),
+            ("reviewed_at", "NULL", "now()"),
+            ("reviewed_by", "NULL", "'rehearsal-admin'"),
+            (
+                "claim_safe_wording",
+                "NULL",
+                "'Synthetic rehearsal source only'",
+            ),
+            ("public_namespace", "'private'", "'public-authority'"),
+        ]
+        for column, bad_value, good_value in citator_source_mutations:
+            review_candidate = new_lineage_review_candidate(column)
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE legal_sources SET {column}={bad_value} WHERE source_key=%s",
+                    [source_key],
+                )
+            conn.commit()
+            assert_citator_lineage_suppressed(
+                column, review_candidate, expect_release_unavailable=False
+            )
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE legal_sources SET {column}={good_value} WHERE source_key=%s",
+                    [source_key],
+                )
+            conn.commit()
+
+        metadata_mutations = [
+            (
+                "implementation",
+                "metadata=metadata-'implementation_status'",
+                "metadata=jsonb_set(metadata, '{implementation_status}', '\"fixture\"'::jsonb)",
+            ),
+        ]
+        for label, bad_set, good_set in metadata_mutations:
+            review_candidate = new_lineage_review_candidate(label)
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE legal_sources SET {bad_set} WHERE source_key=%s",
+                    [source_key],
+                )
+            conn.commit()
+            assert_citator_lineage_suppressed(
+                label, review_candidate, expect_release_unavailable=False
+            )
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE legal_sources SET {good_set} WHERE source_key=%s",
+                    [source_key],
+                )
+            conn.commit()
+
+        # Source metadata is not the release manifest authority.  Mutating it
+        # cannot redirect an already-reviewed, version-bound admission.
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE legal_sources
+                      SET metadata=metadata ||
+                          '{"manifest_reference":"attacker-controlled",
+                            "catalog_schema_version":"attacker-controlled"}'::jsonb
+                    WHERE source_key=%s""",
+                [source_key],
+            )
+        conn.commit()
+        assert (
+            CourtListenerRepository(conn).authority_treatment(opinion_id)["status"]
+            != "unavailable"
+        )
+        assert CourtListenerRepository(conn).citator_status()["available"] is True
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE legal_sources
+                      SET metadata=metadata ||
+                          '{"manifest_reference":"synthetic://citator/rehearsal",
+                            "catalog_schema_version":"rehearsal"}'::jsonb
+                    WHERE source_key=%s""",
+                [source_key],
+            )
+        conn.commit()
+
+        admission_mutations = [("admission-active", "active=FALSE", "active=TRUE")]
+        for label, bad_set, good_set in admission_mutations:
+            review_candidate = new_lineage_review_candidate(label)
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE citator_public_source_admissions SET {bad_set} WHERE source_key=%s",
+                    [source_key],
+                )
+            conn.commit()
+            assert_citator_lineage_suppressed(
+                label, review_candidate, expect_release_unavailable=False
+            )
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE citator_public_source_admissions SET {good_set} WHERE source_key=%s",
+                    [source_key],
+                )
+            conn.commit()
+
+        for bad_set in (
+            "catalog_schema_version='changed'",
+            "manifest_reference='changed'",
+            "manifest_sha256=repeat('d', 64)",
+            "namespace='private'",
+        ):
+            with pytest.raises(
+                DatabaseError,
+                match="promoted authority admission lineage is immutable",
+            ):
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"UPDATE citator_public_source_admissions SET {bad_set} WHERE source_key=%s",
+                        [source_key],
+                    )
+            conn.rollback()
+        assert (
+            CourtListenerRepository(conn).authority_treatment(opinion_id)["status"]
+            != "unavailable"
+        )
+
+        citation_assessment_id = record_treatment_assessment(
+            conn,
+            corpus_version=version,
+            authority_key=authority_key,
+            treatment_label="distinguished",
+            confidence=0.72,
+            policy_version="citator-policy-rehearsal-v1",
+            evidence_fact_ids=[two_sided_citation_fact_id],
+            model_version="two-sided-lineage-rehearsal",
+            actor="rehearsal-worker",
+        )
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE legal_sources SET enabled=FALSE WHERE source_key=%s",
+                [citing_source_key],
+            )
+        conn.commit()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM public_authority_citation_facts WHERE id=%s::uuid",
+                [two_sided_citation_fact_id],
+            )
+            assert cur.fetchone()[0] == 0
+        two_sided_suppressed = CourtListenerRepository(conn).authority_treatment(
+            opinion_id
+        )
+        assert two_sided_suppressed["deterministic_facts"]["citing_references"] == []
+        assert (
+            two_sided_suppressed["machine_interpretation"].get("assessment_id")
+            != citation_assessment_id
+        )
+        with pytest.raises(PermissionError):
+            enqueue_citator_alert(
+                conn,
+                tenant_id=tenant_id,
+                watch_id=watch_id,
+                corpus_version=version,
+                authority_key=authority_key,
+                event_fingerprint="revoked-citing-source",
+                event_kind="treatment",
+                evidence_fact_id=two_sided_citation_fact_id,
+            )
+        with pytest.raises(PermissionError):
+            record_treatment_assessment(
+                conn,
+                corpus_version=version,
+                authority_key=authority_key,
+                treatment_label="negative",
+                confidence=0.8,
+                policy_version="citator-policy-rehearsal-v1",
+                evidence_fact_ids=[two_sided_citation_fact_id],
+                model_version="revoked-citing-source",
+                actor="rehearsal-worker",
+            )
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE legal_sources SET enabled=TRUE WHERE source_key=%s",
+                [citing_source_key],
+            )
+        conn.commit()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM public_authority_citation_facts WHERE id=%s::uuid",
+                [two_sided_citation_fact_id],
+            )
+            assert cur.fetchone()[0] == 1
+
+        # Currentness is immutable release evidence.  A record staged as stale
+        # must remain unavailable, while attempts to rewrite currentness after
+        # promotion are rejected rather than silently changing served claims.
+        stale_treatment = CourtListenerRepository(conn).authority_treatment(
+            stale_opinion_id
+        )
+        assert stale_treatment["status"] == "unavailable"
+        with pytest.raises(
+            PermissionError, match="promoted, reviewed public authority evidence"
+        ):
+            record_treatment_assessment(
+                conn,
+                corpus_version=version,
+                authority_key=stale_authority_key,
+                treatment_label="negative",
+                confidence=0.8,
+                policy_version="citator-policy-rehearsal-v1",
+                evidence_fact_ids=[],
+                model_version="stale-authority-currentness",
+                abstained=True,
+                abstention_reason="staged currentness is stale",
+                actor="rehearsal-worker",
+            )
+        with pytest.raises(DatabaseError):
+            with conn.cursor() as cur:
+                cur.execute(
+                    """UPDATE authority_records SET currentness_state='current'
+                        WHERE corpus_version=%s AND authority_key=%s""",
+                    [version, stale_authority_key],
+                )
+        conn.rollback()
+
+        with pytest.raises(DatabaseError):
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE citator_public_source_admissions SET namespace='private' WHERE source_key=%s",
+                    [source_key],
+                )
+        conn.rollback()
+        for invalid_review_set in ("reviewed_at=NULL", "reviewed_by=''"):
+            with pytest.raises(DatabaseError):
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"UPDATE citator_public_source_admissions SET {invalid_review_set} WHERE source_key=%s",
+                        [source_key],
+                    )
+            conn.rollback()
 
 
 def test_durable_operator_assertion_replay_rehearsal(monkeypatch):
@@ -1870,7 +3815,9 @@ def test_process_once_rehearsal_both_corpora(monkeypatch):
     """Exercise the production worker path with a deterministic model."""
     db_url = os.getenv("AUTHORITY_REHEARSAL_DATABASE_URL")
     if not db_url:
-        pytest.skip("set AUTHORITY_REHEARSAL_DATABASE_URL for the disposable DB rehearsal")
+        pytest.skip(
+            "set AUTHORITY_REHEARSAL_DATABASE_URL for the disposable DB rehearsal"
+        )
     init_schema(db_url)
     version = "worker-rehearsal-" + uuid.uuid4().hex
     source_key = "worker:rehearsal:" + version
@@ -1895,11 +3842,20 @@ def test_process_once_rehearsal_both_corpora(monkeypatch):
                 """INSERT INTO legal_sources
                     (source_key, publisher, source_type, canonical_url, enabled,
                      storage_policy, rights_decision, reviewed_at, reviewed_by,
-                     expected_cadence, claim_safe_wording, metadata)
+                     expected_cadence, claim_safe_wording, public_namespace,
+                     metadata)
                     VALUES (%s, 'Worker rehearsal', 'statute', 'https://worker.example',
                             TRUE, 'normalized_text', 'official', now(), 'rehearsal-admin',
-                            'daily', 'Bounded worker rehearsal',
-                            '{\"catalog_schema_version\":\"rehearsal\",\"namespace\":\"public-authority\"}')""",
+                            'daily', 'Bounded worker rehearsal', 'public-authority',
+                            '{\"catalog_schema_version\":\"rehearsal\",\"implementation_status\":\"fixture\",\"manifest_reference\":\"worker-rehearsal-manifest\"}')""",
+                [source_key],
+            )
+            cur.execute(
+                """INSERT INTO citator_public_source_admissions
+                     (source_key, catalog_schema_version, manifest_reference,
+                      manifest_sha256, reviewed_at, reviewed_by)
+                   VALUES (%s, 'rehearsal', 'worker-rehearsal-manifest',
+                           'worker-rehearsal-manifest', now(), 'rehearsal-admin')""",
                 [source_key],
             )
             cur.execute(
@@ -1921,9 +3877,9 @@ def test_process_once_rehearsal_both_corpora(monkeypatch):
             )
             cur.execute(
                 """INSERT INTO authority_case_clusters
-                    (corpus_version, cluster_id, case_name, date_filed)
-                    VALUES (%s, 98200001, 'Worker case', '2026-01-01')""",
-                [version],
+                    (corpus_version, source_key, cluster_id, case_name, date_filed)
+                    VALUES (%s, %s, 98200001, 'Worker case', '2026-01-01')""",
+                [version, source_key],
             )
             cur.execute(
                 """INSERT INTO authority_case_opinions
@@ -1949,9 +3905,13 @@ def test_process_once_rehearsal_both_corpora(monkeypatch):
                 """SELECT COUNT(*) FROM legal_document_chunks c
                      JOIN legal_documents d ON d.id=c.document_id
                      JOIN legal_sources s ON s.source_key=d.source_key
+                     JOIN public_authority_source_lineage pas
+                       ON pas.source_key=d.source_key
+                      AND pas.corpus_version=d.corpus_version
                     WHERE d.corpus_version=%s
                       AND c.corpus_version IS NOT DISTINCT FROM %s
                       AND s.enabled IS TRUE
+                      AND d.public_namespace='public-authority'
                       AND d.document_status='current'
                       AND s.storage_policy IN ('mirror', 'normalized_text')
                       AND (c.embedding IS NULL
@@ -1962,12 +3922,19 @@ def test_process_once_rehearsal_both_corpora(monkeypatch):
             )
             legal_before = cur.fetchone()[0]
             cur.execute(
-                """SELECT COUNT(*) FROM authority_case_chunks
-                    WHERE corpus_version=%s
-                      AND (embedding IS NULL
-                           OR embedding_model IS DISTINCT FROM %s
-                           OR embedding_version IS DISTINCT FROM %s
-                           OR vector_dims(embedding) IS DISTINCT FROM %s)""",
+                """SELECT COUNT(*) FROM authority_case_chunks ch
+                     JOIN authority_case_clusters cl
+                       ON cl.corpus_version=ch.corpus_version
+                      AND cl.cluster_id=ch.cluster_id
+                     JOIN public_authority_source_lineage pas
+                       ON pas.source_key=cl.source_key
+                      AND pas.corpus_version=ch.corpus_version
+                    WHERE ch.corpus_version=%s
+                      AND cl.public_namespace='public-authority'
+                      AND (ch.embedding IS NULL
+                           OR ch.embedding_model IS DISTINCT FROM %s
+                           OR ch.embedding_version IS DISTINCT FROM %s
+                           OR vector_dims(ch.embedding) IS DISTINCT FROM %s)""",
                 [version, model_name, model_version, dimension],
             )
             authority_before = cur.fetchone()[0]
@@ -2017,8 +3984,19 @@ def test_process_once_rehearsal_both_corpora(monkeypatch):
                 [version],
             )
             rows = cur.fetchall()
-    assert [row[0] for row in rows] == ["authority_case_chunks", "legal_document_chunks"]
-    for corpus_table, status, model, version_value, row_dimension, throughput, observed_at in rows:
+    assert [row[0] for row in rows] == [
+        "authority_case_chunks",
+        "legal_document_chunks",
+    ]
+    for (
+        corpus_table,
+        status,
+        model,
+        version_value,
+        row_dimension,
+        throughput,
+        observed_at,
+    ) in rows:
         assert status == "complete"
         assert model == model_name
         assert version_value == model_version
@@ -2133,7 +4111,9 @@ def test_process_once_rehearsal_both_corpora(monkeypatch):
     finally:
         release_loss.set()
         loss_thread.join(timeout=20)
-        monkeypatch.setattr(jetson_worker, "heartbeat_embedding_shard", heartbeat_embedding_shard)
+        monkeypatch.setattr(
+            jetson_worker, "heartbeat_embedding_shard", heartbeat_embedding_shard
+        )
     assert not loss_thread.is_alive()
     assert not loss_errors
     with connect(db_url) as conn:
@@ -2182,7 +4162,9 @@ def test_process_once_rehearsal_both_corpora(monkeypatch):
                      ORDER BY s.updated_at DESC LIMIT 1""",
                 [version],
             )
-            failed_embedding, failed_status, attempts, health_state, sample_age = cur.fetchone()
+            failed_embedding, failed_status, attempts, health_state, sample_age = (
+                cur.fetchone()
+            )
             assert failed_embedding is None
             assert failed_status == "dead_letter"
             assert attempts >= 3
@@ -2194,10 +4176,14 @@ def test_legal_only_upgrade_bootstrap_rehearsal():
     """A statute-only legacy database also receives a searchable snapshot."""
     db_url = os.getenv("AUTHORITY_REHEARSAL_DATABASE_URL")
     if not db_url:
-        pytest.skip("set AUTHORITY_REHEARSAL_DATABASE_URL for the disposable DB rehearsal")
+        pytest.skip(
+            "set AUTHORITY_REHEARSAL_DATABASE_URL for the disposable DB rehearsal"
+        )
     schema = "legal_legacy_" + uuid.uuid4().hex[:12]
-    scoped_url = db_url + ("&" if "?" in db_url else "?") + (
-        "options=-csearch_path%3D" + quote(schema + ",public", safe="")
+    scoped_url = (
+        db_url
+        + ("&" if "?" in db_url else "?")
+        + ("options=-csearch_path%3D" + quote(schema + ",public", safe=""))
     )
     with connect(db_url) as conn:
         with conn.cursor() as cur:
@@ -2311,7 +4297,110 @@ def test_legal_only_upgrade_bootstrap_rehearsal():
                     WHERE d.external_id='statute-1'"""
             )
             assert cur.fetchone() == (("legacy-bootstrap", "legacy-bootstrap"))
-            result = CourtListenerRepository(conn).search_legal_authorities("Legacy statute")
+            # Migration preserves the historical rows but does not infer a
+            # public classification from their old table/source shape.
+            result = CourtListenerRepository(conn).search_legal_authorities(
+                "Legacy statute"
+            )
+            assert result == []
+            cur.execute(
+                """UPDATE legal_sources
+                      SET reviewed_at=now(), reviewed_by='legacy-upgrade-reviewer',
+                          claim_safe_wording='Reviewed legacy statute fixture only',
+                          metadata=metadata ||
+                            '{"catalog_schema_version":"legacy-rehearsal",
+                              "implementation_status":"legacy-bootstrap",
+                              "manifest_reference":"legacy-bootstrap-manifest"}'::jsonb
+                    WHERE source_key='legacy:statute'"""
+            )
+        conn.commit()
+        reviewed_version = "legacy-statute-reviewed-" + uuid.uuid4().hex
+        stage_corpus_version(
+            conn,
+            version=reviewed_version,
+            manifest_hash="legacy-statute-reviewed",
+            as_of="2026-08-31T00:00:00Z",
+            actor="legacy-upgrade-reviewer",
+            reason="review legacy statute through a staged successor",
+            embedding_model="mixedbread-ai/mxbai-embed-large-v1",
+            embedding_version="1",
+            embedding_dimension=1024,
+            inherit_current=False,
+        )
+        admit_public_source(
+            conn,
+            source_key="legacy:statute",
+            catalog_schema_version="legacy-rehearsal",
+            manifest_reference="legacy-bootstrap-manifest",
+            manifest_sha256="legacy-statute-reviewed",
+            reviewed_by="legacy-upgrade-reviewer",
+        )
+        ingest_result = ingest_document(
+            conn,
+            {
+                "source_key": "legacy:statute",
+                "external_id": "statute-1",
+                "document_type": "statute",
+                "title": "Legacy statute",
+                "citation": None,
+                "jurisdiction": "US",
+                "authority_tier": "binding_primary",
+                "document_status": "current",
+                "canonical_url": "https://legacy.example/statute",
+                "parser_version": "legacy-reviewed-parser-v1",
+                "practice_areas": ["legacy-rehearsal"],
+                "parser": "legacy-reviewed-parser-v1",
+                "official_status": "official",
+                "acquisition_basis": "reviewed legacy migration fixture",
+                "coverage_notes": "bounded legacy statute fixture",
+            },
+            FetchedDocument(
+                text="Legacy statute text",
+                content_hash="legacy-reviewed-hash",
+                media_type="text/html",
+                retrieved_at=datetime.now(timezone.utc),
+                source_modified_at=None,
+                etag="legacy-reviewed-etag",
+                resolved_url="https://legacy.example/statute",
+            ),
+            corpus_version=reviewed_version,
+        )
+        assert ingest_result["chunks_created"] == 1
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE legal_document_chunks
+                      SET embedding=('[' || array_to_string(array_fill(0, ARRAY[1024]), ',') || ']')::vector,
+                          embedding_model='mixedbread-ai/mxbai-embed-large-v1',
+                          embedding_version=1
+                    WHERE corpus_version=%s""",
+                [reviewed_version],
+            )
+        conn.commit()
+        _declare_complete_partition(
+            conn,
+            version=reviewed_version,
+            source_key="legacy:statute",
+            partition_key="manifest:legacy:statute",
+            expected=1,
+            observed=1,
+        )
+        assert materialize_citator_facts(conn, reviewed_version) >= 1
+        conn.commit()
+        _run_production_audits(
+            conn,
+            version=reviewed_version,
+            auditor="legacy-upgrade-reviewer",
+        )
+        promote_corpus_version(
+            conn,
+            version=reviewed_version,
+            actor="legacy-upgrade-reviewer",
+            reason="promote reviewed legacy statute successor",
+        )
+        with conn.cursor() as cur:
+            result = CourtListenerRepository(conn).search_legal_authorities(
+                "Legacy statute"
+            )
             assert result and result[0]["title"] == "Legacy statute"
             cur.execute(
                 """SELECT convalidated FROM pg_constraint
@@ -2324,9 +4413,13 @@ def test_legal_only_upgrade_bootstrap_rehearsal():
     with connect(scoped_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """SELECT COUNT(*) FROM legal_documents WHERE external_id='statute-1'"""
+                """SELECT corpus_version FROM legal_documents
+                    WHERE external_id='statute-1' ORDER BY corpus_version"""
             )
-            assert cur.fetchone()[0] == 1
+            assert {row[0] for row in cur.fetchall()} == {
+                "legacy-bootstrap",
+                reviewed_version,
+            }
 
 
 def test_legacy_upgrade_bootstrap_rehearsal():
@@ -2337,8 +4430,10 @@ def test_legacy_upgrade_bootstrap_rehearsal():
             "set AUTHORITY_REHEARSAL_DATABASE_URL for the disposable DB rehearsal"
         )
     schema = "legacy_rehearsal_" + uuid.uuid4().hex[:12]
-    scoped_url = db_url + ("&" if "?" in db_url else "?") + (
-        "options=-csearch_path%3D" + quote(schema + ",public", safe="")
+    scoped_url = (
+        db_url
+        + ("&" if "?" in db_url else "?")
+        + ("options=-csearch_path%3D" + quote(schema + ",public", safe=""))
     )
     with connect(db_url) as conn:
         with conn.cursor() as cur:
@@ -2500,10 +4595,122 @@ def test_legacy_upgrade_bootstrap_rehearsal():
             )
             assert cur.fetchone() == (None, "Legacy Reporter", "9", "99")
             cur.execute(
+                """SELECT source_key, public_namespace
+                     FROM authority_case_clusters
+                    WHERE corpus_version='legacy-bootstrap'
+                      AND cluster_id=98000001"""
+            )
+            assert cur.fetchone() == ("courtlistener:ohio-caselaw", "unknown")
+            cur.execute(
                 """SELECT COUNT(*) FROM authority_case_chunks
                    WHERE corpus_version IS NULL"""
             )
             assert cur.fetchone()[0] == 0
+            assert (
+                CourtListenerRepository(conn).search_caselaw("Legacy served opinion")
+                == []
+            )
+            cur.execute(
+                """UPDATE legal_sources
+                      SET enabled=TRUE, storage_policy='normalized_text',
+                          rights_decision='official', reviewed_at=now(),
+                          reviewed_by='legacy-upgrade-reviewer',
+                          expected_cadence='daily',
+                          claim_safe_wording='Reviewed legacy caselaw fixture only',
+                          metadata=metadata ||
+                            '{"catalog_schema_version":"legacy-rehearsal",
+                              "implementation_status":"legacy-bootstrap",
+                              "manifest_reference":"legacy-bootstrap-manifest"}'::jsonb
+                    WHERE source_key='courtlistener:ohio-caselaw'"""
+            )
+        conn.commit()
+        # A legacy bootstrap is deliberately not inferred to be public.  The
+        # reviewed admission applies to a side-by-side staged successor so an
+        # already-promoted snapshot is never relabelled in place.
+        reviewed_version = "legacy-reviewed-" + uuid.uuid4().hex
+        stage_corpus_version(
+            conn,
+            version=reviewed_version,
+            manifest_hash="legacy-bootstrap-reviewed",
+            as_of="2026-08-31T00:00:00Z",
+            actor="legacy-upgrade-reviewer",
+            reason="review legacy bootstrap through a staged successor",
+            embedding_model="mixedbread-ai/mxbai-embed-large-v1",
+            embedding_version="0",
+            embedding_dimension=1024,
+        )
+        admit_public_source(
+            conn,
+            source_key="courtlistener:ohio-caselaw",
+            catalog_schema_version="legacy-rehearsal",
+            manifest_reference="legacy-bootstrap-manifest",
+            manifest_sha256="legacy-bootstrap-reviewed",
+            reviewed_by="legacy-upgrade-reviewer",
+        )
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT public_namespace FROM authority_case_clusters
+                    WHERE corpus_version=%s
+                      AND cluster_id=98000001""",
+                [reviewed_version],
+            )
+            assert cur.fetchone() == ("public-authority",)
+            cur.execute(
+                """UPDATE authority_case_chunks
+                      SET embedding=('[' || array_to_string(array_fill(0, ARRAY[1024]), ',') || ']')::vector,
+                          embedding_model='mixedbread-ai/mxbai-embed-large-v1',
+                          embedding_version='0'
+                    WHERE corpus_version=%s""",
+                [reviewed_version],
+            )
+        conn.commit()
+        _declare_complete_partition(
+            conn,
+            version=reviewed_version,
+            source_key="courtlistener:ohio-caselaw",
+            partition_key="legacy-court",
+            expected=1,
+            observed=1,
+        )
+        assert materialize_citator_facts(conn, reviewed_version) >= 1
+        conn.commit()
+        _run_production_audits(
+            conn,
+            version=reviewed_version,
+            auditor="legacy-upgrade-reviewer",
+        )
+        promote_corpus_version(
+            conn,
+            version=reviewed_version,
+            actor="legacy-upgrade-reviewer",
+            reason="promote reviewed legacy successor",
+        )
+        with conn.cursor() as cur:
+            served = CourtListenerRepository(conn).search_caselaw(
+                "Legacy served opinion"
+            )
+            assert served and served[0]["opinion_id"] == 98000001
+        conn.commit()
+    # Runtime singleton writes after the one-time migration are never adopted
+    # into whichever release happens to be promoted on a later startup.
+    with connect(scoped_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO opinion_clusters
+                     (cluster_id, case_name, date_filed, citations)
+                   VALUES (98000002, 'Late unversioned singleton', '2026-08-31', '[]')"""
+            )
+            cur.execute(
+                """INSERT INTO opinions
+                     (opinion_id, cluster_id, plain_text, source_url)
+                   VALUES (98000002, 98000002, 'Late singleton text',
+                           'https://legacy.example/late')"""
+            )
+            cur.execute(
+                """INSERT INTO opinion_chunks
+                     (opinion_id, cluster_id, chunk_index, content)
+                   VALUES (98000002, 98000002, 0, 'Late singleton text')"""
+            )
         conn.commit()
     # A populated upgrade is idempotent and must not duplicate immutable rows.
     init_schema(scoped_url)
@@ -2514,3 +4721,23 @@ def test_legacy_upgrade_bootstrap_rehearsal():
                    WHERE corpus_version='legacy-bootstrap'"""
             )
             assert cur.fetchone()[0] == 1
+            cur.execute(
+                """SELECT corpus_version FROM opinion_clusters
+                    WHERE cluster_id=98000002"""
+            )
+            assert cur.fetchone() == (None,)
+            cur.execute(
+                """SELECT corpus_version FROM opinion_chunks
+                    WHERE opinion_id=98000002"""
+            )
+            assert cur.fetchone() == (None,)
+            cur.execute(
+                """SELECT COUNT(*) FROM authority_case_clusters
+                    WHERE cluster_id=98000002"""
+            )
+            assert cur.fetchone()[0] == 0
+            cur.execute(
+                """SELECT COUNT(*) FROM authority_records
+                    WHERE authority_key='case:98000002'"""
+            )
+            assert cur.fetchone()[0] == 0

@@ -95,7 +95,11 @@ def load_catalog(
     catalog_path = Path(path) if path else CATALOG_PATH
     with catalog_path.open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
-    fragment_root = Path(fragments_dir) if fragments_dir else (FRAGMENT_DIR if path is None else None)
+    fragment_root = (
+        Path(fragments_dir)
+        if fragments_dir
+        else (FRAGMENT_DIR if path is None else None)
+    )
     fragment_files: list[str] = []
     if fragment_root and fragment_root.exists():
         for fragment_path in sorted(fragment_root.glob("*.json")):
@@ -157,9 +161,16 @@ def validate_catalog(catalog: dict[str, Any]) -> None:
         if not isinstance(source["enabled"], bool):
             raise CatalogValidationError(f"{key}: enabled must be boolean")
         if not isinstance(source["priority"], int) or source["priority"] < 0:
-            raise CatalogValidationError(f"{key}: priority must be a non-negative integer")
-        if not isinstance(source["practice_areas"], list) or not source["practice_areas"]:
-            raise CatalogValidationError(f"{key}: practice_areas must be a non-empty list")
+            raise CatalogValidationError(
+                f"{key}: priority must be a non-negative integer"
+            )
+        if (
+            not isinstance(source["practice_areas"], list)
+            or not source["practice_areas"]
+        ):
+            raise CatalogValidationError(
+                f"{key}: practice_areas must be a non-empty list"
+            )
 
         _require_enum(source, "authority_tier", AUTHORITY_TIERS)
         _require_enum(source, "official_status", OFFICIAL_STATUSES)
@@ -170,10 +181,13 @@ def validate_catalog(catalog: dict[str, Any]) -> None:
         _require_enum(source, "coverage_kind", COVERAGE_KINDS)
 
         if source["access_type"] == "blocked_robots" and source["enabled"]:
-            raise CatalogValidationError(f"{key}: a robots-blocked source cannot be enabled")
-        if source["license_status"] in {"terms_review_required", "restricted"} and source[
-            "enabled"
-        ]:
+            raise CatalogValidationError(
+                f"{key}: a robots-blocked source cannot be enabled"
+            )
+        if (
+            source["license_status"] in {"terms_review_required", "restricted"}
+            and source["enabled"]
+        ):
             raise CatalogValidationError(
                 f"{key}: source cannot be enabled until licensing/access review is complete"
             )
@@ -183,16 +197,25 @@ def validate_catalog(catalog: dict[str, Any]) -> None:
             raise CatalogValidationError(
                 f"{key}: permission-granted sources require authorization_basis"
             )
-        if source["ingestion_mode"] == "query_time" and source["storage_policy"] == "mirror":
-            raise CatalogValidationError(f"{key}: query-time sources cannot be mirrored")
+        if (
+            source["ingestion_mode"] == "query_time"
+            and source["storage_policy"] == "mirror"
+        ):
+            raise CatalogValidationError(
+                f"{key}: query-time sources cannot be mirrored"
+            )
         if source["storage_policy"] in {"mirror", "normalized_text"} and source[
             "corpus_table"
         ] in {None, "none"}:
-            raise CatalogValidationError(f"{key}: stored sources require a corpus_table")
+            raise CatalogValidationError(
+                f"{key}: stored sources require a corpus_table"
+            )
         if source["source_type"].endswith("_tool") and (
             source["enabled"] or source["corpus_table"] != "none"
         ):
-            raise CatalogValidationError(f"{key}: tooling entries are not ingestible corpora")
+            raise CatalogValidationError(
+                f"{key}: tooling entries are not ingestible corpora"
+            )
 
 
 def catalog_summary(catalog: dict[str, Any]) -> dict[str, Any]:
@@ -210,13 +233,17 @@ def catalog_summary(catalog: dict[str, Any]) -> dict[str, Any]:
         "source_count": len(sources),
         "enabled_count": sum(bool(source["enabled"]) for source in sources),
         "by_implementation_status": dict(
-            sorted(Counter(source["implementation_status"] for source in sources).items())
+            sorted(
+                Counter(source["implementation_status"] for source in sources).items()
+            )
         ),
         "by_ingestion_mode": dict(
             sorted(Counter(source["ingestion_mode"] for source in sources).items())
         ),
         "policy_hold_source_keys": [source["source_key"] for source in policy_holds],
-        "documented_retry_count": sum(bool(source.get("retry_action")) for source in sources),
+        "documented_retry_count": sum(
+            bool(source.get("retry_action")) for source in sources
+        ),
     }
 
 
@@ -330,10 +357,25 @@ def seed_catalog(conn: Any, catalog: dict[str, Any]) -> int:
                     source.get("notes"),
                     source.get("rights_decision") or "pending_review",
                     source.get("source_tier") or source["authority_tier"],
-                    json.dumps(source.get("geographic_scope") or ([source["jurisdiction"]] if source.get("jurisdiction") else [])),
-                    json.dumps(source.get("temporal_scope") or {"start": source.get("coverage_start"), "end": source.get("coverage_end")}),
+                    json.dumps(
+                        source.get("geographic_scope")
+                        or (
+                            [source["jurisdiction"]]
+                            if source.get("jurisdiction")
+                            else []
+                        )
+                    ),
+                    json.dumps(
+                        source.get("temporal_scope")
+                        or {
+                            "start": source.get("coverage_start"),
+                            "end": source.get("coverage_end"),
+                        }
+                    ),
                     source.get("expected_cadence") or source["sync_frequency"],
-                    source.get("completeness_caveats") or source.get("coverage_notes") or "Bounded source scope; completeness is not established.",
+                    source.get("completeness_caveats")
+                    or source.get("coverage_notes")
+                    or "Bounded source scope; completeness is not established.",
                     source.get("claim_safe_wording"),
                     source.get("reviewed_at"),
                     source.get("reviewed_by"),
@@ -345,8 +387,124 @@ def seed_catalog(conn: Any, catalog: dict[str, Any]) -> int:
     return len(catalog["sources"])
 
 
+def admit_public_source(
+    conn: Any,
+    *,
+    source_key: str,
+    catalog_schema_version: str,
+    manifest_reference: str,
+    manifest_sha256: str,
+    reviewed_by: str,
+) -> None:
+    """Record the explicit reviewed admission required for public serving.
+
+    This is intentionally separate from catalog seeding: a catalog entry is
+    descriptive, while admission is an operator-owned authorization decision.
+    """
+    catalog_schema_version = str(catalog_schema_version or "").strip()
+    manifest_reference = str(manifest_reference or "").strip()
+    manifest_sha256 = str(manifest_sha256 or "").strip()
+    reviewed_by = str(reviewed_by or "").strip()
+    if not catalog_schema_version or not manifest_reference or not reviewed_by:
+        raise CatalogValidationError(
+            "catalog schema, manifest reference, and reviewer are required"
+        )
+    if len(manifest_sha256) < 16:
+        raise CatalogValidationError("manifest_sha256 must be a stable digest")
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """SELECT rights_decision, reviewed_at, reviewed_by, storage_policy,
+                      enabled, metadata->>'catalog_schema_version',
+                      metadata->>'implementation_status', claim_safe_wording
+               FROM legal_sources WHERE source_key=%s""",
+            [source_key],
+        )
+        source = cursor.fetchone()
+        if not source or source[0] not in {"official", "open", "licensed"}:
+            raise CatalogValidationError(
+                "source is not rights-approved for public admission"
+            )
+        if (
+            not source[1]
+            or not source[2]
+            or source[3] == "prohibited"
+            or source[4] is not True
+        ):
+            raise CatalogValidationError("source requires independent review evidence")
+        if (
+            source[5] != catalog_schema_version
+            or not str(source[6] or "").strip()
+            or not str(source[7] or "").strip()
+        ):
+            raise CatalogValidationError(
+                "source catalog lineage does not match the reviewed admission"
+            )
+        cursor.execute(
+            """SELECT EXISTS (
+                 SELECT 1 FROM authority_corpus_versions
+                  WHERE manifest_hash=%s
+                    AND status IN ('staged', 'canary', 'promoted'))""",
+            [manifest_sha256],
+        )
+        if not cursor.fetchone()[0]:
+            raise CatalogValidationError(
+                "admission manifest is not a known staged, canary, or promoted release"
+            )
+        cursor.execute(
+            """INSERT INTO citator_public_source_admissions
+                 (source_key, catalog_schema_version, manifest_reference,
+                  manifest_sha256, reviewed_at, reviewed_by)
+               VALUES (%s, %s, %s, %s, now(), %s)
+               ON CONFLICT (source_key, manifest_sha256) DO UPDATE SET
+                 catalog_schema_version=EXCLUDED.catalog_schema_version,
+                 manifest_reference=EXCLUDED.manifest_reference,
+                 manifest_sha256=EXCLUDED.manifest_sha256,
+                 reviewed_at=now(), reviewed_by=EXCLUDED.reviewed_by,
+                 active=TRUE""",
+            [
+                source_key,
+                catalog_schema_version,
+                manifest_reference,
+                manifest_sha256,
+                reviewed_by,
+            ],
+        )
+        cursor.execute(
+            """UPDATE legal_sources
+                  SET public_namespace='public-authority'
+                WHERE source_key=%s""",
+            [source_key],
+        )
+        # Candidate snapshots are cloned before a new release can be admitted.
+        # Reclassify only rows whose version carries this exact reviewed
+        # manifest; the storage triggers re-evaluate the same lineage view.
+        cursor.execute(
+            """UPDATE legal_documents d
+                  SET public_namespace='public-authority'
+                 FROM authority_corpus_versions v
+                WHERE d.source_key=%s AND d.corpus_version=v.version
+                  AND v.manifest_hash=%s
+                  AND v.status IN ('staged', 'canary')
+                  AND d.public_namespace IS DISTINCT FROM 'public-authority'""",
+            [source_key, manifest_sha256],
+        )
+        cursor.execute(
+            """UPDATE authority_case_clusters cl
+                  SET public_namespace='public-authority'
+                 FROM authority_corpus_versions v
+                WHERE cl.source_key=%s AND cl.corpus_version=v.version
+                  AND v.manifest_hash=%s
+                  AND v.status IN ('staged', 'canary')
+                  AND cl.public_namespace IS DISTINCT FROM 'public-authority'""",
+            [source_key, manifest_sha256],
+        )
+    conn.commit()
+
+
 def _print_sources(catalog: dict[str, Any]) -> None:
-    for source in sorted(catalog["sources"], key=lambda item: (item["priority"], item["source_key"])):
+    for source in sorted(
+        catalog["sources"], key=lambda item: (item["priority"], item["source_key"])
+    ):
         print(
             "\t".join(
                 [
@@ -361,10 +519,16 @@ def _print_sources(catalog: dict[str, Any]) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Validate and seed the legal source catalog")
+    parser = argparse.ArgumentParser(
+        description="Validate and seed the legal source catalog"
+    )
     parser.add_argument("--catalog", help="Override the bundled catalog path")
-    parser.add_argument("--fragments-dir", help="Optional directory of catalog fragments")
-    parser.add_argument("--seed", action="store_true", help="Initialize schema and upsert sources")
+    parser.add_argument(
+        "--fragments-dir", help="Optional directory of catalog fragments"
+    )
+    parser.add_argument(
+        "--seed", action="store_true", help="Initialize schema and upsert sources"
+    )
     parser.add_argument("--list", action="store_true", help="Print catalog sources")
     parser.add_argument("--db-url")
     args = parser.parse_args()

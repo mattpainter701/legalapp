@@ -160,6 +160,16 @@ ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS claim_safe_wording text;
 ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS reviewed_at timestamptz;
 ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS reviewed_by text;
 ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS review_reason text;
+-- Public authority is an explicit reviewed admission, never a URL/prefix or
+-- caller-controlled metadata inference.  Unknown is the safe upgrade value.
+ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS public_namespace text NOT NULL DEFAULT 'unknown';
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='legal_sources'::regclass
+                   AND conname='legal_sources_public_namespace_check') THEN
+        ALTER TABLE legal_sources ADD CONSTRAINT legal_sources_public_namespace_check
+            CHECK (public_namespace IN ('public-authority', 'unknown', 'private'));
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS authority_corpus_versions (
     version text PRIMARY KEY,
@@ -342,11 +352,20 @@ CREATE TABLE IF NOT EXISTS legal_documents (
     parser_version text,
     text_content text,
     metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    public_namespace text NOT NULL DEFAULT 'unknown',
     corpus_version text REFERENCES authority_corpus_versions(version),
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (source_key, external_id, corpus_version)
 );
+ALTER TABLE legal_documents ADD COLUMN IF NOT EXISTS public_namespace text NOT NULL DEFAULT 'unknown';
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='legal_documents'::regclass
+                   AND conname='legal_documents_public_namespace_check') THEN
+        ALTER TABLE legal_documents ADD CONSTRAINT legal_documents_public_namespace_check
+            CHECK (public_namespace IN ('public-authority', 'unknown', 'private'));
+    END IF;
+END $$;
 
 -- These additive upgrades must precede indexes that reference the new column
 -- when an older installation already has the table.
@@ -394,16 +413,60 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_legal_documents_version_id
     ON legal_documents(corpus_version, id);
 ALTER TABLE opinion_clusters ADD COLUMN IF NOT EXISTS corpus_version text REFERENCES authority_corpus_versions(version);
 ALTER TABLE opinion_chunks ADD COLUMN IF NOT EXISTS corpus_version text REFERENCES authority_corpus_versions(version);
--- Preserve the currently served corpus during upgrade; do not leave legacy
--- rows invisible merely because version columns were introduced later.
-UPDATE legal_documents
-SET corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
-WHERE corpus_version IS NULL
-  AND EXISTS (SELECT 1 FROM authority_corpus_versions WHERE status='promoted');
-UPDATE legal_document_chunks c
-SET corpus_version = d.corpus_version
-FROM legal_documents d
-WHERE c.document_id = d.id AND c.corpus_version IS NULL;
+CREATE TABLE IF NOT EXISTS authority_schema_migrations (
+    migration_key text PRIMARY KEY,
+    applied_at timestamptz NOT NULL DEFAULT now(),
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+ALTER TABLE ingest_runs ADD COLUMN IF NOT EXISTS source_key text
+    REFERENCES legal_sources(source_key) ON DELETE RESTRICT;
+ALTER TABLE ingest_runs ADD COLUMN IF NOT EXISTS corpus_version text
+    REFERENCES authority_corpus_versions(version) ON DELETE RESTRICT;
+-- Bind only rows that existed when this upgrade first encountered an already
+-- promoted legacy corpus.  Later runtime writes must provide an explicit
+-- staged/canary version and can never be adopted into the promoted release by
+-- a subsequent startup.
+DO $$
+DECLARE promoted_version text;
+BEGIN
+    SELECT version INTO promoted_version
+      FROM authority_corpus_versions
+     WHERE status='promoted'
+     ORDER BY promoted_at DESC NULLS LAST LIMIT 1;
+    IF EXISTS (
+         SELECT 1 FROM authority_schema_migrations
+          WHERE migration_key LIKE 'legacy-version-binding-v1:%'
+       ) AND NOT EXISTS (
+         SELECT 1 FROM authority_schema_migrations
+          WHERE migration_key='legacy-version-binding-v1'
+       ) THEN
+        INSERT INTO authority_schema_migrations(migration_key, metadata)
+        VALUES ('legacy-version-binding-v1',
+                jsonb_build_object('upgraded_from_version_scoped_marker', true));
+    ELSIF promoted_version IS NOT NULL
+       AND NOT EXISTS (
+         SELECT 1 FROM authority_schema_migrations
+          WHERE migration_key='legacy-version-binding-v1'
+       ) THEN
+        UPDATE legal_documents
+           SET corpus_version=promoted_version
+         WHERE corpus_version IS NULL;
+        UPDATE legal_document_chunks c
+           SET corpus_version=d.corpus_version
+          FROM legal_documents d
+         WHERE c.document_id=d.id AND c.corpus_version IS NULL;
+        UPDATE opinion_clusters
+           SET corpus_version=promoted_version
+         WHERE corpus_version IS NULL;
+        UPDATE opinion_chunks c
+           SET corpus_version=cl.corpus_version
+          FROM opinion_clusters cl
+         WHERE c.cluster_id=cl.cluster_id AND c.corpus_version IS NULL;
+        INSERT INTO authority_schema_migrations(migration_key, metadata)
+        VALUES ('legacy-version-binding-v1',
+                jsonb_build_object('corpus_version', promoted_version));
+    END IF;
+END $$;
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint
                    WHERE conrelid='legal_document_chunks'::regclass
@@ -415,14 +478,6 @@ DO $$ BEGIN
     END IF;
 END $$;
 ALTER TABLE legal_document_chunks VALIDATE CONSTRAINT fk_legal_document_chunks_same_version;
-UPDATE opinion_clusters
-SET corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
-WHERE corpus_version IS NULL
-  AND EXISTS (SELECT 1 FROM authority_corpus_versions WHERE status='promoted');
-UPDATE opinion_chunks c
-SET corpus_version = cl.corpus_version
-FROM opinion_clusters cl
-WHERE c.cluster_id = cl.cluster_id AND c.corpus_version IS NULL;
 ALTER TABLE source_sync_states ADD COLUMN IF NOT EXISTS retry_count integer NOT NULL DEFAULT 0;
 ALTER TABLE source_sync_states ADD COLUMN IF NOT EXISTS dead_letter_count integer NOT NULL DEFAULT 0;
 ALTER TABLE source_sync_states ADD COLUMN IF NOT EXISTS lag_seconds integer;
@@ -460,6 +515,8 @@ ALTER TABLE authority_embedding_shards
 
 CREATE TABLE IF NOT EXISTS authority_case_clusters (
     corpus_version text NOT NULL REFERENCES authority_corpus_versions(version),
+    source_key text NOT NULL DEFAULT 'courtlistener:ohio-caselaw' REFERENCES legal_sources(source_key) ON DELETE RESTRICT,
+    public_namespace text NOT NULL DEFAULT 'unknown',
     cluster_id bigint NOT NULL,
     docket_id bigint,
     case_name text,
@@ -467,6 +524,25 @@ CREATE TABLE IF NOT EXISTS authority_case_clusters (
     citations jsonb NOT NULL DEFAULT '[]'::jsonb,
     PRIMARY KEY (corpus_version, cluster_id)
 );
+ALTER TABLE authority_case_clusters ADD COLUMN IF NOT EXISTS source_key text;
+ALTER TABLE authority_case_clusters ALTER COLUMN source_key SET DEFAULT 'courtlistener:ohio-caselaw';
+UPDATE authority_case_clusters SET source_key = 'courtlistener:ohio-caselaw' WHERE source_key IS NULL;
+ALTER TABLE authority_case_clusters ALTER COLUMN source_key SET NOT NULL;
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='authority_case_clusters'::regclass
+                   AND conname='fk_authority_case_clusters_source') THEN
+        ALTER TABLE authority_case_clusters ADD CONSTRAINT fk_authority_case_clusters_source
+            FOREIGN KEY (source_key) REFERENCES legal_sources(source_key) ON DELETE RESTRICT;
+    END IF;
+END $$;
+ALTER TABLE authority_case_clusters ADD COLUMN IF NOT EXISTS public_namespace text NOT NULL DEFAULT 'unknown';
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='authority_case_clusters'::regclass
+                   AND conname='authority_case_clusters_public_namespace_check') THEN
+        ALTER TABLE authority_case_clusters ADD CONSTRAINT authority_case_clusters_public_namespace_check
+            CHECK (public_namespace IN ('public-authority', 'unknown', 'private'));
+    END IF;
+END $$;
 CREATE TABLE IF NOT EXISTS authority_case_chunks (
     corpus_version text NOT NULL REFERENCES authority_corpus_versions(version),
     chunk_id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -579,13 +655,27 @@ END $$;
 CREATE OR REPLACE FUNCTION reject_authority_snapshot_mutation() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE release_status text;
+DECLARE migration_owner boolean;
+DECLARE release_version text;
 BEGIN
-    IF TG_OP = 'INSERT' AND current_setting('authority.snapshot_backfill', true) = 'on' THEN
-        RETURN NEW;
+    SELECT pg_has_role(current_user, pg_get_userbyid(c.relowner), 'MEMBER')
+      INTO migration_owner
+      FROM pg_class c WHERE c.oid=TG_RELID;
+    IF current_setting('authority.snapshot_backfill', true) = 'on'
+       AND migration_owner IS TRUE THEN
+        RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
     END IF;
+    -- Serialize staged snapshot writes with the final promotion audit/digest.
+    PERFORM pg_advisory_xact_lock(hashtext('authority-corpus-release'));
+    IF TG_OP = 'UPDATE'
+       AND OLD.corpus_version IS DISTINCT FROM NEW.corpus_version THEN
+        RAISE EXCEPTION 'authority snapshot rows cannot move between corpus versions';
+    END IF;
+    release_version := CASE WHEN TG_OP='INSERT' THEN NEW.corpus_version
+                            ELSE OLD.corpus_version END;
     SELECT status INTO release_status
     FROM authority_corpus_versions
-    WHERE version = COALESCE(OLD.corpus_version, NEW.corpus_version);
+    WHERE version = release_version;
     IF release_status IS DISTINCT FROM 'staged'
        AND release_status IS DISTINCT FROM 'canary' THEN
         RAISE EXCEPTION 'authority snapshot % rows are immutable after staging', release_status;
@@ -604,6 +694,8 @@ SELECT install_authority_snapshot_guard('authority_case_clusters');
 SELECT install_authority_snapshot_guard('authority_case_opinions');
 SELECT install_authority_snapshot_guard('authority_case_chunks');
 SELECT install_authority_snapshot_guard('authority_case_citations');
+SELECT install_authority_snapshot_guard('legal_documents');
+SELECT install_authority_snapshot_guard('legal_document_chunks');
 DROP FUNCTION install_authority_snapshot_guard(text);
 
 DO $$ BEGIN
@@ -670,13 +762,13 @@ CREATE TABLE IF NOT EXISTS authority_records (
     CHECK (currentness_state IN ('current', 'stale', 'unknown', 'unavailable'))
 );
 
--- This is intentionally a narrow citator admission list, not a substitute for
--- the still-open, system-wide explicit-public boundary.  A source must be
--- named by a reviewed catalog/manifest record before this feature can make a
--- treatment, watch, or alert claim from it.  Metadata on an arbitrary source
--- row is never an admission.
+-- This reviewed admission list is the explicit-public allowlist shared by
+-- ingestion, retrieval, coverage, release audits, and citator operations. A
+-- source must be bound to the exact catalog/manifest release before any public
+-- authority surface can use it. Metadata on an arbitrary source row is never
+-- an admission.
 CREATE TABLE IF NOT EXISTS citator_public_source_admissions (
-    source_key text PRIMARY KEY REFERENCES legal_sources(source_key) ON DELETE RESTRICT,
+    source_key text NOT NULL REFERENCES legal_sources(source_key) ON DELETE RESTRICT,
     catalog_schema_version text NOT NULL,
     manifest_reference text NOT NULL,
     manifest_sha256 text NOT NULL,
@@ -689,8 +781,165 @@ CREATE TABLE IF NOT EXISTS citator_public_source_admissions (
     CHECK (length(trim(catalog_schema_version)) > 0),
     CHECK (length(trim(manifest_reference)) > 0),
     CHECK (length(trim(manifest_sha256)) >= 16),
-    CHECK (length(trim(reviewed_by)) > 0)
+    CHECK (length(trim(reviewed_by)) > 0),
+    PRIMARY KEY (source_key, manifest_sha256)
 );
+-- Older control-plane installations admitted at most one manifest per source.
+-- Preserve that row while allowing the current promoted and next staged
+-- release to retain independent reviewed admissions during canary/cutover.
+DO $$
+DECLARE admission_pk text;
+BEGIN
+    SELECT conname INTO admission_pk
+      FROM pg_constraint
+     WHERE conrelid='citator_public_source_admissions'::regclass
+       AND contype='p';
+    IF admission_pk IS NOT NULL
+       AND pg_get_constraintdef(
+             (SELECT oid FROM pg_constraint
+               WHERE conrelid='citator_public_source_admissions'::regclass
+                 AND conname=admission_pk)
+           ) <> 'PRIMARY KEY (source_key, manifest_sha256)' THEN
+        EXECUTE format(
+          'ALTER TABLE citator_public_source_admissions DROP CONSTRAINT %I',
+          admission_pk
+        );
+        admission_pk := NULL;
+    END IF;
+    IF admission_pk IS NULL THEN
+        ALTER TABLE citator_public_source_admissions
+          ADD CONSTRAINT citator_public_source_admissions_pkey
+          PRIMARY KEY (source_key, manifest_sha256);
+    END IF;
+END $$;
+
+-- A promoted admission may be revoked via ``active=false`` and its review may
+-- be renewed, but its source/version identity and reviewed manifest reference
+-- are immutable. A successor release receives a separate composite-key row.
+CREATE OR REPLACE FUNCTION reject_promoted_admission_lineage_mutation()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM pg_advisory_xact_lock(hashtext('authority-corpus-release'));
+    IF TG_OP = 'INSERT' THEN
+        RETURN NEW;
+    END IF;
+    IF TG_OP = 'UPDATE'
+       AND OLD.source_key IS NOT DISTINCT FROM NEW.source_key
+       AND OLD.catalog_schema_version IS NOT DISTINCT FROM NEW.catalog_schema_version
+       AND OLD.manifest_reference IS NOT DISTINCT FROM NEW.manifest_reference
+       AND OLD.manifest_sha256 IS NOT DISTINCT FROM NEW.manifest_sha256
+       AND OLD.namespace IS NOT DISTINCT FROM NEW.namespace THEN
+        RETURN NEW;
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM authority_corpus_versions
+       WHERE manifest_hash=OLD.manifest_sha256
+         AND status NOT IN ('staged','canary')
+    ) THEN
+        RAISE EXCEPTION 'promoted authority admission lineage is immutable';
+    END IF;
+    RETURN CASE WHEN TG_OP='DELETE' THEN OLD ELSE NEW END;
+END $$;
+DROP TRIGGER IF EXISTS public_authority_admission_lineage_immutable
+  ON citator_public_source_admissions;
+CREATE TRIGGER public_authority_admission_lineage_immutable
+  BEFORE INSERT OR UPDATE OR DELETE ON citator_public_source_admissions
+  FOR EACH ROW EXECUTE FUNCTION reject_promoted_admission_lineage_mutation();
+
+-- Rights/review/namespace changes are immediate revocation controls, but they
+-- must serialize with the release digest/live-audit check.  A revocation that
+-- wins the lock blocks promotion; one that follows promotion suppresses every
+-- public view before its transaction becomes visible.
+CREATE OR REPLACE FUNCTION serialize_public_source_lineage_mutation()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP = 'UPDATE'
+       AND OLD.enabled IS NOT DISTINCT FROM NEW.enabled
+       AND OLD.reviewed_at IS NOT DISTINCT FROM NEW.reviewed_at
+       AND OLD.reviewed_by IS NOT DISTINCT FROM NEW.reviewed_by
+       AND OLD.rights_decision IS NOT DISTINCT FROM NEW.rights_decision
+       AND OLD.storage_policy IS NOT DISTINCT FROM NEW.storage_policy
+       AND OLD.public_namespace IS NOT DISTINCT FROM NEW.public_namespace
+       AND OLD.source_tier IS NOT DISTINCT FROM NEW.source_tier
+       AND OLD.geographic_scope IS NOT DISTINCT FROM NEW.geographic_scope
+       AND OLD.temporal_scope IS NOT DISTINCT FROM NEW.temporal_scope
+       AND OLD.expected_cadence IS NOT DISTINCT FROM NEW.expected_cadence
+       AND OLD.completeness_caveats IS NOT DISTINCT FROM NEW.completeness_caveats
+       AND OLD.claim_safe_wording IS NOT DISTINCT FROM NEW.claim_safe_wording
+       AND (OLD.metadata->>'implementation_status') IS NOT DISTINCT FROM
+           (NEW.metadata->>'implementation_status') THEN
+        RETURN NEW;
+    END IF;
+    PERFORM pg_advisory_xact_lock(hashtext('authority-corpus-release'));
+    RETURN CASE WHEN TG_OP='DELETE' THEN OLD ELSE NEW END;
+END $$;
+DROP TRIGGER IF EXISTS public_authority_source_lineage_serialized
+  ON legal_sources;
+CREATE TRIGGER public_authority_source_lineage_serialized
+  BEFORE INSERT OR UPDATE OR DELETE ON legal_sources
+  FOR EACH ROW EXECUTE FUNCTION serialize_public_source_lineage_mutation();
+
+-- Single version-bound public-source contract consumed by retrieval,
+-- coverage, audits, and operational projections.  Keeping this as a view
+-- prevents individual callers from accidentally weakening one predicate.
+CREATE OR REPLACE VIEW public_authority_source_lineage AS
+SELECT s.source_key, v.version AS corpus_version,
+       p.catalog_schema_version,
+       p.manifest_reference, p.manifest_sha256,
+       s.enabled, s.reviewed_at, s.reviewed_by,
+       s.rights_decision, s.storage_policy, s.public_namespace,
+       s.metadata->>'implementation_status' AS implementation_status
+FROM legal_sources s
+JOIN citator_public_source_admissions p
+  ON p.source_key=s.source_key
+ AND p.active IS TRUE
+ AND p.namespace='public-authority'
+JOIN authority_corpus_versions v
+  ON p.manifest_sha256=v.manifest_hash
+WHERE s.enabled IS TRUE
+  AND s.reviewed_at IS NOT NULL
+  AND length(trim(s.reviewed_by)) > 0
+  AND s.rights_decision IN ('official','open','licensed')
+  AND s.storage_policy <> 'prohibited'
+  AND s.public_namespace='public-authority'
+  AND length(trim(s.claim_safe_wording)) > 0
+  AND length(trim(p.catalog_schema_version)) > 0
+  AND length(trim(s.metadata->>'implementation_status')) > 0
+  AND length(trim(p.manifest_reference)) > 0
+  AND length(trim(p.manifest_sha256)) > 0
+  AND p.reviewed_at IS NOT NULL
+  AND length(trim(p.reviewed_by)) > 0
+  AND v.metadata->>'bootstrap' IS DISTINCT FROM 'true';
+
+-- The admission table is the sole public-source allowlist.  Storage rows may
+-- carry a display label, but that label cannot grant public authority access.
+CREATE OR REPLACE FUNCTION apply_public_authority_admission() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE admitted boolean;
+BEGIN
+    SELECT EXISTS (
+        SELECT 1 FROM public_authority_source_lineage pas
+        WHERE pas.source_key = NEW.source_key
+          AND pas.corpus_version = NEW.corpus_version
+    ) INTO admitted;
+    IF TG_TABLE_NAME = 'legal_documents' THEN
+        NEW.public_namespace := CASE WHEN admitted THEN 'public-authority' ELSE 'unknown' END;
+    ELSIF TG_TABLE_NAME = 'authority_case_clusters' THEN
+        NEW.public_namespace := CASE WHEN admitted THEN 'public-authority' ELSE 'unknown' END;
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION install_public_authority_guard(table_name text) RETURNS void
+LANGUAGE plpgsql AS $$
+BEGIN
+    EXECUTE format('DROP TRIGGER IF EXISTS public_authority_admission_guard ON %I', table_name);
+    EXECUTE format('CREATE TRIGGER public_authority_admission_guard
+                    BEFORE INSERT OR UPDATE ON %I
+                    FOR EACH ROW EXECUTE FUNCTION apply_public_authority_admission()', table_name);
+END $$;
+SELECT install_public_authority_guard('legal_documents');
+SELECT install_public_authority_guard('authority_case_clusters');
+DROP FUNCTION install_public_authority_guard(text);
 
 CREATE TABLE IF NOT EXISTS authority_history_facts (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -743,6 +992,66 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_authority_citation_fact_identity
       COALESCE(citing_opinion_id, 0), COALESCE(cited_opinion_id, 0),
       COALESCE(source_hash, ''), COALESCE(evidence_span, '')
     );
+
+-- These projections depend on the fact tables above.  Keep them after table
+-- creation so both fresh installs and isolated historical-upgrade schemas can
+-- initialize atomically.
+CREATE OR REPLACE VIEW public_authority_history_facts AS
+SELECT h.*
+  FROM authority_history_facts h
+  JOIN authority_records r
+    ON r.corpus_version=h.corpus_version
+   AND r.authority_key=h.authority_key
+  JOIN public_authority_source_lineage pas
+    ON pas.source_key=r.source_key
+   AND pas.corpus_version=r.corpus_version
+ WHERE h.related_authority_key IS NULL
+    OR EXISTS (
+      SELECT 1 FROM authority_records related
+      JOIN public_authority_source_lineage related_pas
+        ON related_pas.source_key=related.source_key
+       AND related_pas.corpus_version=related.corpus_version
+      WHERE related.corpus_version=h.corpus_version
+        AND related.authority_key=h.related_authority_key
+    );
+
+-- Citation evidence is public only when both the cited target and the citing
+-- authority/opinion retain exact current lineage.  Revoking either endpoint
+-- suppresses the edge and every derived treatment/alert that depends on it.
+CREATE OR REPLACE VIEW public_authority_citation_facts AS
+SELECT c.*
+  FROM authority_citation_facts c
+  JOIN authority_records cited
+    ON cited.corpus_version=c.corpus_version
+   AND cited.authority_key=c.cited_authority_key
+  JOIN public_authority_source_lineage cited_pas
+    ON cited_pas.source_key=cited.source_key
+   AND cited_pas.corpus_version=cited.corpus_version
+ WHERE (
+       c.citing_authority_key IS NOT NULL
+       AND EXISTS (
+         SELECT 1 FROM authority_records citing
+         JOIN public_authority_source_lineage citing_pas
+           ON citing_pas.source_key=citing.source_key
+          AND citing_pas.corpus_version=citing.corpus_version
+         WHERE citing.corpus_version=c.corpus_version
+           AND citing.authority_key=c.citing_authority_key
+       )
+   ) OR (
+       c.citing_opinion_id IS NOT NULL
+       AND EXISTS (
+         SELECT 1 FROM authority_case_opinions o
+         JOIN authority_case_clusters cl
+           ON cl.corpus_version=o.corpus_version
+          AND cl.cluster_id=o.cluster_id
+         JOIN public_authority_source_lineage citing_pas
+           ON citing_pas.source_key=cl.source_key
+          AND citing_pas.corpus_version=cl.corpus_version
+         WHERE o.corpus_version=c.corpus_version
+           AND o.opinion_id=c.citing_opinion_id
+           AND cl.public_namespace='public-authority'
+       )
+   );
 
 CREATE TABLE IF NOT EXISTS authority_treatment_assessments (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

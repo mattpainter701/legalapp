@@ -44,6 +44,25 @@ cannot use it to access Workspace MCP data. The public/private boundary remains
 explicit across storage, authorization, provenance, retention, deletion,
 retrieval, logs, and tests.
 
+Public authority eligibility is an explicit active row in
+`citator_public_source_admissions`, containing reviewed catalog/manifest
+identity, digest, reviewer, and namespace. Admissions are source-and-manifest
+scoped, preserving the current promoted lineage while a reviewed
+staged/canary successor is assembled.
+Database admission triggers protect
+the `public_namespace` fields on legal documents and caselaw clusters; source
+payload metadata cannot promote a tenant, firm, private, custom, or unknown
+source. Public search, detail, citation/network, court/docket, coverage,
+isolation, and promotion paths require the same admission and source lineage.
+Unknown or non-admitted rows are suppressed and cannot support a coverage
+claim. This is metadata-only control-plane evidence: it does not imply a
+production harvest, comprehensive currentness, or a Brief Check integration.
+Public ingestion adapters and embedding workers resolve the identical
+version-bound lineage before they write or process content. Source-health and
+corpus-status projections recompute admitted release counts and expose only
+redacted failure metadata, so private URLs, document metadata, or query text do
+not enter the public authority status contract.
+
 Coverage claims are fail-closed. A source must have a reviewed rights decision
 (`official`, `open`, `licensed`, `prohibited`, or `pending_review`), a promoted
 corpus version, and passing audit evidence before it can report a supported
@@ -60,11 +79,22 @@ and exposes that limitation. No padded vectors or semantic-completeness claim
 is permitted. The canonical control-plane details and operator rehearsal
 contract are in [Authority coverage control plane](../AUTHORITY_COVERAGE_CONTROL_PLANE.md).
 
-**Release state:** implemented in code and release-gated; PR #280 merged with
-mandatory operator and lifecycle rehearsal evidence. COMP-06 acceptance remains
-open for fail-closed explicit-public classification across every authority path.
-No production corpus harvest, coverage claim, or deployment is implied by this
-documentation.
+**Release state:** implemented and release-gated. The mandatory PostgreSQL
+authority rehearsal covers the versioned lifecycle and fail-closed
+explicit-public lineage across ingestion, retrieval, citation, court/docket,
+status, coverage, audit, and promotion surfaces. This is metadata-only control
+plane evidence; no production corpus harvest, deployment, comprehensive
+coverage, currentness, or good-law claim is implied. Brief Check
+promoted-version/currentness integration remains separate COMP-05 work.
+
+Release evidence is bound to a deterministic corpus-state digest and is
+recomputed under the release lock at promotion. Per-manifest admissions retain
+their own reviewed catalog schema and manifest reference, allowing a successor
+and rollback release to coexist without trusting mutable source payload
+metadata. Normal ingestion and citator materialization target only an admitted
+staged/canary release. Startup migration markers can preserve a genuine legacy
+database once, but the unaudited legacy bootstrap is never a public serving
+release and later singleton rows cannot be adopted into a promoted corpus.
 
 ### Research MCP citator contract
 
@@ -241,10 +271,10 @@ defence in depth, not a browser credential: firewall/service-network policy
 must prevent direct external reachability, and operators must use the signed
 platform gateway. Authority coverage responses project source health and
 promoted-corpus/version/currentness metadata, not tenant IDs, document content,
-or query text. Explicit-public classification still must prevent arbitrary
-custom-private source metadata from entering that projection. COMP-06 is
-implemented and release-gated while that boundary acceptance remains open; no
-production harvest, coverage claim, or deployment is implied.
+or query text. The version-bound explicit-public lineage contract suppresses
+arbitrary custom-private source metadata from that projection and from every
+public aggregate or claim. COMP-06 is implemented and release-gated; no
+production harvest, coverage claim, current-law claim, or deployment is implied.
 
 - Generate a complete workspace tool catalog from `backend/app/services/capabilities.py` and `backend/app/services/matter_workspace_capabilities.py`, emitting checked-in Markdown and JSON artifacts. Add CI drift checking so the catalog is regenerated and compared whenever the registry or tool contract changes.
 - Add an end-to-end attorney scenario with sanitized sample matter and document data.

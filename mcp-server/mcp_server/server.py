@@ -8,7 +8,6 @@ import os
 import time
 import json
 from fastapi import Request
-from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
@@ -17,12 +16,9 @@ from .database import connect
 from .loader import init_schema
 from .query_embeddings import QueryEmbeddingClient
 from .control_plane import (
-    cadence_seconds,
     promote_corpus_version,
     rollback_corpus_version,
-    lag_seconds,
-    record_audit,
-    sampled_audit,
+    run_and_record_control_audit,
     stage_corpus_version,
 )
 from .repository import CourtListenerRepository
@@ -191,157 +187,13 @@ def run_control_audit(
     if body.audit_kind not in {"release", "completeness", "freshness", "isolation"}:
         raise HTTPException(
             status_code=400,
-            detail="audit_kind must be completeness, freshness, or isolation",
+            detail="audit_kind must be release, completeness, freshness, or isolation",
         )
     with connect() as conn:
-        with conn.cursor() as cur:
-            if body.audit_kind == "release":
-                cur.execute(
-                    """
-                    SELECT s.rights_decision, s.reviewed_at,
-                           COALESCE(cp.status, l.acquisition_state, 'missing'),
-                           GREATEST(COUNT(DISTINCT d.id), COALESCE(MAX(l.rows_loaded), 0))
-                    FROM legal_sources s
-                    LEFT JOIN authority_harvest_checkpoints cp
-                      ON cp.source_key=s.source_key AND cp.corpus_version=%s
-                    LEFT JOIN legal_documents d
-                      ON d.source_key=s.source_key AND d.corpus_version=%s
-                    LEFT JOIN corpus_coverage_ledger l
-                      ON l.source_key=s.source_key AND l.source_release=%s
-                    WHERE s.enabled IS TRUE
-                      AND s.storage_policy <> 'prohibited'
-                      AND s.rights_decision IN ('official','open','licensed')
-                      AND s.reviewed_by IS NOT NULL
-                      AND s.claim_safe_wording IS NOT NULL
-                      AND s.metadata->>'catalog_schema_version' IS NOT NULL
-                      AND s.metadata->>'implementation_status' IS NOT NULL
-                      AND NOT starts_with(s.source_key, 'tenant:')
-                      AND NOT starts_with(s.source_key, 'firm:')
-                      AND NOT starts_with(s.source_key, 'private:')
-                    GROUP BY s.source_key, s.rights_decision, s.reviewed_at,
-                             cp.status, l.acquisition_state
-                """,
-                    [body.version, body.version, body.version],
-                )
-                records = [
-                    {
-                        "ready": row[0] in {"official", "open", "licensed"}
-                        and row[1] is not None
-                        and row[2] in {"complete", "indexed"}
-                        and row[3] > 0
-                    }
-                    for row in cur.fetchall()
-                ]
-            elif body.audit_kind == "completeness":
-                cur.execute(
-                    """
-                    SELECT e.source_key, e.partition_key,
-                           e.expected_item_count,
-                           COALESCE(e.rows_loaded, 0), e.status
-                    FROM (
-                      SELECT cp.source_key, cp.partition_key,
-                             l.expected_item_count, l.rows_loaded, cp.status
-                      FROM authority_harvest_checkpoints cp
-                      LEFT JOIN corpus_coverage_ledger l
-                        ON l.source_key=cp.source_key AND l.partition_key=cp.partition_key
-                       AND l.source_release=cp.corpus_version
-                      WHERE cp.corpus_version=%s
-                      UNION ALL
-                      SELECT l.source_key, l.partition_key,
-                             l.expected_item_count, l.rows_loaded, l.acquisition_state
-                      FROM corpus_coverage_ledger l
-                      WHERE l.source_release=%s
-                        AND NOT EXISTS (
-                          SELECT 1 FROM authority_harvest_checkpoints cp
-                          WHERE cp.source_key=l.source_key AND cp.partition_key=l.partition_key
-                            AND cp.corpus_version=l.source_release
-                        )
-                    ) e
-                    JOIN legal_sources s ON s.source_key=e.source_key
-                    WHERE s.enabled IS TRUE
-                      AND s.rights_decision IN ('official','open','licensed')
-                      AND s.reviewed_at IS NOT NULL AND s.reviewed_by IS NOT NULL
-                """,
-                    [body.version, body.version],
-                )
-                records = [
-                    {
-                        "expected": max(row[2] or 0, 1),
-                        "observed": row[3]
-                        if row[4] in {"complete", "active", "indexed"}
-                        else 0,
-                        "declared": row[2] is not None and row[2] > 0,
-                    }
-                    for row in cur.fetchall()
-                ]
-            elif body.audit_kind == "freshness":
-                cur.execute(
-                    """
-                    SELECT COALESCE(cp.last_successful_harvest_at,
-                           CASE WHEN l.acquisition_state IN ('complete', 'indexed')
-                                THEN l.last_checked_at ELSE NULL END),
-                           s.expected_cadence, COALESCE(cp.status, l.acquisition_state)
-                    FROM legal_sources s
-                    LEFT JOIN authority_harvest_checkpoints cp
-                      ON cp.source_key=s.source_key AND cp.corpus_version=%s
-                    LEFT JOIN corpus_coverage_ledger l
-                      ON l.source_key=s.source_key AND l.source_release=%s
-                    WHERE (cp.source_key IS NOT NULL OR l.source_key IS NOT NULL)
-                      AND s.enabled IS TRUE
-                      AND s.rights_decision IN ('official','open','licensed')
-                      AND s.reviewed_at IS NOT NULL AND s.reviewed_by IS NOT NULL
-                """,
-                    [body.version, body.version],
-                )
-                now = datetime.now(timezone.utc)
-                records = [
-                    {
-                        "lag_seconds": (
-                            lag_seconds(row[0], cadence, now)
-                            if row[0]
-                            and cadence is not None
-                            and row[2]
-                            not in {
-                                "failed",
-                                "retryable",
-                                "retryable_failure",
-                                "quarantined",
-                                "dead_letter",
-                            }
-                            else None
-                        ),
-                        "cadence": row[1],
-                    }
-                    for row in cur.fetchall()
-                    for cadence in [cadence_seconds(row[1])]
-                ]
-            else:
-                cur.execute(
-                    """
-                    SELECT d.source_key, d.metadata->>'namespace',
-                           (d.metadata->>'namespace' IS DISTINCT FROM 'public-authority'
-                            OR starts_with(d.source_key, 'tenant:') OR starts_with(d.source_key, 'firm:')
-                            OR starts_with(d.source_key, 'private:') OR s.storage_policy = 'prohibited'
-                            OR s.metadata->>'catalog_schema_version' IS NULL)
-                    FROM legal_documents d
-                    LEFT JOIN legal_sources s ON s.source_key=d.source_key
-                    WHERE d.corpus_version=%s
-                """,
-                    [body.version],
-                )
-                records = [
-                    {"namespace": row[1], "private": bool(row[2])}
-                    for row in cur.fetchall()
-                ]
-        result = sampled_audit(records, audit_kind=body.audit_kind)
-        immutable_hash = record_audit(
+        result, immutable_hash = run_and_record_control_audit(
             conn,
-            corpus_version=body.version,
+            version=body.version,
             audit_kind=body.audit_kind,
-            methodology=f"bounded database sample for {body.audit_kind}",
-            thresholds={"minimum_completeness": 0.95, "maximum_lag_seconds": 172800},
-            result=result,
-            passed=bool(result["passed"]),
             auditor=actor,
         )
     return {"version": body.version, "audit": result, "immutable_hash": immutable_hash}

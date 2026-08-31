@@ -204,6 +204,41 @@ def test_sync_selection_skips_parser_blocked_documents_without_hiding_preview():
     assert all(document.get("sync_enabled", True) for document in sync_documents)
 
 
+def test_sync_rejects_unadmitted_source_before_fetch_or_telemetry(monkeypatch):
+    class ConnectionContext:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, *_args):
+            return False
+
+    fetched = False
+
+    def unexpected_fetch(*_args, **_kwargs):
+        nonlocal fetched
+        fetched = True
+        raise AssertionError("unadmitted source reached the network")
+
+    monkeypatch.setattr(authority_ingest, "init_schema", lambda _url: None)
+    monkeypatch.setattr(authority_ingest, "connect", lambda _url: ConnectionContext())
+    monkeypatch.setattr(authority_ingest, "seed_catalog", lambda _conn, _catalog: None)
+    monkeypatch.setattr(authority_ingest, "fetch_document", unexpected_fetch)
+    monkeypatch.setattr(
+        authority_ingest,
+        "require_public_candidate_version",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            PermissionError("reviewed public-authority admission required")
+        ),
+    )
+
+    with pytest.raises(PermissionError, match="admission required"):
+        authority_ingest.sync_documents(
+            [{"source_key": "custom-private:unreviewed"}], {}, "fixture-db"
+        )
+
+    assert fetched is False
+
+
 def test_preview_collection_writes_raw_text_and_audit_manifest(tmp_path, monkeypatch):
     document = next(
         item

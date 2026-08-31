@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.31.4 — Fail-closed public-authority source boundaries
+
+Released August 31, 2026.
+
+Public legal research now serves and describes only reviewed official, open, or licensed sources that are explicitly admitted to the promoted authority release.
+
+- **Require explicit public admission.** A source key or caller-supplied metadata cannot make legal documents or case law public; the reviewed catalog, admission, and promoted manifest must agree.
+- **Suppress revoked or mismatched sources.** Source-rights, review, storage, schema, implementation, namespace, or manifest changes immediately suppress public results, status, coverage, and claims.
+- **Keep private firm data out.** Tenant, firm, private, custom, and unknown records cannot enter the public-authority corpus, telemetry, counts, audits, or customer coverage projection.
+
 ## 2026.08.31.3 — Reliable file-share agent setup on managed Windows networks
 
 Released August 31, 2026.

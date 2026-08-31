@@ -180,6 +180,7 @@ jobs:
     env:
       AUTHORITY_REHEARSAL_DATABASE_URL: postgresql://test:test@127.0.0.1:5432/authority_rehearsal
       PYTHONPATH: mcp-server
+      PYTHONUNBUFFERED: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -190,7 +191,7 @@ jobs:
       - name: Install MCP dependencies
         run: pip install -r mcp-server/requirements.txt pytest
       - name: Run mandatory authority lifecycle rehearsal
-        run: python -m pytest -q mcp-server/tests/test_authority_rehearsal.py
+        run: python -m pytest -vv -o faulthandler_timeout=180 mcp-server/tests/test_authority_rehearsal.py
 
   research-workspace-rehearsal:
     name: Research workspace PostgreSQL rehearsal

@@ -26,21 +26,34 @@ class WorkerConfig:
             raise ValueError("total_workers must be positive")
         if self.batch_size <= 0:
             raise ValueError("batch_size must be positive")
-        if not str(self.model or "").strip() or not str(self.model_version or "").strip():
+        if (
+            not str(self.model or "").strip()
+            or not str(self.model_version or "").strip()
+        ):
             raise ValueError("embedding model and model version are required")
         if self.dim != DEFAULT_DIM:
             raise ValueError("mxbai CourtListener embeddings must be 1024-dimensional")
 
 
-def partition_sql(corpus: str = "opinion_chunks", corpus_version: str | None = None,
-                  embedding_model: str | None = None,
-                  embedding_version: str | None = None,
-                  embedding_dimension: int | None = None) -> str:
-    contract = ("embedding IS NULL OR embedding_model IS DISTINCT FROM %s "
-                "OR embedding_version::text IS DISTINCT FROM %s "
-                "OR vector_dims(embedding) IS DISTINCT FROM %s") if all(
-                    value is not None for value in (embedding_model, embedding_version, embedding_dimension)
-                ) else "embedding IS NULL"
+def partition_sql(
+    corpus: str = "opinion_chunks",
+    corpus_version: str | None = None,
+    embedding_model: str | None = None,
+    embedding_version: str | None = None,
+    embedding_dimension: int | None = None,
+) -> str:
+    contract = (
+        (
+            "embedding IS NULL OR embedding_model IS DISTINCT FROM %s "
+            "OR embedding_version::text IS DISTINCT FROM %s "
+            "OR vector_dims(embedding) IS DISTINCT FROM %s"
+        )
+        if all(
+            value is not None
+            for value in (embedding_model, embedding_version, embedding_dimension)
+        )
+        else "embedding IS NULL"
+    )
     if corpus == "opinion_chunks":
         version_filter = "AND oc.corpus_version = %s" if corpus_version else ""
         return f"""
@@ -54,7 +67,11 @@ def partition_sql(corpus: str = "opinion_chunks", corpus_version: str | None = N
             FOR UPDATE SKIP LOCKED
         """
     if corpus == "legal_document_chunks":
-        version_filter = " AND d.corpus_version = %s AND c.corpus_version = %s" if corpus_version else ""
+        version_filter = (
+            " AND d.corpus_version = %s AND c.corpus_version = %s"
+            if corpus_version
+            else ""
+        )
         return f"""
             SELECT c.id,
                    CONCAT(
@@ -65,8 +82,12 @@ def partition_sql(corpus: str = "opinion_chunks", corpus_version: str | None = N
             FROM legal_document_chunks c
             JOIN legal_documents d ON d.id = c.document_id
             JOIN legal_sources s ON s.source_key = d.source_key
+            JOIN public_authority_source_lineage pas
+              ON pas.source_key=d.source_key
+             AND pas.corpus_version=d.corpus_version
             WHERE ({contract.replace('embedding', 'c.embedding')})
               AND s.enabled IS TRUE
+              AND d.public_namespace = 'public-authority'
               AND d.document_status = 'current'
               {version_filter}
               AND s.storage_policy IN ('mirror', 'normalized_text')
@@ -77,12 +98,20 @@ def partition_sql(corpus: str = "opinion_chunks", corpus_version: str | None = N
         """
     if corpus == "authority_case_chunks":
         return f"""
-            SELECT chunk_id, content
-            FROM authority_case_chunks
-            WHERE ({contract}) AND corpus_version = %s
-              AND ABS(HASHTEXT(chunk_id::text)) %% %s = %s
-            ORDER BY chunk_index, opinion_id
+            SELECT ch.chunk_id, ch.content
+            FROM authority_case_chunks ch
+            JOIN authority_case_clusters cl
+              ON cl.corpus_version=ch.corpus_version
+             AND cl.cluster_id=ch.cluster_id
+            JOIN public_authority_source_lineage pas
+              ON pas.source_key=cl.source_key
+             AND pas.corpus_version=ch.corpus_version
+            WHERE ({contract.replace('embedding', 'ch.embedding')})
+              AND ch.corpus_version = %s
+              AND cl.public_namespace = 'public-authority'
+              AND ABS(HASHTEXT(ch.chunk_id::text)) %% %s = %s
+            ORDER BY ch.chunk_index, ch.opinion_id
             LIMIT %s
-            FOR UPDATE SKIP LOCKED
+            FOR UPDATE OF ch SKIP LOCKED
         """
     raise ValueError(f"unsupported embedding corpus: {corpus}")
