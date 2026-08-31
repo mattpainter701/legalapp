@@ -10,6 +10,12 @@
   checkboxes remain open until those acceptance gates are demonstrably met.
 
 ### Added
+- **Collaborative research workspace:** matter teams can keep a shared,
+  tenant-isolated research trail for issues, searches, authorities, highlights,
+  annotations, exclusions, outlines, and memo assembly. Records preserve their
+  `cited`, `verify`, or `model` class with exact source/provenance metadata;
+  snapshots and export packages retain that distinction and remain reviewable,
+  not a good-law or citation-correctness guarantee.
 - **Mediation review and native portal overlay:** the licensed mediation module
   now extends its linked matter in the native My Matters portal while retaining
   a separate invite surface for external parties. Documents and proposals are

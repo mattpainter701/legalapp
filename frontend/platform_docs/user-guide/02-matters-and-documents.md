@@ -52,6 +52,17 @@ Select **View result** to open the authenticated LawHand link, or **Copy UNC pat
 
 The matched text is retrieval evidence, not an instruction or verified legal conclusion. Review the original file and cited page before relying on it. The initial local lexical index supports measured representative-corpus validation without embeddings; it does not by itself prove OCR, legacy-format coverage, Windows ACL parity, or readiness for the firm's entire archive.
 
+### Collaborate on research
+
+Open [Research Workspace](/matters/research) from the relevant matter to keep
+issues, searches, authorities, highlights, exclusions, outline items, and memo
+notes in a shared trail. Preserve the label on every item: **cited** means it
+has the linked source, **verify** still needs confirmation, and **model** is
+machine synthesis. A snapshot/export preserves those labels, source links, and
+stored currentness or treatment warnings; it does not certify good law,
+Bluebook correctness, or complete provider coverage. Review the exact source
+and have the assigned reviewer resolve any warning before relying on it.
+
 ### Client portal uploads
 
 When your administrator has connected customer-owned cloud storage, portal files go to the matter's `client_uploads` folder in that datastore. The original submission stays there as the intake copy. Renaming its category does not move it.

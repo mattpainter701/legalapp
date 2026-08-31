@@ -25,6 +25,13 @@ from app.models.tenant import Tenant
 from app.services.demo_registry import DEMO_TABLE_REGISTRY
 
 _DEMO_DOMAIN_SUFFIX = ".demo.invalid"
+_RESEARCH_IMMUTABLE_TABLES = (
+    "research_record_revisions",
+    "research_workspace_events",
+    "research_workspace_snapshots",
+)
+_RESEARCH_PURGE_TENANT_GUC = "app.research_workspace_demo_purge_tenant_id"
+_RESEARCH_PURGE_SESSION_GUC = "app.research_workspace_demo_purge_session_id"
 
 # A worker that dies between claiming a session and reaching a terminal state
 # leaves the row in "purging".  Without a reclaim window the hourly job would
@@ -84,6 +91,37 @@ def _purge_tables():
     if missing:
         raise DemoPurgeRefused(f"Purge tables are not registered: {sorted(missing)}")
     return {name: Base.metadata.tables[name] for name in DEMO_TABLE_REGISTRY}
+
+
+async def _purge_immutable_research_history(
+    db: AsyncSession,
+    tables,
+    *,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+) -> dict[str, int]:
+    """Delete immutable demo-only leaves before the generic purge can remove its claim.
+
+    The trigger validates both transaction-local values against the still-live,
+    claimed demo session and the expired inactive demo tenant. This is the only
+    deletion carve-out; updates remain immutable and all ordinary requests are
+    rejected by the database.
+    """
+    await db.execute(
+        text("SELECT set_config(:setting, :value, true)"),
+        {"setting": _RESEARCH_PURGE_TENANT_GUC, "value": str(tenant_id)},
+    )
+    await db.execute(
+        text("SELECT set_config(:setting, :value, true)"),
+        {"setting": _RESEARCH_PURGE_SESSION_GUC, "value": str(session_id)},
+    )
+    deleted: dict[str, int] = {}
+    for name in _RESEARCH_IMMUTABLE_TABLES:
+        result = await db.execute(
+            delete(tables[name]).where(tables[name].c.tenant_id == tenant_id)
+        )
+        deleted[name] = int(result.rowcount or 0)
+    return deleted
 
 
 def _delete_order(tables) -> list[str]:
@@ -192,8 +230,13 @@ async def _purge_demo_tenant_locked(
         _remove_tenant_files(tenant_id)
         tables = _purge_tables()
         await set_tenant_context(db, str(tenant_id))
+        deleted = await _purge_immutable_research_history(
+            db, tables, tenant_id=tenant_id, session_id=session_id
+        )
         # Break optional cycles (invoice/retainer and self-references) first.
-        for table in tables.values():
+        for name, table in tables.items():
+            if name in _RESEARCH_IMMUTABLE_TABLES:
+                continue
             values = {}
             for column in table.columns:
                 if not column.nullable:
@@ -205,8 +248,9 @@ async def _purge_demo_tenant_locked(
                     update(table).where(table.c.tenant_id == tenant_id).values(**values)
                 )
 
-        deleted: dict[str, int] = {}
         for name in _delete_order(tables):
+            if name in _RESEARCH_IMMUTABLE_TABLES:
+                continue
             table = tables[name]
             result = await db.execute(
                 delete(table).where(table.c.tenant_id == tenant_id)

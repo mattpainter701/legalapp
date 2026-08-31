@@ -77,6 +77,17 @@ and is not exposed through a Research key. The canonical data model, alert
 controls, evaluation gate, and remaining licensed-benchmark requirement are in
 [Citator control plane](../CITATOR_CONTROL_PLANE.md).
 
+### Collaborative research workspace boundary
+
+The authenticated application research workspace is a tenant- and
+matter-scoped collaboration and artifact workflow, not a Research MCP retrieval
+tool or an authority-corpus ingestion path. Its snapshot/export contract retains
+the `cited`, `verify`, and `model` distinction plus stored source provenance and
+review limitations. It does not turn model text into source evidence, grant
+Research MCP credentials, deliver provider alerts, or claim provider-backed
+verification. The canonical workflow and retention/access boundaries are in
+[Collaborative research workspace](../research/collaborative-research-workspace.md).
+
 ### Firm Memory Workspace MCP tool
 
 `search_firm_memory` is a Workspace MCP read tool for the bounded local file

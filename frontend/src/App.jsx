@@ -37,6 +37,7 @@ const MatterPortfolioPage = lazy(() => import('./pages/MatterPortfolioPage'))
 const MatterDetailPage = lazy(() => import('./pages/MatterDetailPage'))
 const DocumentRevisionPage = lazy(() => import('./pages/DocumentRevisionPage'))
 const BriefCheckPage = lazy(() => import('./pages/BriefCheckPage'))
+const ResearchWorkspacePage = lazy(() => import('./pages/ResearchWorkspacePage'))
 const RenewalTrackerPage = lazy(() => import('./pages/RenewalTrackerPage'))
 const EstatePortfolioPage = lazy(() => import('./pages/EstatePortfolioPage'))
 const EstateDetailPage = lazy(() => import('./pages/EstateDetailPage'))
@@ -271,6 +272,7 @@ export default function App() {
           element={<ShellRoute title="Revise Document" module="matters"><DocumentRevisionPage /></ShellRoute>}
         />
         <Route path="/matters/:matterId/brief-check" element={<ShellRoute title="Brief Check" module="matters"><BriefCheckPage /></ShellRoute>} />
+        <Route path="/matters/:matterId/research" element={<ShellRoute title="Research Workspace" module="matters"><ResearchWorkspacePage /></ShellRoute>} />
         <Route
           path="/matters/:matterId/documents/:documentId/revisions/:revisionId"
           element={<ShellRoute title="Review Document Revision" module="matters"><DocumentRevisionPage /></ShellRoute>}

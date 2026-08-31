@@ -2,6 +2,7 @@
   "user_modules": [
     { "id": "assistant", "route": "/chat", "chapter": "assistant-and-add-ons" },
     { "id": "matters", "route": "/matters", "chapter": "matters-and-documents" },
+    { "id": "research-workspace", "route": "/matters/research", "chapter": "matters-and-documents" },
     { "id": "document-revisions", "route": "/matters/documents/revisions", "chapter": "matters-and-documents" },
     { "id": "document-revise", "route": "/matters/documents/revise", "chapter": "matters-and-documents" },
     { "id": "brief-check", "route": "/matters/brief-check", "chapter": "matters-and-documents" },

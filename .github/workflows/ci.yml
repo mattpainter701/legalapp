@@ -192,6 +192,51 @@ jobs:
       - name: Run mandatory authority lifecycle rehearsal
         run: python -m pytest -q mcp-server/tests/test_authority_rehearsal.py
 
+  research-workspace-rehearsal:
+    name: Research workspace PostgreSQL rehearsal
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb
+        env:
+          POSTGRES_DB: research_workspace_rehearsal
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+        options: >-
+          --health-cmd "pg_isready -U test -d research_workspace_rehearsal"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      DATABASE_URL: postgresql+asyncpg://test:test@127.0.0.1:5432/research_workspace_rehearsal
+      MIGRATOR_DATABASE_URL: postgresql+asyncpg://test:test@127.0.0.1:5432/research_workspace_rehearsal
+      RESEARCH_WORKSPACE_REHEARSAL_DATABASE_URL: postgresql://test:test@127.0.0.1:5432/research_workspace_rehearsal
+      SECRET_KEY: ci-research-workspace-rehearsal-secret-not-for-production
+      TOKEN_ENCRYPTION_KEY: KxzLuxmIM2dFDWQmKJL9LVUK5ouA0c3_-4VqCMrn-jY=
+      PYTHONPATH: backend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r backend/requirements.txt
+      - name: Apply populated pre-146 baseline online
+        working-directory: backend
+        run: alembic upgrade 145_mediation_confidentiality
+      - name: Seed representative pre-146 data
+        run: python scripts/seed_research_workspace_pre146.py
+      - name: Upgrade populated baseline to head online
+        working-directory: backend
+        run: alembic upgrade head
+      - name: Verify migration rerun is idempotent
+        working-directory: backend
+        run: alembic upgrade head
+      - name: Rehearse workspace integrity matrix
+        run: python scripts/rehearse_research_workspace.py
+
   # ─── Backend: Tests ─────────────────────────────────────────────────────────
   test-backend:
     name: Backend — Tests (pytest)
@@ -642,6 +687,7 @@ jobs:
       - security-dependency-sbom
       - dependency-vulnerability-review
       - authority-control-plane-rehearsal
+      - research-workspace-rehearsal
     runs-on: ubuntu-latest
     permissions: {}
     steps:

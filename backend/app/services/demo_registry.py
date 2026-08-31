@@ -129,6 +129,16 @@ _PURGE_ONLY_TABLES = {
     "prospect_follow_through_events",
     "qbo_integrations",
     "qbo_item_mappings",
+    # Collaborative research rows contain tenant-specific attorney work product
+    # and immutable review evidence. They are purged with an expired demo but
+    # never copied into a different demo tenant.
+    "research_record_revisions",
+    "research_records",
+    "research_workspace_events",
+    "research_workspace_idempotency",
+    "research_workspace_members",
+    "research_workspace_snapshots",
+    "research_workspaces",
     "retention_actions",
     "retention_policies",
     "customer_lifecycle_receipts",

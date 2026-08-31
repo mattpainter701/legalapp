@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["145_mediation_confidentiality"]
+    assert heads == ["146_research_workspaces"]
 
 
 def test_mediation_confidentiality_migration_is_additive_and_tenant_scoped():

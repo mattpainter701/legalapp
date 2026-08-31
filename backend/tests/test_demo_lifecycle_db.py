@@ -17,6 +17,15 @@ from app.models.demo_session import DemoSession
 from app.models.llm_routing_profile import LLMRoutingProfile
 from app.models.document import Chunk, Document
 from app.models.plugin import Matter
+from app.models.research_workspace import (
+    ResearchRecord,
+    ResearchRecordRevision,
+    ResearchWorkspace,
+    ResearchWorkspaceEvent,
+    ResearchWorkspaceIdempotency,
+    ResearchWorkspaceMember,
+    ResearchWorkspaceSnapshot,
+)
 from app.models.tenant import Tenant, TenantSettings
 from app.models.user import User
 from app.services.demo_clone import clone_demo_fixture
@@ -400,7 +409,12 @@ async def test_released_operation_restores_capacity(test_engine):
 async def test_verified_purge_deletes_demo_and_preserves_fixture(
     db_session, tmp_path, monkeypatch
 ):
-    fixture_id, tenant_id, user_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    fixture_id, tenant_id, user_id, demo_session_id = (
+        uuid.uuid4(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+    )
     monkeypatch.setattr(demo_purge.get_settings(), "UPLOAD_DIR", str(tmp_path))
     db_session.add_all(
         [
@@ -424,6 +438,7 @@ async def test_verified_purge_deletes_demo_and_preserves_fixture(
             ),
             TenantSettings(tenant_id=tenant_id, custom_config={"plan": "demo"}),
             DemoSession(
+                id=demo_session_id,
                 tenant_id=tenant_id,
                 fixture_tenant_id=fixture_id,
                 fixture_version="purge-test",
@@ -435,16 +450,142 @@ async def test_verified_purge_deletes_demo_and_preserves_fixture(
             ),
         ]
     )
+    matter_id, workspace_id, record_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    db_session.add(
+        Matter(
+            id=matter_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            slug="purge-research",
+            matter_name="Synthetic research purge",
+        )
+    )
+    await db_session.flush()
+    db_session.add_all(
+        [
+            ResearchWorkspace(
+                id=workspace_id,
+                tenant_id=tenant_id,
+                matter_id=matter_id,
+                title="Disposable research",
+                created_by_user_id=user_id,
+            ),
+            ResearchWorkspaceMember(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                user_id=user_id,
+                role="owner",
+            ),
+        ]
+    )
+    await db_session.flush()
+    db_session.add_all(
+        [
+            ResearchRecord(
+                id=record_id,
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                record_type="memo",
+                title="Disposable research record",
+                evidence_class="model",
+            ),
+            ResearchWorkspaceEvent(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                record_id=record_id,
+                actor_user_id=user_id,
+                action="fixture_history",
+                detail={"before": {}, "after": {}},
+            ),
+            ResearchWorkspaceSnapshot(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                sequence=1,
+                sha256="a" * 64,
+                payload={},
+                created_by_user_id=user_id,
+            ),
+            ResearchRecordRevision(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                record_id=record_id,
+                revision=1,
+                actor_user_id=user_id,
+                payload={"revision": 1},
+            ),
+            ResearchWorkspaceIdempotency(
+                tenant_id=tenant_id,
+                actor_user_id=user_id,
+                operation="workspace_create",
+                idempotency_key="fixture-research-workspace",
+                request_sha256="b" * 64,
+            ),
+        ]
+    )
     await db_session.commit()
+    # Matching user-settable context is still insufficient while this is an
+    # active demo session. The DB trigger requires the service's claimed,
+    # inactive, expired lifecycle facts before it allows immutable DELETE.
+    await db_session.execute(
+        text("SELECT set_config('app.research_workspace_demo_purge_tenant_id', :value, true)"),
+        {"value": str(tenant_id)},
+    )
+    await db_session.execute(
+        text("SELECT set_config('app.research_workspace_demo_purge_session_id', :value, true)"),
+        {"value": str(demo_session_id)},
+    )
+    with pytest.raises(Exception, match="research history, snapshots, and revisions are immutable"):
+        await db_session.execute(
+            text("DELETE FROM research_workspace_snapshots WHERE tenant_id = :tenant_id"),
+            {"tenant_id": str(tenant_id)},
+        )
+    await db_session.rollback()
+    # A stale or other session context is also refused even when the tenant is
+    # otherwise an expired, inactive demo with a purging claim. The service
+    # below reclaims this old claim and supplies its exact session context.
+    await set_tenant_context(db_session, str(tenant_id))
+    claimed_tenant = await db_session.get(Tenant, tenant_id)
+    claimed_demo = await db_session.get(DemoSession, demo_session_id)
+    claimed_tenant.is_active = False
+    claimed_demo.status = "purging"
+    claimed_demo.purge_started_at = datetime.now(timezone.utc) - (
+        demo_purge._PURGE_RECLAIM_AFTER + timedelta(minutes=1)
+    )
+    await db_session.commit()
+    await set_tenant_context(db_session, str(tenant_id))
+    await db_session.execute(
+        text("SELECT set_config('app.research_workspace_demo_purge_tenant_id', :value, true)"),
+        {"value": str(tenant_id)},
+    )
+    await db_session.execute(
+        text("SELECT set_config('app.research_workspace_demo_purge_session_id', :value, true)"),
+        {"value": str(uuid.uuid4())},
+    )
+    with pytest.raises(Exception, match="research history, snapshots, and revisions are immutable"):
+        await db_session.execute(
+            text("DELETE FROM research_record_revisions WHERE tenant_id = :tenant_id"),
+            {"tenant_id": str(tenant_id)},
+        )
+    await db_session.rollback()
     target_file = tmp_path / str(tenant_id) / "document.txt"
     target_file.parent.mkdir(parents=True)
     target_file.write_text("disposable", encoding="utf-8")
 
-    await purge_demo_tenant(db_session, tenant_id)
+    deleted = await purge_demo_tenant(db_session, tenant_id)
 
     assert await db_session.scalar(select(Tenant.id).where(Tenant.id == fixture_id))
     assert (
         await db_session.scalar(select(Tenant.id).where(Tenant.id == tenant_id)) is None
+    )
+    assert deleted["research_workspaces"] == 1
+    assert deleted["research_records"] == 1
+    assert deleted["research_workspace_events"] == 1
+    assert deleted["research_workspace_snapshots"] == 1
+    assert deleted["research_record_revisions"] == 1
+    assert deleted["research_workspace_idempotency"] == 1
+    assert deleted["research_workspace_members"] == 1
+    assert await db_session.scalar(
+        select(OperatorAuditLog.id).where(OperatorAuditLog.action == "demo.session.purged")
     )
     assert not target_file.exists()
 

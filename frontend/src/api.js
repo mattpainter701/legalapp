@@ -2107,6 +2107,15 @@ export const listBriefChecks = (matterId) => api.get(`/matters/${matterId}/brief
 export const decideBriefCheckItem = (matterId, checkId, data) => api.post(`/matters/${matterId}/brief-checks/${checkId}/decisions`, data).then((response) => response.data)
 export const exportBriefCheck = (matterId, checkId, kind) => api.get(`/matters/${matterId}/brief-checks/${checkId}/export/${kind}`, { responseType: 'blob' }).then((response) => response.data)
 
+export const listResearchWorkspaces = (matterId) => api.get(`/matters/${matterId}/research-workspaces`).then((response) => response.data)
+export const createResearchWorkspace = (matterId, data, idempotencyKey = newOperationId()) => api.post(`/matters/${matterId}/research-workspaces`, data, { headers: { 'Idempotency-Key': idempotencyKey } }).then((response) => response.data)
+export const listResearchRecords = (matterId, workspaceId) => api.get(`/matters/${matterId}/research-workspaces/${workspaceId}/records`).then((response) => response.data)
+export const createResearchRecord = (matterId, workspaceId, data) => api.post(`/matters/${matterId}/research-workspaces/${workspaceId}/records`, data).then((response) => response.data)
+export const createResearchSnapshot = (matterId, workspaceId, data = {}, idempotencyKey = newOperationId()) => api.post(`/matters/${matterId}/research-workspaces/${workspaceId}/snapshots`, data, { headers: { 'Idempotency-Key': idempotencyKey } }).then((response) => response.data)
+export const listResearchSnapshots = (matterId, workspaceId) => api.get(`/matters/${matterId}/research-workspaces/${workspaceId}/snapshots`).then((response) => response.data)
+export const exportResearchSnapshot = (matterId, workspaceId, snapshotId) => api.get(`/matters/${matterId}/research-workspaces/${workspaceId}/snapshots/${snapshotId}/export`, { responseType: 'blob' }).then((response) => response.data)
+export const listResearchWorkspaceHistory = (matterId, workspaceId) => api.get(`/matters/${matterId}/research-workspaces/${workspaceId}/history`).then((response) => response.data)
+
 export const discoverTemplateVariables = (id, data = {}) =>
   api.post(`/templates/${id}/smart-fill-preview`, data).then(r => r.data)
 

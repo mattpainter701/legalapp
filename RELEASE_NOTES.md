@@ -5,6 +5,17 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.30.9 — Shared research workspaces with reviewable evidence
+
+Released August 30, 2026.
+
+Matter teams can now preserve a shared research trail without turning machine notes into source evidence.
+
+- **Keep the team trail together.** Create matter-scoped workspaces for saved issues, searches, authorities, highlights, annotations, exclusions, outlines, and memo notes with explicit member roles.
+- **Carry evidence labels forward.** Every saved item and frozen export keeps its cited, verify, or model label alongside exact source links, source version, pinpoints, and stored treatment/currentness state.
+- **Freeze a review package.** Immutable, hash-identified snapshots create an exportable record of the workspace as reviewed. Bluebook formatting and citation correctness still require attorney verification.
+- **Revoke safely.** Workspace access is tenant-and-matter scoped, role checked, auditable, and revocable; archived workspaces and records are retained rather than silently erased.
+
 ## 2026.08.30.8 — Review-first citator evidence controls
 
 Released August 30, 2026.
