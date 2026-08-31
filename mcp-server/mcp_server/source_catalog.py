@@ -485,6 +485,7 @@ def admit_public_source(
                  FROM authority_corpus_versions v
                 WHERE d.source_key=%s AND d.corpus_version=v.version
                   AND v.manifest_hash=%s
+                  AND v.status IN ('staged', 'canary')
                   AND d.public_namespace IS DISTINCT FROM 'public-authority'""",
             [source_key, manifest_sha256],
         )
@@ -494,6 +495,7 @@ def admit_public_source(
                  FROM authority_corpus_versions v
                 WHERE cl.source_key=%s AND cl.corpus_version=v.version
                   AND v.manifest_hash=%s
+                  AND v.status IN ('staged', 'canary')
                   AND cl.public_namespace IS DISTINCT FROM 'public-authority'""",
             [source_key, manifest_sha256],
         )

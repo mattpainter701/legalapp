@@ -301,11 +301,11 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 """INSERT INTO legal_sources
                 (source_key, publisher, source_type, canonical_url, enabled,
                  storage_policy, rights_decision, reviewed_at, reviewed_by,
-                 expected_cadence, claim_safe_wording, metadata)
+                 expected_cadence, claim_safe_wording, public_namespace, metadata)
                 VALUES ('courtlistener:ohio-caselaw', 'Rehearsal', 'case_law',
                         'https://example.test/caselaw', TRUE, 'normalized_text',
                         'official', now(), 'rehearsal-admin', 'daily',
-                        'Fixture caselaw source only',
+                        'Fixture caselaw source only', 'public-authority',
                         '{"catalog_schema_version":"rehearsal","implementation_status":"fixture","manifest_reference":"fixture-manifest"}')
                 ON CONFLICT (source_key) DO UPDATE SET enabled=TRUE,
                   storage_policy='normalized_text', rights_decision='official',
@@ -2007,6 +2007,8 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
     private_shaped_source_key = "privatefoo:citator:" + version
     opinion_id = 97900000 + int(uuid.uuid4().int % 100000)
     authority_key = f"case:{opinion_id}"
+    stale_opinion_id = opinion_id + 1000000
+    stale_authority_key = f"case:{stale_opinion_id}"
     custom_authority_key = "case:custom-" + version
     private_shaped_authority_key = "case:private-shaped-" + version
     tenant_id, other_tenant_id, matter_id = (str(uuid.uuid4()) for _ in range(3))
@@ -2127,6 +2129,22 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
                     source_key,
                     version,
                     '{"opinion_id":' + str(opinion_id) + "}",
+                ],
+            )
+            cur.execute(
+                """INSERT INTO authority_records
+                     (corpus_version, authority_key, authority_kind, source_key,
+                      title, source_url, source_as_of, source_version,
+                      currentness_state, deterministic_metadata)
+                   VALUES (%s, %s, 'case', %s, 'Stale synthetic authority',
+                     'https://example.test/stale-case', '2026-08-30T00:00:00Z',
+                     %s, 'stale', %s::jsonb)""",
+                [
+                    version,
+                    stale_authority_key,
+                    source_key,
+                    version,
+                    '{"opinion_id":' + str(stale_opinion_id) + "}",
                 ],
             )
             cur.execute(
@@ -3017,26 +3035,37 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
                 )
             conn.commit()
 
-        currentness_review = new_lineage_review_candidate("authority-currentness")
-        with conn.cursor() as cur:
-            cur.execute(
-                """UPDATE authority_records SET currentness_state='stale'
-                    WHERE corpus_version=%s AND authority_key=%s""",
-                [version, authority_key],
-            )
-        conn.commit()
-        assert_citator_lineage_suppressed(
-            "authority-currentness",
-            currentness_review,
-            expect_release_unavailable=False,
+        # Currentness is immutable release evidence.  A record staged as stale
+        # must remain unavailable, while attempts to rewrite currentness after
+        # promotion are rejected rather than silently changing served claims.
+        stale_treatment = CourtListenerRepository(conn).authority_treatment(
+            stale_opinion_id
         )
-        with conn.cursor() as cur:
-            cur.execute(
-                """UPDATE authority_records SET currentness_state='current'
-                    WHERE corpus_version=%s AND authority_key=%s""",
-                [version, authority_key],
+        assert stale_treatment["status"] == "unavailable"
+        with pytest.raises(
+            PermissionError, match="promoted, reviewed public authority evidence"
+        ):
+            record_treatment_assessment(
+                conn,
+                corpus_version=version,
+                authority_key=stale_authority_key,
+                treatment_label="negative",
+                confidence=0.8,
+                policy_version="citator-policy-rehearsal-v1",
+                evidence_fact_ids=[],
+                model_version="stale-authority-currentness",
+                abstained=True,
+                abstention_reason="staged currentness is stale",
+                actor="rehearsal-worker",
             )
-        conn.commit()
+        with pytest.raises(DatabaseError):
+            with conn.cursor() as cur:
+                cur.execute(
+                    """UPDATE authority_records SET currentness_state='current'
+                        WHERE corpus_version=%s AND authority_key=%s""",
+                    [version, stale_authority_key],
+                )
+        conn.rollback()
 
         with pytest.raises(DatabaseError):
             with conn.cursor() as cur:
@@ -3834,9 +3863,10 @@ def test_legacy_upgrade_bootstrap_rehearsal():
                    WHERE corpus_version IS NULL"""
             )
             assert cur.fetchone()[0] == 0
-            assert CourtListenerRepository(conn).search_caselaw(
-                "Legacy served opinion"
-            ) == []
+            assert (
+                CourtListenerRepository(conn).search_caselaw("Legacy served opinion")
+                == []
+            )
             cur.execute(
                 """UPDATE legal_sources
                       SET enabled=TRUE, storage_policy='normalized_text',
@@ -3850,21 +3880,80 @@ def test_legacy_upgrade_bootstrap_rehearsal():
                     WHERE source_key='courtlistener:ohio-caselaw'"""
             )
         conn.commit()
+        # A legacy bootstrap is deliberately not inferred to be public.  The
+        # reviewed admission applies to a side-by-side staged successor so an
+        # already-promoted snapshot is never relabelled in place.
+        reviewed_version = "legacy-reviewed-" + uuid.uuid4().hex
+        stage_corpus_version(
+            conn,
+            version=reviewed_version,
+            manifest_hash="legacy-bootstrap-reviewed",
+            as_of="2026-08-31T00:00:00Z",
+            actor="legacy-upgrade-reviewer",
+            reason="review legacy bootstrap through a staged successor",
+            embedding_model="mixedbread-ai/mxbai-embed-large-v1",
+            embedding_version="0",
+            embedding_dimension=1024,
+        )
         admit_public_source(
             conn,
             source_key="courtlistener:ohio-caselaw",
             catalog_schema_version="legacy-rehearsal",
             manifest_reference="legacy-bootstrap-manifest",
-            manifest_sha256="legacy-bootstrap",
+            manifest_sha256="legacy-bootstrap-reviewed",
             reviewed_by="legacy-upgrade-reviewer",
         )
         with conn.cursor() as cur:
             cur.execute(
                 """SELECT public_namespace FROM authority_case_clusters
-                    WHERE corpus_version='legacy-bootstrap'
-                      AND cluster_id=98000001"""
+                    WHERE corpus_version=%s
+                      AND cluster_id=98000001""",
+                [reviewed_version],
             )
             assert cur.fetchone() == ("public-authority",)
+            cur.execute(
+                """UPDATE authority_case_chunks
+                      SET embedding=('[' || array_to_string(array_fill(0, ARRAY[1024]), ',') || ']')::vector,
+                          embedding_model='mixedbread-ai/mxbai-embed-large-v1',
+                          embedding_version='0'
+                    WHERE corpus_version=%s""",
+                [reviewed_version],
+            )
+        conn.commit()
+        for kind in ("release", "completeness", "freshness", "isolation"):
+            result = sampled_audit(
+                (
+                    [{"ready": True}]
+                    if kind == "release"
+                    else (
+                        [{"expected": 1, "observed": 1, "declared": True}]
+                        if kind == "completeness"
+                        else (
+                            [{"lag_seconds": 0}]
+                            if kind == "freshness"
+                            else [{"namespace": "public-authority", "private": False}]
+                        )
+                    )
+                ),
+                audit_kind=kind,
+            )
+            record_audit(
+                conn,
+                corpus_version=reviewed_version,
+                audit_kind=kind,
+                methodology="legacy reviewed successor rehearsal",
+                thresholds={},
+                result=result,
+                passed=True,
+                auditor="legacy-upgrade-reviewer",
+            )
+        promote_corpus_version(
+            conn,
+            version=reviewed_version,
+            actor="legacy-upgrade-reviewer",
+            reason="promote reviewed legacy successor",
+        )
+        with conn.cursor() as cur:
             served = CourtListenerRepository(conn).search_caselaw(
                 "Legacy served opinion"
             )
