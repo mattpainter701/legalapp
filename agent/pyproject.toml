@@ -4,12 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "clarity-agent"
-version = "0.15.3"
+version = "0.15.4"
 description = "LawHand SMB File Share Relay Agent"
 requires-python = ">=3.11"
 dependencies = [
     "smbprotocol>=1.16.1",
     "httpx>=0.27.0",
+    # Use the operating system CA store, including managed Windows roots.
+    "truststore>=0.10.1",
     "pypdf>=4.0",
     "python-docx>=1.1.0",
     "cryptography>=42.0",

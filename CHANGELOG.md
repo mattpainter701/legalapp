@@ -79,6 +79,11 @@
   native Windows ACL trimming, or semantic retrieval.
 
 ### Fixed
+- **Windows file-share agent enrollment works with managed TLS inspection:**
+  the packaged agent now validates HTTPS through the operating system trust
+  store instead of only its embedded CA bundle. Enterprise roots deployed by
+  Windows administrators are trusted without weakening hostname or certificate
+  verification.
 - **Chat authority gaps now identify the actionable retrieval state:** legal
   research responses retain independently cited findings, omit unsupported
   claims, and explain whether the public-authority service was unavailable, the

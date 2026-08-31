@@ -579,6 +579,13 @@
     },
     {
       "ecosystem": "pypi",
+      "name": "truststore",
+      "scope": "runtime",
+      "source": "agent/pyproject.toml",
+      "specifier": ">=0.10.1"
+    },
+    {
+      "ecosystem": "pypi",
       "name": "aiofiles",
       "scope": "runtime/dev",
       "source": "backend/requirements.txt",
