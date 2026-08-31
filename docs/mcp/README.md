@@ -124,7 +124,7 @@ separate licensed source integration says so.
 | Broader RAG design and historical implementation reference | [Legal RAG](../legal_rag.md) | Architecture, engineering | Architecture history; do not use as live operations source |
 | Platform-wide trust boundaries | [Architecture](../ARCHITECTURE.md) | Engineering, security, auditors | Architecture and trust boundaries |
 | Credential lifecycle | [Credential security operations](../credential_security_operations.md) | Security, operations | Credential rotation and access |
-| Template and document operations | [PDF template operations](../PDF_TEMPLATE_OPERATIONS.md) and [module template plan](../module-template-index-plan.md) | Users, document operations, engineering | Templates; document editing and export |
+| Template and document operations | [Template Studio backend contract](../template-studio-backend.md), [PDF template operations](../PDF_TEMPLATE_OPERATIONS.md), and [module template plan](../module-template-index-plan.md) | Users, document operations, engineering | Templates; document editing and export |
 
 When facts conflict, use the most narrowly scoped canonical operations document and reconcile the older source in the same change.
 

@@ -1,51 +1,51 @@
 ## Summary
 
-Promotes the existing Document Automation surface into Template Studio without
-changing the backend template model or generation contract. `/templates`
-remains compatible and now includes response-derived setup, attention, ready,
-and recent queues. Every template opens in the canonical
-`/templates/:templateId/studio` workspace; `/templates/new` reuses the current
-source upload and PDF/image preparation flow.
+Adds the versioned, tenant-isolated server foundation for Template Studio while
+preserving `DocumentTemplate` as the published compatibility record used by
+existing render, generation, and intake workflows.
 
-Adds truthful Phase 1 test, versions, and activity route shells plus a validated
-`lawhand.open_studio` browser UI-event adapter. Optional focus accepts exactly
-one of `draft`, `proposal`, or `snapshot` with its matching UUID server ID.
-Invalid or currently unavailable focus state falls back to the template
-workspace with an accessible status message. This adds no MCP tool, `ui://`
-resource, arbitrary redirect/provider URL, executable content, or raw payload.
+The change introduces immutable opaque source-artifact identities, stable draft
+and field UUIDs, monotonic revisions and strong ETags, separate canonical field
+definitions and format-specific placements, content-addressed redacted
+snapshots, bounded patch operations, audit attribution, idempotency retention,
+archive/cancellation state, evidence invalidation, and a narrow compatibility
+promotion path. All seven Studio tables use FORCE RLS. Snapshot, audit, and
+source identity rows are immutable.
+
+The REST/service surface supports create/import, resume/read, patch, validate,
+snapshot/read-snapshot, worker-safe source-contract read, and safe promotion.
+The canonical documentation records the Phase 3 render/evidence contract,
+Phase 5 placement/renderer ownership, and Phase 4 proposal/MCP extension seam.
+No Studio frontend is included.
 
 ## Validation
 
-- focused Studio routing/event/home/workspace, TemplatesPage, Sidebar, SEO, and
-  platform-doc tests: 83 passed
-- full frontend `npm run check`: lint completed with two pre-existing
-  `no-alert` warnings and no errors; 478 tests passed; production build passed
-- release catalog generation, `--check`, and 17 release-contract tests passed
-  for `2026.08.31.1`
+- 32 focused migration and database-free Studio contract tests passed.
+- 43 existing config, startup, and release-note contract tests passed.
+- Ruff passed for all changed Python and test files.
+- ORM imports, PostgreSQL DDL compilation, OpenAPI generation, and the single
+  Alembic head (`147_studio_drafts`) passed.
+- Offline PostgreSQL upgrade and downgrade SQL generation passed for
+  `146_research_workspaces <-> 147_studio_drafts`.
+- `git diff --check` passed.
+- Six focused PostgreSQL API/service/FORCE-RLS tests collect successfully. Local
+  execution is delegated to GitHub CI because PostgreSQL/Redis are unavailable
+  and Docker Desktop cannot start its engine on this host.
 
 ## Merge policy attestations
 
 - [x] Documentation updated
 - [ ] No documentation impact
-- [x] Customer release notes updated (`2026.08.31.1`)
-- [ ] No customer-facing release note
+- [ ] Customer release notes updated
+- [x] No customer-facing release note
 - [x] Security and privacy impact reviewed
-
-Security/privacy review: Studio URLs and the browser event adapter accept only
-UUID template/server IDs and one fixed focus pair. No redirect URLs, provider
-URLs, executable content, raw payloads, credentials, or new data exposure are
-accepted. Existing authenticated module guards and tenant-scoped template APIs
-remain authoritative.
 
 ## MCP documentation handoff
 
-- [ ] MCP documentation updated
-- [x] MCP documentation not needed
-- MCP area: None; browser UI routing only
-- Wiki handoff note: Phase 1 adds no MCP endpoint, tool, scope, protocol, or
-  `ui://` contract. `lawhand.open_studio` is a validated in-browser UI event.
-
-## Sequencing
-
-Draft only. Do not mark ready or merge until the Visual Document Automation
-Editor master task explicitly authorizes sequencing with later Studio phases.
+- [x] MCP documentation updated
+- [ ] MCP documentation not needed
+- MCP area: Future Workspace MCP template, proposal, artifact, render-job, and review workflow
+- Wiki handoff note: `docs/template-studio-backend.md` defines the authoritative
+  Phase 2 domain/service boundary, revision and idempotency semantics, proposal
+  migration ownership, redaction rules, artifact/job references, 202 status
+  compatibility, and evidence recheck requirements. This PR exposes no MCP tool.
