@@ -2,14 +2,61 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import ssl
+import threading
 from urllib.parse import urlparse
 
 import httpx
+import truststore
 
 logger = logging.getLogger("clarity_agent.api")
 
 _MAX_RETRIES = 3
 _BASE_DELAY = 1.0
+
+
+class _ConnectionIsolatedTrustContext(truststore.SSLContext):
+    """Give every TLS connection its own system-trust backing context.
+
+    ``truststore`` temporarily changes verification flags on its backing
+    ``ssl.SSLContext`` while it creates an SSL object.  HTTPX may create more
+    than one connection concurrently, so sharing that backing context can
+    make those temporary changes overlap.  Keep the HTTPX-facing context, but
+    delegate each socket/BIO wrap to a new system-trust context whose state is
+    private for the lifetime of that connection.
+    """
+
+    def __init__(self, protocol: int) -> None:
+        super().__init__(protocol)
+        self._lawhand_protocol = protocol
+        self._lawhand_alpn_protocols: tuple[str, ...] = ()
+        self._lawhand_settings_lock = threading.Lock()
+
+    def set_alpn_protocols(self, alpn_protocols) -> None:
+        protocols = tuple(alpn_protocols)
+        with self._lawhand_settings_lock:
+            self._lawhand_alpn_protocols = protocols
+            super().set_alpn_protocols(protocols)
+
+    def _connection_context(self) -> truststore.SSLContext:
+        with self._lawhand_settings_lock:
+            protocols = self._lawhand_alpn_protocols
+        context = truststore.SSLContext(self._lawhand_protocol)
+        if protocols:
+            context.set_alpn_protocols(protocols)
+        return context
+
+    def wrap_bio(self, *args, **kwargs):
+        return self._connection_context().wrap_bio(*args, **kwargs)
+
+    def wrap_socket(self, *args, **kwargs):
+        return self._connection_context().wrap_socket(*args, **kwargs)
+
+
+def _system_trust_context() -> ssl.SSLContext:
+    """Return a TLS client context backed by the host system trust store."""
+
+    return _ConnectionIsolatedTrustContext(ssl.PROTOCOL_TLS_CLIENT)
 
 
 class SaaSClient:
@@ -26,7 +73,7 @@ class SaaSClient:
         # remains useful for local development and tests.
         try:
             hostname = parsed.hostname
-            parsed.port
+            _ = parsed.port
         except ValueError as exc:
             raise ValueError("CLARITY_SAAS_URL has a malformed host") from exc
         loopback_http = (
@@ -58,6 +105,7 @@ class SaaSClient:
             base_url=self.base_url,
             headers={"X-Agent-API-Key": self.api_key},
             timeout=30.0,
+            verify=_system_trust_context(),
         )
 
     async def close(self) -> None:

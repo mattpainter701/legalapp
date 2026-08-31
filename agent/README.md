@@ -45,6 +45,10 @@ Pairing is a separate command so the one-time code is never exposed to Windows
 Installer command lines or MSI event logs. Installing a newer MSI directly over
 the existing product preserves the enrollment and service configuration.
 
+Outbound HTTPS on Windows uses the operating system certificate store. Managed
+enterprise roots deployed by the firm's Windows administrators therefore work
+without disabling certificate or hostname validation.
+
 Optional properties:
 
 | Property | Default | Purpose |
@@ -276,7 +280,7 @@ Both drive the shared PyInstaller spec at `packaging/lawhand-agent.spec`, so the
 two platforms ship the same code with the same entry point.
 
 To publish, merge the tested change to `main`, then tag the exact version from
-`clarity_agent/__init__.py` (currently `agent-v0.15.3`) and push that tag. The
+`clarity_agent/__init__.py` (currently `agent-v0.15.4`) and push that tag. The
 workflow rejects a mismatched tag and does not publish either platform unless
 both builds finish successfully.
 
