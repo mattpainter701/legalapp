@@ -74,11 +74,12 @@ silent tenant configuration or claims of universal legal practice.
 
 ## Preview, approval, and execution
 
-Preview is side-effect free. It resolves the approved template, initial stage,
-deterministic due dates, bounded assignee roles, missing required fields, and
-any unresolved attorney-of-record assignment.
-The durable planned run records exact template, matter, request, and preview
-hashes. Raw sensitive values never enter preview or run evidence.
+Preview makes no matter or task changes. It resolves the approved template,
+initial stage, deterministic due dates, bounded assignee roles, missing
+required fields, and any unresolved attorney-of-record assignment. The durable
+planned run and `previewed` event record exact template, matter, request, and
+preview hashes as review evidence. Raw sensitive values never enter preview or
+run evidence.
 
 Preview creation requires a caller-owned idempotency key. Reusing the key with
 the same request returns the same run; reusing it with different input returns
@@ -116,7 +117,7 @@ perform the remaining compensation outside this bounded automatic path.
 | Stable bounded field contract | API and DB checks for keys, types, option strings, lengths, duplicates, required/sensitive/active/schema version | Schema/unit tests and direct-SQL negative rehearsal |
 | Sensitive values do not leak | API redaction, `has_value`, HMAC-only preview evidence, UI does not overwrite or retain a saved secret | Router/service and focused frontend tests |
 | Approved version immutability | Definition hash plus DB triggers covering parent and child INSERT/UPDATE/DELETE | Direct-SQL tamper rehearsal |
-| Preview has no side effects | Planned run/evidence only; no task or stage mutation | Focused service tests |
+| Preview has no execution side effects | Durable planned run/evidence; no task or matter-stage mutation | Focused service tests |
 | Stale preview is rejected | Exact template, matter, and preview hashes recomputed under locks; 409 on change; explicit fresh-key recovery in the UI | Service tests and frontend stale-recovery/key-retention tests |
 | Apply is atomic and idempotent | Locked run/matter, one transaction, stable external task references | PostgreSQL concurrent service rehearsal proving one task set and later-step failure rehearsal proving no partial effects |
 | Run history is durable | Immutable event/step triggers and immutable planning snapshot fields | Catalog/static contracts and direct-SQL tamper rehearsal |

@@ -391,7 +391,9 @@ export default function MatterWorkflowPanel({
           aria-label="Workflow preview"
           className="border rounded p-3 space-y-2"
         >
-          <h3 className="font-semibold">Preview (no changes made)</h3>
+          <h3 className="font-semibold">
+            Preview (no matter or task changes made)
+          </h3>
           <p className="font-mono text-xs break-all">
             Preview fingerprint: {preview.preview_sha256 || "—"}
           </p>

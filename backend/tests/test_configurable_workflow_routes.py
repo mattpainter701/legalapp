@@ -247,6 +247,8 @@ async def test_workflow_approval_hides_foreign_tenant_ids(
         f"{foreign_version.id}/approve"
     )
     assert response.status_code == 404
-    assert response.json() == {"detail": "Workflow template not found"}
+    body = response.json()
+    assert body["detail"] == "Workflow template not found"
+    assert uuid.UUID(body["request_id"])
     await db_session.refresh(foreign_version)
     assert foreign_version.status == "draft"
