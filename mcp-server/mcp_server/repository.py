@@ -554,6 +554,9 @@ class CourtListenerRepository:
                       ON pa.source_key = acl.source_key
                      AND pa.active IS TRUE
                      AND pa.namespace = 'public-authority'
+                    JOIN public_authority_source_lineage pas
+                      ON pas.source_key=acl.source_key
+                     AND pas.corpus_version=authority_case_chunks.corpus_version
                     WHERE chunk_id = %s
                       AND acl.public_namespace = 'public-authority'
                       AND corpus_version = (
@@ -696,6 +699,8 @@ class CourtListenerRepository:
                   ON pa.source_key=s.source_key AND pa.active IS TRUE
                  AND pa.namespace='public-authority'
                  AND pa.catalog_schema_version=s.metadata->>'catalog_schema_version'
+                JOIN public_authority_source_lineage pas
+                  ON pas.source_key=r.source_key AND pas.corpus_version=r.corpus_version
                 WHERE r.authority_key=%s AND r.corpus_version=(
                   SELECT version FROM authority_corpus_versions WHERE status='promoted'
                   ORDER BY promoted_at DESC NULLS LAST LIMIT 1
