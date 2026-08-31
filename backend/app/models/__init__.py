@@ -162,6 +162,19 @@ from app.models.research_workspace import (
     ResearchWorkspaceSnapshot,
     ResearchRecordRevision,
 )
+from app.models.configurable_workflow import (
+    ContactCustomFieldValue,
+    CustomFieldDefinition,
+    MatterCustomFieldValue,
+    MatterWorkflowChecklistDefinition,
+    MatterWorkflowFieldRequirement,
+    MatterWorkflowRun,
+    MatterWorkflowRunEvent,
+    MatterWorkflowRunStep,
+    MatterWorkflowStageDefinition,
+    MatterWorkflowTemplate,
+    MatterWorkflowTemplateVersion,
+)
 
 __all__ = [
     "Tenant",
@@ -316,4 +329,15 @@ __all__ = [
     "ResearchWorkspaceIdempotency",
     "ResearchWorkspaceSnapshot",
     "ResearchRecordRevision",
+    "CustomFieldDefinition",
+    "MatterCustomFieldValue",
+    "ContactCustomFieldValue",
+    "MatterWorkflowTemplate",
+    "MatterWorkflowTemplateVersion",
+    "MatterWorkflowStageDefinition",
+    "MatterWorkflowChecklistDefinition",
+    "MatterWorkflowFieldRequirement",
+    "MatterWorkflowRun",
+    "MatterWorkflowRunEvent",
+    "MatterWorkflowRunStep",
 ]

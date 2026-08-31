@@ -13,6 +13,7 @@ CAPABILITIES: frozenset[str] = frozenset(
         "manage_intake",
         "view_confidential_call_content",
         "manage_documents",
+        "manage_workflows",
         "manage_integrations",
         "admin_settings",
         "approve_legal_work",

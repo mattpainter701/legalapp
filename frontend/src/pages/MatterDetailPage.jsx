@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useAuth } from '../App'
 import { format, parseISO, differenceInDays } from 'date-fns'
 import ReactMarkdown from 'react-markdown'
 import {
@@ -24,6 +25,7 @@ import ComposeEmailModal from '../components/ComposeEmailModal'
 import UserSearchInput from '../components/UserSearchInput'
 import ContactPicker from '../components/ContactPicker'
 import MatterExpensesPanel from '../components/MatterExpensesPanel'
+import MatterWorkflowPanel from '../components/MatterWorkflowPanel'
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
 function Icon({ d, size = 18, className = '' }) {
@@ -227,6 +229,7 @@ const KEY_DATE_TYPES = new Set(['hearing', 'filing', 'deposition', 'deadline'])
 export default function MatterDetailPage() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const { user } = useAuth()
   const [matter, setMatter] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -563,6 +566,7 @@ export default function MatterDetailPage() {
     { key: 'dashboard', label: 'Dashboard', icon: Icons.activity },
     { key: 'activity', label: 'Activity', icon: Icons.clock },
     { key: 'team', label: 'Team', icon: Icons.users },
+    { key: 'workflow', label: 'Workflow', icon: Icons.checkCircle },
     { key: 'documents', label: 'Documents', icon: Icons.file },
     { key: 'correspondence', label: 'Correspondence', icon: Icons.mail },
     { key: 'portal', label: 'Client Portal', icon: Icons.users },
@@ -1268,6 +1272,17 @@ export default function MatterDetailPage() {
               </div>
             </div>
           </div>
+        )}
+
+        {activeTab === 'workflow' && (
+          <MatterWorkflowPanel
+            matterId={id}
+            user={user}
+            onWorkflowApplied={() => {
+              loadMatter()
+              loadDashboard()
+            }}
+          />
         )}
 
         {/* ── Correspondence Tab (archived emails) ─────────────────────────────── */}

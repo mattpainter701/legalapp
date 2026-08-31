@@ -2142,6 +2142,53 @@ export const getMyMatters = () =>
 export const getMatterStats = () =>
   api.get('/matters/stats').then(r => r.data)
 
+// Tenant-configurable matter/contact data and bounded workflow templates.
+export const listWorkflowFields = (params = {}) =>
+  api.get('/workflow-config/fields', { params }).then(r => r.data)
+export const createWorkflowField = (data) =>
+  api.post('/workflow-config/fields', data).then(r => r.data)
+export const updateWorkflowField = (fieldId, data) =>
+  api.patch(`/workflow-config/fields/${fieldId}`, data).then(r => r.data)
+export const getMatterCustomFields = (matterId) =>
+  api.get(`/matters/${matterId}/custom-fields`).then(r => r.data)
+export const updateMatterCustomFields = (matterId, data) =>
+  api.put(`/matters/${matterId}/custom-fields`, data).then(r => r.data)
+export const getContactCustomFields = (contactId) =>
+  api.get(`/contacts/${contactId}/custom-fields`).then(r => r.data)
+export const updateContactCustomFields = (contactId, data) =>
+  api.put(`/contacts/${contactId}/custom-fields`, data).then(r => r.data)
+export const listWorkflowTemplates = (params = {}) =>
+  api.get('/workflow-config/templates', { params }).then(r => r.data)
+export const createWorkflowTemplate = (data) =>
+  api.post('/workflow-config/templates', data).then(r => r.data)
+export const createWorkflowTemplateVersion = (templateId, data) =>
+  api.post(`/workflow-config/templates/${templateId}/versions`, data).then(r => r.data)
+export const approveWorkflowTemplateVersion = (templateId, versionId) =>
+  api.post(`/workflow-config/templates/${templateId}/versions/${versionId}/approve`).then(r => r.data)
+export const archiveWorkflowTemplate = (templateId) =>
+  api.post(`/workflow-config/templates/${templateId}/archive`).then(r => r.data)
+export const getMatterWorkflowTemplates = (matterId) =>
+  api.get(`/matters/${matterId}/workflow-templates`).then(r => r.data)
+export const previewMatterWorkflow = (matterId, templateVersionId, idempotencyKey) =>
+  api.post(
+    `/matters/${matterId}/workflow-runs/preview`,
+    null,
+    {
+      params: { template_version_id: templateVersionId },
+      headers: { 'Idempotency-Key': idempotencyKey },
+    },
+  ).then(r => r.data)
+export const applyMatterWorkflow = (matterId, runId, data) =>
+  api.post(`/matters/${matterId}/workflow-runs/${runId}/apply`, data).then(r => r.data)
+export const getMatterWorkflowRuns = (matterId) =>
+  api.get(`/matters/${matterId}/workflow-runs`).then(r => r.data)
+export const rollbackMatterWorkflow = (matterId, runId, data, idempotencyKey) =>
+  api.post(
+    `/matters/${matterId}/workflow-runs/${runId}/rollback`,
+    data,
+    { headers: { 'Idempotency-Key': idempotencyKey } },
+  ).then(r => r.data)
+
 // Assignments
 export const getMatterAssignments = (id) =>
   api.get(`/matters/${id}/assignments`).then(r => r.data)

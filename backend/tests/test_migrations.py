@@ -12,7 +12,51 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["147_studio_drafts"]
+    assert heads == ["148_configurable_workflows"]
+
+
+def test_configurable_workflow_migration_is_tenant_safe_and_immutable():
+    backend_dir = Path(__file__).resolve().parents[1]
+    source = (
+        backend_dir / "migrations" / "versions" / "148_configurable_workflows.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'revision = "148_configurable_workflows"' in source
+    assert 'down_revision = "147_studio_drafts"' in source
+    for table in (
+        "custom_field_definitions",
+        "matter_custom_field_values",
+        "contact_custom_field_values",
+        "matter_workflow_templates",
+        "matter_workflow_template_versions",
+        "matter_workflow_stage_definitions",
+        "matter_workflow_checklist_definitions",
+        "matter_workflow_field_requirements",
+        "matter_workflow_runs",
+        "matter_workflow_run_events",
+        "matter_workflow_run_steps",
+    ):
+        assert table in source
+    assert "NULLIF(current_setting('app.current_tenant_id', true), '')::uuid" in source
+    assert "WITH CHECK" in source
+    assert "FORCE ROW LEVEL SECURITY" in source
+    assert "prevent_config_workflow_immutable" in source
+    assert "prevent_config_workflow_run_tamper" in source
+    assert "prevent_approved_workflow_mutation" in source
+    assert "BEFORE UPDATE OR DELETE" in source
+    assert "BEFORE INSERT OR UPDATE OR DELETE" in source
+    assert "enforce_config_custom_field_value" in source
+    assert "prevent_config_field_contract_rewrite" in source
+    assert "UPDATE roles SET capabilities = capabilities ||" in source
+    assert "manage_workflows" in source
+    assert "FOREIGN KEY (tenant_id,linked_contact_id)" in source
+    for parent in (
+        "matters(tenant_id,id)",
+        "contacts(tenant_id,id)",
+        "tasks(tenant_id,id)",
+        "users(tenant_id,id)",
+    ):
+        assert parent in source
 
 
 def test_mediation_confidentiality_migration_is_additive_and_tenant_scoped():

@@ -10,6 +10,7 @@ def test_catalog_contains_core_capabilities():
         "manage_matters",
         "manage_intake",
         "manage_documents",
+        "manage_workflows",
         "manage_integrations",
         "admin_settings",
         "use_premium_ai",

@@ -16,6 +16,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -29,6 +30,7 @@ class Contact(Base):
 
     __tablename__ = "contacts"
     __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_contacts_tenant_id"),
         Index("idx_contacts_tenant_id", "tenant_id"),
         Index("idx_contacts_tenant_email", "tenant_id", "email"),
         Index("idx_contacts_tenant_last_name", "tenant_id", "last_name"),

@@ -237,6 +237,76 @@ jobs:
       - name: Rehearse workspace integrity matrix
         run: python scripts/rehearse_research_workspace.py
 
+  configurable-workflow-rehearsal:
+    name: Configurable workflow PostgreSQL rehearsal
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb
+        env:
+          POSTGRES_DB: configurable_workflow_rehearsal
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+        options: >-
+          --health-cmd "pg_isready -U test -d configurable_workflow_rehearsal"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      DATABASE_URL: postgresql+asyncpg://test:test@127.0.0.1:5432/configurable_workflow_rehearsal
+      MIGRATOR_DATABASE_URL: postgresql+asyncpg://test:test@127.0.0.1:5432/configurable_workflow_rehearsal
+      RLS_TEST_DATABASE_URL: postgresql+asyncpg://comp09_runtime:comp09-runtime-password@127.0.0.1:5432/configurable_workflow_rehearsal
+      SECRET_KEY: ci-configurable-workflow-secret-not-for-production
+      TOKEN_ENCRYPTION_KEY: KxzLuxmIM2dFDWQmKJL9LVUK5ouA0c3_-4VqCMrn-jY=
+      PYTHONPATH: backend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r backend/requirements.txt
+      - name: Apply the prior migration head
+        working-directory: backend
+        run: alembic upgrade 147_studio_drafts
+      - name: Seed a pre-COMP-09 Administrator capability fixture
+        env:
+          PGPASSWORD: test
+        run: |
+          psql -h 127.0.0.1 -U test -d configurable_workflow_rehearsal -v ON_ERROR_STOP=1 <<'SQL'
+          INSERT INTO tenants (id, name, domain)
+          VALUES ('00000000-0000-4000-8000-000000000901', 'COMP-09 upgrade fixture', 'comp09-upgrade.invalid');
+          INSERT INTO roles (id, tenant_id, name, capabilities, is_system)
+          VALUES (
+            '00000000-0000-4000-8000-000000000902',
+            '00000000-0000-4000-8000-000000000901',
+            'Administrator',
+            '["manage_users"]'::jsonb,
+            true
+          );
+          SQL
+      - name: Upgrade through COMP-09 and verify rerun safety
+        working-directory: backend
+        run: |
+          alembic upgrade head
+          alembic upgrade head
+      - name: Provision a production-shaped runtime role
+        env:
+          PGPASSWORD: test
+        run: |
+          psql -h 127.0.0.1 -U test -d configurable_workflow_rehearsal -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE comp09_runtime LOGIN PASSWORD 'comp09-runtime-password'
+            NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+          GRANT CONNECT ON DATABASE configurable_workflow_rehearsal TO comp09_runtime;
+          GRANT USAGE ON SCHEMA public TO comp09_runtime;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO comp09_runtime;
+          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO comp09_runtime;
+          SQL
+      - name: Rehearse tenant isolation, integrity, immutability, and concurrency
+        run: python scripts/rehearse_configurable_workflows.py
+
   # ─── Backend: Tests ─────────────────────────────────────────────────────────
   test-backend:
     name: Backend — Tests (pytest)
@@ -688,6 +758,7 @@ jobs:
       - dependency-vulnerability-review
       - authority-control-plane-rehearsal
       - research-workspace-rehearsal
+      - configurable-workflow-rehearsal
     runs-on: ubuntu-latest
     permissions: {}
     steps:
