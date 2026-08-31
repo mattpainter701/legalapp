@@ -39,6 +39,16 @@ from app.models.domestic import (
     DomesticEvent,
 )
 from app.models.matter_assignment import MatterAssignment
+from app.models.firm_memory import (
+    FirmMemoryCollection,
+    FirmMemoryCollectionSource,
+    FirmMemoryDocumentMatter,
+    FirmMemoryDocumentWorkspace,
+    FirmMemoryMatterGrant,
+    FirmMemoryMatterPolicy,
+    FirmMemorySource,
+    FirmMemorySourceGrant,
+)
 from app.models.matter_note import MatterNote
 from app.models.retainer import Retainer, RetainerTransaction
 from app.models.scheduler import SchedulerLog
