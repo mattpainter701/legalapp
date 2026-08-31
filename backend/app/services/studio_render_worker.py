@@ -202,9 +202,11 @@ class StudioRenderWorker:
             code = "cancelled" if lease_lost.is_set() else "processor_timeout"
             raise StudioRenderServiceError(409, code, "Studio processing stopped.")
         finally:
+            if not task.done():
+                task.cancel()
             if not lease_watch.done():
                 lease_watch.cancel()
-            await asyncio.gather(lease_watch, return_exceptions=True)
+            await asyncio.gather(task, lease_watch, return_exceptions=True)
 
     async def _load_inputs(
         self, lease: StudioJobLease

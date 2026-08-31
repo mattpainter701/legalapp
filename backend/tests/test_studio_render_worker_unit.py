@@ -176,6 +176,31 @@ async def test_preprocessor_phase_is_cancelled_when_lease_is_lost(tmp_path):
     assert cancelled.is_set()
 
 
+@pytest.mark.asyncio
+async def test_parent_cancellation_cancels_and_drains_lease_bound_phase(tmp_path):
+    worker = _worker(tmp_path, _processor(tmp_path))
+    worker.processor_timeout_seconds = 5
+    lost = asyncio.Event()
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def hanging_operation():
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    task = asyncio.create_task(
+        worker._await_lease_bound_phase(hanging_operation(), lost)
+    )
+    await asyncio.wait_for(started.wait(), timeout=1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert cancelled.is_set()
+
+
 def test_isolation_failures_are_sanitized_by_cause():
     assert _isolation_failure("hostile_input") == ("hostile_input", False)
     assert _isolation_failure("processor_timeout") == ("processor_timeout", True)

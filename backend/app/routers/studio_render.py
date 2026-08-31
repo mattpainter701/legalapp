@@ -16,7 +16,7 @@ from app.schemas.studio_render import (
     StudioRenderAccepted,
     StudioRenderIntent,
     StudioRenderJobStatus,
-    StudioRenderPublicError,
+    StudioRenderPublicErrorEnvelope,
 )
 from app.services.studio_object_storage import StudioObjectStore
 from app.services.studio_render_jobs import (
@@ -84,7 +84,11 @@ class StudioRenderRouteContext:
 async def get_studio_render_route_context() -> StudioRenderRouteContext:
     """Fail closed until shared registration supplies auth/config/storage wiring."""
 
-    raise HTTPException(status_code=503, detail="Studio rendering is unavailable.")
+    public = studio_render_public_error(RuntimeError("Studio rendering is unavailable."))
+    raise HTTPException(
+        status_code=503,
+        detail=public.model_dump(mode="json", exclude_none=True),
+    )
 
 
 router = APIRouter(prefix="/api/template-studio", tags=["template-studio"])
@@ -120,7 +124,7 @@ def _resource_headers(
     "/render-jobs",
     response_model=StudioRenderAccepted,
     status_code=202,
-    responses={503: {"model": StudioRenderPublicError}},
+    responses={503: {"model": StudioRenderPublicErrorEnvelope}},
 )
 async def enqueue_studio_render(
     body: StudioRenderIntent,

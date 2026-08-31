@@ -537,6 +537,12 @@ class StudioRenderPublicError(StrictModel):
         return self
 
 
+class StudioRenderPublicErrorEnvelope(StrictModel):
+    """FastAPI's explicit HTTPException response envelope."""
+
+    detail: StudioRenderPublicError
+
+
 class StudioRenderJobStatus(StrictModel):
     """Tenant-authorized status without ORM or object-storage details."""
 

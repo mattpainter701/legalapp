@@ -510,6 +510,17 @@ def _parse_result(row: DurableJob, *, now: datetime) -> _PersistedResult | None:
         return None
 
 
+def _peek_requested_by(row: DurableJob) -> uuid.UUID | None:
+    """Read only the ownership fence without validating or mutating job JSON."""
+
+    if not isinstance(row.payload, dict):
+        return None
+    try:
+        return uuid.UUID(str(row.payload.get("requested_by")))
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
 def _idempotency_scope(key: str) -> str:
     normalized = str(key or "").strip()
     if not 8 <= len(normalized) <= 200 or any(ord(char) < 32 for char in normalized):
@@ -1380,6 +1391,10 @@ class _StudioRenderJobStore:
         return content_availability, metadata_availability
 
     async def status(self, job_id: uuid.UUID) -> StudioRenderJobStatus:
+        if self.actor_user_id is None:
+            raise StudioRenderServiceError(
+                403, "actor_mismatch", "Studio actor binding is invalid."
+            )
         await self._bind_tenant_context()
         row = await self.db.scalar(
             select(DurableJob)
@@ -1392,6 +1407,10 @@ class _StudioRenderJobStore:
         )
         if row is None:
             raise StudioRenderServiceError(404, "job_not_found", "Studio job not found.")
+        if _peek_requested_by(row) != self.actor_user_id:
+            raise StudioRenderServiceError(
+                404, "job_not_found", "Studio job not found."
+            )
         now = await self._clock_now()
         queued = _parse_queued(row, now=now)
         if queued is None:
@@ -1401,14 +1420,6 @@ class _StudioRenderJobStore:
                 "job_data_unavailable",
                 STUDIO_PUBLIC_FAILURES["job_data_unavailable"],
                 durable_state_changed=True,
-            )
-        if self.actor_user_id is None:
-            raise StudioRenderServiceError(
-                403, "actor_mismatch", "Studio actor binding is invalid."
-            )
-        if queued.requested_by != self.actor_user_id:
-            raise StudioRenderServiceError(
-                404, "job_not_found", "Studio job not found."
             )
         if row.status in _ACTIVE_STATES and queued.expires_at <= now:
             if row.status == "cancel_requested":
@@ -1779,9 +1790,13 @@ class _StudioRenderJobStore:
             )
             .with_for_update()
         )
-        now = await self._clock_now()
         if row is None:
             raise StudioRenderServiceError(404, "job_not_found", "Studio job not found.")
+        if _peek_requested_by(row) != self.actor_user_id:
+            raise StudioRenderServiceError(
+                404, "job_not_found", "Studio job not found."
+            )
+        now = await self._clock_now()
         queued = _parse_queued(row, now=now)
         if queued is None:
             await self.db.flush()
@@ -1790,10 +1805,6 @@ class _StudioRenderJobStore:
                 "job_data_unavailable",
                 STUDIO_PUBLIC_FAILURES["job_data_unavailable"],
                 durable_state_changed=True,
-            )
-        if queued.requested_by != self.actor_user_id:
-            raise StudioRenderServiceError(
-                404, "job_not_found", "Studio job not found."
             )
         prior_status = row.status
         if row.status == "pending":

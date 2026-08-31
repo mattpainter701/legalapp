@@ -85,29 +85,33 @@ class StudioRenderWorkerLoop:
         while not stop.is_set():
             batch = asyncio.create_task(self.run_once())
             stop_wait = asyncio.create_task(stop.wait())
-            done, _ = await asyncio.wait(
-                {batch, stop_wait}, return_when=asyncio.FIRST_COMPLETED
-            )
-            if stop_wait in done and stop.is_set():
+            try:
+                done, _ = await asyncio.wait(
+                    {batch, stop_wait}, return_when=asyncio.FIRST_COMPLETED
+                )
+                if stop_wait in done and stop.is_set():
+                    return
+                processed = batch.result()
+            finally:
                 if not batch.done():
                     batch.cancel()
-                await asyncio.gather(batch, return_exceptions=True)
-                return
-            stop_wait.cancel()
-            await asyncio.gather(stop_wait, return_exceptions=True)
-            processed = batch.result()
+                if not stop_wait.done():
+                    stop_wait.cancel()
+                await asyncio.gather(batch, stop_wait, return_exceptions=True)
             if processed:
                 continue
             idle = asyncio.create_task(self.sleep(self.idle_seconds))
             stop_wait = asyncio.create_task(stop.wait())
-            done, _ = await asyncio.wait(
-                {idle, stop_wait}, return_when=asyncio.FIRST_COMPLETED
-            )
-            if stop_wait in done and stop.is_set():
+            try:
+                done, _ = await asyncio.wait(
+                    {idle, stop_wait}, return_when=asyncio.FIRST_COMPLETED
+                )
+                if stop_wait in done and stop.is_set():
+                    return
+                await idle
+            finally:
                 if not idle.done():
                     idle.cancel()
-                await asyncio.gather(idle, return_exceptions=True)
-                return
-            stop_wait.cancel()
-            await asyncio.gather(stop_wait, return_exceptions=True)
-            await idle
+                if not stop_wait.done():
+                    stop_wait.cancel()
+                await asyncio.gather(idle, stop_wait, return_exceptions=True)

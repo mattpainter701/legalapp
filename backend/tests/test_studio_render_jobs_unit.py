@@ -283,11 +283,13 @@ def test_consumer_and_worker_facades_do_not_cross_expose_operations():
 
 
 @pytest.mark.asyncio
-async def test_same_tenant_other_actor_status_is_tenant_safe_not_found():
+@pytest.mark.parametrize("operation", ["status", "request_cancel"])
+async def test_other_actor_cannot_probe_or_mutate_corrupt_same_tenant_job(operation):
     row, lease = _lease()
-    database_now = datetime.now(timezone.utc)
+    row.payload = {**row.payload, "render_options_sha256": "0" * 64}
+    original_payload = dict(row.payload)
     db = AsyncMock()
-    db.scalar = AsyncMock(side_effect=[row, database_now])
+    db.scalar = AsyncMock(return_value=row)
     store = _StudioRenderJobStore(
         db,
         tenant_id=lease.tenant_id,
@@ -297,9 +299,13 @@ async def test_same_tenant_other_actor_status_is_tenant_safe_not_found():
         "app.services.studio_render_jobs.set_tenant_context", AsyncMock()
     ):
         with pytest.raises(StudioRenderServiceError) as caught:
-            await store.status(row.id)
+            await getattr(store, operation)(row.id)
     assert caught.value.status_code == 404
     assert caught.value.code == "job_not_found"
+    assert row.payload == original_payload
+    assert row.status == "running"
+    assert row.result is None
+    db.flush.assert_not_awaited()
 
 
 def test_artifact_model_uses_available_tenant_composite_references():

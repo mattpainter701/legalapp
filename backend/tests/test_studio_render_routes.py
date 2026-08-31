@@ -21,6 +21,7 @@ from app.schemas.studio_render import (
     StudioPageGeometry,
     StudioRenderAccepted,
     StudioRenderOptions,
+    StudioRenderPublicErrorEnvelope,
     StudioRenderSourceContract,
 )
 from app.services.studio_render_jobs import StudioRenderArtifactContent
@@ -184,6 +185,27 @@ async def test_route_transaction_propagates_task_cancellation():
 
     with pytest.raises(asyncio.CancelledError):
         await _run(context, cancelled)
+
+
+@pytest.mark.asyncio
+async def test_unavailable_route_uses_its_declared_public_error_envelope():
+    app = FastAPI()
+    app.include_router(router)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="https://test.invalid"
+    ) as client:
+        response = await client.post(
+            "/api/template-studio/render-jobs",
+            headers={"Idempotency-Key": "intent-key-123"},
+            json=_intent(),
+        )
+    assert response.status_code == 503
+    error = StudioRenderPublicErrorEnvelope.model_validate(response.json())
+    assert error.detail.code == "processor_unavailable"
+    response_schema = app.openapi()["paths"]["/api/template-studio/render-jobs"][
+        "post"
+    ]["responses"]["503"]["content"]["application/json"]["schema"]
+    assert response_schema["$ref"].endswith("/StudioRenderPublicErrorEnvelope")
 
 
 def test_route_context_rejects_request_paths_and_non_https_origins():
