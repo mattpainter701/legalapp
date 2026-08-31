@@ -1128,7 +1128,7 @@ class CourtListenerRepository:
             pending = dict_rows(cur)
             cur.execute(
                 """
-                SELECT source_key, display_name, description, publisher, source_type,
+                SELECT s.source_key, display_name, description, publisher, source_type,
                        jurisdiction, court_id, canonical_url, authority_tier,
                        official_status, ingestion_mode, storage_policy, access_type,
                        license_status, terms_url, sync_frequency, data_format,
@@ -1143,15 +1143,15 @@ class CourtListenerRepository:
                  AND pa.namespace='public-authority'
                 WHERE s.public_namespace='public-authority'
                   AND s.storage_policy <> 'prohibited'
-                ORDER BY source_key
+                ORDER BY s.source_key
                 """
             )
             sources = dict_rows(cur)
             cur.execute(
                 """
-                SELECT source_key, partition_key, checkpoint_at, cursor_url, status,
-                       last_attempted_at, last_successful_sync_at, rows_processed,
-                       chunks_created, last_error, metadata
+                SELECT ss.source_key, ss.partition_key, ss.checkpoint_at, ss.cursor_url, ss.status,
+                       ss.last_attempted_at, ss.last_successful_sync_at, ss.rows_processed,
+                       ss.chunks_created, ss.last_error, ss.metadata
                 FROM source_sync_states ss
                 JOIN legal_sources s ON s.source_key=ss.source_key
                 JOIN citator_public_source_admissions pa
@@ -1159,7 +1159,7 @@ class CourtListenerRepository:
                  AND pa.namespace='public-authority'
                 WHERE s.public_namespace='public-authority'
                   AND s.storage_policy <> 'prohibited'
-                ORDER BY source_key, partition_key
+                ORDER BY ss.source_key, ss.partition_key
                 """
             )
             source_partitions = dict_rows(cur)
@@ -1184,7 +1184,8 @@ class CourtListenerRepository:
             cur.execute(
                 """
                 SELECT
-                    (SELECT COUNT(DISTINCT cl.court_id) FROM authority_case_clusters cl
+                    (SELECT COUNT(DISTINCT d.court_id) FROM authority_case_clusters cl
+                     JOIN dockets d ON d.docket_id=cl.docket_id
                      JOIN citator_public_source_admissions pa ON pa.source_key=cl.source_key AND pa.active IS TRUE AND pa.namespace='public-authority'
                      WHERE cl.public_namespace='public-authority' AND cl.corpus_version=(SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)) AS courts,
                     (SELECT COUNT(DISTINCT cl.docket_id) FROM authority_case_clusters cl
