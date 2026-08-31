@@ -4,7 +4,53 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+SmsMessageStatus = Literal[
+    "queued",
+    "dispatching",
+    "provider_unknown",
+    "blocked_number_suppression",
+    "blocked_consent_changed",
+    "blocked_quiet_hours",
+    "blocked_provider_config",
+    "blocked_matter_authorization_changed",
+    "provider_failed",
+    "provider_failed_after_acceptance",
+    "submitted",
+    "delivered",
+    "received",
+    "review_required",
+    "route_rejected",
+]
+SmsDeliveryCertainty = Literal[
+    "not_attempted",
+    "outcome_unknown",
+    "provider_rejected",
+    "provider_accepted",
+    "provider_failed_after_acceptance",
+    "confirmed_sent",
+    "confirmed_received",
+]
+SmsReviewStatus = Literal["pending", "resolved", "rejected"]
+SmsProviderStatus = Literal[
+    "queued",
+    "accepted",
+    "sending",
+    "sent",
+    "delivered",
+    "read",
+    "undelivered",
+    "failed",
+    "received",
+]
+SmsReconciliationResolution = Literal[
+    "operator_attested_unknown",
+    "provider_lookup",
+    "signed_provider_callback",
+    "signed_callback_overrode_operator_attestation",
+]
 
 
 class SmsComplianceSnapshot(BaseModel):
@@ -63,8 +109,15 @@ class SmsProviderConfigResponse(BaseModel):
     from_number: str | None
     sender_ready: bool
     is_active: bool
-    compliance_snapshot: dict
+    compliance_snapshot: SmsComplianceSnapshot | None
     generation: int
+
+    @field_validator("compliance_snapshot", mode="before")
+    @classmethod
+    def empty_snapshot_is_unconfigured(cls, value):
+        return None if value in ({}, None) else value
+
+    model_config = {"from_attributes": True}
 
 
 class SmsSendRequest(BaseModel):
@@ -77,14 +130,28 @@ class SmsSendRequest(BaseModel):
 
 class SmsMessageResponse(BaseModel):
     id: uuid.UUID
-    status: str
-    direction: str
+    contact_id: uuid.UUID | None
+    matter_id: uuid.UUID | None
+    status: SmsMessageStatus
+    direction: Literal["inbound", "outbound"]
+    delivery_certainty: SmsDeliveryCertainty
     provider_message_id: str | None
-    provider_status: str | None
+    provider_status: SmsProviderStatus | None
+    provider_error_code: str | None
     provider_config_generation: int | None
+    provider_submission_started_at: datetime | None
+    provider_created_at: datetime | None
+    from_number: str | None
     to_number: str | None
     body: str
     category: str
+    reconciliation_required_at: datetime | None
+    reconciliation_resolved_at: datetime | None
+    reconciliation_resolution: SmsReconciliationResolution | None
+    reconciliation_resolved_by_user_id: uuid.UUID | None
+    operator_observed_absent_at: datetime | None
+    operator_observed_absent_by_user_id: uuid.UUID | None
+    last_event_at: datetime | None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -99,9 +166,9 @@ class SmsReviewResponse(BaseModel):
     id: uuid.UUID
     sms_message_id: uuid.UUID
     reason: str
-    status: str
-    candidate_contact_ids: list
-    candidate_matter_ids: list
+    status: SmsReviewStatus
+    candidate_contact_ids: list[uuid.UUID]
+    candidate_matter_ids: list[uuid.UUID]
     candidate_contacts: list[SmsRouteCandidate] = Field(default_factory=list)
     candidate_matters: list[SmsRouteCandidate] = Field(default_factory=list)
     from_number: str | None = None
@@ -112,7 +179,7 @@ class SmsReviewResponse(BaseModel):
 
 
 class SmsReviewDecision(BaseModel):
-    decision: str = Field(pattern=r"^(resolve|reject)$")
+    decision: Literal["resolve", "reject"]
     contact_id: uuid.UUID | None = None
     matter_id: uuid.UUID | None = None
 
@@ -126,16 +193,18 @@ class SmsReviewDecision(BaseModel):
 
 
 class SmsReconciliationRequest(BaseModel):
-    resolution: Literal["confirmed_not_sent", "provider_lookup"]
+    resolution: Literal["operator_attested_unknown", "provider_lookup"]
     provider_message_id: str | None = Field(default=None, max_length=255)
 
     @model_validator(mode="after")
     def provider_lookup_has_identity_when_needed(self):
         if (
-            self.resolution == "confirmed_not_sent"
+            self.resolution == "operator_attested_unknown"
             and self.provider_message_id is not None
         ):
-            raise ValueError("A non-send attestation cannot bind a provider message id")
+            raise ValueError(
+                "An operator attestation cannot bind a provider message id"
+            )
         if self.provider_message_id:
             self.provider_message_id = self.provider_message_id.strip()
         return self
@@ -143,14 +212,27 @@ class SmsReconciliationRequest(BaseModel):
 
 class SmsReconciliationItemResponse(BaseModel):
     id: uuid.UUID
-    status: str
+    contact_id: uuid.UUID | None
+    matter_id: uuid.UUID | None
+    status: SmsMessageStatus
+    direction: Literal["outbound"]
+    delivery_certainty: SmsDeliveryCertainty
     provider_message_id: str | None
-    provider_status: str | None
+    provider_status: SmsProviderStatus | None
+    provider_error_code: str | None
+    provider_submission_started_at: datetime | None
+    provider_created_at: datetime | None
+    from_number: str | None
     to_number: str | None
     body: str
     category: str
     reconciliation_required_at: datetime | None
-    reconciliation_resolution: str | None
+    reconciliation_resolved_at: datetime | None
+    reconciliation_resolution: SmsReconciliationResolution | None
+    reconciliation_resolved_by_user_id: uuid.UUID | None
+    operator_observed_absent_at: datetime | None
+    operator_observed_absent_by_user_id: uuid.UUID | None
+    last_event_at: datetime | None
     created_at: datetime
 
     model_config = {"from_attributes": True}

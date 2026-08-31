@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
@@ -119,6 +120,12 @@ class LeadChannelConsent(Base):
             name="fk_lead_channel_consents_tenant_lead",
             ondelete="CASCADE",
         ),
+        CheckConstraint(
+            "sms_status IN ("
+            "'unknown', 'pending_verification', 'active', 'opted_out', 'blocked'"
+            ")",
+            name="ck_lead_channel_consents_sms_status",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -209,6 +216,12 @@ class SmsConsentEvent(Base):
             ["tenant_id", "actor_user_id"],
             ["users.tenant_id", "users.id"],
             name="fk_sms_consent_events_tenant_user",
+        ),
+        CheckConstraint(
+            "sms_status IN ("
+            "'unknown', 'pending_verification', 'active', 'opted_out', 'blocked'"
+            ")",
+            name="ck_sms_consent_events_sms_status",
         ),
         Index(
             "idx_sms_consent_events_tenant_consent",

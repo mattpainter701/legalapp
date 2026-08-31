@@ -150,6 +150,7 @@ class TaskUpdate(BaseModel):
     # Required only when retrying a changed draft after an unconfirmed attempt.
     # It is request metadata, not a Task column.
     acknowledge_prior_delivery_risk: bool = False
+    sms_acknowledgement: Optional["SmsActionAcknowledgement"] = None
 
     @field_validator("status")
     @classmethod
@@ -161,6 +162,11 @@ class TaskUpdate(BaseModel):
         return v
 
 
+class SmsActionAcknowledgement(BaseModel):
+    action_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    consent_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class TaskTransitionRequest(BaseModel):
     to_status: str
     expected_version: int = Field(ge=1)
@@ -168,6 +174,7 @@ class TaskTransitionRequest(BaseModel):
     waiting_follow_up_date: Optional[date] = None
     reviewer_user_id: Optional[uuid.UUID] = None
     acknowledge_prior_delivery_risk: bool = False
+    sms_acknowledgement: Optional[SmsActionAcknowledgement] = None
 
     @field_validator("to_status")
     @classmethod
@@ -288,6 +295,7 @@ class TaskResponse(BaseModel):
     # Drafted follow-through awaiting approval, e.g. an email_client payload.
     # Present so the board can state what approving will actually do.
     pending_action: Optional[dict] = None
+    pending_action_sha256: Optional[str] = None
     # Set once an approval has been recorded. Absent means nothing was dispatched.
     delivery: Optional[TaskDeliveryState] = None
     # Ordered newest-first. Each immutable attempt remains visible after a
@@ -357,6 +365,7 @@ class TaskBoardCard(BaseModel):
     # Drafted follow-through this card will execute when approved out of Review.
     # The board must be able to say what approving does before it is clicked.
     pending_action: Optional[dict] = None
+    pending_action_sha256: Optional[str] = None
     delivery: Optional[TaskDeliveryState] = None
     status_changed_at: datetime
     updated_at: datetime

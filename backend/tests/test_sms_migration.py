@@ -61,6 +61,8 @@ def test_sms_migration_enforces_rls_and_tenant_composite_references():
         "fk_sms_messages_tenant_matter",
         "fk_sms_messages_tenant_communication",
         "fk_sms_messages_tenant_user",
+        "fk_sms_messages_tenant_reconciler",
+        "fk_sms_messages_tenant_attestor",
         "fk_sms_review_items_tenant_message",
         "fk_sms_review_items_tenant_user",
         "fk_task_automation_runs_tenant_sms_message",
@@ -79,6 +81,33 @@ def test_sms_migration_enforces_rls_and_tenant_composite_references():
         "idx_task_automation_runs_tenant_sms_message",
     ):
         assert index_name in source
+    for check_name in (
+        "ck_lead_channel_consents_sms_status",
+        "ck_sms_consent_events_sms_status",
+        "ck_sms_provider_configs_provider",
+        "ck_sms_provider_configs_generation",
+        "ck_sms_provider_configs_sender_ready",
+        "ck_sms_provider_configs_active",
+        "ck_sms_messages_direction",
+        "ck_sms_messages_status",
+        "ck_sms_messages_delivery_certainty",
+        "ck_sms_messages_provider_status",
+        "ck_sms_messages_request_digest",
+        "ck_sms_messages_reconciliation_resolution",
+        "ck_sms_messages_reconciliation_evidence",
+        "ck_sms_messages_provider_truth",
+        "ck_sms_review_items_status",
+    ):
+        assert check_name in source
+    for provider_truth_field in (
+        '"provider_messaging_service_sid"',
+        '"provider_submission_started_at"',
+        '"provider_created_at"',
+        '"operator_observed_absent_at"',
+        '"operator_observed_absent_by_user_id"',
+        '"delivery_certainty"',
+    ):
+        assert provider_truth_field in source
 
 
 def test_ci_rehearses_sms_from_148_with_149_as_the_canonical_head():

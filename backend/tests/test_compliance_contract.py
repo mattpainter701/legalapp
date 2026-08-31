@@ -14,7 +14,9 @@ from app.models.compliance import (
 )
 from app.models.conversation import Conversation
 from app.models.document import Document
+from app.models.sms import SmsProviderConfig
 from app.routers.platform_compliance import PublishAgreementRequest
+from app.services.compliance import _sms_retention_category
 
 
 def _definition(**overrides) -> AgreementDefinition:
@@ -75,6 +77,87 @@ def test_operator_publish_contract_rejects_placeholder_or_ambiguous_documents():
     ):
         with pytest.raises(ValidationError):
             PublishAgreementRequest(**(base | changes))
+
+
+def test_sms_retention_category_contract_fails_closed():
+    aggregate = {"record_count": 0, "oldest_at": None, "bytes": None}
+    assert (
+        _sms_retention_category("sms_messages", aggregate)["data_classification"]
+        == "customer_communication_content"
+    )
+    with pytest.raises(ValueError, match="unclassified"):
+        _sms_retention_category("sms_future_sensitive_store", aggregate)
+    with pytest.raises(ValueError, match="malformed"):
+        _sms_retention_category("sms_messages", {**aggregate, "bytes": 1})
+
+
+@pytest.mark.asyncio
+async def test_sms_retention_inventory_is_metadata_only_and_hold_aware(
+    client, db_session, test_tenant, test_user
+):
+    credential_marker = "encrypted-provider-secret-must-not-leak"
+    account_marker = "AC-sensitive-provider-account"
+    db_session.add(
+        SmsProviderConfig(
+            tenant_id=test_tenant.id,
+            provider="twilio",
+            account_sid=account_marker,
+            encrypted_auth_token=credential_marker,
+            messaging_service_sid="MG-sensitive-sender",
+            sender_ready=False,
+            is_active=False,
+            compliance_snapshot={},
+            updated_by_user_id=test_user.id,
+        )
+    )
+    await db_session.commit()
+
+    response = await client.put(
+        "/api/compliance/retention",
+        json={
+            "chat_attachments_days": 30,
+            "legal_hold": True,
+            "legal_hold_reason": "Preserve communications and compliance evidence",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert credential_marker not in response.text
+    assert account_marker not in response.text
+    categories = {item["name"]: item for item in response.json()["categories"]}
+    expected = {
+        "sms_content_and_delivery": (
+            "customer_communication_content",
+            "customer_export_includes_content_and_delivery_state",
+        ),
+        "sms_suppressions": (
+            "compliance_suppression_state",
+            "customer_export_includes_current_suppression_state",
+        ),
+        "sms_consent_evidence": (
+            "immutable_consent_evidence",
+            "immutable_evidence_summary_only",
+        ),
+        "sms_number_evidence": (
+            "immutable_stop_start_evidence",
+            "immutable_evidence_summary_only",
+        ),
+        "sms_review_evidence": (
+            "operational_review_evidence",
+            "immutable_evidence_summary_only",
+        ),
+        "sms_provider_configuration": (
+            "security_configuration_metadata",
+            "security_metadata_only_no_secret_values",
+        ),
+    }
+    for name, (classification, export_boundary) in expected.items():
+        item = categories[name]
+        assert item["data_classification"] == classification
+        assert item["export_boundary"] == export_boundary
+        assert item["legal_hold_behavior"] == "preserve_when_active"
+        assert item["deletion_supported"] is False
+        assert item["bytes"] is None
+    assert categories["sms_provider_configuration"]["record_count"] == 1
 
 
 @pytest.mark.asyncio

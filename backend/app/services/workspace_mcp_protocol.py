@@ -266,6 +266,24 @@ def _tool_success(payload: dict[str, Any]) -> mcp_types.CallToolResult:
     )
 
 
+def _workspace_idempotency_key(request: Request) -> str | None:
+    """Return mutation identity independently from request correlation."""
+
+    explicit = request.headers.get("X-Idempotency-Key")
+    candidate = (
+        explicit if explicit is not None else request.headers.get("X-Request-ID")
+    )
+    if candidate is None:
+        return None
+    candidate = candidate.strip()
+    if not candidate or len(candidate) > 200:
+        raise CapabilityError(
+            "invalid_idempotency_key",
+            "X-Idempotency-Key must contain between 1 and 200 characters",
+        )
+    return candidate
+
+
 def _success_audit_metadata(spec: CapabilitySpec, result: dict[str, Any]) -> dict:
     """Keep tool audit useful without retaining private search text or snippets."""
     metadata: dict[str, Any] = {"effect": spec.effect.value}
@@ -378,10 +396,8 @@ async def execute_workspace_capability(
                 db=db,
                 user=user,
                 channel="workspace_mcp",
-                request_id=(
-                    request.headers.get("X-Request-ID")
-                    or request.headers.get("X-Idempotency-Key")
-                ),
+                request_id=request.headers.get("X-Request-ID"),
+                idempotency_key=_workspace_idempotency_key(request),
                 granted_scopes=identity.scopes,
                 redis=getattr(
                     getattr(request.scope.get("app"), "state", None), "redis", None

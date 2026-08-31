@@ -73,6 +73,13 @@ def upgrade() -> None:
         "lead_channel_consents",
         sa.Column("allowed_categories", JSONB(), nullable=False, server_default="[]"),
     )
+    op.create_check_constraint(
+        "ck_lead_channel_consents_sms_status",
+        "lead_channel_consents",
+        "sms_status IN ("
+        "'unknown', 'pending_verification', 'active', 'opted_out', 'blocked'"
+        ")",
+    )
     op.create_table(
         "sms_consent_events",
         sa.Column(
@@ -156,6 +163,12 @@ def upgrade() -> None:
             ["users.tenant_id", "users.id"],
             name="fk_sms_consent_events_tenant_user",
         ),
+        sa.CheckConstraint(
+            "sms_status IN ("
+            "'unknown', 'pending_verification', 'active', 'opted_out', 'blocked'"
+            ")",
+            name="ck_sms_consent_events_sms_status",
+        ),
     )
     op.create_table(
         "sms_provider_configs",
@@ -205,6 +218,18 @@ def upgrade() -> None:
             ["users.tenant_id", "users.id"],
             name="fk_sms_provider_configs_tenant_user",
         ),
+        sa.CheckConstraint(
+            "provider = 'twilio'", name="ck_sms_provider_configs_provider"
+        ),
+        sa.CheckConstraint("generation > 0", name="ck_sms_provider_configs_generation"),
+        sa.CheckConstraint(
+            "NOT sender_ready OR messaging_service_sid IS NOT NULL OR from_number IS NOT NULL",
+            name="ck_sms_provider_configs_sender_ready",
+        ),
+        sa.CheckConstraint(
+            "NOT is_active OR sender_ready",
+            name="ck_sms_provider_configs_active",
+        ),
     )
     op.create_table(
         "sms_number_suppressions",
@@ -221,9 +246,7 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("mobile_e164", sa.String(30), nullable=False),
-        sa.Column(
-            "is_suppressed", sa.Boolean(), nullable=False, server_default="true"
-        ),
+        sa.Column("is_suppressed", sa.Boolean(), nullable=False, server_default="true"),
         sa.Column("reason", sa.String(80)),
         sa.Column("provider_message_id", sa.String(255)),
         sa.Column("suppressed_at", sa.DateTime(timezone=True)),
@@ -286,6 +309,10 @@ def upgrade() -> None:
             name="fk_sms_number_suppression_events_tenant_suppression",
             ondelete="CASCADE",
         ),
+        sa.CheckConstraint(
+            "action IN ('provider_stop', 'provider_start', 'provider_start_blocked')",
+            name="ck_sms_number_suppression_events_action",
+        ),
     )
     op.create_table(
         "sms_messages",
@@ -320,9 +347,12 @@ def upgrade() -> None:
         sa.Column("request_digest", sa.String(64), nullable=False),
         sa.Column("provider_message_id", sa.String(255)),
         sa.Column("provider_account_sid", sa.String(100)),
+        sa.Column("provider_messaging_service_sid", sa.String(100)),
         sa.Column("provider_config_generation", sa.Integer()),
         sa.Column("dispatch_attempt_id", UUID(as_uuid=True)),
         sa.Column("dispatch_started_at", sa.DateTime(timezone=True)),
+        sa.Column("provider_submission_started_at", sa.DateTime(timezone=True)),
+        sa.Column("provider_created_at", sa.DateTime(timezone=True)),
         sa.Column("reconciliation_required_at", sa.DateTime(timezone=True)),
         sa.Column("reconciliation_resolved_at", sa.DateTime(timezone=True)),
         sa.Column("reconciliation_resolution", sa.String(40)),
@@ -331,8 +361,20 @@ def upgrade() -> None:
             UUID(as_uuid=True),
             sa.ForeignKey("users.id", ondelete="SET NULL"),
         ),
+        sa.Column("operator_observed_absent_at", sa.DateTime(timezone=True)),
+        sa.Column(
+            "operator_observed_absent_by_user_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("users.id", ondelete="SET NULL"),
+        ),
         sa.Column("direction", sa.String(20), nullable=False),
         sa.Column("status", sa.String(40), nullable=False, server_default="queued"),
+        sa.Column(
+            "delivery_certainty",
+            sa.String(50),
+            nullable=False,
+            server_default="not_attempted",
+        ),
         sa.Column("from_number", sa.String(30)),
         sa.Column("to_number", sa.String(30)),
         sa.Column("body", sa.Text(), nullable=False),
@@ -394,6 +436,61 @@ def upgrade() -> None:
             ["users.tenant_id", "users.id"],
             name="fk_sms_messages_tenant_reconciler",
         ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "operator_observed_absent_by_user_id"],
+            ["users.tenant_id", "users.id"],
+            name="fk_sms_messages_tenant_attestor",
+        ),
+        sa.CheckConstraint(
+            "direction IN ('inbound', 'outbound')",
+            name="ck_sms_messages_direction",
+        ),
+        sa.CheckConstraint(
+            "status IN ("
+            "'queued', 'dispatching', 'provider_unknown', "
+            "'blocked_number_suppression', 'blocked_consent_changed', "
+            "'blocked_quiet_hours', 'blocked_provider_config', "
+            "'blocked_matter_authorization_changed', 'provider_failed', "
+            "'provider_failed_after_acceptance', 'submitted', 'delivered', "
+            "'received', 'review_required', 'route_rejected'"
+            ")",
+            name="ck_sms_messages_status",
+        ),
+        sa.CheckConstraint(
+            "delivery_certainty IN ("
+            "'not_attempted', 'outcome_unknown', 'provider_rejected', "
+            "'provider_accepted', 'provider_failed_after_acceptance', "
+            "'confirmed_sent', 'confirmed_received'"
+            ")",
+            name="ck_sms_messages_delivery_certainty",
+        ),
+        sa.CheckConstraint(
+            "provider_status IS NULL OR provider_status IN ("
+            "'queued', 'accepted', 'sending', 'sent', 'delivered', 'read', "
+            "'undelivered', 'failed', 'received'"
+            ")",
+            name="ck_sms_messages_provider_status",
+        ),
+        sa.CheckConstraint(
+            "char_length(request_digest) = 64",
+            name="ck_sms_messages_request_digest",
+        ),
+        sa.CheckConstraint(
+            "reconciliation_resolution IS NULL OR reconciliation_resolution IN ("
+            "'operator_attested_unknown', 'provider_lookup', 'signed_provider_callback', "
+            "'signed_callback_overrode_operator_attestation'"
+            ")",
+            name="ck_sms_messages_reconciliation_resolution",
+        ),
+        sa.CheckConstraint(
+            "reconciliation_resolved_at IS NULL OR reconciliation_resolution IS NOT NULL",
+            name="ck_sms_messages_reconciliation_evidence",
+        ),
+        sa.CheckConstraint(
+            "status NOT IN ('submitted', 'delivered', "
+            "'provider_failed_after_acceptance') OR provider_message_id IS NOT NULL",
+            name="ck_sms_messages_provider_truth",
+        ),
     )
     op.create_table(
         "sms_review_items",
@@ -442,6 +539,10 @@ def upgrade() -> None:
             ["tenant_id", "reviewed_by_user_id"],
             ["users.tenant_id", "users.id"],
             name="fk_sms_review_items_tenant_user",
+        ),
+        sa.CheckConstraint(
+            "status IN ('pending', 'resolved', 'rejected')",
+            name="ck_sms_review_items_status",
         ),
     )
     op.add_column(
@@ -585,6 +686,11 @@ def downgrade() -> None:
         "sms_consent_events",
     ):
         op.drop_table(table)
+    op.drop_constraint(
+        "ck_lead_channel_consents_sms_status",
+        "lead_channel_consents",
+        type_="check",
+    )
     for name in (
         "allowed_categories",
         "quiet_hours_end",

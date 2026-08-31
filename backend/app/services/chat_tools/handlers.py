@@ -19,14 +19,16 @@ import asyncio
 import hashlib
 import json
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, text
 
 from app.config import get_settings
 from app.models.contact import Contact
 from app.models.document import Chunk, Document
+from app.models.durable_job import DurableJob
 from app.models.matter_assignment import MatterAssignment
 from app.models.matter_party import MatterParty
 from app.models.plugin import Matter
@@ -98,10 +100,78 @@ from app.services.task_workflow import (
 _MAX_MATTER_RESULTS = 8
 _MAX_TASK_RESULTS = 20
 settings = get_settings()
+_WORKSPACE_SMS_IDEMPOTENCY_NAMESPACE = "workspace-mcp:sms"
+_WORKSPACE_SMS_IDEMPOTENCY_KIND = "workspace_mcp_sms_proposal"
 
 
 def _normalize_task_title(value: str) -> str:
     return " ".join(value.casefold().split())
+
+
+def _workspace_sms_request_digest(args: ProposeClientSmsArgs) -> str:
+    """Hash the normalized, complete proposal request without storing its body."""
+
+    canonical_args = args.model_dump(mode="json")
+    canonical_args["recipient_party_ids"] = sorted(
+        canonical_args["recipient_party_ids"]
+    )
+    # Normalize transport line endings only. Other whitespace changes alter the
+    # customer-visible SMS and therefore must conflict.
+    canonical_args["body"] = args.body.replace("\r\n", "\n").replace("\r", "\n")
+    canonical = {
+        "tool": "propose_client_sms",
+        "arguments": canonical_args,
+    }
+    return hashlib.sha256(
+        json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _workspace_sms_idempotency_binding(
+    context: ChatToolContext, args: ProposeClientSmsArgs
+) -> tuple[str, str, str, str] | None:
+    """Derive a tenant/tool-global opaque key prefix and exact request binding."""
+
+    if context.channel != "workspace_mcp":
+        return None
+    raw_key = context.idempotency_key or context.request_id
+    if raw_key is None:
+        return None
+    raw_key = raw_key.strip()
+    if not raw_key or len(raw_key) > 200:
+        raise ChatToolError(
+            "invalid_idempotency_key",
+            "Workspace SMS proposals require a bounded idempotency identity",
+        )
+    key_digest = hashlib.sha256(
+        f"{context.tenant_id}:propose_client_sms:{raw_key}".encode()
+    ).hexdigest()
+    request_digest = _workspace_sms_request_digest(args)
+    prefix = f"{_WORKSPACE_SMS_IDEMPOTENCY_NAMESPACE}:{key_digest}:"
+    return key_digest, request_digest, prefix, f"{prefix}{request_digest}"
+
+
+def _workspace_sms_idempotency_row(
+    *,
+    tenant_id: uuid.UUID,
+    key_digest: str,
+    request_digest: str,
+    task_id: uuid.UUID,
+) -> DurableJob:
+    """Create a completed queue row used only as an idempotency ledger."""
+
+    return DurableJob(
+        tenant_id=tenant_id,
+        kind=_WORKSPACE_SMS_IDEMPOTENCY_KIND,
+        idempotency_key=key_digest,
+        payload={"request_sha256": request_digest},
+        status="completed",
+        progress=100,
+        attempts=0,
+        max_attempts=1,
+        result={"task_id": str(task_id)},
+        completed_at=datetime.now(timezone.utc),
+    )
 
 
 # Compatibility for existing imports while adapters migrate to the neutral name.
@@ -747,6 +817,8 @@ async def _create_proposed_task(
     attorney_reviewer_user_id: uuid.UUID | None = None,
     external_ref: str | None = None,
     idempotency_prefix: str | None = None,
+    idempotency_key_digest: str | None = None,
+    idempotency_request_digest: str | None = None,
 ) -> Task:
     staged = review_policy == "staff_then_attorney"
     if staged and (staff_reviewer_user_id is None or attorney_reviewer_user_id is None):
@@ -766,6 +838,103 @@ async def _create_proposed_task(
     except TaskWorkflowError as exc:
         raise ChatToolError("invalid_task_reference", exc.detail) from exc
 
+    idempotency_values = (
+        external_ref,
+        idempotency_prefix,
+        idempotency_key_digest,
+        idempotency_request_digest,
+    )
+    if any(idempotency_values) and not all(idempotency_values):
+        raise ChatToolError(
+            "invalid_idempotency_binding",
+            "Workspace SMS proposal idempotency evidence is incomplete",
+        )
+
+    if all(idempotency_values):
+        # The key is global within tenant/tool, not matter-scoped. A transaction
+        # advisory lock closes the no-row race. DurableJob's existing unique
+        # tenant/kind/key constraint is the database backstop and its completed
+        # row remains a fail-closed tombstone if the Task is later deleted.
+        await context.db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
+            {"scope": idempotency_prefix},
+        )
+        existing_binding = await context.db.scalar(
+            select(DurableJob)
+            .where(
+                DurableJob.tenant_id == context.tenant_id,
+                DurableJob.kind == _WORKSPACE_SMS_IDEMPOTENCY_KIND,
+                DurableJob.idempotency_key == idempotency_key_digest,
+            )
+            .with_for_update()
+        )
+        if existing_binding is not None:
+            binding_payload = (
+                existing_binding.payload
+                if isinstance(existing_binding.payload, dict)
+                else {}
+            )
+            if binding_payload.get("request_sha256") != idempotency_request_digest:
+                raise ChatToolError(
+                    "idempotency_conflict",
+                    "This request identity was already used for different SMS proposal data",
+                )
+            binding_result = (
+                existing_binding.result
+                if isinstance(existing_binding.result, dict)
+                else {}
+            )
+            try:
+                existing_task_id = uuid.UUID(binding_result["task_id"])
+            except (KeyError, TypeError, ValueError):
+                existing_task_id = None
+            existing_task = (
+                await context.db.scalar(
+                    select(Task)
+                    .where(
+                        Task.tenant_id == context.tenant_id,
+                        Task.id == existing_task_id,
+                    )
+                    .with_for_update()
+                )
+                if existing_task_id is not None
+                else None
+            )
+            if existing_task is None or existing_task.external_ref != external_ref:
+                raise ChatToolError(
+                    "idempotency_replay_unavailable",
+                    "The original SMS proposal is no longer available; use a new idempotency key",
+                )
+            return existing_task
+
+        # Adopt exact records created before the durable sidecar existed. The
+        # global lookup also ensures changed matter/body requests conflict.
+        existing_idempotent = await context.db.scalar(
+            select(Task)
+            .where(
+                Task.tenant_id == context.tenant_id,
+                Task.external_ref.like(f"{idempotency_prefix}%"),
+            )
+            .order_by(Task.created_at, Task.id)
+            .with_for_update()
+        )
+        if existing_idempotent is not None:
+            if existing_idempotent.external_ref == external_ref:
+                context.db.add(
+                    _workspace_sms_idempotency_row(
+                        tenant_id=context.tenant_id,
+                        key_digest=idempotency_key_digest,
+                        request_digest=idempotency_request_digest,
+                        task_id=existing_idempotent.id,
+                    )
+                )
+                await context.db.flush()
+                return existing_idempotent
+            raise ChatToolError(
+                "idempotency_conflict",
+                "This request identity was already used for different SMS proposal data",
+            )
+
     # Serialize proposals for one matter. Without this lock, two concurrent
     # assistant turns can both pass the duplicate scan and create the same open
     # task. The matter is tenant-owned and already validated above.
@@ -779,25 +948,6 @@ async def _create_proposed_task(
     )
     if locked_matter_id is None:
         raise ChatToolError("matter_not_found", "Matter not found")
-
-    if external_ref and idempotency_prefix:
-        existing_idempotent = await context.db.scalar(
-            select(Task)
-            .where(
-                Task.tenant_id == context.tenant_id,
-                Task.matter_id == matter_id,
-                Task.external_ref.like(f"{idempotency_prefix}%"),
-            )
-            .order_by(Task.created_at, Task.id)
-            .with_for_update()
-        )
-        if existing_idempotent is not None:
-            if existing_idempotent.external_ref == external_ref:
-                return existing_idempotent
-            raise ChatToolError(
-                "idempotency_conflict",
-                "This request identity was already used for different SMS proposal data",
-            )
 
     requested_title = _normalize_task_title(title)
     existing_rows = (
@@ -840,6 +990,16 @@ async def _create_proposed_task(
     )
     context.db.add(task)
     await context.db.flush()
+    if all(idempotency_values):
+        context.db.add(
+            _workspace_sms_idempotency_row(
+                tenant_id=context.tenant_id,
+                key_digest=idempotency_key_digest,
+                request_digest=idempotency_request_digest,
+                task_id=task.id,
+            )
+        )
+        await context.db.flush()
     append_task_event(
         context.db,
         task,
@@ -1104,25 +1264,22 @@ async def propose_client_sms(
         )
         for party_id in requested
     ]
-    idempotency_prefix = None
-    proposal_external_ref = None
+    idempotency_prefix: str | None = None
+    idempotency_key_digest: str | None = None
+    idempotency_request_digest: str | None = None
+    proposal_external_ref: str | None = None
     proposal_idempotency_key = f"chat-sms-{uuid.uuid4()}"
-    if context.channel == "workspace_mcp" and context.request_id:
-        request_identity = hashlib.sha256(
-            (
-                f"{context.tenant_id}:{context.actor_user_id}:" f"{context.request_id}"
-            ).encode()
-        ).hexdigest()
-        args_digest = hashlib.sha256(
-            json.dumps(
-                args.model_dump(mode="json"),
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode()
-        ).hexdigest()
-        idempotency_prefix = f"workspace-mcp:sms:{request_identity}:"
-        proposal_external_ref = f"{idempotency_prefix}{args_digest}"
-        proposal_idempotency_key = f"workspace-mcp-sms-{request_identity}-{args_digest}"
+    idempotency_binding = _workspace_sms_idempotency_binding(context, args)
+    if idempotency_binding is not None:
+        (
+            idempotency_key_digest,
+            idempotency_request_digest,
+            idempotency_prefix,
+            proposal_external_ref,
+        ) = idempotency_binding
+        proposal_idempotency_key = (
+            f"workspace-mcp-sms-{idempotency_key_digest}-{idempotency_request_digest}"
+        )
     async with context.db.begin_nested():
         chips = await _resolve_source_chips(
             context, args.source_ids, matter_id=args.matter_id
@@ -1153,6 +1310,8 @@ async def propose_client_sms(
             pending_action=action.model_dump(mode="json"),
             external_ref=proposal_external_ref,
             idempotency_prefix=idempotency_prefix,
+            idempotency_key_digest=idempotency_key_digest,
+            idempotency_request_digest=idempotency_request_digest,
         )
         action = SmsClientAction.model_validate(task.pending_action)
     return {

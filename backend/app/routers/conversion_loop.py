@@ -40,6 +40,7 @@ from app.services.operator_audit import record_operator_audit
 from app.services.sms import (
     SmsError,
     append_sms_consent_event,
+    lock_sms_number_suppression,
     load_sms_consents,
     normalize_e164,
     send_sms,
@@ -380,21 +381,11 @@ async def update_consent(
     if not lead:
         raise HTTPException(404, "Lead not found")
     contact = await db.scalar(
-        select(Contact)
-        .where(
+        select(Contact).where(
             Contact.id == lead.contact_id,
             Contact.tenant_id == current_user.tenant_id,
         )
-        .with_for_update()
     )
-    consents = await load_sms_consents(
-        db, current_user.tenant_id, lead.contact_id, lock=True
-    )
-    row = next((consent for consent in consents if consent.lead_id == lead_id), None)
-    if not row:
-        row = LeadChannelConsent(tenant_id=current_user.tenant_id, lead_id=lead_id)
-        db.add(row)
-        consents.append(row)
     mobile_e164 = None
     if body.sms_allowed:
         if contact is None:
@@ -410,6 +401,60 @@ async def update_consent(
             )
         if not body.phone_verified:
             raise HTTPException(422, "SMS consent requires a verified E.164 mobile")
+        # STOP and staff regrant share the number fence first. If STOP wins,
+        # staff cannot store an apparently active consent; only signed START
+        # may release the durable provider suppression.
+        suppression = await lock_sms_number_suppression(
+            db,
+            tenant_id=current_user.tenant_id,
+            mobile_e164=mobile_e164,
+            initial_suppressed=False,
+        )
+        if suppression.is_suppressed:
+            await record_operator_audit(
+                db,
+                request,
+                action="sms.consent.regrant_blocked",
+                resource_type="lead_channel_consent",
+                resource_id=str(lead_id),
+                actor_type="tenant_user",
+                actor_id=str(current_user.id),
+                metadata={
+                    "tenant_id": str(current_user.tenant_id),
+                    "lead_id": str(lead_id),
+                    "reason": "provider_number_suppression",
+                },
+            )
+            await db.commit()
+            raise HTTPException(
+                409,
+                "Provider STOP suppression is active; the recipient must send START",
+            )
+    contact = await db.scalar(
+        select(Contact)
+        .where(
+            Contact.id == lead.contact_id,
+            Contact.tenant_id == current_user.tenant_id,
+        )
+        .with_for_update()
+    )
+    if body.sms_allowed:
+        try:
+            locked_contact_e164 = normalize_e164(contact.phone if contact else None)
+        except SmsError as exc:
+            raise HTTPException(exc.status_code, str(exc)) from exc
+        if locked_contact_e164 != mobile_e164:
+            raise HTTPException(
+                409, "Lead contact mobile changed before SMS consent was saved"
+            )
+    consents = await load_sms_consents(
+        db, current_user.tenant_id, lead.contact_id, lock=True
+    )
+    row = next((consent for consent in consents if consent.lead_id == lead_id), None)
+    if not row:
+        row = LeadChannelConsent(tenant_id=current_user.tenant_id, lead_id=lead_id)
+        db.add(row)
+        consents.append(row)
     changed_at = datetime.now(timezone.utc)
     (
         row.email_allowed,

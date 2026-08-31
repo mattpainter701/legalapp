@@ -25,6 +25,11 @@ from app.schemas.sms import (
 )
 from app.services.access_control import require_capability
 from app.services.operator_audit import record_operator_audit
+from app.services.matter_access import (
+    accessible_matter_ids,
+    can_access_matter,
+    matter_access_predicate,
+)
 from app.services.sms import (
     SmsError,
     apply_inbound,
@@ -119,6 +124,14 @@ async def send_sms_message(
     db: AsyncSession = Depends(get_db),
 ):
     await set_tenant_context(db, str(current_user.tenant_id))
+    if body.matter_id is None or not await can_access_matter(
+        db,
+        tenant_id=current_user.tenant_id,
+        user_id=current_user.id,
+        is_admin=current_user.role == "admin",
+        matter_id=body.matter_id,
+    ):
+        raise HTTPException(404, "SMS target was not found")
 
     async def audit_success(row: SmsMessage) -> None:
         await record_operator_audit(
@@ -153,26 +166,30 @@ async def send_sms_message(
             before_success_commit=audit_success,
         )
     except SmsError as exc:
-        await set_tenant_context(db, str(current_user.tenant_id))
-        await record_operator_audit(
-            db,
-            request,
-            action="sms.send.rejected",
-            resource_type="sms_message",
-            resource_id=str(exc.sms_message_id or body.idempotency_key),
-            actor_type="tenant_user",
-            actor_id=str(current_user.id),
-            metadata={
-                "tenant_id": str(current_user.tenant_id),
-                "contact_id": str(body.contact_id),
-                "matter_id": str(body.matter_id) if body.matter_id else None,
-                "category": body.category,
-                "status_code": exc.status_code,
-                "delivery_certainty": exc.delivery_certainty,
-                "reconciliation_required": exc.reconciliation_required,
-            },
-        )
-        await db.commit()
+        # Durable message outcomes already carry an OperatorAuditLog in the
+        # exact same commit as their state mutation. Only pre-reservation
+        # validation failures need a request-layer rejection audit.
+        if exc.sms_message_id is None:
+            await set_tenant_context(db, str(current_user.tenant_id))
+            await record_operator_audit(
+                db,
+                request,
+                action="sms.send.rejected",
+                resource_type="sms_request",
+                resource_id=body.idempotency_key,
+                actor_type="tenant_user",
+                actor_id=str(current_user.id),
+                metadata={
+                    "tenant_id": str(current_user.tenant_id),
+                    "contact_id": str(body.contact_id),
+                    "matter_id": str(body.matter_id) if body.matter_id else None,
+                    "category": body.category,
+                    "status_code": exc.status_code,
+                    "delivery_certainty": exc.delivery_certainty,
+                    "reconciliation_required": exc.reconciliation_required,
+                },
+            )
+            await db.commit()
         raise HTTPException(exc.status_code, exc.api_detail()) from exc
     return row
 
@@ -245,21 +262,38 @@ async def list_sms_review_items(
     db: AsyncSession = Depends(get_db),
 ):
     await set_tenant_context(db, str(current_user.tenant_id))
-    rows = (
-        await db.execute(
-            select(SmsReviewItem, SmsMessage)
-            .join(
-                SmsMessage,
-                (SmsMessage.tenant_id == SmsReviewItem.tenant_id)
-                & (SmsMessage.id == SmsReviewItem.sms_message_id),
+    rows = list(
+        (
+            await db.execute(
+                select(SmsReviewItem, SmsMessage)
+                .join(
+                    SmsMessage,
+                    (SmsMessage.tenant_id == SmsReviewItem.tenant_id)
+                    & (SmsMessage.id == SmsReviewItem.sms_message_id),
+                )
+                .where(
+                    SmsReviewItem.tenant_id == current_user.tenant_id,
+                    SmsReviewItem.status == "pending",
+                )
+                .order_by(SmsReviewItem.created_at)
             )
-            .where(
-                SmsReviewItem.tenant_id == current_user.tenant_id,
-                SmsReviewItem.status == "pending",
+        ).all()
+    )
+    visible_matter_ids = await accessible_matter_ids(
+        db,
+        tenant_id=current_user.tenant_id,
+        user_id=current_user.id,
+        is_admin=current_user.role == "admin",
+    )
+    if visible_matter_ids is not None:
+        rows = [
+            (item, message)
+            for item, message in rows
+            if any(
+                uuid.UUID(str(candidate_id)) in visible_matter_ids
+                for candidate_id in (item.candidate_matter_ids or [])
             )
-            .order_by(SmsReviewItem.created_at)
-        )
-    ).all()
+        ]
     contact_ids = {
         uuid.UUID(str(candidate_id))
         for item, _message in rows
@@ -270,6 +304,8 @@ async def list_sms_review_items(
         for item, _message in rows
         for candidate_id in (item.candidate_matter_ids or [])
     }
+    if visible_matter_ids is not None:
+        matter_ids &= visible_matter_ids
     contact_labels = {
         str(contact.id): contact.display_name
         for contact in (
@@ -323,6 +359,8 @@ async def list_sms_review_items(
                     "label": matter_labels.get(str(candidate_id), "Unavailable matter"),
                 }
                 for candidate_id in (item.candidate_matter_ids or [])
+                if visible_matter_ids is None
+                or uuid.UUID(str(candidate_id)) in visible_matter_ids
             ],
             "from_number": message.from_number,
             "body": message.body,
@@ -341,6 +379,34 @@ async def decide_sms_review_item(
     db: AsyncSession = Depends(get_db),
 ):
     await set_tenant_context(db, str(current_user.tenant_id))
+    pending_item = await db.scalar(
+        select(SmsReviewItem).where(
+            SmsReviewItem.id == review_item_id,
+            SmsReviewItem.tenant_id == current_user.tenant_id,
+            SmsReviewItem.status == "pending",
+        )
+    )
+    visible_matter_ids = await accessible_matter_ids(
+        db,
+        tenant_id=current_user.tenant_id,
+        user_id=current_user.id,
+        is_admin=current_user.role == "admin",
+    )
+    candidate_matter_ids = {
+        uuid.UUID(str(candidate_id))
+        for candidate_id in (
+            (pending_item.candidate_matter_ids if pending_item else []) or []
+        )
+    }
+    if pending_item is None or (
+        visible_matter_ids is not None
+        and not (candidate_matter_ids & visible_matter_ids)
+    ):
+        raise HTTPException(404, "SMS review item was not found")
+    if body.matter_id and (
+        visible_matter_ids is not None and body.matter_id not in visible_matter_ids
+    ):
+        raise HTTPException(404, "SMS review item was not found")
     try:
         item = await resolve_review_item(
             db,
@@ -381,6 +447,21 @@ async def reconcile_uncertain_sms(
     db: AsyncSession = Depends(get_db),
 ):
     await set_tenant_context(db, str(current_user.tenant_id))
+    visible_message = await db.scalar(
+        select(SmsMessage).where(
+            SmsMessage.id == sms_message_id,
+            SmsMessage.tenant_id == current_user.tenant_id,
+            SmsMessage.direction == "outbound",
+            matter_access_predicate(
+                tenant_id=current_user.tenant_id,
+                user_id=current_user.id,
+                is_admin=current_user.role == "admin",
+                matter_id_column=SmsMessage.matter_id,
+            ),
+        )
+    )
+    if visible_message is None:
+        raise HTTPException(404, "SMS reconciliation item was not found")
     try:
         message = await reconcile_sms_message(
             db,
@@ -411,7 +492,11 @@ async def reconcile_uncertain_sms(
     await record_operator_audit(
         db,
         request,
-        action="sms.dispatch.reconciled",
+        action=(
+            "sms.dispatch.operator_attested"
+            if body.resolution == "operator_attested_unknown"
+            else "sms.dispatch.reconciled"
+        ),
         resource_type="sms_message",
         resource_id=str(message.id),
         actor_type="tenant_user",
@@ -441,6 +526,12 @@ async def list_sms_reconciliation_items(
                     SmsMessage.direction == "outbound",
                     SmsMessage.reconciliation_required_at.is_not(None),
                     SmsMessage.reconciliation_resolved_at.is_(None),
+                    matter_access_predicate(
+                        tenant_id=current_user.tenant_id,
+                        user_id=current_user.id,
+                        is_admin=current_user.role == "admin",
+                        matter_id_column=SmsMessage.matter_id,
+                    ),
                 )
                 .order_by(
                     SmsMessage.reconciliation_required_at,
@@ -468,6 +559,12 @@ async def get_sms_reconciliation_item(
             SmsMessage.direction == "outbound",
             SmsMessage.reconciliation_required_at.is_not(None),
             SmsMessage.reconciliation_resolved_at.is_(None),
+            matter_access_predicate(
+                tenant_id=current_user.tenant_id,
+                user_id=current_user.id,
+                is_admin=current_user.role == "admin",
+                matter_id_column=SmsMessage.matter_id,
+            ),
         )
     )
     if message is None:

@@ -594,6 +594,7 @@ describe('TaskBoard', () => {
       title: 'Confirm consultation by SMS',
       status: 'review',
       source: 'assistant',
+      pending_action_sha256: 'a'.repeat(64),
       pending_action: {
         type: 'sms_client',
         recipient_bindings: [{
@@ -651,8 +652,36 @@ describe('TaskBoard', () => {
     await waitFor(() => expect(onTransition).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'task-sms-draft' }),
       'in_progress',
-      expect.any(Object),
+      expect.objectContaining({
+        sms_acknowledgement: {
+          action_sha256: 'a'.repeat(64),
+          consent_snapshot_sha256: 'e'.repeat(64),
+        },
+      }),
     ))
+  })
+
+  it('blocks cancellation while an SMS dispatch is claimed and shows provider-truth state', async () => {
+    const user = userEvent.setup()
+    const sending = {
+      ...task,
+      id: 'task-sms-sending',
+      title: 'Sending appointment SMS',
+      status: 'in_progress',
+      delivery: { action_type: 'sms_client', status: 'submitted' },
+    }
+    const sendingData = {
+      ...data,
+      columns: data.columns.map(column => column.status === 'in_progress'
+        ? { ...column, total: 1, items: [sending] }
+        : { ...column, total: 0, items: [] }),
+    }
+    render(<TaskBoard {...props} data={sendingData} />)
+    await user.click(screen.getByRole('button', { name: 'Choose a destination for Sending appointment SMS' }))
+    await user.click(screen.getByRole('button', { name: 'Cancel task' }))
+    expect(screen.getByRole('dialog', { name: 'Move to Cancelled' })).toHaveTextContent(/provider workflow has claimed/i)
+    expect(screen.getByRole('button', { name: 'Move task' })).toBeDisabled()
+    expect(props.onTransition).not.toHaveBeenCalled()
   })
 
   it('blocks SMS replacement approval while provider reconciliation is required', async () => {
@@ -738,7 +767,7 @@ describe('TaskBoard', () => {
     expect(within(dialog).getByRole('button', { name: 'Approve and submit SMS' })).toBeDisabled()
   })
 
-  it('requires a new reviewed SMS proposal after confirmed non-delivery', async () => {
+  it('requires a new reviewed SMS proposal after any failed provider attempt', async () => {
     const user = userEvent.setup()
     const drafted = {
       ...task,
@@ -752,10 +781,12 @@ describe('TaskBoard', () => {
         body: 'Old reviewed body',
         category: 'appointment',
       },
+      pending_action_sha256: 'a'.repeat(64),
       delivery: {
         action_type: 'sms_client',
         status: 'failed',
-        delivery_certainty: 'confirmed_not_sent',
+        action_sha256: 'a'.repeat(64),
+        delivery_certainty: 'provider_failed_after_acceptance',
         reconciliation_required: false,
         sms_message_id: 'sms-message-2',
       },
@@ -769,7 +800,7 @@ describe('TaskBoard', () => {
       )),
     }
     render(<TaskBoard {...props} data={draftedData} />)
-    expect(screen.getByRole('alert')).toHaveTextContent(/confirmed not sent/i)
+    expect(screen.getByRole('alert')).toHaveTextContent(/cannot be reused/i)
     await user.click(screen.getByRole('button', {
       name: 'Choose a destination for Confirmed non-delivery',
     }))

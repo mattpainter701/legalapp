@@ -14,6 +14,7 @@ from app.services import platform_auth
 from app.services.operating_trust import (
     assert_public_safe_text,
     assert_safe_evidence,
+    database_export_mode,
     issue_tenant_export_snapshot,
     reconcile_counts,
     support_acknowledgement_due,
@@ -52,6 +53,28 @@ def test_evidence_safety_distinguishes_timestamps_from_private_addresses():
     ):
         with pytest.raises(ValueError):
             assert_safe_evidence({"summary": f"internal host {address}"})
+    with pytest.raises(ValueError, match="prohibited field"):
+        assert_safe_evidence({"encrypted_auth_token": "ciphertext"})
+
+
+def test_sms_export_modes_are_explicit_and_unknown_sms_tables_fail_closed():
+    assert database_export_mode("sms_messages") == "existing-product-export-path"
+    assert (
+        database_export_mode("sms_number_suppressions")
+        == "existing-product-export-path"
+    )
+    for table in (
+        "sms_consent_events",
+        "sms_number_suppression_events",
+        "sms_review_items",
+    ):
+        assert database_export_mode(table) == "immutable-evidence-summary"
+    assert (
+        database_export_mode("sms_provider_configs")
+        == "security-metadata-only-no-secret-values"
+    )
+    with pytest.raises(ValueError, match="unclassified"):
+        database_export_mode("sms_future_sensitive_store")
 
 
 def test_tenant_export_snapshot_is_signed_and_tenant_bound():
@@ -100,6 +123,19 @@ def test_tenant_export_snapshot_is_signed_and_tenant_bound():
             token,
             tenant_id=uuid.uuid4(),
             contract_version="test-contract",
+        )
+    malformed = {
+        **inventory,
+        "categories": [
+            {
+                **inventory["categories"][0],
+                "export_mode": "unbounded-secret-export",
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="malformed"):
+        issue_tenant_export_snapshot(
+            malformed, tenant_id=tenant_id, contract_version="test-contract"
         )
 
 
@@ -294,6 +330,21 @@ async def test_bk28_migration_and_tenant_export_receipts_reconcile(
     assert (
         category_modes["database:customer_lifecycle_receipts"]
         == "immutable-evidence-summary"
+    )
+    assert category_modes["database:sms_messages"] == "existing-product-export-path"
+    assert (
+        category_modes["database:sms_number_suppressions"]
+        == "existing-product-export-path"
+    )
+    for category in (
+        "database:sms_consent_events",
+        "database:sms_number_suppression_events",
+        "database:sms_review_items",
+    ):
+        assert category_modes[category] == "immutable-evidence-summary"
+    assert (
+        category_modes["database:sms_provider_configs"]
+        == "security-metadata-only-no-secret-values"
     )
     token_index = len(snapshot_token) // 2
     tampered_token = (

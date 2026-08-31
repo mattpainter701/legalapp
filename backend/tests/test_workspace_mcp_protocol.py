@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
@@ -13,7 +14,10 @@ from mcp.client.streamable_http import streamable_http_client
 from starlette.applications import Starlette
 from starlette.routing import Route
 
+from app.schemas.chat_action import ProposeClientSmsArgs
 from app.services import workspace_mcp_protocol
+from app.services.automation_capabilities import CapabilityContext
+from app.services.chat_tools.handlers import _workspace_sms_idempotency_binding
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session", autouse=True)
@@ -157,6 +161,57 @@ def _initialize() -> dict:
             "clientInfo": {"name": "workspace-test", "version": "1"},
         },
     }
+
+
+def test_workspace_sms_idempotency_binding_is_tenant_tool_global_and_canonical():
+    tenant_id = uuid.uuid4()
+    matter_id = uuid.uuid4()
+    party_id = uuid.uuid4()
+
+    def context(*, actor_id: uuid.UUID, request_id: str) -> CapabilityContext:
+        return CapabilityContext(
+            db=None,
+            user=SimpleNamespace(id=actor_id, tenant_id=tenant_id),
+            channel="workspace_mcp",
+            request_id=request_id,
+            idempotency_key="stable-proposal-key",
+        )
+
+    base = ProposeClientSmsArgs(
+        matter_id=matter_id,
+        recipient_party_ids=[party_id],
+        title="Review appointment SMS",
+        body="First line\r\nSecond line",
+        category="appointment",
+    )
+    normalized_transport = base.model_copy(update={"body": "First line\nSecond line"})
+    first = _workspace_sms_idempotency_binding(
+        context(actor_id=uuid.uuid4(), request_id="transport-1"), base
+    )
+    cross_actor_replay = _workspace_sms_idempotency_binding(
+        context(actor_id=uuid.uuid4(), request_id="transport-2"),
+        normalized_transport,
+    )
+
+    assert first == cross_actor_replay
+    assert first is not None
+    key_digest, request_digest, prefix, external_ref = first
+    assert key_digest in prefix
+    assert request_digest in external_ref
+    assert "stable-proposal-key" not in external_ref
+
+    changed_body = _workspace_sms_idempotency_binding(
+        context(actor_id=uuid.uuid4(), request_id="transport-3"),
+        base.model_copy(update={"body": "Changed customer-visible body"}),
+    )
+    changed_matter = _workspace_sms_idempotency_binding(
+        context(actor_id=uuid.uuid4(), request_id="transport-4"),
+        base.model_copy(update={"matter_id": uuid.uuid4()}),
+    )
+    assert changed_body is not None and changed_matter is not None
+    assert changed_body[0] == key_digest == changed_matter[0]
+    assert changed_body[1] != request_digest
+    assert changed_matter[1] != request_digest
 
 
 @pytest.mark.asyncio
@@ -470,7 +525,14 @@ async def test_workspace_sms_call_preserves_idempotency_identity_and_review_boun
     async def execute(*, name, arguments, request, identity):
         assert name == "propose_client_sms"
         assert request.headers["X-Idempotency-Key"] == "mcp-sms-request-1"
-        calls.append((arguments, identity.user_id))
+        calls.append(
+            (
+                arguments,
+                identity.user_id,
+                request.headers["X-Request-ID"],
+                workspace_mcp_protocol._workspace_idempotency_key(request),
+            )
+        )
         return {
             "task_id": task_id,
             "status": "review",
@@ -517,6 +579,7 @@ async def test_workspace_sms_call_preserves_idempotency_identity_and_review_boun
                         **_headers(),
                         "Mcp-Protocol-Version": workspace_mcp_protocol.MCP_PROTOCOL_VERSION,
                         "X-Idempotency-Key": "mcp-sms-request-1",
+                        "X-Request-ID": f"transport-request-{request_id}",
                     },
                     json=response_payload,
                 )
@@ -532,6 +595,14 @@ async def test_workspace_sms_call_preserves_idempotency_identity_and_review_boun
         for response in responses
     )
     assert len(calls) == 2
+    assert [call[2] for call in calls] == [
+        "transport-request-9",
+        "transport-request-10",
+    ]
+    assert [call[3] for call in calls] == [
+        "mcp-sms-request-1",
+        "mcp-sms-request-1",
+    ]
 
 
 @pytest.mark.asyncio

@@ -39,17 +39,23 @@ metadata.
 Keep the provider inactive while credentials, sender registration, ownership,
 consent policy, or quiet-hours policy are incomplete. Repeating the same
 idempotency key can only read the original accepted outcome; failed, blocked,
-or reconciled-not-sent rows never become a new provider call or a successful
-response. Do not create a replacement key while an outcome is uncertain,
-because the provider may have accepted the first request. A dispatch lease that
-expires becomes explicit `provider_unknown` work; the scheduler never resends
-it. An authorized operator must record either confirmed-not-sent or the
-provider message ID for an authenticated lookup. A lookup cannot manufacture
-acceptance: its configured account, SID, destination, and returned status must
-match the reserved dispatch. After confirmed non-delivery, create and review a
-new SMS proposal with a new key rather than re-approving the old attempt. The
-Intake reconciliation queue shows unresolved dispatches and keeps failed
-lookups unresolved for later review.
+or failure-after-acceptance rows never become a new provider call or a
+successful response. Do not create a replacement key while an outcome is
+uncertain, because the provider may have accepted the first request. A dispatch
+lease that expires becomes explicit `provider_unknown` work; the scheduler
+never resends it. An authorized operator may attest that a message was not
+visible in the provider console, but that observation remains unresolved and
+never unlocks a resend. Only an authenticated provider lookup can settle the
+row. A lookup cannot manufacture acceptance: its configured account, SID,
+exact sender, destination, body, messaging service, direction, creation-time
+window, request digest, and returned status must match the reserved dispatch.
+Any response carrying a provider SID represents acceptance or possible
+delivery, including `failed` and `undelivered`; it is never classified as a
+safe no-send. If another submission is appropriate after a settled failure,
+create and review a new SMS proposal with a new key and explicit
+duplicate-delivery awareness rather than re-approving the old attempt. The
+Intake reconciliation queue shows unresolved dispatches and keeps attestations
+and failed lookups unresolved for later review.
 
 Webhook endpoints verify Twilio's request signature with the tenant's actual
 Account Auth Token; there is no second application-defined webhook secret. They
@@ -71,3 +77,28 @@ unverified and block approval until exact local evidence exists. Workspace MCP
 request identities are idempotent and cannot be reused for changed proposal
 content. No model action sends SMS autonomously, and provider outages or
 uncertain outcomes remain visible for operator review.
+
+## Retention, export, and legal hold
+
+The tenant retention inventory reports count/age metadata for six separate SMS
+stores: message content and delivery/reconciliation state, current number
+suppression, immutable consent events, immutable STOP/START number events,
+inbound review evidence, and provider configuration. The endpoint never emits
+message bodies, phone numbers, provider account or sender identifiers,
+compliance snapshots, or encrypted authentication tokens.
+
+Authorized customer export treats SMS messages and current suppression state as
+customer records. Immutable consent/STOP events and review evidence are exposed
+only as bounded evidence summaries. Provider configuration is classified as
+security metadata only, with no secret or configured-provider values. Message
+reconciliation fields travel with the authorized message record; audit and
+receipt surfaces must continue to use sanitized evidence rather than content.
+
+There is no automated SMS deletion path. The chat-attachment retention job does
+not remove SMS rows, and normal demo cleanup is a separate purge boundary. When
+a tenant legal hold is active, preserve SMS content, suppression truth, consent
+and number events, review evidence, configuration metadata, related audit
+records, and applicable backups. Lifting the hold does not itself authorize SMS
+deletion. Counsel and operations must approve a future disposition policy that
+covers customer authority, provider copies, backups, and immutable compliance
+evidence before any destructive workflow is introduced.

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -106,6 +107,42 @@ def transition_is_approval(from_status: str | None, to_status: str | None) -> bo
     return from_status == APPROVAL_FROM_STATUS and to_status in APPROVAL_TO_STATUSES
 
 
+async def require_sms_cancellation_is_truthful(
+    db: AsyncSession,
+    task: Task,
+) -> None:
+    """Reject cancellation once an SMS dispatch may have crossed the boundary."""
+    run = await db.scalar(
+        select(TaskAutomationRun)
+        .where(
+            TaskAutomationRun.tenant_id == task.tenant_id,
+            TaskAutomationRun.task_id == task.id,
+            TaskAutomationRun.action_type == "sms_client",
+        )
+        .order_by(TaskAutomationRun.created_at.desc(), TaskAutomationRun.id.desc())
+        .limit(1)
+        .with_for_update()
+    )
+    if run is None or run.status == "queued":
+        return
+    dispatch_crossed = bool(
+        run.status in {"sending", "submitted", "sent"}
+        or run.reconciliation_required
+        or run.delivery_certainty
+        in {
+            "outcome_unknown",
+            "provider_rejected",
+            "provider_accepted",
+            "provider_failed_after_acceptance",
+            "confirmed_sent",
+        }
+    )
+    if dispatch_crossed:
+        raise ActionApprovalConflict(
+            "This SMS dispatch was already claimed or accepted. Cancellation cannot represent it as unsent; refresh for delivery or reconciliation truth."
+        )
+
+
 def _canonical_action_snapshot(payload: dict[str, Any] | None) -> dict[str, Any]:
     """Deep-copy an action into the canonical JSON representation we audit."""
     encoded = json.dumps(
@@ -127,6 +164,29 @@ def action_payload_sha256(payload: dict[str, Any] | None) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _require_sms_action_acknowledgement(
+    task: Task,
+    action: SmsClientAction,
+    acknowledgement: dict[str, str] | None,
+) -> None:
+    """Bind the approval click to the exact action and consent snapshot."""
+    if not acknowledgement:
+        raise ActionApprovalConflict(
+            "SMS approval requires acknowledgement of the exact action and consent snapshot"
+        )
+    action_hash = str(acknowledgement.get("action_sha256") or "")
+    consent_hash = str(acknowledgement.get("consent_snapshot_sha256") or "")
+    expected_action_hash = action_payload_sha256(task.pending_action)
+    expected_consent_hash = action.consent_evidence[0].evidence_sha256
+    if not (
+        hmac.compare_digest(action_hash, expected_action_hash)
+        and hmac.compare_digest(consent_hash, expected_consent_hash)
+    ):
+        raise ActionApprovalConflict(
+            "The SMS action or consent evidence changed after review. Refresh and acknowledge the current proposal."
+        )
 
 
 def automation_idempotency_key(task: Task, from_status: str) -> str:
@@ -1229,6 +1289,7 @@ async def enqueue_durable_automation(
     to_status: str | None,
     actor_user_id=None,
     acknowledge_prior_delivery_risk: bool = False,
+    sms_acknowledgement: dict[str, str] | None = None,
 ) -> str | None:
     """Persist the send intent in the caller's transaction. Must precede commit.
 
@@ -1286,6 +1347,11 @@ async def enqueue_durable_automation(
                 "The stored SMS draft has invalid or missing consent bindings. "
                 "Create a new draft before approval."
             ) from exc
+        _require_sms_action_acknowledgement(
+            task,
+            pending_sms,
+            sms_acknowledgement,
+        )
         if len(
             pending_sms.recipient_bindings
         ) != 1 or not await _sms_bindings_are_current(db, task, pending_sms):
@@ -1339,22 +1405,28 @@ async def enqueue_durable_automation(
     )
     retry_after_run_id = None
     if latest_run is not None and latest_run.status == "failed":
-        if latest_run.reconciliation_required:
+        is_sms_action = str(task.pending_action.get("type") or "") == "sms_client"
+        if is_sms_action and latest_run.reconciliation_required:
             raise ActionApprovalConflict(
                 "A prior SMS has an unknown provider outcome. Reconcile that exact "
                 "message before approving any replacement."
             )
         certainty = latest_run.delivery_certainty or DELIVERY_OUTCOME_UNKNOWN
-        if (
-            str(task.pending_action.get("type") or "") == "sms_client"
-            and certainty == "confirmed_not_sent"
+        if is_sms_action and (
+            latest_run.action_sha256 is None
+            or hmac.compare_digest(
+                latest_run.action_sha256,
+                action_payload_sha256(task.pending_action),
+            )
         ):
             raise ActionApprovalConflict(
-                "The prior SMS was confirmed not sent. Create and review a new SMS "
-                "proposal with a new idempotency key instead of reusing the old attempt."
+                "The prior SMS attempt cannot be reused, regardless of its provider "
+                "outcome. Create and review a new SMS proposal with a new idempotency "
+                "key before another submission."
             )
         if (
-            certainty == DELIVERY_OUTCOME_UNKNOWN
+            not is_sms_action
+            and certainty == DELIVERY_OUTCOME_UNKNOWN
             and not acknowledge_prior_delivery_risk
         ):
             raise ActionApprovalConflict(
@@ -1362,15 +1434,16 @@ async def enqueue_durable_automation(
                 "mailbox's Sent Items and explicitly acknowledge the duplicate-"
                 "delivery risk before approving another attempt."
             )
-        retry_after_run_id = latest_run.id
+        if not is_sms_action:
+            retry_after_run_id = latest_run.id
 
     from app.services.durable_jobs import enqueue_job
 
     approval_key = automation_idempotency_key(task, from_status)
     if retry_after_run_id is not None:
-        # Explicit Review -> In Progress after a terminal attempt is a new
-        # approval event. Include the prior immutable attempt id so an exact,
-        # confirmed-no-send payload can be retried without inventing an edit.
+        # Email-only retry: explicit Review -> In Progress after a terminal
+        # attempt is a new approval event. SMS requires a newly reviewed action
+        # and already receives a distinct payload-derived key above.
         approval_key = f"{approval_key}:retry-after:{retry_after_run_id}"
     await enqueue_automation_run(
         db,

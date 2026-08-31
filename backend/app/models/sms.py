@@ -6,6 +6,7 @@ from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKeyConstraint,
     ForeignKey,
@@ -33,6 +34,22 @@ class SmsProviderConfig(Base):
             ["tenant_id", "updated_by_user_id"],
             ["users.tenant_id", "users.id"],
             name="fk_sms_provider_configs_tenant_user",
+        ),
+        CheckConstraint(
+            "provider = 'twilio'",
+            name="ck_sms_provider_configs_provider",
+        ),
+        CheckConstraint(
+            "generation > 0",
+            name="ck_sms_provider_configs_generation",
+        ),
+        CheckConstraint(
+            "NOT sender_ready OR messaging_service_sid IS NOT NULL OR from_number IS NOT NULL",
+            name="ck_sms_provider_configs_sender_ready",
+        ),
+        CheckConstraint(
+            "NOT is_active OR sender_ready",
+            name="ck_sms_provider_configs_active",
         ),
         Index("idx_sms_provider_configs_tenant", "tenant_id", "is_active"),
     )
@@ -218,6 +235,61 @@ class SmsMessage(Base):
             ["users.tenant_id", "users.id"],
             name="fk_sms_messages_tenant_reconciler",
         ),
+        ForeignKeyConstraint(
+            ["tenant_id", "operator_observed_absent_by_user_id"],
+            ["users.tenant_id", "users.id"],
+            name="fk_sms_messages_tenant_attestor",
+        ),
+        CheckConstraint(
+            "direction IN ('inbound', 'outbound')",
+            name="ck_sms_messages_direction",
+        ),
+        CheckConstraint(
+            "status IN ("
+            "'queued', 'dispatching', 'provider_unknown', "
+            "'blocked_number_suppression', 'blocked_consent_changed', "
+            "'blocked_quiet_hours', 'blocked_provider_config', "
+            "'blocked_matter_authorization_changed', 'provider_failed', "
+            "'provider_failed_after_acceptance', 'submitted', 'delivered', "
+            "'received', 'review_required', 'route_rejected'"
+            ")",
+            name="ck_sms_messages_status",
+        ),
+        CheckConstraint(
+            "delivery_certainty IN ("
+            "'not_attempted', 'outcome_unknown', 'provider_rejected', "
+            "'provider_accepted', 'provider_failed_after_acceptance', "
+            "'confirmed_sent', 'confirmed_received'"
+            ")",
+            name="ck_sms_messages_delivery_certainty",
+        ),
+        CheckConstraint(
+            "provider_status IS NULL OR provider_status IN ("
+            "'queued', 'accepted', 'sending', 'sent', 'delivered', 'read', "
+            "'undelivered', 'failed', 'received'"
+            ")",
+            name="ck_sms_messages_provider_status",
+        ),
+        CheckConstraint(
+            "char_length(request_digest) = 64",
+            name="ck_sms_messages_request_digest",
+        ),
+        CheckConstraint(
+            "reconciliation_resolution IS NULL OR reconciliation_resolution IN ("
+            "'operator_attested_unknown', 'provider_lookup', 'signed_provider_callback', "
+            "'signed_callback_overrode_operator_attestation'"
+            ")",
+            name="ck_sms_messages_reconciliation_resolution",
+        ),
+        CheckConstraint(
+            "reconciliation_resolved_at IS NULL OR reconciliation_resolution IS NOT NULL",
+            name="ck_sms_messages_reconciliation_evidence",
+        ),
+        CheckConstraint(
+            "status NOT IN ('submitted', 'delivered', "
+            "'provider_failed_after_acceptance') OR provider_message_id IS NOT NULL",
+            name="ck_sms_messages_provider_truth",
+        ),
         Index(
             "idx_sms_messages_tenant_contact", "tenant_id", "contact_id", "created_at"
         ),
@@ -259,6 +331,9 @@ class SmsMessage(Base):
     request_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     provider_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     provider_account_sid: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    provider_messaging_service_sid: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )
     provider_config_generation: Mapped[int | None] = mapped_column(
         Integer, nullable=True
     )
@@ -266,6 +341,12 @@ class SmsMessage(Base):
         UUID(as_uuid=True), nullable=True
     )
     dispatch_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    provider_submission_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    provider_created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     reconciliation_required_at: Mapped[datetime | None] = mapped_column(
@@ -280,9 +361,21 @@ class SmsMessage(Base):
     reconciliation_resolved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+    operator_observed_absent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    operator_observed_absent_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     direction: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(
         String(40), nullable=False, default="queued", server_default="queued"
+    )
+    delivery_certainty: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="not_attempted",
+        server_default="not_attempted",
     )
     from_number: Mapped[str | None] = mapped_column(String(30), nullable=True)
     to_number: Mapped[str | None] = mapped_column(String(30), nullable=True)
@@ -324,6 +417,10 @@ class SmsMessage(Base):
 class SmsReviewItem(Base):
     __tablename__ = "sms_review_items"
     __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'resolved', 'rejected')",
+            name="ck_sms_review_items_status",
+        ),
         Index(
             "idx_sms_review_items_tenant_status", "tenant_id", "status", "created_at"
         ),

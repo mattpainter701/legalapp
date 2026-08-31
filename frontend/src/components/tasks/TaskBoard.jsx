@@ -323,8 +323,8 @@ function DraggableTaskCard({ task, pending, onOpen, onMoveRequest, draggable = t
             <>The cloud document could not be verified for approval: {task.delivery.error_message || 'document integrity check failed'}. Open the task to reconcile the working copy.</>
           ) : task.delivery.reconciliation_required ? (
             <>SMS outcome is unknown: {task.delivery.error_message || 'the provider response was lost'}. Reconcile message {task.delivery.sms_message_id || 'in the SMS queue'} before approving a replacement.</>
-          ) : task.delivery.action_type === 'sms_client' && task.delivery.delivery_certainty === 'confirmed_not_sent' ? (
-            <>SMS was confirmed not sent. Create and review a new SMS proposal before another attempt; the old idempotency key cannot submit again.</>
+          ) : task.delivery.action_type === 'sms_client' ? (
+            <>The prior SMS attempt cannot be reused: {task.delivery.error_message || 'provider delivery was not confirmed'}. Create and review a new proposal with a new idempotency key before another submission.</>
           ) : task.delivery.delivery_certainty === 'not_attempted' ? (
             <>{task.delivery.action_type === 'sms_client' ? 'SMS' : 'Email'} was not sent: {task.delivery.error_message || 'delivery stopped before a provider attempt'}. Resolve the issue and approve again.</>
           ) : (
@@ -488,8 +488,20 @@ function TaskTransitionDialog({ request, onClose, onConfirm, saving }) {
     && request.task.delivery?.delivery_certainty !== 'not_attempted'
   const smsReconciliationRequired = smsApproval
     && request.task.delivery?.reconciliation_required
-  const smsConfirmedNotSent = smsApproval
-    && request.task.delivery?.delivery_certainty === 'confirmed_not_sent'
+  const smsPriorAttemptNeedsReplacement = smsApproval
+    && !smsReconciliationRequired
+    && request.task.delivery?.status === 'failed'
+    && (
+      !request.task.delivery?.action_sha256
+      || request.task.delivery.action_sha256 === request.task.pending_action_sha256
+    )
+  const smsDispatchClaimed = request.task.delivery?.action_type === 'sms_client'
+    && ['queued', 'sending', 'submitted'].includes(request.task.delivery?.status)
+  const smsActionHash = smsApproval && request.task.pending_action_sha256
+  const smsConsentSnapshotHash = smsApproval && (
+    smsEvidence?.evidence_sha256
+    || smsEvidence?.consent_snapshot_sha256
+  )
   const submit = async event => {
     event.preventDefault()
     if (target === 'waiting' && !reason.trim()) {
@@ -512,7 +524,7 @@ function TaskTransitionDialog({ request, onClose, onConfirm, saving }) {
       setError('Reconcile the prior uncertain SMS before approving a replacement.')
       return
     }
-    if (smsConfirmedNotSent) {
+    if (smsPriorAttemptNeedsReplacement) {
       setError('Create and review a new SMS proposal before another attempt.')
       return
     }
@@ -524,6 +536,10 @@ function TaskTransitionDialog({ request, onClose, onConfirm, saving }) {
       setError('Review the SMS destination, content, consent, and delivery risk before approval.')
       return
     }
+    if (target === 'cancelled' && smsDispatchClaimed) {
+      setError('This SMS dispatch is already claimed by the provider workflow. Refresh for delivery truth before cancelling the task.')
+      return
+    }
     setError(null)
     await onConfirm({
       reason: reason.trim() || undefined,
@@ -532,6 +548,14 @@ function TaskTransitionDialog({ request, onClose, onConfirm, saving }) {
       ...(unknownOutcomeRetry && deliveryRiskAcknowledged
         ? { acknowledge_prior_delivery_risk: true }
         : {}),
+      // Bind the approval click to the exact server-computed action hash and
+      // the reviewed consent snapshot; either changing invalidates this click.
+      ...(smsApproval ? {
+        sms_acknowledgement: {
+          action_sha256: smsActionHash || null,
+          consent_snapshot_sha256: smsConsentSnapshotHash || null,
+        },
+      } : {}),
     })
   }
   return (
@@ -610,12 +634,12 @@ function TaskTransitionDialog({ request, onClose, onConfirm, saving }) {
                   type="checkbox"
                   checked={smsApprovalAcknowledged}
                   onChange={event => setSmsApprovalAcknowledged(event.target.checked)}
-                  disabled={saving || smsReconciliationRequired || smsConfirmedNotSent || !smsApprovalEvidenceValid}
+                  disabled={saving || smsReconciliationRequired || smsPriorAttemptNeedsReplacement || !smsApprovalEvidenceValid}
                   className="mt-0.5"
                 />
                 I reviewed the recipient, exact body, verified sources, consent snapshot and hash, category, quiet-hours policy, and duplicate-delivery risk.
               </label>
-              {!smsApprovalEvidenceValid && !smsReconciliationRequired && !smsConfirmedNotSent && <p role="alert" className="mt-2 text-[11px] font-semibold text-red-800">Approval is blocked until consent and every cited source are bound to exact server-verified evidence.</p>}
+              {!smsApprovalEvidenceValid && !smsReconciliationRequired && !smsPriorAttemptNeedsReplacement && <p role="alert" className="mt-2 text-[11px] font-semibold text-red-800">Approval is blocked until consent and every cited source are bound to exact server-verified evidence.</p>}
             </div>
           )}
           {request.task.status === 'review'
@@ -669,14 +693,19 @@ function TaskTransitionDialog({ request, onClose, onConfirm, saving }) {
               This SMS is already confirmed delivered; another approval is disabled.
             </p>
           )}
+          {target === 'cancelled' && smsDispatchClaimed && (
+            <p role="alert" className="rounded-lg border border-red-300 bg-red-50 px-3 py-2.5 text-[11px] font-semibold text-red-950">
+              Cancellation is unavailable while this SMS is {request.task.delivery.status}. The provider workflow has claimed the dispatch; refresh to see signed delivery truth.
+            </p>
+          )}
           {smsApproval && smsReconciliationRequired && (
             <p role="alert" className="rounded-lg border border-red-300 bg-red-50 px-3 py-2.5 text-[11px] font-semibold text-red-950">
               The prior provider outcome is unknown. Reconcile SMS {request.task.delivery.sms_message_id || ''} before approving any replacement.
             </p>
           )}
-          {smsConfirmedNotSent && (
+          {smsPriorAttemptNeedsReplacement && (
             <p role="alert" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-[11px] font-semibold text-amber-950">
-              The prior SMS was confirmed not sent. Create a new reviewed proposal with a new idempotency key before another attempt.
+              The prior SMS attempt cannot be reused. Create a new reviewed proposal with a new idempotency key before another submission.
             </p>
           )}
           {target === 'waiting' && (
@@ -704,7 +733,7 @@ function TaskTransitionDialog({ request, onClose, onConfirm, saving }) {
         </div>
         <footer className="flex justify-end gap-2 border-t border-brand-line px-5 py-4">
           <button type="button" onClick={onClose} disabled={saving} className="rounded-lg px-4 py-2 text-sm text-brand-muted hover:bg-brand-bg-soft">Cancel</button>
-          <button type="submit" disabled={saving || activeDelivery || confirmedDelivery || smsReconciliationRequired || smsConfirmedNotSent || (smsApproval && (!smsApprovalEvidenceValid || !smsApprovalAcknowledged)) || (unknownOutcomeRetry && !deliveryRiskAcknowledged) || (target === 'cancelled' && !reason.trim())} className="btn-primary inline-flex items-center gap-2 disabled:opacity-50">{saving && <Loader2 size={14} className="animate-spin" />} {documentApproval ? 'Approve exact revision' : smsApproval ? 'Approve and submit SMS' : 'Move task'}</button>
+          <button type="submit" disabled={saving || activeDelivery || smsDispatchClaimed || confirmedDelivery || smsReconciliationRequired || smsPriorAttemptNeedsReplacement || (smsApproval && (!smsApprovalEvidenceValid || !smsApprovalAcknowledged)) || (unknownOutcomeRetry && !deliveryRiskAcknowledged) || (target === 'cancelled' && !reason.trim())} className="btn-primary inline-flex items-center gap-2 disabled:opacity-50">{saving && <Loader2 size={14} className="animate-spin" />} {documentApproval ? 'Approve exact revision' : smsApproval ? 'Approve and submit SMS' : 'Move task'}</button>
         </footer>
       </form>
     </div>

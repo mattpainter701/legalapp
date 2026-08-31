@@ -57,7 +57,9 @@ from app.services.task_notifications import (
 )
 from app.services.task_automation import (
     ActionApprovalConflict,
+    action_payload_sha256,
     enqueue_durable_automation,
+    require_sms_cancellation_is_truthful,
 )
 from app.services.task_workflow import (
     TaskVersionConflict,
@@ -240,6 +242,9 @@ async def _delivery_history(db: AsyncSession, task: Task) -> list[TaskDeliverySt
 
 async def _task_response_with_delivery(db: AsyncSession, task: Task) -> TaskResponse:
     response = TaskResponse.model_validate(task)
+    response.pending_action_sha256 = (
+        action_payload_sha256(task.pending_action) if task.pending_action else None
+    )
     # Only assistant-drafted work can carry an action, so skip the extra read
     # for the overwhelming majority of tasks.
     if task.source == "assistant":
@@ -308,6 +313,9 @@ def _task_card_from_row(row) -> TaskBoardCard:
         external_ref=task.external_ref,
         version=task.version,
         pending_action=task.pending_action,
+        pending_action_sha256=(
+            action_payload_sha256(task.pending_action) if task.pending_action else None
+        ),
         delivery=(
             TaskDeliveryState.model_validate(delivery_run) if delivery_run else None
         ),
@@ -1279,6 +1287,18 @@ async def transition_task_status(
         )
     previous_calendar_user_id = task_calendar_user_id(task)
     previous_status = task.status
+    if payload.to_status == "cancelled" and task.status != "cancelled":
+        try:
+            await require_sms_cancellation_is_truthful(db, task)
+        except ActionApprovalConflict as exc:
+            current_response = await _task_response_with_delivery(db, task)
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": exc.detail,
+                    "current_task": current_response.model_dump(mode="json"),
+                },
+            ) from exc
     try:
         changed = transition_task(
             db,
@@ -1347,6 +1367,11 @@ async def transition_task_status(
                 actor_user_id=current_user.id,
                 acknowledge_prior_delivery_risk=(
                     payload.acknowledge_prior_delivery_risk
+                ),
+                sms_acknowledgement=(
+                    payload.sms_acknowledgement.model_dump()
+                    if payload.sms_acknowledgement
+                    else None
                 ),
             )
         except ActionApprovalConflict as exc:
@@ -1990,6 +2015,7 @@ async def update_task(
     acknowledge_prior_delivery_risk = updates.pop(
         "acknowledge_prior_delivery_risk", False
     )
+    sms_acknowledgement = updates.pop("sms_acknowledgement", None)
     if (
         task.status == "review"
         and task.pending_action
@@ -2085,6 +2111,18 @@ async def update_task(
             )
         new_status = task.status
     if new_status is not None:
+        if new_status == "cancelled" and task.status != "cancelled":
+            try:
+                await require_sms_cancellation_is_truthful(db, task)
+            except ActionApprovalConflict as exc:
+                current_response = await _task_response_with_delivery(db, task)
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": exc.detail,
+                        "current_task": current_response.model_dump(mode="json"),
+                    },
+                ) from exc
         try:
             transition_changed = transition_task(
                 db,
@@ -2182,6 +2220,15 @@ async def update_task(
             to_status=task.status,
             actor_user_id=current_user.id,
             acknowledge_prior_delivery_risk=acknowledge_prior_delivery_risk,
+            sms_acknowledgement=(
+                sms_acknowledgement
+                if isinstance(sms_acknowledgement, dict)
+                else (
+                    sms_acknowledgement.model_dump()
+                    if sms_acknowledgement is not None
+                    else None
+                )
+            ),
         )
     except ActionApprovalConflict as exc:
         await db.rollback()

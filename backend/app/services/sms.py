@@ -10,6 +10,7 @@ import re
 import uuid
 from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from email.utils import parsedate_to_datetime
 from typing import Awaitable, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -24,6 +25,8 @@ from app.models.communication_log import CommunicationLog
 from app.models.contact import Contact, Lead
 from app.models.conversion_loop import LeadChannelConsent, SmsConsentEvent
 from app.models.matter_party import MatterParty
+from app.models.matter_assignment import MatterAssignment
+from app.models.operator_audit import OperatorAuditLog
 from app.models.plugin import Matter
 from app.models.sms import (
     SmsMessage,
@@ -34,6 +37,8 @@ from app.models.sms import (
 )
 from app.models.task import TaskAutomationRun
 from app.models.tenant import Tenant
+from app.models.user import User
+from app.services.operator_audit import sanitize_operator_metadata
 from app.services.token_vault import decrypt_token
 
 
@@ -147,6 +152,8 @@ _KNOWN_PROVIDER_STATUSES = frozenset(
 )
 _TERMINAL_PROVIDER_STATUSES = frozenset({"delivered", "read", "undelivered", "failed"})
 _DISPATCH_LEASE = timedelta(minutes=2)
+_PROVIDER_CREATED_BEFORE_DISPATCH = timedelta(minutes=2)
+_PROVIDER_CREATED_AFTER_DISPATCH = timedelta(minutes=5)
 _STOP_KEYWORDS = frozenset({"STOP", "UNSUBSCRIBE", "CANCEL", "END", "QUIT"})
 _START_KEYWORDS = frozenset({"START", "UNSTOP"})
 
@@ -179,6 +186,185 @@ def provider_status_transition_allowed(
     return _provider_status_rank(normalized_incoming) >= _provider_status_rank(
         normalized_current
     )
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _parse_provider_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    candidate = value.strip()
+    try:
+        parsed = parsedate_to_datetime(candidate)
+    except (TypeError, ValueError, OverflowError):
+        try:
+            parsed = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+        except (TypeError, ValueError, OverflowError):
+            return None
+    return _as_utc(parsed)
+
+
+def _append_sms_outcome_audit(
+    db: AsyncSession,
+    *,
+    message: SmsMessage,
+    actor_user_id,
+    outcome: str,
+    metadata: dict | None = None,
+) -> None:
+    """Append sanitized evidence in the same transaction as SMS truth."""
+    db.add(
+        OperatorAuditLog(
+            action=f"sms.dispatch.{outcome}",
+            actor_type="tenant_user" if actor_user_id else "provider",
+            actor_id=str(actor_user_id) if actor_user_id else None,
+            resource_type="sms_message",
+            resource_id=str(message.id),
+            metadata_json=sanitize_operator_metadata(
+                {
+                    "tenant_id": str(message.tenant_id),
+                    "contact_id": str(message.contact_id)
+                    if message.contact_id
+                    else None,
+                    "matter_id": str(message.matter_id) if message.matter_id else None,
+                    "category": message.category,
+                    "status": message.status,
+                    "delivery_certainty": message.delivery_certainty,
+                    "provider": "twilio",
+                    **(metadata or {}),
+                }
+            ),
+        )
+    )
+
+
+async def _lock_sms_matter_authorization(
+    db: AsyncSession,
+    *,
+    tenant_id,
+    user_id,
+    matter_id,
+    contact_id,
+) -> dict[str, str] | None:
+    """Fence actor-to-matter and recipient-to-matter authorization."""
+    role = await db.scalar(
+        select(User.role).where(User.id == user_id, User.tenant_id == tenant_id)
+    )
+    matter = await db.scalar(
+        select(Matter)
+        .where(Matter.id == matter_id, Matter.tenant_id == tenant_id)
+        .with_for_update()
+    )
+    if matter is None or role is None:
+        return None
+    actor_binding = "admin" if role == "admin" else None
+    assignment = None
+    if actor_binding is None and matter.user_id == user_id:
+        actor_binding = "owner"
+    elif actor_binding is None:
+        assignment = await db.scalar(
+            select(MatterAssignment)
+            .where(
+                MatterAssignment.tenant_id == tenant_id,
+                MatterAssignment.matter_id == matter_id,
+                MatterAssignment.user_id == user_id,
+            )
+            .with_for_update()
+        )
+        if assignment is not None:
+            actor_binding = "assignment"
+    if actor_binding is None:
+        return None
+    if matter.client_contact_id == contact_id:
+        return {"actor_binding": actor_binding, "recipient_binding": "client"}
+    party = await db.scalar(
+        select(MatterParty)
+        .where(
+            MatterParty.tenant_id == tenant_id,
+            MatterParty.matter_id == matter_id,
+            MatterParty.contact_id == contact_id,
+        )
+        .order_by(MatterParty.id)
+        .limit(1)
+        .with_for_update()
+    )
+    if party is None:
+        return None
+    return {
+        "actor_binding": actor_binding,
+        "recipient_binding": "matter_party",
+        "party_id": str(party.id),
+    }
+
+
+def _provider_lookup_matches_reserved_dispatch(
+    *,
+    message: SmsMessage,
+    payload: dict,
+    lookup_sid: str,
+    account_sid: str,
+) -> bool:
+    """Bind lookup truth to the exact reserved request, never just a SID."""
+    if not message.provider_account_sid or message.provider_account_sid != account_sid:
+        return False
+    if message.provider_message_id and message.provider_message_id != lookup_sid:
+        return False
+    if str(payload.get("sid") or "") != lookup_sid:
+        return False
+    if str(payload.get("account_sid") or "") != account_sid:
+        return False
+    if str(payload.get("direction") or "").lower() != "outbound-api":
+        return False
+    expected_uri = f"/2010-04-01/Accounts/{account_sid}/Messages/{lookup_sid}.json"
+    if str(payload.get("uri") or "") != expected_uri:
+        return False
+    try:
+        provider_to = normalize_e164(payload.get("to"))
+        provider_from = normalize_e164(payload.get("from"))
+        stored_from = normalize_e164(message.from_number)
+    except SmsError:
+        return False
+    if provider_to != message.to_number or provider_from != stored_from:
+        return False
+    provider_service = str(payload.get("messaging_service_sid") or "").strip() or None
+    if provider_service != message.provider_messaging_service_sid:
+        return False
+    provider_body = str(payload.get("body") or "")
+    if not hmac.compare_digest(provider_body, message.body):
+        return False
+    if message.contact_id is None or message.matter_id is None or not message.to_number:
+        return False
+    expected_digest = _request_digest(
+        contact_id=message.contact_id,
+        matter_id=message.matter_id,
+        to_number=message.to_number,
+        body=message.body,
+        category=message.category,
+    )
+    if not hmac.compare_digest(expected_digest, message.request_digest):
+        return False
+    provider_created_at = _parse_provider_datetime(payload.get("date_created"))
+    submission_started_at = _as_utc(message.provider_submission_started_at)
+    if provider_created_at is None or submission_started_at is None:
+        return False
+    if not (
+        submission_started_at - _PROVIDER_CREATED_BEFORE_DISPATCH
+        <= provider_created_at
+        <= submission_started_at + _PROVIDER_CREATED_AFTER_DISPATCH
+    ):
+        return False
+    reserved_created_at = _as_utc(message.provider_created_at)
+    if reserved_created_at is not None and (
+        abs((provider_created_at - reserved_created_at).total_seconds()) > 1
+    ):
+        return False
+    return True
 
 
 async def _config(db: AsyncSession, tenant_id) -> SmsProviderConfig:
@@ -624,18 +810,18 @@ def _terminal_replay(message: SmsMessage) -> SmsMessage:
     """Return only provider-accepted truth; preserve failed attempts as failures."""
     if message.status in {"submitted", "delivered"}:
         return message
-    if message.status in {"provider_failed", "failed"}:
+    if message.status == "provider_failed":
         raise SmsError(
             "The SMS provider rejected the original request",
             409,
             delivery_certainty="provider_rejected",
             sms_message_id=message.id,
         )
-    if message.status == "reconciled_not_sent":
+    if message.status == "provider_failed_after_acceptance":
         raise SmsError(
-            "The original SMS was confirmed not sent; create a new reviewed request",
+            "The provider accepted the original SMS before delivery failed; create a new reviewed request",
             409,
-            delivery_certainty="confirmed_not_sent",
+            delivery_certainty="provider_failed_after_acceptance",
             sms_message_id=message.id,
         )
     if message.status in {
@@ -643,6 +829,7 @@ def _terminal_replay(message: SmsMessage) -> SmsMessage:
         "blocked_number_suppression",
         "blocked_provider_config",
         "blocked_quiet_hours",
+        "blocked_matter_authorization_changed",
     }:
         raise SmsError(
             "The original SMS was blocked before provider dispatch",
@@ -683,6 +870,7 @@ async def _resolve_replay(
             )
             if locked_replay.status == "dispatching":
                 locked_replay.status = "provider_unknown"
+                locked_replay.delivery_certainty = "outcome_unknown"
                 locked_replay.reconciliation_required_at = now
                 locked_replay.raw_provider_event = {
                     **(locked_replay.raw_provider_event or {}),
@@ -733,8 +921,12 @@ async def _persist_unknown_dispatch(
     user_id,
     provider_account_sid: str,
     provider_config_generation: int,
+    provider_messaging_service_sid: str | None = None,
     provider_message_id: str | None = None,
     provider_status: str | None = None,
+    provider_from_number: str | None = None,
+    provider_created_at: datetime | None = None,
+    provider_submission_started_at: datetime | None = None,
     failure_type: str,
 ) -> None:
     """Recover the durable reservation after any uncertain provider boundary."""
@@ -752,13 +944,23 @@ async def _persist_unknown_dispatch(
         )
         if message and message.status == "dispatching":
             message.status = "provider_unknown"
+            message.delivery_certainty = "outcome_unknown"
             message.provider_account_sid = provider_account_sid
+            message.provider_messaging_service_sid = provider_messaging_service_sid
             message.provider_config_generation = provider_config_generation
             message.provider_message_id = provider_message_id
             message.provider_status = provider_status
+            message.from_number = provider_from_number or message.from_number
+            message.provider_created_at = provider_created_at
+            message.provider_submission_started_at = (
+                provider_submission_started_at or message.provider_submission_started_at
+            )
             message.provider_error_code = failure_type
             message.reconciliation_required_at = datetime.now(timezone.utc)
-            message.raw_provider_event = {"failure": failure_type}
+            message.raw_provider_event = {
+                **(message.raw_provider_event or {}),
+                "failure": failure_type,
+            }
             if message.communication_log_id is None:
                 _record_communication(
                     db,
@@ -767,6 +969,13 @@ async def _persist_unknown_dispatch(
                     user_id=user_id,
                     status="unknown",
                 )
+            _append_sms_outcome_audit(
+                db,
+                message=message,
+                actor_user_id=user_id,
+                outcome="outcome_unknown",
+                metadata={"failure_type": failure_type},
+            )
         await db.commit()
     except Exception:
         # The pre-provider reservation was committed before dispatch. If the
@@ -813,32 +1022,38 @@ async def send_sms(
             await before_success_commit(resolved)
             await db.commit()
         return resolved
+    if matter_id is None:
+        raise SmsError(
+            "A matter-bound SMS target is required",
+            422,
+            code="sms_matter_required",
+        )
+    if (
+        await _lock_sms_matter_authorization(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            matter_id=matter_id,
+            contact_id=contact_id,
+        )
+        is None
+    ):
+        raise SmsError(
+            "SMS target was not found",
+            404,
+            code="sms_target_not_found",
+        )
     contact = await db.scalar(
         select(Contact).where(Contact.id == contact_id, Contact.tenant_id == tenant_id)
     )
     if not contact or not contact.is_active:
-        raise SmsError("SMS recipient was not found", 404)
+        raise SmsError("SMS target was not found", 404, code="sms_target_not_found")
     to_number = normalize_e164(contact.phone)
     consent = await load_sms_consent(db, tenant_id, contact.id)
     if not consent_authorizes_sms(
         consent=consent, to_number=to_number, category=category, now=now
     ):
         raise SmsError("SMS follow-up is not currently consented", 403)
-    if matter_id:
-        matter = await db.scalar(
-            select(Matter).where(Matter.id == matter_id, Matter.tenant_id == tenant_id)
-        )
-        if not matter:
-            raise SmsError("Matter was not found", 404)
-        is_matter_party = await db.scalar(
-            select(MatterParty.id).where(
-                MatterParty.tenant_id == tenant_id,
-                MatterParty.matter_id == matter_id,
-                MatterParty.contact_id == contact.id,
-            )
-        )
-        if matter.client_contact_id != contact.id and not is_matter_party:
-            raise SmsError("SMS recipient is not associated with the matter", 403)
     initial_config = await _config(db, tenant_id)
     provider_auth_token(initial_config)
     request_digest = _request_digest(
@@ -857,6 +1072,7 @@ async def send_sms(
         request_digest=request_digest,
         direction="outbound",
         status="queued",
+        delivery_certainty="not_attempted",
         dispatch_attempt_id=attempt_id,
         dispatch_started_at=now,
         to_number=to_number,
@@ -867,12 +1083,19 @@ async def send_sms(
     db.add(message)
     observed_provider_message_id = None
     observed_provider_status = None
+    observed_provider_from_number = None
+    observed_provider_created_at = None
+    provider_submission_started_at = None
+    messaging_service_sid = None
+    dispatch_message_id = None
     try:
         await db.flush()
+        dispatch_message_id = message.id
         # Reserve the idempotency key before any provider request. A concurrent
         # caller waits on the tenant/key unique constraint and then replays or
         # receives a reconciliation-required response, never a second dispatch.
         message.status = "dispatching"
+        message.delivery_certainty = "outcome_unknown"
         await db.commit()
         await set_tenant_context(db, str(tenant_id))
     except IntegrityError:
@@ -914,7 +1137,7 @@ async def send_sms(
     message = await db.scalar(
         select(SmsMessage)
         .where(
-            SmsMessage.id == message.id,
+            SmsMessage.id == dispatch_message_id,
             SmsMessage.tenant_id == tenant_id,
             SmsMessage.dispatch_attempt_id == attempt_id,
             SmsMessage.status == "dispatching",
@@ -926,13 +1149,22 @@ async def send_sms(
             "SMS dispatch ownership changed before provider submission",
             409,
             delivery_certainty="outcome_unknown",
+            sms_message_id=dispatch_message_id,
             reconciliation_required=True,
+            code="sms_dispatch_ownership_changed",
         )
-    dispatch_message_id = message.id
     if suppression.is_suppressed:
         message.status = "blocked_number_suppression"
+        message.delivery_certainty = "not_attempted"
         _record_communication(
             db, tenant_id=tenant_id, message=message, user_id=user_id, status="failed"
+        )
+        _append_sms_outcome_audit(
+            db,
+            message=message,
+            actor_user_id=user_id,
+            outcome="blocked",
+            metadata={"reason": "number_suppression"},
         )
         await db.commit()
         raise SmsError(
@@ -968,18 +1200,46 @@ async def send_sms(
         )
     ):
         message.status = "blocked_consent_changed"
+        message.delivery_certainty = "not_attempted"
         _record_communication(
             db, tenant_id=tenant_id, message=message, user_id=user_id, status="failed"
         )
+        _append_sms_outcome_audit(
+            db,
+            message=message,
+            actor_user_id=user_id,
+            outcome="blocked",
+            metadata={"reason": "consent_changed"},
+        )
         await db.commit()
-        raise SmsError("SMS consent changed before provider dispatch", 409)
+        raise SmsError(
+            "SMS consent changed before provider dispatch",
+            409,
+            delivery_certainty="not_attempted",
+            sms_message_id=dispatch_message_id,
+            code="sms_consent_changed",
+        )
     if in_quiet_hours(consent=locked_consent, now=locked_now):
         message.status = "blocked_quiet_hours"
+        message.delivery_certainty = "not_attempted"
         _record_communication(
             db, tenant_id=tenant_id, message=message, user_id=user_id, status="failed"
         )
+        _append_sms_outcome_audit(
+            db,
+            message=message,
+            actor_user_id=user_id,
+            outcome="blocked",
+            metadata={"reason": "quiet_hours"},
+        )
         await db.commit()
-        raise SmsError("SMS is blocked during the recipient's quiet hours", 409)
+        raise SmsError(
+            "SMS is blocked during the recipient's quiet hours",
+            409,
+            delivery_certainty="not_attempted",
+            sms_message_id=dispatch_message_id,
+            code="sms_quiet_hours",
+        )
     try:
         # Re-read the active generation immediately before submission. The
         # recipient suppression fence, not this tenant-global config row, stays
@@ -990,12 +1250,24 @@ async def send_sms(
         account_sid = str(config.account_sid).strip()
         messaging_service_sid = str(config.messaging_service_sid or "").strip() or None
         from_number = str(config.from_number or "").strip() or None
+        if from_number:
+            from_number = normalize_e164(from_number)
         message.provider_config_generation = provider_config_generation
         message.provider_account_sid = account_sid
+        message.provider_messaging_service_sid = messaging_service_sid
+        message.from_number = from_number
     except SmsError as exc:
         message.status = "blocked_provider_config"
+        message.delivery_certainty = "not_attempted"
         _record_communication(
             db, tenant_id=tenant_id, message=message, user_id=user_id, status="failed"
+        )
+        _append_sms_outcome_audit(
+            db,
+            message=message,
+            actor_user_id=user_id,
+            outcome="blocked",
+            metadata={"reason": "provider_config"},
         )
         await db.commit()
         raise SmsError(
@@ -1004,12 +1276,46 @@ async def send_sms(
             delivery_certainty="not_attempted",
             sms_message_id=dispatch_message_id,
         ) from exc
+    final_authorization = await _lock_sms_matter_authorization(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        matter_id=matter_id,
+        contact_id=contact_id,
+    )
+    if final_authorization is None:
+        message.status = "blocked_matter_authorization_changed"
+        message.delivery_certainty = "not_attempted"
+        _record_communication(
+            db, tenant_id=tenant_id, message=message, user_id=user_id, status="failed"
+        )
+        _append_sms_outcome_audit(
+            db,
+            message=message,
+            actor_user_id=user_id,
+            outcome="blocked",
+            metadata={"reason": "matter_authorization_changed"},
+        )
+        await db.commit()
+        raise SmsError(
+            "SMS matter authorization changed before provider dispatch",
+            409,
+            delivery_certainty="not_attempted",
+            sms_message_id=dispatch_message_id,
+            code="sms_matter_authorization_changed",
+        )
+    message.raw_provider_event = {
+        **(message.raw_provider_event or {}),
+        "authorization": final_authorization,
+    }
     try:
         data = {"To": to_number, "Body": body}
         if messaging_service_sid:
             data["MessagingServiceSid"] = messaging_service_sid
         else:
             data["From"] = from_number or ""
+        provider_submission_started_at = datetime.now(timezone.utc)
+        message.provider_submission_started_at = provider_submission_started_at
         async with httpx.AsyncClient(timeout=15) as http:
             response = await http.post(
                 f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json",
@@ -1022,19 +1328,63 @@ async def send_sms(
             str(payload["sid"]) if payload.get("sid") else None
         )
         observed_provider_status = provider_status or None
+        observed_provider_from_number = (
+            normalize_e164(payload.get("from")) if payload.get("from") else from_number
+        )
+        observed_provider_created_at = _parse_provider_datetime(
+            payload.get("date_created")
+        )
         if response.status_code >= 500 or response.status_code in (
             _TRANSIENT_PROVIDER_HTTP_CODES
         ):
             raise RuntimeError("provider server response did not prove rejection")
-        if (
-            response.status_code in _DETERMINISTIC_PROVIDER_REJECTION_CODES
-            or provider_status
-            in {
-                "failed",
-                "undelivered",
+        if observed_provider_message_id and provider_status in {
+            "failed",
+            "undelivered",
+        }:
+            message.provider_message_id = observed_provider_message_id
+            message.provider_status = provider_status
+            message.provider_error_code = str(
+                payload.get("error_code") or payload.get("code") or "delivery_failed"
+            )
+            message.provider_created_at = observed_provider_created_at
+            message.from_number = observed_provider_from_number
+            message.status = "provider_failed_after_acceptance"
+            message.delivery_certainty = "provider_failed_after_acceptance"
+            message.raw_provider_event = {
+                **(message.raw_provider_event or {}),
+                "status": provider_status,
+                "status_code": response.status_code,
             }
+            _record_communication(
+                db,
+                tenant_id=tenant_id,
+                message=message,
+                user_id=user_id,
+                status="failed",
+            )
+            _append_sms_outcome_audit(
+                db,
+                message=message,
+                actor_user_id=user_id,
+                outcome="failed_after_acceptance",
+            )
+            await db.commit()
+            raise SmsError(
+                "SMS delivery failed after provider acceptance",
+                503,
+                delivery_certainty="provider_failed_after_acceptance",
+                sms_message_id=message.id,
+                code="sms_provider_failed_after_acceptance",
+            )
+        if observed_provider_message_id and (
+            response.status_code in _DETERMINISTIC_PROVIDER_REJECTION_CODES
+            or provider_status not in _KNOWN_PROVIDER_STATUSES
         ):
+            raise RuntimeError("provider response with an accepted id was ambiguous")
+        if response.status_code in _DETERMINISTIC_PROVIDER_REJECTION_CODES:
             message.status = "provider_failed"
+            message.delivery_certainty = "provider_rejected"
             message.provider_status = provider_status or None
             message.provider_error_code = str(
                 payload.get("code") or "provider_rejected"
@@ -1046,6 +1396,12 @@ async def send_sms(
                 message=message,
                 user_id=user_id,
                 status="failed",
+            )
+            _append_sms_outcome_audit(
+                db,
+                message=message,
+                actor_user_id=user_id,
+                outcome="rejected",
             )
             await db.commit()
             raise SmsError(
@@ -1059,8 +1415,13 @@ async def send_sms(
         message.provider_message_id = str(payload["sid"])
         message.provider_status = provider_status or "queued"
         message.status = "submitted"
-        message.from_number = payload.get("from") or from_number
-        message.raw_provider_event = {"status": message.provider_status}
+        message.delivery_certainty = "provider_accepted"
+        message.from_number = observed_provider_from_number
+        message.provider_created_at = observed_provider_created_at
+        message.raw_provider_event = {
+            **(message.raw_provider_event or {}),
+            "status": message.provider_status,
+        }
         _record_communication(
             db,
             tenant_id=tenant_id,
@@ -1070,6 +1431,12 @@ async def send_sms(
         )
         if before_success_commit:
             await before_success_commit(message)
+        _append_sms_outcome_audit(
+            db,
+            message=message,
+            actor_user_id=user_id,
+            outcome="submitted",
+        )
         await db.commit()
         return message
     except SmsError:
@@ -1083,8 +1450,12 @@ async def send_sms(
             user_id=user_id,
             provider_account_sid=account_sid,
             provider_config_generation=provider_config_generation,
+            provider_messaging_service_sid=messaging_service_sid,
             provider_message_id=observed_provider_message_id,
             provider_status=observed_provider_status,
+            provider_from_number=observed_provider_from_number,
+            provider_created_at=observed_provider_created_at,
+            provider_submission_started_at=provider_submission_started_at,
             failure_type=type(exc).__name__,
         )
         raise SmsError(
@@ -1170,6 +1541,7 @@ async def apply_inbound(
         provider_message_id=provider_message_id,
         direction="inbound",
         status="received" if contact and matter else "review_required",
+        delivery_certainty="confirmed_received",
         from_number=from_number,
         to_number=to_number,
         body=body,
@@ -1322,7 +1694,7 @@ async def reconcile_sms_message(
     resolution: str,
     provider_message_id: str | None = None,
 ) -> SmsMessage:
-    """Resolve uncertain work using operator non-send attestation or provider truth."""
+    """Record operator context or resolve uncertainty with exact provider truth."""
     message = await db.scalar(
         select(SmsMessage)
         .where(
@@ -1341,16 +1713,34 @@ async def reconcile_sms_message(
             code="sms_reconciliation_not_required",
         )
     now = datetime.now(timezone.utc)
-    if resolution == "confirmed_not_sent":
-        message.status = "reconciled_not_sent"
-        message.provider_status = message.provider_status or "unknown"
-        resolved_certainty = "confirmed_not_sent"
-        resolved_status = "failed"
-        resolved_error = (
-            "Operator attested that the provider did not send; create a new reviewed "
-            "SMS proposal"
+    if resolution == "operator_attested_unknown":
+        message.status = "provider_unknown"
+        message.delivery_certainty = "outcome_unknown"
+        message.operator_observed_absent_at = now
+        message.operator_observed_absent_by_user_id = operator_user_id
+        message.reconciliation_resolution = "operator_attested_unknown"
+        message.raw_provider_event = {
+            **(message.raw_provider_event or {}),
+            "operator_attestation": "not_seen_in_provider_console",
+        }
+        automation_run = await db.scalar(
+            select(TaskAutomationRun)
+            .where(
+                TaskAutomationRun.tenant_id == tenant_id,
+                TaskAutomationRun.sms_message_id == message.id,
+            )
+            .with_for_update()
         )
-    elif resolution == "provider_lookup":
+        if automation_run:
+            automation_run.status = "failed"
+            automation_run.delivery_certainty = "outcome_unknown"
+            automation_run.reconciliation_required = True
+            automation_run.error_message = (
+                "An operator recorded that the message was not visible, but the "
+                "provider outcome remains unverified"
+            )
+        return message
+    if resolution == "provider_lookup":
         lookup_sid = str(
             provider_message_id or message.provider_message_id or ""
         ).strip()
@@ -1362,9 +1752,21 @@ async def reconcile_sms_message(
                 reconciliation_required=True,
                 code="sms_provider_message_id_required",
             )
+        if message.provider_message_id and message.provider_message_id != lookup_sid:
+            raise SmsError(
+                "Provider did not verify the reserved dispatch identity",
+                409,
+                delivery_certainty="outcome_unknown",
+                sms_message_id=message.id,
+                reconciliation_required=True,
+                code="sms_provider_identity_mismatch",
+            )
         config = await _config(db, tenant_id)
         account_sid = str(config.account_sid or "").strip()
-        if message.provider_account_sid and message.provider_account_sid != account_sid:
+        if (
+            not message.provider_account_sid
+            or message.provider_account_sid != account_sid
+        ):
             raise SmsError(
                 "The current provider account cannot verify this dispatch",
                 409,
@@ -1409,24 +1811,16 @@ async def reconcile_sms_message(
                 reconciliation_required=True,
                 code="sms_provider_identity_unverified",
             )
-        try:
-            provider_to = normalize_e164(payload.get("to"))
-        except SmsError as exc:
-            raise SmsError(
-                "Provider lookup returned a mismatched message",
-                409,
-                sms_message_id=message.id,
-                reconciliation_required=True,
-                code="sms_provider_identity_mismatch",
-            ) from exc
-        if (
-            str(payload.get("sid") or "") != lookup_sid
-            or str(payload.get("account_sid") or "") != account_sid
-            or provider_to != message.to_number
+        if not _provider_lookup_matches_reserved_dispatch(
+            message=message,
+            payload=payload,
+            lookup_sid=lookup_sid,
+            account_sid=account_sid,
         ):
             raise SmsError(
-                "Provider lookup returned a mismatched message",
+                "Provider did not verify the reserved dispatch identity",
                 409,
+                delivery_certainty="outcome_unknown",
                 sms_message_id=message.id,
                 reconciliation_required=True,
                 code="sms_provider_identity_mismatch",
@@ -1459,23 +1853,30 @@ async def reconcile_sms_message(
         message.provider_account_sid = account_sid
         message.provider_config_generation = config.generation
         message.provider_status = incoming
+        message.provider_created_at = _parse_provider_datetime(
+            payload.get("date_created")
+        )
+        message.from_number = normalize_e164(payload.get("from"))
         message.raw_provider_event = {
             **(message.raw_provider_event or {}),
             "reconciled_by": "provider_lookup",
             "status": incoming,
         }
         if incoming in {"failed", "undelivered"}:
-            message.status = "failed"
-            resolved_certainty = "confirmed_not_sent"
+            message.status = "provider_failed_after_acceptance"
+            message.delivery_certainty = "provider_failed_after_acceptance"
+            resolved_certainty = "provider_failed_after_acceptance"
             resolved_status = "failed"
-            resolved_error = "Provider lookup confirmed that the SMS was not delivered"
+            resolved_error = "SMS delivery failed after provider acceptance"
         elif incoming in {"delivered", "read"}:
             message.status = "delivered"
+            message.delivery_certainty = "confirmed_sent"
             resolved_certainty = "confirmed_sent"
             resolved_status = "sent"
             resolved_error = None
         else:
             message.status = "submitted"
+            message.delivery_certainty = "provider_accepted"
             resolved_certainty = "provider_accepted"
             resolved_status = "submitted"
             resolved_error = None
@@ -1516,16 +1917,6 @@ async def reconcile_sms_message(
                     else ("failed" if resolved_status == "failed" else "submitted")
                 ),
             )
-    elif communication:
-        communication.status = "failed"
-    else:
-        _record_communication(
-            db,
-            tenant_id=tenant_id,
-            message=message,
-            user_id=message.created_by_user_id,
-            status="failed",
-        )
     automation_run = await db.scalar(
         select(TaskAutomationRun)
         .where(
@@ -1588,6 +1979,7 @@ async def mark_stale_sms_dispatches_for_reconciliation() -> int:
                 )
                 if row.status == "dispatching":
                     row.status = "provider_unknown"
+                    row.delivery_certainty = "outcome_unknown"
                 row.reconciliation_required_at = now
                 row.raw_provider_event = {
                     **(row.raw_provider_event or {}),
@@ -1621,7 +2013,20 @@ async def apply_status(
         message.status = (
             "delivered"
             if incoming in {"delivered", "read"}
-            else ("failed" if incoming in {"failed", "undelivered"} else "submitted")
+            else (
+                "provider_failed_after_acceptance"
+                if incoming in {"failed", "undelivered"}
+                else "submitted"
+            )
+        )
+        message.delivery_certainty = (
+            "confirmed_sent"
+            if incoming in {"delivered", "read"}
+            else (
+                "provider_failed_after_acceptance"
+                if incoming in {"failed", "undelivered"}
+                else "provider_accepted"
+            )
         )
         message.provider_error_code = (
             params.get("ErrorCode") or message.provider_error_code
@@ -1650,7 +2055,12 @@ async def apply_status(
             and not message.reconciliation_resolved_at
         ):
             message.reconciliation_resolved_at = message.last_event_at
-            message.reconciliation_resolution = "signed_provider_callback"
+            message.reconciliation_resolution = (
+                "signed_callback_overrode_operator_attestation"
+                if message.operator_observed_absent_at
+                else "signed_provider_callback"
+            )
+            message.reconciliation_resolved_by_user_id = None
         communication = None
         if message.communication_log_id:
             communication = await db.scalar(
@@ -1692,12 +2102,19 @@ async def apply_status(
                 automation_run.error_message = None
             elif incoming in {"failed", "undelivered"}:
                 automation_run.status = "failed"
-                automation_run.delivery_certainty = "provider_rejected"
+                automation_run.delivery_certainty = "provider_failed_after_acceptance"
                 automation_run.error_message = (
                     "SMS delivery failed after provider acceptance"
                 )
             else:
                 automation_run.status = "submitted"
                 automation_run.delivery_certainty = "provider_accepted"
+        _append_sms_outcome_audit(
+            db,
+            message=message,
+            actor_user_id=None,
+            outcome="signed_status_callback",
+            metadata={"provider_status": incoming},
+        )
         await db.commit()
     return message

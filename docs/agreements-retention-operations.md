@@ -52,17 +52,38 @@ hold state, policy version, and recent actions across document indexes, local
 file references, chat attachments, conversations/messages, templates, inbound
 email, matter files, and agreement evidence.
 
+The same inventory accounts for every SMS data surface without returning
+message bodies, phone numbers, sender identifiers, provider account values, or
+credentials. It separately reports SMS communication/delivery records, current
+number suppressions, immutable consent events, immutable STOP/START number
+events, inbound-routing review evidence, and provider-configuration metadata.
+Provider configuration is security metadata only; encrypted authentication
+tokens and configured provider/sender values are never part of this response.
+
 The only automated deletion category in this release is an expired `Document`
 that is linked to a conversation, is not linked to a matter, has an expiry time,
 and points to tenant-local storage (or has no remaining file reference).
 Matter-linked records, cloud originals, conversations, messages, templates,
 inbound email, and agreement evidence are inventory-only.
+SMS records are also inventory-only: this retention executor never deletes
+message content, suppression state, consent or number events, review evidence,
+or provider configuration. Message and current-suppression records belong on
+the authorized customer export path. Immutable consent/STOP and review evidence
+use bounded evidence summaries, while provider configuration uses a count-only
+security-metadata summary. Reconciliation evidence remains associated with its
+SMS message record and must not be treated as proof that customer content can
+be omitted from an authorized export.
 
 `PUT /api/compliance/retention` sets the 1–365 day window for non-matter chat
 attachments and optionally places the tenant on legal hold. A hold requires a
 reason and blocks destructive execution. Policy changes reschedule existing
 expirable chat attachments from their original creation time and create an
 audit action containing before/after values.
+The legal-hold snapshot covers the reported SMS stores as well: an active hold
+requires preserving their content, compliance state, and evidence. A hold does
+not create a new SMS deletion path, and lifting it does not authorize deletion;
+any future SMS disposition workflow requires a separately reviewed policy,
+customer authority, provider/backup handling, and auditable execution.
 
 `POST /api/compliance/retention/execute?dry_run=true` previews and audits the
 eligible set. `dry_run=false` locks eligible rows, records the action, commits
@@ -80,6 +101,13 @@ attachment scheduler calls this same service, so there is no second job queue.
 - Compare platform inventory with database and upload-volume backup manifests.
 - Treat agreement evidence as contract evidence: restrict operator access,
   include it in backup/restore tests, and define its retention with counsel.
+- Treat SMS consent, STOP/START, review, and reconciliation records as
+  compliance evidence. Define their retention and legal-hold handling with
+  counsel, preserve suppression truth across normal customer lifecycle events,
+  and include all SMS stores in backup/restore and offboarding reconciliation.
+- Keep SMS provider credentials out of inventories, export artifacts, support
+  evidence, and retention logs. Only bounded security metadata and record counts
+  may appear in these surfaces.
 - Do not claim that LawHand “stores no customer data.” The control plane,
   messages, indexes, transient uploads, templates, inbound email, audit data,
   and backups are all data-processing surfaces even when authoritative matter
