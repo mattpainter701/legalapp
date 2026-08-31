@@ -18,9 +18,15 @@ from app.services.firm_memory_authorization import (
     AuthorizationDecision,
     AuthorizationState,
     FirmMemoryAuthorizationError,
+    NativeAuthorizerRegistry,
     firm_memory_authorization,
 )
-from app.services.firm_memory import FirmMemorySearchService
+from app.services.firm_memory import (
+    FirmMemorySearchService,
+    _normalize_windows,
+    _path_is_within,
+    _uuid,
+)
 
 
 class _ScalarDb:
@@ -41,6 +47,9 @@ class _ScalarRows:
     def all(self):
         return self.values
 
+    def __iter__(self):
+        return iter(self.values)
+
 
 class _ExecuteDb:
     def __init__(self, values):
@@ -48,6 +57,22 @@ class _ExecuteDb:
 
     async def execute(self, _statement):
         return _ScalarRows(self.values)
+
+
+class _Rows:
+    def __init__(self, values):
+        self.values = values
+
+    def all(self):
+        return self.values
+
+
+class _SequenceExecuteDb:
+    def __init__(self, *results):
+        self.results = list(results)
+
+    async def execute(self, _statement):
+        return self.results.pop(0)
 
 
 def _user(tenant_id=None):
@@ -136,6 +161,270 @@ async def test_explicit_source_deny_overrides_allow():
     )
     assert decision.state is AuthorizationState.DENY
     assert decision.reason == "explicit_source_deny"
+
+
+def test_native_authorizer_registry_normalizes_and_rejects_empty_keys():
+    registry = NativeAuthorizerRegistry()
+    provider = object()
+    registry.register("  Provider-Key ", provider)
+    assert registry.get("PROVIDER-KEY") is provider
+    assert registry.get(None) is None
+    with pytest.raises(ValueError, match="key is required"):
+        registry.register("  ", provider)
+
+
+@pytest.mark.asyncio
+async def test_actor_membership_and_entitlement_fail_closed():
+    user = _user()
+    with pytest.raises(FirmMemoryAuthorizationError):
+        await firm_memory_authorization.require_actor(
+            _ScalarDb(None), user, user.tenant_id, {"search_firm_memory"}
+        )
+    await firm_memory_authorization.require_actor(
+        _ScalarDb(user.id), user, user.tenant_id, {"search_firm_memory"}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("policy", "assigned", "explicit", "expected"),
+    [
+        (SimpleNamespace(access_mode="firm"), None, None, AuthorizationState.ALLOW),
+        (None, uuid.uuid4(), None, AuthorizationState.ALLOW),
+        (
+            SimpleNamespace(access_mode="assigned"),
+            None,
+            None,
+            AuthorizationState.DENY,
+        ),
+        (
+            SimpleNamespace(access_mode="restricted"),
+            None,
+            uuid.uuid4(),
+            AuthorizationState.ALLOW,
+        ),
+    ],
+)
+async def test_matter_policy_modes(policy, assigned, explicit, expected):
+    user = _user()
+    matter_id = uuid.uuid4()
+    values = [matter_id, policy]
+    if not policy or policy.access_mode != "firm":
+        values.append(assigned)
+    if policy and policy.access_mode not in {"firm", "assigned"}:
+        values.append(explicit)
+    decision = await firm_memory_authorization._authorize_matter(
+        _ScalarDb(*values),
+        user=user,
+        tenant_id=user.tenant_id,
+        matter_id=matter_id,
+    )
+    assert decision.state is expected
+
+
+@pytest.mark.asyncio
+async def test_authorize_matters_collects_each_decision(monkeypatch):
+    user = _user()
+    matter_ids = (uuid.uuid4(), uuid.uuid4())
+
+    async def allow(_db, *, user, tenant_id, matter_id):
+        assert user.id and tenant_id == user.tenant_id
+        return AuthorizationDecision(AuthorizationState.ALLOW, str(matter_id))
+
+    monkeypatch.setattr(firm_memory_authorization, "_authorize_matter", allow)
+    decisions = await firm_memory_authorization.authorize_matters(
+        object(), user=user, tenant_id=user.tenant_id, matter_ids=matter_ids
+    )
+    assert set(decisions) == set(matter_ids)
+
+
+@pytest.mark.asyncio
+async def test_source_policy_modes_and_native_responses(monkeypatch):
+    from app.services import firm_memory_authorization as auth_module
+
+    user = _user()
+
+    def source(mode, **values):
+        return FirmMemorySource(
+            id=uuid.uuid4(),
+            tenant_id=user.tenant_id,
+            source_key=f"source-{uuid.uuid4()}",
+            display_name="Source",
+            source_kind="cloud",
+            authorization_mode=mode,
+            is_enabled=values.pop("is_enabled", True),
+            **values,
+        )
+
+    denied = await firm_memory_authorization.authorize_source(
+        object(), user=user, source=source("firm", is_enabled=False), matter_decisions={}
+    )
+    firm = await firm_memory_authorization.authorize_source(
+        object(), user=user, source=source("firm"), matter_decisions={}
+    )
+    matter_unknown = await firm_memory_authorization.authorize_source(
+        object(), user=user, source=source("matter"), matter_decisions={}
+    )
+    matter_allow = await firm_memory_authorization.authorize_source(
+        object(),
+        user=user,
+        source=source("matter"),
+        matter_decisions={
+            uuid.uuid4(): AuthorizationDecision(AuthorizationState.ALLOW, "ok")
+        },
+    )
+    explicit_allow = await firm_memory_authorization.authorize_source(
+        _ExecuteDb(["allow"]),
+        user=user,
+        source=source("explicit"),
+        matter_decisions={},
+    )
+    explicit_missing = await firm_memory_authorization.authorize_source(
+        _ExecuteDb([]),
+        user=user,
+        source=source("explicit"),
+        matter_decisions={},
+    )
+
+    class Provider:
+        async def authorize_search(self, **_kwargs):
+            return AuthorizationDecision(AuthorizationState.ALLOW, "native")
+
+    class BrokenProvider:
+        async def authorize_search(self, **_kwargs):
+            raise RuntimeError("offline")
+
+    class InvalidProvider:
+        async def authorize_search(self, **_kwargs):
+            return object()
+
+    native = source("native", native_authorizer_key="native-ok")
+    monkeypatch.setitem(auth_module.native_authorizers._providers, "native-ok", Provider())
+    native_allow = await firm_memory_authorization.authorize_source(
+        object(), user=user, source=native, matter_decisions={}
+    )
+    monkeypatch.setitem(
+        auth_module.native_authorizers._providers, "native-ok", BrokenProvider()
+    )
+    native_error = await firm_memory_authorization.authorize_source(
+        object(), user=user, source=native, matter_decisions={}
+    )
+    monkeypatch.setitem(
+        auth_module.native_authorizers._providers, "native-ok", InvalidProvider()
+    )
+    native_invalid = await firm_memory_authorization.authorize_source(
+        object(), user=user, source=native, matter_decisions={}
+    )
+    unknown = await firm_memory_authorization.authorize_source(
+        object(), user=user, source=source("unknown"), matter_decisions={}
+    )
+
+    assert [
+        denied.state,
+        firm.state,
+        matter_unknown.state,
+        matter_allow.state,
+        explicit_allow.state,
+        explicit_missing.state,
+        native_allow.state,
+        native_error.state,
+        native_invalid.state,
+        unknown.state,
+    ] == [
+        AuthorizationState.DENY,
+        AuthorizationState.ALLOW,
+        AuthorizationState.UNKNOWN,
+        AuthorizationState.ALLOW,
+        AuthorizationState.ALLOW,
+        AuthorizationState.UNKNOWN,
+        AuthorizationState.ALLOW,
+        AuthorizationState.UNKNOWN,
+        AuthorizationState.UNKNOWN,
+        AuthorizationState.UNKNOWN,
+    ]
+
+
+def test_firm_memory_identifier_and_windows_path_helpers():
+    item = uuid.uuid4()
+    assert _uuid(str(item)) == item
+    assert _uuid("not-a-uuid") is None
+    assert _normalize_windows("C:/Firm/Files/") == "c:\\firm\\files"
+    assert _path_is_within("C:/Firm/Files/Brief.pdf", "C:\\Firm\\Files")
+    assert not _path_is_within("C:/Firm/Files-Other/Brief.pdf", "C:\\Firm\\Files")
+    assert not _path_is_within("C:/Firm/Files", "")
+
+
+@pytest.mark.asyncio
+async def test_service_parses_ids_and_maps_associations():
+    service = FirmMemorySearchService()
+    first = uuid.uuid4()
+    second = uuid.uuid4()
+    assert service._parse_ids([str(first), str(first), str(second)], "source") == (
+        first,
+        second,
+    )
+    with pytest.raises(ValueError, match="Invalid source id"):
+        service._parse_ids(["bad"], "source")
+    assert await service._collection_map(object(), first, []) == {}
+    assert await service._document_associations(
+        object(),
+        tenant_id=first,
+        user_id=second,
+        source_id=uuid.uuid4(),
+        document_keys=[],
+        allowed_matter_ids=(),
+    ) == ({}, {})
+
+    db = _SequenceExecuteDb(
+        _Rows([("doc-1", first)]),
+        _Rows([("doc-1", second)]),
+    )
+    matters, workspaces = await service._document_associations(
+        db,
+        tenant_id=first,
+        user_id=second,
+        source_id=uuid.uuid4(),
+        document_keys=["doc-1"],
+        allowed_matter_ids=(first,),
+    )
+    assert matters == {"doc-1": [str(first)]}
+    assert workspaces == {"doc-1": [str(second)]}
+    assert service._opaque_document_id(first, second).startswith("fmdoc_")
+
+
+@pytest.mark.asyncio
+async def test_collection_map_and_source_scope_resolution():
+    service = FirmMemorySearchService()
+    tenant_id = uuid.uuid4()
+    source_id = uuid.uuid4()
+    collection_id = uuid.uuid4()
+    mapping = await service._collection_map(
+        _SequenceExecuteDb(_Rows([(source_id, collection_id)])),
+        tenant_id,
+        [source_id],
+    )
+    assert mapping == {source_id: [str(collection_id)]}
+
+    source = FirmMemorySource(
+        id=source_id,
+        tenant_id=tenant_id,
+        source_key="selected",
+        display_name="Selected",
+        source_kind="cloud",
+        authorization_mode="firm",
+        is_enabled=True,
+    )
+    for scope in ("selected", "on_prem", "cloud", "all"):
+        request = FirmMemoryDocumentSearchRequest(
+            query="privilege",
+            source_scope=scope,
+            source_ids=[str(source_id)] if scope == "selected" else [],
+        )
+        sources, selected = await service._resolve_sources(
+            _SequenceExecuteDb(_ScalarRows([source])), tenant_id, request
+        )
+        assert sources == [source]
+        assert selected == ({source_id} if scope == "selected" else set())
 
 
 @pytest.mark.asyncio
