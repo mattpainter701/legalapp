@@ -820,6 +820,32 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
         # after promotion and independently restored; public projections must
         # fail closed rather than continue serving stale admitted metadata.
         lineage_repo = CourtListenerRepository(conn)
+        fixture_chunk_id = case_results[0]["chunk_id"]
+
+        def assert_public_surfaces_suppressed():
+            assert lineage_repo.search_legal_authorities("old authority") == []
+            assert lineage_repo.search_caselaw("old case") == []
+            assert lineage_repo.case_details(opinion_id=97000001) is None
+            assert lineage_repo.get_full_opinion(opinion_id=97000001) is None
+            with pytest.raises(ValueError):
+                lineage_repo.find_similar_cases(chunk_id=fixture_chunk_id)
+            assert lineage_repo.search_by_citation("1 Fixture 1") == []
+            assert lineage_repo.citation_network(97000001) == {"cited": [], "citing": []}
+            assert lineage_repo.court_info("ohio") is None
+            assert lineage_repo.search_dockets("old case") == []
+            assert all(
+                row["source_key"] not in {source_key, "courtlistener:ohio-caselaw"}
+                for row in lineage_repo.authority_coverage()["sources"]
+            )
+            assert all(
+                row["source_key"] not in {source_key, "courtlistener:ohio-caselaw"}
+                for row in lineage_repo.sync_status()["sources"]
+            )
+            assert all(
+                row["source_key"] not in {source_key, "courtlistener:ohio-caselaw"}
+                for row in lineage_repo.corpus_status()["coverage_ledger"]
+            )
+
         lineage_mutations = [
             ("enabled", "FALSE", "TRUE"),
             ("rights_decision", "'prohibited'", "'official'"),
@@ -831,59 +857,53 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
         for column, bad_value, good_value in lineage_mutations:
             with conn.cursor() as cur:
                 cur.execute(
-                    f"UPDATE legal_sources SET {column}={bad_value} WHERE source_key=%s",
+                    f"UPDATE legal_sources SET {column}={bad_value} WHERE source_key IN (%s, 'courtlistener:ohio-caselaw')",
                     [source_key],
                 )
             conn.commit()
-            assert lineage_repo.search_legal_authorities("old authority") == []
-            assert source_key not in {
-                row["source_key"] for row in lineage_repo.sync_status()["sources"]
-            }
+            assert_public_surfaces_suppressed()
             with conn.cursor() as cur:
                 cur.execute(
-                    f"UPDATE legal_sources SET {column}={good_value} WHERE source_key=%s",
+                    f"UPDATE legal_sources SET {column}={good_value} WHERE source_key IN (%s, 'courtlistener:ohio-caselaw')",
                     [source_key],
                 )
             conn.commit()
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE citator_public_source_admissions SET active=FALSE WHERE source_key=%s",
+                "UPDATE citator_public_source_admissions SET active=FALSE WHERE source_key IN (%s, 'courtlistener:ohio-caselaw')",
                 [source_key],
             )
         conn.commit()
-        assert lineage_repo.search_legal_authorities("old authority") == []
-        assert source_key not in {
-            row["source_key"] for row in lineage_repo.authority_coverage()["sources"]
-        }
+        assert_public_surfaces_suppressed()
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE citator_public_source_admissions SET active=TRUE WHERE source_key=%s",
-                [source_key],
-            )
-        conn.commit()
-        with conn.cursor() as cur:
-            cur.execute(
-                'UPDATE legal_sources SET metadata=metadata || \'{"catalog_schema_version":"spoofed"}\'::jsonb WHERE source_key=%s',
-                [source_key],
-            )
-        conn.commit()
-        assert lineage_repo.search_legal_authorities("old authority") == []
-        with conn.cursor() as cur:
-            cur.execute(
-                'UPDATE legal_sources SET metadata=metadata || \'{"catalog_schema_version":"rehearsal"}\'::jsonb WHERE source_key=%s',
+                "UPDATE citator_public_source_admissions SET active=TRUE WHERE source_key IN (%s, 'courtlistener:ohio-caselaw')",
                 [source_key],
             )
         conn.commit()
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE citator_public_source_admissions SET manifest_sha256=repeat('c', 64) WHERE source_key=%s",
+                'UPDATE legal_sources SET metadata=metadata || \'{"catalog_schema_version":"spoofed"}\'::jsonb WHERE source_key IN (%s, \'courtlistener:ohio-caselaw\')',
                 [source_key],
             )
         conn.commit()
-        assert lineage_repo.search_legal_authorities("old authority") == []
+        assert_public_surfaces_suppressed()
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE citator_public_source_admissions SET manifest_sha256=repeat('a', 64) WHERE source_key=%s",
+                'UPDATE legal_sources SET metadata=metadata || \'{"catalog_schema_version":"rehearsal"}\'::jsonb WHERE source_key IN (%s, \'courtlistener:ohio-caselaw\')',
+                [source_key],
+            )
+        conn.commit()
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE citator_public_source_admissions SET manifest_sha256=repeat('c', 64) WHERE source_key IN (%s, 'courtlistener:ohio-caselaw')",
+                [source_key],
+            )
+        conn.commit()
+        assert_public_surfaces_suppressed()
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE citator_public_source_admissions SET manifest_sha256=repeat('a', 64) WHERE source_key IN (%s, 'courtlistener:ohio-caselaw')",
                 [source_key],
             )
         conn.commit()
