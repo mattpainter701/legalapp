@@ -1209,13 +1209,17 @@ def validate_template_ocr_settings(settings: Settings) -> None:
 
 def validate_template_studio_settings(settings: Settings) -> None:
     if not 1 <= settings.TEMPLATE_STUDIO_ACTIVE_DRAFT_QUOTA <= 1000:
-        raise ValueError("TEMPLATE_STUDIO_ACTIVE_DRAFT_QUOTA must be between 1 and 1000")
+        raise ValueError(
+            "TEMPLATE_STUDIO_ACTIVE_DRAFT_QUOTA must be between 1 and 1000"
+        )
     if not 1 <= settings.TEMPLATE_STUDIO_SNAPSHOT_QUOTA <= 1000:
         raise ValueError("TEMPLATE_STUDIO_SNAPSHOT_QUOTA must be between 1 and 1000")
     if not 1 <= settings.TEMPLATE_STUDIO_DRAFT_TTL_DAYS <= 365:
         raise ValueError("TEMPLATE_STUDIO_DRAFT_TTL_DAYS must be between 1 and 365")
     if not 1 <= settings.TEMPLATE_STUDIO_IDEMPOTENCY_TTL_HOURS <= 168:
-        raise ValueError("TEMPLATE_STUDIO_IDEMPOTENCY_TTL_HOURS must be between 1 and 168")
+        raise ValueError(
+            "TEMPLATE_STUDIO_IDEMPOTENCY_TTL_HOURS must be between 1 and 168"
+        )
 
 
 def validate_worker_settings(settings: Settings) -> None:
