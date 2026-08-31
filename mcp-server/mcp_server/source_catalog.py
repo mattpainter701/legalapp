@@ -453,8 +453,8 @@ def admit_public_source(
         cursor.execute(
             """INSERT INTO citator_public_source_admissions
                  (source_key, catalog_schema_version, manifest_reference,
-                  manifest_sha256, reviewed_by)
-               VALUES (%s, %s, %s, %s, %s)
+                  manifest_sha256, reviewed_at, reviewed_by)
+               VALUES (%s, %s, %s, %s, now(), %s)
                ON CONFLICT (source_key) DO UPDATE SET
                  catalog_schema_version=EXCLUDED.catalog_schema_version,
                  manifest_reference=EXCLUDED.manifest_reference,

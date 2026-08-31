@@ -124,8 +124,9 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 cur.execute(
                     """INSERT INTO citator_public_source_admissions
                          (source_key, catalog_schema_version, manifest_reference,
-                          manifest_sha256, reviewed_by)
-                       SELECT %s, 'rehearsal', 'fixture-manifest', manifest_hash, 'rehearsal-admin'
+                          manifest_sha256, reviewed_at, reviewed_by)
+                       SELECT %s, 'rehearsal', 'fixture-manifest', manifest_hash,
+                              now(), 'rehearsal-admin'
                          FROM authority_corpus_versions WHERE version=%s
                        ON CONFLICT (source_key) DO UPDATE SET active=TRUE,
                          manifest_sha256=EXCLUDED.manifest_sha256""",
@@ -134,8 +135,10 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 cur.execute(
                     """INSERT INTO citator_public_source_admissions
                          (source_key, catalog_schema_version, manifest_reference,
-                          manifest_sha256, reviewed_by)
-                       SELECT 'courtlistener:ohio-caselaw', 'rehearsal', 'fixture-manifest', manifest_hash, 'rehearsal-admin'
+                          manifest_sha256, reviewed_at, reviewed_by)
+                       SELECT 'courtlistener:ohio-caselaw', 'rehearsal',
+                              'fixture-manifest', manifest_hash, now(),
+                              'rehearsal-admin'
                          FROM authority_corpus_versions WHERE version=%s
                        ON CONFLICT (source_key) DO UPDATE SET active=TRUE,
                          manifest_sha256=EXCLUDED.manifest_sha256""",
@@ -313,9 +316,10 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
             cur.execute(
                 """INSERT INTO citator_public_source_admissions
                      (source_key, catalog_schema_version, manifest_reference,
-                      manifest_sha256, reviewed_by)
+                      manifest_sha256, reviewed_at, reviewed_by)
                    SELECT 'courtlistener:ohio-caselaw', 'rehearsal',
-                          'fixture-manifest', manifest_hash, 'rehearsal-admin'
+                          'fixture-manifest', manifest_hash, now(),
+                          'rehearsal-admin'
                      FROM authority_corpus_versions WHERE version=%s
                    ON CONFLICT (source_key) DO UPDATE SET active=TRUE,
                      catalog_schema_version=EXCLUDED.catalog_schema_version,
@@ -2067,10 +2071,11 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
                 """INSERT INTO legal_sources
                      (source_key, publisher, source_type, canonical_url, enabled,
                       storage_policy, rights_decision, reviewed_at, reviewed_by,
-                      expected_cadence, claim_safe_wording, metadata)
+                      expected_cadence, claim_safe_wording, public_namespace,
+                      metadata)
                    VALUES (%s, 'Citator rehearsal', 'case_law', 'https://example.test/citator',
                      TRUE, 'normalized_text', 'official', now(), 'rehearsal-admin',
-                     'daily', 'Synthetic rehearsal source only',
+                     'daily', 'Synthetic rehearsal source only', 'public-authority',
                      '{"catalog_schema_version":"rehearsal","implementation_status":"fixture","manifest_reference":"synthetic://citator/rehearsal"}')""",
                 [source_key],
             )
@@ -3155,9 +3160,9 @@ def test_process_once_rehearsal_both_corpora(monkeypatch):
             cur.execute(
                 """INSERT INTO citator_public_source_admissions
                      (source_key, catalog_schema_version, manifest_reference,
-                      manifest_sha256, reviewed_by)
+                      manifest_sha256, reviewed_at, reviewed_by)
                    VALUES (%s, 'rehearsal', 'worker-rehearsal-manifest',
-                           'worker-rehearsal-manifest', 'rehearsal-admin')""",
+                           'worker-rehearsal-manifest', now(), 'rehearsal-admin')""",
                 [source_key],
             )
             cur.execute(
