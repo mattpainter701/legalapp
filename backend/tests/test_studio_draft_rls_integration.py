@@ -125,13 +125,14 @@ async def _seed_tenant(conn, tenant_id, marker):
     await conn.execute(
         text(
             "INSERT INTO studio_draft_snapshots "
-            "(id, tenant_id, draft_id, revision, identity_sha256, content_sha256, payload, created_by_user_id) "
-            "VALUES (:id, :tenant, :draft, 1, :hash, :hash, '{}'::json, :user)"
+            "(id, tenant_id, draft_id, source_artifact_id, revision, identity_sha256, content_sha256, payload, created_by_user_id) "
+            "VALUES (:id, :tenant, :draft, :source, 1, :hash, :hash, '{}'::json, :user)"
         ),
         {
             "id": snapshot_id,
             "tenant": tenant_id,
             "draft": draft_id,
+            "source": source_id,
             "hash": digest,
             "user": user_id,
         },
@@ -261,8 +262,8 @@ async def test_studio_force_rls_isolates_reads_and_writes(test_engine, table):
                 """,
                 "studio_draft_snapshots": """
                     INSERT INTO studio_draft_snapshots
-                    (id, tenant_id, draft_id, revision, identity_sha256, content_sha256, payload)
-                    VALUES (gen_random_uuid(), :tenant, :draft, 2, :hash, :hash, '{}'::json)
+                    (id, tenant_id, draft_id, source_artifact_id, revision, identity_sha256, content_sha256, payload)
+                    VALUES (gen_random_uuid(), :tenant, :draft, :source, 2, :hash, :hash, '{}'::json)
                 """,
                 "studio_draft_idempotency": """
                     INSERT INTO studio_draft_idempotency

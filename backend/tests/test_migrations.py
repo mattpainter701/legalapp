@@ -529,6 +529,11 @@ def test_studio_draft_migration_is_post_146_force_rls_and_immutable():
     assert "app.studio_orphan_cleanup_tenant_id" in source
     assert "app.studio_orphan_cleanup_cutoff" in source
     assert "NOT EXISTS (" in immutable_upgrade
+    assert "snapshot.source_artifact_id = OLD.id" in immutable_upgrade
+    assert '["tenant_id", "source_artifact_id"]' in source
+    assert (
+        '["studio_source_artifacts.tenant_id", "studio_source_artifacts.id"]' in source
+    )
 
 
 def test_studio_model_and_migration_table_column_parity():

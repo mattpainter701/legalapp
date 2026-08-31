@@ -493,13 +493,23 @@ class StudioSourceRegistry:
         if not 1 <= limit <= 500:
             raise ValueError("orphan cleanup limit must be between 1 and 500")
         await self._admission_lock()
-        cutoff = datetime.now(timezone.utc) - timedelta(
-            hours=self.settings.TEMPLATE_STUDIO_SOURCE_ORPHAN_TTL_HOURS
+        # Derive the claim from PostgreSQL's transaction clock. A Python clock
+        # sampled after the transaction starts can be milliseconds later than
+        # ``now()`` in the trigger and would fail its minimum-TTL verification.
+        cutoff = await self.db.scalar(
+            text("SELECT now() - (:hours * interval '1 hour')"),
+            {"hours": self.settings.TEMPLATE_STUDIO_SOURCE_ORPHAN_TTL_HOURS},
         )
+        if cutoff is None:  # pragma: no cover - PostgreSQL always returns a value
+            raise RuntimeError("source orphan cutoff could not be established")
         await authorize_studio_orphan_cleanup(self.db, self.tenant_id, cutoff)
         referenced = select(StudioDraft.id).where(
             StudioDraft.tenant_id == self.tenant_id,
             StudioDraft.source_artifact_id == StudioSourceArtifact.id,
+        )
+        snapshot_referenced = select(StudioDraftSnapshot.id).where(
+            StudioDraftSnapshot.tenant_id == self.tenant_id,
+            StudioDraftSnapshot.source_artifact_id == StudioSourceArtifact.id,
         )
         rows = list(
             (
@@ -509,6 +519,7 @@ class StudioSourceRegistry:
                         StudioSourceArtifact.tenant_id == self.tenant_id,
                         StudioSourceArtifact.created_at <= cutoff,
                         ~referenced.exists(),
+                        ~snapshot_referenced.exists(),
                     )
                     .order_by(StudioSourceArtifact.created_at, StudioSourceArtifact.id)
                     .limit(limit)
@@ -947,6 +958,7 @@ class StudioDraftService:
         )
         if replay is not None:
             return replay
+        await self.sources._admission_lock()
         await self._tenant_admission_lock()
         await self._enforce_active_quota()
         artifact = await self.sources.resolve(request.source_artifact_id)
@@ -1258,6 +1270,9 @@ class StudioDraftService:
         )
         if replay is not None:
             return replay
+        # One lock order covers cleanup, create, replace, and mixed lifecycle
+        # patches: source admission -> active-draft admission -> draft row.
+        await self.sources._admission_lock()
         if any(item.op in {"archive", "restore"} for item in request.operations):
             await self._tenant_admission_lock()
         draft = await self._locked_draft(draft_id)
@@ -1548,6 +1563,7 @@ class StudioDraftService:
         snapshot = StudioDraftSnapshot(
             tenant_id=self.tenant_id,
             draft_id=draft.id,
+            source_artifact_id=draft.source_artifact_id,
             revision=draft.revision,
             identity_sha256=draft.identity_sha256,
             content_sha256=content_hash,

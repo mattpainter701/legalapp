@@ -9,7 +9,10 @@ canonicalizes Markdown/PDF/DOCX bytes, persists their exact canonical format,
 media type, and SHA-256, and rechecks them through an internal opaque reader.
 Per-tenant count and aggregate-byte admission quotas are serialized and dedupe
 before charging; a bounded caller-owned orphan seam can remove only old,
-unreferenced artifacts. The draft foundation adds stable draft
+unreferenced artifacts. Immutable snapshots retain a tenant-scoped source
+artifact reference, so cleanup cannot discard historical bytes after source
+replacement; source attachment and cleanup use one serialized lock order. The
+draft foundation adds stable draft
 and field UUIDs, monotonic revisions and strong ETags, separate canonical field
 definitions and format-specific placements, content-addressed redacted
 snapshots, bounded patch operations, audit attribution, idempotency retention,
@@ -19,7 +22,8 @@ Studio tables use FORCE RLS. Source, snapshot, and audit rows reject UPDATE and
 DELETE in ordinary application transactions and are append-only until a
 database-verified expired-demo purge; source rows additionally permit only the
 bounded old-unreferenced cleanup seam. Generic retention purge is deferred.
-Phase 2 wires no cleanup scheduler.
+Phase 2 wires no cleanup scheduler. Verified demo purge deletes the full Studio
+dependency chain while the authoritative demo-session claim remains live.
 
 The REST/service surface supports trusted source registration, create/import,
 resume/read, patch, validate,
@@ -30,10 +34,10 @@ No Studio frontend is included.
 
 ## Validation
 
-- Local focused/full validation will be rewritten with exact final-head results
-  after this corrective revision is rebased if necessary and tested.
-- Fresh exact-head full CI and Merge Gate are required before readiness; the PR
-  remains draft.
+- Exact local and full-CI evidence will replace this placeholder only after the
+  remaining third-pass blockers are corrected and tested.
+- A completely fresh full required check set and Merge Gate on the later
+  evidence revision are required before readiness. The PR remains draft.
 
 ## Merge policy attestations
 

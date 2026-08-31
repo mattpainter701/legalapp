@@ -44,6 +44,9 @@ and must pass the existing ZIP-bomb, encryption, macro, ActiveX, embedded-payloa
 and tracked-change checks. MIME is only an input consistency check and never
 establishes file trust. Create, replace, persisted validation, import, worker
 read, snapshot, and promotion all recheck format/media compatibility.
+DOCX package validation also rejects imported `altChunk` content, attached
+templates, remote images and other external non-hyperlink relationships. It
+permits only bounded ordinary HTTP(S) or email hyperlink relationships.
 
 The only worker-safe source projection is:
 
@@ -71,8 +74,15 @@ configurable defaults are 100 source artifacts and 250 MiB total source bytes pe
 tenant, so unattached rows remain bounded even when no cleanup caller runs. A
 tenant-scoped cleanup seam deletes at most 500 unreferenced artifacts per call
 after a configurable 24-hour orphan TTL (minimum one hour). The database rejects
-deletion if a draft references the artifact. Phase 2 wires no scheduler; Phase 3
-owns the caller and long-term object-storage architecture.
+deletion if a current draft or an immutable snapshot references the artifact.
+Snapshot rows carry the durable tenant-scoped source-artifact foreign key that
+preserves historical bytes after source replacement. Cleanup, source attachment,
+and lifecycle admission share tenant transaction locks in the fixed order:
+source admission, active-draft admission when needed, then draft row. Phase 2
+wires no scheduler; Phase 3 owns the caller and long-term object-storage
+architecture. Phase 3 render jobs and Phase 4 proposals must add their own
+durable source references before those artifacts can ever become cleanup
+candidates.
 
 Fields have stable UUIDs independent from their editable automation keys.
 The server generates source, field, and placement UUIDs; request-local bounded
@@ -126,6 +136,11 @@ policy, and 24-hour idempotency retention. Apart from the caller-owned
 source-orphan seam, no automated deletion is introduced by this phase; Phase 3
 must define safe cleanup, legal-hold handling, and artifact ownership before
 using draft or idempotency TTLs.
+
+Phase 3 must also version/attest the source-validator contract and move repeated
+large immutable-byte parsing off latency-sensitive request paths where
+appropriate. Phase 2 deliberately revalidates synchronously rather than treating
+an earlier validation result as permanent trust.
 
 ## REST and service boundary
 

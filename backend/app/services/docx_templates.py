@@ -10,6 +10,8 @@ import zipfile
 from bisect import bisect_left, bisect_right
 from pathlib import PurePosixPath
 from typing import Any, Iterable
+from urllib.parse import urlparse
+from xml.etree import ElementTree
 
 from docx import Document
 from docx.oxml.ns import qn
@@ -27,6 +29,74 @@ _MAX_DOCX_PART_BYTES = 50 * 1024 * 1024
 _MAX_DOCX_COMPRESSION_RATIO = 1_000
 _UNSAFE_DOCX_PART_PREFIXES = ("word/activeX/", "word/embeddings/")
 _UNSAFE_DOCX_PARTS = {"word/vbaProject.bin"}
+
+
+def _docx_xml(package: zipfile.ZipFile, part_name: str) -> ElementTree.Element:
+    content = package.read(part_name)
+    lowered = content.lower()
+    if b"<!doctype" in lowered or b"<!entity" in lowered:
+        raise TemplateDocxError("The DOCX contains unsafe XML declarations.")
+    try:
+        return ElementTree.fromstring(content)
+    except ElementTree.ParseError as exc:
+        raise TemplateDocxError("The DOCX contains malformed XML.") from exc
+
+
+def _docx_local_name(tag: str) -> str:
+    return str(tag).rsplit("}", 1)[-1]
+
+
+def _safe_external_docx_hyperlink(target: str) -> bool:
+    if len(target) > 2_048 or any(ord(character) < 0x20 for character in target):
+        return False
+    parsed = urlparse(target)
+    scheme = parsed.scheme.casefold()
+    return bool(
+        (scheme in {"http", "https"} and parsed.netloc)
+        or (scheme == "mailto" and parsed.path)
+    )
+
+
+def _validate_docx_relationships_and_altchunks(
+    package: zipfile.ZipFile, names: set[str]
+) -> None:
+    for part_name in names:
+        lowered_name = part_name.casefold()
+        if lowered_name.endswith(".rels"):
+            root = _docx_xml(package, part_name)
+            for relation in root.iter():
+                if _docx_local_name(relation.tag) != "Relationship":
+                    continue
+                relation_type = str(relation.attrib.get("Type") or "").casefold()
+                target_mode = str(relation.attrib.get("TargetMode") or "").casefold()
+                if (
+                    "vbaproject" in relation_type
+                    or relation_type.endswith("/oleobject")
+                    or relation_type.endswith("/package")
+                    or relation_type.endswith("/control")
+                    or relation_type.endswith("/attachedtemplate")
+                    or relation_type.endswith("/afchunk")
+                ):
+                    raise TemplateDocxError(
+                        "The DOCX contains an unsafe active or embedded relationship."
+                    )
+                if target_mode == "external":
+                    target = str(relation.attrib.get("Target") or "")
+                    if not relation_type.endswith(
+                        "/hyperlink"
+                    ) or not _safe_external_docx_hyperlink(target):
+                        raise TemplateDocxError(
+                            "Only ordinary web and email hyperlinks may be external."
+                        )
+        if lowered_name.startswith("word/") and lowered_name.endswith(".xml"):
+            root = _docx_xml(package, part_name)
+            if any(
+                _docx_local_name(element.tag).casefold() == "altchunk"
+                for element in root.iter()
+            ):
+                raise TemplateDocxError(
+                    "Word documents containing imported altChunk content are not supported."
+                )
 
 
 def docx_source_key(source_text: str, anchor: dict) -> str:
@@ -105,6 +175,7 @@ def validate_docx_package(content: bytes) -> None:
                     raise TemplateDocxError(
                         "This Word file uses an unsafe compression ratio."
                     )
+            _validate_docx_relationships_and_altchunks(package, names)
     except TemplateDocxError:
         raise
     except (OSError, zipfile.BadZipFile) as exc:

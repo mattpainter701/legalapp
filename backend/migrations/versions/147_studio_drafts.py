@@ -67,6 +67,9 @@ def upgrade() -> None:
             "format",
             name="uq_studio_source_artifacts_contract",
         ),
+        sa.UniqueConstraint(
+            "tenant_id", "id", name="uq_studio_source_artifacts_tenant_id"
+        ),
         sa.UniqueConstraint("resolver_key", name="uq_studio_source_artifacts_resolver"),
         sa.UniqueConstraint(
             "tenant_id",
@@ -252,6 +255,7 @@ def upgrade() -> None:
         sa.Column("id", u, server_default=sa.text("gen_random_uuid()"), nullable=False),
         sa.Column("tenant_id", u, nullable=False),
         sa.Column("draft_id", u, nullable=False),
+        sa.Column("source_artifact_id", u, nullable=False),
         sa.Column("revision", sa.Integer(), nullable=False),
         sa.Column("identity_sha256", sa.String(64), nullable=False),
         sa.Column("content_sha256", sa.String(64), nullable=False),
@@ -266,6 +270,11 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["tenant_id", "draft_id"],
             ["studio_drafts.tenant_id", "studio_drafts.id"],
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "source_artifact_id"],
+            ["studio_source_artifacts.tenant_id", "studio_source_artifacts.id"],
             ondelete="RESTRICT",
         ),
         sa.ForeignKeyConstraint(
@@ -443,6 +452,11 @@ def upgrade() -> None:
                    SELECT 1 FROM studio_drafts draft
                    WHERE draft.tenant_id = OLD.tenant_id
                      AND draft.source_artifact_id = OLD.id
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM studio_draft_snapshots snapshot
+                   WHERE snapshot.tenant_id = OLD.tenant_id
+                     AND snapshot.source_artifact_id = OLD.id
                )
             THEN RETURN OLD; END IF;
             RAISE EXCEPTION 'studio source, snapshot, and audit rows are append-only until authorized purge';

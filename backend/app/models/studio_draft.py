@@ -41,6 +41,9 @@ class StudioSourceArtifact(Base):
             "format",
             name="uq_studio_source_artifacts_contract",
         ),
+        UniqueConstraint(
+            "tenant_id", "id", name="uq_studio_source_artifacts_tenant_id"
+        ),
         CheckConstraint(
             "sha256 ~ '^[0-9a-f]{64}$'", name="ck_studio_source_artifacts_hash"
         ),
@@ -283,6 +286,11 @@ class StudioDraftSnapshot(Base):
             ["studio_drafts.tenant_id", "studio_drafts.id"],
             ondelete="RESTRICT",
         ),
+        ForeignKeyConstraint(
+            ["tenant_id", "source_artifact_id"],
+            ["studio_source_artifacts.tenant_id", "studio_source_artifacts.id"],
+            ondelete="RESTRICT",
+        ),
         Index(
             "ix_studio_snapshots_draft_created", "tenant_id", "draft_id", "created_at"
         ),
@@ -296,6 +304,9 @@ class StudioDraftSnapshot(Base):
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     draft_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    source_artifact_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
     revision: Mapped[int] = mapped_column(Integer, nullable=False)
     identity_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
