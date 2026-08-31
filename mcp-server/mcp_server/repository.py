@@ -91,7 +91,7 @@ class CourtListenerRepository:
             f"oc.corpus_version = {promoted_version}",
             f"cl.corpus_version = {promoted_version}",
             "cl.public_namespace = 'public-authority'",
-            "EXISTS (SELECT 1 FROM citator_public_source_admissions pa WHERE pa.source_key = cl.source_key AND pa.active IS TRUE AND pa.namespace = 'public-authority')",
+            "EXISTS (SELECT 1 FROM legal_sources ls JOIN citator_public_source_admissions pa ON pa.source_key = ls.source_key AND pa.active IS TRUE AND pa.namespace = 'public-authority' WHERE ls.source_key = cl.source_key AND ls.public_namespace = 'public-authority' AND ls.enabled IS TRUE AND ls.storage_policy <> 'prohibited' AND ls.rights_decision IN ('official', 'open', 'licensed') AND ls.reviewed_at IS NOT NULL AND ls.reviewed_by IS NOT NULL AND ls.metadata->>'catalog_schema_version' = pa.catalog_schema_version AND ls.metadata->>'implementation_status' IS NOT NULL AND pa.manifest_reference <> '' AND pa.manifest_sha256 <> '')",
         ]
         params: list[Any] = []
         if jurisdiction:
@@ -657,6 +657,7 @@ class CourtListenerRepository:
                        r.deterministic_metadata, v.as_of AS corpus_as_of,
                        v.status AS corpus_status, s.source_key,
                        s.enabled, s.rights_decision, s.reviewed_at, s.reviewed_by,
+                       s.public_namespace, s.storage_policy,
                        s.expected_cadence, s.metadata->>'catalog_schema_version'
                          AS catalog_schema_version,
                        s.metadata->>'implementation_status' AS implementation_status,
@@ -667,6 +668,7 @@ class CourtListenerRepository:
                 JOIN citator_public_source_admissions pa
                   ON pa.source_key=s.source_key AND pa.active IS TRUE
                  AND pa.namespace='public-authority'
+                 AND pa.catalog_schema_version=s.metadata->>'catalog_schema_version'
                 WHERE r.authority_key=%s AND r.corpus_version=(
                   SELECT version FROM authority_corpus_versions WHERE status='promoted'
                   ORDER BY promoted_at DESC NULLS LAST LIMIT 1
@@ -807,6 +809,8 @@ class CourtListenerRepository:
             and bool(record.get("expected_cadence"))
             and bool(record.get("catalog_schema_version"))
             and bool(record.get("implementation_status"))
+            and record.get("public_namespace") == "public-authority"
+            and record.get("storage_policy") != "prohibited"
         )
         has_reviewable_evidence = bool(history or citing_references)
         status = (

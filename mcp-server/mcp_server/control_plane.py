@@ -328,12 +328,15 @@ def promote_corpus_version(conn: Any, *, version: str, actor: str, reason: str) 
                  FROM authority_case_chunks ch
                  JOIN authority_case_clusters cl
                    ON cl.corpus_version=ch.corpus_version AND cl.cluster_id=ch.cluster_id
-                 LEFT JOIN citator_public_source_admissions pa
+                LEFT JOIN citator_public_source_admissions pa
                    ON pa.source_key=cl.source_key AND pa.active IS TRUE
                   AND pa.namespace='public-authority'
                 WHERE ch.corpus_version=%s
                   AND (cl.public_namespace IS DISTINCT FROM 'public-authority'
-                       OR pa.source_key IS NULL)""",
+                       OR pa.source_key IS NULL
+                       OR cl.source_key IS NULL
+                       OR pa.catalog_schema_version IS DISTINCT FROM (SELECT metadata->>'catalog_schema_version' FROM legal_sources WHERE source_key=cl.source_key)
+                       OR pa.manifest_reference = '' OR pa.manifest_sha256 = '')""",
             [version],
         )
         if cur.fetchone()[0]:
@@ -350,7 +353,13 @@ def promote_corpus_version(conn: Any, *, version: str, actor: str, reason: str) 
                 WHERE d.corpus_version=%s
                   AND (d.public_namespace IS DISTINCT FROM 'public-authority'
                        OR s.public_namespace IS DISTINCT FROM 'public-authority'
-                       OR pa.source_key IS NULL)""",
+                       OR s.enabled IS DISTINCT FROM TRUE
+                       OR s.storage_policy = 'prohibited'
+                       OR s.rights_decision NOT IN ('official','open','licensed')
+                       OR s.reviewed_at IS NULL OR s.reviewed_by IS NULL
+                       OR pa.source_key IS NULL
+                       OR pa.catalog_schema_version IS DISTINCT FROM s.metadata->>'catalog_schema_version'
+                       OR pa.manifest_reference = '' OR pa.manifest_sha256 = '')""",
             [version],
         )
         if cur.fetchone()[0]:
@@ -848,6 +857,7 @@ def _citator_authority_is_permitted(
         cur.execute(
             """
             SELECT r.source_key, s.enabled, s.rights_decision, s.reviewed_at, s.reviewed_by,
+                   s.public_namespace, s.storage_policy,
                    s.metadata->>'catalog_schema_version', s.metadata->>'implementation_status',
                    r.currentness_state, p.catalog_schema_version, p.manifest_reference, p.manifest_sha256,
                    p.reviewed_at, p.reviewed_by
@@ -857,6 +867,9 @@ def _citator_authority_is_permitted(
             JOIN authority_corpus_versions v ON v.version=r.corpus_version
             WHERE r.corpus_version=%s AND r.authority_key=%s
               AND v.status='promoted' AND p.active=TRUE
+              AND p.namespace='public-authority'
+              AND s.public_namespace='public-authority'
+              AND s.storage_policy <> 'prohibited'
             """,
             [corpus_version, authority_key],
         )
@@ -867,14 +880,16 @@ def _citator_authority_is_permitted(
         and row[2] in {"official", "open", "licensed"}
         and row[3]
         and row[4]
-        and row[5]
-        and row[6]
-        and row[7] == "current"
-        and row[8] == row[5]
-        and row[9]
-        and row[10]
+        and row[5] == "public-authority"
+        and row[6] != "prohibited"
+        and row[7]
+        and row[8]
+        and row[9] == "current"
+        and row[10] == row[7]
         and row[11]
         and row[12]
+        and row[13]
+        and row[14]
     )
 
 
