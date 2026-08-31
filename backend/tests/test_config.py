@@ -1,4 +1,3 @@
-import os
 from types import SimpleNamespace
 
 import pytest
@@ -166,11 +165,11 @@ def test_token_encryption_key_invalid_raises(monkeypatch):
         validate_token_encryption_key(settings)
 
 
-def test_mcp_server_url_defaults_to_empty_for_local_fallback():
-    os.environ["TOKEN_ENCRYPTION_KEY"] = Fernet.generate_key().decode()
-    os.environ["DATABASE_URL"] = "postgresql://test"
-    os.environ["SECRET_KEY"] = "test-secret"
-    os.environ.pop("MCP_SERVER_URL", None)
+def test_mcp_server_url_defaults_to_empty_for_local_fallback(monkeypatch):
+    monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test")
+    monkeypatch.setenv("SECRET_KEY", "test-secret")
+    monkeypatch.delenv("MCP_SERVER_URL", raising=False)
 
     settings = Settings(_env_file=None)
 
