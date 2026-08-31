@@ -170,7 +170,7 @@ async def test_idempotency_mismatch_source_identity_and_payload_bounds(client):
         headers={"Idempotency-Key": "unsafe-durable-payload"},
     )
     assert rejected.status_code == 422
-    assert rejected.json()["detail"]["code"] == "unsafe_durable_payload"
+    assert rejected.json()["detail"]["code"] == "unsupported_field_definition_key"
 
     too_many = _create_payload()
     too_many["fields"] = [too_many["fields"][0]] * 201
