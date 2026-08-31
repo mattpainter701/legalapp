@@ -114,6 +114,20 @@ _PURGE_ONLY_TABLES = {
     "lead_channel_consents",
     "lead_funnel_events",
     "matter_smb_shares",
+    # Configurable workflow definitions, custom values, and immutable run
+    # evidence are tenant-specific legal work product. They are removed only
+    # by the verified expired-demo purge and are never fixture-cloned.
+    "contact_custom_field_values",
+    "custom_field_definitions",
+    "matter_custom_field_values",
+    "matter_workflow_checklist_definitions",
+    "matter_workflow_field_requirements",
+    "matter_workflow_run_events",
+    "matter_workflow_run_steps",
+    "matter_workflow_runs",
+    "matter_workflow_stage_definitions",
+    "matter_workflow_template_versions",
+    "matter_workflow_templates",
     "mcp_product_keys",
     "mcp_usage_events",
     "mediation_invites",

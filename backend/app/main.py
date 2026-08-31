@@ -109,6 +109,7 @@ from app.routers.matter_document_revisions import (
 from app.routers.brief_checks import router as brief_checks_router
 from app.routers.research_workspaces import router as research_workspaces_router
 from app.routers.studio_drafts import router as studio_drafts_router
+from app.routers.configurable_workflows import router as configurable_workflows_router
 from app.routers.demo import router as demo_router
 
 settings = get_settings()
@@ -474,6 +475,7 @@ app.include_router(matter_document_revisions_router)
 app.include_router(brief_checks_router)
 app.include_router(research_workspaces_router)
 app.include_router(studio_drafts_router)
+app.include_router(configurable_workflows_router)
 
 
 # ─────────────────────────────────────────────────────

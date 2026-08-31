@@ -1,71 +1,65 @@
 ## Summary
 
-Adds the versioned, tenant-isolated server foundation for Template Studio while
-preserving `DocumentTemplate` as the published compatibility record used by
-existing render, generation, and intake workflows.
+Adds a bounded, tenant-isolated configurable workflow slice for matter teams:
+typed firm-defined matter fields plus a tenant-safe contact-field API foundation;
+immutable approved template versions
+with ordered stages, checklists, relative tasks, assignee roles, and required
+fields; and preview-first matter application with explicit legal approval.
 
-The change introduces a trusted tenant source registry that validates and
-canonicalizes Markdown/PDF/DOCX bytes, persists their exact canonical format,
-media type, and SHA-256, and rechecks them through an internal opaque reader.
-Per-tenant count and aggregate-byte admission quotas are serialized and dedupe
-before charging; a bounded caller-owned orphan seam can remove only old,
-unreferenced artifacts. Immutable snapshots retain a tenant-scoped source
-artifact reference, so cleanup cannot discard historical bytes after source
-replacement; source attachment and cleanup use one serialized lock order. The
-draft foundation adds stable draft
-and field UUIDs, monotonic revisions and strong ETags, separate canonical field
-definitions and format-specific placements, content-addressed redacted
-snapshots, bounded patch operations, audit attribution, idempotency retention,
-archive/cancellation state, evidence invalidation, and a narrow compatibility
-draft-only promotion path with a locked compatibility-base hash. All seven
-Studio tables use FORCE RLS. Source, snapshot, and audit rows reject UPDATE and
-DELETE in ordinary application transactions and are append-only until a
-database-verified expired-demo purge; source rows additionally permit only the
-bounded old-unreferenced cleanup seam. Generic retention purge is deferred.
-Phase 2 wires no cleanup scheduler. Verified demo purge deletes the full Studio
-dependency chain while the authoritative demo-session claim remains live.
+Preview binds the exact template, matter, fields, assignments, and planned task
+snapshot. Apply rejects stale previews, serializes matter/template state,
+deduplicates retries, and creates all tasks in one transaction. Database-level
+FORCE RLS, composite tenant foreign keys, immutable run events/steps, stable
+idempotency, and compensating task-cancellation/stage-restoration boundaries
+make execution and rollback reviewable without deleting history. Workflow
+authoring and legal approval remain independently assignable capabilities.
 
-The REST/service surface supports trusted source registration, create/import,
-resume/read, patch, validate,
-snapshot/read-snapshot, worker-safe source-contract read, and safe promotion.
-The canonical documentation records the Phase 3 render/evidence contract,
-Phase 5 placement/renderer ownership, and Phase 4 proposal/MCP extension seam.
-No Studio frontend is included.
+The settings UI is embedded in the existing matter-owned surface and includes
+five editable starter presets without persisting them automatically. This slice
+does not claim a general no-code builder, arbitrary triggers/actions, automatic
+outbound email, native DOCX/Smart Fill, generalized Studio automation, or
+generalized contact-detail UI. Contact-field values are intentionally not
+advertised as editable in the matter UI pending coordinated CRM integration.
 
 ## Validation
 
-- Local corrective validation: 72 database-free Studio contract, source-package
-  trust, migration/static-security, demo-purge-plan, and release-policy tests
-  passed; the complete backend collection found 2,920 tests. Ruff lint/format,
-  Python compileall, `git diff --check`, and offline Alembic
-  `146_research_workspaces` to/from `147_studio_drafts` SQL generation passed.
-  This host had no PostgreSQL listener and its Docker daemon was unresponsive,
-  so PostgreSQL runtime coverage was intentionally left to CI.
-- Corrective implementation head `e56c0b060de76606a45a9abae634330172e466de`
-  passed the PostgreSQL-backed backend suite (2,919 passed, 1 skipped; 77%
-  overall and 86% changed-line coverage), tenant migration/RLS rehearsal,
-  research-workspace PostgreSQL rehearsal, lint, frontend build, browser E2E,
-  Office build, CodeQL, security/dependency/SBOM, release/policy checks, and
-  Merge Gate.
-- This evidence-only revision changes `PR_DESCRIPTION.md` and must receive its
-  own completely fresh required check set and Merge Gate before readiness. The
-  PR remains draft and unmerged pending master authorization.
+- Focused backend workflow, schema, migration, capability, demo-lifecycle,
+  demo-registry, release, and Alembic tests: 96 passed, including a fresh-process
+  purge-plan registration regression. The rebased migration-safety gate's
+  focused contract suite added another 11 passed.
+- Focused frontend workflow/settings tests: 20 passed. Full frontend suite:
+  90 files and 502 tests passed. ESLint completed with zero
+  errors and two pre-existing `no-alert` warnings in `ChatPage.jsx` and
+  `ProfilePage.jsx`; the production Vite build passed.
+- Ruff lint and format checks passed for every changed Python file.
+  `git diff --check`, release catalog regeneration/check, committed migration
+  safety from merge base `0acf2d53`, and offline Alembic SQL generation for
+  `147_studio_drafts -> 148_configurable_workflows` passed.
+- This host has no PostgreSQL listener or `psql`, and its Docker Desktop engine
+  pipe is absent. The replacement rehearsal now covers the deployed
+  147-to-148 migration, NOBYPASSRLS TEMP-shadow attacks, exact-only template
+  approval, approval-versus-child-mutation serialization, first-value versus
+  field-contract serialization in both commit orders, production `autoflush=False`
+  multi-evidence rollback, and exact-session deletion of all 11 workflow tables
+  through the real expired-demo purge service. That
+  executable evidence remains mandatory on the final pushed head through the
+  dedicated `Configurable workflow PostgreSQL rehearsal` CI job, full CI,
+  CodeQL, and Merge Gate. The draft must not become merge-ready without those
+  exact-head results and independent review.
 
 ## Merge policy attestations
 
 - [x] Documentation updated
 - [ ] No documentation impact
-- [ ] Customer release notes updated
-- [x] No customer-facing release note
+- [x] Customer release notes updated
+- [ ] No customer-facing release note
 - [x] Security and privacy impact reviewed
 
 ## MCP documentation handoff
 
-- [x] MCP documentation updated
-- [ ] MCP documentation not needed
-- MCP area: Future Workspace MCP template, proposal, artifact, render-job, and review workflow
-- Wiki handoff note: `docs/template-studio-backend.md` defines the authoritative
-  Phase 2 domain/service boundary, revision and idempotency semantics, proposal
-  migration ownership, canonical source validation and quotas, redaction rules,
-  artifact/job references, 202 status compatibility, and evidence recheck
-  requirements. This PR exposes no MCP tool.
+- [ ] MCP documentation updated
+- [x] MCP documentation not needed
+- MCP area: backend application router-registration boundary (no MCP endpoint, protocol, OAuth scope, or client contract change)
+- Wiki handoff note: This slice adds no MCP endpoint, tool, protocol, OAuth
+  scope, or MCP client contract; workflow access is through the existing REST
+  and matter UI surfaces.

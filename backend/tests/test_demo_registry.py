@@ -46,6 +46,25 @@ def test_assistant_runtime_state_is_purged_but_never_cloned():
     assert all(not DEMO_TABLE_REGISTRY[table].clone for table in runtime_tables)
 
 
+def test_configurable_workflow_data_is_purge_only_legal_work_product():
+    workflow_tables = {
+        "custom_field_definitions",
+        "matter_custom_field_values",
+        "contact_custom_field_values",
+        "matter_workflow_templates",
+        "matter_workflow_template_versions",
+        "matter_workflow_stage_definitions",
+        "matter_workflow_checklist_definitions",
+        "matter_workflow_field_requirements",
+        "matter_workflow_runs",
+        "matter_workflow_run_events",
+        "matter_workflow_run_steps",
+    }
+    assert workflow_tables <= set(DEMO_TABLE_REGISTRY)
+    assert all(DEMO_TABLE_REGISTRY[table].purge for table in workflow_tables)
+    assert all(not DEMO_TABLE_REGISTRY[table].clone for table in workflow_tables)
+
+
 def test_mediation_release_grants_clone_with_portal_business_content():
     release_grant_tables = {
         "mediation_document_recipients",

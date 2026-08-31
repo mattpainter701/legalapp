@@ -13,6 +13,19 @@ from unittest.mock import AsyncMock, Mock
 
 from app.database import set_tenant_context
 from app.models.contact import Contact
+from app.models.configurable_workflow import (
+    ContactCustomFieldValue,
+    CustomFieldDefinition,
+    MatterCustomFieldValue,
+    MatterWorkflowChecklistDefinition,
+    MatterWorkflowFieldRequirement,
+    MatterWorkflowRun,
+    MatterWorkflowRunEvent,
+    MatterWorkflowRunStep,
+    MatterWorkflowStageDefinition,
+    MatterWorkflowTemplate,
+    MatterWorkflowTemplateVersion,
+)
 from app.models.operator_audit import OperatorAuditLog
 from app.models.demo_session import DemoSession
 from app.models.llm_routing_profile import LLMRoutingProfile
@@ -612,6 +625,152 @@ async def test_verified_purge_deletes_demo_and_preserves_fixture(
             ),
         ]
     )
+    contact_id = uuid.uuid4()
+    matter_field_id, contact_field_id = uuid.uuid4(), uuid.uuid4()
+    template_id, version_id, run_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    db_session.add(
+        Contact(
+            id=contact_id,
+            tenant_id=tenant_id,
+            first_name="Disposable",
+            last_name="Workflow contact",
+            created_by_user_id=user_id,
+        )
+    )
+    db_session.add_all(
+        [
+            CustomFieldDefinition(
+                id=matter_field_id,
+                tenant_id=tenant_id,
+                entity_type="matter",
+                field_key="demo_matter_field",
+                label="Demo matter field",
+                field_type="text",
+                created_by_user_id=user_id,
+            ),
+            CustomFieldDefinition(
+                id=contact_field_id,
+                tenant_id=tenant_id,
+                entity_type="contact",
+                field_key="demo_contact_field",
+                label="Demo contact field",
+                field_type="text",
+                created_by_user_id=user_id,
+            ),
+            MatterWorkflowTemplate(
+                id=template_id,
+                tenant_id=tenant_id,
+                name="Disposable approved workflow",
+                created_by_user_id=user_id,
+            ),
+        ]
+    )
+    await db_session.flush()
+    workflow_version = MatterWorkflowTemplateVersion(
+        id=version_id,
+        tenant_id=tenant_id,
+        template_id=template_id,
+        version=1,
+        status="draft",
+        initial_stage_key="initial",
+        definition_sha256="a" * 64,
+        created_by_user_id=user_id,
+    )
+    db_session.add(workflow_version)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            MatterCustomFieldValue(
+                tenant_id=tenant_id,
+                matter_id=matter_id,
+                field_definition_id=matter_field_id,
+                value_json="demo",
+                value_hmac="b" * 64,
+                updated_by_user_id=user_id,
+            ),
+            ContactCustomFieldValue(
+                tenant_id=tenant_id,
+                contact_id=contact_id,
+                field_definition_id=contact_field_id,
+                value_json="demo",
+                value_hmac="c" * 64,
+                updated_by_user_id=user_id,
+            ),
+            MatterWorkflowStageDefinition(
+                tenant_id=tenant_id,
+                template_version_id=version_id,
+                stage_key="initial",
+                label="Initial",
+                position=0,
+            ),
+            MatterWorkflowFieldRequirement(
+                tenant_id=tenant_id,
+                template_version_id=version_id,
+                field_definition_id=matter_field_id,
+            ),
+        ]
+    )
+    await db_session.flush()
+    db_session.add(
+        MatterWorkflowChecklistDefinition(
+            tenant_id=tenant_id,
+            template_version_id=version_id,
+            stage_key="initial",
+            item_key="review",
+            title="Review demo file",
+            position=0,
+            task_type="review",
+            priority="medium",
+            due_offset_days=1,
+            assignee_role="matter_owner",
+        )
+    )
+    await db_session.flush()
+    workflow_version.status = "approved"
+    workflow_version.approved_by_user_id = user_id
+    workflow_version.approved_at = datetime.now(timezone.utc)
+    await db_session.flush()
+    db_session.add(
+        MatterWorkflowRun(
+            id=run_id,
+            tenant_id=tenant_id,
+            matter_id=matter_id,
+            template_version_id=version_id,
+            idempotency_key="demo-applied-workflow",
+            request_sha256="d" * 64,
+            template_sha256="a" * 64,
+            matter_sha256="e" * 64,
+            preview_sha256="f" * 64,
+            preview_json={"initial_stage": {"label": "Initial"}, "tasks": []},
+            status="applied",
+            prior_stage="New",
+            planned_by_user_id=user_id,
+            approved_by_user_id=user_id,
+            approved_at=datetime.now(timezone.utc),
+        )
+    )
+    await db_session.flush()
+    db_session.add_all(
+        [
+            MatterWorkflowRunEvent(
+                tenant_id=tenant_id,
+                run_id=run_id,
+                sequence=1,
+                event_type="applied",
+                actor_user_id=user_id,
+                evidence_sha256="1" * 64,
+            ),
+            MatterWorkflowRunStep(
+                tenant_id=tenant_id,
+                run_id=run_id,
+                sequence=1,
+                step_type="matter_stage",
+                action_key="initial",
+                status="succeeded",
+                evidence_sha256="2" * 64,
+            ),
+        ]
+    )
     await db_session.commit()
     # Matching user-settable context is still insufficient while this is an
     # active demo session. The DB trigger requires the service's claimed,
@@ -690,6 +849,21 @@ async def test_verified_purge_deletes_demo_and_preserves_fixture(
     assert deleted["research_workspace_members"] == 1
     for studio_table in demo_purge._STUDIO_PURGE_ORDER:
         assert deleted[studio_table] == 1
+    expected_workflow_counts = {
+        "custom_field_definitions": 2,
+        "matter_custom_field_values": 1,
+        "contact_custom_field_values": 1,
+        "matter_workflow_templates": 1,
+        "matter_workflow_template_versions": 1,
+        "matter_workflow_stage_definitions": 1,
+        "matter_workflow_checklist_definitions": 1,
+        "matter_workflow_field_requirements": 1,
+        "matter_workflow_runs": 1,
+        "matter_workflow_run_events": 1,
+        "matter_workflow_run_steps": 1,
+    }
+    for workflow_table, expected_count in expected_workflow_counts.items():
+        assert deleted[workflow_table] == expected_count
     assert await db_session.scalar(
         select(OperatorAuditLog.id).where(
             OperatorAuditLog.action == "demo.session.purged"

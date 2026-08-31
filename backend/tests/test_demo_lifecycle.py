@@ -1,6 +1,11 @@
+import os
+import subprocess
+import sys
 import uuid
+from pathlib import Path
 
 import pytest
+from cryptography.fernet import Fernet
 from fastapi import HTTPException
 
 from app.middleware.demo_quota import _surface
@@ -50,6 +55,43 @@ def test_runtime_purge_plan_registers_every_demo_table():
     from app.services.demo_registry import DEMO_TABLE_REGISTRY
 
     assert set(_purge_tables()) == set(DEMO_TABLE_REGISTRY)
+
+
+def test_runtime_purge_plan_is_complete_in_a_fresh_process(monkeypatch):
+    """The purge worker and DB rehearsal must not depend on router import order."""
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+    backend_dir = Path(__file__).resolve().parents[1]
+    child_env = {
+        key: value
+        for key in ("PATH", "PATHEXT", "SYSTEMROOT", "WINDIR")
+        if (value := os.environ.get(key))
+    }
+    child_env.update(
+        {
+            "DATABASE_URL": (
+                "postgresql+asyncpg://test:test@localhost:5432/legalapp_test"
+            ),
+            "SECRET_KEY": f"purge-registry-{uuid.uuid4().hex}",
+            "TOKEN_ENCRYPTION_KEY": Fernet.generate_key().decode(),
+        }
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from app.services.demo_purge import _purge_tables; "
+                "from app.services.demo_registry import DEMO_TABLE_REGISTRY; "
+                "assert set(_purge_tables()) == set(DEMO_TABLE_REGISTRY)"
+            ),
+        ],
+        cwd=backend_dir,
+        capture_output=True,
+        text=True,
+        check=False,
+        env=child_env,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
 
 
 @pytest.mark.parametrize(

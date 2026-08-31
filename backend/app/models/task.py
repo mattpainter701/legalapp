@@ -28,6 +28,7 @@ class Task(Base):
 
     __tablename__ = "tasks"
     __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_tasks_tenant_id"),
         Index("idx_tasks_tenant_id", "tenant_id"),
         Index("idx_tasks_matter_id", "matter_id"),
         Index("idx_tasks_assigned_to", "tenant_id", "assigned_to_user_id"),

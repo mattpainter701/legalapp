@@ -3,7 +3,8 @@ import { listRoles, createRole, deleteRole } from '../../api'
 
 const CAPABILITIES = [
   'manage_users', 'manage_roles', 'manage_billing', 'view_billing',
-  'manage_matters', 'manage_intake', 'manage_documents',
+  'manage_matters', 'manage_intake', 'manage_documents', 'manage_workflows',
+  'approve_legal_work',
   'manage_integrations', 'admin_settings', 'use_premium_ai',
 ]
 

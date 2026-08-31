@@ -2,6 +2,19 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.31.2",
+      "version": "2026.08.31.2",
+      "title": "Configurable matter workflows with reviewable runs",
+      "published_at": "2026-08-31",
+      "summary": "Firms can define bounded matter data and apply approved stage and checklist templates through previewed, auditable workflow runs.",
+      "highlights": [
+        {"title": "Model firm-specific matter data", "description": "Administrators can define typed matter fields with stable keys, required and sensitive handling, bounded options, and safe retirement controls in the matter workflow surface."},
+        {"title": "Preview before applying a workflow", "description": "Approved matter templates show the exact initial stage, required data, assignee gaps, checklist tasks, and snapshot hash before any matter or task changes occur."},
+        {"title": "Apply once with durable evidence", "description": "Approved runs create deterministic relative tasks in one transaction, reject stale previews, deduplicate retries, and retain immutable run and step evidence."},
+        {"title": "Compensate without erasing history", "description": "Rollback cancels only unchanged workflow-created tasks, restores the prior matter stage, reports blockers for manual review, and keeps authoring separate from legal approval."}
+      ]
+    },
+    {
       "id": "2026.08.31.1",
       "version": "2026.08.31.1",
       "title": "Template Studio workspaces and resumable setup",
