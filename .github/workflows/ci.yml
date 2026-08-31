@@ -293,6 +293,11 @@ jobs:
         run: |
           alembic upgrade 148_configurable_workflows
           alembic upgrade 148_configurable_workflows
+      - name: Verify current purge is safe on the coherent pre-SMS schema
+        run: python backend/scripts/rehearse_demo_purge_schema_guard.py --expected none
+      - name: Advance to the current application schema for the full rehearsal
+        working-directory: backend
+        run: alembic upgrade head
       - name: Provision a production-shaped runtime role
         env:
           PGPASSWORD: test
@@ -363,6 +368,8 @@ jobs:
         run: |
           alembic upgrade 149_sms_lifecycle
           alembic upgrade 149_sms_lifecycle
+      - name: Verify current purge sees the complete SMS schema family
+        run: python backend/scripts/rehearse_demo_purge_schema_guard.py --expected all
       - name: Provision a production-shaped SMS runtime role
         env:
           PGPASSWORD: test

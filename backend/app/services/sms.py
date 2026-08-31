@@ -245,23 +245,15 @@ def _append_sms_outcome_audit(
     )
 
 
-async def _lock_sms_matter_authorization(
+async def _lock_sms_actor(
     db: AsyncSession,
     *,
     tenant_id,
     user_id,
-    matter_id,
-    contact_id,
     required_capabilities: frozenset[str],
-) -> dict[str, str] | None:
-    """Fence live actor capability, matter access, and recipient binding.
+) -> User | None:
+    """Lock and revalidate one live actor and the actor's persisted roles."""
 
-    The user, that user's role assignments, and the assigned roles are locked
-    across provider I/O.  A deactivation or capability revocation therefore
-    either commits before this fence and blocks the send, or waits until the
-    already-authorized provider attempt has durably recorded its outcome.
-    Locks are actor-local; unrelated tenant users remain concurrent.
-    """
     user = await db.scalar(
         select(User)
         .where(User.id == user_id, User.tenant_id == tenant_id)
@@ -290,16 +282,28 @@ async def _lock_sms_matter_authorization(
         capabilities.update(assigned_role.capabilities or [])
     if not required_capabilities.issubset(capabilities):
         return None
+    return user
+
+
+async def _lock_sms_matter_access(
+    db: AsyncSession,
+    *,
+    tenant_id,
+    user: User,
+    matter_id,
+) -> tuple[Matter, str] | None:
+    """Lock and revalidate the actor's current access to one matter."""
+
     matter = await db.scalar(
         select(Matter)
         .where(Matter.id == matter_id, Matter.tenant_id == tenant_id)
-        .with_for_update()
+        .with_for_update(of=Matter)
     )
     if matter is None:
         return None
     actor_binding = "admin" if user.role == "admin" else None
     assignment = None
-    if actor_binding is None and matter.user_id == user_id:
+    if actor_binding is None and matter.user_id == user.id:
         actor_binding = "owner"
     elif actor_binding is None:
         assignment = await db.scalar(
@@ -307,7 +311,7 @@ async def _lock_sms_matter_authorization(
             .where(
                 MatterAssignment.tenant_id == tenant_id,
                 MatterAssignment.matter_id == matter_id,
-                MatterAssignment.user_id == user_id,
+                MatterAssignment.user_id == user.id,
             )
             .with_for_update()
         )
@@ -315,6 +319,43 @@ async def _lock_sms_matter_authorization(
             actor_binding = "assignment"
     if actor_binding is None:
         return None
+    return matter, actor_binding
+
+
+async def _lock_sms_matter_authorization(
+    db: AsyncSession,
+    *,
+    tenant_id,
+    user_id,
+    matter_id,
+    contact_id,
+    required_capabilities: frozenset[str],
+) -> dict[str, str] | None:
+    """Fence live actor capability, matter access, and recipient binding.
+
+    The user, that user's role assignments, and the assigned roles are locked
+    across provider I/O.  A deactivation or capability revocation therefore
+    either commits before this fence and blocks the operation, or waits until
+    the already-authorized provider attempt has durably recorded its outcome.
+    Locks are actor-local; unrelated tenant users remain concurrent.
+    """
+    user = await _lock_sms_actor(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        required_capabilities=required_capabilities,
+    )
+    if user is None:
+        return None
+    access = await _lock_sms_matter_access(
+        db,
+        tenant_id=tenant_id,
+        user=user,
+        matter_id=matter_id,
+    )
+    if access is None:
+        return None
+    matter, actor_binding = access
     if matter.client_contact_id == contact_id:
         return {"actor_binding": actor_binding, "recipient_binding": "client"}
     party = await db.scalar(
@@ -412,7 +453,9 @@ def _provider_lookup_matches_reserved_dispatch(
     return True
 
 
-async def _config(db: AsyncSession, tenant_id) -> SmsProviderConfig:
+async def _config(
+    db: AsyncSession, tenant_id, *, lock_for_provider_io: bool = False
+) -> SmsProviderConfig:
     statement = (
         select(SmsProviderConfig)
         .where(
@@ -422,6 +465,11 @@ async def _config(db: AsyncSession, tenant_id) -> SmsProviderConfig:
         )
         .execution_options(populate_existing=True)
     )
+    if lock_for_provider_io:
+        # A shared row fence allows concurrent provider operations while
+        # forcing admin rotation/deactivation (FOR UPDATE) to wait until the
+        # exact-generation provider outcome is durable.
+        statement = statement.with_for_update(read=True)
     config = await db.scalar(statement)
     if (
         not config
@@ -720,6 +768,10 @@ async def apply_compliance_keyword(
             consent.sms_status = "active" if can_restart else "blocked"
             consent.sms_allowed = can_restart
         if not can_restart:
+            suppression.is_suppressed = True
+            suppression.reason = "provider_start_blocked"
+            suppression.suppressed_at = now
+            suppression.released_at = None
             append_sms_number_suppression_event(
                 db,
                 suppression=suppression,
@@ -1288,10 +1340,10 @@ async def send_sms(
             code="sms_quiet_hours",
         )
     try:
-        # Re-read the active generation immediately before submission. The
-        # recipient suppression fence, not this tenant-global config row, stays
-        # locked across provider I/O so unrelated destinations remain parallel.
-        config = await _config(db, tenant_id)
+        # Re-read and share-lock the active generation immediately before
+        # submission. Concurrent sends remain compatible, while an admin
+        # rotation/deactivation waits until this exact outcome is durable.
+        config = await _config(db, tenant_id, lock_for_provider_io=True)
         auth_token = provider_auth_token(config)
         provider_config_generation = config.generation
         account_sid = str(config.account_sid).strip()
@@ -1532,11 +1584,33 @@ async def apply_inbound(
     to_number = params.get("To")
     body = (params.get("Body") or "").strip()[:1600]
     token = body.upper().split()[0] if body else ""
+    compliance = None
+    if token in {
+        "STOP",
+        "UNSUBSCRIBE",
+        "CANCEL",
+        "END",
+        "QUIT",
+        "START",
+        "UNSTOP",
+        "HELP",
+    }:
+        # STOP/START must take the tenant/number suppression fence before any
+        # Contact row. Outbound dispatch and direct compliance changes use the
+        # same order, eliminating a webhook-vs-send deadlock window.
+        compliance = await apply_compliance_keyword(
+            db,
+            tenant_id=tenant_id,
+            from_number=from_number,
+            keyword=token,
+            provider_message_id=provider_message_id,
+        )
     # Lock routing inputs in one canonical order before deriving a timeline
-    # target: Contact -> Matter -> MatterParty.  Contact phone is not stored as
-    # a normalized indexed value, so the tenant's contact rows are deliberately
-    # locked in UUID order.  This also fences a null/old phone becoming the
-    # inbound number while routing is decided.
+    # target after the optional suppression fence: Contact -> Matter ->
+    # MatterParty. Contact phone is not stored as a normalized indexed value,
+    # so the tenant's contact rows are deliberately locked in UUID order. This
+    # also fences a null/old phone becoming the inbound number while routing is
+    # decided.
     contacts = (
         await db.scalars(
             select(Contact)
@@ -1579,7 +1653,7 @@ async def apply_inbound(
                     select(Matter)
                     .where(Matter.tenant_id == tenant_id, Matter.id.in_(matter_ids))
                     .order_by(Matter.id)
-                    .with_for_update()
+                    .with_for_update(of=Matter)
                 )
             ).all()
             locked_parties = (
@@ -1625,7 +1699,10 @@ async def apply_inbound(
         body=body,
         category="customer_reply",
         provider_status="received",
-        raw_provider_event={"provider_message_id": provider_message_id},
+        raw_provider_event={
+            "provider_message_id": provider_message_id,
+            **({"compliance": compliance} if compliance is not None else {}),
+        },
     )
     db.add(message)
     try:
@@ -1642,27 +1719,6 @@ async def apply_inbound(
         if replay:
             return replay
         raise SmsError("Inbound SMS replay could not be reconciled", 409)
-    if token in {
-        "STOP",
-        "UNSUBSCRIBE",
-        "CANCEL",
-        "END",
-        "QUIT",
-        "START",
-        "UNSTOP",
-        "HELP",
-    }:
-        compliance = await apply_compliance_keyword(
-            db,
-            tenant_id=tenant_id,
-            from_number=from_number,
-            keyword=token,
-            provider_message_id=provider_message_id,
-        )
-        message.raw_provider_event = {
-            **message.raw_provider_event,
-            "compliance": compliance,
-        }
     if not (contact and matter):
         db.add(
             SmsReviewItem(
@@ -1718,6 +1774,31 @@ async def resolve_review_item(
         raise SmsError("Inbound SMS evidence was not found", 404)
     now = datetime.now(timezone.utc)
     if decision == "reject":
+        reviewer = await _lock_sms_actor(
+            db,
+            tenant_id=tenant_id,
+            user_id=reviewer_user_id,
+            required_capabilities=frozenset({"manage_matters"}),
+        )
+        if reviewer is None:
+            raise SmsError("SMS review item was not found", 404)
+        candidate_matter_ids = sorted(
+            {uuid.UUID(str(value)) for value in (item.candidate_matter_ids or [])},
+            key=str,
+        )
+        if not candidate_matter_ids and reviewer.role != "admin":
+            raise SmsError("SMS review item was not found", 404)
+        for candidate_matter_id in candidate_matter_ids:
+            if (
+                await _lock_sms_matter_access(
+                    db,
+                    tenant_id=tenant_id,
+                    user=reviewer,
+                    matter_id=candidate_matter_id,
+                )
+                is None
+            ):
+                raise SmsError("SMS review item was not found", 404)
         item.status = "rejected"
         item.reviewed_by_user_id = reviewer_user_id
         item.reviewed_at = now
@@ -1725,13 +1806,16 @@ async def resolve_review_item(
         return item
     if decision != "resolve" or not contact_id or not matter_id:
         raise SmsError("Resolution requires one contact and matter", 422)
+    # Match outbound dispatch and inbound routing: once the review/message
+    # evidence is fenced, take the target Contact before actor/matter locks.
+    # Taking actor/matter first can deadlock with dispatch holding Contact while
+    # it performs its final live authorization check.
     contact = await db.scalar(
-        select(Contact).where(Contact.id == contact_id, Contact.tenant_id == tenant_id)
+        select(Contact)
+        .where(Contact.id == contact_id, Contact.tenant_id == tenant_id)
+        .with_for_update()
     )
-    matter = await db.scalar(
-        select(Matter).where(Matter.id == matter_id, Matter.tenant_id == tenant_id)
-    )
-    if contact is None or matter is None:
+    if contact is None:
         raise SmsError("Resolution target was not found", 404)
     try:
         current_phone = normalize_e164(contact.phone)
@@ -1741,15 +1825,18 @@ async def resolve_review_item(
         ) from exc
     if current_phone != message.from_number:
         raise SmsError("Resolution contact does not match the inbound phone", 409)
-    party = await db.scalar(
-        select(MatterParty.id).where(
-            MatterParty.tenant_id == tenant_id,
-            MatterParty.matter_id == matter_id,
-            MatterParty.contact_id == contact_id,
+    if (
+        await _lock_sms_matter_authorization(
+            db,
+            tenant_id=tenant_id,
+            user_id=reviewer_user_id,
+            matter_id=matter_id,
+            contact_id=contact_id,
+            required_capabilities=frozenset({"manage_matters"}),
         )
-    )
-    if matter.client_contact_id != contact_id and party is None:
-        raise SmsError("Resolution contact is not associated with the matter", 409)
+        is None
+    ):
+        raise SmsError("SMS review item was not found", 404)
     message.contact_id = contact_id
     message.matter_id = matter_id
     message.status = "received"
@@ -1774,10 +1861,12 @@ async def reconcile_sms_message(
 ) -> SmsMessage:
     """Record operator context or resolve uncertainty with exact provider truth."""
     message = await db.scalar(
-        select(SmsMessage).where(
+        select(SmsMessage)
+        .where(
             SmsMessage.id == sms_message_id,
             SmsMessage.tenant_id == tenant_id,
         )
+        .with_for_update()
     )
     if message is None or message.direction != "outbound":
         raise SmsError("Outbound SMS was not found", 404, code="sms_message_not_found")
@@ -1788,16 +1877,22 @@ async def reconcile_sms_message(
             sms_message_id=message.id,
             code="sms_reconciliation_not_required",
         )
+    if (
+        message.contact_id is None
+        or message.matter_id is None
+        or await _lock_sms_matter_authorization(
+            db,
+            tenant_id=tenant_id,
+            user_id=operator_user_id,
+            matter_id=message.matter_id,
+            contact_id=message.contact_id,
+            required_capabilities=frozenset({"manage_matters"}),
+        )
+        is None
+    ):
+        raise SmsError("Outbound SMS was not found", 404, code="sms_message_not_found")
     now = datetime.now(timezone.utc)
     if resolution == "operator_attested_unknown":
-        message = await db.scalar(
-            select(SmsMessage)
-            .where(
-                SmsMessage.id == sms_message_id,
-                SmsMessage.tenant_id == tenant_id,
-            )
-            .with_for_update()
-        )
         if (
             message is None
             or message.direction != "outbound"
@@ -1857,7 +1952,7 @@ async def reconcile_sms_message(
                 reconciliation_required=True,
                 code="sms_provider_identity_mismatch",
             )
-        config = await _config(db, tenant_id)
+        config = await _config(db, tenant_id, lock_for_provider_io=True)
         account_sid = str(config.account_sid or "").strip()
         if (
             not message.provider_account_sid
@@ -2016,7 +2111,6 @@ async def reconcile_sms_message(
             )
         message.provider_message_id = lookup_sid
         message.provider_account_sid = account_sid
-        message.provider_config_generation = config.generation
         message.provider_status = incoming
         message.provider_created_at = provider_created_at
         message.from_number = provider_from

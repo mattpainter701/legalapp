@@ -308,6 +308,13 @@ async def _require_sms_task_access(db: AsyncSession, task: Task, user) -> None:
 
 
 def _redact_sms_fields(response: TaskResponse | TaskBoardCard):
+    # SMS proposal producers historically embedded the verified phone and body
+    # in Task.description, and callers may also place sensitive text in the
+    # title. Generic task surfaces must not retain either derived search/display
+    # field when the actor lacks the SMS task's live matter authorization.
+    response.title = "Restricted SMS task"
+    if isinstance(response, TaskResponse):
+        response.description = None
     response.pending_action = None
     response.pending_action_sha256 = None
     response.delivery = None
@@ -1709,6 +1716,7 @@ async def update_pending_action(
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    await _require_sms_task_access(db, task, current_user)
     if not task.pending_action:
         raise HTTPException(
             status_code=409, detail="This task has no drafted action to edit"

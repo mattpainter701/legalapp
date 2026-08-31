@@ -158,7 +158,7 @@ class ProposeClientEmailArgs(ChatActionModel):
     """
 
     matter_id: UUID
-    recipient_party_ids: list[UUID] = Field(min_length=1, max_length=1)
+    recipient_party_ids: list[UUID] = Field(min_length=1, max_length=10)
     title: str = Field(min_length=1, max_length=500)
     subject: str = Field(min_length=1, max_length=300)
     body: str = Field(min_length=1, max_length=20_000)

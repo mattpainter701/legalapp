@@ -403,7 +403,7 @@ class TaskAutomationRun(Base):
     delivery_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Distinguishes no provider attempt from an ambiguous or accepted outcome.
     # SMS operator observations never become a safe-to-retry certainty.
-    delivery_certainty: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    delivery_certainty: Mapped[str | None] = mapped_column(String(50), nullable=True)
     sms_message_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), nullable=True
     )

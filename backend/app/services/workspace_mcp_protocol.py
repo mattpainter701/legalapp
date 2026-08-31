@@ -266,10 +266,17 @@ def _tool_success(payload: dict[str, Any]) -> mcp_types.CallToolResult:
     )
 
 
-def _workspace_idempotency_key(request: Request) -> str | None:
+def _workspace_idempotency_key(
+    request: Request, *, require_explicit: bool = False
+) -> str | None:
     """Return mutation identity independently from request correlation."""
 
     explicit = request.headers.get("X-Idempotency-Key")
+    if explicit is None and require_explicit:
+        raise CapabilityError(
+            "idempotency_key_required",
+            "This workspace tool requires an explicit stable X-Idempotency-Key",
+        )
     candidate = (
         explicit if explicit is not None else request.headers.get("X-Request-ID")
     )
@@ -397,7 +404,10 @@ async def execute_workspace_capability(
                 user=user,
                 channel="workspace_mcp",
                 request_id=request.headers.get("X-Request-ID"),
-                idempotency_key=_workspace_idempotency_key(request),
+                idempotency_key=_workspace_idempotency_key(
+                    request,
+                    require_explicit=spec.name == "propose_client_sms",
+                ),
                 granted_scopes=identity.scopes,
                 redis=getattr(
                     getattr(request.scope.get("app"), "state", None), "redis", None

@@ -56,6 +56,8 @@ def test_sms_migration_enforces_rls_and_tenant_composite_references():
         "uq_sms_number_suppressions_tenant_id",
         "fk_sms_number_suppression_events_tenant_suppression",
         "uq_sms_messages_tenant_id",
+        "uq_sms_provider_configs_messaging_service_sid",
+        "uq_sms_provider_configs_from_number",
         "fk_sms_provider_configs_tenant_user",
         "fk_sms_messages_tenant_contact",
         "fk_sms_messages_tenant_matter",
@@ -87,11 +89,15 @@ def test_sms_migration_enforces_rls_and_tenant_composite_references():
         "ck_lead_channel_consents_sms_active_evidence",
         "ck_sms_consent_events_sms_status",
         "ck_sms_consent_events_mobile_e164",
+        "ck_sms_consent_events_active_evidence",
         "ck_sms_provider_configs_provider",
         "ck_sms_provider_configs_generation",
         "ck_sms_provider_configs_sender_ready",
         "ck_sms_provider_configs_active",
+        "ck_sms_provider_configs_active_evidence",
         "ck_sms_provider_configs_from_number_e164",
+        "ck_sms_number_suppression_events_action",
+        "ck_sms_number_suppression_events_state",
         "ck_sms_messages_direction",
         "ck_sms_messages_status",
         "ck_sms_messages_direction_status",
@@ -106,8 +112,13 @@ def test_sms_migration_enforces_rls_and_tenant_composite_references():
         "ck_sms_messages_provider_truth",
         "ck_sms_messages_status_certainty",
         "ck_sms_review_items_status",
+        "ck_sms_review_items_review_evidence",
     ):
         assert check_name in source
+    assert '"task_automation_runs"' in source
+    assert '"delivery_certainty"' in source
+    assert "type_=sa.String(50)" in source
+    assert "AND delivery_certainty = 'confirmed_received')" in source
     for provider_truth_field in (
         '"provider_messaging_service_sid"',
         '"provider_submission_started_at"',
@@ -125,6 +136,7 @@ def test_ci_rehearses_sms_from_148_with_149_as_the_canonical_head():
     assert "sms-lifecycle-rehearsal:" in source
     assert "alembic upgrade 148_configurable_workflows" in source
     assert "alembic upgrade 149_sms_lifecycle" in source
+    assert "rehearse_demo_purge_schema_guard.py --expected all" in source
     assert "149_sms_lifecycle" in (ROOT / "backend/tests/test_migrations.py").read_text(
         encoding="utf-8"
     )

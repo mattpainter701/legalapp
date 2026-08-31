@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import require_admin
 from app.models.contact import Contact
+from app.models.matter_party import MatterParty
 from app.models.plugin import Matter
 from app.models.sms import SmsMessage, SmsProviderConfig, SmsReviewItem
 from app.schemas.sms import (
@@ -34,6 +35,7 @@ from app.services.sms import (
     SmsError,
     apply_inbound,
     apply_status,
+    normalize_e164,
     provider_auth_token,
     reconcile_sms_message,
     resolve_review_item,
@@ -194,7 +196,13 @@ async def send_sms_message(
     return row
 
 
-async def _signed_params(request: Request, *, tenant_id: uuid.UUID, db: AsyncSession):
+async def _signed_params(
+    request: Request,
+    *,
+    tenant_id: uuid.UUID,
+    db: AsyncSession,
+    require_inbound_ownership: bool = False,
+):
     config = await db.scalar(
         select(SmsProviderConfig).where(
             SmsProviderConfig.tenant_id == tenant_id,
@@ -219,8 +227,32 @@ async def _signed_params(request: Request, *, tenant_id: uuid.UUID, db: AsyncSes
         raise HTTPException(401, "Invalid SMS webhook signature")
     supplied_account_sid = str(params.get("AccountSid") or "").strip()
     configured_account_sid = str(config.account_sid or "").strip()
-    if supplied_account_sid and supplied_account_sid != configured_account_sid:
+    if (
+        require_inbound_ownership
+        and (not supplied_account_sid or supplied_account_sid != configured_account_sid)
+    ) or (
+        not require_inbound_ownership
+        and supplied_account_sid
+        and supplied_account_sid != configured_account_sid
+    ):
         raise HTTPException(401, "SMS webhook provider account mismatch")
+    if require_inbound_ownership:
+        configured_service = str(config.messaging_service_sid or "").strip()
+        supplied_service = str(params.get("MessagingServiceSid") or "").strip()
+        service_matches = bool(
+            configured_service and supplied_service == configured_service
+        )
+        number_matches = False
+        configured_number = str(config.from_number or "").strip()
+        if configured_number:
+            try:
+                number_matches = normalize_e164(params.get("To")) == normalize_e164(
+                    configured_number
+                )
+            except SmsError:
+                number_matches = False
+        if not (service_matches or number_matches):
+            raise HTTPException(401, "SMS webhook destination is not tenant-owned")
     return params
 
 
@@ -229,7 +261,12 @@ async def inbound_sms_webhook(
     tenant_id: uuid.UUID, request: Request, db: AsyncSession = Depends(get_db)
 ):
     await set_tenant_context(db, str(tenant_id))
-    params = await _signed_params(request, tenant_id=tenant_id, db=db)
+    params = await _signed_params(
+        request,
+        tenant_id=tenant_id,
+        db=db,
+        require_inbound_ownership=True,
+    )
     provider_message_id = params.get("MessageSid")
     if not provider_message_id:
         raise HTTPException(422, "Provider message id is required")
@@ -294,18 +331,73 @@ async def list_sms_review_items(
                 for candidate_id in (item.candidate_matter_ids or [])
             )
         ]
+    visible_candidates_by_item: dict[uuid.UUID, tuple[list[str], list[str]]] = {}
+    if visible_matter_ids is None:
+        for item, _message in rows:
+            visible_candidates_by_item[item.id] = (
+                [str(value) for value in (item.candidate_contact_ids or [])],
+                [str(value) for value in (item.candidate_matter_ids or [])],
+            )
+    else:
+        candidate_matter_ids = {
+            uuid.UUID(str(candidate_id))
+            for item, _message in rows
+            for candidate_id in (item.candidate_matter_ids or [])
+            if uuid.UUID(str(candidate_id)) in visible_matter_ids
+        }
+        contacts_by_matter: dict[uuid.UUID, set[uuid.UUID]] = {
+            matter_id: set() for matter_id in candidate_matter_ids
+        }
+        if candidate_matter_ids:
+            for matter_id, client_contact_id in (
+                await db.execute(
+                    select(Matter.id, Matter.client_contact_id).where(
+                        Matter.tenant_id == current_user.tenant_id,
+                        Matter.id.in_(candidate_matter_ids),
+                    )
+                )
+            ).all():
+                if client_contact_id:
+                    contacts_by_matter[matter_id].add(client_contact_id)
+            for matter_id, contact_id in (
+                await db.execute(
+                    select(MatterParty.matter_id, MatterParty.contact_id).where(
+                        MatterParty.tenant_id == current_user.tenant_id,
+                        MatterParty.matter_id.in_(candidate_matter_ids),
+                    )
+                )
+            ).all():
+                contacts_by_matter[matter_id].add(contact_id)
+        for item, _message in rows:
+            allowed_matters = [
+                uuid.UUID(str(value))
+                for value in (item.candidate_matter_ids or [])
+                if uuid.UUID(str(value)) in visible_matter_ids
+            ]
+            allowed_contacts = set().union(
+                *(
+                    contacts_by_matter.get(matter_id, set())
+                    for matter_id in allowed_matters
+                )
+            )
+            visible_candidates_by_item[item.id] = (
+                [
+                    str(value)
+                    for value in (item.candidate_contact_ids or [])
+                    if uuid.UUID(str(value)) in allowed_contacts
+                ],
+                [str(value) for value in allowed_matters],
+            )
     contact_ids = {
         uuid.UUID(str(candidate_id))
         for item, _message in rows
-        for candidate_id in (item.candidate_contact_ids or [])
+        for candidate_id in visible_candidates_by_item[item.id][0]
     }
     matter_ids = {
         uuid.UUID(str(candidate_id))
         for item, _message in rows
-        for candidate_id in (item.candidate_matter_ids or [])
+        for candidate_id in visible_candidates_by_item[item.id][1]
     }
-    if visible_matter_ids is not None:
-        matter_ids &= visible_matter_ids
     contact_labels = {
         str(contact.id): contact.display_name
         for contact in (
@@ -342,8 +434,8 @@ async def list_sms_review_items(
             "sms_message_id": item.sms_message_id,
             "reason": item.reason,
             "status": item.status,
-            "candidate_contact_ids": item.candidate_contact_ids,
-            "candidate_matter_ids": item.candidate_matter_ids,
+            "candidate_contact_ids": visible_candidates_by_item[item.id][0],
+            "candidate_matter_ids": visible_candidates_by_item[item.id][1],
             "candidate_contacts": [
                 {
                     "id": candidate_id,
@@ -351,16 +443,14 @@ async def list_sms_review_items(
                         str(candidate_id), "Unavailable contact"
                     ),
                 }
-                for candidate_id in (item.candidate_contact_ids or [])
+                for candidate_id in visible_candidates_by_item[item.id][0]
             ],
             "candidate_matters": [
                 {
                     "id": candidate_id,
                     "label": matter_labels.get(str(candidate_id), "Unavailable matter"),
                 }
-                for candidate_id in (item.candidate_matter_ids or [])
-                if visible_matter_ids is None
-                or uuid.UUID(str(candidate_id)) in visible_matter_ids
+                for candidate_id in visible_candidates_by_item[item.id][1]
             ],
             "from_number": message.from_number,
             "body": message.body,
@@ -379,34 +469,6 @@ async def decide_sms_review_item(
     db: AsyncSession = Depends(get_db),
 ):
     await set_tenant_context(db, str(current_user.tenant_id))
-    pending_item = await db.scalar(
-        select(SmsReviewItem).where(
-            SmsReviewItem.id == review_item_id,
-            SmsReviewItem.tenant_id == current_user.tenant_id,
-            SmsReviewItem.status == "pending",
-        )
-    )
-    visible_matter_ids = await accessible_matter_ids(
-        db,
-        tenant_id=current_user.tenant_id,
-        user_id=current_user.id,
-        is_admin=current_user.role == "admin",
-    )
-    candidate_matter_ids = {
-        uuid.UUID(str(candidate_id))
-        for candidate_id in (
-            (pending_item.candidate_matter_ids if pending_item else []) or []
-        )
-    }
-    if pending_item is None or (
-        visible_matter_ids is not None
-        and not (candidate_matter_ids & visible_matter_ids)
-    ):
-        raise HTTPException(404, "SMS review item was not found")
-    if body.matter_id and (
-        visible_matter_ids is not None and body.matter_id not in visible_matter_ids
-    ):
-        raise HTTPException(404, "SMS review item was not found")
     try:
         item = await resolve_review_item(
             db,

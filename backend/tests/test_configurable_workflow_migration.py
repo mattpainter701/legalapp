@@ -4,6 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 MIGRATION = ROOT / "backend/migrations/versions/148_configurable_workflows.py"
 REHEARSAL = ROOT / "scripts/rehearse_configurable_workflows.py"
+CI_WORKFLOW = ROOT / ".github/workflows/ci.yml"
 
 TABLES = {
     "custom_field_definitions",
@@ -183,6 +184,28 @@ def test_rehearsal_requires_runtime_role_and_reports_evidence() -> None:
     assert "existing system Administrator roles lack manage_workflows" in source
     assert "successful_rollback" in source
     assert "autoflush=False" in source
+
+
+def test_ci_preserves_148_rerun_proof_then_advances_before_current_app_rehearsal():
+    source = CI_WORKFLOW.read_text()
+    start = source.index("name: Configurable workflow PostgreSQL rehearsal")
+    end = source.index("name: SMS lifecycle PostgreSQL/provider rehearsal")
+    job = source[start:end]
+    first_148 = job.index("alembic upgrade 148_configurable_workflows")
+    second_148 = job.index(
+        "alembic upgrade 148_configurable_workflows",
+        first_148 + 1,
+    )
+    rolling_guard = job.index(
+        "rehearse_demo_purge_schema_guard.py --expected none",
+        second_148,
+    )
+    current_head = job.index("run: alembic upgrade head", second_148)
+    rehearsal = job.index(
+        "run: python scripts/rehearse_configurable_workflows.py",
+        current_head,
+    )
+    assert first_148 < second_148 < rolling_guard < current_head < rehearsal
 
 
 def test_migration_backfills_existing_system_administrators() -> None:

@@ -116,8 +116,8 @@ There is deliberately no model-facing `execute` effect. In particular:
   review item. Its reviewed approval path can enqueue the approved email for
   deterministic delivery;
 - `propose_client_sms` accepts exactly one verified matter-party binding and
-  creates reviewable work only. It requires `matters:read` and
-  `communications:propose` workspace scopes plus the actor's live
+  creates reviewable work only. It requires `matters:read`, `contacts:read`,
+  and `communications:propose` workspace scopes plus the actor's live
   `manage_matters` capability and matter access. It never accepts an arbitrary
   phone number or dispatches during the MCP call;
 - `propose_matter_document` creates and read-back verifies a tenant-cloud DOCX

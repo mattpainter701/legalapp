@@ -30,6 +30,13 @@ def upgrade() -> None:
         "communication_logs",
         ["tenant_id", "id"],
     )
+    op.alter_column(
+        "task_automation_runs",
+        "delivery_certainty",
+        existing_type=sa.String(30),
+        type_=sa.String(50),
+        existing_nullable=True,
+    )
     op.create_unique_constraint("uq_leads_tenant_id", "leads", ["tenant_id", "id"])
     op.create_unique_constraint(
         "uq_lead_channel_consents_tenant_id",
@@ -196,6 +203,23 @@ def upgrade() -> None:
             "mobile_e164 IS NULL OR mobile_e164 ~ '^\\+[1-9][0-9]{7,14}$'",
             name="ck_sms_consent_events_mobile_e164",
         ),
+        sa.CheckConstraint(
+            "sms_status <> 'active' OR ("
+            "sms_allowed AND phone_verified AND mobile_e164 IS NOT NULL "
+            "AND consented_at IS NOT NULL "
+            "AND NULLIF(BTRIM(consent_source), '') IS NOT NULL "
+            "AND NULLIF(BTRIM(disclosure_version), '') IS NOT NULL "
+            "AND NULLIF(BTRIM(consent_timezone), '') IS NOT NULL "
+            "AND quiet_hours_start ~ '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$' "
+            "AND quiet_hours_end ~ '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$' "
+            "AND quiet_hours_start <> quiet_hours_end "
+            "AND jsonb_typeof(allowed_categories) = 'array' "
+            "AND jsonb_array_length(allowed_categories) > 0 "
+            "AND sms_revoked_at IS NULL "
+            "AND (consent_expires_at IS NULL OR consent_expires_at > consented_at)"
+            ")",
+            name="ck_sms_consent_events_active_evidence",
+        ),
     )
     op.create_table(
         "sms_provider_configs",
@@ -240,6 +264,11 @@ def upgrade() -> None:
         sa.UniqueConstraint(
             "tenant_id", "provider", name="uq_sms_provider_configs_tenant_provider"
         ),
+        sa.UniqueConstraint(
+            "messaging_service_sid",
+            name="uq_sms_provider_configs_messaging_service_sid",
+        ),
+        sa.UniqueConstraint("from_number", name="uq_sms_provider_configs_from_number"),
         sa.ForeignKeyConstraint(
             ["tenant_id", "updated_by_user_id"],
             ["users.tenant_id", "users.id"],
@@ -256,6 +285,19 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "NOT is_active OR sender_ready",
             name="ck_sms_provider_configs_active",
+        ),
+        sa.CheckConstraint(
+            "NOT is_active OR ("
+            "NULLIF(BTRIM(account_sid), '') IS NOT NULL "
+            "AND NULLIF(BTRIM(encrypted_auth_token), '') IS NOT NULL "
+            "AND (NULLIF(BTRIM(messaging_service_sid), '') IS NOT NULL "
+            "OR NULLIF(BTRIM(from_number), '') IS NOT NULL) "
+            "AND jsonb_typeof(compliance_snapshot) = 'object' "
+            "AND NULLIF(BTRIM(compliance_snapshot->>'ownership_model'), '') IS NOT NULL "
+            "AND NULLIF(BTRIM(compliance_snapshot->>'consent_policy'), '') IS NOT NULL "
+            "AND NULLIF(BTRIM(compliance_snapshot->>'quiet_hours_policy'), '') IS NOT NULL"
+            ")",
+            name="ck_sms_provider_configs_active_evidence",
         ),
         sa.CheckConstraint(
             "from_number IS NULL OR from_number ~ '^\\+[1-9][0-9]{7,14}$'",
@@ -351,6 +393,11 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "mobile_e164 ~ '^\\+[1-9][0-9]{7,14}$'",
             name="ck_sms_number_suppression_events_mobile_e164",
+        ),
+        sa.CheckConstraint(
+            "(action IN ('provider_stop', 'provider_start_blocked') AND is_suppressed) "
+            "OR (action = 'provider_start' AND NOT is_suppressed)",
+            name="ck_sms_number_suppression_events_state",
         ),
     )
     op.create_table(
@@ -555,7 +602,8 @@ def upgrade() -> None:
             name="ck_sms_messages_provider_truth",
         ),
         sa.CheckConstraint(
-            "(status IN ('queued', 'blocked_number_suppression', "
+            "(direction = 'outbound' AND ((status IN ("
+            "'queued', 'blocked_number_suppression', "
             "'blocked_consent_changed', 'blocked_quiet_hours', "
             "'blocked_provider_config', 'blocked_matter_authorization_changed') "
             "AND delivery_certainty = 'not_attempted') OR "
@@ -568,8 +616,9 @@ def upgrade() -> None:
             "(status = 'submitted' "
             "AND delivery_certainty = 'provider_accepted') OR "
             "(status = 'delivered' "
-            "AND delivery_certainty = 'confirmed_sent') OR "
-            "(status IN ('received', 'review_required', 'route_rejected') "
+            "AND delivery_certainty = 'confirmed_sent'))) OR "
+            "(direction = 'inbound' "
+            "AND status IN ('received', 'review_required', 'route_rejected') "
             "AND delivery_certainty = 'confirmed_received')",
             name="ck_sms_messages_status_certainty",
         ),
@@ -625,6 +674,12 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "status IN ('pending', 'resolved', 'rejected')",
             name="ck_sms_review_items_status",
+        ),
+        sa.CheckConstraint(
+            "(status = 'pending' AND reviewed_by_user_id IS NULL AND reviewed_at IS NULL) "
+            "OR (status IN ('resolved', 'rejected') "
+            "AND reviewed_by_user_id IS NOT NULL AND reviewed_at IS NOT NULL)",
+            name="ck_sms_review_items_review_evidence",
         ),
     )
     op.add_column(
@@ -759,6 +814,18 @@ def downgrade() -> None:
     )
     op.drop_column("task_automation_runs", "reconciliation_required")
     op.drop_column("task_automation_runs", "sms_message_id")
+    op.execute(
+        "UPDATE task_automation_runs "
+        "SET delivery_certainty = 'failed_after_acceptance' "
+        "WHERE delivery_certainty = 'provider_failed_after_acceptance'"
+    )
+    op.alter_column(
+        "task_automation_runs",
+        "delivery_certainty",
+        existing_type=sa.String(50),
+        type_=sa.String(30),
+        existing_nullable=True,
+    )
     for table in (
         "sms_review_items",
         "sms_messages",

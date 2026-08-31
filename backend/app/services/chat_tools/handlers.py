@@ -134,9 +134,12 @@ def _workspace_sms_idempotency_binding(
 
     if context.channel != "workspace_mcp":
         return None
-    raw_key = context.idempotency_key or context.request_id
+    raw_key = context.idempotency_key
     if raw_key is None:
-        return None
+        raise ChatToolError(
+            "idempotency_key_required",
+            "Workspace SMS proposals require an explicit stable X-Idempotency-Key",
+        )
     raw_key = raw_key.strip()
     if not raw_key or len(raw_key) > 200:
         raise ChatToolError(

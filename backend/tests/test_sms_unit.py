@@ -273,6 +273,30 @@ def test_sms_records_have_tenant_composite_referential_guards():
     } <= constraints
 
 
+def test_sms_evidence_models_expose_database_coherence_guards():
+    constraints = {
+        constraint.name
+        for table in (
+            SmsConsentEvent.__table__,
+            SmsProviderConfig.__table__,
+            SmsNumberSuppressionEvent.__table__,
+            SmsMessage.__table__,
+            SmsReviewItem.__table__,
+        )
+        for constraint in table.constraints
+    }
+    assert {
+        "ck_sms_consent_events_active_evidence",
+        "ck_sms_provider_configs_active_evidence",
+        "uq_sms_provider_configs_messaging_service_sid",
+        "uq_sms_provider_configs_from_number",
+        "ck_sms_number_suppression_events_state",
+        "ck_sms_messages_status_certainty",
+        "ck_sms_review_items_review_evidence",
+    } <= constraints
+    assert TaskAutomationRun.__table__.c.delivery_certainty.type.length == 50
+
+
 def test_sms_request_digest_is_stable_and_request_bound():
     args = {
         "contact_id": uuid4(),

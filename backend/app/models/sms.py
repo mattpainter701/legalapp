@@ -30,6 +30,11 @@ class SmsProviderConfig(Base):
         UniqueConstraint(
             "tenant_id", "provider", name="uq_sms_provider_configs_tenant_provider"
         ),
+        UniqueConstraint(
+            "messaging_service_sid",
+            name="uq_sms_provider_configs_messaging_service_sid",
+        ),
+        UniqueConstraint("from_number", name="uq_sms_provider_configs_from_number"),
         ForeignKeyConstraint(
             ["tenant_id", "updated_by_user_id"],
             ["users.tenant_id", "users.id"],
@@ -50,6 +55,19 @@ class SmsProviderConfig(Base):
         CheckConstraint(
             "NOT is_active OR sender_ready",
             name="ck_sms_provider_configs_active",
+        ),
+        CheckConstraint(
+            "NOT is_active OR ("
+            "NULLIF(BTRIM(account_sid), '') IS NOT NULL "
+            "AND NULLIF(BTRIM(encrypted_auth_token), '') IS NOT NULL "
+            "AND (NULLIF(BTRIM(messaging_service_sid), '') IS NOT NULL "
+            "OR NULLIF(BTRIM(from_number), '') IS NOT NULL) "
+            "AND jsonb_typeof(compliance_snapshot) = 'object' "
+            "AND NULLIF(BTRIM(compliance_snapshot->>'ownership_model'), '') IS NOT NULL "
+            "AND NULLIF(BTRIM(compliance_snapshot->>'consent_policy'), '') IS NOT NULL "
+            "AND NULLIF(BTRIM(compliance_snapshot->>'quiet_hours_policy'), '') IS NOT NULL"
+            ")",
+            name="ck_sms_provider_configs_active_evidence",
         ),
         CheckConstraint(
             "from_number IS NULL OR from_number ~ '^\\+[1-9][0-9]{7,14}$'",
@@ -176,6 +194,15 @@ class SmsNumberSuppressionEvent(Base):
         CheckConstraint(
             "mobile_e164 ~ '^\\+[1-9][0-9]{7,14}$'",
             name="ck_sms_number_suppression_events_mobile_e164",
+        ),
+        CheckConstraint(
+            "action IN ('provider_stop', 'provider_start', 'provider_start_blocked')",
+            name="ck_sms_number_suppression_events_action",
+        ),
+        CheckConstraint(
+            "(action IN ('provider_stop', 'provider_start_blocked') AND is_suppressed) "
+            "OR (action = 'provider_start' AND NOT is_suppressed)",
+            name="ck_sms_number_suppression_events_state",
         ),
         Index(
             "idx_sms_number_suppression_events_tenant_number",
@@ -327,7 +354,8 @@ class SmsMessage(Base):
             name="ck_sms_messages_provider_truth",
         ),
         CheckConstraint(
-            "(status IN ('queued', 'blocked_number_suppression', "
+            "(direction = 'outbound' AND ((status IN ("
+            "'queued', 'blocked_number_suppression', "
             "'blocked_consent_changed', 'blocked_quiet_hours', "
             "'blocked_provider_config', 'blocked_matter_authorization_changed') "
             "AND delivery_certainty = 'not_attempted') OR "
@@ -340,8 +368,9 @@ class SmsMessage(Base):
             "(status = 'submitted' "
             "AND delivery_certainty = 'provider_accepted') OR "
             "(status = 'delivered' "
-            "AND delivery_certainty = 'confirmed_sent') OR "
-            "(status IN ('received', 'review_required', 'route_rejected') "
+            "AND delivery_certainty = 'confirmed_sent'))) OR "
+            "(direction = 'inbound' "
+            "AND status IN ('received', 'review_required', 'route_rejected') "
             "AND delivery_certainty = 'confirmed_received')",
             name="ck_sms_messages_status_certainty",
         ),
@@ -475,6 +504,12 @@ class SmsReviewItem(Base):
         CheckConstraint(
             "status IN ('pending', 'resolved', 'rejected')",
             name="ck_sms_review_items_status",
+        ),
+        CheckConstraint(
+            "(status = 'pending' AND reviewed_by_user_id IS NULL AND reviewed_at IS NULL) "
+            "OR (status IN ('resolved', 'rejected') "
+            "AND reviewed_by_user_id IS NOT NULL AND reviewed_at IS NOT NULL)",
+            name="ck_sms_review_items_review_evidence",
         ),
         Index(
             "idx_sms_review_items_tenant_status", "tenant_id", "status", "created_at"

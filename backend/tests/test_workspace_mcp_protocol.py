@@ -12,11 +12,12 @@ from jose import jwt
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from starlette.applications import Starlette
+from starlette.requests import Request
 from starlette.routing import Route
 
 from app.schemas.chat_action import ProposeClientSmsArgs
 from app.services import workspace_mcp_protocol
-from app.services.automation_capabilities import CapabilityContext
+from app.services.automation_capabilities import CapabilityContext, CapabilityError
 from app.services.chat_tools.handlers import _workspace_sms_idempotency_binding
 
 
@@ -212,6 +213,37 @@ def test_workspace_sms_idempotency_binding_is_tenant_tool_global_and_canonical()
     assert changed_body[0] == key_digest == changed_matter[0]
     assert changed_body[1] != request_digest
     assert changed_matter[1] != request_digest
+
+    missing = CapabilityContext(
+        db=None,
+        user=SimpleNamespace(id=uuid.uuid4(), tenant_id=tenant_id),
+        channel="workspace_mcp",
+        request_id="transient-transport-only",
+        idempotency_key=None,
+    )
+    with pytest.raises(CapabilityError) as required:
+        _workspace_sms_idempotency_binding(missing, base)
+    assert required.value.code == "idempotency_key_required"
+
+
+def test_workspace_sms_requires_explicit_idempotency_header_not_request_id_fallback():
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/mcp/workspace",
+            "headers": [(b"x-request-id", b"transient-request")],
+        }
+    )
+    assert workspace_mcp_protocol._workspace_idempotency_key(request) == (
+        "transient-request"
+    )
+    with pytest.raises(CapabilityError) as required:
+        workspace_mcp_protocol._workspace_idempotency_key(
+            request,
+            require_explicit=True,
+        )
+    assert required.value.code == "idempotency_key_required"
 
 
 @pytest.mark.asyncio
