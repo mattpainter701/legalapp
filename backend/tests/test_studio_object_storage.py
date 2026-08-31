@@ -14,6 +14,7 @@ from app.services.studio_object_storage import (
     StudioObjectRef,
     StudioStorageError,
     run_storage_mutation_to_completion,
+    run_storage_operation_to_completion,
 )
 
 
@@ -37,6 +38,29 @@ async def test_timed_out_storage_mutation_is_drained_before_timeout_propagates()
     assert not task.done()
     release.set()
     with pytest.raises(TimeoutError):
+        await task
+    assert finished.is_set()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_storage_operation_is_drained_before_cancellation():
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    def read():
+        started.set()
+        release.wait(timeout=2)
+        finished.set()
+        return b"verified"
+
+    task = asyncio.create_task(run_storage_operation_to_completion(read))
+    assert await asyncio.to_thread(started.wait, 1)
+    task.cancel()
+    await asyncio.sleep(0.01)
+    assert not task.done()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
         await task
     assert finished.is_set()
 

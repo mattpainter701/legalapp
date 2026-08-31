@@ -30,7 +30,8 @@ StudioJobState = Literal[
 StudioAdoptionOutcome = Literal[
     "current_evidence", "stale_output", "cancelled_output"
 ]
-StudioPublicErrorCode = Literal[
+StudioArtifactAvailability = Literal["available", "expired"]
+StudioJobFailureCode = Literal[
     "cancelled",
     "expired",
     "hostile_input",
@@ -41,6 +42,36 @@ StudioPublicErrorCode = Literal[
     "processor_unavailable",
     "source_integrity_failed",
     "storage_integrity_failed",
+    "validation_failed",
+]
+StudioPublicErrorCode = Literal[
+    "actor_mismatch",
+    "artifact_expired",
+    "artifact_not_found",
+    "audit_unavailable",
+    "cancelled",
+    "expired",
+    "hostile_input",
+    "idempotency_key_expired",
+    "idempotency_key_mismatch",
+    "input_too_large",
+    "invalid_idempotency_key",
+    "invalid_job_kind",
+    "invalid_job_transition",
+    "invalid_status_resource",
+    "job_data_unavailable",
+    "job_not_found",
+    "lease_lost",
+    "output_too_large",
+    "processor_timeout",
+    "processor_unavailable",
+    "revision_not_found",
+    "source_integrity_failed",
+    "stale_revision",
+    "storage_integrity_failed",
+    "studio_job_quota",
+    "studio_job_rate",
+    "studio_queued_bytes",
     "validation_failed",
 ]
 
@@ -56,6 +87,81 @@ STUDIO_PUBLIC_FAILURES = {
     "source_integrity_failed": "The source document failed its integrity check.",
     "storage_integrity_failed": "The rendered output failed its integrity check.",
     "validation_failed": "The Studio revision is not valid for processing.",
+}
+
+STUDIO_PUBLIC_ERROR_MESSAGES = {
+    **STUDIO_PUBLIC_FAILURES,
+    "actor_mismatch": "Studio actor binding is invalid.",
+    "artifact_expired": "The Studio artifact has expired.",
+    "artifact_not_found": "Studio artifact not found.",
+    "audit_unavailable": "Studio auditing is temporarily unavailable.",
+    "idempotency_key_expired": "Idempotency-Key refers to an expired Studio request.",
+    "idempotency_key_mismatch": (
+        "Idempotency-Key was already used for another render request."
+    ),
+    "invalid_idempotency_key": (
+        "Idempotency-Key must be 8-200 printable characters."
+    ),
+    "invalid_job_kind": "The Studio render job kind is invalid.",
+    "invalid_job_transition": "Studio job state changed before this operation completed.",
+    "invalid_status_resource": "Studio status resource is unavailable.",
+    "job_not_found": "Studio job not found.",
+    "lease_lost": "Studio job lease is no longer owned.",
+    "revision_not_found": "Studio revision not found.",
+    "stale_revision": (
+        "Studio revision or source changed before processing was queued."
+    ),
+    "studio_job_quota": "The tenant Studio processing limit is reached.",
+    "studio_job_rate": "The tenant Studio submission rate is reached.",
+    "studio_queued_bytes": "The tenant Studio queued-byte limit is reached.",
+}
+
+STUDIO_PUBLIC_ERROR_STATUS = {
+    "actor_mismatch": 403,
+    "artifact_expired": 410,
+    "artifact_not_found": 404,
+    "audit_unavailable": 503,
+    "cancelled": 409,
+    "expired": 409,
+    "hostile_input": 422,
+    "idempotency_key_expired": 409,
+    "idempotency_key_mismatch": 409,
+    "input_too_large": 413,
+    "invalid_idempotency_key": 422,
+    "invalid_job_kind": 422,
+    "invalid_job_transition": 409,
+    "invalid_status_resource": 500,
+    "job_data_unavailable": 409,
+    "job_not_found": 404,
+    "lease_lost": 409,
+    "output_too_large": 413,
+    "processor_timeout": 504,
+    "processor_unavailable": 503,
+    "revision_not_found": 404,
+    "source_integrity_failed": 409,
+    "stale_revision": 409,
+    "storage_integrity_failed": 409,
+    "studio_job_quota": 429,
+    "studio_job_rate": 429,
+    "studio_queued_bytes": 429,
+    "validation_failed": 409,
+}
+
+STUDIO_PUBLIC_ERROR_RETRYABLE = {
+    code: code
+    in {
+        "audit_unavailable",
+        "processor_timeout",
+        "processor_unavailable",
+        "studio_job_quota",
+        "studio_job_rate",
+        "studio_queued_bytes",
+    }
+    for code in STUDIO_PUBLIC_ERROR_MESSAGES
+}
+
+STUDIO_PUBLIC_ERROR_DETAIL_KEYS = {
+    "stale_revision": frozenset({"current_revision", "current_etag"}),
 }
 
 STUDIO_RENDER_JOB_KINDS = frozenset(
@@ -191,6 +297,47 @@ def canonical_render_request_hash(
     )
 
 
+def canonical_effective_render_request_hash(
+    *,
+    request_sha256: str,
+    input_binding_sha256: str | None,
+    input_binding_version: int | None,
+) -> str:
+    """Bind admitted server-resolved inputs without changing client intent."""
+
+    if (input_binding_sha256 is None) != (input_binding_version is None):
+        raise ValueError("input binding identity is incomplete")
+    if (
+        not isinstance(request_sha256, str)
+        or len(request_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in request_sha256)
+    ):
+        raise ValueError("invalid client request hash")
+    if input_binding_sha256 is not None and (
+        not isinstance(input_binding_sha256, str)
+        or len(input_binding_sha256) != 64
+        or any(
+            character not in "0123456789abcdef"
+            for character in input_binding_sha256
+        )
+    ):
+        raise ValueError("invalid input binding hash")
+    if input_binding_version is not None and not (
+        isinstance(input_binding_version, int)
+        and not isinstance(input_binding_version, bool)
+        and 1 <= input_binding_version <= 2_147_483_647
+    ):
+        raise ValueError("invalid input binding version")
+    return canonical_json_sha256(
+        {
+            "contract_version": 1,
+            "request_sha256": request_sha256,
+            "input_binding_sha256": input_binding_sha256,
+            "input_binding_version": input_binding_version,
+        }
+    )
+
+
 class StudioRenderRequest(StrictModel):
     """Phase 4 handoff. Raw document bytes and merge values cannot be supplied."""
 
@@ -256,9 +403,26 @@ class StudioRenderErrorDetails(StrictModel):
 
 
 class StudioRenderPublicError(StrictModel):
-    code: str = Field(min_length=1, max_length=80, pattern=r"^[a-z][a-z0-9_]+$")
+    code: StudioPublicErrorCode
     message: str = Field(min_length=1, max_length=300)
+    retryable: bool
     details: StudioRenderErrorDetails | None = None
+
+    @model_validator(mode="after")
+    def validate_canonical_error(self):
+        if self.message != STUDIO_PUBLIC_ERROR_MESSAGES[self.code]:
+            raise ValueError("Studio public error message is not canonical")
+        if self.retryable != STUDIO_PUBLIC_ERROR_RETRYABLE[self.code]:
+            raise ValueError("Studio public error retryability is not canonical")
+        allowed = STUDIO_PUBLIC_ERROR_DETAIL_KEYS.get(self.code, frozenset())
+        supplied = (
+            set(self.details.model_dump(exclude_none=True))
+            if self.details is not None
+            else set()
+        )
+        if not supplied.issubset(allowed):
+            raise ValueError("Studio public error details are not allowed")
+        return self
 
 
 class StudioRenderJobStatus(StrictModel):
@@ -289,6 +453,7 @@ class StudioRenderJobStatus(StrictModel):
     render_options: StudioRenderOptions
     render_options_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    effective_request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     renderer_manifest: StudioRendererManifest
     runtime_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     input_binding_sha256: str | None = Field(
@@ -296,6 +461,7 @@ class StudioRenderJobStatus(StrictModel):
     )
     input_binding_version: int | None = Field(default=None, ge=1)
     artifact_id: uuid.UUID | None = None
+    artifact_availability: StudioArtifactAvailability | None = None
     result_url: str | None = Field(
         default=None,
         max_length=500,
@@ -318,8 +484,9 @@ class StudioRenderJobStatus(StrictModel):
         default=None, pattern=r"^[0-9a-f]{64}$"
     )
     retention_class: Literal["ephemeral", "review", "evidence"] | None = None
-    error_code: StudioPublicErrorCode | None = None
+    error_code: StudioJobFailureCode | None = None
     error_message: str | None = Field(default=None, max_length=300)
+    error_retryable: bool | None = None
     job_expires_at: AwareDatetime
     artifact_expires_at: AwareDatetime | None = None
 
@@ -327,6 +494,12 @@ class StudioRenderJobStatus(StrictModel):
     def validate_state_shape(self):
         if self.render_options.sha256 != self.render_options_sha256:
             raise ValueError("render options hash mismatch")
+        if self.effective_request_sha256 != canonical_effective_render_request_hash(
+            request_sha256=self.request_sha256,
+            input_binding_sha256=self.input_binding_sha256,
+            input_binding_version=self.input_binding_version,
+        ):
+            raise ValueError("effective request hash mismatch")
         if self.renderer_manifest.sha256 != self.runtime_manifest_sha256:
             raise ValueError("renderer manifest hash mismatch")
         if (self.input_binding_sha256 is None) != (
@@ -354,6 +527,7 @@ class StudioRenderJobStatus(StrictModel):
             if self.artifact_id is None or self.adoption_outcome is None:
                 raise ValueError("completed jobs require materialized artifact evidence")
             required_metadata = (
+                self.artifact_availability,
                 self.result_url,
                 self.download_url,
                 self.adopted_as_current_evidence,
@@ -391,10 +565,15 @@ class StudioRenderJobStatus(StrictModel):
             if self.auto_open and not (
                 self.adoption_outcome == "current_evidence"
                 and self.is_current_evidence is True
+                and self.artifact_availability == "available"
             ):
                 raise ValueError("only live current evidence may auto-open")
+            if self.artifact_availability == "expired" and self.auto_open:
+                raise ValueError("expired artifacts cannot auto-open")
         elif materialized:
             raise ValueError("artifact evidence exists only after materialization")
+        elif self.artifact_availability is not None:
+            raise ValueError("artifact availability exists only after materialization")
         elif self.artifact_expires_at is not None:
             raise ValueError("artifact expiry exists only after materialization")
         elif any(
@@ -416,11 +595,21 @@ class StudioRenderJobStatus(StrictModel):
         if self.state != "completed" and self.auto_open:
             raise ValueError("only completed current evidence may auto-open")
         if self.state == "failed":
-            if self.error_code is None or self.error_message is None:
+            if (
+                self.error_code is None
+                or self.error_message is None
+                or self.error_retryable is None
+            ):
                 raise ValueError("failed jobs require a sanitized failure")
             if self.error_message != STUDIO_PUBLIC_FAILURES[self.error_code]:
                 raise ValueError("failed jobs require the canonical sanitized message")
-        elif self.error_code is not None or self.error_message is not None:
+            if self.error_retryable != STUDIO_PUBLIC_ERROR_RETRYABLE[self.error_code]:
+                raise ValueError("failed jobs require canonical retryability")
+        elif (
+            self.error_code is not None
+            or self.error_message is not None
+            or self.error_retryable is not None
+        ):
             raise ValueError("failure details exist only for failed jobs")
         return self
 

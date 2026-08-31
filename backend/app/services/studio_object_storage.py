@@ -38,12 +38,12 @@ class StudioStorageError(RuntimeError):
         self.code = code
 
 
-async def run_storage_mutation_to_completion(
+async def run_storage_operation_to_completion(
     operation: Callable[[], _StorageMutationResult],
     *,
     timeout_seconds: float | None = None,
 ) -> _StorageMutationResult:
-    """Hold the caller's fence until a synchronous storage mutation stops.
+    """Drain a bounded synchronous storage operation before returning.
 
     Cancelling ``asyncio.to_thread`` never stops its worker thread.  Mutation
     callers use this primitive while holding a database-backed object fence,
@@ -87,6 +87,18 @@ async def run_storage_mutation_to_completion(
             pass
         raise TimeoutError
     return task.result()
+
+
+async def run_storage_mutation_to_completion(
+    operation: Callable[[], _StorageMutationResult],
+    *,
+    timeout_seconds: float | None = None,
+) -> _StorageMutationResult:
+    """Compatibility name emphasizing fenced mutating callers."""
+
+    return await run_storage_operation_to_completion(
+        operation, timeout_seconds=timeout_seconds
+    )
 
 
 @dataclass(frozen=True)
@@ -478,8 +490,17 @@ class LocalStudioObjectStore:
                         raise StudioStorageError(
                             "unsafe_object_path", "Studio object path is not safe"
                         )
-                    os.replace(temporary_name, target)
+                    try:
+                        # Publish-if-absent keeps the winning CAS inode stable.
+                        # Unconditional replace lets another process swap the
+                        # final path while a winner is verifying it on Windows.
+                        os.link(temporary_name, target)
+                    except FileExistsError:
+                        pass
+                    Path(temporary_name).unlink()
                     temporary_name = None
+                    # A loser can durably flush the winning directory entry if
+                    # the winner exits between link publication and fsync.
                     self._sync_directory(target.parent)
                     self._bounded_verified_read(
                         target,

@@ -13,6 +13,7 @@ from app.schemas.studio_render import (
     StudioRendererManifest,
     StudioRenderOptions,
     StudioRenderSourceContract,
+    canonical_effective_render_request_hash,
     canonical_render_request_hash,
 )
 from app.services.studio_render_jobs import (
@@ -95,6 +96,11 @@ def _lease():
         requested_by=values["requested_by"],
         input_binding_id=None,
     )
+    values["effective_request_sha256"] = canonical_effective_render_request_hash(
+        request_sha256=values["request_sha256"],
+        input_binding_sha256=None,
+        input_binding_version=None,
+    )
     values["cache_key"] = _render_cache_key(
         kind=values["kind"],
         draft_id=values["draft_id"],
@@ -104,6 +110,7 @@ def _lease():
         snapshot_content_sha256=values["snapshot_content_sha256"],
         source=source,
         render_options_sha256=values["render_options_sha256"],
+        effective_request_sha256=values["effective_request_sha256"],
         input_binding_id=None,
         input_binding_sha256=None,
         input_binding_version=None,
@@ -189,6 +196,12 @@ def test_queue_payload_is_reference_only_and_bounded():
 
 def test_cache_contract_binds_runtime_manifest_and_frozen_input_identity():
     row, lease = _lease()
+    effective_tampered = {
+        **row.payload,
+        "effective_request_sha256": "0" * 64,
+    }
+    with pytest.raises(Exception, match="effective request hash mismatch"):
+        _QueuedPayload.model_validate(effective_tampered)
     tampered = {**row.payload, "runtime_manifest_sha256": "0" * 64}
     with pytest.raises(Exception, match="manifest hash mismatch|cache key mismatch"):
         _QueuedPayload.model_validate(tampered)

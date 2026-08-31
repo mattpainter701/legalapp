@@ -7,15 +7,24 @@ import pytest
 from pydantic import ValidationError
 
 from app.schemas.studio_render import (
+    STUDIO_PUBLIC_ERROR_MESSAGES,
+    STUDIO_PUBLIC_ERROR_RETRYABLE,
+    STUDIO_PUBLIC_ERROR_STATUS,
     StudioRendererComponent,
     StudioRendererManifest,
     StudioRenderAccepted,
     StudioRenderErrorDetails,
     StudioRenderJobStatus,
     StudioRenderOptions,
+    StudioRenderPublicError,
     StudioRenderRequest,
     StudioRenderSourceContract,
+    canonical_effective_render_request_hash,
     canonical_render_request_hash,
+)
+from app.services.studio_render_jobs import (
+    StudioRenderServiceError,
+    studio_render_public_error,
 )
 
 
@@ -73,6 +82,14 @@ def _request_payload(**updates):
         input_binding_id=values["input_binding_id"],
     )
     return values
+
+
+def _effective_request_sha256(request):
+    return canonical_effective_render_request_hash(
+        request_sha256=request.request_sha256,
+        input_binding_sha256=None,
+        input_binding_version=None,
+    )
 
 
 def test_request_hash_is_canonical_and_tamper_evident():
@@ -139,6 +156,7 @@ def test_status_exposes_artifact_only_after_materialization():
         "render_options": request.render_options,
         "render_options_sha256": request.render_options.sha256,
         "request_sha256": request.request_sha256,
+        "effective_request_sha256": _effective_request_sha256(request),
         "renderer_manifest": manifest,
         "runtime_manifest_sha256": manifest.sha256,
         "job_expires_at": now + timedelta(hours=1),
@@ -149,6 +167,7 @@ def test_status_exposes_artifact_only_after_materialization():
             state="running",
             leased_at=now,
             artifact_id=uuid.uuid4(),
+            artifact_availability="available",
             adoption_outcome="current_evidence",
             artifact_expires_at=now + timedelta(hours=1),
             result_url="/api/template-studio/render-artifacts/123",
@@ -166,6 +185,7 @@ def test_status_exposes_artifact_only_after_materialization():
         state="completed",
         completed_at=now,
         artifact_id=artifact_id,
+        artifact_availability="available",
         result_url=f"/api/template-studio/render-artifacts/{artifact_id}",
         download_url=f"/api/template-studio/render-artifacts/{artifact_id}/content",
         adoption_outcome="stale_output",
@@ -187,6 +207,115 @@ def test_status_exposes_artifact_only_after_materialization():
         "exception",
     ):
         assert forbidden not in public_json
+
+
+def test_expired_completed_status_preserves_metadata_but_disables_auto_open():
+    request = StudioRenderRequest.model_validate(_request_payload())
+    now = datetime.now(timezone.utc)
+    manifest = _manifest()
+    artifact_id = uuid.uuid4()
+    values = {
+        "job_id": uuid.uuid4(),
+        "status_url": "/api/template-studio/render-jobs/expired-status",
+        "kind": request.kind,
+        "state": "completed",
+        "progress": 100,
+        "attempts": 1,
+        "max_attempts": 5,
+        "created_at": now - timedelta(hours=1),
+        "updated_at": now - timedelta(minutes=1),
+        "completed_at": now - timedelta(minutes=1),
+        "draft_id": request.draft_id,
+        "rendered_revision": request.expected_revision,
+        "identity_sha256": request.identity_sha256,
+        "snapshot_id": request.snapshot_id,
+        "snapshot_content_sha256": request.content_sha256,
+        "source": request.source,
+        "render_options": request.render_options,
+        "render_options_sha256": request.render_options.sha256,
+        "request_sha256": request.request_sha256,
+        "effective_request_sha256": _effective_request_sha256(request),
+        "renderer_manifest": manifest,
+        "runtime_manifest_sha256": manifest.sha256,
+        "artifact_id": artifact_id,
+        "artifact_availability": "expired",
+        "result_url": f"/api/template-studio/render-artifacts/{artifact_id}",
+        "download_url": (
+            f"/api/template-studio/render-artifacts/{artifact_id}/content"
+        ),
+        "adoption_outcome": "current_evidence",
+        "adopted_as_current_evidence": True,
+        "is_current_evidence": True,
+        "auto_open": False,
+        "output_sha256": "9" * 64,
+        "output_media_type": "application/pdf",
+        "output_byte_size": 100,
+        "page_count": 1,
+        "retention_class": "review",
+        "job_expires_at": now + timedelta(hours=1),
+        "artifact_expires_at": now - timedelta(seconds=1),
+    }
+    expired = StudioRenderJobStatus(**values)
+    assert expired.state == "completed"
+    assert expired.artifact_availability == "expired"
+    assert expired.artifact_id == artifact_id
+    assert expired.auto_open is False
+    with pytest.raises(ValidationError, match="auto-open"):
+        StudioRenderJobStatus(**{**values, "auto_open": True})
+
+
+@pytest.mark.parametrize("code", sorted(STUDIO_PUBLIC_ERROR_MESSAGES))
+def test_public_service_errors_are_closed_canonical_and_redacted(code):
+    draft_id = uuid.uuid4()
+    details = {
+        "current_revision": 7,
+        "current_etag": f'"studio:{draft_id}:7:{"a" * 64}"',
+        "exception": "C:/private/client.docx",
+    }
+    error = StudioRenderServiceError(
+        418,
+        code,
+        "raw provider exception with signed URL",
+        details=details,
+    )
+    public = studio_render_public_error(error)
+    assert public.code == code
+    assert error.status_code == STUDIO_PUBLIC_ERROR_STATUS[code]
+    assert public.message == STUDIO_PUBLIC_ERROR_MESSAGES[code]
+    assert public.retryable == STUDIO_PUBLIC_ERROR_RETRYABLE[code]
+    assert "provider" not in public.model_dump_json()
+    assert "private" not in public.model_dump_json()
+    if code == "stale_revision":
+        assert public.details is not None
+        assert public.details.current_revision == 7
+    else:
+        assert public.details is None
+
+
+def test_unknown_exception_and_noncanonical_error_model_fail_closed():
+    public = studio_render_public_error(RuntimeError("secret exception"))
+    assert public == StudioRenderPublicError(
+        code="processor_unavailable",
+        message=STUDIO_PUBLIC_ERROR_MESSAGES["processor_unavailable"],
+        retryable=True,
+    )
+    unknown = StudioRenderServiceError(
+        418, "vendor_secret_code", "signed URL and provider exception"
+    ).to_public_error()
+    assert unknown == public
+    with pytest.raises(ValidationError, match="not canonical"):
+        StudioRenderPublicError(
+            code="processor_unavailable",
+            message="secret exception",
+            retryable=True,
+        )
+    with pytest.raises(ValidationError, match="details are not allowed"):
+        StudioRenderPublicError(
+            code="job_not_found",
+            message=STUDIO_PUBLIC_ERROR_MESSAGES["job_not_found"],
+            retryable=False,
+            details={"current_revision": 7},
+        )
 
 
 @pytest.mark.parametrize(
@@ -240,6 +369,7 @@ def test_failed_status_requires_sanitized_shape():
         "render_options": request.render_options,
         "render_options_sha256": request.render_options.sha256,
         "request_sha256": request.request_sha256,
+        "effective_request_sha256": _effective_request_sha256(request),
         "renderer_manifest": manifest,
         "runtime_manifest_sha256": manifest.sha256,
         "job_expires_at": now,
@@ -251,6 +381,14 @@ def test_failed_status_requires_sanitized_shape():
             **common,
             error_code="processor_unavailable",
             error_message="raw exception: C:/private/source.docx",
+            error_retryable=True,
+        )
+    with pytest.raises(ValidationError, match="retryability"):
+        StudioRenderJobStatus(
+            **common,
+            error_code="processor_unavailable",
+            error_message=STUDIO_PUBLIC_ERROR_MESSAGES["processor_unavailable"],
+            error_retryable=False,
         )
 
 
@@ -302,6 +440,7 @@ def test_non_result_status_states_have_exact_timestamp_shapes(
         "render_options": request.render_options,
         "render_options_sha256": request.render_options.sha256,
         "request_sha256": request.request_sha256,
+        "effective_request_sha256": _effective_request_sha256(request),
         "renderer_manifest": manifest,
         "runtime_manifest_sha256": manifest.sha256,
         "job_expires_at": now + timedelta(hours=1),
