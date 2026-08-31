@@ -21,6 +21,7 @@ const api = vi.hoisted(() => ({
   createWorkflowField: vi.fn(),
   updateWorkflowField: vi.fn(),
   createWorkflowTemplate: vi.fn(),
+  createWorkflowTemplateVersion: vi.fn(),
   approveWorkflowTemplateVersion: vi.fn(),
   archiveWorkflowTemplate: vi.fn(),
 }));
@@ -126,11 +127,39 @@ describe("MatterWorkflowPanel", () => {
       }),
     );
   });
-  it("saves fields and renders a structured preview", async () => {
+  it("embeds read-only template review for approval-only users", async () => {
     render(
       <MatterWorkflowPanel
         matterId="m1"
         user={{ capabilities: ["approve_legal_work"] }}
+      />,
+    );
+    expect(
+      await screen.findByText("Firm workflow configuration"),
+    ).toBeInTheDocument();
+  });
+  it("does not expose raw UUID editing for contact-linked values", async () => {
+    api.getMatterCustomFields.mockResolvedValue({
+      items: [
+        {
+          id: "contact-link-1",
+          label: "Primary contact",
+          field_type: "contact",
+          value: null,
+        },
+      ],
+    });
+    render(<MatterWorkflowPanel matterId="m1" user={{ capabilities: [] }} />);
+    expect(
+      await screen.findByText(/Primary contact: contact-linked values require/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText("Primary contact")).not.toBeInTheDocument();
+  });
+  it("saves fields and renders a structured preview", async () => {
+    render(
+      <MatterWorkflowPanel
+        matterId="m1"
+        user={{ capabilities: ["approve_legal_work", "manage_matters"] }}
       />,
     );
     fireEvent.change(await screen.findByLabelText("Court"), {
@@ -149,6 +178,7 @@ describe("MatterWorkflowPanel", () => {
     await waitFor(() =>
       expect(screen.getByText(/Initial stage:\s*Initial/)).toBeInTheDocument(),
     );
+    expect(screen.getByText(`Preview fingerprint: ${"a".repeat(64)}`)).toBeInTheDocument();
     expect(api.previewMatterWorkflow).toHaveBeenCalledWith(
       "m1",
       "v1",
@@ -224,7 +254,7 @@ describe("MatterWorkflowPanel", () => {
     render(
       <MatterWorkflowPanel
         matterId="m1"
-        user={{ capabilities: ["approve_legal_work"] }}
+        user={{ capabilities: ["approve_legal_work", "manage_matters"] }}
       />,
     );
     fireEvent.change(
@@ -276,7 +306,7 @@ describe("MatterWorkflowPanel", () => {
     render(
       <MatterWorkflowPanel
         matterId="m1"
-        user={{ capabilities: ["approve_legal_work"] }}
+        user={{ capabilities: ["approve_legal_work", "manage_matters"] }}
       />,
     );
     fireEvent.change(await screen.findByLabelText(/Rollback reason/), {

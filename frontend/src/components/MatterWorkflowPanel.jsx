@@ -28,6 +28,13 @@ function FieldInput({ field, value, onChange }) {
   const id = `matter-field-${field.id || field.field_definition_id || field.field_key}`;
   const type = field.field_type || field.type;
   const options = field.options || [];
+  if (type === "contact")
+    return (
+      <p className="text-sm" id={id}>
+        {field.label}: contact-linked values require the tenant-safe CRM/API
+        surface and cannot be edited here.
+      </p>
+    );
   if (type === "boolean")
     return (
       <label htmlFor={id} className="flex gap-2 items-center text-sm">
@@ -106,7 +113,11 @@ export default function MatterWorkflowPanel({
   onWorkflowApplied,
   user,
 }) {
-  const canApprove = (user?.capabilities || []).includes("approve_legal_work");
+  const canApproveLegal = (user?.capabilities || []).includes(
+    "approve_legal_work",
+  );
+  const canManageMatters = (user?.capabilities || []).includes("manage_matters");
+  const canApprove = canApproveLegal && canManageMatters;
   const canManageWorkflows = (user?.capabilities || []).includes(
     "manage_workflows",
   );
@@ -373,6 +384,9 @@ export default function MatterWorkflowPanel({
           className="border rounded p-3 space-y-2"
         >
           <h3 className="font-semibold">Preview (no changes made)</h3>
+          <p className="font-mono text-xs break-all">
+            Preview fingerprint: {preview.preview_sha256 || "—"}
+          </p>
           <p>
             Initial stage:{" "}
             {preview.initial_stage?.label ||
@@ -471,7 +485,7 @@ export default function MatterWorkflowPanel({
           })
         )}
       </div>
-      {canManageWorkflows && (
+      {(canManageWorkflows || canApproveLegal) && (
         <details className="border-t pt-4">
           <summary className="cursor-pointer font-semibold">
             Firm workflow configuration

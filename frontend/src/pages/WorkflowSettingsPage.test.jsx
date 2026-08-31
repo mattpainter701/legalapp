@@ -19,6 +19,21 @@ const api = vi.hoisted(() => ({
           version_id: "v1",
           version: 1,
           status: "draft",
+          template_active: true,
+          initial_stage_key: "initial",
+          stages: [{ stage_key: "initial", label: "Initial" }],
+          checklist: [
+            {
+              item_key: "review",
+              stage_key: "initial",
+              title: "Review file",
+              task_type: "review",
+              priority: "medium",
+              due_offset_days: 2,
+              assignee_role: "matter_owner",
+            },
+          ],
+          required_fields: [{ id: "field-1" }],
         },
       ],
     }),
@@ -35,6 +50,9 @@ vi.mock("../api", () => api);
 describe("WorkflowSettingsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    api.createWorkflowTemplateVersion.mockResolvedValue({});
+    api.approveWorkflowTemplateVersion.mockResolvedValue({});
+    api.archiveWorkflowTemplate.mockResolvedValue({});
     api.listWorkflowFields.mockResolvedValue({ items: [] });
     api.listWorkflowTemplates.mockResolvedValue({
       items: [
@@ -44,6 +62,21 @@ describe("WorkflowSettingsPage", () => {
           version_id: "v1",
           version: 1,
           status: "draft",
+          template_active: true,
+          initial_stage_key: "initial",
+          stages: [{ stage_key: "initial", label: "Initial" }],
+          checklist: [
+            {
+              item_key: "review",
+              stage_key: "initial",
+              title: "Review file",
+              task_type: "review",
+              priority: "medium",
+              due_offset_days: 2,
+              assignee_role: "matter_owner",
+            },
+          ],
+          required_fields: [{ id: "field-1" }],
         },
       ],
     });
@@ -110,6 +143,91 @@ describe("WorkflowSettingsPage", () => {
       screen.getByRole("button", { name: /Use New matter opening preset/i }),
     );
     expect(screen.getByDisplayValue("New matter opening")).toBeInTheDocument();
+  });
+  it("lets approval-only users discover, review, and approve drafts", async () => {
+    render(
+      <WorkflowSettingsPage user={{ capabilities: ["approve_legal_work"] }} />,
+    );
+    expect(await screen.findByText("Opening")).toBeInTheDocument();
+    expect(api.listWorkflowFields).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("button", { name: "Create template draft" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Archive template" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    await waitFor(() =>
+      expect(api.approveWorkflowTemplateVersion).toHaveBeenCalledWith(
+        "t1",
+        "v1",
+      ),
+    );
+  });
+  it("creates a bounded next version with optimistic concurrency", async () => {
+    api.createWorkflowTemplateVersion.mockResolvedValue({});
+    render(
+      <WorkflowSettingsPage user={{ capabilities: ["manage_workflows"] }} />,
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Create next version" }),
+    );
+    expect(screen.getByText(/Editing from v1/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Checklist title 1"), {
+      target: { value: "Review updated file" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Create next version draft" }),
+    );
+    await waitFor(() =>
+      expect(api.createWorkflowTemplateVersion).toHaveBeenCalledWith("t1", {
+        expected_latest_version: 1,
+        initial_stage_key: "initial",
+        stages: [{ stage_key: "initial", label: "Initial" }],
+        checklist: [
+          expect.objectContaining({
+            item_key: "review",
+            title: "Review updated file",
+            due_offset_days: 2,
+          }),
+        ],
+        required_field_definition_ids: ["field-1"],
+      }),
+    );
+  });
+  it("reloads and exits version editing after a stale conflict", async () => {
+    api.createWorkflowTemplateVersion.mockRejectedValue({
+      response: { status: 409, data: { detail: "stale" } },
+    });
+    render(
+      <WorkflowSettingsPage user={{ capabilities: ["manage_workflows"] }} />,
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Create next version" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Create next version draft" }),
+    );
+    expect(
+      await screen.findByText(/settings were reloaded.*Start the new version/i),
+    ).toBeInTheDocument();
+    expect(api.listWorkflowTemplates).toHaveBeenCalledTimes(2);
+    expect(
+      screen.getByRole("button", { name: "Create template draft" }),
+    ).toBeInTheDocument();
+  });
+  it("shows lifecycle errors and reloads conflicts", async () => {
+    api.approveWorkflowTemplateVersion.mockRejectedValue({
+      response: { status: 409, data: { detail: "Approval became stale" } },
+    });
+    render(
+      <WorkflowSettingsPage
+        user={{ capabilities: ["manage_workflows", "approve_legal_work"] }}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    expect(await screen.findByText("Approval became stale")).toBeInTheDocument();
+    expect(api.listWorkflowTemplates).toHaveBeenCalledTimes(2);
   });
   it("keeps inactive fields visible so they can be reactivated", async () => {
     api.listWorkflowFields

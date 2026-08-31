@@ -35,7 +35,11 @@ from app.schemas.configurable_workflow import (
     WorkflowTemplateVersionCreate,
     normalized_field_value,
 )
-from app.services.access_control import require_capability
+from app.services.access_control import (
+    require_any_capability,
+    require_capabilities,
+    require_capability,
+)
 from app.services.configurable_workflows import (
     append_run_event,
     apply_run,
@@ -695,7 +699,7 @@ async def _template_version_response(
 async def list_workflow_templates(
     include_inactive: bool = False,
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_capability("manage_workflows")),
+    user=Depends(require_any_capability("manage_workflows", "approve_legal_work")),
 ):
     await set_tenant_context(db, str(user.tenant_id))
     template_filter = [MatterWorkflowTemplate.tenant_id == user.tenant_id]
@@ -943,7 +947,7 @@ async def apply_matter_workflow(
     run_id: uuid.UUID,
     body: WorkflowApplyRequest,
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_capability("approve_legal_work")),
+    user=Depends(require_capabilities("approve_legal_work", "manage_matters")),
 ):
     await set_tenant_context(db, str(user.tenant_id))
     run = await _run_or_404(
@@ -1001,7 +1005,7 @@ async def rollback_matter_workflow(
         ..., alias="Idempotency-Key", min_length=8, max_length=200
     ),
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_capability("approve_legal_work")),
+    user=Depends(require_capabilities("approve_legal_work", "manage_matters")),
 ):
     await set_tenant_context(db, str(user.tenant_id))
     run = await _run_or_404(

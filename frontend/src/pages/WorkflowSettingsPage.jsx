@@ -5,6 +5,7 @@ import {
   updateWorkflowField,
   listWorkflowTemplates,
   createWorkflowTemplate,
+  createWorkflowTemplateVersion,
   approveWorkflowTemplateVersion,
   archiveWorkflowTemplate,
 } from "../api";
@@ -84,12 +85,14 @@ const errText = (e, fallback) => {
 export default function WorkflowSettingsPage({ user, embedded = false }) {
   const canManage = (user?.capabilities || []).includes("manage_workflows");
   const canApprove = (user?.capabilities || []).includes("approve_legal_work");
+  const canReview = canManage || canApprove;
   const Container = embedded ? "section" : "main";
   const Heading = embedded ? "h3" : "h1";
   const [fields, setFields] = useState([]);
   const [templates, setTemplates] = useState([]);
+  const [versionSource, setVersionSource] = useState(null);
   const [message, setMessage] = useState(null);
-  const [loading, setLoading] = useState(canManage);
+  const [loading, setLoading] = useState(canReview);
   const [field, setField] = useState({
     entity_type: "matter",
     field_key: "",
@@ -110,7 +113,9 @@ export default function WorkflowSettingsPage({ user, embedded = false }) {
   const load = useCallback(async () => {
     try {
       const [f, t] = await Promise.all([
-        listWorkflowFields({ include_inactive: true }),
+        canManage
+          ? listWorkflowFields({ include_inactive: true })
+          : Promise.resolve({ items: [] }),
         listWorkflowTemplates({}),
       ]);
       setFields(asItems(f));
@@ -123,21 +128,32 @@ export default function WorkflowSettingsPage({ user, embedded = false }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [canManage]);
   useEffect(() => {
-    if (canManage) load();
-  }, [canManage, load]);
-  if (!canManage)
+    if (canReview) load();
+  }, [canReview, load]);
+  if (!canReview)
     return (
       <Container className="p-6">
         <Heading>Workflow settings</Heading>
         <p role="alert">
-          You need the manage_workflows capability to manage workflow
+          You need manage_workflows or approve_legal_work to review workflow
           definitions.
         </p>
       </Container>
     );
   const setFormValue = (key, value) => setForm((v) => ({ ...v, [key]: value }));
+  const resetTemplateForm = () => {
+    setVersionSource(null);
+    setForm({
+      name: "",
+      description: "",
+      initial_stage_key: "stage_1",
+      stages: [{ stage_key: "stage_1", label: "Initial" }],
+      checklist: [blankRow()],
+      required_field_definition_ids: [],
+    });
+  };
   const renameStage = (index, stageKey) =>
     setForm((current) => {
       const previousKey = current.stages[index].stage_key;
@@ -182,31 +198,79 @@ export default function WorkflowSettingsPage({ user, embedded = false }) {
     e.preventDefault();
     setMessage(null);
     try {
-      await createWorkflowTemplate({
-        ...form,
+      const definition = {
+        initial_stage_key: form.initial_stage_key,
+        stages: form.stages,
         checklist: form.checklist.map((x) => ({
           ...x,
           due_offset_days: Number(x.due_offset_days),
         })),
-      });
+        required_field_definition_ids: form.required_field_definition_ids,
+      };
+      if (versionSource) {
+        await createWorkflowTemplateVersion(versionSource.template_id, {
+          ...definition,
+          expected_latest_version: versionSource.version,
+        });
+      } else {
+        await createWorkflowTemplate({
+          ...definition,
+          name: form.name,
+          description: form.description,
+        });
+      }
       setMessage({
         type: "success",
-        text: "Template draft created. It was not silently approved.",
+        text: versionSource
+          ? "New template version created as a draft."
+          : "Template draft created. It was not silently approved.",
       });
-      setForm({
-        name: "",
-        description: "",
-        initial_stage_key: "stage_1",
-        stages: [{ stage_key: "stage_1", label: "Initial" }],
-        checklist: [blankRow()],
-        required_field_definition_ids: [],
-      });
+      resetTemplateForm();
       await load();
     } catch (x) {
+      const stale = x?.response?.status === 409 && versionSource;
       setMessage({
         type: "error",
-        text: errText(x, "Unable to create template."),
+        text: stale
+          ? "Workflow template changed; settings were reloaded. Start the new version again."
+          : errText(x, "Unable to create template."),
       });
+      if (stale) {
+        resetTemplateForm();
+        await load();
+      }
+    }
+  };
+  const startVersion = (template) => {
+    setVersionSource({
+      template_id: template.template_id,
+      template_name: template.template_name,
+      version: template.version,
+    });
+    setForm({
+      name: template.template_name,
+      description: template.template_description || "",
+      initial_stage_key: template.initial_stage_key,
+      stages: template.stages.map((stage) => ({ ...stage })),
+      checklist: template.checklist.map((item) => ({ ...item })),
+      required_field_definition_ids: (template.required_fields || []).map(
+        (item) => item.id,
+      ),
+    });
+    setMessage(null);
+  };
+  const runLifecycle = async (operation, successText) => {
+    setMessage(null);
+    try {
+      await operation();
+      setMessage({ type: "success", text: successText });
+      await load();
+    } catch (error) {
+      setMessage({
+        type: "error",
+        text: errText(error, "Unable to update workflow settings."),
+      });
+      if (error?.response?.status === 409) await load();
     }
   };
   const preset = (_, key, stages) =>
@@ -248,6 +312,8 @@ export default function WorkflowSettingsPage({ user, embedded = false }) {
         <p>Loading…</p>
       ) : (
         <>
+          {canManage && (
+            <>
           <section className="border rounded p-4">
             <h2 className="font-semibold">Matter and contact fields</h2>
             <form onSubmit={saveField} className="grid gap-2 mt-3">
@@ -332,10 +398,14 @@ export default function WorkflowSettingsPage({ user, embedded = false }) {
                   <button
                     type="button"
                     onClick={() =>
-                      updateWorkflowField(item.id, {
-                        active: item.active === false,
-                        expected_schema_version: item.schema_version || 1,
-                      }).then(load)
+                      runLifecycle(
+                        () =>
+                          updateWorkflowField(item.id, {
+                            active: item.active === false,
+                            expected_schema_version: item.schema_version || 1,
+                          }),
+                        "Field status updated.",
+                      )
                     }
                   >
                     Toggle active
@@ -345,7 +415,11 @@ export default function WorkflowSettingsPage({ user, embedded = false }) {
             </ul>
           </section>
           <section className="border rounded p-4">
-            <h2 className="font-semibold">New workflow template draft</h2>
+            <h2 className="font-semibold">
+              {versionSource
+                ? `New version of ${versionSource.template_name}`
+                : "New workflow template draft"}
+            </h2>
             <div className="flex flex-wrap gap-2 my-3">
               {PRESETS.map(([name, key, stages]) => (
                 <button
@@ -358,19 +432,28 @@ export default function WorkflowSettingsPage({ user, embedded = false }) {
               ))}
             </div>
             <form onSubmit={saveTemplate} className="grid gap-3">
-              <input
-                required
-                aria-label="Template name"
-                placeholder="Template name"
-                value={form.name}
-                onChange={(e) => setFormValue("name", e.target.value)}
-              />
-              <textarea
-                aria-label="Description"
-                placeholder="Description"
-                value={form.description}
-                onChange={(e) => setFormValue("description", e.target.value)}
-              />
+              {versionSource ? (
+                <p>
+                  Editing from v{versionSource.version}; saving creates draft v
+                  {versionSource.version + 1}.
+                </p>
+              ) : (
+                <>
+                  <input
+                    required
+                    aria-label="Template name"
+                    placeholder="Template name"
+                    value={form.name}
+                    onChange={(e) => setFormValue("name", e.target.value)}
+                  />
+                  <textarea
+                    aria-label="Description"
+                    placeholder="Description"
+                    value={form.description}
+                    onChange={(e) => setFormValue("description", e.target.value)}
+                  />
+                </>
+              )}
               <label>
                 Initial stage
                 <select
@@ -590,9 +673,18 @@ export default function WorkflowSettingsPage({ user, embedded = false }) {
                   Add checklist item
                 </button>
               </div>
-              <button type="submit">Create template draft</button>
+              <button type="submit">
+                {versionSource ? "Create next version draft" : "Create template draft"}
+              </button>
+              {versionSource && (
+                <button type="button" onClick={resetTemplateForm}>
+                  Cancel new version
+                </button>
+              )}
             </form>
           </section>
+            </>
+          )}
           <section>
             <h2 className="font-semibold">Templates and versions</h2>
             {templates.map((template) => (
@@ -607,24 +699,45 @@ export default function WorkflowSettingsPage({ user, embedded = false }) {
                     <button
                       type="button"
                       onClick={() =>
-                        approveWorkflowTemplateVersion(
-                          template.template_id,
-                          template.version_id,
-                        ).then(load)
+                        runLifecycle(
+                          () =>
+                            approveWorkflowTemplateVersion(
+                              template.template_id,
+                              template.version_id,
+                            ),
+                          "Template version approved.",
+                        )
                       }
                     >
                       Approve
                     </button>
                   )}
                 </span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    archiveWorkflowTemplate(template.template_id).then(load)
-                  }
-                >
-                  Archive template
-                </button>
+                {canManage && template.version ===
+                  Math.max(
+                    ...templates
+                      .filter(
+                        (item) => item.template_id === template.template_id,
+                      )
+                      .map((item) => item.version),
+                  ) && template.template_active !== false && (
+                  <button type="button" onClick={() => startVersion(template)}>
+                    Create next version
+                  </button>
+                )}
+                {canManage && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      runLifecycle(
+                        () => archiveWorkflowTemplate(template.template_id),
+                        "Template archived.",
+                      )
+                    }
+                  >
+                    Archive template
+                  </button>
+                )}
               </article>
             ))}
           </section>

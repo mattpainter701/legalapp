@@ -16,11 +16,14 @@ services, send email, or generate documents.
 | --- | --- | --- |
 | Define or retire custom fields and workflow templates | `manage_workflows` | Firm configuration only |
 | Read or update a matter/contact's custom values and create a preview | `manage_matters` | Existing entity access plus tenant RLS |
-| Approve a template version, apply a preview, or request rollback | `approve_legal_work` | Deliberately separate from authoring |
+| Review or approve a template version | `approve_legal_work` | Read-only definition review remains independent from authoring |
+| Apply a preview or request rollback | `approve_legal_work` **and** `manage_matters` | Legal approval cannot mutate a matter without matter access |
 
 Users with `manage_workflows` reach firm configuration from the Workflow tab
-of an existing matter. There is no new global route or Template Studio seam in
-this slice. The migration adds `manage_workflows` to existing system
+of an existing matter. Approval-only users can review and approve pending
+versions from the same matter-owned surface without receiving authoring or
+matter-mutation authority. There is no new global route or Template Studio
+seam in this slice. The migration adds `manage_workflows` to existing system
 Administrator roles, and the role editor exposes authoring and approval as
 separate grants for custom roles.
 
@@ -139,6 +142,12 @@ COMP-09 APIs or UI:
 No production deployment, external email send, tenant seeding, or automatic
 activation is part of this change.
 
+Downgrade removes the COMP-09 schema but deliberately leaves
+`manage_workflows` on an existing system Administrator role. Migration 148 has
+no provenance that can distinguish a capability it appended from an identical
+pre-existing firm grant, so automatic removal could revoke an intentional
+permission. The role editor remains the explicit revocation path.
+
 ## Verification and operations
 
 The dedicated CI job migrates a disposable PostgreSQL 16 database through the
@@ -151,11 +160,17 @@ python scripts/rehearse_configurable_workflows.py
 The rehearsal verifies the exact Alembic head, ENABLE+FORCE RLS catalog state,
 policy predicates, own-tenant positive access, foreign/no-GUC read and write
 failures, composite-FK and check constraints, approved/history/snapshot
-immutability, concurrent idempotency claims, and concurrent execution through
-the real workflow service with exactly one created task set. It then proves a
-changed task enters `compensation_required` and that a same-key retry returns
-the same immutable blockers without duplicate events or steps. A separate
-later-step assignee failure proves the transaction leaves no partial tasks,
-apply events/steps, status change, or matter-stage change. The repository's
-global migration-safety rehearsal and tenant-schema verifier remain mandatory;
-ORM `create_all` is not accepted as migration evidence.
+immutability even in the presence of same-named temporary tables, concurrent
+idempotency claims, and concurrent execution through the real workflow service
+with exactly one created task set. It exercises production's
+`autoflush=False` behavior through blocked and successful multi-evidence
+rollback paths. It then proves a changed task enters `compensation_required`
+and that a same-key retry returns the same immutable blockers without duplicate
+events or steps. A separate later-step assignee failure proves the transaction
+leaves no partial tasks, apply events/steps, status change, or matter-stage
+change. Finally, an expired demo with approved definitions and applied run
+history is deleted through the real, exact-session purge path, while invalid
+and mismatched purge contexts remain rejected and a terminal operator audit is
+preserved. The repository's global migration-safety rehearsal and
+tenant-schema verifier remain mandatory; ORM `create_all` is not accepted as
+migration evidence.

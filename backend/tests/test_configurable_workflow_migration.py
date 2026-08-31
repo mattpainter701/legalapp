@@ -26,6 +26,12 @@ def test_revision_and_down_revision_are_current_chain() -> None:
     assert 'down_revision = "147_studio_drafts"' in source
 
 
+def test_postgresql_rehearsal_registers_uuid_adaptation() -> None:
+    source = REHEARSAL.read_text()
+    assert "from psycopg2.extras import register_uuid" in source
+    assert "register_uuid()" in source
+
+
 def test_every_comp09_table_has_forced_fail_closed_rls() -> None:
     source = MIGRATION.read_text()
     for table in TABLES:
@@ -39,6 +45,25 @@ def test_every_comp09_table_has_forced_fail_closed_rls() -> None:
         )
     assert "NULLIF(current_setting('app.current_tenant_id', true), '')::uuid" in source
     assert "WITH CHECK" in source
+
+
+def test_trigger_functions_pin_trusted_relations_against_temp_shadowing() -> None:
+    source = MIGRATION.read_text()
+    assert "FROM public.custom_field_definitions" in source
+    assert "FROM public.matter_custom_field_values" in source
+    assert "FROM public.contact_custom_field_values" in source
+    assert "FROM public.matter_workflow_template_versions" in source
+    assert "FROM public.tenants tenant" in source
+    assert "JOIN public.demo_sessions demo" in source
+    assert source.count("SET search_path = pg_catalog, public") >= 7
+    rehearsal = REHEARSAL.read_text()
+    assert "CREATE TEMP TABLE custom_field_definitions" in rehearsal
+    assert "CREATE TEMP TABLE matter_workflow_template_versions" in rehearsal
+    assert "temp_shadow_typed_value" in rehearsal
+    assert "temp_shadow_approved_definition" in rehearsal
+    assert "assert_demo_purge_lifecycle" in rehearsal
+    assert "verified_demo_purge" in rehearsal
+    assert "purge_demo_tenant(session, tenant_id)" in rehearsal
 
 
 def test_composite_parent_targets_and_immutable_triggers_are_present() -> None:
@@ -58,6 +83,27 @@ def test_composite_parent_targets_and_immutable_triggers_are_present() -> None:
     assert "prevent_approved_workflow_mutation" in source
     assert "148_configurable_workflows_created" in source
     assert "OLD.template_version_id" in source and "NEW.template_version_id" in source
+
+
+def test_immutable_history_has_only_verified_demo_purge_delete_carve_out() -> None:
+    source = MIGRATION.read_text()
+    assert "config_workflow_demo_purge_authorized" in source
+    assert "app.config_workflow_demo_purge_tenant_id" in source
+    assert "app.config_workflow_demo_purge_session_id" in source
+    for contract in (
+        "tenant.billing_tier = 'demo'",
+        "tenant.domain LIKE '%.demo.invalid'",
+        "tenant.is_active = false",
+        "tenant.expires_at <= now()",
+        "demo.status = 'purging'",
+        "demo.fixture_tenant_id <> demo.tenant_id",
+        "demo.purge_started_at IS NOT NULL",
+    ):
+        assert contract in source
+    purge = (ROOT / "backend/app/services/demo_purge.py").read_text()
+    assert "_CONFIG_WORKFLOW_PURGE_ORDER" in purge
+    assert "_authorize_config_workflow_demo_purge" in purge
+    assert "_CONFIG_WORKFLOW_TABLES" in purge
 
 
 def test_typed_values_and_contact_relationships_are_database_enforced() -> None:
@@ -94,6 +140,8 @@ def test_rehearsal_requires_runtime_role_and_reports_evidence() -> None:
     assert "run_snapshot_update" in source
     assert "sensitive_field_downgrade" in source
     assert "existing system Administrator roles lack manage_workflows" in source
+    assert "successful_rollback" in source
+    assert "autoflush=False" in source
 
 
 def test_migration_backfills_existing_system_administrators() -> None:
@@ -101,3 +149,10 @@ def test_migration_backfills_existing_system_administrators() -> None:
     assert "UPDATE roles SET capabilities = capabilities ||" in source
     assert r"'[\"manage_workflows\"]'::jsonb" in source
     assert "name = 'Administrator' AND is_system IS TRUE" in source
+
+
+def test_downgrade_deliberately_preserves_unattributed_capability_grants() -> None:
+    source = MIGRATION.read_text()
+    downgrade = source.split("def downgrade() -> None:", 1)[1]
+    assert "Deliberately retain manage_workflows" in downgrade
+    assert "UPDATE roles" not in downgrade

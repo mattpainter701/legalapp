@@ -11,7 +11,9 @@
 
 ### Added
 - **Configurable matter data and review-first workflow execution:** tenant
-  administrators can define bounded typed matter/contact fields and immutable
+  administrators can define bounded typed matter fields in the matter workflow
+  UI, with tenant-safe contact field definitions and values available as an API
+  foundation pending coordinated CRM integration. They can also define immutable
   approved matter-template versions containing ordered stages, checklists,
   relative tasks, assignee roles, and required-field rules. Matter teams preview
   the exact template, matter, field, and task snapshot before a separately

@@ -51,3 +51,40 @@ def require_capability(capability: str):
         return user
 
     return _dep
+
+
+def require_capabilities(*required: str):
+    """Require every named capability for a compound privileged operation."""
+
+    async def _dep(request: Request, db: AsyncSession = Depends(get_db)):
+        from app.services.rbac_service import get_user_capabilities
+
+        user = await get_current_user(request, db)
+        caps = await get_user_capabilities(db, user.id)
+        missing = sorted(set(required) - caps)
+        if missing:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Missing capabilities: {', '.join(missing)}",
+            )
+        return user
+
+    return _dep
+
+
+def require_any_capability(*allowed: str):
+    """Allow a read/review surface to either authors or legal approvers."""
+
+    async def _dep(request: Request, db: AsyncSession = Depends(get_db)):
+        from app.services.rbac_service import get_user_capabilities
+
+        user = await get_current_user(request, db)
+        caps = await get_user_capabilities(db, user.id)
+        if not set(allowed) & caps:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Missing one of capabilities: {', '.join(sorted(allowed))}",
+            )
+        return user
+
+    return _dep

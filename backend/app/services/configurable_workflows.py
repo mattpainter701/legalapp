@@ -383,6 +383,11 @@ async def append_run_event(
         evidence_sha256=digest_payload(payload),
     )
     db.add(event)
+    # Production sessions disable autoflush. Persist each append before the
+    # next MAX(sequence) allocation so a multi-event transition cannot reuse
+    # the same sequence inside one transaction. Callers retain transaction
+    # ownership, so a later failure still rolls the evidence row back.
+    await db.flush()
     return event
 
 
@@ -423,6 +428,7 @@ async def append_run_step(
         evidence_sha256=digest_payload(payload),
     )
     db.add(step)
+    await db.flush()
     return step
 
 

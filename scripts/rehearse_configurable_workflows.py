@@ -20,7 +20,11 @@ from typing import Any
 
 import psycopg2
 from psycopg2 import sql
+from psycopg2.extras import register_uuid
 from sqlalchemy.engine import make_url
+
+
+register_uuid()
 
 
 EXPECTED_HEAD = "148_configurable_workflows"
@@ -331,6 +335,182 @@ def seed_fixture(owner) -> dict[str, Any]:
         "contacts": contacts,
         "tasks": tasks,
         "records": records,
+    }
+
+
+def seed_demo_purge_fixture(owner, fixture_tenant_id: uuid.UUID) -> dict[str, Any]:
+    """Seed every COMP-09 table for an expired disposable demo tenant."""
+
+    tenant_id, session_id, user_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    matter_id, contact_id = uuid.uuid4(), uuid.uuid4()
+    matter_field_id, contact_field_id = uuid.uuid4(), uuid.uuid4()
+    template_id, version_id, run_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    ids = {name: uuid.uuid4() for name in ("stage", "checklist", "requirement")}
+    with owner.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO tenants
+              (id,name,domain,billing_tier,is_active,expires_at)
+            VALUES (%s,'COMP-09 purge demo',%s,'demo',true,now() - interval '1 minute')
+            """,
+            (tenant_id, f"comp09-{uuid.uuid4().hex}.demo.invalid"),
+        )
+        cursor.execute(
+            """
+            INSERT INTO demo_sessions
+              (id,tenant_id,fixture_tenant_id,fixture_version,prospect_name,
+               prospect_email,status,quota,expires_at)
+            VALUES (%s,%s,%s,'comp09-rehearsal','Synthetic Prospect',
+                    'comp09-purge@example.invalid','active',20,now() - interval '1 minute')
+            """,
+            (session_id, tenant_id, fixture_tenant_id),
+        )
+        cursor.execute(
+            "INSERT INTO users (id,tenant_id,email,full_name) VALUES (%s,%s,%s,'Purge User')",
+            (user_id, tenant_id, f"comp09-purge-{uuid.uuid4().hex}@example.invalid"),
+        )
+        cursor.execute(
+            """
+            INSERT INTO matters (id,tenant_id,user_id,slug,matter_name,stage)
+            VALUES (%s,%s,%s,%s,'Disposable workflow matter','New')
+            """,
+            (matter_id, tenant_id, user_id, f"comp09-purge-{uuid.uuid4().hex}"),
+        )
+        cursor.execute(
+            """
+            INSERT INTO contacts (id,tenant_id,first_name,last_name,created_by_user_id)
+            VALUES (%s,%s,'Disposable','Workflow Contact',%s)
+            """,
+            (contact_id, tenant_id, user_id),
+        )
+        cursor.execute(
+            """
+            INSERT INTO custom_field_definitions
+              (id,tenant_id,entity_type,field_key,label,field_type,created_by_user_id)
+            VALUES
+              (%s,%s,'matter','purge_matter_field','Purge matter field','text',%s),
+              (%s,%s,'contact','purge_contact_field','Purge contact field','text',%s)
+            """,
+            (
+                matter_field_id,
+                tenant_id,
+                user_id,
+                contact_field_id,
+                tenant_id,
+                user_id,
+            ),
+        )
+        cursor.execute(
+            """
+            INSERT INTO matter_custom_field_values
+              (tenant_id,matter_id,field_definition_id,value_json,value_hmac,updated_by_user_id)
+            VALUES (%s,%s,%s,'"purge"'::jsonb,%s,%s)
+            """,
+            (tenant_id, matter_id, matter_field_id, HASH_A, user_id),
+        )
+        cursor.execute(
+            """
+            INSERT INTO contact_custom_field_values
+              (tenant_id,contact_id,field_definition_id,value_json,value_hmac,updated_by_user_id)
+            VALUES (%s,%s,%s,'"purge"'::jsonb,%s,%s)
+            """,
+            (tenant_id, contact_id, contact_field_id, HASH_B, user_id),
+        )
+        cursor.execute(
+            """
+            INSERT INTO matter_workflow_templates (id,tenant_id,name,created_by_user_id)
+            VALUES (%s,%s,'Disposable approved workflow',%s)
+            """,
+            (template_id, tenant_id, user_id),
+        )
+        cursor.execute(
+            """
+            INSERT INTO matter_workflow_template_versions
+              (id,tenant_id,template_id,version,initial_stage_key,definition_sha256,created_by_user_id)
+            VALUES (%s,%s,%s,1,'initial',%s,%s)
+            """,
+            (version_id, tenant_id, template_id, HASH_C, user_id),
+        )
+        cursor.execute(
+            """
+            INSERT INTO matter_workflow_stage_definitions
+              (id,tenant_id,template_version_id,stage_key,label,position)
+            VALUES (%s,%s,%s,'initial','Initial',0)
+            """,
+            (ids["stage"], tenant_id, version_id),
+        )
+        cursor.execute(
+            """
+            INSERT INTO matter_workflow_checklist_definitions
+              (id,tenant_id,template_version_id,stage_key,item_key,title,position,
+               task_type,priority,due_offset_days,assignee_role)
+            VALUES (%s,%s,%s,'initial','review','Review demo',0,
+                    'review','medium',1,'matter_owner')
+            """,
+            (ids["checklist"], tenant_id, version_id),
+        )
+        cursor.execute(
+            """
+            INSERT INTO matter_workflow_field_requirements
+              (id,tenant_id,template_version_id,field_definition_id)
+            VALUES (%s,%s,%s,%s)
+            """,
+            (ids["requirement"], tenant_id, version_id, matter_field_id),
+        )
+        cursor.execute(
+            """
+            UPDATE matter_workflow_template_versions
+               SET status='approved',approved_by_user_id=%s,approved_at=now()
+             WHERE id=%s
+            """,
+            (user_id, version_id),
+        )
+        cursor.execute(
+            """
+            INSERT INTO matter_workflow_runs
+              (id,tenant_id,matter_id,template_version_id,idempotency_key,
+               request_sha256,template_sha256,matter_sha256,preview_sha256,
+               preview_json,status,prior_stage,planned_by_user_id,
+               approved_by_user_id,approved_at)
+            VALUES (%s,%s,%s,%s,'demo-purge',%s,%s,%s,%s,
+                    '{"initial_stage":{"stage_key":"initial","label":"Initial"},"tasks":[]}'::jsonb,
+                    'applied','New',%s,%s,now())
+            """,
+            (
+                run_id,
+                tenant_id,
+                matter_id,
+                version_id,
+                HASH_A,
+                HASH_B,
+                HASH_C,
+                HASH_D,
+                user_id,
+                user_id,
+            ),
+        )
+        cursor.execute(
+            """
+            INSERT INTO matter_workflow_run_events
+              (tenant_id,run_id,sequence,event_type,actor_user_id,evidence_sha256)
+            VALUES (%s,%s,1,'applied',%s,%s)
+            """,
+            (tenant_id, run_id, user_id, HASH_A),
+        )
+        cursor.execute(
+            """
+            INSERT INTO matter_workflow_run_steps
+              (tenant_id,run_id,sequence,step_type,action_key,status,evidence_sha256)
+            VALUES (%s,%s,1,'matter_stage','initial','succeeded',%s)
+            """,
+            (tenant_id, run_id, HASH_B),
+        )
+    owner.commit()
+    return {
+        "tenant_id": tenant_id,
+        "session_id": session_id,
+        "run_id": run_id,
+        "stage_id": ids["stage"],
     }
 
 
@@ -753,6 +933,210 @@ def assert_integrity_and_immutability(owner, fixture: dict[str, Any]) -> list[st
     return rejected
 
 
+def assert_temp_shadow_resistance(
+    runtime_url: str, fixture: dict[str, Any]
+) -> list[str]:
+    """Prove runtime TEMP privileges cannot redirect trigger relation reads."""
+
+    tenant_id = fixture["tenants"][0]
+    record = fixture["records"][0]
+    inactive_field = uuid.uuid4()
+    rejected: list[str] = []
+    with connect(runtime_url) as runtime:
+        set_tenant(runtime, tenant_id)
+        with runtime.cursor() as cursor:
+            cursor.execute(
+                """
+                CREATE TEMP TABLE custom_field_definitions (
+                  id uuid, tenant_id uuid, entity_type text,
+                  field_type text, options_json jsonb, active boolean
+                )
+                """
+            )
+            cursor.execute(
+                """
+                INSERT INTO custom_field_definitions
+                  (id,tenant_id,entity_type,field_type,options_json,active)
+                VALUES (%s,%s,'matter','boolean','[]'::jsonb,true)
+                """,
+                (record["field"], tenant_id),
+            )
+            cursor.execute(
+                """
+                INSERT INTO public.custom_field_definitions
+                  (id,tenant_id,entity_type,field_key,label,field_type,active,created_by_user_id)
+                VALUES (%s,%s,'matter','temp_shadow_inactive','Inactive','text',false,%s)
+                """,
+                (inactive_field, tenant_id, fixture["users"][0]),
+            )
+            cursor.execute(
+                """
+                INSERT INTO custom_field_definitions
+                  (id,tenant_id,entity_type,field_type,options_json,active)
+                VALUES (%s,%s,'matter','text','[]'::jsonb,true)
+                """,
+                (inactive_field, tenant_id),
+            )
+            cursor.execute(
+                """
+                CREATE TEMP TABLE matter_workflow_template_versions (
+                  id uuid, tenant_id uuid, template_version_id uuid, status text
+                )
+                """
+            )
+            cursor.execute(
+                """
+                INSERT INTO matter_workflow_template_versions
+                  (id,tenant_id,template_version_id,status)
+                VALUES (%s,%s,%s,'draft')
+                """,
+                (record["version"], tenant_id, record["version"]),
+            )
+        runtime.commit()
+        set_tenant(runtime, tenant_id)
+        expect_database_error(
+            runtime,
+            "UPDATE public.matter_custom_field_values SET value_json='true'::jsonb WHERE id=%s",
+            (record["matter_value"],),
+            sqlstates={"P0001"},
+            tenant_id=tenant_id,
+        )
+        rejected.append("temp_shadow_typed_value")
+        expect_database_error(
+            runtime,
+            """
+            INSERT INTO public.matter_custom_field_values
+              (tenant_id,matter_id,field_definition_id,value_json,value_hmac,updated_by_user_id)
+            VALUES (%s,%s,%s,'\"bypass\"'::jsonb,%s,%s)
+            """,
+            (
+                tenant_id,
+                fixture["matters"][0],
+                inactive_field,
+                HASH_A,
+                fixture["users"][0],
+            ),
+            sqlstates={"P0001"},
+            tenant_id=tenant_id,
+        )
+        rejected.append("temp_shadow_inactive_field")
+        expect_database_error(
+            runtime,
+            "UPDATE public.matter_workflow_stage_definitions SET label='Shadowed' WHERE id=%s",
+            (record["stage"],),
+            sqlstates={"P0001"},
+            tenant_id=tenant_id,
+        )
+        rejected.append("temp_shadow_approved_definition")
+        expect_database_error(
+            runtime,
+            "DELETE FROM public.matter_workflow_checklist_definitions WHERE id=%s",
+            (record["checklist"],),
+            sqlstates={"P0001"},
+            tenant_id=tenant_id,
+        )
+        rejected.append("temp_shadow_approved_delete")
+    return rejected
+
+
+def assert_demo_purge_lifecycle(
+    owner, runtime_url: str, purge_fixture: dict[str, Any]
+) -> dict[str, Any]:
+    """Exercise the deployed immutable-history carve-out through real purge code."""
+
+    tenant_id = purge_fixture["tenant_id"]
+    session_id = purge_fixture["session_id"]
+    with connect(runtime_url) as runtime:
+        set_tenant(runtime, tenant_id)
+        with runtime.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                  set_config('app.config_workflow_demo_purge_tenant_id', %s, false),
+                  set_config('app.config_workflow_demo_purge_session_id', %s, false)
+                """,
+                (str(tenant_id), str(uuid.uuid4())),
+            )
+        runtime.commit()
+        expect_database_error(
+            runtime,
+            "DELETE FROM public.matter_workflow_run_events WHERE run_id=%s",
+            (purge_fixture["run_id"],),
+            sqlstates={"P0001"},
+            tenant_id=tenant_id,
+        )
+        with runtime.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                  set_config('app.config_workflow_demo_purge_tenant_id', %s, false),
+                  set_config('app.config_workflow_demo_purge_session_id', %s, false)
+                """,
+                (str(tenant_id), str(session_id)),
+            )
+        runtime.commit()
+        expect_database_error(
+            runtime,
+            "DELETE FROM public.matter_workflow_stage_definitions WHERE id=%s",
+            (purge_fixture["stage_id"],),
+            sqlstates={"P0001"},
+            tenant_id=tenant_id,
+        )
+
+    async def run_verified_purge() -> dict[str, int]:
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+        from app.services.demo_purge import purge_demo_tenant
+
+        engine = create_async_engine(runtime_url)
+        sessions = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
+        try:
+            async with sessions() as session:
+                return await purge_demo_tenant(session, tenant_id)
+        finally:
+            await engine.dispose()
+
+    deleted = asyncio.run(run_verified_purge())
+    expected = {
+        "custom_field_definitions": 2,
+        "matter_custom_field_values": 1,
+        "contact_custom_field_values": 1,
+        "matter_workflow_templates": 1,
+        "matter_workflow_template_versions": 1,
+        "matter_workflow_stage_definitions": 1,
+        "matter_workflow_checklist_definitions": 1,
+        "matter_workflow_field_requirements": 1,
+        "matter_workflow_runs": 1,
+        "matter_workflow_run_events": 1,
+        "matter_workflow_run_steps": 1,
+    }
+    actual = {table: deleted.get(table, 0) for table in TABLES}
+    if actual != expected:
+        raise AssertionError(f"workflow demo purge counts were incomplete: {actual}")
+    with owner.cursor() as cursor:
+        cursor.execute("SELECT count(*) FROM tenants WHERE id=%s", (tenant_id,))
+        tenant_count = cursor.fetchone()[0]
+        cursor.execute(
+            """
+            SELECT count(*) FROM operator_audit_logs
+             WHERE action='demo.session.purged' AND resource_id=%s
+            """,
+            (str(session_id),),
+        )
+        audit_count = cursor.fetchone()[0]
+    if tenant_count != 0 or audit_count != 1:
+        raise AssertionError(
+            "verified demo purge lacked tenant removal or terminal audit: "
+            f"tenant_count={tenant_count}, audit_count={audit_count}"
+        )
+    return {
+        "invalid_context_rejected": True,
+        "mismatched_session_rejected": True,
+        "deleted_rows": actual,
+        "terminal_audit": True,
+    }
+
+
 def assert_concurrent_idempotency(
     runtime_url: str, fixture: dict[str, Any]
 ) -> list[int]:
@@ -852,7 +1236,7 @@ async def assert_concurrent_apply(
     version_id = fixture["records"][0]["version"]
     idempotency_key = f"service-apply-{uuid.uuid4()}"
     engine = create_async_engine(runtime_url, pool_size=4, max_overflow=0)
-    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    sessions = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
 
     try:
         async with sessions() as session:
@@ -1068,6 +1452,139 @@ async def assert_concurrent_apply(
             )
         evidence["compensating_rollback"] = compensation
 
+        # Production sessions use autoflush=False. Exercise apply plus a
+        # successful multi-step rollback in one transaction so every event and
+        # step allocator must make its prior append visible before MAX+1.
+        success_key = f"service-successful-rollback-{uuid.uuid4()}"
+        async with sessions() as session:
+            await set_tenant_context(session, str(tenant_id))
+            matter = await session.scalar(
+                select(Matter).where(
+                    Matter.tenant_id == tenant_id, Matter.id == matter_id
+                )
+            )
+            if matter is None:
+                raise AssertionError("successful rollback matter is not visible")
+            (
+                success_preview,
+                success_sha,
+                template_sha,
+                matter_sha,
+            ) = await build_preview(
+                session,
+                matter=matter,
+                version_id=version_id,
+                as_of=date.today(),
+            )
+            success_run = MatterWorkflowRun(
+                tenant_id=tenant_id,
+                matter_id=matter_id,
+                template_version_id=version_id,
+                idempotency_key=success_key,
+                request_sha256=digest_payload(
+                    {
+                        "matter_id": str(matter_id),
+                        "template_version_id": str(version_id),
+                    }
+                ),
+                template_sha256=template_sha,
+                matter_sha256=matter_sha,
+                preview_sha256=success_sha,
+                preview_json=success_preview,
+                prior_stage=matter.stage,
+                planned_by_user_id=actor_user_id,
+            )
+            session.add(success_run)
+            await session.flush()
+            await append_run_event(
+                session,
+                success_run,
+                event_type="previewed",
+                actor_user_id=actor_user_id,
+                detail={"preview_sha256": success_sha},
+            )
+            await session.commit()
+            success_run_id = success_run.id
+
+        async with sessions() as session:
+            await set_tenant_context(session, str(tenant_id))
+            locked_run = await _run_or_404(
+                session,
+                tenant_id=tenant_id,
+                matter_id=matter_id,
+                run_id=success_run_id,
+                lock=True,
+            )
+            locked_matter = await _matter_or_404(
+                session, tenant_id, matter_id, lock=True
+            )
+            await apply_run(
+                session,
+                run=locked_run,
+                matter=locked_matter,
+                actor_user_id=actor_user_id,
+                preview_sha256=success_sha,
+            )
+            reason = "Rehearse successful multi-step rollback"
+            result, blockers = await rollback_run(
+                session,
+                run=locked_run,
+                matter=locked_matter,
+                actor_user_id=actor_user_id,
+                idempotency_key=f"rollback-{uuid.uuid4()}",
+                request_sha256=digest_payload(
+                    {"run_id": str(success_run_id), "reason": reason}
+                ),
+                reason=reason,
+            )
+            if blockers or result.status != "rolled_back":
+                raise AssertionError(
+                    f"successful rollback required compensation: {blockers}"
+                )
+            await session.commit()
+
+        async with sessions() as session:
+            await set_tenant_context(session, str(tenant_id))
+            event_sequences = (
+                (
+                    await session.execute(
+                        select(MatterWorkflowRunEvent.sequence)
+                        .where(
+                            MatterWorkflowRunEvent.tenant_id == tenant_id,
+                            MatterWorkflowRunEvent.run_id == success_run_id,
+                        )
+                        .order_by(MatterWorkflowRunEvent.sequence)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            step_sequences = (
+                (
+                    await session.execute(
+                        select(MatterWorkflowRunStep.sequence)
+                        .where(
+                            MatterWorkflowRunStep.tenant_id == tenant_id,
+                            MatterWorkflowRunStep.run_id == success_run_id,
+                        )
+                        .order_by(MatterWorkflowRunStep.sequence)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        successful_rollback = {
+            "status": "rolled_back",
+            "event_sequences": event_sequences,
+            "step_sequences": step_sequences,
+        }
+        if event_sequences != list(range(1, 6)) or step_sequences != list(range(1, 7)):
+            raise AssertionError(
+                "autoflush-disabled rollback evidence sequences were not contiguous: "
+                f"{successful_rollback}"
+            )
+        evidence["successful_rollback"] = successful_rollback
+
         # Rehearse a later-step failure after the first task has flushed. The
         # enclosing transaction must leave only the original preview evidence:
         # no created task, apply step/event, status change, or stage mutation.
@@ -1248,8 +1765,11 @@ def main() -> int:
             )
         assert_catalog(owner, runtime_role)
         fixture = seed_fixture(owner)
+        purge_fixture = seed_demo_purge_fixture(owner, fixture["tenants"][0])
         visible = assert_effective_rls(runtime_url, fixture)
         rejected = assert_integrity_and_immutability(owner, fixture)
+        shadow_rejections = assert_temp_shadow_resistance(runtime_url, fixture)
+        demo_purge = assert_demo_purge_lifecycle(owner, runtime_url, purge_fixture)
         concurrent = assert_concurrent_idempotency(runtime_url, fixture)
         concurrent_apply = asyncio.run(assert_concurrent_apply(runtime_url, fixture))
 
@@ -1261,6 +1781,8 @@ def main() -> int:
                 "runtime_role": {"superuser": False, "bypassrls": False},
                 "visible_rows_by_tenant": visible,
                 "database_rejections": rejected,
+                "temp_shadow_rejections": shadow_rejections,
+                "verified_demo_purge": demo_purge,
                 "concurrent_claim_rowcounts": concurrent,
                 "concurrent_apply": concurrent_apply,
             },

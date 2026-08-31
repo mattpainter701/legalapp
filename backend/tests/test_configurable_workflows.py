@@ -38,6 +38,7 @@ class _SequenceDB:
         self.rows = rows or []
         self.execute_count = 0
         self.added = []
+        self.flush_count = 0
 
     async def scalar(self, query):
         return self.sequence
@@ -53,6 +54,9 @@ class _SequenceDB:
 
     def add(self, value):
         self.added.append(value)
+
+    async def flush(self):
+        self.flush_count += 1
 
 
 def _run(**overrides):
@@ -214,6 +218,8 @@ async def test_run_event_and_step_evidence_hashes_are_deterministic():
     )
     assert first_step.evidence_sha256 == second_step.evidence_sha256
     assert first_event.evidence_sha256 != first_step.evidence_sha256
+    assert first_db.flush_count == 2
+    assert second_db.flush_count == 2
 
 
 def test_hashing_is_order_independent_and_preview_never_contains_raw_value():
@@ -450,16 +456,21 @@ async def test_compensation_required_rollback_different_key_is_rejected():
 
 def test_workflow_routes_declare_required_capabilities():
     expected = {
-        "create_workflow_template": "manage_workflows",
-        "create_workflow_template_version": "manage_workflows",
-        "approve_workflow_template_version": "approve_legal_work",
-        "preview_matter_workflow": "manage_matters",
-        "apply_matter_workflow": "approve_legal_work",
-        "rollback_matter_workflow": "approve_legal_work",
+        "create_workflow_template": {"manage_workflows"},
+        "create_workflow_template_version": {"manage_workflows"},
+        "approve_workflow_template_version": {"approve_legal_work"},
+        "preview_matter_workflow": {"manage_matters"},
+        "apply_matter_workflow": {"approve_legal_work", "manage_matters"},
+        "rollback_matter_workflow": {"approve_legal_work", "manage_matters"},
     }
     by_name = {route.endpoint.__name__: route for route in router.routes}
-    for name, capability in expected.items():
+    for name, capabilities in expected.items():
         dependency = by_name[name].dependant.dependencies[-1].call
-        assert capability in {
-            cell.cell_contents for cell in (dependency.__closure__ or ())
-        }
+        declared = set()
+        for cell in dependency.__closure__ or ():
+            value = cell.cell_contents
+            if isinstance(value, str):
+                declared.add(value)
+            elif isinstance(value, tuple):
+                declared.update(value)
+        assert capabilities <= declared

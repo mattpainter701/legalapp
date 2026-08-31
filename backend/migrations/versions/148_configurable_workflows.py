@@ -68,7 +68,7 @@ def upgrade() -> None:
               FROM jsonb_array_elements(options) AS entry(value)
           )
         ELSE false END
-    $$ LANGUAGE sql IMMUTABLE""")
+    $$ LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, public""")
     op.execute(f"""CREATE TABLE custom_field_definitions (
       id {_UUID} PRIMARY KEY, tenant_id {_TENANT}, entity_type varchar(20) NOT NULL,
       field_key varchar(64) NOT NULL, label varchar(160) NOT NULL, description text,
@@ -136,9 +136,9 @@ def upgrade() -> None:
         RAISE EXCEPTION 'sensitive custom fields cannot be downgraded';
       END IF;
       IF OLD.options_json<>NEW.options_json AND (
-           EXISTS (SELECT 1 FROM matter_custom_field_values
+           EXISTS (SELECT 1 FROM public.matter_custom_field_values
                     WHERE tenant_id=OLD.tenant_id AND field_definition_id=OLD.id)
-           OR EXISTS (SELECT 1 FROM contact_custom_field_values
+           OR EXISTS (SELECT 1 FROM public.contact_custom_field_values
                        WHERE tenant_id=OLD.tenant_id AND field_definition_id=OLD.id)
          ) THEN
         RAISE EXCEPTION 'custom field options with stored values are immutable';
@@ -147,7 +147,7 @@ def upgrade() -> None:
         RAISE EXCEPTION 'custom field updates require the next schema version';
       END IF;
       RETURN NEW;
-    END; $$ LANGUAGE plpgsql""")
+    END; $$ LANGUAGE plpgsql SET search_path = pg_catalog, public""")
     op.execute(
         "CREATE TRIGGER custom_field_definitions_contract BEFORE UPDATE ON custom_field_definitions FOR EACH ROW EXECUTE FUNCTION prevent_config_field_contract_rewrite()"
     )
@@ -155,7 +155,7 @@ def upgrade() -> None:
     DECLARE definition record; scalar_value text;
     BEGIN
       SELECT field_type, options_json, active INTO definition
-        FROM custom_field_definitions
+        FROM public.custom_field_definitions
        WHERE tenant_id=NEW.tenant_id AND id=NEW.field_definition_id
          AND entity_type=NEW.entity_type;
       IF NOT FOUND THEN
@@ -200,7 +200,7 @@ def upgrade() -> None:
       RETURN NEW;
     EXCEPTION WHEN invalid_text_representation OR datetime_field_overflow OR numeric_value_out_of_range THEN
       RAISE EXCEPTION 'invalid typed custom field value';
-    END; $$ LANGUAGE plpgsql""")
+    END; $$ LANGUAGE plpgsql SET search_path = pg_catalog, public""")
     for table in ("matter_custom_field_values", "contact_custom_field_values"):
         op.execute(
             f"CREATE TRIGGER {table}_validate BEFORE INSERT OR UPDATE ON {table} FOR EACH ROW EXECUTE FUNCTION enforce_config_custom_field_value()"
@@ -290,7 +290,31 @@ def upgrade() -> None:
     for table in tables:
         _rls(table)
     op.execute(
-        """CREATE FUNCTION prevent_config_workflow_immutable() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'configurable workflow history is immutable'; END; $$ LANGUAGE plpgsql"""
+        """CREATE FUNCTION config_workflow_demo_purge_authorized(row_tenant uuid) RETURNS boolean AS $$
+        SELECT current_setting('app.config_workflow_demo_purge_tenant_id', true) = row_tenant::text
+          AND EXISTS (
+            SELECT 1
+            FROM public.tenants tenant
+            JOIN public.demo_sessions demo ON demo.tenant_id = tenant.id
+            WHERE tenant.id = row_tenant
+              AND tenant.billing_tier = 'demo'
+              AND tenant.domain LIKE '%.demo.invalid'
+              AND tenant.is_active = false
+              AND tenant.expires_at <= now()
+              AND demo.id::text = current_setting('app.config_workflow_demo_purge_session_id', true)
+              AND demo.status = 'purging'
+              AND demo.fixture_tenant_id <> demo.tenant_id
+              AND demo.purge_started_at IS NOT NULL
+          );
+        $$ LANGUAGE sql STABLE SET search_path = pg_catalog, public"""
+    )
+    op.execute(
+        """CREATE FUNCTION prevent_config_workflow_immutable() RETURNS trigger AS $$
+        BEGIN
+          IF TG_OP = 'DELETE' AND public.config_workflow_demo_purge_authorized(OLD.tenant_id)
+          THEN RETURN OLD; END IF;
+          RAISE EXCEPTION 'configurable workflow history is immutable';
+        END; $$ LANGUAGE plpgsql SET search_path = pg_catalog, public"""
     )
     for table in ("matter_workflow_run_events", "matter_workflow_run_steps"):
         op.execute(
@@ -298,6 +322,8 @@ def upgrade() -> None:
         )
     op.execute("""CREATE FUNCTION prevent_config_workflow_run_tamper() RETURNS trigger AS $$
     BEGIN
+      IF TG_OP = 'DELETE' AND public.config_workflow_demo_purge_authorized(OLD.tenant_id)
+      THEN RETURN OLD; END IF;
       IF TG_OP='DELETE' OR OLD.tenant_id<>NEW.tenant_id OR OLD.matter_id<>NEW.matter_id
          OR OLD.template_version_id<>NEW.template_version_id
          OR OLD.idempotency_key<>NEW.idempotency_key
@@ -312,13 +338,15 @@ def upgrade() -> None:
         RAISE EXCEPTION 'workflow run planning evidence is immutable';
       END IF;
       RETURN NEW;
-    END; $$ LANGUAGE plpgsql""")
+    END; $$ LANGUAGE plpgsql SET search_path = pg_catalog, public""")
     op.execute(
         "CREATE TRIGGER matter_workflow_runs_snapshot_immutable BEFORE UPDATE OR DELETE ON matter_workflow_runs FOR EACH ROW EXECUTE FUNCTION prevent_config_workflow_run_tamper()"
     )
     op.execute("""CREATE FUNCTION prevent_approved_workflow_mutation() RETURNS trigger AS $$
     DECLARE version_status text;
     BEGIN
+      IF TG_OP = 'DELETE' AND public.config_workflow_demo_purge_authorized(OLD.tenant_id)
+      THEN RETURN OLD; END IF;
       IF TG_OP = 'INSERT' AND TG_TABLE_NAME = 'matter_workflow_template_versions' THEN
         IF NEW.status <> 'draft' OR NEW.approved_by_user_id IS NOT NULL OR NEW.approved_at IS NOT NULL THEN
           RAISE EXCEPTION 'workflow template versions must be created as drafts';
@@ -326,7 +354,7 @@ def upgrade() -> None:
         RETURN NEW;
       END IF;
       IF TG_OP = 'INSERT' THEN
-        version_status := (SELECT status FROM matter_workflow_template_versions WHERE tenant_id=NEW.tenant_id AND id=NEW.template_version_id);
+        version_status := (SELECT status FROM public.matter_workflow_template_versions WHERE tenant_id=NEW.tenant_id AND id=NEW.template_version_id);
         IF version_status = 'approved' THEN
           RAISE EXCEPTION 'approved workflow template definitions are immutable';
         END IF;
@@ -343,23 +371,23 @@ def upgrade() -> None:
          AND OLD.created_by_user_id=NEW.created_by_user_id
          AND OLD.created_at=NEW.created_at THEN RETURN NEW; END IF;
       IF TG_TABLE_NAME = 'matter_workflow_template_versions' THEN
-        IF (SELECT status FROM matter_workflow_template_versions WHERE tenant_id=OLD.tenant_id AND id=OLD.id) = 'approved' THEN
+        IF (SELECT status FROM public.matter_workflow_template_versions WHERE tenant_id=OLD.tenant_id AND id=OLD.id) = 'approved' THEN
           RAISE EXCEPTION 'approved workflow template definitions are immutable';
         END IF;
         IF TG_OP = 'DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
       END IF;
       IF TG_OP = 'DELETE' THEN
-        version_status := (SELECT status FROM matter_workflow_template_versions WHERE tenant_id=OLD.tenant_id AND id=OLD.template_version_id);
+        version_status := (SELECT status FROM public.matter_workflow_template_versions WHERE tenant_id=OLD.tenant_id AND id=OLD.template_version_id);
         IF version_status <> 'approved' THEN RETURN OLD; END IF;
       ELSE
-        IF (SELECT status FROM matter_workflow_template_versions WHERE tenant_id=OLD.tenant_id AND id=OLD.template_version_id) = 'approved'
-           OR (SELECT status FROM matter_workflow_template_versions WHERE tenant_id=NEW.tenant_id AND id=NEW.template_version_id) = 'approved' THEN
+        IF (SELECT status FROM public.matter_workflow_template_versions WHERE tenant_id=OLD.tenant_id AND id=OLD.template_version_id) = 'approved'
+           OR (SELECT status FROM public.matter_workflow_template_versions WHERE tenant_id=NEW.tenant_id AND id=NEW.template_version_id) = 'approved' THEN
           RAISE EXCEPTION 'approved workflow template definitions are immutable';
         END IF;
         RETURN NEW;
       END IF;
       RAISE EXCEPTION 'approved workflow template definitions are immutable';
-    END; $$ LANGUAGE plpgsql""")
+    END; $$ LANGUAGE plpgsql SET search_path = pg_catalog, public""")
     for table in (
         "matter_workflow_template_versions",
         "matter_workflow_stage_definitions",
@@ -381,6 +409,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Deliberately retain manage_workflows on existing Administrator roles.
+    # The upgrade only appends the capability when absent and stores no
+    # provenance that can distinguish its grant from a pre-existing firm
+    # choice; removing it here could silently revoke an intentional grant.
     op.execute(
         "DROP TRIGGER IF EXISTS matter_workflow_runs_snapshot_immutable ON matter_workflow_runs"
     )
@@ -404,6 +436,7 @@ def downgrade() -> None:
     op.execute("DROP FUNCTION IF EXISTS prevent_config_workflow_immutable()")
     op.execute("DROP FUNCTION IF EXISTS enforce_config_custom_field_value()")
     op.execute("DROP FUNCTION IF EXISTS prevent_config_field_contract_rewrite()")
+    op.execute("DROP FUNCTION IF EXISTS config_workflow_demo_purge_authorized(uuid)")
     for table in (
         "matter_workflow_run_steps",
         "matter_workflow_run_events",

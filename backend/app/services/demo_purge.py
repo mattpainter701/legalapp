@@ -43,6 +43,22 @@ _STUDIO_PURGE_ORDER = (
     "studio_source_artifacts",
 )
 _STUDIO_TABLES = frozenset(_STUDIO_PURGE_ORDER)
+_CONFIG_WORKFLOW_PURGE_ORDER = (
+    "matter_workflow_run_steps",
+    "matter_workflow_run_events",
+    "matter_workflow_runs",
+    "matter_workflow_field_requirements",
+    "matter_workflow_checklist_definitions",
+    "matter_workflow_stage_definitions",
+    "matter_workflow_template_versions",
+    "matter_workflow_templates",
+    "contact_custom_field_values",
+    "matter_custom_field_values",
+    "custom_field_definitions",
+)
+_CONFIG_WORKFLOW_TABLES = frozenset(_CONFIG_WORKFLOW_PURGE_ORDER)
+_CONFIG_WORKFLOW_PURGE_TENANT_GUC = "app.config_workflow_demo_purge_tenant_id"
+_CONFIG_WORKFLOW_PURGE_SESSION_GUC = "app.config_workflow_demo_purge_session_id"
 
 # A worker that dies between claiming a session and reaching a terminal state
 # leaves the row in "purging".  Without a reclaim window the hourly job would
@@ -133,6 +149,27 @@ async def _purge_immutable_research_history(
         )
         deleted[name] = int(result.rowcount or 0)
     return deleted
+
+
+async def _authorize_config_workflow_demo_purge(
+    db: AsyncSession, tenant_id: uuid.UUID, session_id: uuid.UUID
+) -> None:
+    """Present exact claim identifiers; migration triggers verify lifecycle state."""
+
+    await db.execute(
+        text("SELECT set_config(:setting, :value, true)"),
+        {
+            "setting": _CONFIG_WORKFLOW_PURGE_TENANT_GUC,
+            "value": str(tenant_id),
+        },
+    )
+    await db.execute(
+        text("SELECT set_config(:setting, :value, true)"),
+        {
+            "setting": _CONFIG_WORKFLOW_PURGE_SESSION_GUC,
+            "value": str(session_id),
+        },
+    )
 
 
 def _delete_order(tables) -> list[str]:
@@ -254,9 +291,24 @@ async def _purge_demo_tenant_locked(
                 delete(table).where(table.c.tenant_id == tenant_id)
             )
             deleted[name] = int(result.rowcount or 0)
+        await _authorize_config_workflow_demo_purge(db, tenant_id, session_id)
+        # Workflow history and approved definitions are append-only in ordinary
+        # transactions. Migration 148 admits DELETE only while this exact,
+        # expired demo claim is live, so remove the dependency chain before the
+        # generic purge deletes demo_sessions.
+        for name in _CONFIG_WORKFLOW_PURGE_ORDER:
+            table = tables[name]
+            result = await db.execute(
+                delete(table).where(table.c.tenant_id == tenant_id)
+            )
+            deleted[name] = int(result.rowcount or 0)
         # Break optional cycles (invoice/retainer and self-references) first.
         for name, table in tables.items():
-            if name in _RESEARCH_IMMUTABLE_TABLES or name in _STUDIO_TABLES:
+            if (
+                name in _RESEARCH_IMMUTABLE_TABLES
+                or name in _STUDIO_TABLES
+                or name in _CONFIG_WORKFLOW_TABLES
+            ):
                 continue
             values = {}
             for column in table.columns:
@@ -270,7 +322,11 @@ async def _purge_demo_tenant_locked(
                 )
 
         for name in _delete_order(tables):
-            if name in _RESEARCH_IMMUTABLE_TABLES or name in _STUDIO_TABLES:
+            if (
+                name in _RESEARCH_IMMUTABLE_TABLES
+                or name in _STUDIO_TABLES
+                or name in _CONFIG_WORKFLOW_TABLES
+            ):
                 continue
             table = tables[name]
             result = await db.execute(
