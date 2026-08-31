@@ -83,6 +83,57 @@ async def test_workflow_config_lock_uses_dedicated_shared_and_exclusive_namespac
     )
 
 
+@pytest.mark.asyncio
+async def test_template_bundle_locks_fields_by_id_but_returns_field_key_order():
+    tenant_id = uuid.uuid4()
+    version_id = uuid.uuid4()
+    version = SimpleNamespace(id=version_id)
+    template = SimpleNamespace(id=uuid.uuid4())
+    fields = [
+        SimpleNamespace(id=uuid.uuid4(), field_key="zoning"),
+        SimpleNamespace(id=uuid.uuid4(), field_key="court"),
+    ]
+
+    class Result:
+        def __init__(self, value):
+            self.value = value
+
+        def one_or_none(self):
+            return self.value
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            return self.value
+
+    class BundleDB:
+        def __init__(self):
+            self.results = [(version, template), [], [], fields]
+            self.queries = []
+
+        async def execute(self, query, params=None):
+            self.queries.append((query, params))
+            return Result(self.results.pop(0))
+
+    db = BundleDB()
+    (
+        _template,
+        _version,
+        _stages,
+        _checklist,
+        returned_fields,
+    ) = await workflows.load_template_bundle(
+        db,
+        tenant_id,
+        version_id,
+        share=True,
+    )
+
+    assert [field.field_key for field in returned_fields] == ["court", "zoning"]
+    assert "custom_field_definitions.id" in str(db.queries[-1][0])
+
+
 def _run(**overrides):
     values = {
         "id": uuid.uuid4(),

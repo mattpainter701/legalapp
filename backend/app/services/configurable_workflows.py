@@ -186,8 +186,12 @@ async def load_template_bundle(
         )
     stages = (await db.execute(stage_query)).scalars().all()
     checklist = (await db.execute(checklist_query)).scalars().all()
-    fields = (await db.execute(field_query)).scalars().all()
-    return template, version, list(stages), list(checklist), list(fields)
+    locked_fields = (await db.execute(field_query)).scalars().all()
+    # PostgreSQL acquires field rows in UUID order above. Restore the existing
+    # human-facing field-key order after every required row is locked so API
+    # and preview arrays remain stable and readable.
+    fields = sorted(locked_fields, key=lambda field: field.field_key)
+    return template, version, list(stages), list(checklist), fields
 
 
 def stored_definition_payload(

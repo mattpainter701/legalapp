@@ -16,7 +16,7 @@ stale 409. Migration 148 is unchanged and migration 149 remains untouched.
 ## Validation
 
 - Focused workflow, migration-contract, release-policy, and Alembic tests:
-  67 passed. The narrower service/migration pass accounted for 27 of them.
+  68 passed. The narrower service/migration pass accounted for 28 of them.
 - Ruff lint, Ruff format, Python compile, and `git diff --check` passed for all
   changed Python and repository files.
 - The PostgreSQL 16 rehearsal now adds NOBYPASSRLS READ COMMITTED two-session
