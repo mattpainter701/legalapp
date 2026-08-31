@@ -89,7 +89,19 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_opinion_chunks_unembedded_queue
     ON opinion_chunks(created_at, id) WHERE embedding IS NULL;
 ```
 
-The worker refuses to start when that exact access path is absent or invalid.
+If a previous concurrent build left the index invalid, or inspection shows the
+same name has different keys or a different predicate, repair it outside a
+transaction before retrying the worker:
+
+```sql
+DROP INDEX CONCURRENTLY IF EXISTS ix_opinion_chunks_unembedded_queue;
+CREATE INDEX CONCURRENTLY ix_opinion_chunks_unembedded_queue
+    ON opinion_chunks(created_at, id) WHERE embedding IS NULL;
+```
+
+Do not drop a valid matching queue index. The worker structurally verifies the
+indexed table, both ordered keys, exact predicate, and validity, and refuses to
+start when that access path is absent, invalid, or mismatched.
 Then launch `scripts/opinion_backfill_worker.py` on Jetsons or
 `scripts/direct_cuda_embed_worker.py --opinion-stage` on the CUDA workstation.
 All workers use one shared, indexed keyset queue with `FOR UPDATE SKIP LOCKED`

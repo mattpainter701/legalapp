@@ -110,20 +110,24 @@ def require_queue_index(db_url: str) -> None:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT i.indisvalid, pg_get_indexdef(i.indexrelid)
+                SELECT
+                    i.indisvalid,
+                    i.indrelid = 'public.opinion_chunks'::regclass,
+                    i.indnkeyatts = 2,
+                    pg_get_indexdef(i.indexrelid, 1, true) = 'created_at',
+                    pg_get_indexdef(i.indexrelid, 2, true) = 'id',
+                    pg_get_expr(i.indpred, i.indrelid) = '(embedding IS NULL)'
                 FROM pg_index AS i
                 WHERE i.indexrelid = to_regclass(%s)
                 """,
                 [f"public.{QUEUE_INDEX}"],
             )
             row = cur.fetchone()
-    if not row or not row[0]:
+    if not row or not all(row):
         raise RuntimeError(
-            f"{QUEUE_INDEX} is required; build it CONCURRENTLY before launch"
+            f"{QUEUE_INDEX} is missing, invalid, or mismatched; repair it "
+            "CONCURRENTLY before launch"
         )
-    definition = row[1].lower()
-    if "(created_at, id)" not in definition or "embedding is null" not in definition:
-        raise RuntimeError(f"{QUEUE_INDEX} does not match the required queue order")
 
 
 def format_embedding(values: Iterable[float]) -> str:
