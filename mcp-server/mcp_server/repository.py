@@ -485,7 +485,7 @@ class CourtListenerRepository:
                 WHERE {where}
                   AND o.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
                   AND cl.public_namespace = 'public-authority'
-                  AND EXISTS (SELECT 1 FROM citator_public_source_admissions pa WHERE pa.source_key = cl.source_key AND pa.active IS TRUE AND pa.namespace='public-authority')
+                  AND {public_source_predicate('cl.source_key')}
                 LIMIT 1
                 """,
                 [value],
@@ -495,7 +495,7 @@ class CourtListenerRepository:
                 return None
             detail = rows[0]
             cur.execute(
-                """
+                f"""
                 SELECT ch.chunk_id::text AS chunk_id, ch.chunk_index, ch.content
                 FROM authority_case_chunks ch
                 JOIN authority_case_clusters cl
@@ -503,7 +503,7 @@ class CourtListenerRepository:
                 WHERE ch.opinion_id = %s
                   AND ch.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
                   AND cl.public_namespace = 'public-authority'
-                  AND EXISTS (SELECT 1 FROM citator_public_source_admissions pa WHERE pa.source_key=cl.source_key AND pa.active IS TRUE AND pa.namespace='public-authority')
+                  AND {public_source_predicate('cl.source_key')}
                 ORDER BY ch.chunk_index
                 """,
                 [detail["opinion_id"]],
@@ -595,7 +595,7 @@ class CourtListenerRepository:
             return []
         with self.conn.cursor() as cur:
             cur.execute(
-                """
+                f"""
                 SELECT DISTINCT o.opinion_id, o.cluster_id, cl.case_name, cl.date_filed,
                        c.court_id, c.full_name AS court_name
                 FROM authority_case_citations cit
@@ -607,7 +607,7 @@ class CourtListenerRepository:
                 WHERE cit.cited_volume = %s AND cit.cited_reporter = %s AND cit.cited_page = %s
                   AND cit.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
                   AND cl.public_namespace = 'public-authority'
-                  AND EXISTS (SELECT 1 FROM citator_public_source_admissions pa WHERE pa.source_key=cl.source_key AND pa.active IS TRUE AND pa.namespace='public-authority')
+                  AND {public_source_predicate('cl.source_key')}
                 LIMIT 20
                 """,
                 [parsed["volume"], parsed["reporter"], parsed["page"]],
@@ -963,7 +963,7 @@ class CourtListenerRepository:
                 WHERE c.court_id = %s
                   AND oc.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
                   AND cl.public_namespace = 'public-authority'
-                  AND EXISTS (SELECT 1 FROM citator_public_source_admissions pa WHERE pa.source_key=cl.source_key AND pa.active IS TRUE AND pa.namespace='public-authority')
+                  AND {public_source_predicate('cl.source_key')}
                 GROUP BY c.court_id, c.short_name, c.full_name, c.jurisdiction
                 """,
                 [court_id],
@@ -981,7 +981,7 @@ class CourtListenerRepository:
             f"oc.corpus_version = {promoted}",
             f"ch.corpus_version = {promoted}",
             "oc.public_namespace = 'public-authority'",
-            "EXISTS (SELECT 1 FROM citator_public_source_admissions pa WHERE pa.source_key=oc.source_key AND pa.active IS TRUE AND pa.namespace='public-authority')",
+            public_source_predicate("oc.source_key", version_expr=promoted),
         ]
         params: list[Any] = []
         if court_id:
@@ -1029,9 +1029,7 @@ class CourtListenerRepository:
         promoted = "(SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)"
         filters.append(f"oc.corpus_version = {promoted}")
         filters.append("oc.public_namespace = 'public-authority'")
-        filters.append(
-            "EXISTS (SELECT 1 FROM citator_public_source_admissions pa WHERE pa.source_key=oc.source_key AND pa.active IS TRUE AND pa.namespace='public-authority')"
-        )
+        filters.append(public_source_predicate("oc.source_key", version_expr=promoted))
         pattern = f"%{query}%"
         params: list[Any] = [pattern, pattern, pattern]
         if court_id:
