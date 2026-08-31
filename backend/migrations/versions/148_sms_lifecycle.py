@@ -21,6 +21,13 @@ def _rls(table: str) -> None:
 
 
 def upgrade() -> None:
+    # Parent composite keys make tenant ownership enforceable by PostgreSQL,
+    # not merely by application predicates or RLS policies.
+    for table, name in (
+        ("contacts", "uq_contacts_tenant_id"),
+        ("communication_logs", "uq_communication_logs_tenant_id"),
+    ):
+        op.create_unique_constraint(name, table, ["tenant_id", "id"])
     op.add_column(
         "lead_channel_consents",
         sa.Column(
@@ -30,6 +37,10 @@ def upgrade() -> None:
     op.add_column("lead_channel_consents", sa.Column("mobile_e164", sa.String(30)))
     op.add_column(
         "lead_channel_consents", sa.Column("consented_at", sa.DateTime(timezone=True))
+    )
+    op.add_column(
+        "lead_channel_consents",
+        sa.Column("consent_expires_at", sa.DateTime(timezone=True)),
     )
     op.add_column("lead_channel_consents", sa.Column("consent_source", sa.String(80)))
     op.add_column("lead_channel_consents", sa.Column("consent_language", sa.String(20)))
@@ -85,6 +96,11 @@ def upgrade() -> None:
         sa.UniqueConstraint(
             "tenant_id", "provider", name="uq_sms_provider_configs_tenant_provider"
         ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "updated_by_user_id"],
+            ["users.tenant_id", "users.id"],
+            name="fk_sms_provider_configs_tenant_user",
+        ),
     )
     op.create_table(
         "sms_messages",
@@ -116,6 +132,7 @@ def upgrade() -> None:
             sa.ForeignKey("communication_logs.id", ondelete="SET NULL"),
         ),
         sa.Column("idempotency_key", sa.String(200), nullable=False),
+        sa.Column("request_digest", sa.String(64), nullable=False),
         sa.Column("provider_message_id", sa.String(255)),
         sa.Column("direction", sa.String(20), nullable=False),
         sa.Column("status", sa.String(40), nullable=False, server_default="queued"),
@@ -148,11 +165,32 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("now()"),
         ),
+        sa.UniqueConstraint("tenant_id", "id", name="uq_sms_messages_tenant_id"),
         sa.UniqueConstraint(
             "tenant_id", "idempotency_key", name="uq_sms_messages_tenant_idempotency"
         ),
         sa.UniqueConstraint(
             "tenant_id", "provider_message_id", name="uq_sms_messages_provider_id"
+        ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "contact_id"],
+            ["contacts.tenant_id", "contacts.id"],
+            name="fk_sms_messages_tenant_contact",
+        ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "matter_id"],
+            ["matters.tenant_id", "matters.id"],
+            name="fk_sms_messages_tenant_matter",
+        ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "communication_log_id"],
+            ["communication_logs.tenant_id", "communication_logs.id"],
+            name="fk_sms_messages_tenant_communication",
+        ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "created_by_user_id"],
+            ["users.tenant_id", "users.id"],
+            name="fk_sms_messages_tenant_user",
         ),
     )
     op.create_table(
@@ -193,6 +231,16 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("now()"),
         ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "sms_message_id"],
+            ["sms_messages.tenant_id", "sms_messages.id"],
+            name="fk_sms_review_items_tenant_message",
+        ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "reviewed_by_user_id"],
+            ["users.tenant_id", "users.id"],
+            name="fk_sms_review_items_tenant_user",
+        ),
     )
     for table in ("sms_provider_configs", "sms_messages", "sms_review_items"):
         _rls(table)
@@ -209,7 +257,10 @@ def downgrade() -> None:
         "consent_language",
         "consent_source",
         "consented_at",
+        "consent_expires_at",
         "mobile_e164",
         "sms_status",
     ):
         op.drop_column("lead_channel_consents", name)
+    op.drop_constraint("uq_communication_logs_tenant_id", "communication_logs")
+    op.drop_constraint("uq_contacts_tenant_id", "contacts")

@@ -134,6 +134,9 @@ class LeadChannelConsent(Base):
     consented_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    consent_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     consent_source: Mapped[str | None] = mapped_column(String(80), nullable=True)
     consent_language: Mapped[str | None] = mapped_column(String(20), nullable=True)
     consent_timezone: Mapped[str | None] = mapped_column(String(100), nullable=True)

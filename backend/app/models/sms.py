@@ -7,6 +7,7 @@ from decimal import Decimal
 from sqlalchemy import (
     Boolean,
     DateTime,
+    ForeignKeyConstraint,
     ForeignKey,
     Index,
     Integer,
@@ -26,6 +27,11 @@ class SmsProviderConfig(Base):
     __table_args__ = (
         UniqueConstraint(
             "tenant_id", "provider", name="uq_sms_provider_configs_tenant_provider"
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "updated_by_user_id"],
+            ["users.tenant_id", "users.id"],
+            name="fk_sms_provider_configs_tenant_user",
         ),
         Index("idx_sms_provider_configs_tenant", "tenant_id", "is_active"),
     )
@@ -79,11 +85,32 @@ class SmsProviderConfig(Base):
 class SmsMessage(Base):
     __tablename__ = "sms_messages"
     __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_sms_messages_tenant_id"),
         UniqueConstraint(
             "tenant_id", "idempotency_key", name="uq_sms_messages_tenant_idempotency"
         ),
         UniqueConstraint(
             "tenant_id", "provider_message_id", name="uq_sms_messages_provider_id"
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "contact_id"],
+            ["contacts.tenant_id", "contacts.id"],
+            name="fk_sms_messages_tenant_contact",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "matter_id"],
+            ["matters.tenant_id", "matters.id"],
+            name="fk_sms_messages_tenant_matter",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "communication_log_id"],
+            ["communication_logs.tenant_id", "communication_logs.id"],
+            name="fk_sms_messages_tenant_communication",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "created_by_user_id"],
+            ["users.tenant_id", "users.id"],
+            name="fk_sms_messages_tenant_user",
         ),
         Index(
             "idx_sms_messages_tenant_contact", "tenant_id", "contact_id", "created_at"
@@ -114,6 +141,7 @@ class SmsMessage(Base):
         nullable=True,
     )
     idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    request_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     provider_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     direction: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(
@@ -161,6 +189,17 @@ class SmsReviewItem(Base):
     __table_args__ = (
         Index(
             "idx_sms_review_items_tenant_status", "tenant_id", "status", "created_at"
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "sms_message_id"],
+            ["sms_messages.tenant_id", "sms_messages.id"],
+            name="fk_sms_review_items_tenant_message",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "reviewed_by_user_id"],
+            ["users.tenant_id", "users.id"],
+            name="fk_sms_review_items_tenant_user",
         ),
     )
 

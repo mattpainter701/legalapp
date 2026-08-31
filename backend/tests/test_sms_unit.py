@@ -4,12 +4,14 @@ from uuid import uuid4
 
 import pytest
 
+from app.models.sms import SmsMessage, SmsProviderConfig, SmsReviewItem
 from app.services.sms import (
     in_quiet_hours,
     normalize_e164,
     twilio_signature,
     verify_twilio_signature,
 )
+from app.services.sms import _request_digest
 from app.schemas.chat_action import SmsClientAction, ResolvedSmsRecipientBinding
 from app.schemas.sms import SmsProviderConfigUpdate
 
@@ -108,3 +110,36 @@ def test_sms_action_is_phone_bound_and_reviewable():
         ResolvedSmsRecipientBinding(
             party_id=party_id, contact_id=uuid4(), phone="555-1234"
         )
+
+
+def test_sms_records_have_tenant_composite_referential_guards():
+    constraints = {
+        constraint.name
+        for table in (
+            SmsProviderConfig.__table__,
+            SmsMessage.__table__,
+            SmsReviewItem.__table__,
+        )
+        for constraint in table.foreign_key_constraints
+    }
+    assert {
+        "fk_sms_provider_configs_tenant_user",
+        "fk_sms_messages_tenant_contact",
+        "fk_sms_messages_tenant_matter",
+        "fk_sms_messages_tenant_communication",
+        "fk_sms_messages_tenant_user",
+        "fk_sms_review_items_tenant_message",
+        "fk_sms_review_items_tenant_user",
+    } <= constraints
+
+
+def test_sms_request_digest_is_stable_and_request_bound():
+    args = {
+        "contact_id": uuid4(),
+        "matter_id": uuid4(),
+        "to_number": "+15551234567",
+        "body": "Appointment confirmed",
+        "category": "appointment",
+    }
+    assert _request_digest(**args) == _request_digest(**args)
+    assert _request_digest(**args) != _request_digest(**{**args, "body": "Changed"})

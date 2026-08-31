@@ -716,6 +716,11 @@ async def _sms_bindings_are_current(
                 LeadChannelConsent.phone_verified,
                 LeadChannelConsent.mobile_e164,
                 LeadChannelConsent.revoked_at,
+                LeadChannelConsent.consented_at,
+                LeadChannelConsent.consent_expires_at,
+                LeadChannelConsent.consent_source,
+                LeadChannelConsent.disclosure_version,
+                LeadChannelConsent.allowed_categories,
             )
             .join(Contact, MatterParty.contact_id == Contact.id)
             .join(Lead, Lead.contact_id == Contact.id)
@@ -732,8 +737,35 @@ async def _sms_bindings_are_current(
         )
     ).all()
     current = {
-        party_id: (contact_id, phone, allowed, status, verified, mobile, revoked)
-        for party_id, contact_id, phone, allowed, status, verified, mobile, revoked in rows
+        party_id: (
+            contact_id,
+            phone,
+            allowed,
+            status,
+            verified,
+            mobile,
+            revoked,
+            consented_at,
+            consent_expires_at,
+            consent_source,
+            disclosure_version,
+            allowed_categories,
+        )
+        for (
+            party_id,
+            contact_id,
+            phone,
+            allowed,
+            status,
+            verified,
+            mobile,
+            revoked,
+            consented_at,
+            consent_expires_at,
+            consent_source,
+            disclosure_version,
+            allowed_categories,
+        ) in rows
     }
     if len(current) != len(set(requested_ids)):
         return False
@@ -754,6 +786,11 @@ async def _sms_bindings_are_current(
             or not row[4]
             or row[5] != current_phone
             or row[6]
+            or not row[7]
+            or not row[8]
+            or not row[9]
+            or (row[10] and row[10] <= datetime.now(timezone.utc))
+            or (row[11] and action.category not in row[11])
         ):
             return False
     return True

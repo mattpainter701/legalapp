@@ -19,6 +19,7 @@ import asyncio
 import hashlib
 import re
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -1016,6 +1017,11 @@ async def propose_client_sms(
                 LeadChannelConsent.phone_verified,
                 LeadChannelConsent.mobile_e164,
                 LeadChannelConsent.revoked_at,
+                LeadChannelConsent.consented_at,
+                LeadChannelConsent.consent_expires_at,
+                LeadChannelConsent.consent_source,
+                LeadChannelConsent.disclosure_version,
+                LeadChannelConsent.allowed_categories,
             )
             .join(Contact, MatterParty.contact_id == Contact.id)
             .join(Lead, Lead.contact_id == Contact.id)
@@ -1031,7 +1037,21 @@ async def propose_client_sms(
         )
     ).all()
     resolved: dict[uuid.UUID, tuple[uuid.UUID, str]] = {}
-    for party_id, contact_id, phone, allowed, status, verified, mobile, revoked in rows:
+    for (
+        party_id,
+        contact_id,
+        phone,
+        allowed,
+        status,
+        verified,
+        mobile,
+        revoked,
+        consented_at,
+        consent_expires_at,
+        consent_source,
+        disclosure_version,
+        allowed_categories,
+    ) in rows:
         try:
             stored = re.sub(r"[ ().-]", "", str(phone or ""))
             if stored.startswith("00"):
@@ -1042,6 +1062,14 @@ async def propose_client_sms(
                 and verified
                 and mobile == stored
                 and not revoked
+                and consented_at
+                and consent_source
+                and disclosure_version
+                and (
+                    not consent_expires_at
+                    or consent_expires_at > datetime.now(timezone.utc)
+                )
+                and (not allowed_categories or args.category in allowed_categories)
                 and re.fullmatch(r"\+[1-9]\d{7,14}", stored)
             ):
                 if party_id in resolved and resolved[party_id][1] != stored:

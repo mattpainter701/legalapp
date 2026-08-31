@@ -37,6 +37,7 @@ class Contact(Base):
         Index("idx_contacts_tenant_client_status", "tenant_id", "client_status"),
         Index("idx_contacts_tenant_client_account", "tenant_id", "client_account_id"),
         Index("idx_contacts_tenant_qbo_customer", "tenant_id", "qbo_customer_id"),
+        UniqueConstraint("tenant_id", "id", name="uq_contacts_tenant_id"),
         Index(
             "uq_contacts_tenant_client_number",
             "tenant_id",

@@ -37,6 +37,7 @@ class IntakeSubmissionCreate(BaseModel):
     consent_timezone: str | None = Field(default=None, max_length=100)
     quiet_hours_start: str | None = Field(default=None, max_length=5)
     quiet_hours_end: str | None = Field(default=None, max_length=5)
+    consent_expires_at: datetime | None = None
 
 
 class BookingCreate(BaseModel):
@@ -59,6 +60,7 @@ class ConsentUpdate(BaseModel):
     quiet_hours_start: str | None = Field(default=None, max_length=5)
     quiet_hours_end: str | None = Field(default=None, max_length=5)
     allowed_categories: list[str] = Field(default_factory=list, max_length=20)
+    consent_expires_at: datetime | None = None
 
 
 class TriageDecision(BaseModel):

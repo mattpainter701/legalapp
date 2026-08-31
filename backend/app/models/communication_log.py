@@ -9,6 +9,7 @@ from sqlalchemy import (
     Index,
     String,
     Text,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -22,6 +23,7 @@ class CommunicationLog(Base):
 
     __tablename__ = "communication_logs"
     __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_communication_logs_tenant_id"),
         Index("idx_commlogs_tenant_id", "tenant_id"),
         Index("idx_commlogs_matter_id", "matter_id"),
         Index("idx_commlogs_contact_id", "contact_id"),
