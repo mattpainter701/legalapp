@@ -34,10 +34,22 @@ No Studio frontend is included.
 
 ## Validation
 
-- Exact local and full-CI evidence will replace this placeholder only after the
-  remaining third-pass blockers are corrected and tested.
-- A completely fresh full required check set and Merge Gate on the later
-  evidence revision are required before readiness. The PR remains draft.
+- Local corrective validation: 72 database-free Studio contract, source-package
+  trust, migration/static-security, demo-purge-plan, and release-policy tests
+  passed; the complete backend collection found 2,920 tests. Ruff lint/format,
+  Python compileall, `git diff --check`, and offline Alembic
+  `146_research_workspaces` to/from `147_studio_drafts` SQL generation passed.
+  This host had no PostgreSQL listener and its Docker daemon was unresponsive,
+  so PostgreSQL runtime coverage was intentionally left to CI.
+- Corrective implementation head `e56c0b060de76606a45a9abae634330172e466de`
+  passed the PostgreSQL-backed backend suite (2,919 passed, 1 skipped; 77%
+  overall and 86% changed-line coverage), tenant migration/RLS rehearsal,
+  research-workspace PostgreSQL rehearsal, lint, frontend build, browser E2E,
+  Office build, CodeQL, security/dependency/SBOM, release/policy checks, and
+  Merge Gate.
+- This evidence-only revision changes `PR_DESCRIPTION.md` and must receive its
+  own completely fresh required check set and Merge Gate before readiness. The
+  PR remains draft and unmerged pending master authorization.
 
 ## Merge policy attestations
 
