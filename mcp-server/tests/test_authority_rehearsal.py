@@ -588,6 +588,10 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 actor="rehearsal-admin",
                 reason="partial bulk must not promote",
             )
+        # The rejected promotion deliberately takes the release advisory lock.
+        # End that failed transaction before the operator-style loader resumes
+        # on its own connection, exactly as the API transaction boundary does.
+        conn.rollback()
         write_bulk(
             "opinions-rehearsal.csv.bz2",
             [
