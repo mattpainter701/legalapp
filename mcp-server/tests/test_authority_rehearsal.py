@@ -1245,6 +1245,42 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
         assert private_telemetry_source not in str(baseline_sync)
         assert private_telemetry_source not in str(lineage_repo.corpus_status())
         assert private_telemetry_source not in str(lineage_repo.authority_coverage())
+        private_isolation = run_control_audit(
+            ControlPlaneRequest(
+                version=version,
+                reason="private telemetry contamination must fail isolation",
+                audit_kind="isolation",
+            ),
+            actor="rehearsal-admin",
+        )
+        assert private_isolation["audit"]["passed"] is False
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM corpus_coverage_ledger WHERE source_key=%s",
+                [private_telemetry_source],
+            )
+            cur.execute(
+                "DELETE FROM source_sync_states WHERE source_key=%s",
+                [private_telemetry_source],
+            )
+            cur.execute(
+                "DELETE FROM ingest_runs WHERE source=%s",
+                [private_telemetry_source],
+            )
+            cur.execute(
+                "DELETE FROM legal_sources WHERE source_key=%s",
+                [private_telemetry_source],
+            )
+        conn.commit()
+        recovered_isolation = run_control_audit(
+            ControlPlaneRequest(
+                version=version,
+                reason="private telemetry cleanup restores isolation",
+                audit_kind="isolation",
+            ),
+            actor="rehearsal-admin",
+        )
+        assert recovered_isolation["audit"]["passed"] is True
 
         def assert_public_surfaces_suppressed():
             assert lineage_repo.search_legal_authorities("old authority") == []
