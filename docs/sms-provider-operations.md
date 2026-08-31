@@ -80,19 +80,20 @@ uncertain outcomes remain visible for operator review.
 
 ## Retention, export, and legal hold
 
-The tenant retention inventory reports count/age metadata for six separate SMS
-stores: message content and delivery/reconciliation state, current number
-suppression, immutable consent events, immutable STOP/START number events,
-inbound review evidence, and provider configuration. The endpoint never emits
-message bodies, phone numbers, provider account or sender identifiers,
-compliance snapshots, or encrypted authentication tokens.
+The tenant retention inventory reports count/age metadata for seven separate SMS
+stores: message content and delivery/reconciliation state, current lead consent
+state, current number suppression, immutable consent events, immutable
+STOP/START number events, inbound review evidence, and provider configuration.
+The endpoint never emits message bodies, phone numbers, provider account or
+sender identifiers, compliance snapshots, or encrypted authentication tokens.
 
-Authorized customer export treats SMS messages and current suppression state as
-customer records. Immutable consent/STOP events and review evidence are exposed
-only as bounded evidence summaries. Provider configuration is classified as
-security metadata only, with no secret or configured-provider values. Message
-reconciliation fields travel with the authorized message record; audit and
-receipt surfaces must continue to use sanitized evidence rather than content.
+Authorized customer export treats SMS messages, current consent state, and
+current suppression state as customer records. Immutable consent/STOP events and
+review evidence are exposed only as bounded evidence summaries. Provider
+configuration is classified as security metadata only, with no secret or
+configured-provider values. Message reconciliation fields travel with the
+authorized message record; audit and receipt surfaces must continue to use
+sanitized evidence rather than content.
 
 There is no automated SMS deletion path. The chat-attachment retention job does
 not remove SMS rows, and normal demo cleanup is a separate purge boundary. When

@@ -133,6 +133,10 @@ async def test_sms_retention_inventory_is_metadata_only_and_hold_aware(
             "compliance_suppression_state",
             "customer_export_includes_current_suppression_state",
         ),
+        "sms_current_consent_state": (
+            "current_consent_state",
+            "customer_export_includes_current_consent_state",
+        ),
         "sms_consent_evidence": (
             "immutable_consent_evidence",
             "immutable_evidence_summary_only",

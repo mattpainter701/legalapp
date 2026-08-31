@@ -66,13 +66,14 @@ and points to tenant-local storage (or has no remaining file reference).
 Matter-linked records, cloud originals, conversations, messages, templates,
 inbound email, and agreement evidence are inventory-only.
 SMS records are also inventory-only: this retention executor never deletes
-message content, suppression state, consent or number events, review evidence,
-or provider configuration. Message and current-suppression records belong on
-the authorized customer export path. Immutable consent/STOP and review evidence
-use bounded evidence summaries, while provider configuration uses a count-only
-security-metadata summary. Reconciliation evidence remains associated with its
-SMS message record and must not be treated as proof that customer content can
-be omitted from an authorized export.
+message content, current consent and suppression state, consent or number
+events, review evidence, or provider configuration. Message, current-consent,
+and current-suppression records belong on the authorized customer export path.
+Immutable consent/STOP and review evidence use bounded evidence summaries, while
+provider configuration uses a count-only security-metadata summary.
+Reconciliation evidence remains associated with its SMS message record and must
+not be treated as proof that customer content can be omitted from an authorized
+export.
 
 `PUT /api/compliance/retention` sets the 1–365 day window for non-matter chat
 attachments and optionally places the tenant on legal hold. A hold requires a

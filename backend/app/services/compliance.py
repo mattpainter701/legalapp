@@ -21,7 +21,7 @@ from app.models.compliance import (
     RetentionPolicy,
     TenantAgreementAcceptance,
 )
-from app.models.conversion_loop import SmsConsentEvent
+from app.models.conversion_loop import LeadChannelConsent, SmsConsentEvent
 from app.models.conversation import Conversation, Message
 from app.models.document import Document
 from app.models.document_template import DocumentTemplate
@@ -45,6 +45,7 @@ MAX_CHAT_ATTACHMENT_DAYS = 365
 SmsDataClassification = Literal[
     "customer_communication_content",
     "compliance_suppression_state",
+    "current_consent_state",
     "immutable_consent_evidence",
     "immutable_stop_start_evidence",
     "operational_review_evidence",
@@ -53,6 +54,7 @@ SmsDataClassification = Literal[
 SmsRetentionMode = Literal[
     "firm_records_policy_with_reconciliation_evidence",
     "compliance_suppression_record",
+    "current_consent_record",
     "consent_evidence",
     "stop_start_evidence",
     "review_evidence",
@@ -61,6 +63,7 @@ SmsRetentionMode = Literal[
 SmsExportBoundary = Literal[
     "customer_export_includes_content_and_delivery_state",
     "customer_export_includes_current_suppression_state",
+    "customer_export_includes_current_consent_state",
     "immutable_evidence_summary_only",
     "security_metadata_only_no_secret_values",
 ]
@@ -99,6 +102,12 @@ _SMS_RETENTION_SPECS: dict[str, _SmsRetentionSpec] = {
         data_classification="compliance_suppression_state",
         retention_mode="compliance_suppression_record",
         export_boundary="customer_export_includes_current_suppression_state",
+    ),
+    "lead_channel_consents": _SmsRetentionSpec(
+        name="sms_current_consent_state",
+        data_classification="current_consent_state",
+        retention_mode="current_consent_record",
+        export_boundary="customer_export_includes_current_consent_state",
     ),
     "sms_consent_events": _SmsRetentionSpec(
         name="sms_consent_evidence",
@@ -390,6 +399,12 @@ async def retention_inventory(db: AsyncSession, tenant_id: uuid.UUID) -> dict[st
         created_column=SmsConsentEvent.occurred_at,
         where=[SmsConsentEvent.tenant_id == tenant_id],
     )
+    sms_current_consent_state = await _aggregate(
+        db,
+        id_column=LeadChannelConsent.id,
+        created_column=LeadChannelConsent.updated_at,
+        where=[LeadChannelConsent.tenant_id == tenant_id],
+    )
     sms_number_evidence = await _aggregate(
         db,
         id_column=SmsNumberSuppressionEvent.id,
@@ -488,6 +503,7 @@ async def retention_inventory(db: AsyncSession, tenant_id: uuid.UUID) -> dict[st
         },
         _sms_retention_category("sms_messages", sms_content),
         _sms_retention_category("sms_number_suppressions", sms_suppressions),
+        _sms_retention_category("lead_channel_consents", sms_current_consent_state),
         _sms_retention_category("sms_consent_events", sms_consent_evidence),
         _sms_retention_category("sms_number_suppression_events", sms_number_evidence),
         _sms_retention_category("sms_review_items", sms_review_evidence),

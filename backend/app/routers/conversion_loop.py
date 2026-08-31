@@ -35,7 +35,7 @@ from app.schemas.conversion_loop import (
     TriageDecision,
 )
 from app.services.email import EmailDeliveryResult, email_service
-from app.services.access_control import require_capability
+from app.services.access_control import require_capabilities, require_capability
 from app.services.operator_audit import record_operator_audit
 from app.services.sms import (
     SmsError,
@@ -571,7 +571,7 @@ async def triage(
 async def send_follow_up(
     lead_id: uuid.UUID,
     body: FollowUpCreate,
-    current_user=Depends(require_capability("manage_intake")),
+    current_user=Depends(require_capabilities("manage_intake", "manage_matters")),
     db: AsyncSession = Depends(get_db),
 ):
     """Send only an explicitly authored, consent-checked follow-up.
@@ -614,6 +614,7 @@ async def send_follow_up(
                 body=body.body,
                 category="lead_follow_up",
                 idempotency_key=body.idempotency_key,
+                required_capabilities=frozenset({"manage_intake", "manage_matters"}),
             )
         except SmsError as exc:
             raise HTTPException(exc.status_code, exc.api_detail()) from exc

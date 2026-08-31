@@ -505,6 +505,9 @@ async def _run_sms_client(
                 body=action.body,
                 category=action.category,
                 idempotency_key=action.idempotency_key,
+                required_capabilities=frozenset(
+                    {"approve_legal_work", "manage_matters"}
+                ),
             )
     except SmsError as exc:
         return ActionExecutionResult(

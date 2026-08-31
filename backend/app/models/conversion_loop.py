@@ -126,6 +126,27 @@ class LeadChannelConsent(Base):
             ")",
             name="ck_lead_channel_consents_sms_status",
         ),
+        CheckConstraint(
+            "mobile_e164 IS NULL OR mobile_e164 ~ '^\\+[1-9][0-9]{7,14}$'",
+            name="ck_lead_channel_consents_mobile_e164",
+        ),
+        CheckConstraint(
+            "sms_status <> 'active' OR ("
+            "sms_allowed AND phone_verified AND mobile_e164 IS NOT NULL "
+            "AND consented_at IS NOT NULL "
+            "AND NULLIF(BTRIM(consent_source), '') IS NOT NULL "
+            "AND NULLIF(BTRIM(disclosure_version), '') IS NOT NULL "
+            "AND NULLIF(BTRIM(consent_timezone), '') IS NOT NULL "
+            "AND quiet_hours_start ~ '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$' "
+            "AND quiet_hours_end ~ '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$' "
+            "AND quiet_hours_start <> quiet_hours_end "
+            "AND jsonb_typeof(allowed_categories) = 'array' "
+            "AND jsonb_array_length(allowed_categories) > 0 "
+            "AND sms_revoked_at IS NULL AND revoked_at IS NULL "
+            "AND (consent_expires_at IS NULL OR consent_expires_at > consented_at)"
+            ")",
+            name="ck_lead_channel_consents_sms_active_evidence",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -222,6 +243,10 @@ class SmsConsentEvent(Base):
             "'unknown', 'pending_verification', 'active', 'opted_out', 'blocked'"
             ")",
             name="ck_sms_consent_events_sms_status",
+        ),
+        CheckConstraint(
+            "mobile_e164 IS NULL OR mobile_e164 ~ '^\\+[1-9][0-9]{7,14}$'",
+            name="ck_sms_consent_events_mobile_e164",
         ),
         Index(
             "idx_sms_consent_events_tenant_consent",

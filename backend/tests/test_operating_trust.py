@@ -63,6 +63,9 @@ def test_sms_export_modes_are_explicit_and_unknown_sms_tables_fail_closed():
         database_export_mode("sms_number_suppressions")
         == "existing-product-export-path"
     )
+    assert (
+        database_export_mode("lead_channel_consents") == "existing-product-export-path"
+    )
     for table in (
         "sms_consent_events",
         "sms_number_suppression_events",

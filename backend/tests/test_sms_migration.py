@@ -83,19 +83,28 @@ def test_sms_migration_enforces_rls_and_tenant_composite_references():
         assert index_name in source
     for check_name in (
         "ck_lead_channel_consents_sms_status",
+        "ck_lead_channel_consents_mobile_e164",
+        "ck_lead_channel_consents_sms_active_evidence",
         "ck_sms_consent_events_sms_status",
+        "ck_sms_consent_events_mobile_e164",
         "ck_sms_provider_configs_provider",
         "ck_sms_provider_configs_generation",
         "ck_sms_provider_configs_sender_ready",
         "ck_sms_provider_configs_active",
+        "ck_sms_provider_configs_from_number_e164",
         "ck_sms_messages_direction",
         "ck_sms_messages_status",
+        "ck_sms_messages_direction_status",
         "ck_sms_messages_delivery_certainty",
         "ck_sms_messages_provider_status",
         "ck_sms_messages_request_digest",
+        "ck_sms_messages_from_number_e164",
+        "ck_sms_messages_to_number_e164",
         "ck_sms_messages_reconciliation_resolution",
         "ck_sms_messages_reconciliation_evidence",
+        "ck_sms_messages_provider_unknown_reconciliation",
         "ck_sms_messages_provider_truth",
+        "ck_sms_messages_status_certainty",
         "ck_sms_review_items_status",
     ):
         assert check_name in source

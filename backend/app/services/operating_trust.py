@@ -82,6 +82,7 @@ _EVIDENCE_ONLY_TABLES = frozenset(
 _SMS_TABLE_EXPORT_MODES: dict[str, ExportMode] = {
     "sms_messages": "existing-product-export-path",
     "sms_number_suppressions": "existing-product-export-path",
+    "lead_channel_consents": "existing-product-export-path",
     "sms_consent_events": "immutable-evidence-summary",
     "sms_number_suppression_events": "immutable-evidence-summary",
     "sms_review_items": "immutable-evidence-summary",

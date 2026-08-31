@@ -4,16 +4,20 @@ import { getSmsReconciliationItems, reconcileSmsMessage } from '../../api'
 
 const errorText = error => {
   const detail = error?.response?.data?.detail
-  if (typeof detail === 'string') return detail
+  let message
+  if (typeof detail === 'string') message = detail
   if (detail && typeof detail === 'object') {
-    const message = typeof detail.message === 'string' ? detail.message : null
-    if (message) return message
-    return Object.entries(detail)
-      .filter(([, value]) => value !== undefined && value !== null)
-      .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`)
-      .join(' · ') || 'The SMS provider outcome could not be reconciled.'
+    message = typeof detail.message === 'string'
+      ? detail.message
+      : Object.entries(detail)
+        .filter(([, value]) => value !== undefined && value !== null)
+        .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`)
+        .join(' · ')
   }
-  return 'The SMS provider outcome could not be reconciled.'
+  const requestId = error?.request_id || error?.response?.data?.request_id
+  const errorId = error?.error_id || error?.response?.data?.error_id
+  const correlation = errorId ? `Error ID ${errorId}` : requestId ? `Request ID ${requestId}` : null
+  return `${message || 'The SMS provider outcome could not be reconciled.'}${correlation ? ` · ${correlation}` : ''}`
 }
 
 const copyText = async value => {
@@ -44,8 +48,8 @@ export default function SmsReconciliationQueue() {
     return () => { active = false }
   }, [])
 
-  const copyRequestId = async item => {
-    if (await copyText(item.request_id)) {
+  const copyMessageId = async item => {
+    if (await copyText(item.id)) {
       setCopied(item.id)
       window.setTimeout(() => setCopied(current => current === item.id ? null : current), 1500)
     }
@@ -91,7 +95,7 @@ export default function SmsReconciliationQueue() {
                 <span className="rounded bg-red-100 px-2 py-0.5 text-red-800">{String(item.status || 'unknown').replaceAll('_', ' ')}</span>
                 <span className="ml-auto font-normal text-brand-muted">{item.provider_status || 'provider status unknown'}</span>
               </div>
-              {item.request_id && <div className="mt-2 flex items-center gap-2 text-[11px] text-brand-muted"><span>Request ID <code className="font-mono text-brand-ink">{item.request_id}</code></span><button type="button" onClick={() => copyRequestId(item)} className="inline-flex items-center gap-1 rounded border border-brand-line px-2 py-1 font-semibold hover:bg-brand-bg-soft" aria-label={`Copy request ID ${item.request_id}`}>{copied === item.id ? <Check size={11} /> : <Clipboard size={11} />}{copied === item.id ? 'Copied' : 'Copy'}</button></div>}
+              <div className="mt-2 flex items-center gap-2 text-[11px] text-brand-muted"><span>Message ID <code className="font-mono text-brand-ink">{item.id}</code></span><button type="button" onClick={() => copyMessageId(item)} className="inline-flex items-center gap-1 rounded border border-brand-line px-2 py-1 font-semibold hover:bg-brand-bg-soft" aria-label={`Copy message ID ${item.id}`}>{copied === item.id ? <Check size={11} /> : <Clipboard size={11} />}{copied === item.id ? 'Copied' : 'Copy'}</button></div>
               <p className="mt-2 whitespace-pre-wrap break-words text-sm text-brand-ink">{item.body}</p>
               <label className="mt-3 block text-xs font-semibold text-brand-ink">
                 Exact provider message ID

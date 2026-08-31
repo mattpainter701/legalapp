@@ -80,6 +80,29 @@ def upgrade() -> None:
         "'unknown', 'pending_verification', 'active', 'opted_out', 'blocked'"
         ")",
     )
+    op.create_check_constraint(
+        "ck_lead_channel_consents_mobile_e164",
+        "lead_channel_consents",
+        "mobile_e164 IS NULL OR mobile_e164 ~ '^\\+[1-9][0-9]{7,14}$'",
+    )
+    op.create_check_constraint(
+        "ck_lead_channel_consents_sms_active_evidence",
+        "lead_channel_consents",
+        "sms_status <> 'active' OR ("
+        "sms_allowed AND phone_verified AND mobile_e164 IS NOT NULL "
+        "AND consented_at IS NOT NULL "
+        "AND NULLIF(BTRIM(consent_source), '') IS NOT NULL "
+        "AND NULLIF(BTRIM(disclosure_version), '') IS NOT NULL "
+        "AND NULLIF(BTRIM(consent_timezone), '') IS NOT NULL "
+        "AND quiet_hours_start ~ '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$' "
+        "AND quiet_hours_end ~ '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$' "
+        "AND quiet_hours_start <> quiet_hours_end "
+        "AND jsonb_typeof(allowed_categories) = 'array' "
+        "AND jsonb_array_length(allowed_categories) > 0 "
+        "AND sms_revoked_at IS NULL AND revoked_at IS NULL "
+        "AND (consent_expires_at IS NULL OR consent_expires_at > consented_at)"
+        ")",
+    )
     op.create_table(
         "sms_consent_events",
         sa.Column(
@@ -169,6 +192,10 @@ def upgrade() -> None:
             ")",
             name="ck_sms_consent_events_sms_status",
         ),
+        sa.CheckConstraint(
+            "mobile_e164 IS NULL OR mobile_e164 ~ '^\\+[1-9][0-9]{7,14}$'",
+            name="ck_sms_consent_events_mobile_e164",
+        ),
     )
     op.create_table(
         "sms_provider_configs",
@@ -230,6 +257,10 @@ def upgrade() -> None:
             "NOT is_active OR sender_ready",
             name="ck_sms_provider_configs_active",
         ),
+        sa.CheckConstraint(
+            "from_number IS NULL OR from_number ~ '^\\+[1-9][0-9]{7,14}$'",
+            name="ck_sms_provider_configs_from_number_e164",
+        ),
     )
     op.create_table(
         "sms_number_suppressions",
@@ -270,6 +301,10 @@ def upgrade() -> None:
         ),
         sa.UniqueConstraint(
             "tenant_id", "id", name="uq_sms_number_suppressions_tenant_id"
+        ),
+        sa.CheckConstraint(
+            "mobile_e164 ~ '^\\+[1-9][0-9]{7,14}$'",
+            name="ck_sms_number_suppressions_mobile_e164",
         ),
     )
     op.create_table(
@@ -312,6 +347,10 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "action IN ('provider_stop', 'provider_start', 'provider_start_blocked')",
             name="ck_sms_number_suppression_events_action",
+        ),
+        sa.CheckConstraint(
+            "mobile_e164 ~ '^\\+[1-9][0-9]{7,14}$'",
+            name="ck_sms_number_suppression_events_mobile_e164",
         ),
     )
     op.create_table(
@@ -457,6 +496,18 @@ def upgrade() -> None:
             name="ck_sms_messages_status",
         ),
         sa.CheckConstraint(
+            "(direction = 'outbound' AND status IN ("
+            "'queued', 'dispatching', 'provider_unknown', "
+            "'blocked_number_suppression', 'blocked_consent_changed', "
+            "'blocked_quiet_hours', 'blocked_provider_config', "
+            "'blocked_matter_authorization_changed', 'provider_failed', "
+            "'provider_failed_after_acceptance', 'submitted', 'delivered'"
+            ")) OR (direction = 'inbound' AND status IN ("
+            "'received', 'review_required', 'route_rejected'"
+            "))",
+            name="ck_sms_messages_direction_status",
+        ),
+        sa.CheckConstraint(
             "delivery_certainty IN ("
             "'not_attempted', 'outcome_unknown', 'provider_rejected', "
             "'provider_accepted', 'provider_failed_after_acceptance', "
@@ -476,6 +527,14 @@ def upgrade() -> None:
             name="ck_sms_messages_request_digest",
         ),
         sa.CheckConstraint(
+            "from_number IS NULL OR from_number ~ '^\\+[1-9][0-9]{7,14}$'",
+            name="ck_sms_messages_from_number_e164",
+        ),
+        sa.CheckConstraint(
+            "to_number IS NULL OR to_number ~ '^\\+[1-9][0-9]{7,14}$'",
+            name="ck_sms_messages_to_number_e164",
+        ),
+        sa.CheckConstraint(
             "reconciliation_resolution IS NULL OR reconciliation_resolution IN ("
             "'operator_attested_unknown', 'provider_lookup', 'signed_provider_callback', "
             "'signed_callback_overrode_operator_attestation'"
@@ -487,9 +546,32 @@ def upgrade() -> None:
             name="ck_sms_messages_reconciliation_evidence",
         ),
         sa.CheckConstraint(
+            "status <> 'provider_unknown' OR reconciliation_required_at IS NOT NULL",
+            name="ck_sms_messages_provider_unknown_reconciliation",
+        ),
+        sa.CheckConstraint(
             "status NOT IN ('submitted', 'delivered', "
             "'provider_failed_after_acceptance') OR provider_message_id IS NOT NULL",
             name="ck_sms_messages_provider_truth",
+        ),
+        sa.CheckConstraint(
+            "(status IN ('queued', 'blocked_number_suppression', "
+            "'blocked_consent_changed', 'blocked_quiet_hours', "
+            "'blocked_provider_config', 'blocked_matter_authorization_changed') "
+            "AND delivery_certainty = 'not_attempted') OR "
+            "(status IN ('dispatching', 'provider_unknown') "
+            "AND delivery_certainty = 'outcome_unknown') OR "
+            "(status = 'provider_failed' "
+            "AND delivery_certainty = 'provider_rejected') OR "
+            "(status = 'provider_failed_after_acceptance' "
+            "AND delivery_certainty = 'provider_failed_after_acceptance') OR "
+            "(status = 'submitted' "
+            "AND delivery_certainty = 'provider_accepted') OR "
+            "(status = 'delivered' "
+            "AND delivery_certainty = 'confirmed_sent') OR "
+            "(status IN ('received', 'review_required', 'route_rejected') "
+            "AND delivery_certainty = 'confirmed_received')",
+            name="ck_sms_messages_status_certainty",
         ),
     )
     op.create_table(
@@ -686,6 +768,16 @@ def downgrade() -> None:
         "sms_consent_events",
     ):
         op.drop_table(table)
+    op.drop_constraint(
+        "ck_lead_channel_consents_sms_active_evidence",
+        "lead_channel_consents",
+        type_="check",
+    )
+    op.drop_constraint(
+        "ck_lead_channel_consents_mobile_e164",
+        "lead_channel_consents",
+        type_="check",
+    )
     op.drop_constraint(
         "ck_lead_channel_consents_sms_status",
         "lead_channel_consents",

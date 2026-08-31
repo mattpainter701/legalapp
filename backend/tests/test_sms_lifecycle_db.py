@@ -51,6 +51,7 @@ from app.services.chat_tools import ChatToolError, resolve_tool
 from app.services.chat_tools.handlers import ChatToolContext
 from app.services.demo_purge import purge_demo_tenant
 from app.services.demo_registry import DEMO_TABLE_REGISTRY, SENSITIVE_NEVER_CLONE
+from app.services.rbac_service import provision_tenant_rbac
 from app.services.sms import (
     SmsError,
     apply_compliance_keyword,
@@ -153,6 +154,10 @@ async def _seed_lifecycle(
     categories: list[str] | None = None,
 ):
     await set_tenant_context(db, str(tenant.id))
+    # Production tenant creation always seeds and assigns canonical RBAC roles.
+    # Keep provider-shaped tests faithful to that contract so the final live
+    # authorization fence exercises persisted role grants, not legacy labels.
+    await provision_tenant_rbac(db, tenant.id, user.id)
     contact = Contact(
         tenant_id=tenant.id,
         first_name="SMS",
@@ -4020,3 +4025,675 @@ async def test_custom_role_capability_controls_staff_sms_send(
     assert send_audit.metadata_json["category"] == "appointment"
     assert "body" not in send_audit.metadata_json
     assert "phone" not in send_audit.metadata_json
+
+
+@pytest.mark.asyncio
+async def test_generic_task_surfaces_redact_or_hide_sms_for_unauthorized_users(
+    db_session, client, test_tenant, test_user
+):
+    seeded = await _seed_lifecycle(
+        db_session,
+        tenant=test_tenant,
+        user=test_user,
+        suffix="task-surface-auth",
+    )
+    denied = User(
+        tenant_id=test_tenant.id,
+        email=f"sms-task-denied-{uuid.uuid4().hex}@example.invalid",
+        full_name="SMS task denied",
+        role="user",
+    )
+    unassigned = User(
+        tenant_id=test_tenant.id,
+        email=f"sms-task-unassigned-{uuid.uuid4().hex}@example.invalid",
+        full_name="SMS task unassigned",
+        role="user",
+    )
+    case_staff = Role(
+        tenant_id=test_tenant.id,
+        name=f"SMS task staff {uuid.uuid4().hex[:8]}",
+        capabilities=["manage_matters"],
+    )
+    settings_row = await db_session.scalar(
+        select(TenantSettings).where(TenantSettings.tenant_id == test_tenant.id)
+    )
+    if settings_row is None:
+        settings_row = TenantSettings(
+            tenant_id=test_tenant.id,
+            enable_task_board=True,
+        )
+        db_session.add(settings_row)
+    else:
+        settings_row.enable_task_board = True
+    db_session.add_all([denied, unassigned, case_staff])
+    await db_session.flush()
+    db_session.add(
+        UserRole(
+            tenant_id=test_tenant.id,
+            user_id=unassigned.id,
+            role_id=case_staff.id,
+            source="manual",
+        )
+    )
+    secret_body = "SMS-TASK-SECRET-BODY"
+    secret_phone = seeded.contact.phone
+    action = SmsClientAction(
+        type="sms_client",
+        recipient_bindings=[
+            ResolvedSmsRecipientBinding(
+                party_id=seeded.party.id,
+                contact_id=seeded.contact.id,
+                phone=secret_phone,
+            )
+        ],
+        body=secret_body,
+        category="appointment",
+        matter_id=seeded.matter.id,
+        consent_evidence=[_consent_evidence(seeded)],
+        idempotency_key="sms-task-surface-auth",
+    ).model_dump(mode="json")
+    task = Task(
+        tenant_id=test_tenant.id,
+        title="Restricted SMS task",
+        description="Generic description remains visible",
+        task_type="follow_up",
+        status="review",
+        due_date=datetime.now(timezone.utc).date(),
+        matter_id=seeded.matter.id,
+        contact_id=seeded.contact.id,
+        assigned_to_user_id=unassigned.id,
+        reviewer_user_id=unassigned.id,
+        source="assistant",
+        pending_action=action,
+        created_by_user_id=test_user.id,
+    )
+    historical_task = Task(
+        tenant_id=test_tenant.id,
+        title="Restricted historical SMS task",
+        task_type="follow_up",
+        status="in_progress",
+        due_date=datetime.now(timezone.utc).date(),
+        matter_id=seeded.matter.id,
+        contact_id=seeded.contact.id,
+        assigned_to_user_id=unassigned.id,
+        source="assistant",
+        created_by_user_id=test_user.id,
+    )
+    db_session.add_all([task, historical_task])
+    await db_session.flush()
+    db_session.add(
+        TaskAutomationRun(
+            tenant_id=test_tenant.id,
+            task_id=historical_task.id,
+            action_type="sms_client",
+            idempotency_key="sms-task-history-auth",
+            action_snapshot=action,
+            action_sha256="a" * 64,
+            status="failed",
+            error_message="SMS-TASK-SECRET-ERROR",
+            provider="twilio",
+            provider_message_id="SM-TASK-SECRET",
+            delivery_detail="SMS-TASK-SECRET-DELIVERY",
+            delivery_certainty="outcome_unknown",
+            reconciliation_required=True,
+            triggered_by_user_id=test_user.id,
+        )
+    )
+    await db_session.commit()
+
+    for restricted_user in (denied, unassigned):
+        headers = {"Authorization": f"Bearer {_user_token(restricted_user)}"}
+        listed = await client.get("/api/tasks", headers=headers)
+        assert listed.status_code == 200, listed.text
+        listed_by_id = {row["id"]: row for row in listed.json()["items"]}
+        for restricted_task in (task, historical_task):
+            row = listed_by_id[str(restricted_task.id)]
+            assert row["pending_action"] is None
+            assert row["pending_action_sha256"] is None
+            assert row["delivery"] is None
+            assert row["delivery_history"] == []
+        assert secret_body not in listed.text
+        assert secret_phone not in listed.text
+        assert "SMS-TASK-SECRET" not in listed.text
+
+        board = await client.get("/api/tasks/board?scope=firm", headers=headers)
+        assert board.status_code == 200, board.text
+        cards = {
+            row["id"]: row
+            for column in board.json()["columns"]
+            for row in column["items"]
+        }
+        for restricted_task in (task, historical_task):
+            card = cards[str(restricted_task.id)]
+            assert card["pending_action"] is None
+            assert card["pending_action_sha256"] is None
+            assert card["delivery"] is None
+        assert secret_body not in board.text
+        assert secret_phone not in board.text
+        assert "SMS-TASK-SECRET" not in board.text
+
+        direct_calls = (
+            ("get", f"/api/tasks/{task.id}", None),
+            ("get", f"/api/tasks/{historical_task.id}/events", None),
+            (
+                "patch",
+                f"/api/tasks/{task.id}",
+                {"title": "stale write", "expected_version": task.version + 10},
+            ),
+            (
+                "post",
+                f"/api/tasks/{task.id}/transition",
+                {
+                    "to_status": "cancelled",
+                    "expected_version": task.version + 10,
+                    "reason": "stale cancellation",
+                },
+            ),
+            (
+                "patch",
+                f"/api/tasks/{task.id}/pending-action",
+                {"body": "leak attempt", "expected_version": task.version},
+            ),
+        )
+        for method, path, payload in direct_calls:
+            response = await getattr(client, method)(
+                path, json=payload, headers=headers
+            )
+            assert response.status_code == 404, response.text
+            assert secret_body not in response.text
+            assert secret_phone not in response.text
+            assert "SMS-TASK-SECRET" not in response.text
+
+
+async def _mutate_sms_actor(
+    maker,
+    *,
+    tenant_id,
+    user_id,
+    role_id,
+    mutation: str,
+):
+    async with maker() as mutation_db:
+        await set_tenant_context(mutation_db, str(tenant_id))
+        if mutation == "deactivate":
+            row = await mutation_db.scalar(
+                select(User)
+                .where(User.id == user_id, User.tenant_id == tenant_id)
+                .with_for_update()
+            )
+            row.is_active = False
+        else:
+            row = await mutation_db.scalar(
+                select(Role)
+                .where(Role.id == role_id, Role.tenant_id == tenant_id)
+                .with_for_update()
+            )
+            row.capabilities = [
+                capability
+                for capability in (row.capabilities or [])
+                if capability != "manage_matters"
+            ]
+        await mutation_db.commit()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mutation", ["deactivate", "revoke"])
+async def test_actor_change_committed_before_final_fence_blocks_provider_dispatch(
+    mutation,
+    db_session,
+    test_engine,
+    test_tenant,
+    test_user,
+    monkeypatch,
+):
+    seeded = await _seed_lifecycle(
+        db_session,
+        tenant=test_tenant,
+        user=test_user,
+        suffix=f"actor-before-{mutation}",
+        phone=("+15551234591" if mutation == "deactivate" else "+15551234592"),
+    )
+    assignment = await db_session.scalar(
+        select(UserRole).where(
+            UserRole.tenant_id == test_tenant.id,
+            UserRole.user_id == test_user.id,
+        )
+    )
+    role_id = assignment.role_id
+    fence_entered = asyncio.Event()
+    release_fence = asyncio.Event()
+    original_number_lock = sms_service.lock_sms_number_suppression
+
+    async def pause_after_reservation(*args, **kwargs):
+        suppression = await original_number_lock(*args, **kwargs)
+        fence_entered.set()
+        await release_fence.wait()
+        return suppression
+
+    monkeypatch.setattr(
+        sms_service,
+        "lock_sms_number_suppression",
+        pause_after_reservation,
+    )
+
+    async def accepted(**_kwargs):
+        return _Response(
+            201,
+            {
+                "sid": f"SM-ACTOR-BEFORE-{mutation}",
+                "status": "queued",
+                "from": "+15550001111",
+            },
+        )
+
+    provider = _Provider(accepted)
+    _install_provider(monkeypatch, provider)
+    maker = async_sessionmaker(test_engine, expire_on_commit=False)
+
+    async def dispatch():
+        async with maker() as send_db:
+            await set_tenant_context(send_db, str(test_tenant.id))
+            return await send_sms(
+                send_db,
+                tenant_id=test_tenant.id,
+                user_id=test_user.id,
+                contact_id=seeded.contact.id,
+                matter_id=seeded.matter.id,
+                body=f"Actor mutation before final fence {mutation}",
+                category="appointment",
+                idempotency_key=f"actor-before-final-{mutation}",
+            )
+
+    sending = asyncio.create_task(dispatch())
+    await asyncio.wait_for(fence_entered.wait(), timeout=5)
+    await _mutate_sms_actor(
+        maker,
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        role_id=role_id,
+        mutation=mutation,
+    )
+    release_fence.set()
+    with pytest.raises(SmsError) as blocked:
+        await asyncio.wait_for(sending, timeout=5)
+    assert blocked.value.code == "sms_matter_authorization_changed"
+    assert provider.calls == []
+    await set_tenant_context(db_session, str(test_tenant.id))
+    db_session.expire_all()
+    row = await db_session.scalar(
+        select(SmsMessage).where(
+            SmsMessage.idempotency_key == f"actor-before-final-{mutation}"
+        )
+    )
+    assert row.status == "blocked_matter_authorization_changed"
+    assert row.delivery_certainty == "not_attempted"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mutation", ["deactivate", "revoke"])
+async def test_actor_change_waits_when_final_fence_already_owns_provider_attempt(
+    mutation,
+    db_session,
+    test_engine,
+    test_tenant,
+    test_user,
+    monkeypatch,
+):
+    seeded = await _seed_lifecycle(
+        db_session,
+        tenant=test_tenant,
+        user=test_user,
+        suffix=f"actor-after-{mutation}",
+        phone=("+15551234593" if mutation == "deactivate" else "+15551234594"),
+    )
+    assignment = await db_session.scalar(
+        select(UserRole).where(
+            UserRole.tenant_id == test_tenant.id,
+            UserRole.user_id == test_user.id,
+        )
+    )
+    role_id = assignment.role_id
+    provider_entered = asyncio.Event()
+    release_provider = asyncio.Event()
+
+    async def accepted(**_kwargs):
+        provider_entered.set()
+        await release_provider.wait()
+        return _Response(
+            201,
+            {
+                "sid": f"SM-ACTOR-AFTER-{mutation}",
+                "status": "queued",
+                "from": "+15550001111",
+            },
+        )
+
+    provider = _Provider(accepted)
+    _install_provider(monkeypatch, provider)
+    maker = async_sessionmaker(test_engine, expire_on_commit=False)
+
+    async def dispatch():
+        async with maker() as send_db:
+            await set_tenant_context(send_db, str(test_tenant.id))
+            return await send_sms(
+                send_db,
+                tenant_id=test_tenant.id,
+                user_id=test_user.id,
+                contact_id=seeded.contact.id,
+                matter_id=seeded.matter.id,
+                body=f"Actor mutation after final fence {mutation}",
+                category="appointment",
+                idempotency_key=f"actor-after-final-{mutation}",
+            )
+
+    sending = asyncio.create_task(dispatch())
+    await asyncio.wait_for(provider_entered.wait(), timeout=5)
+    mutation_task = asyncio.create_task(
+        _mutate_sms_actor(
+            maker,
+            tenant_id=test_tenant.id,
+            user_id=test_user.id,
+            role_id=role_id,
+            mutation=mutation,
+        )
+    )
+    await asyncio.sleep(0.1)
+    assert not mutation_task.done()
+    assert len(provider.calls) == 1
+    release_provider.set()
+    sent = await asyncio.wait_for(sending, timeout=5)
+    await asyncio.wait_for(mutation_task, timeout=5)
+    assert sent.status == "submitted"
+    assert sent.provider_message_id == f"SM-ACTOR-AFTER-{mutation}"
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_messaging_service_lookup_requires_one_unique_local_dispatch(
+    db_session, client, test_tenant, test_user, monkeypatch
+):
+    seeded = await _seed_lifecycle(
+        db_session,
+        tenant=test_tenant,
+        user=test_user,
+        suffix="lookup-service-only",
+        phone="+15551234595",
+    )
+    assert seeded.config.messaging_service_sid
+    assert seeded.config.from_number is None
+    submitted_at = datetime.now(timezone.utc)
+    body = "Identical unresolved messaging-service attempt"
+    digest = sms_service._request_digest(
+        contact_id=seeded.contact.id,
+        matter_id=seeded.matter.id,
+        to_number=seeded.contact.phone,
+        body=body,
+        category="appointment",
+    )
+    rows = [
+        SmsMessage(
+            tenant_id=test_tenant.id,
+            contact_id=seeded.contact.id,
+            matter_id=seeded.matter.id,
+            idempotency_key=f"service-only-ambiguous-{index}",
+            request_digest=digest,
+            provider_account_sid=seeded.config.account_sid,
+            provider_messaging_service_sid=seeded.config.messaging_service_sid,
+            provider_config_generation=seeded.config.generation,
+            dispatch_attempt_id=uuid.uuid4(),
+            dispatch_started_at=submitted_at,
+            provider_submission_started_at=submitted_at,
+            reconciliation_required_at=submitted_at,
+            direction="outbound",
+            status="provider_unknown",
+            delivery_certainty="outcome_unknown",
+            from_number=None,
+            to_number=seeded.contact.phone,
+            body=body,
+            category="appointment",
+            created_by_user_id=test_user.id,
+        )
+        for index in (1, 2)
+    ]
+    db_session.add_all(rows)
+    await db_session.commit()
+    sid = "SM-SERVICE-ASSIGNED-SENDER"
+    provider_from = "+15550002222"
+    provider_payload = {
+        "sid": sid,
+        "account_sid": seeded.config.account_sid,
+        "to": seeded.contact.phone,
+        "from": provider_from,
+        "body": body,
+        "messaging_service_sid": seeded.config.messaging_service_sid,
+        "direction": "outbound-api",
+        "date_created": submitted_at.isoformat(),
+        "uri": f"/2010-04-01/Accounts/{seeded.config.account_sid}/Messages/{sid}.json",
+        "status": "delivered",
+    }
+
+    async def lookup(**_kwargs):
+        return _Response(200, provider_payload)
+
+    provider = _Provider(
+        lambda **_kwargs: pytest.fail("provider reconciliation must not dispatch"),
+        lookup_handler=lookup,
+    )
+    _install_provider(monkeypatch, provider)
+    for row in rows:
+        ambiguous = await client.post(
+            f"/api/sms/messages/{row.id}/reconcile",
+            json={"resolution": "provider_lookup", "provider_message_id": sid},
+        )
+        assert ambiguous.status_code == 409, ambiguous.text
+        assert ambiguous.json()["detail"]["code"] == "sms_provider_identity_ambiguous"
+
+    await set_tenant_context(db_session, str(test_tenant.id))
+    second = await db_session.get(SmsMessage, rows[1].id)
+    await db_session.delete(second)
+    await db_session.commit()
+    unique = await client.post(
+        f"/api/sms/messages/{rows[0].id}/reconcile",
+        json={"resolution": "provider_lookup", "provider_message_id": sid},
+    )
+    assert unique.status_code == 200, unique.text
+    assert unique.json()["status"] == "delivered"
+    assert unique.json()["provider_message_id"] == sid
+    assert unique.json()["from_number"] == provider_from
+    assert len(provider.lookup_calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_reject_review_audit_failure_rolls_back_route_state(
+    db_session, client, test_tenant, test_user, monkeypatch
+):
+    seeded = await _seed_lifecycle(
+        db_session,
+        tenant=test_tenant,
+        user=test_user,
+        suffix="reject-audit-rollback",
+        phone="+15551234596",
+    )
+    message = SmsMessage(
+        tenant_id=test_tenant.id,
+        idempotency_key="reject-audit-rollback",
+        request_digest="f" * 64,
+        provider_message_id="SM-REJECT-AUDIT-ROLLBACK",
+        direction="inbound",
+        status="review_required",
+        delivery_certainty="confirmed_received",
+        from_number=seeded.contact.phone,
+        to_number="+15550001111",
+        body="Reject without a partial auditless state",
+        category="customer_reply",
+        provider_status="received",
+    )
+    db_session.add(message)
+    await db_session.flush()
+    review = SmsReviewItem(
+        tenant_id=test_tenant.id,
+        sms_message_id=message.id,
+        reason="ambiguous_inbound_route",
+        candidate_contact_ids=[str(seeded.contact.id)],
+        candidate_matter_ids=[str(seeded.matter.id)],
+    )
+    db_session.add(review)
+    await db_session.commit()
+
+    async def fail_reject_audit(*_args, action, **_kwargs):
+        assert action == "sms.inbound_route.reject"
+        raise RuntimeError("forced reject audit failure")
+
+    monkeypatch.setattr(sms_router, "record_operator_audit", fail_reject_audit)
+    with pytest.raises(RuntimeError, match="forced reject audit failure"):
+        await client.post(
+            f"/api/sms/review/{review.id}",
+            json={"decision": "reject"},
+        )
+    await set_tenant_context(db_session, str(test_tenant.id))
+    db_session.expire_all()
+    persisted_review = await db_session.get(SmsReviewItem, review.id)
+    persisted_message = await db_session.get(SmsMessage, message.id)
+    assert persisted_review.status == "pending"
+    assert persisted_review.reviewed_at is None
+    assert persisted_review.reviewed_by_user_id is None
+    assert persisted_message.status == "review_required"
+    audit = await db_session.scalar(
+        select(OperatorAuditLog).where(
+            OperatorAuditLog.action == "sms.inbound_route.reject",
+            OperatorAuditLog.resource_id == str(review.id),
+        )
+    )
+    assert audit is None
+
+
+@pytest.mark.asyncio
+async def test_postgres_rejects_invalid_sms_phone_provenance_and_truth_states(
+    db_session, test_tenant, test_user
+):
+    seeded = await _seed_lifecycle(
+        db_session,
+        tenant=test_tenant,
+        user=test_user,
+        suffix="db-checks",
+        phone="+15551234597",
+    )
+
+    async def rejected(row):
+        savepoint = await db_session.begin_nested()
+        db_session.add(row)
+        with pytest.raises(IntegrityError):
+            await db_session.flush()
+        await savepoint.rollback()
+
+    for field, invalid in (
+        ("consent_source", None),
+        ("disclosure_version", None),
+        ("allowed_categories", []),
+        ("quiet_hours_end", seeded.consent.quiet_hours_start),
+        (
+            "consent_expires_at",
+            seeded.consent.consented_at - timedelta(seconds=1),
+        ),
+    ):
+        savepoint = await db_session.begin_nested()
+        setattr(seeded.consent, field, invalid)
+        with pytest.raises(IntegrityError):
+            await db_session.flush()
+        await savepoint.rollback()
+        await db_session.refresh(seeded.consent)
+
+    savepoint = await db_session.begin_nested()
+    seeded.config.from_number = "555-not-e164"
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
+    await savepoint.rollback()
+    await db_session.refresh(seeded.config)
+
+    await rejected(
+        SmsConsentEvent(
+            tenant_id=test_tenant.id,
+            consent_id=seeded.consent.id,
+            lead_id=seeded.lead.id,
+            contact_id=seeded.contact.id,
+            action="invalid_phone_test",
+            sms_status="active",
+            sms_allowed=True,
+            phone_verified=True,
+            mobile_e164="not-a-phone",
+            consented_at=seeded.consent.consented_at,
+            consent_expires_at=seeded.consent.consent_expires_at,
+            consent_source="public_intake",
+            disclosure_version="sms-v3",
+            consent_language="en",
+            consent_timezone="America/Chicago",
+            quiet_hours_start="23:00",
+            quiet_hours_end="06:00",
+            allowed_categories=["appointment"],
+            actor_type="test",
+            actor_user_id=test_user.id,
+            metadata_json={},
+        )
+    )
+
+    valid_common = {
+        "tenant_id": test_tenant.id,
+        "contact_id": seeded.contact.id,
+        "matter_id": seeded.matter.id,
+        "request_digest": "1" * 64,
+        "provider_account_sid": seeded.config.account_sid,
+        "provider_messaging_service_sid": seeded.config.messaging_service_sid,
+        "provider_config_generation": seeded.config.generation,
+        "to_number": seeded.contact.phone,
+        "body": "Database constraint rehearsal",
+        "category": "appointment",
+        "created_by_user_id": test_user.id,
+    }
+    await rejected(
+        SmsMessage(
+            **valid_common,
+            idempotency_key="invalid-from-number",
+            direction="outbound",
+            status="queued",
+            delivery_certainty="not_attempted",
+            from_number="invalid",
+        )
+    )
+    await rejected(
+        SmsMessage(
+            **{**valid_common, "to_number": "invalid"},
+            idempotency_key="invalid-to-number",
+            direction="outbound",
+            status="queued",
+            delivery_certainty="not_attempted",
+        )
+    )
+    await rejected(
+        SmsMessage(
+            **valid_common,
+            idempotency_key="invalid-direction-status",
+            provider_message_id="SM-INVALID-DIRECTION",
+            direction="inbound",
+            status="submitted",
+            delivery_certainty="provider_accepted",
+        )
+    )
+    await rejected(
+        SmsMessage(
+            **valid_common,
+            idempotency_key="invalid-unknown-reconciliation",
+            direction="outbound",
+            status="provider_unknown",
+            delivery_certainty="outcome_unknown",
+            reconciliation_required_at=None,
+        )
+    )
+    await rejected(
+        SmsMessage(
+            **valid_common,
+            idempotency_key="invalid-status-certainty",
+            direction="outbound",
+            status="provider_failed",
+            delivery_certainty="confirmed_sent",
+        )
+    )

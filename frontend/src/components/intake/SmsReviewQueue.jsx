@@ -4,12 +4,17 @@ import { decideSmsReviewItem, getSmsReviewItems } from '../../api'
 
 const errorText = error => {
   const detail = error?.response?.data?.detail
-  if (typeof detail === 'string') return detail
+  let message
+  if (typeof detail === 'string') message = detail
   if (detail && typeof detail === 'object') {
-    if (typeof detail.message === 'string') return detail.message
-    return Object.entries(detail).map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`).join(' · ') || 'The inbound SMS could not be updated.'
+    message = typeof detail.message === 'string'
+      ? detail.message
+      : Object.entries(detail).map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`).join(' · ')
   }
-  return 'The inbound SMS could not be updated.'
+  const requestId = error?.request_id || error?.response?.data?.request_id
+  const errorId = error?.error_id || error?.response?.data?.error_id
+  const correlation = errorId ? `Error ID ${errorId}` : requestId ? `Request ID ${requestId}` : null
+  return `${message || 'The inbound SMS could not be updated.'}${correlation ? ` · ${correlation}` : ''}`
 }
 
 const copyText = async value => {
@@ -40,8 +45,8 @@ export default function SmsReviewQueue() {
     return () => { active = false }
   }, [])
 
-  const copyRequestId = async item => {
-    if (await copyText(item.request_id)) {
+  const copyReviewId = async item => {
+    if (await copyText(item.id)) {
       setCopied(item.id)
       window.setTimeout(() => setCopied(current => current === item.id ? null : current), 1500)
     }
@@ -94,7 +99,7 @@ export default function SmsReviewQueue() {
                 <MessageSquareText size={14} /> {item.from_number || 'Unknown sender'}
                 <span className="ml-auto font-normal text-brand-muted">{item.reason.replaceAll('_', ' ')}</span>
               </div>
-              {item.request_id && <div className="mt-2 flex items-center gap-2 text-[11px] text-brand-muted"><span>Request ID <code className="font-mono text-brand-ink">{item.request_id}</code></span><button type="button" onClick={() => copyRequestId(item)} className="inline-flex items-center gap-1 rounded border border-brand-line px-2 py-1 font-semibold hover:bg-brand-bg-soft" aria-label={`Copy request ID ${item.request_id}`}>{copied === item.id ? <Check size={11} /> : <Clipboard size={11} />}{copied === item.id ? 'Copied' : 'Copy'}</button></div>}
+              <div className="mt-2 flex items-center gap-2 text-[11px] text-brand-muted"><span>Review ID <code className="font-mono text-brand-ink">{item.id}</code></span><button type="button" onClick={() => copyReviewId(item)} className="inline-flex items-center gap-1 rounded border border-brand-line px-2 py-1 font-semibold hover:bg-brand-bg-soft" aria-label={`Copy review ID ${item.id}`}>{copied === item.id ? <Check size={11} /> : <Clipboard size={11} />}{copied === item.id ? 'Copied' : 'Copy'}</button></div>
               <p className="mt-2 whitespace-pre-wrap break-words text-sm text-brand-ink">{item.body}</p>
               <div className="mt-3 grid gap-2 sm:grid-cols-2">
                 <label className="text-xs font-semibold text-brand-ink">

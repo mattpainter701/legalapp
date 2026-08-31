@@ -52,22 +52,24 @@ describe('SmsReviewQueue', () => {
     expect(screen.queryByText('Please call about my appointment.')).not.toBeInTheDocument()
   })
 
-  it('exposes request IDs and a refresh action', async () => {
+  it('exposes the durable review ID and a refresh action', async () => {
     const user = userEvent.setup()
-    getSmsReviewItems.mockResolvedValueOnce([{ id: 'review-1', reason: 'ambiguous_inbound_route', from_number: '+15551234567', body: 'Review me.', request_id: 'req-review-1' }]).mockResolvedValueOnce([])
+    getSmsReviewItems.mockResolvedValueOnce([{ id: 'review-1', reason: 'ambiguous_inbound_route', from_number: '+15551234567', body: 'Review me.' }]).mockResolvedValueOnce([])
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn().mockResolvedValue(undefined) } })
     render(<SmsReviewQueue />)
-    expect(await screen.findByText('req-review-1')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Copy request ID req-review-1' }))
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('req-review-1')
+    expect(await screen.findByText('review-1')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Copy review ID review-1' }))
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('review-1')
     await user.click(screen.getByRole('button', { name: 'Refresh queue' }))
     await waitFor(() => expect(getSmsReviewItems).toHaveBeenCalledTimes(2))
   })
 
   it('renders structured API errors as safe text', async () => {
     getSmsReviewItems.mockReset()
-    getSmsReviewItems.mockRejectedValue({ response: { data: { detail: { code: 'routing_conflict', message: 'Select an authorized route.' } } } })
+    getSmsReviewItems.mockRejectedValue({ response: { data: { detail: { code: 'routing_conflict', message: 'Select an authorized route.' }, error_id: 'error-review-1' } } })
     render(<SmsReviewQueue />)
     expect(await screen.findByRole('alert')).toHaveTextContent('Select an authorized route.')
+    expect(screen.getByRole('alert')).toHaveTextContent('Error ID error-review-1')
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
   })
 })

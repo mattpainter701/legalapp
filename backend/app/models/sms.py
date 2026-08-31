@@ -51,6 +51,10 @@ class SmsProviderConfig(Base):
             "NOT is_active OR sender_ready",
             name="ck_sms_provider_configs_active",
         ),
+        CheckConstraint(
+            "from_number IS NULL OR from_number ~ '^\\+[1-9][0-9]{7,14}$'",
+            name="ck_sms_provider_configs_from_number_e164",
+        ),
         Index("idx_sms_provider_configs_tenant", "tenant_id", "is_active"),
     )
 
@@ -113,6 +117,10 @@ class SmsNumberSuppression(Base):
         UniqueConstraint(
             "tenant_id", "id", name="uq_sms_number_suppressions_tenant_id"
         ),
+        CheckConstraint(
+            "mobile_e164 ~ '^\\+[1-9][0-9]{7,14}$'",
+            name="ck_sms_number_suppressions_mobile_e164",
+        ),
         Index(
             "idx_sms_number_suppressions_tenant_state",
             "tenant_id",
@@ -164,6 +172,10 @@ class SmsNumberSuppressionEvent(Base):
             ["sms_number_suppressions.tenant_id", "sms_number_suppressions.id"],
             name="fk_sms_number_suppression_events_tenant_suppression",
             ondelete="CASCADE",
+        ),
+        CheckConstraint(
+            "mobile_e164 ~ '^\\+[1-9][0-9]{7,14}$'",
+            name="ck_sms_number_suppression_events_mobile_e164",
         ),
         Index(
             "idx_sms_number_suppression_events_tenant_number",
@@ -256,6 +268,18 @@ class SmsMessage(Base):
             name="ck_sms_messages_status",
         ),
         CheckConstraint(
+            "(direction = 'outbound' AND status IN ("
+            "'queued', 'dispatching', 'provider_unknown', "
+            "'blocked_number_suppression', 'blocked_consent_changed', "
+            "'blocked_quiet_hours', 'blocked_provider_config', "
+            "'blocked_matter_authorization_changed', 'provider_failed', "
+            "'provider_failed_after_acceptance', 'submitted', 'delivered'"
+            ")) OR (direction = 'inbound' AND status IN ("
+            "'received', 'review_required', 'route_rejected'"
+            "))",
+            name="ck_sms_messages_direction_status",
+        ),
+        CheckConstraint(
             "delivery_certainty IN ("
             "'not_attempted', 'outcome_unknown', 'provider_rejected', "
             "'provider_accepted', 'provider_failed_after_acceptance', "
@@ -275,6 +299,14 @@ class SmsMessage(Base):
             name="ck_sms_messages_request_digest",
         ),
         CheckConstraint(
+            "from_number IS NULL OR from_number ~ '^\\+[1-9][0-9]{7,14}$'",
+            name="ck_sms_messages_from_number_e164",
+        ),
+        CheckConstraint(
+            "to_number IS NULL OR to_number ~ '^\\+[1-9][0-9]{7,14}$'",
+            name="ck_sms_messages_to_number_e164",
+        ),
+        CheckConstraint(
             "reconciliation_resolution IS NULL OR reconciliation_resolution IN ("
             "'operator_attested_unknown', 'provider_lookup', 'signed_provider_callback', "
             "'signed_callback_overrode_operator_attestation'"
@@ -286,9 +318,32 @@ class SmsMessage(Base):
             name="ck_sms_messages_reconciliation_evidence",
         ),
         CheckConstraint(
+            "status <> 'provider_unknown' OR reconciliation_required_at IS NOT NULL",
+            name="ck_sms_messages_provider_unknown_reconciliation",
+        ),
+        CheckConstraint(
             "status NOT IN ('submitted', 'delivered', "
             "'provider_failed_after_acceptance') OR provider_message_id IS NOT NULL",
             name="ck_sms_messages_provider_truth",
+        ),
+        CheckConstraint(
+            "(status IN ('queued', 'blocked_number_suppression', "
+            "'blocked_consent_changed', 'blocked_quiet_hours', "
+            "'blocked_provider_config', 'blocked_matter_authorization_changed') "
+            "AND delivery_certainty = 'not_attempted') OR "
+            "(status IN ('dispatching', 'provider_unknown') "
+            "AND delivery_certainty = 'outcome_unknown') OR "
+            "(status = 'provider_failed' "
+            "AND delivery_certainty = 'provider_rejected') OR "
+            "(status = 'provider_failed_after_acceptance' "
+            "AND delivery_certainty = 'provider_failed_after_acceptance') OR "
+            "(status = 'submitted' "
+            "AND delivery_certainty = 'provider_accepted') OR "
+            "(status = 'delivered' "
+            "AND delivery_certainty = 'confirmed_sent') OR "
+            "(status IN ('received', 'review_required', 'route_rejected') "
+            "AND delivery_certainty = 'confirmed_received')",
+            name="ck_sms_messages_status_certainty",
         ),
         Index(
             "idx_sms_messages_tenant_contact", "tenant_id", "contact_id", "created_at"

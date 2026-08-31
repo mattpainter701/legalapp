@@ -417,24 +417,28 @@ async def decide_sms_review_item(
             contact_id=body.contact_id,
             matter_id=body.matter_id,
         )
+        await record_operator_audit(
+            db,
+            request,
+            action=f"sms.inbound_route.{body.decision}",
+            resource_type="sms_review_item",
+            resource_id=str(item.id),
+            actor_type="tenant_user",
+            actor_id=str(current_user.id),
+            metadata={
+                "tenant_id": str(current_user.tenant_id),
+                "sms_message_id": str(item.sms_message_id),
+                "contact_id": str(body.contact_id) if body.contact_id else None,
+                "matter_id": str(body.matter_id) if body.matter_id else None,
+            },
+        )
+        await db.commit()
     except SmsError as exc:
         raise HTTPException(exc.status_code, str(exc)) from exc
-    await record_operator_audit(
-        db,
-        request,
-        action=f"sms.inbound_route.{body.decision}",
-        resource_type="sms_review_item",
-        resource_id=str(item.id),
-        actor_type="tenant_user",
-        actor_id=str(current_user.id),
-        metadata={
-            "tenant_id": str(current_user.tenant_id),
-            "sms_message_id": str(item.sms_message_id),
-            "contact_id": str(body.contact_id) if body.contact_id else None,
-            "matter_id": str(body.matter_id) if body.matter_id else None,
-        },
-    )
-    await db.commit()
+    except Exception:
+        await db.rollback()
+        await set_tenant_context(db, str(current_user.tenant_id))
+        raise
     return item
 
 

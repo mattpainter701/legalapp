@@ -50,18 +50,20 @@ message content remain out of unauthorized responses and audit metadata.
 
 ## Validation
 
-- Ruff lint/format and Python compilation passed; 58 touched backend unit,
-  migration, release, and MCP protocol tests passed.
-- The PostgreSQL/provider-shaped lifecycle suite collects 29 rehearsals covering
+- Ruff lint/format and Python compilation passed; the 15 SMS unit and migration
+  contract tests passed.
+- The PostgreSQL/provider-shaped lifecycle suite collects 48 rehearsals covering
   concurrent idempotency, tenant constraints/RLS, consent provenance and
   conflicts, quiet hours/categories, signed webhook replay/order, STOP/START/HELP,
   durable unmatched-number suppression, review routing, exact-provider
-  reconciliation, demo purge, custom-role gating, and credential non-leakage.
-- The full frontend suite passed (92 files, 509 tests), along with frontend lint
-  and the production build; the focused SMS/Task Board subset passed 27 tests.
+  reconciliation, actor deactivation/role-revocation ordering, demo purge,
+  generic-Task redaction, custom-role gating, and credential non-leakage.
+- The full frontend suite passed (92 files, 514 tests), along with frontend lint
+  and the production build; the focused SMS queue subset passed 6 tests.
   Alembic reports migration 149 as the sole head and renders its offline SQL
   from migration 148 successfully.
-- This Windows host has no usable PostgreSQL listener or Docker engine, so the
+- This Windows host has no usable PostgreSQL listener, and its Docker Desktop
+  engine fails before startup on an inaccessible local runtime socket. The
   mandatory hosted PostgreSQL rehearsal, full CI, CodeQL, Merge Gate, and fresh
   independent security review remain required before this draft may be readied.
 
