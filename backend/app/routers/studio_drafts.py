@@ -47,7 +47,9 @@ def _set_etag(response: Response, payload: dict) -> dict:
 async def create_studio_draft(
     body: StudioDraftCreate,
     response: Response,
-    idempotency_key: str = Header(alias="Idempotency-Key", min_length=8, max_length=200),
+    idempotency_key: str = Header(
+        alias="Idempotency-Key", min_length=8, max_length=200
+    ),
     db: AsyncSession = Depends(get_db),
     current_user=Depends(require_capability("manage_documents")),
 ):
@@ -59,11 +61,15 @@ async def create_studio_draft(
 async def import_published_template(
     body: StudioDraftImport,
     response: Response,
-    idempotency_key: str = Header(alias="Idempotency-Key", min_length=8, max_length=200),
+    idempotency_key: str = Header(
+        alias="Idempotency-Key", min_length=8, max_length=200
+    ),
     db: AsyncSession = Depends(get_db),
     current_user=Depends(require_capability("manage_documents")),
 ):
-    payload = await _result(_service(db, current_user).import_template(body, idempotency_key))
+    payload = await _result(
+        _service(db, current_user).import_template(body, idempotency_key)
+    )
     return _set_etag(response, payload)
 
 
@@ -94,11 +100,15 @@ async def patch_studio_draft(
     draft_id: uuid.UUID,
     body: StudioDraftPatch,
     response: Response,
-    idempotency_key: str = Header(alias="Idempotency-Key", min_length=8, max_length=200),
+    idempotency_key: str = Header(
+        alias="Idempotency-Key", min_length=8, max_length=200
+    ),
     db: AsyncSession = Depends(get_db),
     current_user=Depends(require_capability("manage_documents")),
 ):
-    payload = await _result(_service(db, current_user).patch(draft_id, body, idempotency_key))
+    payload = await _result(
+        _service(db, current_user).patch(draft_id, body, idempotency_key)
+    )
     return _set_etag(response, payload)
 
 
@@ -112,25 +122,35 @@ async def validate_studio_draft(
     return await _result(_service(db, current_user).validate(draft_id, body))
 
 
-@router.post("/{draft_id}/snapshots", response_model=StudioSnapshotResponse, status_code=201)
+@router.post(
+    "/{draft_id}/snapshots", response_model=StudioSnapshotResponse, status_code=201
+)
 async def snapshot_studio_draft(
     draft_id: uuid.UUID,
     body: StudioRevisionRequest,
-    idempotency_key: str = Header(alias="Idempotency-Key", min_length=8, max_length=200),
+    idempotency_key: str = Header(
+        alias="Idempotency-Key", min_length=8, max_length=200
+    ),
     db: AsyncSession = Depends(get_db),
     current_user=Depends(require_capability("manage_documents")),
 ):
-    return await _result(_service(db, current_user).snapshot(draft_id, body, idempotency_key))
+    return await _result(
+        _service(db, current_user).snapshot(draft_id, body, idempotency_key)
+    )
 
 
-@router.get("/{draft_id}/snapshots/{snapshot_id}", response_model=StudioSnapshotResponse)
+@router.get(
+    "/{draft_id}/snapshots/{snapshot_id}", response_model=StudioSnapshotResponse
+)
 async def read_studio_snapshot(
     draft_id: uuid.UUID,
     snapshot_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user=Depends(require_capability("manage_documents")),
 ):
-    return await _result(_service(db, current_user).read_snapshot(draft_id, snapshot_id))
+    return await _result(
+        _service(db, current_user).read_snapshot(draft_id, snapshot_id)
+    )
 
 
 @router.get("/{draft_id}/source-contract", response_model=StudioSourceContract)
@@ -148,9 +168,13 @@ async def promote_studio_draft(
     draft_id: uuid.UUID,
     body: StudioPromoteRequest,
     response: Response,
-    idempotency_key: str = Header(alias="Idempotency-Key", min_length=8, max_length=200),
+    idempotency_key: str = Header(
+        alias="Idempotency-Key", min_length=8, max_length=200
+    ),
     db: AsyncSession = Depends(get_db),
     current_user=Depends(require_capability("manage_documents")),
 ):
-    payload = await _result(_service(db, current_user).promote(draft_id, body, idempotency_key))
+    payload = await _result(
+        _service(db, current_user).promote(draft_id, body, idempotency_key)
+    )
     return _set_etag(response, payload)

@@ -25,7 +25,9 @@ StudioOperationName = Literal[
 
 class StudioFieldInput(BaseModel):
     id: uuid.UUID | None = None
-    automation_key: str = Field(min_length=1, max_length=120, pattern=r"^[A-Za-z][A-Za-z0-9_.-]*$")
+    automation_key: str = Field(
+        min_length=1, max_length=120, pattern=r"^[A-Za-z][A-Za-z0-9_.-]*$"
+    )
     label: str = Field(min_length=1, max_length=300)
     field_type: str = Field(min_length=1, max_length=40)
     required: bool = False
@@ -49,7 +51,9 @@ class StudioDraftCreate(BaseModel):
     source_media_type: str = Field(min_length=1, max_length=100)
     published_template_id: uuid.UUID | None = None
     fields: list[StudioFieldInput] = Field(default_factory=list, max_length=200)
-    placements: list[StudioPlacementInput] = Field(default_factory=list, max_length=1000)
+    placements: list[StudioPlacementInput] = Field(
+        default_factory=list, max_length=1000
+    )
 
     @model_validator(mode="after")
     def placement_fields_exist(self):
@@ -64,7 +68,9 @@ class StudioDraftCreate(BaseModel):
         if len(set(placement_ids)) != len(placement_ids):
             raise ValueError("explicit placement IDs must be unique")
         if any(item.field_id not in supplied for item in self.placements):
-            raise ValueError("placements require explicit field IDs from the same request")
+            raise ValueError(
+                "placements require explicit field IDs from the same request"
+            )
         return self
 
 

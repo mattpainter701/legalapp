@@ -509,7 +509,15 @@ def test_studio_draft_migration_is_post_146_force_rls_and_immutable():
     for table in tables:
         assert f'"{table}"' in source
     assert "studio_drafts_source_identity_guard" in source
-    assert 'for table in ("studio_source_artifacts", "studio_draft_snapshots", "studio_draft_audit_events")' in source
+    immutable_upgrade = source.split(
+        "CREATE FUNCTION prevent_studio_immutable_mutation", 1
+    )[1].split("def downgrade", 1)[0]
+    for table in (
+        "studio_source_artifacts",
+        "studio_draft_snapshots",
+        "studio_draft_audit_events",
+    ):
+        assert f'"{table}"' in immutable_upgrade
     assert "CREATE TRIGGER {table}_immutable" in source
     assert "prevent_studio_immutable_mutation" in source
 

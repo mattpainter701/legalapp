@@ -21,14 +21,23 @@ def _base_create():
         "format": "markdown",
         "source_sha256": "a" * 64,
         "source_media_type": "text/markdown",
-        "fields": [{
-            "id": field_id, "automation_key": "client_name",
-            "label": "Client", "field_type": "text",
-        }],
-        "placements": [{
-            "id": uuid.uuid4(), "field_id": field_id, "format": "markdown",
-            "anchor_kind": "template_token", "anchor": {"token": "client_name"},
-        }],
+        "fields": [
+            {
+                "id": field_id,
+                "automation_key": "client_name",
+                "label": "Client",
+                "field_type": "text",
+            }
+        ],
+        "placements": [
+            {
+                "id": uuid.uuid4(),
+                "field_id": field_id,
+                "format": "markdown",
+                "anchor_kind": "template_token",
+                "anchor": {"token": "client_name"},
+            }
+        ],
     }
 
 
