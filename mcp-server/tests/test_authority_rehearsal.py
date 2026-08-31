@@ -1380,9 +1380,10 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 [private_telemetry_source],
             )
             cur.execute(
-                """INSERT INTO ingest_runs (source, status)
-                   VALUES (%s, 'completed')""",
-                [source_key],
+                """INSERT INTO ingest_runs
+                     (source, source_key, corpus_version, status)
+                   VALUES (%s, %s, %s, 'completed')""",
+                [source_key, source_key, version],
             )
         conn.commit()
         baseline_sync = lineage_repo.sync_status()
