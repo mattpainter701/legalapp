@@ -51,6 +51,10 @@ from app.models.teams_voice_setting import TeamsVoiceSetting
 from app.models.error_log import ErrorLog
 from app.models.integration_sync_run import IntegrationSyncRun
 from app.models.contact import Contact, Lead
+from app.models.billing import Expense, Invoice, InvoiceLineItem, Payment, TimeEntry
+from app.models.matter_party import MatterParty
+from app.models.plan_upgrade import PlanUpgradeRequest
+from app.models.qbo import QBOIntegration, QBOItemMapping
 from app.models.intake_dashboard import (
     IntakeCallDraft,
     LegacyCallRecord,
@@ -238,6 +242,15 @@ __all__ = [
     "IntegrationSyncRun",
     "Contact",
     "Lead",
+    "TimeEntry",
+    "Expense",
+    "Invoice",
+    "InvoiceLineItem",
+    "Payment",
+    "MatterParty",
+    "PlanUpgradeRequest",
+    "QBOIntegration",
+    "QBOItemMapping",
     "LegacyCallRecord",
     "IntakeCallDraft",
     "PartnerRotationState",

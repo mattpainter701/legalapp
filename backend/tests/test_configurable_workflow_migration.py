@@ -83,7 +83,8 @@ def test_composite_parent_targets_and_immutable_triggers_are_present() -> None:
     assert "prevent_approved_workflow_mutation" in source
     assert "148_configurable_workflows_created" in source
     assert "OLD.template_version_id" in source and "NEW.template_version_id" in source
-    assert source.count("FOR SHARE;") == 4
+    assert source.count("FOR SHARE;") == 5
+    assert "AND entity_type=NEW.entity_type\n       FOR SHARE;" in source
     assert "workflow template approval transition must be exact" in source
 
 
@@ -151,6 +152,9 @@ def test_rehearsal_requires_runtime_role_and_reports_evidence() -> None:
         "mutation_blocked_until_approval_commit",
         "mutation_rejected_after_approval",
         "approved_snapshot_unchanged",
+        "custom_field_contract_serialization",
+        "value_blocked_contract_rewrite",
+        "contract_rewrite_blocked_value",
         "draft_to_approved_transitions",
         "draft_stage_insert_update_delete",
         "draft_checklist_insert_update_delete",

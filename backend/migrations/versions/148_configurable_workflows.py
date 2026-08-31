@@ -157,7 +157,8 @@ def upgrade() -> None:
       SELECT field_type, options_json, active INTO definition
         FROM public.custom_field_definitions
        WHERE tenant_id=NEW.tenant_id AND id=NEW.field_definition_id
-         AND entity_type=NEW.entity_type;
+         AND entity_type=NEW.entity_type
+       FOR SHARE;
       IF NOT FOUND THEN
         RETURN NEW;
       END IF;

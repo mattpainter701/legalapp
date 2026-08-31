@@ -14,7 +14,7 @@ Firms can define bounded matter data and apply approved stage and checklist temp
 - **Model firm-specific matter data.** Administrators can define typed matter fields with stable keys, required and sensitive handling, bounded options, and safe retirement controls in the matter workflow surface.
 - **Preview before applying a workflow.** Approved matter templates show the exact initial stage, required data, assignee gaps, checklist tasks, and snapshot hash before any matter or task changes occur.
 - **Apply once with durable evidence.** Approved runs create deterministic relative tasks in one transaction, reject stale previews, deduplicate retries, and retain immutable run and step evidence.
-- **Compensate without erasing history.** Rollback cancels or archives only unchanged workflow-created work, reports blockers for manual review, and keeps authoring separate from legal approval.
+- **Compensate without erasing history.** Rollback cancels only unchanged workflow-created tasks, restores the prior matter stage, reports blockers for manual review, and keeps authoring separate from legal approval.
 
 ## 2026.08.31.1 — Template Studio workspaces and resumable setup
 

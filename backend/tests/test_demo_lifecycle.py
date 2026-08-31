@@ -1,4 +1,7 @@
+import subprocess
+import sys
 import uuid
+from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
@@ -50,6 +53,27 @@ def test_runtime_purge_plan_registers_every_demo_table():
     from app.services.demo_registry import DEMO_TABLE_REGISTRY
 
     assert set(_purge_tables()) == set(DEMO_TABLE_REGISTRY)
+
+
+def test_runtime_purge_plan_is_complete_in_a_fresh_process():
+    """The purge worker and DB rehearsal must not depend on router import order."""
+    backend_dir = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from app.services.demo_purge import _purge_tables; "
+                "from app.services.demo_registry import DEMO_TABLE_REGISTRY; "
+                "assert set(_purge_tables()) == set(DEMO_TABLE_REGISTRY)"
+            ),
+        ],
+        cwd=backend_dir,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
 
 
 @pytest.mark.parametrize(

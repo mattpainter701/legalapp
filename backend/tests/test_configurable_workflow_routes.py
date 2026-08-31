@@ -230,9 +230,16 @@ async def test_workflow_approval_hides_foreign_tenant_ids(
         definition_sha256="a" * 64,
         created_by_user_id=foreign_user.id,
     )
-    db_session.add_all(
-        [foreign_tenant, foreign_user, foreign_template, foreign_version]
-    )
+    # These security fixtures intentionally use scalar composite FK identifiers
+    # rather than ORM relationships. Persist each parent before its child so
+    # PostgreSQL—not incidental unit-of-work insertion order—defines the setup.
+    db_session.add(foreign_tenant)
+    await db_session.flush()
+    db_session.add(foreign_user)
+    await db_session.flush()
+    db_session.add(foreign_template)
+    await db_session.flush()
+    db_session.add(foreign_version)
     await db_session.commit()
 
     response = await client.post(

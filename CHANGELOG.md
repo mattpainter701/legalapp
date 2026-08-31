@@ -20,8 +20,9 @@
   authorized apply creates work in one transaction. Stable idempotency keys,
   stale-preview rejection, append-only database-protected run/step evidence,
   tenant-safe composite foreign keys, FORCE RLS, and compensating cancellation
-  or archival make retries and rollback reviewable without destructive history
-  deletion. This slice does not add arbitrary triggers/actions, outbound email,
+  of unchanged workflow tasks plus prior-stage restoration make retries and
+  rollback reviewable without destructive history deletion. This slice does
+  not add arbitrary triggers/actions, outbound email,
   native DOCX/Smart Fill, generalized Studio automation, or a no-code builder.
 - **Template Studio Phase 1 shell:** the existing document-template library is
   now a first-class Template Studio with response-derived continue-setup,

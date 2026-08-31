@@ -10,9 +10,9 @@ Preview binds the exact template, matter, fields, assignments, and planned task
 snapshot. Apply rejects stale previews, serializes matter/template state,
 deduplicates retries, and creates all tasks in one transaction. Database-level
 FORCE RLS, composite tenant foreign keys, immutable run events/steps, stable
-idempotency, and compensating cancellation/archive boundaries make execution
-and rollback reviewable without deleting history. Workflow authoring and legal
-approval remain independently assignable capabilities.
+idempotency, and compensating task-cancellation/stage-restoration boundaries
+make execution and rollback reviewable without deleting history. Workflow
+authoring and legal approval remain independently assignable capabilities.
 
 The settings UI is embedded in the existing matter-owned surface and includes
 five editable starter presets without persisting them automatically. This slice
@@ -23,8 +23,9 @@ advertised as editable in the matter UI pending coordinated CRM integration.
 
 ## Validation
 
-- Focused backend workflow, schema, migration, capability, demo-registry,
-  release, and Alembic tests: 84 passed. The rebased migration-safety gate's
+- Focused backend workflow, schema, migration, capability, demo-lifecycle,
+  demo-registry, release, and Alembic tests: 96 passed, including a fresh-process
+  purge-plan registration regression. The rebased migration-safety gate's
   focused contract suite added another 11 passed.
 - Focused frontend workflow/settings tests: 20 passed. Full frontend suite:
   90 files and 502 tests passed. ESLint completed with zero
@@ -37,9 +38,10 @@ advertised as editable in the matter UI pending coordinated CRM integration.
 - This host has no PostgreSQL listener or `psql`, and its Docker Desktop engine
   pipe is absent. The replacement rehearsal now covers the deployed
   147-to-148 migration, NOBYPASSRLS TEMP-shadow attacks, exact-only template
-  approval, approval-versus-child-mutation serialization, production
-  `autoflush=False` multi-evidence rollback, and exact-session deletion of all
-  11 workflow tables through the real expired-demo purge service. That
+  approval, approval-versus-child-mutation serialization, first-value versus
+  field-contract serialization in both commit orders, production `autoflush=False`
+  multi-evidence rollback, and exact-session deletion of all 11 workflow tables
+  through the real expired-demo purge service. That
   executable evidence remains mandatory on the final pushed head through the
   dedicated `Configurable workflow PostgreSQL rehearsal` CI job, full CI,
   CodeQL, and Merge Gate. The draft must not become merge-ready without those

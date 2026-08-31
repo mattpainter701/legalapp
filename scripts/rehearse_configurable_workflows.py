@@ -1353,6 +1353,267 @@ def assert_concurrent_idempotency(
     return sorted(outcomes)
 
 
+def assert_custom_field_contract_serialization(
+    owner, runtime_url: str, fixture: dict[str, Any]
+) -> dict[str, bool]:
+    """Prove first-value writes serialize with field contract changes."""
+
+    tenant_id = fixture["tenants"][0]
+    matter_id = fixture["matters"][0]
+    actor_user_id = fixture["users"][0]
+    value_first_field_id = uuid.uuid4()
+    rewrite_first_field_id = uuid.uuid4()
+    with owner.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO public.custom_field_definitions
+              (id,tenant_id,entity_type,field_key,label,field_type,
+               options_json,created_by_user_id)
+            VALUES (%s,%s,'matter','value_first_race','Value first race',
+                    'single_select','["Alpha"]'::jsonb,%s),
+                   (%s,%s,'matter','rewrite_first_race','Rewrite first race',
+                    'single_select','["Alpha"]'::jsonb,%s)
+            """,
+            (
+                value_first_field_id,
+                tenant_id,
+                actor_user_id,
+                rewrite_first_field_id,
+                tenant_id,
+                actor_user_id,
+            ),
+        )
+    owner.commit()
+
+    def wait_for_lock(
+        connection_pid: int, thread: threading.Thread, label: str
+    ) -> None:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            with owner.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT wait_event_type
+                      FROM pg_catalog.pg_stat_activity
+                     WHERE pid=%s
+                    """,
+                    (connection_pid,),
+                )
+                row = cursor.fetchone()
+            # PostgreSQL can cache statistics snapshots for a transaction.
+            # End this read-only monitor transaction so the next poll observes
+            # the worker's current wait state rather than the first sample.
+            owner.commit()
+            if row is not None and row[0] == "Lock":
+                return
+            if not thread.is_alive():
+                break
+            time.sleep(0.05)
+        raise AssertionError(f"{label} did not block on the field definition lock")
+
+    # The value transaction holds FOR SHARE on its definition. A concurrent
+    # contract rewrite must wait, then observe the committed value and reject.
+    value_first = connect(runtime_url)
+    blocked_rewrite = connect(runtime_url)
+    set_tenant(value_first, tenant_id)
+    set_tenant(blocked_rewrite, tenant_id)
+    rewrite_pid = blocked_rewrite.get_backend_pid()
+    rewrite_started = threading.Event()
+    rewrite_outcomes: list[str] = []
+
+    def rewrite_after_value() -> None:
+        try:
+            with blocked_rewrite.cursor() as cursor:
+                rewrite_started.set()
+                cursor.execute(
+                    """
+                    UPDATE public.custom_field_definitions
+                       SET options_json='["Beta"]'::jsonb,
+                           schema_version=schema_version+1
+                     WHERE tenant_id=%s AND id=%s
+                    """,
+                    (tenant_id, value_first_field_id),
+                )
+            blocked_rewrite.commit()
+            rewrite_outcomes.append("committed")
+        except psycopg2.Error as exc:
+            blocked_rewrite.rollback()
+            rewrite_outcomes.append(exc.pgcode or type(exc).__name__)
+
+    rewrite_thread = threading.Thread(target=rewrite_after_value, daemon=True)
+    try:
+        with value_first.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO public.matter_custom_field_values
+                  (tenant_id,matter_id,field_definition_id,value_json,
+                   value_hmac,updated_by_user_id)
+                VALUES (%s,%s,%s,'"Alpha"'::jsonb,%s,%s)
+                """,
+                (
+                    tenant_id,
+                    matter_id,
+                    value_first_field_id,
+                    HASH_A,
+                    actor_user_id,
+                ),
+            )
+        rewrite_thread.start()
+        if not rewrite_started.wait(timeout=5):
+            raise AssertionError("value-first contract rewrite did not start")
+        wait_for_lock(rewrite_pid, rewrite_thread, "value-first contract rewrite")
+        value_first.commit()
+        rewrite_thread.join(timeout=10)
+        if rewrite_thread.is_alive():
+            raise AssertionError("value-first contract rewrite deadlocked")
+    finally:
+        if value_first.closed == 0:
+            value_first.rollback()
+            value_first.close()
+        if rewrite_thread.is_alive() and blocked_rewrite.closed == 0:
+            blocked_rewrite.cancel()
+            rewrite_thread.join(timeout=5)
+        rewrite_cleanup_failed = rewrite_thread.is_alive()
+        if not rewrite_cleanup_failed and blocked_rewrite.closed == 0:
+            blocked_rewrite.rollback()
+            blocked_rewrite.close()
+        if rewrite_cleanup_failed:
+            raise AssertionError("value-first contract rewrite cleanup did not stop")
+
+    if rewrite_outcomes != ["P0001"]:
+        raise AssertionError(
+            "a contract rewrite crossed the first stored value: " f"{rewrite_outcomes}"
+        )
+    with owner.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT options_json, schema_version
+              FROM public.custom_field_definitions
+             WHERE id=%s
+            """,
+            (value_first_field_id,),
+        )
+        value_first_contract = cursor.fetchone()
+        cursor.execute(
+            """
+            SELECT value_json
+              FROM public.matter_custom_field_values
+             WHERE tenant_id=%s AND field_definition_id=%s
+            """,
+            (tenant_id, value_first_field_id),
+        )
+        stored_value = cursor.fetchone()
+    if value_first_contract != (["Alpha"], 1) or stored_value != ("Alpha",):
+        raise AssertionError(
+            "value-first serialization changed the validated contract or value: "
+            f"contract={value_first_contract}, value={stored_value}"
+        )
+
+    # The inverse order must also serialize: the definition rewrite owns the
+    # row first, so an old-option value waits and revalidates against the newly
+    # committed contract before it can be stored.
+    rewrite_first = connect(runtime_url)
+    blocked_value = connect(runtime_url)
+    set_tenant(rewrite_first, tenant_id)
+    set_tenant(blocked_value, tenant_id)
+    value_pid = blocked_value.get_backend_pid()
+    value_started = threading.Event()
+    value_outcomes: list[str] = []
+
+    def insert_after_rewrite() -> None:
+        try:
+            with blocked_value.cursor() as cursor:
+                value_started.set()
+                cursor.execute(
+                    """
+                    INSERT INTO public.matter_custom_field_values
+                      (tenant_id,matter_id,field_definition_id,value_json,
+                       value_hmac,updated_by_user_id)
+                    VALUES (%s,%s,%s,'"Alpha"'::jsonb,%s,%s)
+                    """,
+                    (
+                        tenant_id,
+                        matter_id,
+                        rewrite_first_field_id,
+                        HASH_A,
+                        actor_user_id,
+                    ),
+                )
+            blocked_value.commit()
+            value_outcomes.append("committed")
+        except psycopg2.Error as exc:
+            blocked_value.rollback()
+            value_outcomes.append(exc.pgcode or type(exc).__name__)
+
+    value_thread = threading.Thread(target=insert_after_rewrite, daemon=True)
+    try:
+        with rewrite_first.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE public.custom_field_definitions
+                   SET options_json='["Beta"]'::jsonb,
+                       schema_version=schema_version+1
+                 WHERE tenant_id=%s AND id=%s
+                """,
+                (tenant_id, rewrite_first_field_id),
+            )
+        value_thread.start()
+        if not value_started.wait(timeout=5):
+            raise AssertionError("rewrite-first value insert did not start")
+        wait_for_lock(value_pid, value_thread, "rewrite-first value insert")
+        rewrite_first.commit()
+        value_thread.join(timeout=10)
+        if value_thread.is_alive():
+            raise AssertionError("rewrite-first value insert deadlocked")
+    finally:
+        if rewrite_first.closed == 0:
+            rewrite_first.rollback()
+            rewrite_first.close()
+        if value_thread.is_alive() and blocked_value.closed == 0:
+            blocked_value.cancel()
+            value_thread.join(timeout=5)
+        value_cleanup_failed = value_thread.is_alive()
+        if not value_cleanup_failed and blocked_value.closed == 0:
+            blocked_value.rollback()
+            blocked_value.close()
+        if value_cleanup_failed:
+            raise AssertionError("rewrite-first value cleanup did not stop")
+
+    if value_outcomes != ["P0001"]:
+        raise AssertionError(
+            "an old-option value crossed the contract rewrite: " f"{value_outcomes}"
+        )
+    with owner.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT options_json, schema_version
+              FROM public.custom_field_definitions
+             WHERE id=%s
+            """,
+            (rewrite_first_field_id,),
+        )
+        rewrite_first_contract = cursor.fetchone()
+        cursor.execute(
+            """
+            SELECT count(*)
+              FROM public.matter_custom_field_values
+             WHERE tenant_id=%s AND field_definition_id=%s
+            """,
+            (tenant_id, rewrite_first_field_id),
+        )
+        stale_value_count = cursor.fetchone()[0]
+    if rewrite_first_contract != (["Beta"], 2) or stale_value_count != 0:
+        raise AssertionError(
+            "rewrite-first serialization stored stale field data: "
+            f"contract={rewrite_first_contract}, values={stale_value_count}"
+        )
+
+    return {
+        "value_blocked_contract_rewrite": True,
+        "contract_rewrite_blocked_value": True,
+    }
+
+
 def assert_approval_child_mutation_serialization(
     owner, runtime_url: str, fixture: dict[str, Any]
 ) -> dict[str, Any]:
@@ -1429,6 +1690,9 @@ def assert_approval_child_mutation_serialization(
                     (mutation_pid,),
                 )
                 row = cursor.fetchone()
+            # Keep lock-state polling independent of a cached statistics
+            # snapshot in this long-lived owner connection.
+            owner.commit()
             if row is not None and row[0] == "Lock":
                 blocked_before_approval_commit = True
                 break
@@ -1449,9 +1713,12 @@ def assert_approval_child_mutation_serialization(
             thread.join(timeout=5)
         if approval.closed == 0:
             approval.close()
-        if mutation.closed == 0:
+        mutation_cleanup_failed = thread.is_alive()
+        if not mutation_cleanup_failed and mutation.closed == 0:
             mutation.rollback()
             mutation.close()
+        if mutation_cleanup_failed:
+            raise AssertionError("approval race mutation cleanup did not stop")
 
     if not blocked_before_approval_commit or outcomes != ["P0001"]:
         raise AssertionError(
@@ -2050,6 +2317,9 @@ def main() -> int:
         )
         shadow_rejections = assert_temp_shadow_resistance(runtime_url, fixture)
         demo_purge = assert_demo_purge_lifecycle(owner, runtime_url, purge_fixture)
+        field_contract_serialization = assert_custom_field_contract_serialization(
+            owner, runtime_url, fixture
+        )
         approval_serialization = assert_approval_child_mutation_serialization(
             owner, runtime_url, fixture
         )
@@ -2068,6 +2338,7 @@ def main() -> int:
                 "draft_to_approved_transitions": approved_transitions,
                 "temp_shadow_rejections": shadow_rejections,
                 "verified_demo_purge": demo_purge,
+                "custom_field_contract_serialization": field_contract_serialization,
                 "approval_child_serialization": approval_serialization,
                 "concurrent_claim_rowcounts": concurrent,
                 "concurrent_apply": concurrent_apply,
