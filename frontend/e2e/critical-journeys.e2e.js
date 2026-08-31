@@ -136,17 +136,14 @@ test('Firm Memory capability enables firm-wide query-first research with honest 
     if (path === '/api/version' && request.method() === 'GET') {
       return json({ version: 'firm-memory-e2e', latest_release: null, release_notes: [] })
     }
-    if (path === '/api/auth/login' && request.method() === 'POST') return json({ ok: true })
     if (path === '/api/auth/me' && request.method() === 'GET') {
+      const response = await route.fetch()
+      const currentUser = await response.json()
       return json({
-        id: 'firm-memory-e2e-user',
-        email,
-        full_name: 'Firm Memory E2E User',
-        role: 'admin',
+        ...currentUser,
         default_route: '/intake/dashboard',
-        enabled_modules: ['intake-dashboard', 'matters'],
-        capabilities: [],
-      })
+        enabled_modules: [...new Set([...(currentUser.enabled_modules || []), 'intake-dashboard', 'matters'])],
+      }, response.status())
     }
     if (path === '/api/matters' && request.method() === 'GET') {
       return json({ items: [{ id: 'matter-1', name: 'Acme v. Northstar' }] })
