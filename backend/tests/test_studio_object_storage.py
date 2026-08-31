@@ -1,8 +1,11 @@
 """Integrity, atomicity, and tenant-cache checks for Studio CAS storage."""
 
+import asyncio
 import hashlib
+import threading
 import uuid
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -10,7 +13,32 @@ from app.services.studio_object_storage import (
     LocalStudioObjectStore,
     StudioObjectRef,
     StudioStorageError,
+    run_storage_mutation_to_completion,
 )
+
+
+@pytest.mark.asyncio
+async def test_timed_out_storage_mutation_is_drained_before_timeout_propagates():
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    def mutate():
+        started.set()
+        release.wait(timeout=2)
+        finished.set()
+        return "materialized"
+
+    task = asyncio.create_task(
+        run_storage_mutation_to_completion(mutate, timeout_seconds=0.01)
+    )
+    assert await asyncio.to_thread(started.wait, 1)
+    await asyncio.sleep(0.02)
+    assert not task.done()
+    release.set()
+    with pytest.raises(TimeoutError):
+        await task
+    assert finished.is_set()
 
 
 def _process_put(root, tenant_id, content):
@@ -118,6 +146,9 @@ def test_bounded_read_and_reference_shape(tmp_path):
     with pytest.raises(StudioStorageError) as bounded:
         store.read(ref, max_bytes=4)
     assert bounded.value.code == "object_too_large"
+    with pytest.raises(StudioStorageError) as invalid_limit:
+        store.read(ref, max_bytes=True)
+    assert invalid_limit.value.code == "invalid_read_limit"
     with pytest.raises(ValueError):
         StudioObjectRef(
             tenant_id=ref.tenant_id,
@@ -139,3 +170,96 @@ def test_docx_media_type_is_supported_without_control_text(tmp_path):
         store.put(uuid.uuid4(), b"bad", media_type="application/pdf\r\nsecret")
     assert invalid.value.code == "invalid_media_type"
 
+
+def test_pre_adoption_stage_is_durable_and_acknowledged_after_commit(tmp_path):
+    tenant_id = uuid.uuid4()
+    job_id = uuid.uuid4()
+    lease_token = uuid.uuid4()
+    now = datetime.now(timezone.utc)
+    store = LocalStudioObjectStore(tmp_path, max_object_bytes=1024)
+    content = b"durably staged output"
+    digest = hashlib.sha256(content).hexdigest()
+    stage = store.stage(
+        tenant_id,
+        content,
+        job_id=job_id,
+        lease_token=lease_token,
+        reconcile_after=now,
+        media_type="application/pdf",
+        expected_sha256=digest,
+    )
+    assert stage.state == "materialized"
+    assert store.read(stage.object_ref) == content
+
+    restarted = LocalStudioObjectStore(tmp_path, max_object_bytes=1024)
+    pending = restarted.list_staged(
+        tenant_id,
+        reconcile_before=now + timedelta(seconds=1),
+        limit=10,
+    )
+    assert pending == [stage]
+    assert restarted.acknowledge_stage(stage) is True
+    assert restarted.list_staged(
+        tenant_id,
+        reconcile_before=now + timedelta(seconds=1),
+        limit=10,
+    ) == []
+
+
+def test_oversized_stage_is_rejected_before_receipt_creation(tmp_path):
+    tenant_id = uuid.uuid4()
+    store = LocalStudioObjectStore(tmp_path, max_object_bytes=4)
+    content = b"12345"
+    with pytest.raises(StudioStorageError) as oversized:
+        store.stage(
+            tenant_id,
+            content,
+            job_id=uuid.uuid4(),
+            lease_token=uuid.uuid4(),
+            reconcile_after=datetime.now(timezone.utc),
+            media_type="application/pdf",
+            expected_sha256=hashlib.sha256(content).hexdigest(),
+        )
+    assert oversized.value.code == "object_too_large"
+    assert not list(tmp_path.rglob("*.json"))
+
+
+def test_shared_cas_stages_prevent_early_orphan_deletion(tmp_path):
+    tenant_id = uuid.uuid4()
+    now = datetime.now(timezone.utc)
+    store = LocalStudioObjectStore(tmp_path, max_object_bytes=1024)
+    content = b"shared staged output"
+    digest = hashlib.sha256(content).hexdigest()
+    first = store.stage(
+        tenant_id,
+        content,
+        job_id=uuid.uuid4(),
+        lease_token=uuid.uuid4(),
+        reconcile_after=now,
+        media_type="application/pdf",
+        expected_sha256=digest,
+    )
+    second = store.stage(
+        tenant_id,
+        content,
+        job_id=uuid.uuid4(),
+        lease_token=uuid.uuid4(),
+        reconcile_after=now,
+        media_type="application/pdf",
+        expected_sha256=digest,
+    )
+    assert store.has_other_stages(first) is True
+    with pytest.raises(StudioStorageError) as staged_delete:
+        store.delete(first.object_ref)
+    assert staged_delete.value.code == "object_staged"
+    with pytest.raises(StudioStorageError) as sibling_delete:
+        store.delete_staged(first)
+    assert sibling_delete.value.code == "object_staged"
+    assert store.acknowledge_stage(first) is True
+    assert store.has_other_stages(second) is False
+    assert store.read(second.object_ref) == content
+    assert store.delete_staged(second) is True
+    assert store.has_stages(second.object_ref) is False
+    with pytest.raises(StudioStorageError) as missing:
+        store.read(second.object_ref)
+    assert missing.value.code == "object_missing"

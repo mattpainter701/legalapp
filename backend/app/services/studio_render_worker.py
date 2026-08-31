@@ -6,28 +6,33 @@ import asyncio
 import hashlib
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Awaitable, Literal, Protocol, TypeVar
+from types import MappingProxyType
+from typing import Awaitable, Mapping, Protocol, TypeVar
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.database import set_tenant_context
 from app.models.studio_draft import StudioDraft, StudioDraftSnapshot
+from app.schemas.studio_render import StudioRendererManifest
 from app.services.studio_drafts import StudioError, StudioSourceRegistry
 from app.services.studio_object_storage import (
     StudioObjectRef,
     StudioObjectStore,
+    StudioStagedObject,
     StudioStorageError,
 )
 from app.services.studio_render_jobs import (
+    StudioCachedOutput,
     StudioInputBindingResolver,
     StudioJobLease,
-    StudioRenderJobService,
     StudioRenderServiceError,
+    StudioRenderWorkerService,
+    _snapshot_payload_is_exact,
     default_worker_owner,
 )
 from app.services.studio_worker_isolation import (
+    StudioIsolatedProcessorOutput,
     StudioIsolationError,
     StudioTrustedProcessorAdapter,
 )
@@ -45,6 +50,8 @@ def _isolation_failure(code: str) -> tuple[str, bool]:
         return "input_too_large", False
     if code == "processor_output_limit":
         return "output_too_large", False
+    if code == "validation_failed":
+        return "validation_failed", False
     return "processor_unavailable", True
 
 
@@ -54,9 +61,10 @@ class StudioProcessorOutput:
     content_sha256: str
     media_type: str
     artifact_kind: str
-    renderer_identity: str
-    converter_identity: str
-    validator_identity: str
+    renderer_manifest: StudioRendererManifest
+    runtime_manifest_sha256: str
+    page_count: int
+    mapping_manifest_sha256: str
     retention_class: str = "review"
 
 
@@ -64,7 +72,7 @@ class StudioProcessor(Protocol):
     """A renderer bound to a server-owned Phase 3 isolation policy."""
 
     isolation_policy_id: str
-    isolation_enforced: Literal[True]
+    runtime_manifest_sha256: str
 
     async def process(
         self,
@@ -73,12 +81,14 @@ class StudioProcessor(Protocol):
         snapshot: dict,
         options: dict,
         input_binding: bytes | None,
-    ) -> StudioProcessorOutput: ...
+    ) -> StudioProcessorOutput | StudioIsolatedProcessorOutput: ...
 
     async def terminate(self) -> None:
         """Kill the isolated process tree and release its bounded workspace."""
 
         ...
+
+    def attest_runtime(self) -> StudioRendererManifest: ...
 
 
 class StudioRenderWorker:
@@ -87,7 +97,7 @@ class StudioRenderWorker:
         session_factory: async_sessionmaker[AsyncSession],
         *,
         object_store: StudioObjectStore,
-        processors: dict[str, StudioProcessor],
+        processors: Mapping[str, StudioProcessor],
         input_bindings: StudioInputBindingResolver | None = None,
         owner: str | None = None,
         lease_seconds: int = 900,
@@ -106,19 +116,23 @@ class StudioRenderWorker:
         if any(
             type(processor) is not StudioTrustedProcessorAdapter
             or not str(getattr(processor, "isolation_policy_id", "")).strip()
-            or getattr(processor, "isolation_enforced", False) is not True
+            or not str(getattr(processor, "runtime_manifest_sha256", "")).strip()
             for processor in processors.values()
         ):
-            raise ValueError("every Studio processor requires enforced isolation")
+            raise ValueError("every Studio processor requires an attested runtime")
         self.session_factory = session_factory
         self.object_store = object_store
-        self.processors = dict(processors)
+        self._processors = MappingProxyType(dict(processors))
         self.input_bindings = input_bindings
         self.owner = owner or default_worker_owner()
         self.lease_seconds = lease_seconds
         self.heartbeat_seconds = heartbeat_seconds
         self.processor_timeout_seconds = processor_timeout_seconds
         self.artifact_ttl_seconds = artifact_ttl_seconds
+
+    @property
+    def processors(self) -> Mapping[str, StudioProcessor]:
+        return self._processors
 
     async def _heartbeat(
         self,
@@ -135,7 +149,7 @@ class StudioRenderWorker:
             try:
                 async with self.session_factory() as db:
                     await set_tenant_context(db, str(lease.tenant_id))
-                    renewed = await StudioRenderJobService(
+                    renewed = await StudioRenderWorkerService(
                         db, tenant_id=lease.tenant_id
                     ).renew_lease(lease)
             except asyncio.CancelledError:
@@ -150,7 +164,7 @@ class StudioRenderWorker:
     async def _progress(self, lease: StudioJobLease, progress: int) -> bool:
         async with self.session_factory() as db:
             await set_tenant_context(db, str(lease.tenant_id))
-            return await StudioRenderJobService(
+            return await StudioRenderWorkerService(
                 db, tenant_id=lease.tenant_id
             ).update_progress(lease, progress)
 
@@ -218,6 +232,14 @@ class StudioRenderWorker:
                 or snapshot.identity_sha256 != queued.identity_sha256
                 or snapshot.content_sha256 != queued.snapshot_content_sha256
                 or snapshot.source_artifact_id != queued.source.artifact_id
+                or not _snapshot_payload_is_exact(
+                    snapshot.payload,
+                    draft_id=queued.draft_id,
+                    revision=queued.rendered_revision,
+                    identity_sha256=queued.identity_sha256,
+                    content_sha256=queued.snapshot_content_sha256,
+                    source=queued.source,
+                )
             ):
                 raise StudioRenderServiceError(
                     409,
@@ -249,12 +271,32 @@ class StudioRenderWorker:
                     "validation_failed",
                     "Studio input binding resolver is unavailable.",
                 )
-            ref = await self.input_bindings.resolve(
-                lease.tenant_id, queued.input_binding_id
-            )
+            try:
+                resolved = await asyncio.wait_for(
+                    self.input_bindings.resolve(
+                        lease.tenant_id, queued.input_binding_id
+                    ),
+                    timeout=min(5, self.processor_timeout_seconds),
+                )
+            except Exception as exc:
+                raise StudioRenderServiceError(
+                    409,
+                    "validation_failed",
+                    "Studio input binding resolver is unavailable.",
+                ) from exc
+            ref = resolved.object_ref
             if ref.tenant_id != lease.tenant_id:
                 raise StudioRenderServiceError(
                     409, "validation_failed", "Studio input binding is invalid."
+                )
+            if (
+                ref.sha256 != queued.input_binding_sha256
+                or resolved.version != queued.input_binding_version
+            ):
+                raise StudioRenderServiceError(
+                    409,
+                    "validation_failed",
+                    "Studio input binding changed before processing.",
                 )
             input_binding = await asyncio.wait_for(
                 asyncio.to_thread(
@@ -266,16 +308,20 @@ class StudioRenderWorker:
             )
         return source, snapshot_payload, input_binding
 
-    async def _cached_output(self, lease: StudioJobLease) -> StudioObjectRef | None:
+    async def _cached_output(self, lease: StudioJobLease) -> StudioCachedOutput | None:
         # Opaque bindings are server-owned but are not required to be immutable
         # content addresses. Never reuse a cached render unless no binding exists.
         if lease.payload.input_binding_id is not None:
             return None
         async with self.session_factory() as db:
             await set_tenant_context(db, str(lease.tenant_id))
-            cached = await StudioRenderJobService(
+            cached = await StudioRenderWorkerService(
                 db, tenant_id=lease.tenant_id
-            ).find_cached_output(lease.payload.cache_key)
+            ).find_cached_output(
+                lease.payload.cache_key,
+                object_store=self.object_store,
+                max_bytes=lease.payload.render_options.max_output_bytes,
+            )
         if cached is None:
             return None
         queued = lease.payload
@@ -287,9 +333,8 @@ class StudioRenderWorker:
                 "studio_page_preview": "page_preview",
                 "studio_test_render": "test_render",
             }[queued.kind]
-            or cached.renderer_identity != queued.renderer_identity
-            or cached.converter_identity != queued.converter_identity
-            or cached.validator_identity != queued.validator_identity
+            or cached.runtime_manifest_sha256
+            != queued.runtime_manifest_sha256
         ):
             return None
         try:
@@ -303,13 +348,17 @@ class StudioRenderWorker:
             )
         except StudioStorageError:
             return None
-        return cached.object_ref
+        return cached
 
     async def _adopt(
         self,
         lease: StudioJobLease,
         output: StudioObjectRef,
-        processor_output: StudioProcessorOutput | None,
+        processor_output: (
+            StudioProcessorOutput
+            | StudioIsolatedProcessorOutput
+            | StudioCachedOutput
+        ),
     ) -> None:
         queued = lease.payload
         artifact_kind = {
@@ -320,39 +369,68 @@ class StudioRenderWorker:
         }[queued.kind]
         async with self.session_factory() as db:
             await set_tenant_context(db, str(lease.tenant_id))
-            await StudioRenderJobService(db, tenant_id=lease.tenant_id).adopt_output(
+            await StudioRenderWorkerService(
+                db,
+                tenant_id=lease.tenant_id,
+                input_binding_resolver=self.input_bindings,
+            ).adopt_output(
                 lease,
                 output,
                 object_store=self.object_store,
                 artifact_kind=artifact_kind,
-                renderer_identity=(
-                    processor_output.renderer_identity
-                    if processor_output
-                    else queued.renderer_identity
-                ),
-                converter_identity=(
-                    processor_output.converter_identity
-                    if processor_output
-                    else queued.converter_identity
-                ),
-                validator_identity=(
-                    processor_output.validator_identity
-                    if processor_output
-                    else queued.validator_identity
+                runtime_manifest_sha256=(
+                    processor_output.runtime_manifest_sha256
                 ),
                 retention_class=(
-                    processor_output.retention_class if processor_output else "review"
+                    getattr(processor_output, "retention_class", "review")
                 ),
-                expires_at=datetime.now(timezone.utc)
-                + timedelta(seconds=self.artifact_ttl_seconds),
+                artifact_ttl_seconds=self.artifact_ttl_seconds,
+                page_count=processor_output.page_count,
+                mapping_manifest_sha256=processor_output.mapping_manifest_sha256,
             )
+
+    async def _stage_and_adopt(
+        self,
+        lease: StudioJobLease,
+        processor_output: StudioProcessorOutput | StudioIsolatedProcessorOutput,
+    ) -> StudioStagedObject:
+        artifact_kind = {
+            "studio_template_analysis": "analysis",
+            "studio_template_ocr": "ocr",
+            "studio_page_preview": "page_preview",
+            "studio_test_render": "test_render",
+        }[lease.payload.kind]
+        async with self.session_factory() as db:
+            await set_tenant_context(db, str(lease.tenant_id))
+            _, _, staged = await StudioRenderWorkerService(
+                db,
+                tenant_id=lease.tenant_id,
+                input_binding_resolver=self.input_bindings,
+            ).stage_and_adopt_output(
+                lease,
+                processor_output.content,
+                object_store=self.object_store,
+                media_type=processor_output.media_type,
+                content_sha256=processor_output.content_sha256,
+                artifact_kind=artifact_kind,
+                runtime_manifest_sha256=(
+                    processor_output.runtime_manifest_sha256
+                ),
+                retention_class=processor_output.retention_class,
+                artifact_ttl_seconds=self.artifact_ttl_seconds,
+                page_count=processor_output.page_count,
+                mapping_manifest_sha256=(
+                    processor_output.mapping_manifest_sha256
+                ),
+            )
+            return staged
 
     async def _fail(
         self, lease: StudioJobLease, code: str, *, retryable: bool
     ) -> None:
         async with self.session_factory() as db:
             await set_tenant_context(db, str(lease.tenant_id))
-            await StudioRenderJobService(
+            await StudioRenderWorkerService(
                 db, tenant_id=lease.tenant_id
             ).fail_owned_job(lease, code, retryable=retryable)
 
@@ -378,7 +456,9 @@ class StudioRenderWorker:
         tenant_id = uuid.UUID(str(tenant_id))
         async with self.session_factory() as db:
             await set_tenant_context(db, str(tenant_id))
-            lease = await StudioRenderJobService(db, tenant_id=tenant_id).claim(
+            lease = await StudioRenderWorkerService(
+                db, tenant_id=tenant_id
+            ).claim(
                 job_id,
                 owner=self.owner,
                 lease_seconds=self.lease_seconds,
@@ -395,12 +475,19 @@ class StudioRenderWorker:
         heartbeat = asyncio.create_task(self._heartbeat(lease, stop, lease_lost))
         processing: asyncio.Task | None = None
         lease_watch: asyncio.Task | None = None
+        staged: StudioStagedObject | None = None
         try:
             # Recheck the mutable head and verify the immutable snapshot/source
             # before either processor execution or a cache hit is adopted.
             source, snapshot, input_binding = await self._await_lease_bound_phase(
                 self._load_inputs(lease), lease_lost
             )
+            current_manifest = processor.attest_runtime()
+            if current_manifest.sha256 != lease.payload.runtime_manifest_sha256:
+                raise StudioIsolationError(
+                    "isolation_unavailable",
+                    "Studio runtime does not match the queued request.",
+                )
             cached = await self._await_lease_bound_phase(
                 self._cached_output(lease), lease_lost
             )
@@ -409,8 +496,14 @@ class StudioRenderWorker:
                     raise StudioRenderServiceError(
                         409, "cancelled", "Studio processing stopped."
                     )
-                await self._adopt(lease, cached, None)
-                return True
+                try:
+                    await self._adopt(lease, cached.object_ref, cached)
+                    return True
+                except StudioRenderServiceError as exc:
+                    # Cleanup may win after the verified cache read. Treat only
+                    # storage loss as a cache miss and render under the lease.
+                    if exc.code != "storage_integrity_failed":
+                        raise
             if not await self._progress(lease, 20):
                 raise StudioRenderServiceError(
                     409, "cancelled", "Studio processing stopped."
@@ -448,6 +541,23 @@ class StudioRenderWorker:
                     "validation_failed",
                     "Studio processor artifact kind is invalid.",
                 )
+            if (
+                result.runtime_manifest_sha256
+                != lease.payload.runtime_manifest_sha256
+                or result.renderer_manifest.sha256
+                != lease.payload.runtime_manifest_sha256
+            ):
+                raise StudioRenderServiceError(
+                    409,
+                    "validation_failed",
+                    "Studio processor attestation is invalid.",
+                )
+            if not 1 <= result.page_count <= lease.payload.render_options.max_pages:
+                raise StudioRenderServiceError(
+                    409,
+                    "validation_failed",
+                    "Studio processor page metadata is invalid.",
+                )
             if len(result.content) > lease.payload.render_options.max_output_bytes:
                 raise StudioRenderServiceError(
                     413, "output_too_large", "Studio output exceeded its limit."
@@ -459,21 +569,19 @@ class StudioRenderWorker:
                     "storage_integrity_failed",
                     "Studio output failed its integrity check.",
                 )
-            stored = await asyncio.wait_for(
-                asyncio.to_thread(
-                    self.object_store.put,
-                    tenant_id,
-                    result.content,
-                    media_type=result.media_type,
-                    expected_sha256=result.content_sha256,
-                ),
-                timeout=self.processor_timeout_seconds,
-            )
             if not await self._progress(lease, 90):
                 raise StudioRenderServiceError(
                     409, "cancelled", "Studio processing stopped."
                 )
-            await self._adopt(lease, stored, result)
+            staged = await self._stage_and_adopt(lease, result)
+            try:
+                await asyncio.to_thread(
+                    self.object_store.acknowledge_stage, staged
+                )
+            except Exception:
+                # The adopted artifact is authoritative. Its durable receipt is
+                # intentionally left for the bounded reconciler to acknowledge.
+                pass
             return True
         except StudioRenderServiceError as exc:
             await self._fail(

@@ -22,17 +22,35 @@ from app.services.studio_worker_isolation import (
 def _registry(tmp_path):
     launcher = Path(tmp_path) / "trusted-launcher.bin"
     executable = Path(tmp_path) / "renderer.bin"
+    font_pack = Path(tmp_path) / "fonts.bundle"
+    rasterizer = Path(tmp_path) / "rasterizer.bin"
+    converter = Path(tmp_path) / "converter.bin"
+    validator = Path(tmp_path) / "validator.bin"
     launcher.write_bytes(b"trusted launcher")
     executable.write_bytes(b"renderer")
+    font_pack.write_bytes(b"fonts")
+    rasterizer.write_bytes(b"rasterizer")
+    converter.write_bytes(b"converter")
+    validator.write_bytes(b"validator")
     profile = StudioIsolationProfile(
         profile_id="studio-test-v1",
+        runtime_root=Path(tmp_path).absolute(),
         launcher=launcher.absolute(),
         launcher_sha256=hashlib.sha256(launcher.read_bytes()).hexdigest(),
         executable=executable.absolute(),
         executable_sha256=hashlib.sha256(executable.read_bytes()).hexdigest(),
-        network_isolation_enforced=True,
-        resource_limits_enforced=True,
-        process_tree_enforced=True,
+        font_pack=font_pack.absolute(),
+        font_pack_sha256=hashlib.sha256(font_pack.read_bytes()).hexdigest(),
+        renderer_version="1.0.0",
+        rasterizer=rasterizer.absolute(),
+        rasterizer_version="1.0.0",
+        rasterizer_sha256=hashlib.sha256(rasterizer.read_bytes()).hexdigest(),
+        converter=converter.absolute(),
+        converter_version="1.0.0",
+        converter_sha256=hashlib.sha256(converter.read_bytes()).hexdigest(),
+        validator=validator.absolute(),
+        validator_version="1.0.0",
+        validator_sha256=hashlib.sha256(validator.read_bytes()).hexdigest(),
     )
     return StudioIsolationRegistry([profile])
 
@@ -65,18 +83,18 @@ def _worker(tmp_path, processor):
 def test_worker_rejects_self_declared_or_missing_isolation(tmp_path):
     unsafe = SimpleNamespace(
         isolation_policy_id="self-declared",
-        isolation_enforced=True,
+        runtime_manifest_sha256="a" * 64,
     )
-    with pytest.raises(ValueError, match="enforced isolation"):
+    with pytest.raises(ValueError, match="attested runtime"):
         _worker(tmp_path, unsafe)
 
     missing = SimpleNamespace(
         isolation_policy_id="",
-        isolation_enforced=True,
+        runtime_manifest_sha256="a" * 64,
     )
-    with pytest.raises(ValueError, match="enforced isolation"):
+    with pytest.raises(ValueError, match="attested runtime"):
         _worker(tmp_path, missing)
-    with pytest.raises(ValueError, match="enforced isolation"):
+    with pytest.raises(ValueError, match="attested runtime"):
         _worker(
             tmp_path,
             _BypassProcessor(
@@ -86,7 +104,10 @@ def test_worker_rejects_self_declared_or_missing_isolation(tmp_path):
             ),
         )
     trusted = _processor(tmp_path)
-    assert _worker(tmp_path, trusted).processors
+    worker = _worker(tmp_path, trusted)
+    assert worker.processors
+    with pytest.raises(TypeError):
+        worker.processors["studio_test_render"] = unsafe
     with pytest.raises(AttributeError, match="immutable"):
         trusted.workspace_root = tmp_path / "provider-controlled"
 
@@ -160,6 +181,10 @@ def test_isolation_failures_are_sanitized_by_cause():
     assert _isolation_failure("processor_timeout") == ("processor_timeout", True)
     assert _isolation_failure("processor_output_limit") == (
         "output_too_large",
+        False,
+    )
+    assert _isolation_failure("validation_failed") == (
+        "validation_failed",
         False,
     )
     assert _isolation_failure("isolation_unavailable") == (

@@ -7,15 +7,18 @@ references are server-owned capabilities rather than client input.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import json
 import os
 import re
 import tempfile
 import threading
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol, TypeVar
 
 
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
@@ -24,6 +27,7 @@ _MEDIA_TYPE = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,29}/"
     r"[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,89}$"
 )
+_StorageMutationResult = TypeVar("_StorageMutationResult")
 
 
 class StudioStorageError(RuntimeError):
@@ -32,6 +36,57 @@ class StudioStorageError(RuntimeError):
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code = code
+
+
+async def run_storage_mutation_to_completion(
+    operation: Callable[[], _StorageMutationResult],
+    *,
+    timeout_seconds: float | None = None,
+) -> _StorageMutationResult:
+    """Hold the caller's fence until a synchronous storage mutation stops.
+
+    Cancelling ``asyncio.to_thread`` never stops its worker thread.  Mutation
+    callers use this primitive while holding a database-backed object fence,
+    so timeout or cancellation is propagated only after the thread finishes.
+    """
+
+    if timeout_seconds is not None and timeout_seconds <= 0:
+        raise ValueError("storage mutation timeout must be positive")
+    task = asyncio.create_task(asyncio.to_thread(operation))
+    cancellation_requested = False
+    timed_out = False
+    try:
+        if timeout_seconds is None:
+            return await asyncio.shield(task)
+        return await asyncio.wait_for(
+            asyncio.shield(task), timeout=timeout_seconds
+        )
+    except TimeoutError:
+        if task.done():
+            return task.result()
+        timed_out = True
+    except asyncio.CancelledError:
+        cancellation_requested = True
+
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancellation_requested = True
+
+    if cancellation_requested:
+        try:
+            task.result()
+        except BaseException:
+            pass
+        raise asyncio.CancelledError
+    if timed_out:
+        try:
+            task.result()
+        except BaseException:
+            pass
+        raise TimeoutError
+    return task.result()
 
 
 @dataclass(frozen=True)
@@ -56,6 +111,27 @@ class StudioObjectRef:
             raise ValueError("invalid Studio object media type")
 
 
+@dataclass(frozen=True)
+class StudioStagedObject:
+    """Durable receipt created before CAS publication and cleared after adoption."""
+
+    stage_id: uuid.UUID
+    job_id: uuid.UUID
+    lease_token: uuid.UUID
+    object_ref: StudioObjectRef
+    reconcile_after: datetime
+    state: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "stage_id", uuid.UUID(str(self.stage_id)))
+        object.__setattr__(self, "job_id", uuid.UUID(str(self.job_id)))
+        object.__setattr__(self, "lease_token", uuid.UUID(str(self.lease_token)))
+        if self.reconcile_after.tzinfo is None:
+            raise ValueError("Studio stage reconciliation time must be timezone-aware")
+        if self.state not in {"reserved", "materialized"}:
+            raise ValueError("invalid Studio stage state")
+
+
 class StudioObjectStore(Protocol):
     def put(
         self,
@@ -69,6 +145,34 @@ class StudioObjectStore(Protocol):
     def read(self, ref: StudioObjectRef, *, max_bytes: int | None = None) -> bytes: ...
 
     def delete(self, ref: StudioObjectRef) -> bool: ...
+
+    def stage(
+        self,
+        tenant_id: uuid.UUID,
+        content: bytes,
+        *,
+        job_id: uuid.UUID,
+        lease_token: uuid.UUID,
+        reconcile_after: datetime,
+        media_type: str,
+        expected_sha256: str,
+    ) -> StudioStagedObject: ...
+
+    def acknowledge_stage(self, stage: StudioStagedObject) -> bool: ...
+
+    def has_stages(self, ref: StudioObjectRef) -> bool: ...
+
+    def list_staged(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        reconcile_before: datetime,
+        limit: int,
+    ) -> list[StudioStagedObject]: ...
+
+    def has_other_stages(self, stage: StudioStagedObject) -> bool: ...
+
+    def delete_staged(self, stage: StudioStagedObject) -> bool: ...
 
 
 def _is_link(path: Path) -> bool:
@@ -156,6 +260,130 @@ class LocalStudioObjectStore:
                 "invalid_object_ref", "invalid Studio object reference"
             ) from exc
         return target
+
+    def _stage_path(
+        self,
+        tenant_id: uuid.UUID,
+        sha256: str,
+        stage_id: uuid.UUID,
+    ) -> Path:
+        tenant = uuid.UUID(str(tenant_id))
+        if not _DIGEST.fullmatch(sha256):
+            raise StudioStorageError("invalid_hash", "invalid Studio content digest")
+        stage = uuid.UUID(str(stage_id))
+        target = (
+            self.root
+            / str(tenant)
+            / "studio-stages"
+            / sha256[:2]
+            / sha256
+            / f"{stage}.json"
+        )
+        try:
+            target.relative_to(self.root)
+        except ValueError as exc:
+            raise StudioStorageError(
+                "invalid_stage", "invalid Studio staging receipt"
+            ) from exc
+        return target
+
+    def _write_stage(self, stage: StudioStagedObject) -> None:
+        target = self._stage_path(
+            stage.object_ref.tenant_id,
+            stage.object_ref.sha256,
+            stage.stage_id,
+        )
+        self._ensure_safe_directory(target.parent)
+        payload = {
+            "contract_version": 1,
+            "stage_id": str(stage.stage_id),
+            "job_id": str(stage.job_id),
+            "lease_token": str(stage.lease_token),
+            "tenant_id": str(stage.object_ref.tenant_id),
+            "object_key": stage.object_ref.object_key,
+            "sha256": stage.object_ref.sha256,
+            "byte_size": stage.object_ref.byte_size,
+            "media_type": stage.object_ref.media_type,
+            "reconcile_after": stage.reconcile_after.isoformat(),
+            "state": stage.state,
+        }
+        temporary_name: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=target.parent,
+                prefix=".studio-stage-",
+                delete=False,
+            ) as handle:
+                temporary_name = handle.name
+                json.dump(
+                    payload,
+                    handle,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_name, target)
+            temporary_name = None
+            self._sync_directory(target.parent)
+        finally:
+            if temporary_name is not None:
+                try:
+                    Path(temporary_name).unlink()
+                except FileNotFoundError:
+                    pass
+
+    def _read_stage(self, path: Path) -> StudioStagedObject:
+        if _is_link(path):
+            raise StudioStorageError(
+                "unsafe_object_path", "Studio stage path is not safe"
+            )
+        try:
+            raw = path.read_bytes()
+            if len(raw) > 4096:
+                raise ValueError("stage receipt too large")
+            payload = json.loads(raw.decode("utf-8"))
+            if set(payload) != {
+                "contract_version",
+                "stage_id",
+                "job_id",
+                "lease_token",
+                "tenant_id",
+                "object_key",
+                "sha256",
+                "byte_size",
+                "media_type",
+                "reconcile_after",
+                "state",
+            } or payload["contract_version"] != 1:
+                raise ValueError("invalid stage receipt")
+            ref = StudioObjectRef(
+                tenant_id=payload["tenant_id"],
+                object_key=payload["object_key"],
+                sha256=payload["sha256"],
+                byte_size=payload["byte_size"],
+                media_type=payload["media_type"],
+            )
+            stage = StudioStagedObject(
+                stage_id=payload["stage_id"],
+                job_id=payload["job_id"],
+                lease_token=payload["lease_token"],
+                object_ref=ref,
+                reconcile_after=datetime.fromisoformat(payload["reconcile_after"]),
+                state=payload["state"],
+            )
+            expected = self._stage_path(ref.tenant_id, ref.sha256, stage.stage_id)
+            if expected != path:
+                raise ValueError("stage receipt path mismatch")
+            return stage
+        except StudioStorageError:
+            raise
+        except Exception as exc:
+            raise StudioStorageError(
+                "invalid_stage", "Studio staging receipt is invalid"
+            ) from exc
 
     def _bounded_verified_read(
         self, path: Path, *, digest: str, expected_size: int | None, limit: int
@@ -277,9 +505,13 @@ class LocalStudioObjectStore:
     def read(self, ref: StudioObjectRef, *, max_bytes: int | None = None) -> bytes:
         limit = self.max_object_bytes
         if max_bytes is not None:
-            if int(max_bytes) < 1:
+            if (
+                isinstance(max_bytes, bool)
+                or not isinstance(max_bytes, int)
+                or max_bytes < 1
+            ):
                 raise StudioStorageError("invalid_read_limit", "invalid Studio read limit")
-            limit = min(limit, int(max_bytes))
+            limit = min(limit, max_bytes)
         target = self._path(ref.tenant_id, ref.object_key)
         with self._lock:
             self._ensure_safe_directory(target.parent)
@@ -290,10 +522,239 @@ class LocalStudioObjectStore:
                 limit=limit,
             )
 
+    def stage(
+        self,
+        tenant_id: uuid.UUID,
+        content: bytes,
+        *,
+        job_id: uuid.UUID,
+        lease_token: uuid.UUID,
+        reconcile_after: datetime,
+        media_type: str,
+        expected_sha256: str,
+    ) -> StudioStagedObject:
+        if not isinstance(content, bytes) or not content:
+            raise StudioStorageError("empty_object", "Studio output is empty")
+        if len(content) > self.max_object_bytes:
+            raise StudioStorageError(
+                "object_too_large", "Studio output exceeds its size limit"
+            )
+        digest = self._digest(content)
+        if expected_sha256 != digest:
+            raise StudioStorageError(
+                "hash_mismatch", "Studio output failed its integrity check"
+            )
+        ref = StudioObjectRef(
+            tenant_id=tenant_id,
+            object_key=self.object_key(digest),
+            sha256=digest,
+            byte_size=len(content),
+            media_type=self._validate_media_type(media_type),
+        )
+        reserved = StudioStagedObject(
+            stage_id=uuid.uuid4(),
+            job_id=job_id,
+            lease_token=lease_token,
+            object_ref=ref,
+            reconcile_after=reconcile_after,
+            state="reserved",
+        )
+        with self._lock:
+            self._write_stage(reserved)
+            materialized_ref = self.put(
+                tenant_id,
+                content,
+                media_type=media_type,
+                expected_sha256=expected_sha256,
+            )
+            materialized = StudioStagedObject(
+                stage_id=reserved.stage_id,
+                job_id=reserved.job_id,
+                lease_token=reserved.lease_token,
+                object_ref=materialized_ref,
+                reconcile_after=reserved.reconcile_after,
+                state="materialized",
+            )
+            self._write_stage(materialized)
+            return materialized
+
+    def acknowledge_stage(self, stage: StudioStagedObject) -> bool:
+        target = self._stage_path(
+            stage.object_ref.tenant_id,
+            stage.object_ref.sha256,
+            stage.stage_id,
+        )
+        with self._lock:
+            if not target.exists():
+                return False
+            persisted = self._read_stage(target)
+            if persisted != stage:
+                raise StudioStorageError(
+                    "invalid_stage", "Studio staging receipt is invalid"
+                )
+            try:
+                target.unlink()
+            except FileNotFoundError:
+                return False
+            self._sync_directory(target.parent)
+            return True
+
+    def list_staged(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        reconcile_before: datetime,
+        limit: int,
+    ) -> list[StudioStagedObject]:
+        if reconcile_before.tzinfo is None:
+            raise ValueError("reconcile_before must be timezone-aware")
+        if not 1 <= limit <= 500:
+            raise ValueError("stage scan limit must be between 1 and 500")
+        tenant = uuid.UUID(str(tenant_id))
+        stage_root = self.root / str(tenant) / "studio-stages"
+        with self._lock:
+            if not stage_root.exists():
+                return []
+            if not stage_root.is_dir() or _is_link(stage_root):
+                raise StudioStorageError(
+                    "unsafe_object_path", "Studio stage path is not safe"
+                )
+            found: list[StudioStagedObject] = []
+            scanned = 0
+            for directory, directories, files in os.walk(stage_root, followlinks=False):
+                base = Path(directory)
+                if _is_link(base):
+                    raise StudioStorageError(
+                        "unsafe_object_path", "Studio stage path is not safe"
+                    )
+                unsafe_directories = [
+                    name for name in directories if _is_link(base / name)
+                ]
+                if unsafe_directories:
+                    raise StudioStorageError(
+                        "unsafe_object_path", "Studio stage path is not safe"
+                    )
+                directories[:] = sorted(directories)
+                for name in sorted(files):
+                    if not name.endswith(".json"):
+                        continue
+                    scanned += 1
+                    if scanned > max(5_000, limit * 100):
+                        raise StudioStorageError(
+                            "stage_scan_limit",
+                            "Studio staging receipts exceed their scan limit",
+                        )
+                    stage = self._read_stage(base / name)
+                    if stage.object_ref.tenant_id != tenant:
+                        raise StudioStorageError(
+                            "invalid_stage", "Studio staging receipt is invalid"
+                        )
+                    if stage.reconcile_after <= reconcile_before:
+                        found.append(stage)
+            return sorted(
+                found,
+                key=lambda item: (item.reconcile_after, str(item.stage_id)),
+            )[:limit]
+
+    def has_other_stages(self, stage: StudioStagedObject) -> bool:
+        directory = self._stage_path(
+            stage.object_ref.tenant_id,
+            stage.object_ref.sha256,
+            stage.stage_id,
+        ).parent
+        with self._lock:
+            return self._has_stage_receipts(
+                stage.object_ref,
+                directory=directory,
+                exclude_stage_id=stage.stage_id,
+            )
+
+    def _has_stage_receipts(
+        self,
+        ref: StudioObjectRef,
+        *,
+        directory: Path | None = None,
+        exclude_stage_id: uuid.UUID | None = None,
+    ) -> bool:
+        directory = directory or self._stage_path(
+            ref.tenant_id,
+            ref.sha256,
+            uuid.UUID(int=0),
+        ).parent
+        if not directory.exists():
+            return False
+        if not directory.is_dir() or _is_link(directory):
+            raise StudioStorageError(
+                "unsafe_object_path", "Studio stage path is not safe"
+            )
+        seen = 0
+        for path in directory.glob("*.json"):
+            seen += 1
+            if seen > 1_000:
+                raise StudioStorageError(
+                    "stage_scan_limit",
+                    "Studio staging receipts exceed their scan limit",
+                )
+            persisted = self._read_stage(path)
+            if (
+                persisted.object_ref.tenant_id != ref.tenant_id
+                or persisted.object_ref.sha256 != ref.sha256
+            ):
+                raise StudioStorageError(
+                    "invalid_stage", "Studio staging receipt is invalid"
+                )
+            if persisted.stage_id != exclude_stage_id:
+                return True
+        return False
+
+    def has_stages(self, ref: StudioObjectRef) -> bool:
+        with self._lock:
+            return self._has_stage_receipts(ref)
+
+    def delete_staged(self, stage: StudioStagedObject) -> bool:
+        """Delete an unreferenced last-stage CAS object and its receipt together."""
+
+        receipt = self._stage_path(
+            stage.object_ref.tenant_id,
+            stage.object_ref.sha256,
+            stage.stage_id,
+        )
+        target = self._path(stage.object_ref.tenant_id, stage.object_ref.object_key)
+        with self._lock:
+            if not receipt.exists() or self._read_stage(receipt) != stage:
+                raise StudioStorageError(
+                    "invalid_stage", "Studio staging receipt is invalid"
+                )
+            if self._has_stage_receipts(
+                stage.object_ref,
+                directory=receipt.parent,
+                exclude_stage_id=stage.stage_id,
+            ):
+                raise StudioStorageError(
+                    "object_staged", "Studio output is still being materialized"
+                )
+            if _is_link(target):
+                raise StudioStorageError(
+                    "unsafe_object_path", "Studio object path is not safe"
+                )
+            removed = True
+            try:
+                target.unlink()
+            except FileNotFoundError:
+                removed = False
+            receipt.unlink()
+            self._sync_directory(target.parent)
+            self._sync_directory(receipt.parent)
+            return removed
+
     def delete(self, ref: StudioObjectRef) -> bool:
         target = self._path(ref.tenant_id, ref.object_key)
         with self._lock:
             self._ensure_safe_directory(target.parent)
+            if self._has_stage_receipts(ref):
+                raise StudioStorageError(
+                    "object_staged", "Studio output is still being materialized"
+                )
             if _is_link(target):
                 raise StudioStorageError(
                     "unsafe_object_path", "Studio object path is not safe"
