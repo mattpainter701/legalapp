@@ -520,7 +520,15 @@ class CourtListenerRepository:
                     """
                     SELECT opinion_id, content
                     FROM authority_case_chunks
+                    JOIN authority_case_clusters acl
+                      ON acl.corpus_version = authority_case_chunks.corpus_version
+                     AND acl.cluster_id = authority_case_chunks.cluster_id
+                    JOIN citator_public_source_admissions pa
+                      ON pa.source_key = acl.source_key
+                     AND pa.active IS TRUE
+                     AND pa.namespace = 'public-authority'
                     WHERE chunk_id = %s
+                      AND acl.public_namespace = 'public-authority'
                       AND corpus_version = (
                           SELECT version FROM authority_corpus_versions
                           WHERE status='promoted'
@@ -614,7 +622,8 @@ class CourtListenerRepository:
                 """SELECT cit.cited_opinion_id, cit.cited_reporter, cit.cited_volume, cit.cited_page, cit.depth
                    FROM authority_case_citations cit
                    WHERE cit.citing_opinion_id = %s AND cit.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
-                     AND EXISTS (SELECT 1 FROM authority_case_opinions ao JOIN authority_case_clusters acl ON acl.corpus_version=ao.corpus_version AND acl.cluster_id=ao.cluster_id WHERE ao.corpus_version=cit.corpus_version AND ao.opinion_id=cit.citing_opinion_id AND acl.public_namespace='public-authority' AND EXISTS (SELECT 1 FROM citator_public_source_admissions pa WHERE pa.source_key=acl.source_key AND pa.active IS TRUE AND pa.namespace='public-authority')) LIMIT 100""",
+                     AND EXISTS (SELECT 1 FROM authority_case_opinions ao JOIN authority_case_clusters acl ON acl.corpus_version=ao.corpus_version AND acl.cluster_id=ao.cluster_id JOIN citator_public_source_admissions pa ON pa.source_key=acl.source_key AND pa.active IS TRUE AND pa.namespace='public-authority' WHERE ao.corpus_version=cit.corpus_version AND ao.opinion_id=cit.citing_opinion_id AND acl.public_namespace='public-authority')
+                     AND EXISTS (SELECT 1 FROM authority_case_opinions ao JOIN authority_case_clusters acl ON acl.corpus_version=ao.corpus_version AND acl.cluster_id=ao.cluster_id JOIN citator_public_source_admissions pa ON pa.source_key=acl.source_key AND pa.active IS TRUE AND pa.namespace='public-authority' WHERE ao.corpus_version=cit.corpus_version AND ao.opinion_id=cit.cited_opinion_id AND acl.public_namespace='public-authority') LIMIT 100""",
                 [opinion_id],
             )
             cited = dict_rows(cur)
@@ -622,7 +631,8 @@ class CourtListenerRepository:
                 """SELECT cit.citing_opinion_id, cit.depth
                    FROM authority_case_citations cit
                    WHERE cit.cited_opinion_id = %s AND cit.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
-                     AND EXISTS (SELECT 1 FROM authority_case_opinions ao JOIN authority_case_clusters acl ON acl.corpus_version=ao.corpus_version AND acl.cluster_id=ao.cluster_id WHERE ao.corpus_version=cit.corpus_version AND ao.opinion_id=cit.cited_opinion_id AND acl.public_namespace='public-authority' AND EXISTS (SELECT 1 FROM citator_public_source_admissions pa WHERE pa.source_key=acl.source_key AND pa.active IS TRUE AND pa.namespace='public-authority')) LIMIT 100""",
+                     AND EXISTS (SELECT 1 FROM authority_case_opinions ao JOIN authority_case_clusters acl ON acl.corpus_version=ao.corpus_version AND acl.cluster_id=ao.cluster_id JOIN citator_public_source_admissions pa ON pa.source_key=acl.source_key AND pa.active IS TRUE AND pa.namespace='public-authority' WHERE ao.corpus_version=cit.corpus_version AND ao.opinion_id=cit.cited_opinion_id AND acl.public_namespace='public-authority')
+                     AND EXISTS (SELECT 1 FROM authority_case_opinions ao JOIN authority_case_clusters acl ON acl.corpus_version=ao.corpus_version AND acl.cluster_id=ao.cluster_id JOIN citator_public_source_admissions pa ON pa.source_key=acl.source_key AND pa.active IS TRUE AND pa.namespace='public-authority' WHERE ao.corpus_version=cit.corpus_version AND ao.opinion_id=cit.citing_opinion_id AND acl.public_namespace='public-authority') LIMIT 100""",
                 [opinion_id],
             )
             citing = dict_rows(cur)
@@ -654,6 +664,9 @@ class CourtListenerRepository:
                 FROM authority_records r
                 JOIN authority_corpus_versions v ON v.version=r.corpus_version
                 JOIN legal_sources s ON s.source_key=r.source_key
+                JOIN citator_public_source_admissions pa
+                  ON pa.source_key=s.source_key AND pa.active IS TRUE
+                 AND pa.namespace='public-authority'
                 WHERE r.authority_key=%s AND r.corpus_version=(
                   SELECT version FROM authority_corpus_versions WHERE status='promoted'
                   ORDER BY promoted_at DESC NULLS LAST LIMIT 1
@@ -689,6 +702,14 @@ class CourtListenerRepository:
                 WHERE corpus_version=(SELECT version FROM authority_corpus_versions
                   WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
                   AND authority_key=%s
+                  AND EXISTS (SELECT 1 FROM authority_records ar
+                              JOIN legal_sources ls ON ls.source_key=ar.source_key
+                              JOIN citator_public_source_admissions lp
+                                ON lp.source_key=ls.source_key AND lp.active IS TRUE
+                               AND lp.namespace='public-authority'
+                              WHERE ar.corpus_version=authority_history_facts.corpus_version
+                                AND ar.authority_key=authority_history_facts.authority_key
+                                AND ls.public_namespace='public-authority')
                 ORDER BY event_date DESC NULLS LAST, observed_at DESC LIMIT 100
                 """,
                 [authority_key],
@@ -703,6 +724,14 @@ class CourtListenerRepository:
                 WHERE corpus_version=(SELECT version FROM authority_corpus_versions
                   WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
                   AND cited_authority_key=%s
+                  AND EXISTS (SELECT 1 FROM authority_records ar
+                              JOIN legal_sources ls ON ls.source_key=ar.source_key
+                              JOIN citator_public_source_admissions lp
+                                ON lp.source_key=ls.source_key AND lp.active IS TRUE
+                               AND lp.namespace='public-authority'
+                              WHERE ar.corpus_version=authority_citation_facts.corpus_version
+                                AND ar.authority_key=authority_citation_facts.cited_authority_key
+                                AND ls.public_namespace='public-authority')
                 ORDER BY depth, observed_at DESC LIMIT 100
                 """,
                 [authority_key],
@@ -1108,7 +1137,12 @@ class CourtListenerRepository:
                        last_attempted_at, last_successful_sync_at, item_count,
                        chunk_count, embedded_chunk_count, parser_version,
                        embedding_model, embedding_version, current_error, metadata
-                FROM legal_sources
+                FROM legal_sources s
+                JOIN citator_public_source_admissions pa
+                  ON pa.source_key=s.source_key AND pa.active IS TRUE
+                 AND pa.namespace='public-authority'
+                WHERE s.public_namespace='public-authority'
+                  AND s.storage_policy <> 'prohibited'
                 ORDER BY source_key
                 """
             )
@@ -1118,7 +1152,13 @@ class CourtListenerRepository:
                 SELECT source_key, partition_key, checkpoint_at, cursor_url, status,
                        last_attempted_at, last_successful_sync_at, rows_processed,
                        chunks_created, last_error, metadata
-                FROM source_sync_states
+                FROM source_sync_states ss
+                JOIN legal_sources s ON s.source_key=ss.source_key
+                JOIN citator_public_source_admissions pa
+                  ON pa.source_key=s.source_key AND pa.active IS TRUE
+                 AND pa.namespace='public-authority'
+                WHERE s.public_namespace='public-authority'
+                  AND s.storage_policy <> 'prohibited'
                 ORDER BY source_key, partition_key
                 """
             )
@@ -1144,8 +1184,12 @@ class CourtListenerRepository:
             cur.execute(
                 """
                 SELECT
-                    (SELECT COUNT(*) FROM courts) AS courts,
-                    (SELECT COUNT(*) FROM dockets) AS dockets,
+                    (SELECT COUNT(DISTINCT cl.court_id) FROM authority_case_clusters cl
+                     JOIN citator_public_source_admissions pa ON pa.source_key=cl.source_key AND pa.active IS TRUE AND pa.namespace='public-authority'
+                     WHERE cl.public_namespace='public-authority' AND cl.corpus_version=(SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)) AS courts,
+                    (SELECT COUNT(DISTINCT cl.docket_id) FROM authority_case_clusters cl
+                     JOIN citator_public_source_admissions pa ON pa.source_key=cl.source_key AND pa.active IS TRUE AND pa.namespace='public-authority'
+                     WHERE cl.public_namespace='public-authority' AND cl.corpus_version=(SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)) AS dockets,
                     (SELECT COUNT(*) FROM authority_case_clusters cl WHERE cl.corpus_version = (
                        SELECT version FROM authority_corpus_versions WHERE status='promoted'
                        ORDER BY promoted_at DESC NULLS LAST LIMIT 1)) AS clusters,
@@ -1159,10 +1203,10 @@ class CourtListenerRepository:
                      WHERE ch.embedding IS NOT NULL AND ch.corpus_version = (
                        SELECT version FROM authority_corpus_versions WHERE status='promoted'
                        ORDER BY promoted_at DESC NULLS LAST LIMIT 1)) AS embedded_chunks,
-                    (SELECT COUNT(*) FROM legal_sources) AS legal_sources,
-                    (SELECT COUNT(*) FROM legal_documents) AS legal_documents,
-                    (SELECT COUNT(*) FROM legal_document_chunks) AS legal_document_chunks,
-                    (SELECT COUNT(*) FROM legal_document_chunks WHERE embedding IS NOT NULL)
+                    (SELECT COUNT(*) FROM legal_sources s JOIN citator_public_source_admissions pa ON pa.source_key=s.source_key AND pa.active IS TRUE AND pa.namespace='public-authority' WHERE s.public_namespace='public-authority' AND s.storage_policy <> 'prohibited') AS legal_sources,
+                    (SELECT COUNT(*) FROM legal_documents d JOIN legal_sources s ON s.source_key=d.source_key JOIN citator_public_source_admissions pa ON pa.source_key=s.source_key AND pa.active IS TRUE AND pa.namespace='public-authority' WHERE d.public_namespace='public-authority' AND d.corpus_version=(SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)) AS legal_documents,
+                    (SELECT COUNT(*) FROM legal_document_chunks c JOIN legal_documents d ON d.id=c.document_id JOIN legal_sources s ON s.source_key=d.source_key JOIN citator_public_source_admissions pa ON pa.source_key=s.source_key AND pa.active IS TRUE AND pa.namespace='public-authority' WHERE d.public_namespace='public-authority' AND d.corpus_version=(SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)) AS legal_document_chunks,
+                    (SELECT COUNT(*) FROM legal_document_chunks c JOIN legal_documents d ON d.id=c.document_id JOIN legal_sources s ON s.source_key=d.source_key JOIN citator_public_source_admissions pa ON pa.source_key=s.source_key AND pa.active IS TRUE AND pa.namespace='public-authority' WHERE c.embedding IS NOT NULL AND d.public_namespace='public-authority' AND d.corpus_version=(SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1))
                         AS embedded_legal_document_chunks,
                     (SELECT MIN(date_filed) FROM authority_case_clusters cl WHERE cl.corpus_version = (
                        SELECT version FROM authority_corpus_versions WHERE status='promoted'
