@@ -36,6 +36,45 @@ _SEARCH_STOP_WORDS = {
     "with",
 }
 
+_PROMOTED_VERSION_SQL = "(SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)"
+
+
+def public_source_predicate(
+    source_expr: str,
+    *,
+    source_alias: str = "ls",
+    admission_alias: str = "pa",
+    version_expr: str = _PROMOTED_VERSION_SQL,
+) -> str:
+    """Canonical fail-closed public source lineage predicate.
+
+    Every public projection must bind storage, review, catalog, admission and
+    manifest evidence to the same promoted release.  Callers interpolate only
+    trusted SQL expressions for source/version columns; values remain bound
+    query parameters elsewhere.
+    """
+    return (
+        f"EXISTS (SELECT 1 FROM legal_sources {source_alias} "
+        f"JOIN citator_public_source_admissions {admission_alias} "
+        f"ON {admission_alias}.source_key={source_alias}.source_key "
+        f"AND {admission_alias}.active IS TRUE "
+        f"AND {admission_alias}.namespace='public-authority' "
+        f"AND {admission_alias}.manifest_sha256="
+        f"(SELECT manifest_hash FROM authority_corpus_versions WHERE version={version_expr}) "
+        f"WHERE {source_alias}.source_key={source_expr} "
+        f"AND {source_alias}.public_namespace='public-authority' "
+        f"AND {source_alias}.enabled IS TRUE "
+        f"AND {source_alias}.storage_policy <> 'prohibited' "
+        f"AND {source_alias}.rights_decision IN ('official','open','licensed') "
+        f"AND {source_alias}.reviewed_at IS NOT NULL "
+        f"AND {source_alias}.reviewed_by IS NOT NULL "
+        f"AND {source_alias}.metadata->>'catalog_schema_version'="
+        f"{admission_alias}.catalog_schema_version "
+        f"AND {source_alias}.metadata->>'implementation_status' IS NOT NULL "
+        f"AND {admission_alias}.manifest_reference <> '' "
+        f"AND {admission_alias}.manifest_sha256 <> '')"
+    )
+
 
 def broad_legal_websearch_query(query: str) -> str:
     """Turn conversational questions into ranked OR recall for legal corpora.
@@ -91,7 +130,7 @@ class CourtListenerRepository:
             f"oc.corpus_version = {promoted_version}",
             f"cl.corpus_version = {promoted_version}",
             "cl.public_namespace = 'public-authority'",
-            "EXISTS (SELECT 1 FROM legal_sources ls JOIN citator_public_source_admissions pa ON pa.source_key = ls.source_key AND pa.active IS TRUE AND pa.namespace = 'public-authority' WHERE ls.source_key = cl.source_key AND ls.public_namespace = 'public-authority' AND ls.enabled IS TRUE AND ls.storage_policy <> 'prohibited' AND ls.rights_decision IN ('official', 'open', 'licensed') AND ls.reviewed_at IS NOT NULL AND ls.reviewed_by IS NOT NULL AND ls.metadata->>'catalog_schema_version' = pa.catalog_schema_version AND pa.manifest_sha256 = (SELECT manifest_hash FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1) AND ls.metadata->>'implementation_status' IS NOT NULL AND pa.manifest_reference <> '' AND pa.manifest_sha256 <> '')",
+            public_source_predicate("cl.source_key", version_expr=promoted_version),
         ]
         params: list[Any] = []
         if jurisdiction:
@@ -154,7 +193,11 @@ class CourtListenerRepository:
             "s.enabled IS TRUE",
             "s.public_namespace = 'public-authority'",
             "d.public_namespace = 'public-authority'",
-            "EXISTS (SELECT 1 FROM citator_public_source_admissions pa WHERE pa.source_key = s.source_key AND pa.active IS TRUE AND pa.namespace = 'public-authority' AND pa.manifest_sha256 = (SELECT manifest_hash FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1) AND pa.catalog_schema_version = s.metadata->>'catalog_schema_version')",
+            public_source_predicate(
+                "s.source_key",
+                source_alias="s",
+                version_expr="(SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)",
+            ),
             "d.document_status IN ('current', 'current_with_supplement')",
             "d.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status = 'promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)",
             "c.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status = 'promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)",
@@ -1190,11 +1233,13 @@ class CourtListenerRepository:
                 SELECT
                     (SELECT COUNT(DISTINCT d.court_id) FROM authority_case_clusters cl
                      JOIN dockets d ON d.docket_id=cl.docket_id
+                     JOIN legal_sources s ON s.source_key=cl.source_key
                      JOIN citator_public_source_admissions pa ON pa.source_key=cl.source_key AND pa.active IS TRUE AND pa.namespace='public-authority'
-                     WHERE cl.public_namespace='public-authority' AND cl.corpus_version=(SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)) AS courts,
+                     WHERE cl.public_namespace='public-authority' AND s.enabled IS TRUE AND s.reviewed_at IS NOT NULL AND s.reviewed_by IS NOT NULL AND pa.manifest_sha256=(SELECT manifest_hash FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1) AND cl.corpus_version=(SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)) AS courts,
                     (SELECT COUNT(DISTINCT cl.docket_id) FROM authority_case_clusters cl
+                     JOIN legal_sources s ON s.source_key=cl.source_key
                      JOIN citator_public_source_admissions pa ON pa.source_key=cl.source_key AND pa.active IS TRUE AND pa.namespace='public-authority'
-                     WHERE cl.public_namespace='public-authority' AND cl.corpus_version=(SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)) AS dockets,
+                     WHERE cl.public_namespace='public-authority' AND s.enabled IS TRUE AND s.reviewed_at IS NOT NULL AND s.reviewed_by IS NOT NULL AND pa.manifest_sha256=(SELECT manifest_hash FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1) AND cl.corpus_version=(SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)) AS dockets,
                     (SELECT COUNT(*) FROM authority_case_clusters cl
                      JOIN legal_sources s ON s.source_key=cl.source_key
                      JOIN citator_public_source_admissions pa ON pa.source_key=s.source_key AND pa.active IS TRUE AND pa.namespace='public-authority'
@@ -1206,7 +1251,7 @@ class CourtListenerRepository:
                      WHERE cl.public_namespace='public-authority' AND pa.manifest_sha256=(SELECT manifest_hash FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1) AND o.corpus_version = (
                        SELECT version FROM authority_corpus_versions WHERE status='promoted'
                        ORDER BY promoted_at DESC NULLS LAST LIMIT 1)) AS opinions,
-                    (SELECT COUNT(*) FROM authority_case_chunks ch WHERE ch.corpus_version = (
+                    (SELECT COUNT(*) FROM authority_case_chunks ch JOIN authority_case_clusters cl ON cl.corpus_version=ch.corpus_version AND cl.cluster_id=ch.cluster_id JOIN legal_sources s ON s.source_key=cl.source_key JOIN citator_public_source_admissions pa ON pa.source_key=s.source_key AND pa.active IS TRUE AND pa.namespace='public-authority' WHERE cl.public_namespace='public-authority' AND s.enabled IS TRUE AND s.reviewed_at IS NOT NULL AND s.reviewed_by IS NOT NULL AND pa.manifest_sha256=(SELECT manifest_hash FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1) AND ch.corpus_version = (
                        SELECT version FROM authority_corpus_versions WHERE status='promoted'
                        ORDER BY promoted_at DESC NULLS LAST LIMIT 1)) AS chunks,
                     (SELECT COUNT(*) FROM authority_case_chunks ch JOIN authority_case_clusters cl ON cl.corpus_version=ch.corpus_version AND cl.cluster_id=ch.cluster_id
@@ -1240,7 +1285,7 @@ class CourtListenerRepository:
                 JOIN citator_public_source_admissions pa ON pa.source_key=s.source_key AND pa.active IS TRUE AND pa.namespace='public-authority'
                  AND pa.manifest_sha256=(SELECT manifest_hash FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
                 WHERE l.source_release=(SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
-                ORDER BY source_key, partition_key
+                ORDER BY l.source_key, l.partition_key
                 """
             )
             coverage_ledger = dict_rows(cur)
