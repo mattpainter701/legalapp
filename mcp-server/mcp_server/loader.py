@@ -125,6 +125,7 @@ def _ensure_legacy_bootstrap_version(conn) -> str | None:
                        authority_corpus_versions.promoted_at, EXCLUDED.promoted_at)""",
             [version],
         )
+        cur.execute("SET LOCAL authority.snapshot_backfill = 'on'")
         for table in ("opinion_clusters", "opinion_chunks", "legal_documents"):
             cur.execute(
                 f"UPDATE {table} SET corpus_version=%s WHERE corpus_version IS NULL",
@@ -139,22 +140,53 @@ def _ensure_legacy_bootstrap_version(conn) -> str | None:
                   AND d.corpus_version = %s""",
             [version],
         )
+        cur.execute(
+            """INSERT INTO authority_schema_migrations(migration_key, metadata)
+               VALUES (%s, jsonb_build_object('corpus_version', %s))
+               ON CONFLICT (migration_key) DO NOTHING""",
+            ["legacy-version-binding-v1", version],
+        )
+        cur.execute("SET LOCAL authority.snapshot_backfill = 'off'")
         return version
 
 
 def backfill_promoted_caselaw_snapshot(conn) -> int:
-    """Idempotently materialize the legacy served corpus into snapshots."""
+    """Materialize the pre-control-plane corpus exactly once per database."""
     with conn.cursor() as cur:
-        cur.execute("SET LOCAL authority.snapshot_backfill = 'on'")
         cur.execute("""
             SELECT version FROM authority_corpus_versions
             WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1
         """)
         row = cur.fetchone()
         if not row:
-            cur.execute("SET LOCAL authority.snapshot_backfill = 'off'")
+            cur.execute(
+                """INSERT INTO authority_schema_migrations(migration_key, metadata)
+                     VALUES ('legacy-caselaw-snapshot-v1',
+                             '{"no_legacy_promoted_release":true}'::jsonb)
+                     ON CONFLICT (migration_key) DO NOTHING"""
+            )
             return 0
         version = row[0]
+        migration_key = "legacy-caselaw-snapshot-v1"
+        cur.execute(
+            "SELECT 1 FROM authority_schema_migrations WHERE migration_key=%s",
+            [migration_key],
+        )
+        if cur.fetchone():
+            return 0
+        cur.execute(
+            """SELECT 1 FROM authority_schema_migrations
+                WHERE migration_key LIKE 'legacy-caselaw-snapshot-v1:%' LIMIT 1"""
+        )
+        if cur.fetchone():
+            cur.execute(
+                """INSERT INTO authority_schema_migrations(migration_key, metadata)
+                     VALUES (%s, '{"upgraded_from_version_scoped_marker":true}'::jsonb)
+                     ON CONFLICT (migration_key) DO NOTHING""",
+                [migration_key],
+            )
+            return 0
+        cur.execute("SET LOCAL authority.snapshot_backfill = 'on'")
         cur.execute(
             """
             INSERT INTO authority_case_clusters
@@ -210,14 +242,40 @@ def backfill_promoted_caselaw_snapshot(conn) -> int:
             [version, version],
         )
         inserted = cur.rowcount
+        cur.execute(
+            """INSERT INTO authority_schema_migrations(migration_key, metadata)
+               VALUES (%s, jsonb_build_object('corpus_version', %s))""",
+            [migration_key, version],
+        )
         # The INSERT exemption is migration-only and must not leak into the
         # caller's transaction, where promoted snapshots remain immutable.
         cur.execute("SET LOCAL authority.snapshot_backfill = 'off'")
         return inserted
 
 
+def materialize_citator_facts(conn, corpus_version: str) -> int:
+    """Materialize deterministic citator facts into one staged release.
+
+    This is a candidate-build step, not a startup repair path.  The resulting
+    rows are covered by the release state digest and production audits before
+    promotion.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT as_of, status FROM authority_corpus_versions
+                 WHERE version=%s""",
+            [corpus_version],
+        )
+        release = cur.fetchone()
+    if not release or release[1] not in {"staged", "canary"}:
+        raise PermissionError(
+            "citator facts may be materialized only into a staged/canary release"
+        )
+    return _materialize_citator_facts(conn, corpus_version, release[0])
+
+
 def backfill_promoted_citator_facts(conn) -> int:
-    """Materialize only reviewed, promoted authority into citator facts.
+    """Run the reviewed legacy-bootstrap citator migration exactly once.
 
     This migration path is deliberately conservative: an old CourtListener row
     with no reviewed source record does not acquire a citator identity merely
@@ -226,17 +284,43 @@ def backfill_promoted_citator_facts(conn) -> int:
     authority control plane.
     """
     with conn.cursor() as cur:
-        cur.execute("SET LOCAL authority.snapshot_backfill = 'on'")
+        migration_key = "legacy-citator-facts-v1"
+        cur.execute(
+            "SELECT 1 FROM authority_schema_migrations WHERE migration_key=%s",
+            [migration_key],
+        )
+        if cur.fetchone():
+            return 0
         cur.execute(
             """SELECT version, as_of FROM authority_corpus_versions
                WHERE status='promoted'
+                 AND metadata->>'bootstrap' = 'true'
                ORDER BY promoted_at DESC NULLS LAST LIMIT 1"""
         )
         release = cur.fetchone()
         if not release:
-            cur.execute("SET LOCAL authority.snapshot_backfill = 'off'")
+            cur.execute(
+                """INSERT INTO authority_schema_migrations(migration_key, metadata)
+                     VALUES (%s, '{"no_legacy_bootstrap":true}'::jsonb)""",
+                [migration_key],
+            )
             return 0
         version, as_of = release
+        cur.execute("SET LOCAL authority.snapshot_backfill = 'on'")
+    inserted = _materialize_citator_facts(conn, version, as_of)
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO authority_schema_migrations(migration_key, metadata)
+                 VALUES (%s, jsonb_build_object('corpus_version', %s))""",
+            [migration_key, version],
+        )
+        cur.execute("SET LOCAL authority.snapshot_backfill = 'off'")
+    return inserted
+
+
+def _materialize_citator_facts(conn, version: str, as_of) -> int:
+    """Insert idempotent derived facts for an explicitly selected version."""
+    with conn.cursor() as cur:
         # Case identity is admitted only through the named, reviewed
         # CourtListener source; arbitrary/imported authority never inherits it.
         cur.execute(
@@ -267,7 +351,18 @@ def backfill_promoted_citator_facts(conn) -> int:
             JOIN public_authority_source_lineage pas
               ON pas.source_key=cl.source_key AND pas.corpus_version=cl.corpus_version
             WHERE op.corpus_version=%s
-            ON CONFLICT (corpus_version, authority_key) DO NOTHING
+            ON CONFLICT (corpus_version, authority_key) DO UPDATE SET
+              authority_kind=EXCLUDED.authority_kind,
+              source_key=EXCLUDED.source_key,
+              canonical_citation=EXCLUDED.canonical_citation,
+              title=EXCLUDED.title,
+              court=EXCLUDED.court,
+              decision_date=EXCLUDED.decision_date,
+              source_url=EXCLUDED.source_url,
+              source_as_of=EXCLUDED.source_as_of,
+              source_version=EXCLUDED.source_version,
+              currentness_state=EXCLUDED.currentness_state,
+              deterministic_metadata=EXCLUDED.deterministic_metadata
             """,
             [as_of, version],
         )
@@ -295,7 +390,18 @@ def backfill_promoted_citator_facts(conn) -> int:
             JOIN public_authority_source_lineage pas
               ON pas.source_key=d.source_key AND pas.corpus_version=d.corpus_version
             WHERE d.corpus_version=%s
-            ON CONFLICT (corpus_version, authority_key) DO NOTHING
+            ON CONFLICT (corpus_version, authority_key) DO UPDATE SET
+              authority_kind=EXCLUDED.authority_kind,
+              source_key=EXCLUDED.source_key,
+              canonical_citation=EXCLUDED.canonical_citation,
+              title=EXCLUDED.title,
+              effective_date=EXCLUDED.effective_date,
+              repeal_date=EXCLUDED.repeal_date,
+              source_url=EXCLUDED.source_url,
+              source_as_of=EXCLUDED.source_as_of,
+              source_version=EXCLUDED.source_version,
+              currentness_state=EXCLUDED.currentness_state,
+              deterministic_metadata=EXCLUDED.deterministic_metadata
             """,
             [as_of, version],
         )
@@ -359,7 +465,6 @@ def backfill_promoted_citator_facts(conn) -> int:
             [version],
         )
         citation_facts = cur.rowcount
-        cur.execute("SET LOCAL authority.snapshot_backfill = 'off'")
         return case_records + document_records + status_facts + citation_facts
 
 
@@ -1214,6 +1319,7 @@ def create_chunks(db_url: str | None = None, limit: int | None = None) -> int:
         # candidate text or vector contracts on replay.
         created += create_snapshot_chunks(conn, version, limit=limit)
         refresh_courtlistener_coverage_ledger(conn, source_release=version)
+        materialize_citator_facts(conn, version)
         conn.commit()
     return created
 

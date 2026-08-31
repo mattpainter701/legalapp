@@ -26,6 +26,7 @@ import httpx
 from .authority_ingest import FetchedDocument, html_main_text, ingest_document
 from .database import connect
 from .loader import init_schema
+from .public_lineage import require_public_candidate_version
 from .source_catalog import load_catalog, seed_catalog
 
 DEFAULT_AUTHORIZATION_BASIS = "written authorization from Ohio Courts (user-confirmed 2026-07-31)"
@@ -197,8 +198,13 @@ def to_fetched_document(result: FetchResponse, *, parser: str, now: datetime | N
 
 
 def _existing_validators(conn: Any, source_key: str, external_id: str) -> dict[str, str]:
+    corpus_version = require_public_candidate_version(conn, source_key=source_key)
     with conn.cursor() as cursor:
-        cursor.execute("SELECT metadata FROM legal_documents WHERE source_key = %s AND external_id = %s", [source_key, external_id])
+        cursor.execute(
+            """SELECT metadata FROM legal_documents
+                WHERE source_key=%s AND external_id=%s AND corpus_version=%s""",
+            [source_key, external_id, corpus_version],
+        )
         row = cursor.fetchone()
     metadata = row[0] if row and row[0] else {}
     headers: dict[str, str] = {}

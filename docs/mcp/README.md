@@ -87,6 +87,15 @@ plane evidence; no production corpus harvest, deployment, comprehensive
 coverage, currentness, or good-law claim is implied. Brief Check
 promoted-version/currentness integration remains separate COMP-05 work.
 
+Release evidence is bound to a deterministic corpus-state digest and is
+recomputed under the release lock at promotion. Per-manifest admissions retain
+their own reviewed catalog schema and manifest reference, allowing a successor
+and rollback release to coexist without trusting mutable source payload
+metadata. Normal ingestion and citator materialization target only an admitted
+staged/canary release. Startup migration markers can preserve a genuine legacy
+database once, but the unaudited legacy bootstrap is never a public serving
+release and later singleton rows cannot be adopted into a promoted corpus.
+
 ### Research MCP citator contract
 
 `get_authority_treatment` and `get_citator_status` are read-only citator

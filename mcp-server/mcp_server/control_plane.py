@@ -33,6 +33,12 @@ CADENCE_SECONDS = {
     "quarterly": 7776000,
     "annual": 31536000,
 }
+CONTROL_AUDIT_KINDS = ("release", "completeness", "freshness", "isolation")
+CONTROL_AUDIT_PRODUCER = "authority-control-plane-v3"
+CONTROL_AUDIT_THRESHOLDS = {
+    "minimum_completeness": 0.95,
+    "maximum_lag_seconds": 172800,
+}
 
 
 def cadence_seconds(value: str | None) -> int | None:
@@ -185,6 +191,417 @@ def _authorized(actor: str | None, reason: str | None) -> tuple[str, str]:
     return actor[:200], reason[:1000]
 
 
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _audit_immutable_hash(
+    *,
+    corpus_version: str,
+    audit_kind: str,
+    methodology: str,
+    thresholds: dict[str, Any],
+    result: dict[str, Any],
+    passed: bool,
+    auditor: str,
+    metadata: dict[str, Any],
+) -> str:
+    return audit_hash(
+        {
+            "corpus_version": corpus_version,
+            "audit_kind": audit_kind,
+            "methodology": methodology,
+            "thresholds": thresholds,
+            "result": result,
+            "passed": passed,
+            "auditor": auditor,
+            "metadata": metadata,
+        }
+    )
+
+
+def corpus_state_digest(conn: Any, *, version: str) -> str:
+    """Hash the exact searchable release and reviewed operational evidence."""
+    queries = (
+        (
+            "version",
+            """SELECT manifest_hash, as_of, embedding_model,
+                      embedding_version, embedding_dimension
+                 FROM authority_corpus_versions WHERE version=%s""",
+        ),
+        (
+            "sources",
+            """SELECT s.source_key, s.enabled, s.reviewed_at, s.reviewed_by,
+                      s.rights_decision, s.storage_policy, s.public_namespace,
+                      s.source_tier, s.geographic_scope, s.temporal_scope,
+                      s.expected_cadence, s.completeness_caveats,
+                      s.claim_safe_wording,
+                      p.catalog_schema_version,
+                      s.metadata->>'implementation_status',
+                      p.manifest_reference, p.manifest_sha256, p.namespace,
+                      p.reviewed_at, p.reviewed_by, p.active
+                 FROM legal_sources s
+                 JOIN citator_public_source_admissions p ON p.source_key=s.source_key
+                 JOIN authority_corpus_versions v ON v.manifest_hash=p.manifest_sha256
+                WHERE v.version=%s
+                ORDER BY s.source_key, p.manifest_sha256""",
+        ),
+        (
+            "documents",
+            """SELECT id, source_key, external_id, document_type, title, citation,
+                      jurisdiction, authority_tier, document_status,
+                      publication_date, effective_date, termination_date,
+                      canonical_url, source_modified_at, retrieved_at,
+                      content_hash, parser_version, text_content, public_namespace,
+                      metadata
+                 FROM legal_documents WHERE corpus_version=%s ORDER BY id""",
+        ),
+        (
+            "document_chunks",
+            """SELECT id, document_id, chunk_index, heading_path, content_hash,
+                      content, token_count, embedding_model, embedding_version,
+                      vector_dims(embedding), md5(embedding::text), metadata
+                 FROM legal_document_chunks
+                WHERE corpus_version=%s ORDER BY document_id, chunk_index""",
+        ),
+        (
+            "case_clusters",
+            """SELECT source_key, public_namespace, cluster_id, docket_id,
+                      case_name, date_filed, citations
+                 FROM authority_case_clusters
+                WHERE corpus_version=%s ORDER BY cluster_id""",
+        ),
+        (
+            "case_opinions",
+            """SELECT opinion_id, cluster_id, plain_text, source_url
+                 FROM authority_case_opinions
+                WHERE corpus_version=%s ORDER BY opinion_id""",
+        ),
+        (
+            "case_chunks",
+            """SELECT chunk_id, opinion_id, cluster_id, court_id, chunk_index,
+                      content, embedding_model, embedding_version,
+                      vector_dims(embedding), md5(embedding::text)
+                 FROM authority_case_chunks
+                WHERE corpus_version=%s ORDER BY opinion_id, chunk_index""",
+        ),
+        (
+            "case_citations",
+            """SELECT citation_id, citing_opinion_id, cited_opinion_id,
+                      cited_cluster_id, cited_reporter, cited_volume, cited_page,
+                      depth
+                 FROM authority_case_citations
+                WHERE corpus_version=%s ORDER BY citation_id""",
+        ),
+        (
+            "authority_records",
+            """SELECT authority_key, authority_kind, source_key,
+                      canonical_citation, title, court, decision_date,
+                      effective_date, repeal_date, source_url, source_as_of,
+                      source_version, currentness_state, deterministic_metadata
+                 FROM authority_records
+                WHERE corpus_version=%s ORDER BY authority_key""",
+        ),
+        (
+            "history_facts",
+            """SELECT id, authority_key, fact_kind, related_authority_key,
+                      court, event_date, source_url, evidence_span,
+                      evidence_locator, source_hash, observed_at, metadata
+                 FROM authority_history_facts
+                WHERE corpus_version=%s ORDER BY id""",
+        ),
+        (
+            "citation_facts",
+            """SELECT id, citing_authority_key, cited_authority_key,
+                      citing_opinion_id, cited_opinion_id, depth, issue_context,
+                      source_url, evidence_span, evidence_locator, source_hash,
+                      observed_at, metadata
+                 FROM authority_citation_facts
+                WHERE corpus_version=%s ORDER BY id""",
+        ),
+        (
+            "checkpoints",
+            """SELECT source_key, partition_key, cursor_url, cursor_hash, status,
+                      retry_count, next_retry_at, dead_letter_at,
+                      last_successful_harvest_at, updated_at
+                 FROM authority_harvest_checkpoints
+                WHERE corpus_version=%s ORDER BY source_key, partition_key""",
+        ),
+        (
+            "coverage",
+            """SELECT source_key, partition_key, expected_coverage,
+                      expected_item_count, acquisition_state, snapshot_date,
+                      rows_loaded, chunks_loaded, vectors_loaded, bytes_loaded,
+                      first_document_date, last_document_date,
+                      upstream_modified_at, last_checked_at, stale_after,
+                      gap_reason, owner, metadata
+                 FROM corpus_coverage_ledger
+                WHERE source_release=%s ORDER BY source_key, partition_key""",
+        ),
+    )
+    digest = hashlib.sha256()
+    for label, sql in queries:
+        digest.update(label.encode("utf-8"))
+        digest.update(b"\0")
+        with conn.cursor() as cur:
+            cur.execute(sql, [version])
+            while rows := cur.fetchmany(500):
+                for row in rows:
+                    digest.update(
+                        json.dumps(
+                            row,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            default=str,
+                        ).encode("utf-8")
+                    )
+                    digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _control_audit_records(
+    conn: Any, *, version: str, audit_kind: str
+) -> list[dict[str, Any]]:
+    if audit_kind not in CONTROL_AUDIT_KINDS:
+        raise ValueError("unsupported sampled audit kind")
+    with conn.cursor() as cur:
+        if audit_kind == "release":
+            cur.execute(
+                """
+                WITH evidence AS (
+                  SELECT cp.source_key, cp.partition_key, cp.status,
+                         GREATEST(COUNT(DISTINCT d.id), COALESCE(MAX(l.rows_loaded), 0)) observed
+                    FROM authority_harvest_checkpoints cp
+                    LEFT JOIN legal_documents d
+                      ON d.source_key=cp.source_key AND d.corpus_version=cp.corpus_version
+                    LEFT JOIN corpus_coverage_ledger l
+                      ON l.source_key=cp.source_key AND l.partition_key=cp.partition_key
+                     AND l.source_release=cp.corpus_version
+                   WHERE cp.corpus_version=%s
+                   GROUP BY cp.source_key, cp.partition_key, cp.status
+                  UNION ALL
+                  SELECT l.source_key, l.partition_key, l.acquisition_state,
+                         l.rows_loaded
+                    FROM corpus_coverage_ledger l
+                   WHERE l.source_release=%s
+                     AND NOT EXISTS (
+                       SELECT 1 FROM authority_harvest_checkpoints cp
+                        WHERE cp.source_key=l.source_key
+                          AND cp.partition_key=l.partition_key
+                          AND cp.corpus_version=l.source_release)
+                )
+                SELECT pas.source_key, COALESCE(e.status, 'missing'),
+                       COALESCE(e.observed, 0)
+                  FROM public_authority_source_lineage pas
+                  LEFT JOIN evidence e ON e.source_key=pas.source_key
+                 WHERE pas.corpus_version=%s
+                """,
+                [version, version, version],
+            )
+            return [
+                {
+                    "source_key": row[0],
+                    "ready": row[1] in {"complete", "indexed"} and row[2] > 0,
+                }
+                for row in cur.fetchall()
+            ]
+        if audit_kind == "completeness":
+            cur.execute(
+                """
+                SELECT e.source_key, e.partition_key, e.expected_item_count,
+                       COALESCE(e.rows_loaded, 0), e.status
+                  FROM (
+                    SELECT cp.source_key, cp.partition_key,
+                           l.expected_item_count, l.rows_loaded, cp.status
+                      FROM authority_harvest_checkpoints cp
+                      LEFT JOIN corpus_coverage_ledger l
+                        ON l.source_key=cp.source_key AND l.partition_key=cp.partition_key
+                       AND l.source_release=cp.corpus_version
+                     WHERE cp.corpus_version=%s
+                    UNION ALL
+                    SELECT l.source_key, l.partition_key,
+                           l.expected_item_count, l.rows_loaded, l.acquisition_state
+                      FROM corpus_coverage_ledger l
+                     WHERE l.source_release=%s
+                       AND NOT EXISTS (
+                         SELECT 1 FROM authority_harvest_checkpoints cp
+                          WHERE cp.source_key=l.source_key
+                            AND cp.partition_key=l.partition_key
+                            AND cp.corpus_version=l.source_release)
+                  ) e
+                  JOIN public_authority_source_lineage pas
+                    ON pas.source_key=e.source_key AND pas.corpus_version=%s
+                """,
+                [version, version, version],
+            )
+            return [
+                {
+                    "source_key": row[0],
+                    "partition_key": row[1],
+                    "expected": max(row[2] or 0, 1),
+                    "observed": row[3] if row[4] in {"complete", "indexed"} else 0,
+                    "declared": row[2] is not None and row[2] > 0,
+                }
+                for row in cur.fetchall()
+            ]
+        if audit_kind == "freshness":
+            cur.execute(
+                """
+                WITH evidence AS (
+                  SELECT cp.source_key, cp.partition_key,
+                         cp.last_successful_harvest_at successful_at, cp.status
+                    FROM authority_harvest_checkpoints cp
+                   WHERE cp.corpus_version=%s
+                  UNION ALL
+                  SELECT l.source_key, l.partition_key,
+                         CASE WHEN l.acquisition_state IN ('complete','indexed')
+                              THEN l.last_checked_at END,
+                         l.acquisition_state
+                    FROM corpus_coverage_ledger l
+                   WHERE l.source_release=%s
+                     AND NOT EXISTS (
+                       SELECT 1 FROM authority_harvest_checkpoints cp
+                        WHERE cp.source_key=l.source_key
+                          AND cp.partition_key=l.partition_key
+                          AND cp.corpus_version=l.source_release)
+                )
+                SELECT e.successful_at, s.expected_cadence, e.status,
+                       e.source_key, e.partition_key
+                  FROM evidence e
+                  JOIN public_authority_source_lineage pas
+                    ON pas.source_key=e.source_key AND pas.corpus_version=%s
+                  JOIN legal_sources s ON s.source_key=e.source_key
+                """,
+                [version, version, version],
+            )
+            now = datetime.now(timezone.utc)
+            records = []
+            for row in cur.fetchall():
+                cadence = cadence_seconds(row[1])
+                failed = row[2] in {
+                    "failed",
+                    "retryable",
+                    "retryable_failure",
+                    "quarantined",
+                    "dead_letter",
+                }
+                records.append(
+                    {
+                        "source_key": row[3],
+                        "partition_key": row[4],
+                        "lag_seconds": lag_seconds(row[0], cadence, now)
+                        if row[0] and cadence is not None and not failed
+                        else None,
+                        "cadence": row[1],
+                    }
+                )
+            return records
+        cur.execute(
+            """
+            SELECT d.source_key, d.public_namespace,
+                   NOT EXISTS (SELECT 1 FROM public_authority_source_lineage pas
+                                WHERE pas.source_key=d.source_key
+                                  AND pas.corpus_version=d.corpus_version)
+              FROM legal_documents d WHERE d.corpus_version=%s
+            UNION ALL
+            SELECT cl.source_key, cl.public_namespace,
+                   NOT EXISTS (SELECT 1 FROM public_authority_source_lineage pas
+                                WHERE pas.source_key=cl.source_key
+                                  AND pas.corpus_version=cl.corpus_version)
+              FROM authority_case_clusters cl WHERE cl.corpus_version=%s
+            UNION ALL
+            SELECT r.source_key, 'public-authority',
+                   NOT EXISTS (SELECT 1 FROM public_authority_source_lineage pas
+                                WHERE pas.source_key=r.source_key
+                                  AND pas.corpus_version=r.corpus_version)
+              FROM authority_records r WHERE r.corpus_version=%s
+            UNION ALL
+            SELECT r.source_key, 'public-authority',
+                   NOT EXISTS (SELECT 1 FROM public_authority_history_facts ph
+                                WHERE ph.id=h.id)
+              FROM authority_history_facts h
+              JOIN authority_records r ON r.corpus_version=h.corpus_version
+                                      AND r.authority_key=h.authority_key
+             WHERE h.corpus_version=%s
+            UNION ALL
+            SELECT cited.source_key, 'public-authority',
+                   NOT EXISTS (SELECT 1 FROM public_authority_citation_facts pc
+                                WHERE pc.id=c.id)
+              FROM authority_citation_facts c
+              JOIN authority_records cited ON cited.corpus_version=c.corpus_version
+                                            AND cited.authority_key=c.cited_authority_key
+             WHERE c.corpus_version=%s
+            UNION ALL
+            SELECT cp.source_key, 'public-authority',
+                   NOT EXISTS (SELECT 1 FROM public_authority_source_lineage pas
+                                WHERE pas.source_key=cp.source_key
+                                  AND pas.corpus_version=cp.corpus_version)
+              FROM authority_harvest_checkpoints cp WHERE cp.corpus_version=%s
+            UNION ALL
+            SELECT l.source_key, 'public-authority',
+                   NOT EXISTS (SELECT 1 FROM public_authority_source_lineage pas
+                                WHERE pas.source_key=l.source_key
+                                  AND pas.corpus_version=l.source_release)
+              FROM corpus_coverage_ledger l WHERE l.source_release=%s
+            """,
+            [version] * 7,
+        )
+        return [
+            {"source_key": row[0], "namespace": row[1], "private": bool(row[2])}
+            for row in cur.fetchall()
+        ]
+
+
+def compute_control_audit(
+    conn: Any,
+    *,
+    version: str,
+    audit_kind: str,
+    state_digest: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], str, str]:
+    digest = state_digest or corpus_state_digest(conn, version=version)
+    records = _control_audit_records(conn, version=version, audit_kind=audit_kind)
+    result = sampled_audit(
+        records,
+        audit_kind=audit_kind,
+        minimum_completeness=CONTROL_AUDIT_THRESHOLDS["minimum_completeness"],
+        maximum_lag_seconds=CONTROL_AUDIT_THRESHOLDS["maximum_lag_seconds"],
+    )
+    result["state_digest"] = digest
+    methodology = f"production version-bound database audit for {audit_kind}"
+    return result, dict(CONTROL_AUDIT_THRESHOLDS), methodology, digest
+
+
+def run_and_record_control_audit(
+    conn: Any, *, version: str, audit_kind: str, auditor: str
+) -> tuple[dict[str, Any], str]:
+    actor, _ = _authorized(auditor, f"run {audit_kind} authority audit")
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(hashtext('authority-corpus-release'))"
+        )
+    result, thresholds, methodology, digest = compute_control_audit(
+        conn, version=version, audit_kind=audit_kind
+    )
+    immutable = record_audit(
+        conn,
+        corpus_version=version,
+        audit_kind=audit_kind,
+        methodology=methodology,
+        thresholds=thresholds,
+        result=result,
+        passed=bool(result["passed"]),
+        auditor=actor,
+        metadata={"producer": CONTROL_AUDIT_PRODUCER, "state_digest": digest},
+    )
+    return result, immutable
+
+
 def record_audit(
     conn: Any,
     *,
@@ -200,16 +617,16 @@ def record_audit(
     actor, _ = _authorized(auditor, methodology)
     if bool(passed) != bool(result.get("passed")):
         raise ValueError("passed must match the computed audit result")
-    immutable = audit_hash(
-        {
-            "corpus_version": corpus_version,
-            "audit_kind": audit_kind,
-            "methodology": methodology,
-            "thresholds": thresholds,
-            "result": result,
-            "passed": passed,
-            "auditor": actor,
-        }
+    audit_metadata = dict(metadata or {})
+    immutable = _audit_immutable_hash(
+        corpus_version=corpus_version,
+        audit_kind=audit_kind,
+        methodology=methodology,
+        thresholds=thresholds,
+        result=result,
+        passed=passed,
+        auditor=actor,
+        metadata=audit_metadata,
     )
     with conn.cursor() as cur:
         cur.execute(
@@ -228,11 +645,82 @@ def record_audit(
                 passed,
                 actor,
                 immutable,
-                json.dumps(metadata or {}),
+                json.dumps(audit_metadata),
             ],
         )
     conn.commit()
     return immutable
+
+
+def _validate_control_audits(conn: Any, *, version: str) -> None:
+    state_digest = corpus_state_digest(conn, version=version)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT ON (audit_kind)
+                   audit_kind, methodology, thresholds, result, passed,
+                   auditor, immutable_hash, metadata
+              FROM authority_audits
+             WHERE corpus_version = %s
+               AND audit_kind = ANY(%s)
+             ORDER BY audit_kind, sampled_at DESC, id DESC
+            """,
+            [version, list(CONTROL_AUDIT_KINDS)],
+        )
+        latest_audits = {row[0]: row for row in cur.fetchall()}
+    if set(latest_audits) != set(CONTROL_AUDIT_KINDS):
+        raise PermissionError(
+            "latest passing release, completeness, freshness, and isolation audits are required"
+        )
+    for audit_kind in CONTROL_AUDIT_KINDS:
+        row = latest_audits[audit_kind]
+        thresholds = _json_object(row[2])
+        stored_result = _json_object(row[3])
+        metadata = _json_object(row[7])
+        immutable = _audit_immutable_hash(
+            corpus_version=version,
+            audit_kind=audit_kind,
+            methodology=row[1],
+            thresholds=thresholds,
+            result=stored_result,
+            passed=bool(row[4]),
+            auditor=row[5],
+            metadata=metadata,
+        )
+        if (
+            not row[4]
+            or metadata.get("producer") != CONTROL_AUDIT_PRODUCER
+            or metadata.get("state_digest") != state_digest
+            or stored_result.get("state_digest") != state_digest
+            or not hmac.compare_digest(str(row[6]), immutable)
+        ):
+            raise PermissionError(
+                "latest authority audits are stale, fabricated, or invalid"
+            )
+        live_result, live_thresholds, live_methodology, _ = compute_control_audit(
+            conn,
+            version=version,
+            audit_kind=audit_kind,
+            state_digest=state_digest,
+        )
+        if (
+            not live_result.get("passed")
+            or stored_result != live_result
+            or thresholds != live_thresholds
+            or row[1] != live_methodology
+        ):
+            raise PermissionError(
+                "authority audit evidence no longer matches live corpus state"
+            )
+
+
+def control_audits_are_current(conn: Any, *, version: str) -> bool:
+    """Return whether customer claims remain backed by live production audits."""
+    try:
+        _validate_control_audits(conn, version=version)
+    except (PermissionError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return False
+    return True
 
 
 def promote_corpus_version(conn: Any, *, version: str, actor: str, reason: str) -> None:
@@ -260,24 +748,6 @@ def promote_corpus_version(conn: Any, *, version: str, actor: str, reason: str) 
             or not str(target_contract[1]).strip()
         ):
             raise PermissionError("target corpus embedding contract is incomplete")
-        cur.execute(
-            """
-            SELECT COUNT(*) FROM (
-                SELECT DISTINCT ON (audit_kind) audit_kind, passed
-                FROM authority_audits
-                WHERE corpus_version = %s
-                  AND audit_kind IN ('release', 'completeness', 'freshness', 'isolation')
-                ORDER BY audit_kind, sampled_at DESC, id DESC
-            ) latest
-            WHERE passed = TRUE
-            """,
-            [version],
-        )
-        audit_row = cur.fetchone()
-        if not audit_row or audit_row[0] < 4:
-            raise PermissionError(
-                "latest passing release, completeness, freshness, and isolation audits are required"
-            )
         cur.execute(
             """SELECT
                  (SELECT COUNT(*)
@@ -415,6 +885,7 @@ def promote_corpus_version(conn: Any, *, version: str, actor: str, reason: str) 
             raise PermissionError(
                 "corpus contains telemetry without public authority lineage"
             )
+        _validate_control_audits(conn, version=version)
         cur.execute(
             "UPDATE authority_corpus_versions SET status='retired' WHERE status='promoted' AND version <> %s",
             [version],
@@ -979,12 +1450,12 @@ def record_treatment_assessment(
                 """
                 SELECT id::text AS fact_id, source_url, evidence_span,
                        evidence_locator, source_hash, 'history' AS fact_type
-                FROM authority_history_facts
+                FROM public_authority_history_facts
                 WHERE corpus_version=%s AND authority_key=%s AND id::text = ANY(%s)
                 UNION ALL
                 SELECT id::text AS fact_id, source_url, evidence_span,
                        evidence_locator, source_hash, 'citation' AS fact_type
-                FROM authority_citation_facts
+                FROM public_authority_citation_facts
                 WHERE corpus_version=%s AND cited_authority_key=%s AND id::text = ANY(%s)
                 """,
                 [
@@ -1270,12 +1741,12 @@ def _citator_alert_evidence(
             """
             SELECT id::text AS fact_id, source_url, evidence_span, evidence_locator,
                    source_hash, 'history' AS fact_type
-            FROM authority_history_facts
+            FROM public_authority_history_facts
             WHERE corpus_version=%s AND authority_key=%s AND id::text=%s
             UNION ALL
             SELECT id::text AS fact_id, source_url, evidence_span, evidence_locator,
                    source_hash, 'citation' AS fact_type
-            FROM authority_citation_facts
+            FROM public_authority_citation_facts
             WHERE corpus_version=%s AND cited_authority_key=%s AND id::text=%s
             """,
             [

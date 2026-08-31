@@ -471,10 +471,9 @@ def admit_public_source(
         )
         cursor.execute(
             """UPDATE legal_sources
-                  SET public_namespace='public-authority',
-                      metadata=jsonb_set(metadata, '{manifest_reference}', to_jsonb(%s::text), true)
+                  SET public_namespace='public-authority'
                 WHERE source_key=%s""",
-            [manifest_reference, source_key],
+            [source_key],
         )
         # Candidate snapshots are cloned before a new release can be admitted.
         # Reclassify only rows whose version carries this exact reviewed

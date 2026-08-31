@@ -6,7 +6,7 @@ from typing import Any
 
 from .database import dict_rows
 from .query_embeddings import format_vector_literal
-from .control_plane import cadence_seconds, lag_seconds
+from .control_plane import cadence_seconds, control_audits_are_current, lag_seconds
 
 _CITATION_RE = re.compile(
     r"^\s*(?P<volume>\d+)\s+(?P<reporter>.+?)\s+(?P<page>\d+)\s*$"
@@ -736,15 +736,10 @@ class CourtListenerRepository:
                 SELECT fact_kind, related_authority_key, court, event_date,
                        source_url, evidence_span, evidence_locator, source_hash,
                        observed_at, metadata
-                FROM authority_history_facts
+                FROM public_authority_history_facts
                 WHERE corpus_version=(SELECT version FROM authority_corpus_versions
                   WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
                   AND authority_key=%s
-                  AND EXISTS (SELECT 1 FROM authority_records ar
-                              JOIN public_authority_source_lineage pas
-                                ON pas.source_key=ar.source_key AND pas.corpus_version=ar.corpus_version
-                              WHERE ar.corpus_version=authority_history_facts.corpus_version
-                                AND ar.authority_key=authority_history_facts.authority_key)
                 ORDER BY event_date DESC NULLS LAST, observed_at DESC LIMIT 100
                 """,
                 [authority_key],
@@ -755,15 +750,10 @@ class CourtListenerRepository:
                 SELECT citing_authority_key, citing_opinion_id, depth, issue_context,
                        source_url, evidence_span, evidence_locator, source_hash,
                        observed_at, metadata
-                FROM authority_citation_facts
+                FROM public_authority_citation_facts
                 WHERE corpus_version=(SELECT version FROM authority_corpus_versions
                   WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
                   AND cited_authority_key=%s
-                  AND EXISTS (SELECT 1 FROM authority_records ar
-                              JOIN public_authority_source_lineage pas
-                                ON pas.source_key=ar.source_key AND pas.corpus_version=ar.corpus_version
-                              WHERE ar.corpus_version=authority_citation_facts.corpus_version
-                                AND ar.authority_key=authority_citation_facts.cited_authority_key)
                 ORDER BY depth, observed_at DESC LIMIT 100
                 """,
                 [authority_key],
@@ -787,6 +777,20 @@ class CourtListenerRepository:
                 WHERE a.corpus_version=(SELECT version FROM authority_corpus_versions
                   WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
                   AND a.authority_key=%s
+                  AND (a.abstained IS TRUE OR NOT EXISTS (
+                    SELECT 1 FROM jsonb_array_elements_text(a.evidence_fact_ids) evidence(fact_id)
+                    WHERE NOT EXISTS (
+                      SELECT 1 FROM public_authority_history_facts h
+                       WHERE h.corpus_version=a.corpus_version
+                         AND h.authority_key=a.authority_key
+                         AND h.id::text=evidence.fact_id
+                    ) AND NOT EXISTS (
+                      SELECT 1 FROM public_authority_citation_facts c
+                       WHERE c.corpus_version=a.corpus_version
+                         AND c.cited_authority_key=a.authority_key
+                         AND c.id::text=evidence.fact_id
+                    )
+                  ))
                 ORDER BY a.computed_at DESC, a.id DESC LIMIT 1
                 """,
                 [authority_key],
@@ -896,9 +900,9 @@ class CourtListenerRepository:
                 SELECT v.version, v.as_of, v.status,
                        (SELECT COUNT(*) FROM authority_records r JOIN public_authority_source_lineage pas ON pas.source_key=r.source_key AND pas.corpus_version=r.corpus_version
                          WHERE r.corpus_version=v.version) AS authority_count,
-                       (SELECT COUNT(*) FROM authority_history_facts h JOIN authority_records r ON r.corpus_version=h.corpus_version AND r.authority_key=h.authority_key JOIN public_authority_source_lineage pas ON pas.source_key=r.source_key AND pas.corpus_version=r.corpus_version
+                       (SELECT COUNT(*) FROM public_authority_history_facts h
                          WHERE h.corpus_version=v.version) AS history_fact_count,
-                       (SELECT COUNT(*) FROM authority_citation_facts c JOIN authority_records r ON r.corpus_version=c.corpus_version AND r.authority_key=c.cited_authority_key JOIN public_authority_source_lineage pas ON pas.source_key=r.source_key AND pas.corpus_version=r.corpus_version
+                       (SELECT COUNT(*) FROM public_authority_citation_facts c
                          WHERE c.corpus_version=v.version) AS citation_fact_count,
                        (SELECT COUNT(*) FROM authority_treatment_assessments a JOIN authority_records r ON r.corpus_version=a.corpus_version AND r.authority_key=a.authority_key JOIN public_authority_source_lineage pas ON pas.source_key=r.source_key AND pas.corpus_version=r.corpus_version
                          WHERE a.corpus_version=v.version) AS assessment_count,
@@ -920,6 +924,20 @@ class CourtListenerRepository:
                            AND (a.stale_at IS NULL OR a.stale_at > now())
                            AND latest_review.decision IN ('accepted', 'overridden')
                            AND ar.currentness_state='current'
+                           AND (a.abstained IS TRUE OR NOT EXISTS (
+                             SELECT 1 FROM jsonb_array_elements_text(a.evidence_fact_ids) evidence(fact_id)
+                              WHERE NOT EXISTS (
+                                SELECT 1 FROM public_authority_history_facts h
+                                 WHERE h.corpus_version=a.corpus_version
+                                   AND h.authority_key=a.authority_key
+                                   AND h.id::text=evidence.fact_id
+                              ) AND NOT EXISTS (
+                                SELECT 1 FROM public_authority_citation_facts c
+                                 WHERE c.corpus_version=a.corpus_version
+                                   AND c.cited_authority_key=a.authority_key
+                                   AND c.id::text=evidence.fact_id
+                              )
+                           ))
                            AND s.enabled=TRUE
                            AND s.rights_decision IN ('official', 'open', 'licensed')
                            AND s.reviewed_at IS NOT NULL AND s.reviewed_by IS NOT NULL
@@ -1127,13 +1145,13 @@ class CourtListenerRepository:
                        ) AS errors
                 FROM ingest_runs ir
                 JOIN public_authority_source_lineage pas
-                  ON pas.corpus_version=(
+                  ON ir.source_key=pas.source_key
+                 AND ir.corpus_version=pas.corpus_version
+                 AND pas.corpus_version=(
                      SELECT version FROM authority_corpus_versions
                       WHERE status='promoted'
                       ORDER BY promoted_at DESC NULLS LAST LIMIT 1
                    )
-                 AND (ir.source=pas.source_key
-                      OR starts_with(ir.source, pas.source_key || ':'))
                 ORDER BY ir.started_at DESC
                 LIMIT 10
                 """
@@ -1411,7 +1429,8 @@ class CourtListenerRepository:
                        s.embedded_chunk_count, s.current_error, s.rights_decision,
                        s.geographic_scope, s.temporal_scope, s.expected_cadence,
                        s.completeness_caveats, s.claim_safe_wording, s.reviewed_at,
-                       s.reviewed_by
+                       s.reviewed_by, pas.catalog_schema_version,
+                       pas.manifest_reference, pas.manifest_sha256
                 FROM legal_sources s
                 JOIN public_authority_source_lineage pas
                   ON pas.source_key=s.source_key AND pas.corpus_version=%s
@@ -1421,7 +1440,6 @@ class CourtListenerRepository:
                   AND s.rights_decision IN ('official', 'open', 'licensed')
                   AND s.reviewed_at IS NOT NULL AND s.reviewed_by IS NOT NULL
                   AND s.claim_safe_wording IS NOT NULL
-                  AND s.metadata->>'catalog_schema_version' IS NOT NULL
                   AND s.metadata->>'implementation_status' IS NOT NULL
                   AND NOT starts_with(s.source_key, 'tenant:')
                   AND NOT starts_with(s.source_key, 'firm:')
@@ -1446,7 +1464,6 @@ class CourtListenerRepository:
                   AND s.claim_safe_wording IS NOT NULL
                   AND s.storage_policy <> 'prohibited'
                   AND s.public_namespace = 'public-authority'
-                  AND s.metadata->>'catalog_schema_version' IS NOT NULL
                   AND s.metadata->>'implementation_status' IS NOT NULL
                   AND NOT starts_with(s.source_key, 'tenant:')
                   AND NOT starts_with(s.source_key, 'firm:')
@@ -1562,6 +1579,7 @@ class CourtListenerRepository:
             and bool(sources)
             and required_audits.issubset(latest_audits)
             and all(bool(latest_audits[k]["passed"]) for k in required_audits)
+            and control_audits_are_current(self.conn, version=version_key)
         )
         partition_by_source = {}
         for partition in partitions:

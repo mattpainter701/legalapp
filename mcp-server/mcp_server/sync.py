@@ -15,7 +15,8 @@ from typing import Any, Protocol
 import httpx
 
 from .database import connect
-from .loader import chunk_text, init_schema
+from .loader import chunk_text, init_schema, materialize_citator_facts
+from .public_lineage import require_public_candidate_version
 
 COURTLISTENER_API_BASE = "https://www.courtlistener.com/api/rest/v4"
 COURTLISTENER_WEB_BASE = "https://www.courtlistener.com"
@@ -85,9 +86,7 @@ def is_ohio_appellate_court(court: dict[str, Any]) -> bool:
         return True
     if "supreme court of ohio" in name or "ohio supreme court" in name:
         return True
-    return "ohio" in name and (
-        "court of appeals" in name or "appellate court" in name
-    )
+    return "ohio" in name and ("court of appeals" in name or "appellate court" in name)
 
 
 @dataclass(frozen=True)
@@ -127,9 +126,13 @@ class SyncConfig:
 
 
 class CourtListenerClient:
-    def __init__(self, config: SyncConfig, transport: httpx.BaseTransport | None = None):
+    def __init__(
+        self, config: SyncConfig, transport: httpx.BaseTransport | None = None
+    ):
         if not config.api_key:
-            raise RuntimeError("COURTLISTENER_API_KEY is required for REST synchronization")
+            raise RuntimeError(
+                "COURTLISTENER_API_KEY is required for REST synchronization"
+            )
         self.config = config
         self.http = httpx.Client(
             headers={
@@ -151,7 +154,9 @@ class CourtListenerClient:
         response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, dict):
-            raise RuntimeError(f"CourtListener returned a non-object response for {url}")
+            raise RuntimeError(
+                f"CourtListener returned a non-object response for {url}"
+            )
         return payload
 
     def get_resource(self, value: Any, endpoint: str) -> dict[str, Any]:
@@ -213,7 +218,12 @@ class CourtListenerClient:
         cluster = self.get_resource(cluster_ref, "clusters")
         docket_ref = cluster.get("docket") or cluster.get("docket_id")
         docket = self.get_resource(docket_ref, "dockets")
-        return {"court": court, "docket": docket, "cluster": cluster, "opinion": opinion}
+        return {
+            "court": court,
+            "docket": docket,
+            "cluster": cluster,
+            "opinion": opinion,
+        }
 
 
 class SyncStore(Protocol):
@@ -248,6 +258,14 @@ class SyncStore(Protocol):
 class PostgresSyncStore:
     def __init__(self, conn):
         self.conn = conn
+        self.corpus_version: str | None = None
+
+    def _version(self) -> str:
+        if not self.corpus_version:
+            raise PermissionError(
+                "CourtListener sync requires an admitted staged/canary corpus version"
+            )
+        return self.corpus_version
 
     @staticmethod
     def _source_lock_key(court_id: str) -> str:
@@ -303,13 +321,21 @@ class PostgresSyncStore:
                     "mixedbread-ai/mxbai-embed-large-v1",
                     1,
                     "API use and stored volume require the configured CourtListener membership/commercial terms.",
-                    json.dumps({"coverage_label": f"Ohio appellate baseline from {baseline_start}"}),
+                    json.dumps(
+                        {
+                            "coverage_label": f"Ohio appellate baseline from {baseline_start}"
+                        }
+                    ),
                 ],
             )
         self.conn.commit()
+        self.corpus_version = require_public_candidate_version(
+            self.conn, source_key=OHIO_SOURCE_KEY
+        )
 
     def start_partition(self, court_id: str) -> dict[str, Any] | None:
-        lock_key = self._source_lock_key(court_id)
+        version = self._version()
+        lock_key = f"{self._source_lock_key(court_id)}:{version}"
         with self.conn.cursor() as cur:
             cur.execute("SELECT pg_try_advisory_lock(hashtext(%s))", [lock_key])
             row = cur.fetchone()
@@ -318,56 +344,55 @@ class PostgresSyncStore:
                 return None
             cur.execute(
                 """
-                INSERT INTO source_sync_states (source_key, partition_key, status)
-                VALUES (%s, %s, 'idle')
-                ON CONFLICT (source_key, partition_key) DO NOTHING
+                INSERT INTO authority_harvest_checkpoints
+                  (source_key, partition_key, corpus_version, status)
+                VALUES (%s, %s, %s, 'active')
+                ON CONFLICT (source_key, partition_key, corpus_version) DO NOTHING
                 """,
-                [OHIO_SOURCE_KEY, court_id],
+                [OHIO_SOURCE_KEY, court_id, version],
             )
             cur.execute(
                 """
-                SELECT checkpoint_at, cursor_url, status, rows_processed, chunks_created
-                FROM source_sync_states
-                WHERE source_key = %s AND partition_key = %s
+                SELECT last_successful_harvest_at, cursor_url, status
+                FROM authority_harvest_checkpoints
+                WHERE source_key = %s AND partition_key = %s AND corpus_version=%s
                 """,
-                [OHIO_SOURCE_KEY, court_id],
+                [OHIO_SOURCE_KEY, court_id, version],
             )
             state = cur.fetchone()
             cur.execute(
                 """
-                UPDATE source_sync_states
-                SET status = 'running', last_attempted_at = now(), last_error = NULL,
-                    updated_at = now()
-                WHERE source_key = %s AND partition_key = %s
+                UPDATE authority_harvest_checkpoints
+                SET status = 'running', updated_at = now()
+                WHERE source_key = %s AND partition_key = %s AND corpus_version=%s
                 """,
-                [OHIO_SOURCE_KEY, court_id],
-            )
-            cur.execute(
-                """
-                UPDATE legal_sources
-                SET last_attempted_at = now(), current_error = NULL, updated_at = now()
-                WHERE source_key = %s
-                """,
-                [OHIO_SOURCE_KEY],
+                [OHIO_SOURCE_KEY, court_id, version],
             )
         self.conn.commit()
         return {
             "checkpoint_at": state[0] if state else None,
             "cursor_url": state[1] if state else None,
             "status": state[2] if state else "idle",
-            "rows_processed": state[3] if state else 0,
-            "chunks_created": state[4] if state else 0,
+            "rows_processed": 0,
+            "chunks_created": 0,
         }
 
     def begin_run(self, court_id: str, baseline_start: date) -> Any:
+        version = self._version()
         with self.conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO ingest_runs (source, snapshot_date, status)
-                VALUES (%s, %s, 'running')
+                INSERT INTO ingest_runs
+                  (source, source_key, corpus_version, snapshot_date, status)
+                VALUES (%s, %s, %s, %s, 'running')
                 RETURNING id
                 """,
-                [f"{OHIO_SOURCE_KEY}:{court_id}", baseline_start],
+                [
+                    f"{OHIO_SOURCE_KEY}:{court_id}",
+                    OHIO_SOURCE_KEY,
+                    version,
+                    baseline_start,
+                ],
             )
             run_id = cur.fetchone()[0]
         self.conn.commit()
@@ -378,6 +403,7 @@ class PostgresSyncStore:
         return str(court.get("id") or court.get("court_id") or "")
 
     def ingest_bundle(self, bundle: dict[str, Any]) -> tuple[int, int]:
+        version = self._version()
         court = bundle["court"]
         docket = bundle["docket"]
         cluster = bundle["cluster"]
@@ -386,8 +412,15 @@ class PostgresSyncStore:
         docket_id = resource_id(docket.get("id"))
         cluster_id = resource_id(cluster.get("id"))
         opinion_id = resource_id(opinion.get("id"))
-        if not court_id or docket_id is None or cluster_id is None or opinion_id is None:
-            raise RuntimeError("CourtListener bundle is missing a required stable identifier")
+        if (
+            not court_id
+            or docket_id is None
+            or cluster_id is None
+            or opinion_id is None
+        ):
+            raise RuntimeError(
+                "CourtListener bundle is missing a required stable identifier"
+            )
 
         html_value = (
             opinion.get("html_with_citations")
@@ -453,86 +486,72 @@ class PostgresSyncStore:
             )
             cur.execute(
                 """
-                INSERT INTO opinion_clusters (
-                    cluster_id, docket_id, case_name, date_filed,
-                    precedential_status, citations, metadata
-                )
-                VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb)
-                ON CONFLICT (cluster_id) DO UPDATE
-                SET docket_id = EXCLUDED.docket_id,
-                    case_name = EXCLUDED.case_name,
-                    date_filed = EXCLUDED.date_filed,
-                    precedential_status = EXCLUDED.precedential_status,
-                    citations = EXCLUDED.citations,
-                    metadata = EXCLUDED.metadata
+                INSERT INTO authority_case_clusters
+                  (corpus_version, source_key, cluster_id, docket_id, case_name,
+                   date_filed, citations)
+                VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+                ON CONFLICT (corpus_version, cluster_id) DO UPDATE SET
+                  source_key=EXCLUDED.source_key,
+                  docket_id=EXCLUDED.docket_id,
+                  case_name=EXCLUDED.case_name,
+                  date_filed=EXCLUDED.date_filed,
+                  citations=EXCLUDED.citations
                 """,
                 [
+                    version,
+                    OHIO_SOURCE_KEY,
                     cluster_id,
                     docket_id,
                     cluster.get("case_name") or docket.get("case_name"),
                     cluster.get("date_filed") or docket.get("date_filed"),
-                    cluster.get("precedential_status"),
                     json.dumps(citations),
-                    json.dumps(cluster),
                 ],
             )
             cur.execute(
-                "SELECT content_hash FROM opinions WHERE opinion_id = %s",
-                [opinion_id],
+                """SELECT plain_text FROM authority_case_opinions
+                    WHERE corpus_version=%s AND opinion_id=%s""",
+                [version, opinion_id],
             )
             existing = cur.fetchone()
-            changed = existing is None or existing[0] != content_hash
+            changed = (
+                existing is None
+                or hashlib.sha256(str(existing[0] or "").encode("utf-8")).hexdigest()
+                != content_hash
+            )
             cur.execute(
                 """
-                INSERT INTO opinions (
-                    opinion_id, cluster_id, type, author_id, html_with_citations,
-                    plain_text, sha1, source_url, source_created_at,
-                    source_modified_at, content_hash, last_synced_at, metadata
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), %s::jsonb)
-                ON CONFLICT (opinion_id) DO UPDATE
-                SET cluster_id = EXCLUDED.cluster_id,
-                    type = EXCLUDED.type,
-                    author_id = EXCLUDED.author_id,
-                    html_with_citations = EXCLUDED.html_with_citations,
-                    plain_text = EXCLUDED.plain_text,
-                    sha1 = EXCLUDED.sha1,
-                    source_url = EXCLUDED.source_url,
-                    source_created_at = EXCLUDED.source_created_at,
-                    source_modified_at = EXCLUDED.source_modified_at,
-                    content_hash = EXCLUDED.content_hash,
-                    last_synced_at = now(),
-                    metadata = EXCLUDED.metadata,
-                    updated_at = now()
+                INSERT INTO authority_case_opinions
+                  (corpus_version, opinion_id, cluster_id, source_url, plain_text)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (corpus_version, opinion_id) DO UPDATE SET
+                  cluster_id=EXCLUDED.cluster_id,
+                  source_url=EXCLUDED.source_url,
+                  plain_text=EXCLUDED.plain_text
                 """,
                 [
+                    version,
                     opinion_id,
                     cluster_id,
-                    opinion.get("type"),
-                    resource_id(opinion.get("author") or opinion.get("author_id")),
-                    html_value or None,
-                    plain_value or None,
-                    opinion.get("sha1"),
                     source_url,
-                    opinion.get("date_created"),
-                    opinion.get("date_modified"),
-                    content_hash,
-                    json.dumps(opinion),
+                    searchable_text,
                 ],
             )
             chunks_created = 0
             if changed:
-                cur.execute("DELETE FROM opinion_chunks WHERE opinion_id = %s", [opinion_id])
+                cur.execute(
+                    """DELETE FROM authority_case_chunks
+                        WHERE corpus_version=%s AND opinion_id=%s""",
+                    [version, opinion_id],
+                )
                 for index, content in enumerate(chunk_text(searchable_text)):
                     cur.execute(
                         """
-                        INSERT INTO opinion_chunks (
-                            opinion_id, cluster_id, court_id, chunk_index, content,
-                            embedding, embedding_version
-                        )
-                        VALUES (%s, %s, %s, %s, %s, NULL, 0)
+                        INSERT INTO authority_case_chunks
+                          (corpus_version, opinion_id, cluster_id, court_id,
+                           chunk_index, content)
+                        VALUES (%s, %s, %s, %s, %s, %s)
                         """,
-                        [opinion_id, cluster_id, court_id, index, content],
+                        [version, opinion_id, cluster_id, court_id, index, content],
                     )
                     chunks_created += 1
         return 1, chunks_created
@@ -543,12 +562,11 @@ class PostgresSyncStore:
         with self.conn.cursor() as cur:
             cur.execute(
                 """
-                UPDATE source_sync_states
-                SET cursor_url = %s, rows_processed = rows_processed + %s,
-                    chunks_created = chunks_created + %s, updated_at = now()
-                WHERE source_key = %s AND partition_key = %s
+                UPDATE authority_harvest_checkpoints
+                SET cursor_url = %s, updated_at = now()
+                WHERE source_key = %s AND partition_key = %s AND corpus_version=%s
                 """,
-                [next_url, rows, chunks, OHIO_SOURCE_KEY, court_id],
+                [next_url, OHIO_SOURCE_KEY, court_id, self._version()],
             )
         self.conn.commit()
 
@@ -576,13 +594,13 @@ class PostgresSyncStore:
         with self.conn.cursor() as cur:
             cur.execute(
                 """
-                UPDATE source_sync_states
-                SET checkpoint_at = %s, cursor_url = NULL, status = 'idle',
-                    last_successful_sync_at = now(), last_error = NULL,
-                    rows_processed = 0, chunks_created = 0, updated_at = now()
-                WHERE source_key = %s AND partition_key = %s
+                UPDATE authority_harvest_checkpoints
+                SET cursor_url = NULL, status = 'complete',
+                    retry_count=0, next_retry_at=NULL, dead_letter_at=NULL,
+                    last_successful_harvest_at = %s, updated_at = now()
+                WHERE source_key = %s AND partition_key = %s AND corpus_version=%s
                 """,
-                [checkpoint_at, OHIO_SOURCE_KEY, court_id],
+                [checkpoint_at, OHIO_SOURCE_KEY, court_id, self._version()],
             )
             cur.execute(
                 """
@@ -593,37 +611,7 @@ class PostgresSyncStore:
                 """,
                 [rows, chunks, run_id],
             )
-            cur.execute(
-                """
-                UPDATE legal_sources
-                SET last_successful_sync_at = now(), coverage_end = (
-                        SELECT MAX(c.date_filed) FROM opinion_clusters c
-                        JOIN dockets d ON d.docket_id = c.docket_id
-                        JOIN courts ct ON ct.court_id = d.court_id
-                        WHERE ct.jurisdiction = 'OH'
-                    ),
-                    item_count = (
-                        SELECT COUNT(*) FROM opinions o
-                        JOIN opinion_clusters c ON c.cluster_id = o.cluster_id
-                        JOIN dockets d ON d.docket_id = c.docket_id
-                        JOIN courts ct ON ct.court_id = d.court_id
-                        WHERE ct.jurisdiction = 'OH'
-                    ),
-                    chunk_count = (
-                        SELECT COUNT(*) FROM opinion_chunks ch
-                        JOIN courts ct ON ct.court_id = ch.court_id
-                        WHERE ct.jurisdiction = 'OH'
-                    ),
-                    embedded_chunk_count = (
-                        SELECT COUNT(*) FROM opinion_chunks ch
-                        JOIN courts ct ON ct.court_id = ch.court_id
-                        WHERE ct.jurisdiction = 'OH' AND ch.embedding IS NOT NULL
-                    ),
-                    current_error = NULL, updated_at = now()
-                WHERE source_key = %s
-                """,
-                [OHIO_SOURCE_KEY],
-            )
+        materialize_citator_facts(self.conn, self._version())
         self.conn.commit()
 
     def fail_partition(self, court_id: str, run_id: Any, error: str) -> None:
@@ -635,11 +623,11 @@ class PostgresSyncStore:
         with self.conn.cursor() as cur:
             cur.execute(
                 """
-                UPDATE source_sync_states
-                SET status = 'failed', last_error = %s, updated_at = now()
-                WHERE source_key = %s AND partition_key = %s
+                UPDATE authority_harvest_checkpoints
+                SET status = 'failed', retry_count=retry_count+1, updated_at = now()
+                WHERE source_key = %s AND partition_key = %s AND corpus_version=%s
                 """,
-                [safe_error, OHIO_SOURCE_KEY, court_id],
+                [OHIO_SOURCE_KEY, court_id, self._version()],
             )
             cur.execute(
                 """
@@ -649,27 +637,21 @@ class PostgresSyncStore:
                 """,
                 [json.dumps([{"court_id": court_id, "error": safe_error}]), run_id],
             )
-            cur.execute(
-                """
-                UPDATE legal_sources
-                SET current_error = %s, updated_at = now()
-                WHERE source_key = %s
-                """,
-                [safe_error, OHIO_SOURCE_KEY],
-            )
         self.conn.commit()
 
     def unlock_partition(self, court_id: str) -> None:
         with self.conn.cursor() as cur:
             cur.execute(
                 "SELECT pg_advisory_unlock(hashtext(%s))",
-                [self._source_lock_key(court_id)],
+                [f"{self._source_lock_key(court_id)}:{self._version()}"],
             )
         self.conn.commit()
 
 
 class CourtListenerSyncer:
-    def __init__(self, client: CourtListenerClient, store: SyncStore, config: SyncConfig):
+    def __init__(
+        self, client: CourtListenerClient, store: SyncStore, config: SyncConfig
+    ):
         self.client = client
         self.store = store
         self.config = config
@@ -688,7 +670,11 @@ class CourtListenerSyncer:
         chunks = 0
         try:
             run_id = self.store.begin_run(court_id, self.config.baseline_start)
-            resume = state.get("cursor_url") if state.get("status") in {"running", "failed"} else None
+            resume = (
+                state.get("cursor_url")
+                if state.get("status") in {"running", "failed"}
+                else None
+            )
             url = resume or self.client.opinions_url(
                 court_id,
                 baseline_start=self.config.baseline_start,
@@ -712,7 +698,11 @@ class CourtListenerSyncer:
                 next_url = page.get("next")
                 self.store.record_page(court_id, next_url, page_rows, page_chunks)
                 pages += 1
-                if self.config.max_pages and pages >= self.config.max_pages and next_url:
+                if (
+                    self.config.max_pages
+                    and pages >= self.config.max_pages
+                    and next_url
+                ):
                     self.store.pause_run(run_id, rows, chunks)
                     return {
                         "court_id": court_id,
@@ -722,9 +712,7 @@ class CourtListenerSyncer:
                         "pages": pages,
                     }
                 url = next_url
-            self.store.finish_partition(
-                court_id, run_id, run_started, rows, chunks
-            )
+            self.store.finish_partition(court_id, run_id, run_started, rows, chunks)
             return {
                 "court_id": court_id,
                 "status": "completed",
@@ -792,7 +780,9 @@ def main() -> None:
         ),
         overlap_hours=env_config.overlap_hours,
         timeout_seconds=env_config.timeout_seconds,
-        max_pages=args.max_pages if args.max_pages is not None else env_config.max_pages,
+        max_pages=args.max_pages
+        if args.max_pages is not None
+        else env_config.max_pages,
         court_ids=tuple(args.court_ids or env_config.court_ids),
     )
     if args.once:

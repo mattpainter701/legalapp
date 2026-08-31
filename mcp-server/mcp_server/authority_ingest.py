@@ -26,7 +26,7 @@ from urllib.parse import urlparse
 import httpx
 
 from .database import connect
-from .loader import chunk_text, init_schema
+from .loader import chunk_text, init_schema, materialize_citator_facts
 from .public_lineage import public_authority_metadata, require_public_candidate_version
 from .source_catalog import load_catalog, seed_catalog
 
@@ -742,7 +742,11 @@ def preview(
 
 
 def sync_documents(
-    documents: list[dict[str, Any]], catalog: dict[str, Any], db_url: str | None
+    documents: list[dict[str, Any]],
+    catalog: dict[str, Any],
+    db_url: str | None,
+    *,
+    corpus_versions: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     init_schema(db_url)
     user_agent = os.getenv("LEGAL_SOURCE_USER_AGENT", DEFAULT_USER_AGENT)
@@ -753,6 +757,7 @@ def sync_documents(
             source_key: require_public_candidate_version(
                 conn,
                 source_key=source_key,
+                requested_version=(corpus_versions or {}).get(source_key),
                 error_message=(
                     "source requires a reviewed public-authority admission before sync"
                 ),
@@ -793,11 +798,11 @@ def sync_documents(
                     with conn.cursor() as cursor:
                         failure_text = str(exc)[:2000]
                         cursor.execute(
-                            "SELECT retry_count FROM source_sync_states WHERE source_key=%s AND partition_key=%s",
-                            [
-                                document["source_key"],
-                                f"manifest:{document['source_key']}",
-                            ],
+                            """SELECT retry_count
+                                 FROM authority_harvest_checkpoints
+                                WHERE source_key=%s AND partition_key=%s
+                                  AND corpus_version=%s""",
+                            [document["source_key"], partition_key, corpus_version],
                         )
                         retry_row = cursor.fetchone()
                         retry_count = int(retry_row[0] or 0) + 1 if retry_row else 1
@@ -915,6 +920,9 @@ def sync_documents(
                     time.sleep(
                         float(os.getenv("LEGAL_SOURCE_REQUEST_DELAY_SECONDS", "1"))
                     )
+        for corpus_version in sorted(set(candidate_versions.values())):
+            materialize_citator_facts(conn, corpus_version)
+        conn.commit()
     return results
 
 
@@ -929,24 +937,43 @@ def retry_due_documents(
     if limit < 1:
         raise ValueError("retry limit must be positive")
     init_schema(db_url)
-    due_sources: set[str] = set()
+    due_targets: list[tuple[str, str, str]] = []
     with connect(db_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT DISTINCT source_key
+                SELECT source_key, partition_key, corpus_version
                 FROM authority_harvest_checkpoints
                 WHERE status IN ('retryable_failure', 'retryable')
                   AND next_retry_at IS NOT NULL AND next_retry_at <= now()
-                ORDER BY source_key LIMIT %s
+                ORDER BY next_retry_at, source_key, partition_key, corpus_version
+                LIMIT %s
             """,
                 [limit],
             )
-            due_sources = {row[0] for row in cur.fetchall()}
-    if not due_sources:
+            due_targets = [
+                (str(row[0]), str(row[1]), str(row[2])) for row in cur.fetchall()
+            ]
+    if not due_targets:
         return []
-    selected = [d for d in documents if d.get("source_key") in due_sources][:limit]
-    return sync_documents(selected, catalog, db_url)
+    results: list[dict[str, Any]] = []
+    for source_key, partition_key, corpus_version in due_targets:
+        selected = [
+            document
+            for document in documents
+            if document.get("source_key") == source_key
+            and f"manifest:{source_key}" == partition_key
+        ]
+        if selected:
+            results.extend(
+                sync_documents(
+                    selected,
+                    catalog,
+                    db_url,
+                    corpus_versions={source_key: corpus_version},
+                )
+            )
+    return results[:limit]
 
 
 def main() -> None:

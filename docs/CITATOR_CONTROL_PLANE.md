@@ -14,8 +14,9 @@ and an active, reviewed entry in the citator's explicit public
 catalog/manifest admission list. Custom, tenant, firm, private-shaped,
 unreviewed, and prohibited source keys fail closed; a public URL or metadata
 on an arbitrary source row never establishes public-authority eligibility.
-This deliberately narrow citator gate does not claim to close the separate
-system-wide explicit-public namespace follow-up.
+The same exact source/manifest lineage is enforced by ingestion, serving,
+coverage, audit, treatment, watch, and alert paths; revoking either endpoint of
+a citation suppresses the edge and every derived assessment or alert.
 
 `authority_records`, `authority_history_facts`, and
 `authority_citation_facts` contain deterministic source facts. They preserve
@@ -23,6 +24,13 @@ direct/later history, amendment/repeal/status records where the permitted
 source provides them, citation depth, issue/context text, source links, spans
 or locators, source hashes, and observation timestamps. Promoted snapshot facts
 are immutable.
+
+Citator materialization is a candidate build step and accepts only a reviewed
+staged/canary release. The resulting records and facts are included in the
+release state digest before audits and promotion. Startup performs at most one
+bounded legacy conversion; it cannot append facts to a normal promoted release,
+and the unaudited legacy bootstrap remains suppressed until a separately
+reviewed successor is staged and promoted.
 
 `authority_treatment_assessments` is separate. It records an explicitly
 provisional machine interpretation, confidence, abstention, model/policy

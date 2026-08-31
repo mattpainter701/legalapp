@@ -23,7 +23,7 @@ separate COMP-05 work.
 
 ## Validation
 
-- Full local MCP suite: 183 passed, 6 skipped. The skips are the disposable
+- Full local MCP suite: 183 passed, 8 skipped. The skips are the disposable
   PostgreSQL rehearsals because this Windows host has no local PostgreSQL
   listener; all non-DB authority, citator, ingest, adapter, control-plane,
   embedding-safety, and contract tests ran.
