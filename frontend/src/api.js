@@ -146,6 +146,12 @@ export const isLongRunningPath = (url) => (
   typeof url === 'string' && LONG_REQUEST_PATTERNS.some((pattern) => pattern.test(url))
 )
 
+export const getSmsReviewItems = () => api.get('/sms/review').then(response => response.data)
+
+export const decideSmsReviewItem = (reviewItemId, decision) => (
+  api.post(`/sms/review/${reviewItemId}`, decision).then(response => response.data)
+)
+
 const api = axios.create({
   baseURL: BASE_URL,
   timeout: REQUEST_TIMEOUT_MS,

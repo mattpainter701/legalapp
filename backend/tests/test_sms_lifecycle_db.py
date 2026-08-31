@@ -18,7 +18,7 @@ from app.config import get_settings
 from app.database import set_tenant_context
 from app.models.communication_log import CommunicationLog
 from app.models.contact import Contact, Lead
-from app.models.conversion_loop import LeadChannelConsent
+from app.models.conversion_loop import LeadChannelConsent, SmsConsentEvent
 from app.models.demo_session import DemoSession
 from app.models.matter_party import MatterParty
 from app.models.operator_audit import OperatorAuditLog
@@ -32,8 +32,14 @@ from app.schemas.chat_action import SmsClientAction, ResolvedSmsRecipientBinding
 from app.services import sms as sms_service
 from app.services.demo_purge import purge_demo_tenant
 from app.services.demo_registry import DEMO_TABLE_REGISTRY, SENSITIVE_NEVER_CLONE
-from app.services.sms import SmsError, send_sms, twilio_signature
-from app.services.task_automation import _sms_bindings_are_current
+from app.services.sms import (
+    SmsError,
+    apply_compliance_keyword,
+    mark_stale_sms_dispatches_for_reconciliation,
+    send_sms,
+    twilio_signature,
+)
+from app.services.task_automation import _run_sms_client, _sms_bindings_are_current
 from app.services.token_vault import encrypt_token
 
 
@@ -84,7 +90,7 @@ async def _seed_lifecycle(
     user: User,
     suffix: str = "primary",
     phone: str = "+15551234567",
-    webhook_secret: str = "webhook-secret-primary",
+    auth_token: str | None = None,
     categories: list[str] | None = None,
 ):
     await set_tenant_context(db, str(tenant.id))
@@ -140,12 +146,12 @@ async def _seed_lifecycle(
         role="client",
         is_primary=True,
     )
+    provider_token = auth_token or f"auth-token-{suffix}"
     config = SmsProviderConfig(
         tenant_id=tenant.id,
         provider="twilio",
         account_sid=f"AC{suffix}",
-        encrypted_auth_token=encrypt_token(f"auth-token-{suffix}"),
-        encrypted_webhook_secret=encrypt_token(webhook_secret),
+        encrypted_auth_token=encrypt_token(provider_token),
         messaging_service_sid=f"MG{suffix}",
         sender_ready=True,
         is_active=True,
@@ -165,7 +171,7 @@ async def _seed_lifecycle(
         consent=consent,
         party=party,
         config=config,
-        webhook_secret=webhook_secret,
+        auth_token=provider_token,
     )
 
 
@@ -251,6 +257,16 @@ async def test_concurrent_idempotency_reserves_before_exactly_one_provider_call(
     }
     assert "auth-token" not in str(submitted.raw_provider_event)
 
+    seeded.consent.sms_allowed = False
+    seeded.consent.sms_status = "opted_out"
+    seeded.consent.sms_revoked_at = datetime.now(timezone.utc)
+    seeded.config.is_active = False
+    await db_session.commit()
+    replayed = await attempt()
+    assert replayed.id == submitted.id
+    assert replayed.status == "submitted"
+    assert len(provider.calls) == 1
+
     with pytest.raises(SmsError) as mismatch:
         await attempt(body="Different canonical request")
     assert mismatch.value.status_code == 409
@@ -314,17 +330,20 @@ async def test_signed_status_webhook_is_tenant_bound_and_never_regresses_truth(
         task_id=task.id,
         action_type="sms_client",
         idempotency_key="approved-sms-run",
-        status="submitted",
+        action_snapshot={
+            "type": "sms_client",
+            "idempotency_key": "sms-status-key",
+        },
+        status="sending",
         provider="twilio",
-        provider_message_id=message.provider_message_id,
-        delivery_certainty="provider_accepted",
+        delivery_certainty="outcome_unknown",
     )
     db_session.add(run)
     await db_session.commit()
 
     path = f"/api/sms/webhooks/{test_tenant.id}/status"
 
-    async def callback(status: str, *, signature_secret=seeded.webhook_secret):
+    async def callback(status: str, *, signature_secret=seeded.auth_token):
         params = {"MessageSid": "SM-STATUS", "MessageStatus": status}
         return await client.post(
             path,
@@ -348,6 +367,7 @@ async def test_signed_status_webhook_is_tenant_bound_and_never_regresses_truth(
     await db_session.refresh(run)
     assert run.status == "sent"
     assert run.delivery_certainty == "confirmed_sent"
+    assert run.sms_message_id == message.id
     await db_session.refresh(message)
     communication = await db_session.get(CommunicationLog, message.communication_log_id)
     assert communication.status == "delivered"
@@ -370,7 +390,7 @@ async def test_signed_status_webhook_is_tenant_bound_and_never_regresses_truth(
         SmsProviderConfig(
             tenant_id=other.id,
             provider="twilio",
-            encrypted_webhook_secret=encrypt_token("different-tenant-secret"),
+            encrypted_auth_token=encrypt_token("different-tenant-auth-token"),
         )
     )
     await db_session.commit()
@@ -379,7 +399,7 @@ async def test_signed_status_webhook_is_tenant_bound_and_never_regresses_truth(
         other_path,
         data=params,
         headers=_signed_headers(
-            path=other_path, params=params, secret=seeded.webhook_secret
+            path=other_path, params=params, secret=seeded.auth_token
         ),
     )
     assert cross_tenant.status_code == 401
@@ -394,6 +414,16 @@ async def test_stop_start_help_replay_and_ambiguous_inbound_review_queue(
     )
     path = f"/api/sms/webhooks/{test_tenant.id}/inbound"
 
+    second_matter = Matter(
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        slug=f"ambiguous-{uuid.uuid4().hex[:8]}",
+        matter_name="Second active matter",
+        client_contact_id=seeded.contact.id,
+    )
+    db_session.add(second_matter)
+    await db_session.commit()
+
     async def inbound(sid: str, body: str):
         params = {
             "MessageSid": sid,
@@ -404,18 +434,18 @@ async def test_stop_start_help_replay_and_ambiguous_inbound_review_queue(
         return await client.post(
             path,
             data=params,
-            headers=_signed_headers(
-                path=path, params=params, secret=seeded.webhook_secret
-            ),
+            headers=_signed_headers(path=path, params=params, secret=seeded.auth_token),
         )
 
     stopped = await inbound("SM-IN-STOP", "STOP")
     assert stopped.status_code == 200
+    assert stopped.json()["status"] == "review_required"
     assert (await inbound("SM-IN-STOP", "STOP")).json() == stopped.json()
     await db_session.refresh(seeded.consent)
     assert seeded.consent.sms_status == "opted_out"
     assert seeded.consent.sms_allowed is False
-    assert seeded.consent.revoked_at is not None
+    assert seeded.consent.sms_revoked_at is not None
+    assert seeded.consent.revoked_at is None
     with pytest.raises(SmsError) as opted_out:
         await send_sms(
             db_session,
@@ -429,6 +459,20 @@ async def test_stop_start_help_replay_and_ambiguous_inbound_review_queue(
         )
     assert opted_out.value.status_code == 403
 
+    seeded.consent.quiet_hours_start = "07:00"
+    seeded.consent.quiet_hours_end = "07:00"
+    await db_session.commit()
+    blocked_start = await inbound("SM-IN-START-BLOCKED", "START")
+    assert blocked_start.status_code == 200
+    await db_session.refresh(seeded.consent)
+    assert seeded.consent.sms_status == "blocked"
+    assert seeded.consent.sms_allowed is False
+    assert seeded.consent.sms_revoked_at is not None
+
+    seeded.consent.quiet_hours_start = "23:00"
+    seeded.consent.quiet_hours_end = "06:00"
+    await db_session.commit()
+
     started = await inbound("SM-IN-START", "START")
     assert started.status_code == 200
     await db_session.refresh(seeded.consent)
@@ -440,15 +484,6 @@ async def test_stop_start_help_replay_and_ambiguous_inbound_review_queue(
     await db_session.refresh(seeded.consent)
     assert seeded.consent.consented_at == restarted_at
 
-    second_matter = Matter(
-        tenant_id=test_tenant.id,
-        user_id=test_user.id,
-        slug=f"ambiguous-{uuid.uuid4().hex[:8]}",
-        matter_name="Second active matter",
-        client_contact_id=seeded.contact.id,
-    )
-    db_session.add(second_matter)
-    await db_session.commit()
     ambiguous = await inbound("SM-IN-REVIEW", "Can someone call me?")
     assert ambiguous.status_code == 200
     assert ambiguous.json()["status"] == "review_required"
@@ -468,6 +503,210 @@ async def test_stop_start_help_replay_and_ambiguous_inbound_review_queue(
         )
         == 1
     )
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(CommunicationLog)
+            .where(
+                CommunicationLog.tenant_id == test_tenant.id,
+                CommunicationLog.external_ref == "sms:SM-IN-STOP",
+            )
+        )
+        == 0
+    )
+    consent_events = list(
+        (
+            await db_session.scalars(
+                select(SmsConsentEvent).where(
+                    SmsConsentEvent.tenant_id == test_tenant.id,
+                    SmsConsentEvent.consent_id == seeded.consent.id,
+                )
+            )
+        ).all()
+    )
+    assert [event.action for event in consent_events] == [
+        "provider_stop",
+        "provider_start_blocked",
+        "provider_start",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stop_serializes_with_send_in_both_orders(
+    db_session, test_engine, test_tenant, test_user, monkeypatch
+):
+    seeded = await _seed_lifecycle(
+        db_session, tenant=test_tenant, user=test_user, suffix="stop-race"
+    )
+    maker = async_sessionmaker(test_engine, expire_on_commit=False)
+    provider_entered = asyncio.Event()
+    provider_release = asyncio.Event()
+
+    async def accepted(**_kwargs):
+        provider_entered.set()
+        await provider_release.wait()
+        return _Response(201, {"sid": "SM-STOP-RACE", "status": "queued"})
+
+    provider = _Provider(accepted)
+    _install_provider(monkeypatch, provider)
+
+    async with maker() as stop_db:
+        await set_tenant_context(stop_db, str(test_tenant.id))
+        evidence = await apply_compliance_keyword(
+            stop_db,
+            tenant_id=test_tenant.id,
+            from_number=seeded.contact.phone,
+            keyword="STOP",
+            provider_message_id="SM-STOP-FIRST",
+        )
+        assert evidence["applied"] is True
+
+        async def blocked_send():
+            async with maker() as send_db:
+                await set_tenant_context(send_db, str(test_tenant.id))
+                return await send_sms(
+                    send_db,
+                    tenant_id=test_tenant.id,
+                    user_id=test_user.id,
+                    contact_id=seeded.contact.id,
+                    matter_id=seeded.matter.id,
+                    body="STOP wins",
+                    category="appointment",
+                    idempotency_key="sms-stop-wins",
+                )
+
+        send_task = asyncio.create_task(blocked_send())
+        await asyncio.sleep(0.1)
+        assert not send_task.done()
+        await stop_db.commit()
+        with pytest.raises(SmsError, match="consent changed") as blocked:
+            await asyncio.wait_for(send_task, timeout=5)
+        assert blocked.value.status_code == 409
+    assert provider.calls == []
+
+    await set_tenant_context(db_session, str(test_tenant.id))
+    consent = await db_session.get(LeadChannelConsent, seeded.consent.id)
+    consent.sms_allowed = True
+    consent.sms_status = "active"
+    consent.sms_revoked_at = None
+    consent.revoked_at = None
+    consent.consented_at = datetime.now(timezone.utc)
+    seeded.contact.sms_opt_in = True
+    await db_session.commit()
+
+    async def winning_send():
+        async with maker() as send_db:
+            await set_tenant_context(send_db, str(test_tenant.id))
+            return await send_sms(
+                send_db,
+                tenant_id=test_tenant.id,
+                user_id=test_user.id,
+                contact_id=seeded.contact.id,
+                matter_id=seeded.matter.id,
+                body="Send wins",
+                category="appointment",
+                idempotency_key="sms-send-wins",
+            )
+
+    send_task = asyncio.create_task(winning_send())
+    await asyncio.wait_for(provider_entered.wait(), timeout=5)
+
+    async def waiting_stop():
+        async with maker() as stop_db:
+            await set_tenant_context(stop_db, str(test_tenant.id))
+            result = await apply_compliance_keyword(
+                stop_db,
+                tenant_id=test_tenant.id,
+                from_number=seeded.contact.phone,
+                keyword="STOP",
+                provider_message_id="SM-STOP-SECOND",
+            )
+            await stop_db.commit()
+            return result
+
+    stop_task = asyncio.create_task(waiting_stop())
+    await asyncio.sleep(0.1)
+    assert not stop_task.done()
+    provider_release.set()
+    submitted = await asyncio.wait_for(send_task, timeout=5)
+    assert submitted.status == "submitted"
+    assert (await asyncio.wait_for(stop_task, timeout=5))["applied"] is True
+    assert len(provider.calls) == 1
+    await db_session.refresh(consent)
+    assert consent.sms_allowed is False
+    assert consent.sms_revoked_at is not None
+
+
+@pytest.mark.asyncio
+async def test_stop_suppresses_duplicate_phone_identities_without_a_matter(
+    db_session, client, test_tenant, test_user
+):
+    seeded = await _seed_lifecycle(
+        db_session, tenant=test_tenant, user=test_user, suffix="duplicate-phone"
+    )
+    phone = "+15557654321"
+    contacts = []
+    consents = []
+    for index in range(2):
+        contact = Contact(
+            tenant_id=test_tenant.id,
+            first_name="Duplicate",
+            last_name=str(index),
+            phone=phone,
+        )
+        db_session.add(contact)
+        await db_session.flush()
+        lead = Lead(
+            tenant_id=test_tenant.id,
+            contact_id=contact.id,
+            status="qualified",
+            source="website",
+        )
+        db_session.add(lead)
+        await db_session.flush()
+        consent = LeadChannelConsent(
+            tenant_id=test_tenant.id,
+            lead_id=lead.id,
+            sms_allowed=True,
+            sms_status="active",
+            phone_verified=True,
+            mobile_e164=phone,
+            consented_at=datetime.now(timezone.utc),
+            consent_source="public_intake",
+            consent_timezone="America/Chicago",
+            quiet_hours_start="23:00",
+            quiet_hours_end="06:00",
+            allowed_categories=["appointment"],
+            disclosure_version="sms-v3",
+        )
+        db_session.add(consent)
+        contacts.append(contact)
+        consents.append(consent)
+    await db_session.commit()
+    path = f"/api/sms/webhooks/{test_tenant.id}/inbound"
+    params = {
+        "MessageSid": "SM-DUPLICATE-STOP",
+        "From": phone,
+        "To": "+15550001111",
+        "Body": "STOP",
+    }
+    response = await client.post(
+        path,
+        data=params,
+        headers=_signed_headers(path=path, params=params, secret=seeded.auth_token),
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "review_required"
+    for consent in consents:
+        await db_session.refresh(consent)
+        assert consent.sms_allowed is False
+        assert consent.sms_revoked_at is not None
+    review = await db_session.scalar(
+        select(SmsReviewItem).where(
+            SmsReviewItem.sms_message_id == uuid.UUID(response.json()["id"])
+        )
+    )
+    assert set(review.candidate_contact_ids) == {str(row.id) for row in contacts}
 
 
 @pytest.mark.asyncio
@@ -520,6 +759,7 @@ async def test_approval_recheck_rejects_category_and_multiple_lead_consent_confl
             consent_source="public_intake",
             disclosure_version="sms-v2",
             allowed_categories=["appointment"],
+            sms_revoked_at=datetime.now(timezone.utc),
             revoked_at=datetime.now(timezone.utc),
         )
     )
@@ -540,8 +780,84 @@ async def test_approval_recheck_rejects_category_and_multiple_lead_consent_confl
 
 
 @pytest.mark.asyncio
+async def test_staff_sms_revocation_is_channel_specific_and_reconsent_is_provenanced(
+    db_session, client, test_tenant, test_user
+):
+    seeded = await _seed_lifecycle(
+        db_session, tenant=test_tenant, user=test_user, suffix="staff-consent"
+    )
+    path = f"/api/intake/leads/{seeded.lead.id}/consent"
+    revoked = await client.post(
+        path,
+        json={
+            "email_allowed": True,
+            "sms_allowed": False,
+            "phone_verified": False,
+            "disclosure_version": "sms-v3",
+            "consent_source": "staff_recorded",
+        },
+    )
+    assert revoked.status_code == 200
+    await db_session.refresh(seeded.consent)
+    assert seeded.consent.email_allowed is True
+    assert seeded.consent.sms_allowed is False
+    assert seeded.consent.sms_revoked_at is not None
+    assert seeded.consent.revoked_at is None
+
+    reconsented = await client.post(
+        path,
+        json={
+            "email_allowed": True,
+            "sms_allowed": True,
+            "phone_verified": True,
+            "mobile_e164": seeded.contact.phone,
+            "disclosure_version": "sms-v4",
+            "consent_source": "signed_fee_agreement",
+            "consent_language": "en",
+            "consent_timezone": "America/Chicago",
+            "quiet_hours_start": "21:00",
+            "quiet_hours_end": "07:00",
+            "allowed_categories": ["appointment", "lead_follow_up"],
+            "consent_expires_at": (
+                datetime.now(timezone.utc) + timedelta(days=180)
+            ).isoformat(),
+        },
+    )
+    assert reconsented.status_code == 200
+    await db_session.refresh(seeded.consent)
+    assert seeded.consent.sms_status == "active"
+    assert seeded.consent.sms_revoked_at is None
+    assert seeded.consent.consent_source == "signed_fee_agreement"
+    assert seeded.consent.disclosure_version == "sms-v4"
+    events = list(
+        (
+            await db_session.scalars(
+                select(SmsConsentEvent)
+                .where(
+                    SmsConsentEvent.tenant_id == test_tenant.id,
+                    SmsConsentEvent.consent_id == seeded.consent.id,
+                )
+                .order_by(SmsConsentEvent.occurred_at, SmsConsentEvent.id)
+            )
+        ).all()
+    )
+    assert [event.action for event in events] == ["staff_revoke", "staff_grant"]
+    grant = events[-1]
+    assert grant.phone_verified is True
+    assert grant.consented_at == seeded.consent.consented_at
+    assert grant.consent_expires_at == seeded.consent.consent_expires_at
+    assert grant.consent_source == "signed_fee_agreement"
+    assert grant.disclosure_version == "sms-v4"
+    assert grant.consent_language == "en"
+    assert grant.consent_timezone == "America/Chicago"
+    assert grant.quiet_hours_start == "21:00"
+    assert grant.quiet_hours_end == "07:00"
+    assert grant.allowed_categories == ["appointment", "lead_follow_up"]
+
+
+@pytest.mark.asyncio
 async def test_provider_failures_are_durable_without_fake_delivery(
-    db_session, test_tenant, test_user, monkeypatch
+    db_session, client, test_tenant, test_user, monkeypatch
 ):
     seeded = await _seed_lifecycle(
         db_session, tenant=test_tenant, user=test_user, suffix="failure"
@@ -618,6 +934,19 @@ async def test_provider_failures_are_durable_without_fake_delivery(
         CommunicationLog, rejected_row.communication_log_id
     )
     assert rejected_log.status == "failed"
+    with pytest.raises(SmsError) as rejected_replay:
+        await send_sms(
+            db_session,
+            tenant_id=test_tenant.id,
+            user_id=test_user.id,
+            contact_id=seeded.contact.id,
+            matter_id=seeded.matter.id,
+            body="Provider rejects",
+            category="appointment",
+            idempotency_key="provider-rejected",
+        )
+    assert rejected_replay.value.delivery_certainty == "provider_rejected"
+    assert len(rejected_provider.calls) == 1
 
     async def uncertain(**_kwargs):
         raise TimeoutError("provider response lost")
@@ -636,10 +965,14 @@ async def test_provider_failures_are_durable_without_fake_delivery(
             idempotency_key="provider-unknown",
         )
     assert unknown.value.status_code == 503
+    assert unknown.value.delivery_certainty == "outcome_unknown"
+    assert unknown.value.reconciliation_required is True
     unknown_row = await db_session.scalar(
         select(SmsMessage).where(SmsMessage.idempotency_key == "provider-unknown")
     )
     assert unknown_row.status == "provider_unknown"
+    assert unknown.value.sms_message_id == unknown_row.id
+    assert unknown_row.reconciliation_required_at is not None
     unknown_log = await db_session.get(
         CommunicationLog, unknown_row.communication_log_id
     )
@@ -657,6 +990,334 @@ async def test_provider_failures_are_durable_without_fake_delivery(
         )
     assert replay.value.status_code == 409
     assert len(uncertain_provider.calls) == 1
+    api_replay = await client.post(
+        "/api/sms/send",
+        json={
+            "contact_id": str(seeded.contact.id),
+            "matter_id": str(seeded.matter.id),
+            "body": "Provider outcome unknown",
+            "category": "appointment",
+            "idempotency_key": "provider-unknown",
+        },
+    )
+    assert api_replay.status_code == 409
+    assert api_replay.json()["detail"] == {
+        "message": "Provider outcome is unknown; reconcile this SMS before retrying",
+        "delivery_certainty": "outcome_unknown",
+        "sms_message_id": str(unknown_row.id),
+        "reconciliation_required": True,
+    }
+    assert len(uncertain_provider.calls) == 1
+
+    reconciled = await client.post(
+        f"/api/sms/messages/{unknown_row.id}/reconcile",
+        json={"resolution": "confirmed_not_sent"},
+    )
+    assert reconciled.status_code == 200
+    assert reconciled.json()["status"] == "reconciled_not_sent"
+    await db_session.refresh(unknown_row)
+    assert unknown_row.reconciliation_resolved_at is not None
+    assert unknown_row.reconciliation_resolution == "confirmed_not_sent"
+    with pytest.raises(SmsError) as reconciled_replay:
+        await send_sms(
+            db_session,
+            tenant_id=test_tenant.id,
+            user_id=test_user.id,
+            contact_id=seeded.contact.id,
+            matter_id=seeded.matter.id,
+            body="Provider outcome unknown",
+            category="appointment",
+            idempotency_key="provider-unknown",
+        )
+    assert reconciled_replay.value.delivery_certainty == "confirmed_not_sent"
+    assert reconciled_replay.value.reconciliation_required is False
+    assert len(uncertain_provider.calls) == 1
+    audit = await db_session.scalar(
+        select(OperatorAuditLog).where(
+            OperatorAuditLog.action == "sms.dispatch.reconciled",
+            OperatorAuditLog.resource_id == str(unknown_row.id),
+        )
+    )
+    assert audit.metadata_json["tenant_id"] == str(test_tenant.id)
+
+
+@pytest.mark.asyncio
+async def test_provider_config_is_revalidated_under_the_dispatch_lock(
+    db_session, test_tenant, test_user, monkeypatch
+):
+    seeded = await _seed_lifecycle(
+        db_session, tenant=test_tenant, user=test_user, suffix="config-race"
+    )
+
+    async def accepted(**_kwargs):
+        return _Response(201, {"sid": "SM-CONFIG-RACE", "status": "queued"})
+
+    provider = _Provider(accepted)
+    _install_provider(monkeypatch, provider)
+    original_config = sms_service._config
+    checks = 0
+
+    async def deactivate_before_locked_recheck(db, tenant_id, *, lock=False):
+        nonlocal checks
+        checks += 1
+        if lock:
+            config = await db.scalar(
+                select(SmsProviderConfig).where(
+                    SmsProviderConfig.tenant_id == tenant_id,
+                    SmsProviderConfig.provider == "twilio",
+                )
+            )
+            config.is_active = False
+            await db.flush()
+        return await original_config(db, tenant_id, lock=lock)
+
+    monkeypatch.setattr(sms_service, "_config", deactivate_before_locked_recheck)
+    with pytest.raises(SmsError) as blocked:
+        await send_sms(
+            db_session,
+            tenant_id=test_tenant.id,
+            user_id=test_user.id,
+            contact_id=seeded.contact.id,
+            matter_id=seeded.matter.id,
+            body="Do not submit after provider deactivation",
+            category="appointment",
+            idempotency_key="provider-config-race",
+        )
+    assert checks == 2
+    assert blocked.value.delivery_certainty == "not_attempted"
+    row = await db_session.scalar(
+        select(SmsMessage).where(SmsMessage.idempotency_key == "provider-config-race")
+    )
+    assert row.status == "blocked_provider_config"
+    assert row.provider_message_id is None
+    assert provider.calls == []
+
+
+@pytest.mark.asyncio
+async def test_task_automation_retains_unknown_sms_identity_for_reconciliation(
+    db_session, test_tenant, test_user, monkeypatch
+):
+    seeded = await _seed_lifecycle(
+        db_session, tenant=test_tenant, user=test_user, suffix="automation-unknown"
+    )
+    task = Task(
+        tenant_id=test_tenant.id,
+        title="Review unknown SMS",
+        matter_id=seeded.matter.id,
+        contact_id=seeded.contact.id,
+        status="in_progress",
+        source="assistant",
+        created_by_user_id=test_user.id,
+    )
+    db_session.add(task)
+    await db_session.commit()
+    action = SmsClientAction(
+        type="sms_client",
+        recipient_bindings=[
+            ResolvedSmsRecipientBinding(
+                party_id=seeded.party.id,
+                contact_id=seeded.contact.id,
+                phone=seeded.contact.phone,
+            )
+        ],
+        body="Provider response may be lost",
+        category="appointment",
+        matter_id=seeded.matter.id,
+        idempotency_key="automation-unknown-sms",
+    )
+
+    async def uncertain(**_kwargs):
+        raise TimeoutError("provider response lost")
+
+    provider = _Provider(uncertain)
+    _install_provider(monkeypatch, provider)
+    result = await _run_sms_client(
+        db_session,
+        task,
+        action.model_dump(mode="json"),
+        test_user.id,
+    )
+    assert result.succeeded is False
+    assert result.delivery_certainty == "outcome_unknown"
+    assert result.reconciliation_required is True
+    assert result.sms_message_id is not None
+    await set_tenant_context(db_session, str(test_tenant.id))
+    row = await db_session.get(SmsMessage, result.sms_message_id)
+    assert row.status == "provider_unknown"
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_stale_dispatch_lease_becomes_reconciliation_work_without_resend(
+    db_session, test_tenant, test_user, monkeypatch
+):
+    seeded = await _seed_lifecycle(
+        db_session, tenant=test_tenant, user=test_user, suffix="stale-lease"
+    )
+    provider = _Provider(lambda **_kwargs: pytest.fail("provider must not be called"))
+    _install_provider(monkeypatch, provider)
+    stale = SmsMessage(
+        tenant_id=test_tenant.id,
+        contact_id=seeded.contact.id,
+        matter_id=seeded.matter.id,
+        idempotency_key="stale-dispatch-lease",
+        request_digest="d" * 64,
+        direction="outbound",
+        status="dispatching",
+        dispatch_attempt_id=uuid.uuid4(),
+        dispatch_started_at=datetime.now(timezone.utc) - timedelta(minutes=3),
+        to_number=seeded.contact.phone,
+        body="Possibly submitted before a worker crash",
+        category="appointment",
+        created_by_user_id=test_user.id,
+    )
+    db_session.add(stale)
+    await db_session.commit()
+    assert await mark_stale_sms_dispatches_for_reconciliation() >= 1
+    await set_tenant_context(db_session, str(test_tenant.id))
+    await db_session.refresh(stale)
+    assert stale.status == "provider_unknown"
+    assert stale.reconciliation_required_at is not None
+    assert provider.calls == []
+
+
+@pytest.mark.asyncio
+async def test_authorized_review_resolution_controls_timeline_and_audit(
+    db_session, client, test_tenant, test_user
+):
+    seeded = await _seed_lifecycle(
+        db_session, tenant=test_tenant, user=test_user, suffix="review-resolution"
+    )
+    second = Matter(
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        slug=f"review-second-{uuid.uuid4().hex[:8]}",
+        matter_name="Second route candidate",
+        client_contact_id=seeded.contact.id,
+    )
+    db_session.add(second)
+    await db_session.commit()
+    path = f"/api/sms/webhooks/{test_tenant.id}/inbound"
+    params = {
+        "MessageSid": "SM-REVIEW-RESOLVE",
+        "From": seeded.contact.phone,
+        "To": "+15550001111",
+        "Body": "Please call about the appointment",
+    }
+    inbound = await client.post(
+        path,
+        data=params,
+        headers=_signed_headers(path=path, params=params, secret=seeded.auth_token),
+    )
+    assert inbound.status_code == 200
+    message_id = uuid.UUID(inbound.json()["id"])
+    message = await db_session.get(SmsMessage, message_id)
+    assert message.communication_log_id is None
+
+    reviews = await client.get("/api/sms/review")
+    assert reviews.status_code == 200
+    review = next(
+        row for row in reviews.json() if row["sms_message_id"] == str(message_id)
+    )
+    assert review["body"] == "Please call about the appointment"
+    resolved = await client.post(
+        f"/api/sms/review/{review['id']}",
+        json={
+            "decision": "resolve",
+            "contact_id": str(seeded.contact.id),
+            "matter_id": str(seeded.matter.id),
+        },
+    )
+    assert resolved.status_code == 200
+    assert resolved.json()["status"] == "resolved"
+    await db_session.refresh(message)
+    assert message.status == "received"
+    assert message.communication_log_id is not None
+    communication = await db_session.get(CommunicationLog, message.communication_log_id)
+    assert communication.matter_id == seeded.matter.id
+    audit = await db_session.scalar(
+        select(OperatorAuditLog).where(
+            OperatorAuditLog.action == "sms.inbound_route.resolve",
+            OperatorAuditLog.resource_id == review["id"],
+        )
+    )
+    assert audit.metadata_json["tenant_id"] == str(test_tenant.id)
+    assert "body" not in audit.metadata_json
+
+
+@pytest.mark.asyncio
+async def test_duplicate_phone_review_includes_resolvable_matter_candidates(
+    db_session, client, test_tenant, test_user
+):
+    seeded = await _seed_lifecycle(
+        db_session, tenant=test_tenant, user=test_user, suffix="duplicate-route"
+    )
+    duplicate = Contact(
+        tenant_id=test_tenant.id,
+        first_name="Duplicate",
+        last_name="Route",
+        phone=seeded.contact.phone,
+        created_by_user_id=test_user.id,
+    )
+    db_session.add(duplicate)
+    await db_session.flush()
+    duplicate_lead = Lead(
+        tenant_id=test_tenant.id,
+        contact_id=duplicate.id,
+        status="qualified",
+        source="website",
+        created_by_user_id=test_user.id,
+    )
+    duplicate_matter = Matter(
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        slug=f"duplicate-route-{uuid.uuid4().hex[:8]}",
+        matter_name="Duplicate phone route",
+        client_contact_id=duplicate.id,
+    )
+    db_session.add_all([duplicate_lead, duplicate_matter])
+    await db_session.commit()
+
+    path = f"/api/sms/webhooks/{test_tenant.id}/inbound"
+    params = {
+        "MessageSid": "SM-DUPLICATE-ROUTE",
+        "From": seeded.contact.phone,
+        "To": "+15550001111",
+        "Body": "Please attach this to the right matter",
+    }
+    inbound = await client.post(
+        path,
+        data=params,
+        headers=_signed_headers(path=path, params=params, secret=seeded.auth_token),
+    )
+    assert inbound.status_code == 200
+    assert inbound.json()["status"] == "review_required"
+    reviews = await client.get("/api/sms/review")
+    review = next(
+        row for row in reviews.json() if row["sms_message_id"] == inbound.json()["id"]
+    )
+    assert set(review["candidate_contact_ids"]) == {
+        str(seeded.contact.id),
+        str(duplicate.id),
+    }
+    assert set(review["candidate_matter_ids"]) == {
+        str(seeded.matter.id),
+        str(duplicate_matter.id),
+    }
+    resolved = await client.post(
+        f"/api/sms/review/{review['id']}",
+        json={
+            "decision": "resolve",
+            "contact_id": str(duplicate.id),
+            "matter_id": str(duplicate_matter.id),
+        },
+    )
+    assert resolved.status_code == 200
+    message = await db_session.get(SmsMessage, uuid.UUID(inbound.json()["id"]))
+    await db_session.refresh(message)
+    communication = await db_session.get(CommunicationLog, message.communication_log_id)
+    assert communication.contact_id == duplicate.id
+    assert communication.matter_id == duplicate_matter.id
 
 
 @pytest.mark.asyncio
@@ -689,6 +1350,35 @@ async def test_composite_fk_and_runtime_rls_reject_cross_tenant_sms_links(
     )
 
     await set_tenant_context(db_session, str(test_tenant.id))
+    evidence = SmsConsentEvent(
+        tenant_id=test_tenant.id,
+        consent_id=primary.consent.id,
+        lead_id=primary.lead.id,
+        contact_id=primary.contact.id,
+        action="staff_grant",
+        sms_status="active",
+        sms_allowed=True,
+        phone_verified=True,
+        mobile_e164=primary.contact.phone,
+        consent_source="public_intake",
+        disclosure_version="sms-v3",
+        allowed_categories=["appointment"],
+        actor_type="tenant_user",
+        actor_user_id=test_user.id,
+    )
+    db_session.add(evidence)
+    await db_session.commit()
+    with pytest.raises(Exception, match="SMS consent evidence is immutable"):
+        await db_session.execute(
+            text(
+                "UPDATE sms_consent_events SET action='tampered' " "WHERE id=:event_id"
+            ),
+            {"event_id": str(evidence.id)},
+        )
+        await db_session.flush()
+    await db_session.rollback()
+
+    await set_tenant_context(db_session, str(test_tenant.id))
     db_session.add(
         SmsMessage(
             tenant_id=test_tenant.id,
@@ -699,6 +1389,18 @@ async def test_composite_fk_and_runtime_rls_reject_cross_tenant_sms_links(
             direction="outbound",
             body="Must fail",
             category="appointment",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
+    await db_session.rollback()
+
+    await set_tenant_context(db_session, str(test_tenant.id))
+    db_session.add(
+        LeadChannelConsent(
+            tenant_id=test_tenant.id,
+            lead_id=other.lead.id,
+            disclosure_version="cross-tenant",
         )
     )
     with pytest.raises(IntegrityError):
@@ -727,6 +1429,12 @@ async def test_composite_fk_and_runtime_rls_reject_cross_tenant_sms_links(
                 )
                 == 1
             )
+            assert (
+                await runtime_db.scalar(
+                    select(func.count()).select_from(SmsConsentEvent)
+                )
+                == 1
+            )
             await runtime_db.rollback()
             await set_tenant_context(runtime_db, str(other_tenant.id))
             assert (
@@ -734,6 +1442,12 @@ async def test_composite_fk_and_runtime_rls_reject_cross_tenant_sms_links(
                     select(func.count()).select_from(SmsProviderConfig)
                 )
                 == 1
+            )
+            assert (
+                await runtime_db.scalar(
+                    select(func.count()).select_from(SmsConsentEvent)
+                )
+                == 0
             )
             with pytest.raises(Exception, match="row-level security"):
                 await runtime_db.execute(
@@ -757,7 +1471,12 @@ async def test_expired_demo_purge_removes_sms_secrets_content_and_review_but_kee
 ):
     from app.services import demo_purge
 
-    sms_tables = {"sms_provider_configs", "sms_messages", "sms_review_items"}
+    sms_tables = {
+        "sms_provider_configs",
+        "sms_messages",
+        "sms_review_items",
+        "sms_consent_events",
+    }
     assert sms_tables <= SENSITIVE_NEVER_CLONE
     assert all(not DEMO_TABLE_REGISTRY[name].clone for name in sms_tables)
     monkeypatch.setattr(demo_purge.get_settings(), "UPLOAD_DIR", str(tmp_path))
@@ -790,7 +1509,6 @@ async def test_expired_demo_purge_removes_sms_secrets_content_and_review_but_kee
         provider="twilio",
         account_sid="AC-DEMO-SECRET",
         encrypted_auth_token=encrypt_token("demo-auth-token"),
-        encrypted_webhook_secret=encrypt_token("demo-webhook-secret"),
         messaging_service_sid="MG-DEMO",
         sender_ready=True,
         is_active=True,
@@ -809,6 +1527,43 @@ async def test_expired_demo_purge_removes_sms_secrets_content_and_review_but_kee
     )
     db_session.add_all([session, config, message])
     await db_session.flush()
+    contact = Contact(
+        tenant_id=demo.id,
+        first_name="Disposable",
+        last_name="Prospect",
+        phone="+15557770000",
+    )
+    db_session.add(contact)
+    await db_session.flush()
+    lead = Lead(tenant_id=demo.id, contact_id=contact.id, status="qualified")
+    db_session.add(lead)
+    await db_session.flush()
+    consent = LeadChannelConsent(
+        tenant_id=demo.id,
+        lead_id=lead.id,
+        sms_allowed=False,
+        sms_status="opted_out",
+        mobile_e164=contact.phone,
+        sms_revoked_at=datetime.now(timezone.utc),
+        disclosure_version="sms-v3",
+    )
+    db_session.add(consent)
+    await db_session.flush()
+    db_session.add(
+        SmsConsentEvent(
+            tenant_id=demo.id,
+            consent_id=consent.id,
+            lead_id=lead.id,
+            contact_id=contact.id,
+            action="provider_stop",
+            sms_status="opted_out",
+            sms_allowed=False,
+            phone_verified=False,
+            mobile_e164=contact.phone,
+            disclosure_version="sms-v3",
+            actor_type="provider_customer",
+        )
+    )
     db_session.add(
         SmsReviewItem(
             tenant_id=demo.id,
@@ -824,6 +1579,7 @@ async def test_expired_demo_purge_removes_sms_secrets_content_and_review_but_kee
         "sms_provider_configs": 1,
         "sms_messages": 1,
         "sms_review_items": 1,
+        "sms_consent_events": 1,
     }
     for table in sms_tables:
         assert (
@@ -855,7 +1611,6 @@ async def test_admin_config_response_never_returns_provider_credentials(
         json={
             "account_sid": "AC-ROTATED",
             "auth_token": "rotated-auth-token",
-            "webhook_secret": "rotated-webhook-secret",
             "messaging_service_sid": "MG-ROTATED",
             "sender_ready": True,
             "is_active": True,
@@ -870,12 +1625,9 @@ async def test_admin_config_response_never_returns_provider_credentials(
     payload = response.json()
     serialized = response.text
     assert "auth_token" not in payload
-    assert "webhook_secret" not in payload
     assert "encrypted_" not in serialized
     assert "auth-token-credential-response" not in serialized
-    assert "webhook-secret-primary" not in serialized
     assert "rotated-auth-token" not in serialized
-    assert "rotated-webhook-secret" not in serialized
     audit = await db_session.scalar(
         select(OperatorAuditLog).where(
             OperatorAuditLog.action == "sms.provider_config.updated"
@@ -947,6 +1699,17 @@ async def test_custom_role_capability_controls_staff_sms_send(
     )
     assert forbidden.status_code == 403
     assert len(provider.calls) == 0
+    consent_forbidden = await client.post(
+        f"/api/intake/leads/{seeded.lead.id}/consent",
+        json={
+            "email_allowed": True,
+            "sms_allowed": False,
+            "phone_verified": False,
+            "disclosure_version": "sms-v3",
+        },
+        headers={"Authorization": f"Bearer {_user_token(allowed)}"},
+    )
+    assert consent_forbidden.status_code == 403
     permitted = await client.post(
         "/api/sms/send",
         json=payload,
@@ -955,3 +1718,13 @@ async def test_custom_role_capability_controls_staff_sms_send(
     assert permitted.status_code == 200
     assert permitted.json()["status"] == "submitted"
     assert len(provider.calls) == 1
+    send_audit = await db_session.scalar(
+        select(OperatorAuditLog).where(
+            OperatorAuditLog.action == "sms.send.submitted",
+            OperatorAuditLog.resource_id == permitted.json()["id"],
+        )
+    )
+    assert send_audit.metadata_json["tenant_id"] == str(test_tenant.id)
+    assert send_audit.metadata_json["category"] == "appointment"
+    assert "body" not in send_audit.metadata_json
+    assert "phone" not in send_audit.metadata_json

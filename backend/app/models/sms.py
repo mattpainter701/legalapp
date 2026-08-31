@@ -15,6 +15,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -50,7 +51,6 @@ class SmsProviderConfig(Base):
     )
     account_sid: Mapped[str | None] = mapped_column(String(100), nullable=True)
     encrypted_auth_token: Mapped[str | None] = mapped_column(Text, nullable=True)
-    encrypted_webhook_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
     messaging_service_sid: Mapped[str | None] = mapped_column(
         String(100), nullable=True
     )
@@ -112,10 +112,23 @@ class SmsMessage(Base):
             ["users.tenant_id", "users.id"],
             name="fk_sms_messages_tenant_user",
         ),
+        ForeignKeyConstraint(
+            ["tenant_id", "reconciliation_resolved_by_user_id"],
+            ["users.tenant_id", "users.id"],
+            name="fk_sms_messages_tenant_reconciler",
+        ),
         Index(
             "idx_sms_messages_tenant_contact", "tenant_id", "contact_id", "created_at"
         ),
         Index("idx_sms_messages_tenant_matter", "tenant_id", "matter_id", "created_at"),
+        Index(
+            "idx_sms_messages_reconciliation",
+            "status",
+            "dispatch_started_at",
+            postgresql_where=text(
+                "status IN ('dispatching', 'provider_unknown') AND direction = 'outbound'"
+            ),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -143,6 +156,24 @@ class SmsMessage(Base):
     idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
     request_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     provider_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    dispatch_attempt_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    dispatch_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    reconciliation_required_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    reconciliation_resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    reconciliation_resolution: Mapped[str | None] = mapped_column(
+        String(40), nullable=True
+    )
+    reconciliation_resolved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     direction: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(
         String(40), nullable=False, default="queued", server_default="queued"

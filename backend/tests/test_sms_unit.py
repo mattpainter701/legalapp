@@ -4,19 +4,28 @@ from uuid import uuid4
 
 import pytest
 
+from app.models.conversion_loop import LeadChannelConsent, SmsConsentEvent
 from app.models.sms import SmsMessage, SmsProviderConfig, SmsReviewItem
+from app.models.task import TaskAutomationRun
+from app.schemas.chat_action import (
+    ProposeClientSmsArgs,
+    ResolvedSmsRecipientBinding,
+    SmsClientAction,
+    SourceDocumentBinding,
+)
+from app.schemas.conversion_loop import ConsentUpdate, IntakeSubmissionCreate
+from app.schemas.sms import SmsProviderConfigUpdate
+from app.services.automation_capabilities import capability_catalog
 from app.services.sms import (
     consent_authorizes_sms,
     in_quiet_hours,
     normalize_e164,
     provider_status_transition_allowed,
+    quiet_hours_configuration_valid,
     twilio_signature,
     verify_twilio_signature,
 )
 from app.services.sms import _request_digest
-from app.schemas.chat_action import SmsClientAction, ResolvedSmsRecipientBinding
-from app.schemas.conversion_loop import ConsentUpdate, IntakeSubmissionCreate
-from app.schemas.sms import SmsProviderConfigUpdate
 
 
 def test_sms_destination_normalizes_only_e164_compatible_numbers():
@@ -69,6 +78,12 @@ def test_quiet_hours_supports_overnight_window_and_invalid_timezone_fails_closed
     assert in_quiet_hours(
         consent=consent, now=datetime(2026, 9, 1, 16, 0, tzinfo=timezone.utc)
     )
+    assert not quiet_hours_configuration_valid(consent)
+    consent.consent_timezone = "America/Chicago"
+    consent.quiet_hours_start = "25:00"
+    assert in_quiet_hours(
+        consent=consent, now=datetime(2026, 9, 1, 16, 0, tzinfo=timezone.utc)
+    )
 
 
 def test_sms_provider_activation_requires_explicit_compliance_evidence():
@@ -76,14 +91,12 @@ def test_sms_provider_activation_requires_explicit_compliance_evidence():
         SmsProviderConfigUpdate(
             account_sid="AC123",
             auth_token="auth-token",
-            webhook_secret="webhook-secret",
             sender_ready=True,
             compliance_snapshot={},
         )
     config = SmsProviderConfigUpdate(
         account_sid="AC123",
         auth_token="auth-token",
-        webhook_secret="webhook-secret",
         messaging_service_sid="MG123",
         sender_ready=True,
         is_active=True,
@@ -94,6 +107,32 @@ def test_sms_provider_activation_requires_explicit_compliance_evidence():
         },
     )
     assert config.is_active
+    with pytest.raises(ValueError, match="compliance evidence"):
+        SmsProviderConfigUpdate(
+            account_sid="AC123",
+            auth_token="auth-token",
+            messaging_service_sid="MG123",
+            is_active=True,
+            sender_ready=True,
+            compliance_snapshot={
+                "ownership_model": "firm-owned",
+                "consent_policy": "   ",
+                "quiet_hours_policy": "recipient-timezone",
+            },
+        )
+    with pytest.raises(ValueError, match="ready sender"):
+        SmsProviderConfigUpdate(
+            account_sid="AC123",
+            auth_token="auth-token",
+            messaging_service_sid="MG123",
+            is_active=True,
+            sender_ready=False,
+            compliance_snapshot={
+                "ownership_model": "firm-owned",
+                "consent_policy": "documented-opt-in",
+                "quiet_hours_policy": "recipient-timezone",
+            },
+        )
 
 
 def test_sms_action_is_phone_bound_and_reviewable():
@@ -114,15 +153,62 @@ def test_sms_action_is_phone_bound_and_reviewable():
         ResolvedSmsRecipientBinding(
             party_id=party_id, contact_id=uuid4(), phone="555-1234"
         )
+    with pytest.raises(ValueError, match="at most 1 item"):
+        ProposeClientSmsArgs(
+            matter_id=uuid4(),
+            recipient_party_ids=[uuid4(), uuid4()],
+            title="Unsafe multi-recipient SMS",
+            body="One review must bind one recipient.",
+        )
+    sms_tool = next(
+        tool for tool in capability_catalog() if tool["name"] == "propose_client_sms"
+    )
+    assert (
+        sms_tool["input_schema"]["properties"]["recipient_party_ids"]["maxItems"] == 1
+    )
+
+
+def test_sms_action_binds_every_local_source_to_exact_bytes():
+    document_id = uuid4()
+    action = SmsClientAction(
+        type="sms_client",
+        recipient_bindings=[
+            ResolvedSmsRecipientBinding(
+                party_id=uuid4(), contact_id=uuid4(), phone="+15551234567"
+            )
+        ],
+        body="Source-bound update",
+        matter_id=uuid4(),
+        source_document_ids=[document_id],
+        source_document_bindings=[
+            SourceDocumentBinding(document_id=document_id, sha256="a" * 64)
+        ],
+        sources=[{"source_id": "document:1", "label": "Exact source"}],
+        idempotency_key="chat-sms-source-123",
+    )
+    assert action.source_document_bindings[0].sha256 == "a" * 64
+    with pytest.raises(ValueError, match="exact content binding"):
+        SmsClientAction(
+            type="sms_client",
+            recipient_bindings=action.recipient_bindings,
+            body=action.body,
+            matter_id=action.matter_id,
+            source_document_ids=[document_id],
+            source_document_bindings=[],
+            idempotency_key="chat-sms-source-456",
+        )
 
 
 def test_sms_records_have_tenant_composite_referential_guards():
     constraints = {
         constraint.name
         for table in (
+            LeadChannelConsent.__table__,
+            SmsConsentEvent.__table__,
             SmsProviderConfig.__table__,
             SmsMessage.__table__,
             SmsReviewItem.__table__,
+            TaskAutomationRun.__table__,
         )
         for constraint in table.foreign_key_constraints
     }
@@ -132,8 +218,15 @@ def test_sms_records_have_tenant_composite_referential_guards():
         "fk_sms_messages_tenant_matter",
         "fk_sms_messages_tenant_communication",
         "fk_sms_messages_tenant_user",
+        "fk_sms_messages_tenant_reconciler",
         "fk_sms_review_items_tenant_message",
         "fk_sms_review_items_tenant_user",
+        "fk_lead_channel_consents_tenant_lead",
+        "fk_sms_consent_events_tenant_consent",
+        "fk_sms_consent_events_tenant_lead",
+        "fk_sms_consent_events_tenant_contact",
+        "fk_sms_consent_events_tenant_user",
+        "fk_task_automation_runs_tenant_sms_message",
     } <= constraints
 
 
@@ -156,6 +249,7 @@ def _active_consent(**overrides):
         "phone_verified": True,
         "mobile_e164": "+15551234567",
         "revoked_at": None,
+        "sms_revoked_at": None,
         "consented_at": datetime.now(timezone.utc) - timedelta(minutes=5),
         "consent_expires_at": datetime.now(timezone.utc) + timedelta(days=30),
         "consent_source": "public_intake",
@@ -177,6 +271,7 @@ def test_sms_consent_requires_provenance_expiry_and_explicit_category_grant():
         {"consent_source": None},
         {"disclosure_version": None},
         {"revoked_at": datetime.now(timezone.utc)},
+        {"sms_revoked_at": datetime.now(timezone.utc)},
         {"consent_expires_at": datetime.now(timezone.utc) - timedelta(seconds=1)},
         {"allowed_categories": []},
         {"allowed_categories": ["billing"]},
@@ -219,6 +314,9 @@ def test_active_sms_consent_contract_requires_disclosure_mobile_and_categories()
             mobile_e164="+15551234567",
             disclosure_version="sms-v3",
             allowed_categories=[],
+            consent_timezone="America/Chicago",
+            quiet_hours_start="21:00",
+            quiet_hours_end="08:00",
         )
     consent = ConsentUpdate(
         sms_allowed=True,
@@ -226,7 +324,30 @@ def test_active_sms_consent_contract_requires_disclosure_mobile_and_categories()
         mobile_e164="+15551234567",
         disclosure_version="sms-v3",
         allowed_categories=[" appointment ", "appointment", "lead_follow_up"],
+        consent_timezone="America/Chicago",
         quiet_hours_start="21:00",
         quiet_hours_end="07:00",
     )
     assert consent.allowed_categories == ["appointment", "lead_follow_up"]
+    with pytest.raises(ValueError, match="HH:MM"):
+        ConsentUpdate(
+            sms_allowed=True,
+            phone_verified=True,
+            mobile_e164="+15551234567",
+            disclosure_version="sms-v3",
+            allowed_categories=["appointment"],
+            consent_timezone="America/Chicago",
+            quiet_hours_start="9pm",
+            quiet_hours_end="07:00",
+        )
+    with pytest.raises(ValueError, match="must be different"):
+        ConsentUpdate(
+            sms_allowed=True,
+            phone_verified=True,
+            mobile_e164="+15551234567",
+            disclosure_version="sms-v3",
+            allowed_categories=["appointment"],
+            consent_timezone="America/Chicago",
+            quiet_hours_start="07:00",
+            quiet_hours_end="07:00",
+        )

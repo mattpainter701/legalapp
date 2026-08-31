@@ -144,11 +144,23 @@ async def _ensure_unique_client_number(
 
 
 def _apply_sms_consent(contact: Contact, sms_opt_in: bool) -> None:
-    if sms_opt_in and not contact.sms_opt_in:
-        contact.sms_opt_in_at = datetime.now(timezone.utc)
-    elif not sms_opt_in:
-        contact.sms_opt_in_at = None
-    contact.sms_opt_in = sms_opt_in
+    """Keep the legacy contact flag non-authoritative and fail closed on grants.
+
+    Active SMS permission requires a lead-bound consent event with disclosure,
+    category, verification, expiry, and quiet-hours provenance. Client CRUD has
+    none of that evidence, so it may clear the compatibility flag but can never
+    grant delivery authority.
+    """
+    if sms_opt_in:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "SMS permission must be recorded through the intake consent "
+                "workflow with verification and disclosure provenance"
+            ),
+        )
+    contact.sms_opt_in_at = None
+    contact.sms_opt_in = False
 
 
 def _validate_client_name(contact: Contact) -> None:

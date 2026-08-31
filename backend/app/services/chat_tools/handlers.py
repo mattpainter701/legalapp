@@ -1059,6 +1059,9 @@ async def propose_client_sms(
             category=args.category,
             matter_id=args.matter_id,
             source_ids=args.source_ids[:10],
+            source_document_ids=_source_document_ids(chips),
+            source_document_bindings=_source_document_bindings(chips),
+            sources=chips,
             idempotency_key=f"chat-sms-{uuid.uuid4()}",
         )
         task = await _create_proposed_task(

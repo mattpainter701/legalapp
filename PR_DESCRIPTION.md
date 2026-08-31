@@ -35,6 +35,33 @@ coverage; this PR does not claim NTFS ACL trimming.
 - This host has no local PostgreSQL listener. GitHub CI runs the live migration,
   least-privilege RLS, and PostgreSQL rehearsal gates for each pushed head; all
   required checks must be green on the exact merge head.
+Adds the provider-backed, tenant-bound SMS lifecycle for the COMP-02/03 closure
+program without closing either milestone. Twilio dispatch now requires durable
+provenance-bearing consent, category and quiet-hours approval, race-safe
+idempotency, and review-first staff approval. Signed inbound/status webhooks
+handle STOP/START/HELP, replay and out-of-order delivery callbacks, ambiguous
+routing, and provider-unknown reconciliation without reporting fake delivery.
+
+Migration 149 follows the merged configurable-workflow migration 148 and adds
+tenant-composite constraints, immutable consent evidence, RLS, reconciliation
+state, and demo-purge coverage. The intake and task interfaces expose restricted
+review and informed SMS approval workflows; provider credentials and unresolved
+message content remain out of unauthorized responses and audit metadata.
+
+## Validation
+
+- Ruff lint/format and Python compilation passed; 27 focused backend unit and
+  migration tests passed.
+- The PostgreSQL/provider-shaped lifecycle suite collects 16 rehearsals covering
+  concurrent idempotency, tenant constraints/RLS, consent provenance and
+  conflicts, quiet hours/categories, signed webhook replay/order, STOP/START/HELP,
+  review routing, reconciliation, demo purge, and credential non-leakage.
+- 24 focused frontend tests, frontend lint, and the production frontend build
+  passed. Alembic reports migration 149 as the sole head and renders its offline
+  SQL from migration 148 successfully.
+- This Windows host has no usable PostgreSQL listener or Docker engine, so the
+  mandatory hosted PostgreSQL rehearsal, full CI, CodeQL, Merge Gate, and fresh
+  independent security review remain required before this draft may be readied.
 
 ## Merge policy attestations
 
@@ -57,3 +84,9 @@ of native ACL trimming.
 - Wiki handoff note: This PR does not change an MCP endpoint, tool, scope, or
   protocol. A future Workspace MCP integration must consume the normalized API
   and retain the same source/matter/native authorization boundary.
+- [x] MCP documentation updated
+- [ ] MCP documentation not needed
+- MCP area: review-first `propose_client_sms` action schema and approval contract.
+- Wiki handoff note: SMS proposals are limited to one recipient and must carry
+  source bindings/hashes; approval revalidates sources, consent, category, and
+  quiet-hours eligibility before a tenant-bound provider dispatch is attempted.

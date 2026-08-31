@@ -155,6 +155,7 @@ from app.models.conversion_loop import (
     IntakeForm,
     IntakeSubmission,
     LeadChannelConsent,
+    SmsConsentEvent,
     LeadAppointment,
     LeadFunnelEvent,
 )
@@ -285,6 +286,7 @@ __all__ = [
     "IntakeForm",
     "IntakeSubmission",
     "LeadChannelConsent",
+    "SmsConsentEvent",
     "LeadAppointment",
     "LeadFunnelEvent",
     "DocumentTemplate",

@@ -9,6 +9,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     JSON,
@@ -352,6 +353,16 @@ class TaskAutomationRun(Base):
             "status",
             "created_at",
         ),
+        ForeignKeyConstraint(
+            ["tenant_id", "sms_message_id"],
+            ["sms_messages.tenant_id", "sms_messages.id"],
+            name="fk_task_automation_runs_tenant_sms_message",
+        ),
+        Index(
+            "idx_task_automation_runs_tenant_sms_message",
+            "tenant_id",
+            "sms_message_id",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -378,7 +389,7 @@ class TaskAutomationRun(Base):
     # cleared after a confirmed send, but legal audit evidence must remain.
     action_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     action_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    # "queued" -> "sending" -> "sent" | "failed"
+    # "queued" -> "sending" -> "submitted" -> "sent" | "failed"
     #
     # Distinguishing queued from sending matters to the attorney: "we have not
     # tried yet" and "we tried and do not know the outcome" are different states,
@@ -393,6 +404,12 @@ class TaskAutomationRun(Base):
     # Distinguishes a confirmed no-send (safe to retry) from a transport
     # interruption where the provider may have accepted the message.
     delivery_certainty: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    sms_message_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    reconciliation_required: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
     triggered_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),

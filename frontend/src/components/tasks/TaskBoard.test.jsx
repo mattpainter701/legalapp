@@ -503,6 +503,150 @@ describe('TaskBoard', () => {
     expect(notice).toHaveTextContent('gc@redwood.example')
   })
 
+  it('uses an informed dedicated approval before submitting one consented SMS', async () => {
+    const user = userEvent.setup()
+    const onTransition = vi.fn().mockResolvedValue({ ...task, status: 'in_progress', version: 3 })
+    const drafted = {
+      ...task,
+      id: 'task-sms-draft',
+      title: 'Confirm consultation by SMS',
+      status: 'review',
+      source: 'assistant',
+      pending_action: {
+        type: 'sms_client',
+        recipient_bindings: [{
+          party_id: 'party-1',
+          contact_id: 'contact-1',
+          phone: '+15551234567',
+        }],
+        body: 'Your consultation is confirmed for Tuesday at 10:00.',
+        category: 'appointment',
+        matter_id: 'matter-1',
+        idempotency_key: 'sms-review-123456',
+        sources: [{
+          source_id: 'document:appointment',
+          label: 'Consultation schedule',
+          url: '/api/documents/document-1/download',
+        }],
+      },
+    }
+    const draftedData = {
+      ...data,
+      columns: data.columns.map((column) => (
+        column.status === 'review'
+          ? { ...column, total: 1, items: [drafted] }
+          : { ...column, total: 0, items: [] }
+      )),
+    }
+    render(<TaskBoard {...props} data={draftedData} onTransition={onTransition} />)
+
+    expect(screen.getByTestId('pending-sms-badge')).toHaveTextContent(
+      'Approval submits one consented SMS to +15551234567',
+    )
+    await user.click(screen.getByRole('button', {
+      name: 'Choose a destination for Confirm consultation by SMS',
+    }))
+    await user.click(screen.getByRole('button', { name: /^In Progress/ }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Approve consented SMS' })
+    expect(dialog).toHaveTextContent('This approval submits one SMS')
+    expect(dialog).toHaveTextContent('+15551234567')
+    expect(dialog).toHaveTextContent('appointment')
+    expect(dialog).toHaveTextContent('Your consultation is confirmed')
+    expect(within(dialog).getByRole('link', { name: 'Consultation schedule' })).toBeInTheDocument()
+    const confirm = within(dialog).getByRole('button', { name: 'Approve and submit SMS' })
+    expect(confirm).toBeDisabled()
+    await user.click(within(dialog).getByRole('checkbox', { name: /reviewed the recipient/i }))
+    expect(confirm).toBeEnabled()
+    await user.click(confirm)
+
+    await waitFor(() => expect(onTransition).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'task-sms-draft' }),
+      'in_progress',
+      expect.any(Object),
+    ))
+  })
+
+  it('blocks SMS replacement approval while provider reconciliation is required', async () => {
+    const user = userEvent.setup()
+    const drafted = {
+      ...task,
+      id: 'task-sms-unknown',
+      title: 'Unknown SMS delivery',
+      status: 'review',
+      source: 'assistant',
+      pending_action: {
+        type: 'sms_client',
+        recipient_bindings: [{ phone: '+15551234567' }],
+        body: 'Prior message body',
+        category: 'appointment',
+      },
+      delivery: {
+        status: 'failed',
+        delivery_certainty: 'outcome_unknown',
+        reconciliation_required: true,
+        sms_message_id: 'sms-message-1',
+      },
+    }
+    const draftedData = {
+      ...data,
+      columns: data.columns.map((column) => (
+        column.status === 'review'
+          ? { ...column, total: 1, items: [drafted] }
+          : { ...column, total: 0, items: [] }
+      )),
+    }
+    render(<TaskBoard {...props} data={draftedData} />)
+    await user.click(screen.getByRole('button', {
+      name: 'Choose a destination for Unknown SMS delivery',
+    }))
+    await user.click(screen.getByRole('button', { name: /^In Progress/ }))
+    const dialog = screen.getByRole('dialog', { name: 'Approve consented SMS' })
+    expect(within(dialog).getByRole('alert')).toHaveTextContent(/Reconcile SMS sms-message-1/i)
+    expect(within(dialog).getByRole('button', { name: 'Approve and submit SMS' })).toBeDisabled()
+  })
+
+  it('requires a new reviewed SMS proposal after confirmed non-delivery', async () => {
+    const user = userEvent.setup()
+    const drafted = {
+      ...task,
+      id: 'task-sms-confirmed-not-sent',
+      title: 'Confirmed non-delivery',
+      status: 'review',
+      source: 'assistant',
+      pending_action: {
+        type: 'sms_client',
+        recipient_bindings: [{ phone: '+15551234567' }],
+        body: 'Old reviewed body',
+        category: 'appointment',
+      },
+      delivery: {
+        action_type: 'sms_client',
+        status: 'failed',
+        delivery_certainty: 'confirmed_not_sent',
+        reconciliation_required: false,
+        sms_message_id: 'sms-message-2',
+      },
+    }
+    const draftedData = {
+      ...data,
+      columns: data.columns.map((column) => (
+        column.status === 'review'
+          ? { ...column, total: 1, items: [drafted] }
+          : { ...column, total: 0, items: [] }
+      )),
+    }
+    render(<TaskBoard {...props} data={draftedData} />)
+    expect(screen.getByRole('alert')).toHaveTextContent(/confirmed not sent/i)
+    await user.click(screen.getByRole('button', {
+      name: 'Choose a destination for Confirmed non-delivery',
+    }))
+    await user.click(screen.getByRole('button', { name: /^In Progress/ }))
+    const dialog = screen.getByRole('dialog', { name: 'Approve consented SMS' })
+    expect(within(dialog).getByRole('alert')).toHaveTextContent(/new reviewed proposal/i)
+    expect(within(dialog).getByRole('button', { name: 'Approve and submit SMS' })).toBeDisabled()
+  })
+
   it('states that non-approval moves leave a Review email unsent', async () => {
     const user = userEvent.setup()
     const drafted = {

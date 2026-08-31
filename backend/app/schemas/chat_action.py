@@ -168,7 +168,7 @@ class ProposeClientSmsArgs(ChatActionModel):
     """Draft a consented client SMS as reviewable board work."""
 
     matter_id: UUID
-    recipient_party_ids: list[UUID] = Field(min_length=1, max_length=10)
+    recipient_party_ids: list[UUID] = Field(min_length=1, max_length=1)
     title: str = Field(min_length=1, max_length=500)
     body: str = Field(min_length=1, max_length=1_600)
     category: str = Field(default="staff_authored", min_length=1, max_length=50)
@@ -310,7 +310,26 @@ class SmsClientAction(ChatActionModel):
     category: str = Field(default="staff_authored", min_length=1, max_length=50)
     matter_id: UUID
     source_ids: list[str] = Field(default_factory=list, max_length=10)
+    source_document_ids: list[UUID] = Field(default_factory=list, max_length=10)
+    source_document_bindings: list[SourceDocumentBinding] = Field(
+        default_factory=list,
+        max_length=10,
+    )
+    sources: list[dict] = Field(default_factory=list, max_length=10)
     idempotency_key: str = Field(min_length=8, max_length=200)
+
+    @model_validator(mode="after")
+    def local_sources_have_exact_content_bindings(self):
+        document_ids = [
+            binding.document_id for binding in self.source_document_bindings
+        ]
+        if len(document_ids) != len(set(document_ids)):
+            raise ValueError("Source document bindings must be unique")
+        if document_ids != self.source_document_ids:
+            raise ValueError(
+                "Every local source document must have an exact content binding"
+            )
+        return self
 
 
 class MatterDocumentDraftAction(ChatActionModel):

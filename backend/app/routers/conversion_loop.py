@@ -35,7 +35,15 @@ from app.schemas.conversion_loop import (
     TriageDecision,
 )
 from app.services.email import EmailDeliveryResult, email_service
-from app.services.sms import SmsError, normalize_e164, send_sms
+from app.services.access_control import require_capability
+from app.services.operator_audit import record_operator_audit
+from app.services.sms import (
+    SmsError,
+    append_sms_consent_event,
+    load_sms_consents,
+    normalize_e164,
+    send_sms,
+)
 
 router = APIRouter(tags=["conversion-loop"])
 staff = APIRouter(prefix="/api/intake", tags=["conversion-loop"])
@@ -187,7 +195,10 @@ async def submit_public_form(
         email=email,
         phone=phone,
         email_opt_in=body.email_consent,
-        sms_opt_in=body.sms_consent,
+        # This compatibility flag becomes true only after verified, active
+        # lead-channel consent. Public self-attestation is durable provenance,
+        # but it remains pending verification and cannot authorize delivery.
+        sms_opt_in=False,
         referral_source=_attribution(body.attribution).get("source"),
     )
     db.add(contact)
@@ -220,23 +231,31 @@ async def submit_public_form(
             mobile_e164 = normalize_e164(phone)
         except SmsError as exc:
             raise HTTPException(exc.status_code, str(exc)) from exc
-    db.add(
-        LeadChannelConsent(
-            tenant_id=row.tenant_id,
-            lead_id=lead.id,
-            email_allowed=body.email_consent,
-            sms_allowed=body.sms_consent,
-            sms_status="pending_verification" if body.sms_consent else "unknown",
-            disclosure_version=body.disclosure_version,
-            mobile_e164=mobile_e164,
-            consented_at=datetime.now(timezone.utc) if body.sms_consent else None,
-            consent_expires_at=body.consent_expires_at,
-            consent_source="public_intake" if body.sms_consent else None,
-            consent_language=body.consent_language,
-            consent_timezone=body.consent_timezone,
-            quiet_hours_start=body.quiet_hours_start,
-            quiet_hours_end=body.quiet_hours_end,
-        )
+    consent = LeadChannelConsent(
+        tenant_id=row.tenant_id,
+        lead_id=lead.id,
+        email_allowed=body.email_consent,
+        sms_allowed=body.sms_consent,
+        sms_status="pending_verification" if body.sms_consent else "unknown",
+        disclosure_version=body.disclosure_version,
+        mobile_e164=mobile_e164,
+        consented_at=datetime.now(timezone.utc) if body.sms_consent else None,
+        consent_expires_at=body.consent_expires_at,
+        consent_source="public_intake" if body.sms_consent else None,
+        consent_language=body.consent_language,
+        consent_timezone=body.consent_timezone,
+        quiet_hours_start=body.quiet_hours_start,
+        quiet_hours_end=body.quiet_hours_end,
+    )
+    db.add(consent)
+    await db.flush()
+    append_sms_consent_event(
+        db,
+        consent=consent,
+        contact_id=contact.id,
+        action="public_intake_grant" if body.sms_consent else "public_intake_no_grant",
+        actor_type="public_customer",
+        metadata={"form_id": str(row.id), "submission_id": str(submission.id)},
     )
     db.add(
         LeadFunnelEvent(
@@ -350,7 +369,8 @@ async def book_public(
 async def update_consent(
     lead_id: uuid.UUID,
     body: ConsentUpdate,
-    current_user=Depends(get_current_user),
+    request: Request,
+    current_user=Depends(require_capability("manage_intake")),
     db: AsyncSession = Depends(get_db),
 ):
     await set_tenant_context(db, str(current_user.tenant_id))
@@ -359,23 +379,38 @@ async def update_consent(
     )
     if not lead:
         raise HTTPException(404, "Lead not found")
-    row = await db.scalar(
-        select(LeadChannelConsent).where(
-            LeadChannelConsent.tenant_id == current_user.tenant_id,
-            LeadChannelConsent.lead_id == lead_id,
+    contact = await db.scalar(
+        select(Contact)
+        .where(
+            Contact.id == lead.contact_id,
+            Contact.tenant_id == current_user.tenant_id,
         )
+        .with_for_update()
     )
+    consents = await load_sms_consents(
+        db, current_user.tenant_id, lead.contact_id, lock=True
+    )
+    row = next((consent for consent in consents if consent.lead_id == lead_id), None)
     if not row:
         row = LeadChannelConsent(tenant_id=current_user.tenant_id, lead_id=lead_id)
         db.add(row)
+        consents.append(row)
     mobile_e164 = None
     if body.sms_allowed:
+        if contact is None:
+            raise HTTPException(409, "Lead contact is unavailable for SMS consent")
         try:
             mobile_e164 = normalize_e164(body.mobile_e164)
+            contact_e164 = normalize_e164(contact.phone)
         except SmsError as exc:
             raise HTTPException(exc.status_code, str(exc)) from exc
+        if mobile_e164 != contact_e164:
+            raise HTTPException(
+                409, "Verified SMS consent must match the lead contact mobile"
+            )
         if not body.phone_verified:
             raise HTTPException(422, "SMS consent requires a verified E.164 mobile")
+    changed_at = datetime.now(timezone.utc)
     (
         row.email_allowed,
         row.sms_allowed,
@@ -391,6 +426,7 @@ async def update_consent(
         row.quiet_hours_start,
         row.quiet_hours_end,
         row.allowed_categories,
+        row.sms_revoked_at,
         row.revoked_at,
     ) = (
         body.email_allowed,
@@ -399,7 +435,7 @@ async def update_consent(
         body.phone_verified,
         body.disclosure_version,
         mobile_e164,
-        datetime.now(timezone.utc) if body.sms_allowed else None,
+        changed_at if body.sms_allowed else None,
         body.consent_expires_at,
         body.consent_source,
         body.consent_language,
@@ -407,21 +443,43 @@ async def update_consent(
         body.quiet_hours_start,
         body.quiet_hours_end,
         body.allowed_categories,
-        None if body.email_allowed or body.sms_allowed else datetime.now(timezone.utc),
-    )
-    contact = await db.scalar(
-        select(Contact).where(
-            Contact.id == lead.contact_id, Contact.tenant_id == current_user.tenant_id
-        )
+        None if body.sms_allowed else changed_at,
+        None if body.email_allowed or body.sms_allowed else changed_at,
     )
     if contact:
-        contact.sms_opt_in = row.sms_status == "active"
+        contact.sms_opt_in = len(consents) == 1 and row.sms_status == "active"
         contact.sms_opt_in_at = row.consented_at if contact.sms_opt_in else None
+    await db.flush()
+    append_sms_consent_event(
+        db,
+        consent=row,
+        contact_id=lead.contact_id,
+        action="staff_grant" if body.sms_allowed else "staff_revoke",
+        actor_type="tenant_user",
+        actor_user_id=current_user.id,
+        metadata={"email_allowed": body.email_allowed},
+    )
+    await record_operator_audit(
+        db,
+        request,
+        action="sms.consent.updated",
+        resource_type="lead_channel_consent",
+        resource_id=str(row.id),
+        actor_type="tenant_user",
+        actor_id=str(current_user.id),
+        metadata={
+            "tenant_id": str(current_user.tenant_id),
+            "lead_id": str(lead_id),
+            "sms_allowed": row.sms_allowed,
+            "sms_status": row.sms_status,
+        },
+    )
     await db.commit()
     return {
         "lead_id": str(lead_id),
         "email_allowed": row.email_allowed,
         "sms_allowed": row.sms_allowed,
+        "sms_revoked_at": row.sms_revoked_at,
         "revoked_at": row.revoked_at,
     }
 
@@ -468,13 +526,13 @@ async def triage(
 async def send_follow_up(
     lead_id: uuid.UUID,
     body: FollowUpCreate,
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_capability("manage_intake")),
     db: AsyncSession = Depends(get_db),
 ):
     """Send only an explicitly authored, consent-checked follow-up.
 
-    SMS remains unavailable until ECO-23–29's provider, signed webhooks and
-    STOP/START state machine are configured; returning 503 is deliberate.
+    SMS additionally requires a configured provider, verified provenance, an
+    allowed category, quiet-hours clearance, and webhook-reconciled truth.
     """
     await set_tenant_context(db, str(current_user.tenant_id))
     lead = await db.scalar(
@@ -513,7 +571,7 @@ async def send_follow_up(
                 idempotency_key=body.idempotency_key,
             )
         except SmsError as exc:
-            raise HTTPException(exc.status_code, str(exc)) from exc
+            raise HTTPException(exc.status_code, exc.api_detail()) from exc
         return {
             "lead_id": str(lead.id),
             "channel": body.channel,

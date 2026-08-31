@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field, model_validator
 class SmsProviderConfigUpdate(BaseModel):
     account_sid: str = Field(min_length=3, max_length=100)
     auth_token: str = Field(min_length=8, max_length=500)
-    webhook_secret: str = Field(min_length=8, max_length=500)
     messaging_service_sid: str | None = Field(default=None, max_length=100)
     from_number: str | None = Field(default=None, max_length=30)
     sender_ready: bool = False
@@ -18,9 +17,23 @@ class SmsProviderConfigUpdate(BaseModel):
 
     @model_validator(mode="after")
     def active_config_has_compliance_evidence(self):
+        self.account_sid = self.account_sid.strip()
+        self.auth_token = self.auth_token.strip()
+        self.messaging_service_sid = (
+            self.messaging_service_sid.strip() if self.messaging_service_sid else None
+        )
+        self.from_number = self.from_number.strip() if self.from_number else None
+        if not self.account_sid or not self.auth_token:
+            raise ValueError("SMS provider credentials cannot be blank")
+        if self.is_active and not self.sender_ready:
+            raise ValueError("Active SMS configuration requires a ready sender")
         if self.sender_ready or self.is_active:
             required = {"ownership_model", "consent_policy", "quiet_hours_policy"}
-            missing = sorted(required - set(self.compliance_snapshot))
+            missing = sorted(
+                key
+                for key in required
+                if not str(self.compliance_snapshot.get(key) or "").strip()
+            )
             if missing:
                 raise ValueError(
                     "Active SMS configuration requires compliance evidence: "
@@ -72,5 +85,38 @@ class SmsReviewResponse(BaseModel):
     status: str
     candidate_contact_ids: list
     candidate_matter_ids: list
+    from_number: str | None = None
+    body: str | None = None
+    created_at: datetime | None = None
 
     model_config = {"from_attributes": True}
+
+
+class SmsReviewDecision(BaseModel):
+    decision: str = Field(pattern=r"^(resolve|reject)$")
+    contact_id: uuid.UUID | None = None
+    matter_id: uuid.UUID | None = None
+
+    @model_validator(mode="after")
+    def resolved_route_is_complete(self):
+        if self.decision == "resolve" and (not self.contact_id or not self.matter_id):
+            raise ValueError("Resolution requires one contact and matter")
+        if self.decision == "reject" and (self.contact_id or self.matter_id):
+            raise ValueError("Rejected inbound messages cannot be routed")
+        return self
+
+
+class SmsReconciliationRequest(BaseModel):
+    resolution: str = Field(pattern=r"^(confirmed_not_sent|provider_accepted)$")
+    provider_message_id: str | None = Field(default=None, max_length=255)
+
+    @model_validator(mode="after")
+    def provider_acceptance_has_identity(self):
+        if (
+            self.resolution == "provider_accepted"
+            and not str(self.provider_message_id or "").strip()
+        ):
+            raise ValueError("Provider acceptance requires the provider message id")
+        if self.provider_message_id:
+            self.provider_message_id = self.provider_message_id.strip()
+        return self

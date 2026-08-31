@@ -61,6 +61,9 @@ _CONFIG_WORKFLOW_PURGE_ORDER = (
 _CONFIG_WORKFLOW_TABLES = frozenset(_CONFIG_WORKFLOW_PURGE_ORDER)
 _CONFIG_WORKFLOW_PURGE_TENANT_GUC = "app.config_workflow_demo_purge_tenant_id"
 _CONFIG_WORKFLOW_PURGE_SESSION_GUC = "app.config_workflow_demo_purge_session_id"
+_SMS_IMMUTABLE_TABLES = ("sms_consent_events",)
+_SMS_PURGE_TENANT_GUC = "app.sms_demo_purge_tenant_id"
+_SMS_PURGE_SESSION_GUC = "app.sms_demo_purge_session_id"
 
 # A worker that dies between claiming a session and reaching a terminal state
 # leaves the row in "purging".  Without a reclaim window the hourly job would
@@ -172,6 +175,31 @@ async def _authorize_config_workflow_demo_purge(
             "value": str(session_id),
         },
     )
+
+
+async def _purge_immutable_sms_evidence(
+    db: AsyncSession,
+    tables,
+    *,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+) -> dict[str, int]:
+    """Delete append-only SMS evidence only for the exact expired demo claim."""
+    await db.execute(
+        text("SELECT set_config(:setting, :value, true)"),
+        {"setting": _SMS_PURGE_TENANT_GUC, "value": str(tenant_id)},
+    )
+    await db.execute(
+        text("SELECT set_config(:setting, :value, true)"),
+        {"setting": _SMS_PURGE_SESSION_GUC, "value": str(session_id)},
+    )
+    deleted = {}
+    for name in _SMS_IMMUTABLE_TABLES:
+        result = await db.execute(
+            delete(tables[name]).where(tables[name].c.tenant_id == tenant_id)
+        )
+        deleted[name] = int(result.rowcount or 0)
+    return deleted
 
 
 def _delete_order(tables) -> list[str]:
@@ -315,12 +343,18 @@ async def _purge_demo_tenant_locked(
                 delete(table).where(table.c.tenant_id == tenant_id)
             )
             deleted[name] = int(result.rowcount or 0)
+        deleted.update(
+            await _purge_immutable_sms_evidence(
+                db, tables, tenant_id=tenant_id, session_id=session_id
+            )
+        )
         # Break optional cycles (invoice/retainer and self-references) first.
         for name, table in tables.items():
             if (
                 name in _RESEARCH_IMMUTABLE_TABLES
                 or name in _STUDIO_TABLES
                 or name in _CONFIG_WORKFLOW_TABLES
+                or name in _SMS_IMMUTABLE_TABLES
             ):
                 continue
             values = {}
@@ -339,6 +373,7 @@ async def _purge_demo_tenant_locked(
                 name in _RESEARCH_IMMUTABLE_TABLES
                 or name in _STUDIO_TABLES
                 or name in _CONFIG_WORKFLOW_TABLES
+                or name in _SMS_IMMUTABLE_TABLES
             ):
                 continue
             table = tables[name]

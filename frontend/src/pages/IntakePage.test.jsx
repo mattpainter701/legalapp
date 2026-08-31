@@ -21,6 +21,8 @@ vi.mock('../api', () => ({
   updateLead: vi.fn(),
   convertLead: vi.fn(),
   getMatterFieldOptions: vi.fn(),
+  getSmsReviewItems: vi.fn(() => Promise.resolve([])),
+  decideSmsReviewItem: vi.fn(),
 }))
 
 describe('IntakePage matter conversion', () => {

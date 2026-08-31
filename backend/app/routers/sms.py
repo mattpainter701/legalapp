@@ -10,11 +10,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import require_admin
-from app.models.sms import SmsProviderConfig, SmsReviewItem
+from app.models.sms import SmsMessage, SmsProviderConfig, SmsReviewItem
 from app.schemas.sms import (
     SmsMessageResponse,
     SmsProviderConfigResponse,
     SmsProviderConfigUpdate,
+    SmsReconciliationRequest,
+    SmsReviewDecision,
     SmsReviewResponse,
     SmsSendRequest,
 )
@@ -24,6 +26,9 @@ from app.services.sms import (
     SmsError,
     apply_inbound,
     apply_status,
+    provider_auth_token,
+    reconcile_sms_message,
+    resolve_review_item,
     send_sms,
     verify_twilio_signature,
 )
@@ -52,7 +57,6 @@ async def update_sms_config(
         db.add(row)
     row.account_sid = body.account_sid.strip()
     row.encrypted_auth_token = encrypt_token(body.auth_token)
-    row.encrypted_webhook_secret = encrypt_token(body.webhook_secret)
     row.messaging_service_sid = body.messaging_service_sid
     row.from_number = body.from_number
     row.sender_ready = body.sender_ready
@@ -100,6 +104,7 @@ async def get_sms_config(
 @router.post("/send", response_model=SmsMessageResponse)
 async def send_sms_message(
     body: SmsSendRequest,
+    request: Request,
     current_user=Depends(require_capability("manage_matters")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -116,7 +121,46 @@ async def send_sms_message(
             idempotency_key=body.idempotency_key,
         )
     except SmsError as exc:
-        raise HTTPException(exc.status_code, str(exc)) from exc
+        await set_tenant_context(db, str(current_user.tenant_id))
+        await record_operator_audit(
+            db,
+            request,
+            action="sms.send.rejected",
+            resource_type="sms_message",
+            resource_id=str(exc.sms_message_id or body.idempotency_key),
+            actor_type="tenant_user",
+            actor_id=str(current_user.id),
+            metadata={
+                "tenant_id": str(current_user.tenant_id),
+                "contact_id": str(body.contact_id),
+                "matter_id": str(body.matter_id) if body.matter_id else None,
+                "category": body.category,
+                "status_code": exc.status_code,
+                "delivery_certainty": exc.delivery_certainty,
+                "reconciliation_required": exc.reconciliation_required,
+            },
+        )
+        await db.commit()
+        raise HTTPException(exc.status_code, exc.api_detail()) from exc
+    await set_tenant_context(db, str(current_user.tenant_id))
+    await record_operator_audit(
+        db,
+        request,
+        action="sms.send.submitted",
+        resource_type="sms_message",
+        resource_id=str(row.id),
+        actor_type="tenant_user",
+        actor_id=str(current_user.id),
+        metadata={
+            "tenant_id": str(current_user.tenant_id),
+            "contact_id": str(body.contact_id),
+            "matter_id": str(body.matter_id) if body.matter_id else None,
+            "category": body.category,
+            "provider": "twilio",
+            "provider_status": row.provider_status,
+        },
+    )
+    await db.commit()
     return row
 
 
@@ -127,14 +171,12 @@ async def _signed_params(request: Request, *, tenant_id: uuid.UUID, db: AsyncSes
             SmsProviderConfig.provider == "twilio",
         )
     )
-    if not config or not config.encrypted_webhook_secret:
+    if not config:
         raise HTTPException(503, "SMS webhook is not configured")
-    from app.services.token_vault import decrypt_token
-
     try:
-        secret = decrypt_token(config.encrypted_webhook_secret)
-    except Exception as exc:
-        raise HTTPException(503, "SMS webhook secret is unavailable") from exc
+        secret = provider_auth_token(config)
+    except SmsError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
     form = await request.form()
     params = {str(key): str(value) for key, value in form.items()}
     supplied = request.headers.get("X-Twilio-Signature")
@@ -186,15 +228,110 @@ async def list_sms_review_items(
     db: AsyncSession = Depends(get_db),
 ):
     await set_tenant_context(db, str(current_user.tenant_id))
-    return list(
-        (
-            await db.scalars(
-                select(SmsReviewItem)
-                .where(
-                    SmsReviewItem.tenant_id == current_user.tenant_id,
-                    SmsReviewItem.status == "pending",
-                )
-                .order_by(SmsReviewItem.created_at)
+    rows = (
+        await db.execute(
+            select(SmsReviewItem, SmsMessage)
+            .join(
+                SmsMessage,
+                (SmsMessage.tenant_id == SmsReviewItem.tenant_id)
+                & (SmsMessage.id == SmsReviewItem.sms_message_id),
             )
-        ).all()
+            .where(
+                SmsReviewItem.tenant_id == current_user.tenant_id,
+                SmsReviewItem.status == "pending",
+            )
+            .order_by(SmsReviewItem.created_at)
+        )
+    ).all()
+    return [
+        {
+            "id": item.id,
+            "sms_message_id": item.sms_message_id,
+            "reason": item.reason,
+            "status": item.status,
+            "candidate_contact_ids": item.candidate_contact_ids,
+            "candidate_matter_ids": item.candidate_matter_ids,
+            "from_number": message.from_number,
+            "body": message.body,
+            "created_at": message.created_at,
+        }
+        for item, message in rows
+    ]
+
+
+@router.post("/review/{review_item_id}", response_model=SmsReviewResponse)
+async def decide_sms_review_item(
+    review_item_id: uuid.UUID,
+    body: SmsReviewDecision,
+    request: Request,
+    current_user=Depends(require_capability("manage_matters")),
+    db: AsyncSession = Depends(get_db),
+):
+    await set_tenant_context(db, str(current_user.tenant_id))
+    try:
+        item = await resolve_review_item(
+            db,
+            tenant_id=current_user.tenant_id,
+            reviewer_user_id=current_user.id,
+            review_item_id=review_item_id,
+            decision=body.decision,
+            contact_id=body.contact_id,
+            matter_id=body.matter_id,
+        )
+    except SmsError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+    await record_operator_audit(
+        db,
+        request,
+        action=f"sms.inbound_route.{body.decision}",
+        resource_type="sms_review_item",
+        resource_id=str(item.id),
+        actor_type="tenant_user",
+        actor_id=str(current_user.id),
+        metadata={
+            "tenant_id": str(current_user.tenant_id),
+            "sms_message_id": str(item.sms_message_id),
+            "contact_id": str(body.contact_id) if body.contact_id else None,
+            "matter_id": str(body.matter_id) if body.matter_id else None,
+        },
     )
+    await db.commit()
+    return item
+
+
+@router.post("/messages/{sms_message_id}/reconcile", response_model=SmsMessageResponse)
+async def reconcile_uncertain_sms(
+    sms_message_id: uuid.UUID,
+    body: SmsReconciliationRequest,
+    request: Request,
+    current_user=Depends(require_capability("manage_matters")),
+    db: AsyncSession = Depends(get_db),
+):
+    await set_tenant_context(db, str(current_user.tenant_id))
+    try:
+        message = await reconcile_sms_message(
+            db,
+            tenant_id=current_user.tenant_id,
+            operator_user_id=current_user.id,
+            sms_message_id=sms_message_id,
+            resolution=body.resolution,
+            provider_message_id=body.provider_message_id,
+        )
+    except SmsError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+    await record_operator_audit(
+        db,
+        request,
+        action="sms.dispatch.reconciled",
+        resource_type="sms_message",
+        resource_id=str(message.id),
+        actor_type="tenant_user",
+        actor_id=str(current_user.id),
+        metadata={
+            "tenant_id": str(current_user.tenant_id),
+            "resolution": body.resolution,
+            "provider_message_id": body.provider_message_id,
+        },
+    )
+    await db.commit()
+    return message

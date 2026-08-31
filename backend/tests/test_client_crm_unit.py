@@ -276,7 +276,7 @@ async def test_create_update_archive_and_linked_matters():
             ClientCreate(
                 first_name="Jordan",
                 client_number="CL-1",
-                sms_opt_in=True,
+                sms_opt_in=False,
                 qbo_customer_id="123",
             ),
             current_user=admin,
@@ -325,7 +325,7 @@ async def test_create_update_archive_and_linked_matters():
             client_id,
             ClientUpdate(
                 client_number="CL-2",
-                sms_opt_in=True,
+                sms_opt_in=False,
                 client_status="prospect",
                 qbo_customer_id="456",
             ),
@@ -334,7 +334,7 @@ async def test_create_update_archive_and_linked_matters():
         )
     assert updated == {"updated": True}
     assert contact.contact_type == "prospect"
-    assert contact.sms_opt_in_at is not None
+    assert contact.sms_opt_in_at is None
     unique_update.assert_awaited_once()
 
     matter = SimpleNamespace(

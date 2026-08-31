@@ -11,9 +11,13 @@ Staff triage is explicit. A public lead cannot be converted until an attorney
 records a clear conflict decision. Appointment booking accepts only a slot
 published by the form and writes a local calendar event plus a durable pending
 reminder state; no external provider success is inferred. Email follow-up
-requires current channel consent and records the actual provider result.
-SMS returns an explicit unavailable response until ECO-23–29 provider,
-webhook, opt-out, and reconciliation gates are complete. Existing BK26 fee
+requires current channel consent and records the actual provider result. SMS is
+available only for tenants with complete provider and compliance configuration;
+it requires provenance-bearing consent, verified category and quiet-hours
+clearance, dedicated human approval, and signed webhook reconciliation. STOP
+suppression is independent of matter routing, while ambiguous inbound messages
+remain in an authorized review queue until explicitly routed or rejected.
+Existing BK26 fee
 agreement packet review/e-signature and lead conversion remain the canonical
 agreement/matter path; the new funnel ledger records those downstream events
 without creating a parallel agreement implementation.

@@ -213,6 +213,7 @@ class Lead(Base):
 
     __tablename__ = "leads"
     __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_leads_tenant_id"),
         Index("idx_leads_tenant_id", "tenant_id"),
         Index("idx_leads_contact_id", "contact_id"),
         Index("idx_leads_status", "tenant_id", "status"),

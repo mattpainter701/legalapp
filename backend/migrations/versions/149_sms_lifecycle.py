@@ -30,6 +30,20 @@ def upgrade() -> None:
         "communication_logs",
         ["tenant_id", "id"],
     )
+    op.create_unique_constraint("uq_leads_tenant_id", "leads", ["tenant_id", "id"])
+    op.create_unique_constraint(
+        "uq_lead_channel_consents_tenant_id",
+        "lead_channel_consents",
+        ["tenant_id", "id"],
+    )
+    op.create_foreign_key(
+        "fk_lead_channel_consents_tenant_lead",
+        "lead_channel_consents",
+        "leads",
+        ["tenant_id", "lead_id"],
+        ["tenant_id", "id"],
+        ondelete="CASCADE",
+    )
     op.add_column(
         "lead_channel_consents",
         sa.Column(
@@ -44,6 +58,10 @@ def upgrade() -> None:
         "lead_channel_consents",
         sa.Column("consent_expires_at", sa.DateTime(timezone=True)),
     )
+    op.add_column(
+        "lead_channel_consents",
+        sa.Column("sms_revoked_at", sa.DateTime(timezone=True)),
+    )
     op.add_column("lead_channel_consents", sa.Column("consent_source", sa.String(80)))
     op.add_column("lead_channel_consents", sa.Column("consent_language", sa.String(20)))
     op.add_column(
@@ -54,6 +72,90 @@ def upgrade() -> None:
     op.add_column(
         "lead_channel_consents",
         sa.Column("allowed_categories", JSONB(), nullable=False, server_default="[]"),
+    )
+    op.create_table(
+        "sms_consent_events",
+        sa.Column(
+            "id",
+            UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
+        sa.Column(
+            "tenant_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("tenants.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "consent_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("lead_channel_consents.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "lead_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("leads.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "contact_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("contacts.id", ondelete="SET NULL"),
+        ),
+        sa.Column("action", sa.String(40), nullable=False),
+        sa.Column("sms_status", sa.String(30), nullable=False),
+        sa.Column("sms_allowed", sa.Boolean(), nullable=False),
+        sa.Column("phone_verified", sa.Boolean(), nullable=False),
+        sa.Column("mobile_e164", sa.String(30)),
+        sa.Column("consented_at", sa.DateTime(timezone=True)),
+        sa.Column("consent_expires_at", sa.DateTime(timezone=True)),
+        sa.Column("sms_revoked_at", sa.DateTime(timezone=True)),
+        sa.Column("consent_source", sa.String(80)),
+        sa.Column("disclosure_version", sa.String(80)),
+        sa.Column("consent_language", sa.String(20)),
+        sa.Column("consent_timezone", sa.String(100)),
+        sa.Column("quiet_hours_start", sa.String(5)),
+        sa.Column("quiet_hours_end", sa.String(5)),
+        sa.Column("allowed_categories", JSONB(), nullable=False, server_default="[]"),
+        sa.Column("actor_type", sa.String(30), nullable=False),
+        sa.Column(
+            "actor_user_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("users.id", ondelete="SET NULL"),
+        ),
+        sa.Column("provider_message_id", sa.String(255)),
+        sa.Column("metadata_json", JSONB(), nullable=False, server_default="{}"),
+        sa.Column(
+            "occurred_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+        sa.UniqueConstraint("tenant_id", "id", name="uq_sms_consent_events_tenant_id"),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "consent_id"],
+            ["lead_channel_consents.tenant_id", "lead_channel_consents.id"],
+            name="fk_sms_consent_events_tenant_consent",
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "lead_id"],
+            ["leads.tenant_id", "leads.id"],
+            name="fk_sms_consent_events_tenant_lead",
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "contact_id"],
+            ["contacts.tenant_id", "contacts.id"],
+            name="fk_sms_consent_events_tenant_contact",
+        ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "actor_user_id"],
+            ["users.tenant_id", "users.id"],
+            name="fk_sms_consent_events_tenant_user",
+        ),
     )
     op.create_table(
         "sms_provider_configs",
@@ -72,7 +174,6 @@ def upgrade() -> None:
         sa.Column("provider", sa.String(30), nullable=False, server_default="twilio"),
         sa.Column("account_sid", sa.String(100)),
         sa.Column("encrypted_auth_token", sa.Text()),
-        sa.Column("encrypted_webhook_secret", sa.Text()),
         sa.Column("messaging_service_sid", sa.String(100)),
         sa.Column("from_number", sa.String(30)),
         sa.Column("sender_ready", sa.Boolean(), nullable=False, server_default="false"),
@@ -136,6 +237,16 @@ def upgrade() -> None:
         sa.Column("idempotency_key", sa.String(200), nullable=False),
         sa.Column("request_digest", sa.String(64), nullable=False),
         sa.Column("provider_message_id", sa.String(255)),
+        sa.Column("dispatch_attempt_id", UUID(as_uuid=True)),
+        sa.Column("dispatch_started_at", sa.DateTime(timezone=True)),
+        sa.Column("reconciliation_required_at", sa.DateTime(timezone=True)),
+        sa.Column("reconciliation_resolved_at", sa.DateTime(timezone=True)),
+        sa.Column("reconciliation_resolution", sa.String(40)),
+        sa.Column(
+            "reconciliation_resolved_by_user_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("users.id", ondelete="SET NULL"),
+        ),
         sa.Column("direction", sa.String(20), nullable=False),
         sa.Column("status", sa.String(40), nullable=False, server_default="queued"),
         sa.Column("from_number", sa.String(30)),
@@ -194,6 +305,11 @@ def upgrade() -> None:
             ["users.tenant_id", "users.id"],
             name="fk_sms_messages_tenant_user",
         ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "reconciliation_resolved_by_user_id"],
+            ["users.tenant_id", "users.id"],
+            name="fk_sms_messages_tenant_reconciler",
+        ),
     )
     op.create_table(
         "sms_review_items",
@@ -244,12 +360,122 @@ def upgrade() -> None:
             name="fk_sms_review_items_tenant_user",
         ),
     )
-    for table in ("sms_provider_configs", "sms_messages", "sms_review_items"):
+    op.add_column(
+        "task_automation_runs", sa.Column("sms_message_id", UUID(as_uuid=True))
+    )
+    op.add_column(
+        "task_automation_runs",
+        sa.Column(
+            "reconciliation_required",
+            sa.Boolean(),
+            nullable=False,
+            server_default="false",
+        ),
+    )
+    op.create_foreign_key(
+        "fk_task_automation_runs_tenant_sms_message",
+        "task_automation_runs",
+        "sms_messages",
+        ["tenant_id", "sms_message_id"],
+        ["tenant_id", "id"],
+    )
+    op.create_index(
+        "idx_sms_provider_configs_tenant",
+        "sms_provider_configs",
+        ["tenant_id", "is_active"],
+    )
+    op.create_index(
+        "idx_sms_messages_tenant_contact",
+        "sms_messages",
+        ["tenant_id", "contact_id", "created_at"],
+    )
+    op.create_index(
+        "idx_sms_messages_tenant_matter",
+        "sms_messages",
+        ["tenant_id", "matter_id", "created_at"],
+    )
+    op.create_index(
+        "idx_sms_review_items_tenant_status",
+        "sms_review_items",
+        ["tenant_id", "status", "created_at"],
+    )
+    op.create_index(
+        "idx_task_automation_runs_tenant_sms_message",
+        "task_automation_runs",
+        ["tenant_id", "sms_message_id"],
+    )
+    for table in (
+        "sms_consent_events",
+        "sms_provider_configs",
+        "sms_messages",
+        "sms_review_items",
+    ):
         _rls(table)
+    op.create_index(
+        "idx_sms_consent_events_tenant_consent",
+        "sms_consent_events",
+        ["tenant_id", "consent_id", "occurred_at"],
+    )
+    op.create_index(
+        "idx_sms_messages_reconciliation",
+        "sms_messages",
+        ["status", "dispatch_started_at"],
+        postgresql_where=sa.text(
+            "status IN ('dispatching', 'provider_unknown') AND direction = 'outbound'"
+        ),
+    )
+    op.execute(
+        """CREATE FUNCTION sms_demo_purge_authorized(row_tenant uuid) RETURNS boolean AS $$
+        SELECT current_setting('app.sms_demo_purge_tenant_id', true) = row_tenant::text
+          AND EXISTS (
+            SELECT 1 FROM tenants tenant
+            JOIN demo_sessions demo ON demo.tenant_id = tenant.id
+            WHERE tenant.id = row_tenant
+              AND tenant.billing_tier = 'demo'
+              AND tenant.domain LIKE '%.demo.invalid'
+              AND tenant.is_active = false
+              AND tenant.expires_at <= now()
+              AND demo.id::text = current_setting('app.sms_demo_purge_session_id', true)
+              AND demo.status = 'purging'
+              AND demo.fixture_tenant_id <> demo.tenant_id
+              AND demo.purge_started_at IS NOT NULL
+          );
+        $$ LANGUAGE sql STABLE SET search_path = pg_catalog, public"""
+    )
+    op.execute(
+        """CREATE FUNCTION prevent_sms_consent_event_mutation() RETURNS trigger AS $$
+        BEGIN
+          IF TG_OP = 'DELETE' AND public.sms_demo_purge_authorized(OLD.tenant_id)
+          THEN RETURN OLD; END IF;
+          RAISE EXCEPTION 'SMS consent evidence is immutable';
+        END; $$ LANGUAGE plpgsql SET search_path = pg_catalog, public"""
+    )
+    op.execute(
+        "CREATE TRIGGER sms_consent_events_immutable BEFORE UPDATE OR DELETE "
+        "ON sms_consent_events FOR EACH ROW "
+        "EXECUTE FUNCTION prevent_sms_consent_event_mutation()"
+    )
 
 
 def downgrade() -> None:
-    for table in ("sms_review_items", "sms_messages", "sms_provider_configs"):
+    op.execute(
+        "DROP TRIGGER IF EXISTS sms_consent_events_immutable ON sms_consent_events"
+    )
+    op.execute("DROP FUNCTION IF EXISTS prevent_sms_consent_event_mutation()")
+    op.execute("DROP FUNCTION IF EXISTS sms_demo_purge_authorized(uuid)")
+    op.drop_constraint(
+        "fk_task_automation_runs_tenant_sms_message",
+        "task_automation_runs",
+        type_="foreignkey",
+    )
+    op.drop_column("task_automation_runs", "reconciliation_required")
+    op.drop_column("task_automation_runs", "sms_message_id")
+    for table in (
+        "sms_review_items",
+        "sms_messages",
+        "sms_provider_configs",
+        "sms_consent_events",
+    ):
         op.drop_table(table)
     for name in (
         "allowed_categories",
@@ -259,9 +485,21 @@ def downgrade() -> None:
         "consent_language",
         "consent_source",
         "consented_at",
+        "sms_revoked_at",
         "consent_expires_at",
         "mobile_e164",
         "sms_status",
     ):
         op.drop_column("lead_channel_consents", name)
     op.drop_constraint("uq_communication_logs_tenant_id", "communication_logs")
+    op.drop_constraint(
+        "fk_lead_channel_consents_tenant_lead",
+        "lead_channel_consents",
+        type_="foreignkey",
+    )
+    op.drop_constraint(
+        "uq_lead_channel_consents_tenant_id",
+        "lead_channel_consents",
+        type_="unique",
+    )
+    op.drop_constraint("uq_leads_tenant_id", "leads", type_="unique")

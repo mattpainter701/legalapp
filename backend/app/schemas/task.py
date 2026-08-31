@@ -90,6 +90,8 @@ class TaskDeliveryState(BaseModel):
     provider_message_id: Optional[str] = None
     delivery_detail: Optional[str] = None
     delivery_certainty: Optional[str] = None
+    sms_message_id: Optional[uuid.UUID] = None
+    reconciliation_required: bool = False
     created_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
 

@@ -20,6 +20,7 @@ import hashlib
 import json
 import logging
 import os
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
@@ -330,6 +331,8 @@ class ActionExecutionResult:
     provider: str | None = None
     provider_message_id: str | None = None
     delivery_certainty: str = DELIVERY_OUTCOME_UNKNOWN
+    sms_message_id: uuid.UUID | None = None
+    reconciliation_required: bool = False
 
 
 async def _run_email_client(
@@ -416,6 +419,12 @@ async def _run_sms_client(
             "Not sent: SMS consent, phone, or matter-party binding changed",
             delivery_certainty=DELIVERY_NOT_ATTEMPTED,
         )
+    if not await _action_sources_are_current(db, task, action):
+        return ActionExecutionResult(
+            False,
+            "Not sent: one or more cited local documents are no longer available",
+            delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+        )
     if len(action.recipient_bindings) != 1:
         return ActionExecutionResult(
             False,
@@ -442,7 +451,9 @@ async def _run_sms_client(
             str(exc),
             provider="twilio",
             provider_message_id=None,
-            delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+            delivery_certainty=exc.delivery_certainty,
+            sms_message_id=exc.sms_message_id,
+            reconciliation_required=exc.reconciliation_required,
         )
     return ActionExecutionResult(
         True,
@@ -450,6 +461,7 @@ async def _run_sms_client(
         provider="twilio",
         provider_message_id=message.provider_message_id,
         delivery_certainty="provider_accepted",
+        sms_message_id=message.id,
     )
 
 
@@ -720,7 +732,6 @@ async def _sms_bindings_are_current(
                 MatterParty.matter_id == action.matter_id,
                 Contact.tenant_id == task.tenant_id,
             )
-            .with_for_update()
         )
     ).all()
     current = {party_id: (contact_id, phone) for party_id, contact_id, phone in rows}
@@ -734,9 +745,7 @@ async def _sms_bindings_are_current(
             current_phone = normalize_e164(row[1])
         except SmsError:
             return False
-        consent = await load_sms_consent(
-            db, task.tenant_id, binding.contact_id, lock=True
-        )
+        consent = await load_sms_consent(db, task.tenant_id, binding.contact_id)
         if current_phone != binding.phone or not consent_authorizes_sms(
             consent=consent,
             to_number=current_phone,
@@ -749,7 +758,7 @@ async def _sms_bindings_are_current(
 async def _action_sources_are_current(
     db: AsyncSession,
     task: Task,
-    action: EmailClientAction,
+    action: EmailClientAction | SmsClientAction,
 ) -> bool:
     """Lock and verify every local source before approval/delivery."""
     if not action.source_document_ids:
@@ -1051,6 +1060,7 @@ async def run_task_automation(
             payload_snapshot = _canonical_action_snapshot(
                 run.action_snapshot or task.pending_action
             )
+            claimed_run_id = run.id
             if run.action_snapshot is None:
                 # Compatibility for a queued row created before migration 103.
                 # All new runs already carry these fields before delivery.
@@ -1072,19 +1082,41 @@ async def run_task_automation(
             # OAuth token refresh may commit inside the delivery handler, which
             # clears SET LOCAL. Rebind before writing the durable outcome.
             await set_tenant_context(db, str(locked_tenant_id))
-            run.status = (
-                "submitted"
-                if result.succeeded and result.delivery_certainty == "provider_accepted"
-                else ("sent" if result.succeeded else "failed")
+            run = await db.scalar(
+                select(TaskAutomationRun)
+                .where(
+                    TaskAutomationRun.id == claimed_run_id,
+                    TaskAutomationRun.tenant_id == locked_tenant_id,
+                )
+                .with_for_update()
             )
-            run.error_message = None if result.succeeded else result.detail[:500]
-            run.delivery_detail = result.detail[:500]
-            run.delivery_certainty = result.delivery_certainty
-            run.provider = result.provider[:50] if result.provider else None
-            run.provider_message_id = (
-                result.provider_message_id[:500] if result.provider_message_id else None
+            if run is None:
+                raise RuntimeError("Claimed automation run disappeared during delivery")
+            signed_sms_truth_already_won = bool(
+                action_type == "sms_client"
+                and result.sms_message_id
+                and run.sms_message_id == result.sms_message_id
+                and run.status in {"submitted", "sent", "failed"}
             )
-            run.completed_at = datetime.now(timezone.utc)
+            if not signed_sms_truth_already_won:
+                run.status = (
+                    "submitted"
+                    if result.succeeded
+                    and result.delivery_certainty == "provider_accepted"
+                    else ("sent" if result.succeeded else "failed")
+                )
+                run.error_message = None if result.succeeded else result.detail[:500]
+                run.delivery_detail = result.detail[:500]
+                run.delivery_certainty = result.delivery_certainty
+                run.provider = result.provider[:50] if result.provider else None
+                run.provider_message_id = (
+                    result.provider_message_id[:500]
+                    if result.provider_message_id
+                    else None
+                )
+                run.sms_message_id = result.sms_message_id
+                run.reconciliation_required = result.reconciliation_required
+            run.completed_at = run.completed_at or datetime.now(timezone.utc)
             audit_snapshot = run.action_snapshot or {}
             append_task_event(
                 db,
@@ -1217,6 +1249,11 @@ async def enqueue_durable_automation(
                 "SMS consent, verified phone, or matter-party membership changed. "
                 "Create and review a new draft."
             )
+        if not await _action_sources_are_current(db, task, pending_sms):
+            raise ActionApprovalConflict(
+                "A cited local document is no longer available or no longer "
+                "belongs to this matter. Restore the evidence or create a new draft."
+            )
     elif str(task.pending_action.get("type") or "") == "matter_document_draft":
         try:
             pending_document = MatterDocumentDraftAction.model_validate(
@@ -1258,7 +1295,20 @@ async def enqueue_durable_automation(
     )
     retry_after_run_id = None
     if latest_run is not None and latest_run.status == "failed":
+        if latest_run.reconciliation_required:
+            raise ActionApprovalConflict(
+                "A prior SMS has an unknown provider outcome. Reconcile that exact "
+                "message before approving any replacement."
+            )
         certainty = latest_run.delivery_certainty or DELIVERY_OUTCOME_UNKNOWN
+        if (
+            str(task.pending_action.get("type") or "") == "sms_client"
+            and certainty == "confirmed_not_sent"
+        ):
+            raise ActionApprovalConflict(
+                "The prior SMS was confirmed not sent. Create and review a new SMS "
+                "proposal with a new idempotency key instead of reusing the old attempt."
+            )
         if (
             certainty == DELIVERY_OUTCOME_UNKNOWN
             and not acknowledge_prior_delivery_risk
