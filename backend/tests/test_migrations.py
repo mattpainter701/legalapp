@@ -518,7 +518,8 @@ def test_studio_draft_migration_is_post_146_force_rls_and_immutable():
         "studio_draft_audit_events",
     ):
         assert f'"{table}"' in immutable_upgrade
-    assert "CREATE TRIGGER {table}_immutable" in source
+    assert "CREATE TRIGGER {table}_immutable BEFORE UPDATE ON" in source
+    assert "BEFORE UPDATE OR DELETE ON {table}" not in source
     assert "prevent_studio_immutable_mutation" in source
 
 

@@ -390,7 +390,7 @@ def upgrade() -> None:
         "studio_draft_audit_events",
     ):
         op.execute(
-            f"CREATE TRIGGER {table}_immutable BEFORE UPDATE OR DELETE ON {table} FOR EACH ROW EXECUTE FUNCTION prevent_studio_immutable_mutation()"
+            f"CREATE TRIGGER {table}_immutable BEFORE UPDATE ON {table} FOR EACH ROW EXECUTE FUNCTION prevent_studio_immutable_mutation()"
         )
 
 
