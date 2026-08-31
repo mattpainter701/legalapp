@@ -234,7 +234,7 @@ const WORKSPACE_ROUTE_TITLES = [
   ['/invoices', 'Invoices'],
   ['/reports', 'Reports'],
   ['/trust', 'Trust accounting'],
-  ['/templates', 'Document automation'],
+  ['/templates', 'Template Studio'],
   ['/billing', 'Billing'],
   ['/contacts', 'Contacts'],
   ['/tasks', 'Tasks'],

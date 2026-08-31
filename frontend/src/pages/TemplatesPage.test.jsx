@@ -1,6 +1,7 @@
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render as rtlRender, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import TemplatesPage from './TemplatesPage'
 import {
   analyzeTemplateUpload,
@@ -8,6 +9,7 @@ import {
   createTemplate,
   createTemplateFromUpload,
   discoverTemplateVariables,
+  getTemplate,
   getTemplates,
   renderTemplate,
   renderTemplateFile,
@@ -18,6 +20,7 @@ const originalCreateObjectURL = URL.createObjectURL
 const originalRevokeObjectURL = URL.revokeObjectURL
 
 vi.mock('../api', () => ({
+  getTemplate: vi.fn(),
   getTemplates: vi.fn().mockResolvedValue({ items: [{ id: 'template-1', title: 'Engagement Letter', body: 'Dear {{client_name}}', category: 'engagement_letter', is_active: true }] }),
   getMattersV2: vi.fn().mockResolvedValue({ items: [{ id: 'matter-1', matter_name: 'Smith Matter', client_name: 'Smith' }] }),
   analyzeTemplateUpload: vi.fn(),
@@ -32,6 +35,16 @@ vi.mock('../api', () => ({
   getMatterDocumentDownloadUrl: (matterId, documentId) => `/api/matters/${matterId}/documents/${documentId}/download`,
   triggerBlobDownload: vi.fn(),
 }))
+
+const render = (ui) => rtlRender(<MemoryRouter initialEntries={['/templates']}>{ui}</MemoryRouter>)
+
+const renderStudioRoute = (route) => rtlRender(
+  <MemoryRouter initialEntries={[route]}>
+    <Routes>
+      <Route path="/templates/*" element={<TemplatesPage />} />
+    </Routes>
+  </MemoryRouter>,
+)
 
 describe('document template workflow', () => {
   beforeEach(() => vi.clearAllMocks())
@@ -87,6 +100,84 @@ describe('document template workflow', () => {
     expect(screen.queryByRole('button', { name: 'Branding / Settings' })).not.toBeInTheDocument()
   })
 
+  it('shows truthful Studio home queues from the loaded template response', async () => {
+    getTemplates.mockResolvedValueOnce({
+      items: [
+        { id: 'draft', title: 'Draft engagement', format: 'markdown', body: '', category: 'other', is_active: false },
+        { id: 'ready', title: 'Ready motion', format: 'markdown', body: '', category: 'motion', is_active: true },
+        { id: 'missing', title: 'Missing PDF', format: 'pdf', body: '', category: 'other', is_active: false, source_ready: false },
+      ],
+      summary: { total: 3, active: 1, inactive: 2, ready: 1, source_missing: 1 },
+    })
+    render(<TemplatesPage />)
+
+    expect(await screen.findByRole('heading', { name: 'Studio home' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Continue setup' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Needs attention' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Ready to generate' })).toBeInTheDocument()
+    expect(screen.getAllByRole('link', { name: /Draft engagement/ }).length).toBeGreaterThan(0)
+    expect(screen.getAllByRole('button', { name: 'Open in Studio' })).toHaveLength(3)
+  })
+
+  it('loads a canonical workspace route and truthfully falls back from focused Phase 2 state', async () => {
+    const templateId = '11111111-1111-4111-8111-111111111111'
+    const draftId = '22222222-2222-4222-8222-222222222222'
+    getTemplate.mockResolvedValue({
+      id: templateId,
+      title: 'Engagement workspace',
+      format: 'docx',
+      source_filename: 'engagement.docx',
+      source_sha256: 'abc',
+      variable_schema: { fields: [{ name: 'client_name' }] },
+      is_active: false,
+    })
+    renderStudioRoute(`/templates/${templateId}/studio?focus=draft&draft_id=${draftId}`)
+
+    expect(await screen.findByRole('heading', { name: 'Engagement workspace' })).toBeInTheDocument()
+    expect(getTemplate).toHaveBeenCalledWith(templateId)
+    expect(screen.getByRole('status')).toHaveTextContent(`Draft ${draftId} is not available in Phase 1`)
+    expect(screen.getByRole('link', { name: 'Workspace' })).toHaveAttribute('aria-current', 'page')
+  })
+
+  it('exposes version, test, and activity routes as unavailable shells without fake controls', async () => {
+    const templateId = '11111111-1111-4111-8111-111111111111'
+    getTemplate.mockResolvedValue({ id: templateId, title: 'Court form', format: 'pdf', source_filename: 'court.pdf', source_sha256: 'abc', is_active: true })
+    renderStudioRoute(`/templates/${templateId}/studio/versions`)
+
+    expect(await screen.findByRole('heading', { name: /versions/i })).toBeInTheDocument()
+    expect(screen.getByText(/No versions records or controls are available in Phase 1/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /create version/i })).not.toBeInTheDocument()
+  })
+
+  it('adapts a validated lawhand.open_studio UI event to an internal route', async () => {
+    const templateId = '11111111-1111-4111-8111-111111111111'
+    getTemplate.mockResolvedValue({ id: templateId, title: 'Event workspace', format: 'markdown', is_active: false })
+    renderStudioRoute('/templates')
+    await screen.findByRole('heading', { name: 'Studio home' })
+
+    act(() => window.dispatchEvent(new CustomEvent('lawhand.open_studio', { detail: { template_id: templateId } })))
+    expect(await screen.findByRole('heading', { name: 'Event workspace' })).toBeInTheDocument()
+  })
+
+  it('falls back from an invalid Studio event focus with an accessible message', async () => {
+    const templateId = '11111111-1111-4111-8111-111111111111'
+    getTemplate.mockResolvedValue({ id: templateId, title: 'Fallback workspace', format: 'markdown', is_active: false })
+    renderStudioRoute('/templates')
+    await screen.findByRole('heading', { name: 'Studio home' })
+
+    act(() => window.dispatchEvent(new CustomEvent('lawhand.open_studio', {
+      detail: { template_id: templateId, focus: 'draft', draft_id: 'javascript:alert(1)' },
+    })))
+    expect(await screen.findByRole('heading', { name: 'Fallback workspace' })).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent(/focus was invalid or unavailable/i)
+  })
+
+  it('opens the persistent new route in the existing source preparation flow', async () => {
+    renderStudioRoute('/templates/new')
+    expect(await screen.findByRole('dialog', { name: 'Create Template From Sample' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Choose sample document or filled scan' })).toBeInTheDocument()
+  })
+
   it('searches and paginates the template library on the server', async () => {
     getTemplates
       .mockResolvedValueOnce({
@@ -116,10 +207,10 @@ describe('document template workflow', () => {
     const user = userEvent.setup()
     render(<TemplatesPage />)
 
-    expect(await screen.findByText('First page template')).toBeInTheDocument()
+    expect((await screen.findAllByText('First page template')).length).toBeGreaterThan(0)
     expect(screen.getByText('Showing 1–1 of 13 templates')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Next' }))
-    expect(await screen.findByText('Second page template')).toBeInTheDocument()
+    expect((await screen.findAllByText('Second page template')).length).toBeGreaterThan(0)
     expect(getTemplates).toHaveBeenNthCalledWith(2, expect.objectContaining({ limit: 12, offset: 12 }))
 
     await user.type(screen.getByRole('searchbox', { name: 'Search templates' }), '  Retainer  ')
@@ -128,7 +219,7 @@ describe('document template workflow', () => {
       limit: 12,
       offset: 0,
     })))
-    expect(await screen.findByText('Retainer result')).toBeInTheDocument()
+    expect((await screen.findAllByText('Retainer result')).length).toBeGreaterThan(0)
   })
 
   it('documents singular and plural plaintiff and defendant template fields', async () => {

@@ -1,15 +1,23 @@
 ---
 slug: document-automation-and-esignature
-title: Document automation & e-signature
-description: Build controlled templates, generate reviewable drafts, and manage signature requests from the matter.
+title: Template Studio & e-signature
+description: Build controlled templates in Template Studio, generate reviewable drafts, and manage signature requests from the matter.
 order: 90
 read_time: 9 min
 icon: sparkles
 ---
 
-# Document automation & e-signature
+# Template Studio & e-signature
 
-[Document Automation](/templates) turns approved Word or PDF source files into reusable templates and generated drafts. Matter-level signature tools then track requests and the signature queue.
+[Template Studio](/templates) turns approved Word or PDF source files into reusable templates and generated drafts. Matter-level signature tools then track requests and the signature queue. Existing `/templates` links remain supported.
+
+## Studio home and workspaces
+
+Studio home groups the templates returned by the current library response into **Continue setup**, **Needs attention**, **Ready to generate**, and **Recent templates**. The count badges use the library summary returned by the server; a short visible list is not a promise that every matching template is on the current page.
+
+Choose **Open in Studio** to use the persistent `/templates/{template-id}/studio` workspace. Starting at `/templates/new` opens the source-upload workflow, while `/templates/new?mode=manual` opens the existing manual template form. A successful creation opens the new template's persistent workspace when the server returns its ID. Closing an unfinished creation returns to Studio home, so a copied `/templates/new` link remains recoverable.
+
+The **Test**, **Versions**, and **Activity** workspace URLs are reserved route shells in this phase. They accurately state that their server records and controls are not yet available; they do not create simulated history, tests, or versions. Draft, proposal, and snapshot focus links likewise return to the template workspace with a status message until those server contracts ship.
 
 ## Template library
 

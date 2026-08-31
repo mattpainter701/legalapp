@@ -74,6 +74,14 @@ const PortalCasePage = lazy(() => import('./pages/PortalCasePage'))
 const ClientPortalAcceptPage = lazy(() => import('./pages/ClientPortalAcceptPage'))
 const ClientPortalMatterPage = lazy(() => import('./pages/ClientPortalMatterPage'))
 
+const TEMPLATE_STUDIO_ROUTES = [
+  '/templates/new',
+  '/templates/:templateId/studio',
+  '/templates/:templateId/studio/test',
+  '/templates/:templateId/studio/versions',
+  '/templates/:templateId/studio/activity',
+]
+
 // ---------------------------------------------------------------------------
 // Auth Context
 // ---------------------------------------------------------------------------
@@ -319,8 +327,15 @@ export default function App() {
         />
         <Route
           path="/templates"
-          element={<ShellRoute title="Document Automation" module="templates"><TemplatesPage /></ShellRoute>}
+          element={<ShellRoute title="Template Studio" module="templates"><TemplatesPage /></ShellRoute>}
         />
+        {TEMPLATE_STUDIO_ROUTES.map((path) => (
+          <Route
+            key={path}
+            path={path}
+            element={<ShellRoute title="Template Studio" module="templates"><TemplatesPage /></ShellRoute>}
+          />
+        ))}
         <Route
           path="/billing"
           element={<ProtectedRoute financeOnly><LegacyBillingRedirect /></ProtectedRoute>}

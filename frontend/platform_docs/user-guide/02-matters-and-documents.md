@@ -42,7 +42,7 @@ Use [Document revisions](/matters/documents/revisions) to inspect a document's s
 
 Before uploading, confirm that the document belongs to the tenant and matter shown on screen. Use a descriptive filename that another team member can recognize. Avoid unexplained names such as `scan1.pdf` or `final-final.docx`.
 
-Document automation can create a new draft from an approved template. Open [Document Automation](/templates), choose the right template, review detected fields, and preview the result before saving it to a matter. Generated content is a draft until a qualified person reviews and approves it.
+Template Studio can create a new draft from an approved template. Open [Template Studio](/templates), choose the right template, review detected fields, and preview the result before saving it to a matter. Generated content is a draft until a qualified person reviews and approves it.
 
 ### Search historic firm files
 

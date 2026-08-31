@@ -1,7 +1,12 @@
 import { useState, useEffect, useCallback, useId, useMemo, useRef } from 'react'
 import { useDropzone } from 'react-dropzone'
+import { useLocation, useNavigate } from 'react-router-dom'
 import PrepareFormWorkspace from '../components/templates/PrepareFormWorkspace'
+import TemplateStudioHome from '../components/templates/TemplateStudioHome'
+import TemplateStudioWorkspace from '../components/templates/TemplateStudioWorkspace'
+import { buildOpenStudioTarget, isStudioServerId, OPEN_STUDIO_EVENT, readStudioFocus } from '../components/templates/studioRouting'
 import {
+  getTemplate,
   getTemplates,
   analyzeTemplateUpload,
   proposeTemplateFieldsWithAi,
@@ -635,8 +640,8 @@ function UploadTemplateForm({ onCreated, onCancel }) {
       // Every uploaded template uses the same source-backed lifecycle. This
       // keeps Word formatting intact and binds the reviewed analysis to the
       // exact bytes that are persisted by the server.
-      await createTemplateFromUpload(buildFormData({ includeCategory: true, includeReview: true }))
-      onCreated()
+      const created = await createTemplateFromUpload(buildFormData({ includeCategory: true, includeReview: true }))
+      onCreated(created)
     } catch (err) {
       setError(getErrorMessage(err, 'Could not create template from upload.'))
     } finally {
@@ -1767,6 +1772,8 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
 }
 
 export default function TemplatesPage() {
+  const location = useLocation()
+  const navigate = useNavigate()
   const [templates, setTemplates] = useState([])
   const [matters, setMatters] = useState([])
   const [generationTemplates, setGenerationTemplates] = useState([])
@@ -1793,7 +1800,16 @@ export default function TemplatesPage() {
   const [editTemplate, setEditTemplate] = useState(null)
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [renderTarget, setRenderTarget] = useState(null)
+  const [workspaceTemplate, setWorkspaceTemplate] = useState(null)
+  const [workspaceLoading, setWorkspaceLoading] = useState(false)
+  const [workspaceError, setWorkspaceError] = useState(null)
+  const [routeStatus, setRouteStatus] = useState('')
   const requestIdRef = useRef(0)
+
+  const workspaceMatch = location.pathname.match(/^\/templates\/([^/]+)\/studio(?:\/(test|versions|activity))?\/?$/)
+  const workspaceTemplateId = workspaceMatch?.[1] || null
+  const workspaceSection = workspaceMatch?.[2] || 'workspace'
+  const isNewRoute = /^\/templates\/new\/?$/.test(location.pathname)
 
   const load = useCallback(async () => {
     const requestId = ++requestIdRef.current
@@ -1892,18 +1908,74 @@ export default function TemplatesPage() {
     if (activeTab === 'generate') loadGenerationTemplates()
   }, [activeTab, loadGenerationTemplates])
 
+  useEffect(() => {
+    if (!workspaceTemplateId) {
+      setWorkspaceTemplate(null)
+      setWorkspaceError(null)
+      return
+    }
+    if (!isStudioServerId(workspaceTemplateId)) {
+      setWorkspaceTemplate(null)
+      setWorkspaceError('This Template Studio URL does not contain a valid template ID.')
+      return
+    }
+
+    let cancelled = false
+    setWorkspaceLoading(true)
+    setWorkspaceError(null)
+    getTemplate(workspaceTemplateId)
+      .then((template) => {
+        if (!cancelled) setWorkspaceTemplate(template)
+      })
+      .catch((err) => {
+        if (!cancelled) setWorkspaceError(getErrorMessage(err, 'The requested template could not be loaded.'))
+      })
+      .finally(() => {
+        if (!cancelled) setWorkspaceLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [workspaceTemplateId])
+
+  useEffect(() => {
+    if (!workspaceTemplateId) return
+    const focusState = readStudioFocus(location.search)
+    if (!focusState.valid) {
+      setRouteStatus(focusState.message)
+      return
+    }
+    if (focusState.focus) {
+      setRouteStatus(`${focusState.focus[0].toUpperCase()}${focusState.focus.slice(1)} ${focusState.focusId} is not available in Phase 1. Showing the template workspace.`)
+      return
+    }
+    setRouteStatus(location.state?.studioStatus || '')
+  }, [location.search, location.state, workspaceTemplateId])
+
+  useEffect(() => {
+    const handleOpenStudio = (event) => {
+      const target = buildOpenStudioTarget(event?.detail)
+      setRouteStatus(target.valid ? '' : target.message)
+      navigate(target.url, target.valid ? undefined : { state: { studioStatus: target.message } })
+    }
+    window.addEventListener(OPEN_STUDIO_EVENT, handleOpenStudio)
+    return () => window.removeEventListener(OPEN_STUDIO_EVENT, handleOpenStudio)
+  }, [navigate])
+
   const handleCreate = async (data) => {
-    await createTemplate(data)
+    const created = await createTemplate(data)
     setShowCreate(false)
     await load()
     if (activeTab === 'generate') await loadGenerationTemplates()
+    if (created?.id) navigate(`/templates/${created.id}/studio`)
+    else if (isNewRoute) navigate('/templates')
   }
 
-  const handleUploadedTemplate = async () => {
+  const handleUploadedTemplate = async (created) => {
     setShowUpload(false)
     setPage(0)
     await load()
     if (activeTab === 'generate') await loadGenerationTemplates()
+    if (created?.id) navigate(`/templates/${created.id}/studio`)
+    else if (isNewRoute) navigate('/templates')
   }
 
   const handleUpdate = async (data) => {
@@ -2114,6 +2186,13 @@ export default function TemplatesPage() {
 
                     <div className="mt-auto flex items-center gap-2 pt-4">
                       <button
+                        type="button"
+                        onClick={() => navigate(`/templates/${tpl.id}/studio`)}
+                        className="inline-flex items-center justify-center gap-1 rounded-lg border border-brand-line px-3 py-2 text-xs font-semibold text-brand-ink hover:bg-brand-bg"
+                      >
+                        Open in Studio
+                      </button>
+                      <button
                         onClick={() => setRenderTarget(tpl)}
                         disabled={sourceMissing}
                         title={sourceMissing
@@ -2263,10 +2342,46 @@ export default function TemplatesPage() {
     </div>
   )
 
+  if (workspaceTemplateId) {
+    if (workspaceLoading) {
+      return <div role="status" className="flex h-full items-center justify-center bg-brand-bg text-brand-muted">Loading template workspace…</div>
+    }
+    if (workspaceError || !workspaceTemplate) {
+      return (
+        <div className="flex h-full items-center justify-center bg-brand-bg p-6">
+          <div role="alert" className="max-w-lg rounded-xl border border-brand-rose/30 bg-brand-surface-2 p-6 text-center">
+            <h1 className="text-lg font-semibold text-brand-ink">Template workspace unavailable</h1>
+            <p className="mt-2 text-sm text-brand-muted">{workspaceError || 'The requested template could not be loaded.'}</p>
+            <button type="button" onClick={() => navigate('/templates')} className="mt-4 rounded-lg bg-brand-ink px-4 py-2 text-sm font-semibold text-white">Return to Template Studio</button>
+          </div>
+        </div>
+      )
+    }
+    return (
+      <>
+        <TemplateStudioWorkspace
+          template={workspaceTemplate}
+          section={workspaceSection}
+          statusMessage={routeStatus}
+          onEdit={() => setEditTemplate(workspaceTemplate)}
+          onGenerate={() => setRenderTarget(workspaceTemplate)}
+        />
+        {editTemplate && (
+          <Modal title="Edit Template" onClose={() => setEditTemplate(null)}>
+            <TemplateForm initial={editTemplate} onSubmit={handleUpdate} onCancel={() => setEditTemplate(null)} />
+          </Modal>
+        )}
+        {renderTarget && (
+          <RenderModal template={renderTarget} matters={matters} matterLoading={matterLoading} onClose={() => setRenderTarget(null)} />
+        )}
+      </>
+    )
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full bg-brand-bg">
-        <div className="text-brand-muted">Loading document automation...</div>
+        <div className="text-brand-muted">Loading Template Studio...</div>
       </div>
     )
   }
@@ -2282,7 +2397,7 @@ export default function TemplatesPage() {
             <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-white/80">
               <Sparkles size={13} /> Document workspace
             </div>
-            <h1 className="text-2xl font-semibold tracking-tight text-white md:text-3xl">Document Automation</h1>
+            <h1 className="text-2xl font-semibold tracking-tight text-white md:text-3xl">Template Studio</h1>
             <p className="mt-2 max-w-xl text-sm leading-6 text-white/70">
               Turn the documents your firm already trusts into reviewed, matter-aware templates—and keep every final file in the matter record.
             </p>
@@ -2342,8 +2457,11 @@ export default function TemplatesPage() {
         </div>
       </div>
 
+      {routeStatus && <div role="status" className="mt-5 rounded-lg border border-brand-amber/40 bg-brand-amber/10 px-4 py-3 text-sm text-brand-ink">{routeStatus}</div>}
+      <TemplateStudioHome templates={templates} summary={libraryMeta.summary} />
+
       <div className="my-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div role="tablist" aria-label="Document automation views" className="inline-flex w-fit rounded-xl border border-brand-line bg-brand-surface-2 p-1 shadow-sm">
+        <div role="tablist" aria-label="Template Studio views" className="inline-flex w-fit rounded-xl border border-brand-line bg-brand-surface-2 p-1 shadow-sm">
           {TABS.map(({ key, label, icon: Icon }) => (
             <button
               key={key}
@@ -2382,20 +2500,20 @@ export default function TemplatesPage() {
       {activeTab === 'templates' && renderTemplatesPanel()}
       {activeTab === 'generate' && renderGeneratePanel()}
 
-      {showCreate && (
-        <Modal title="Create Template" onClose={() => setShowCreate(false)}>
+      {(showCreate || (isNewRoute && new URLSearchParams(location.search).get('mode') === 'manual')) && (
+        <Modal title="Create Template" onClose={() => { setShowCreate(false); if (isNewRoute) navigate('/templates') }}>
           <TemplateForm
             onSubmit={handleCreate}
-            onCancel={() => setShowCreate(false)}
+            onCancel={() => { setShowCreate(false); if (isNewRoute) navigate('/templates') }}
           />
         </Modal>
       )}
 
-      {showUpload && (
-          <Modal title="Create Template From Sample" wide onClose={() => setShowUpload(false)}>
+      {(showUpload || (isNewRoute && new URLSearchParams(location.search).get('mode') !== 'manual')) && (
+          <Modal title="Create Template From Sample" wide onClose={() => { setShowUpload(false); if (isNewRoute) navigate('/templates') }}>
           <UploadTemplateForm
             onCreated={handleUploadedTemplate}
-            onCancel={() => setShowUpload(false)}
+            onCancel={() => { setShowUpload(false); if (isNewRoute) navigate('/templates') }}
           />
         </Modal>
       )}

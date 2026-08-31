@@ -28,7 +28,7 @@ const NAV_GROUPS = [
       { path: '/conflicts',      label: 'Conflict Search', icon: ShieldCheck, module: 'contacts' },
       { path: '/intake/dashboard', label: 'Call Intake',   icon: PhoneCall, module: 'intake-dashboard' },
       { path: '/intake',         label: 'Intake',         icon: ClipboardList, module: 'intake' },
-      { path: '/templates',      label: 'Document Automation', icon: FileSignature, module: 'templates' },
+      { path: '/templates',      label: 'Template Studio', icon: FileSignature, module: 'templates' },
     ],
   },
   {

@@ -1,42 +1,50 @@
 ## Summary
 
-Establishes the mediation add-on as a safe extension of its linked Matter and
-the native My Matters portal. Client and external-party submissions remain
-private until attorney review and recipient-specific release; released
-documents/proposals and approved assets are immutable and carry integrity and
-audit evidence. Eligible firm clients receive a read-only Mediation tab only
-while the tenant has an active `mediation-legal` entitlement. The same live
-entitlement now gates the staff and external-party mediation surfaces, while
-legal approval and release require the `approve_legal_work` capability.
+Promotes the existing Document Automation surface into Template Studio without
+changing the backend template model or generation contract. `/templates`
+remains compatible and now includes response-derived setup, attention, ready,
+and recent queues. Every template opens in the canonical
+`/templates/:templateId/studio` workspace; `/templates/new` reuses the current
+source upload and PDF/image preparation flow.
 
-This is the secure workflow foundation, not the final granular demand ledger or
-e-sign packet flow. `docs/mediation-addon-architecture.md` records those next
-slices and their platform integration contract.
+Adds truthful Phase 1 test, versions, and activity route shells plus a validated
+`lawhand.open_studio` browser UI-event adapter. Optional focus accepts exactly
+one of `draft`, `proposal`, or `snapshot` with its matching UUID server ID.
+Invalid or currently unavailable focus state falls back to the template
+workspace with an accessible status message. This adds no MCP tool, `ui://`
+resource, arbitrary redirect/provider URL, executable content, or raw payload.
 
 ## Validation
 
-- frontend `npm run check`: 448 tests, lint with two pre-existing `no-alert`
-  warnings and no errors, production build passed
-- focused backend static/unit contracts: 34 passed
-- mediation and native-portal PostgreSQL integration suite: 19 tests collect;
-  execution is delegated to GitHub CI because local PostgreSQL/Redis services
-  are unavailable
-- Ruff lint and format checks, Python `compileall`, and `git diff --check` passed
-- Alembic graph/offline SQL and migration-safety checks passed
-- release-catalog generation check passed
+- focused Studio routing/event/home/workspace, TemplatesPage, Sidebar, SEO, and
+  platform-doc tests: 72 passed
+- full frontend `npm run check`: lint completed with two pre-existing
+  `no-alert` warnings and no errors; 467 tests passed; production build passed
+- release catalog generation and `--check` passed for `2026.08.30.10`
 
 ## Merge policy attestations
 
 - [x] Documentation updated
 - [ ] No documentation impact
-- [x] Customer release notes updated (`2026.08.30.7`)
+- [x] Customer release notes updated (`2026.08.30.10`)
 - [ ] No customer-facing release note
 - [x] Security and privacy impact reviewed
+
+Security/privacy review: Studio URLs and the browser event adapter accept only
+UUID template/server IDs and one fixed focus pair. No redirect URLs, provider
+URLs, executable content, raw payloads, credentials, or new data exposure are
+accepted. Existing authenticated module guards and tenant-scoped template APIs
+remain authoritative.
 
 ## MCP documentation handoff
 
 - [ ] MCP documentation updated
 - [x] MCP documentation not needed
-- MCP area: Shared architecture and client-portal authorization boundary
-- Wiki handoff note: This change affects mediation and client-portal REST
-  surfaces only; no MCP endpoint, tool, protocol, or client contract changed.
+- MCP area: None; browser UI routing only
+- Wiki handoff note: Phase 1 adds no MCP endpoint, tool, scope, protocol, or
+  `ui://` contract. `lawhand.open_studio` is a validated in-browser UI event.
+
+## Sequencing
+
+Draft only. Do not mark ready or merge until the Visual Document Automation
+Editor master task explicitly authorizes sequencing with later Studio phases.
