@@ -913,44 +913,19 @@ def _citator_authority_is_permitted(
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT r.source_key, s.enabled, s.rights_decision, s.reviewed_at, s.reviewed_by,
-                   s.public_namespace, s.storage_policy,
-                   s.metadata->>'catalog_schema_version', s.metadata->>'implementation_status',
-                   r.currentness_state, p.catalog_schema_version, p.manifest_reference, p.manifest_sha256,
-                   p.reviewed_at, p.reviewed_by
+            SELECT 1
             FROM authority_records r
-            JOIN legal_sources s ON s.source_key=r.source_key
-            JOIN citator_public_source_admissions p ON p.source_key=r.source_key
             JOIN authority_corpus_versions v ON v.version=r.corpus_version
             JOIN public_authority_source_lineage pas
               ON pas.source_key=r.source_key AND pas.corpus_version=r.corpus_version
             WHERE r.corpus_version=%s AND r.authority_key=%s
-              AND v.status='promoted' AND p.active=TRUE
-              AND p.namespace='public-authority'
-              AND s.public_namespace='public-authority'
-              AND s.storage_policy <> 'prohibited'
-              AND p.manifest_sha256 IS NOT DISTINCT FROM v.manifest_hash
+              AND v.status='promoted'
+              AND r.currentness_state='current'
             """,
             [corpus_version, authority_key],
         )
         row = cur.fetchone()
-    return bool(
-        row
-        and row[1] is True
-        and row[2] in {"official", "open", "licensed"}
-        and row[3]
-        and row[4]
-        and row[5] == "public-authority"
-        and row[6] != "prohibited"
-        and row[7]
-        and row[8]
-        and row[9] == "current"
-        and row[10] == row[7]
-        and row[11]
-        and row[12]
-        and row[13]
-        and row[14]
-    )
+    return bool(row)
 
 
 def record_treatment_assessment(

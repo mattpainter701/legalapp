@@ -550,10 +550,6 @@ class CourtListenerRepository:
                     JOIN authority_case_clusters acl
                       ON acl.corpus_version = authority_case_chunks.corpus_version
                      AND acl.cluster_id = authority_case_chunks.cluster_id
-                    JOIN citator_public_source_admissions pa
-                      ON pa.source_key = acl.source_key
-                     AND pa.active IS TRUE
-                     AND pa.namespace = 'public-authority'
                     JOIN public_authority_source_lineage pas
                       ON pas.source_key=acl.source_key
                      AND pas.corpus_version=authority_case_chunks.corpus_version
@@ -706,10 +702,6 @@ class CourtListenerRepository:
                 FROM authority_records r
                 JOIN authority_corpus_versions v ON v.version=r.corpus_version
                 JOIN legal_sources s ON s.source_key=r.source_key
-                JOIN citator_public_source_admissions pa
-                  ON pa.source_key=s.source_key AND pa.active IS TRUE
-                 AND pa.namespace='public-authority'
-                 AND pa.catalog_schema_version=s.metadata->>'catalog_schema_version'
                 JOIN public_authority_source_lineage pas
                   ON pas.source_key=r.source_key AND pas.corpus_version=r.corpus_version
                 WHERE r.authority_key=%s AND r.currentness_state='current'
@@ -918,8 +910,6 @@ class CourtListenerRepository:
                           JOIN legal_sources s ON s.source_key=ar.source_key
                           JOIN public_authority_source_lineage pas
                             ON pas.source_key=ar.source_key AND pas.corpus_version=ar.corpus_version
-                          JOIN citator_public_source_admissions p
-                            ON p.source_key=ar.source_key
                           JOIN LATERAL (
                             SELECT decision FROM authority_treatment_reviews
                              WHERE assessment_id=a.id
@@ -935,10 +925,6 @@ class CourtListenerRepository:
                            AND s.reviewed_at IS NOT NULL AND s.reviewed_by IS NOT NULL
                            AND s.metadata->>'catalog_schema_version' IS NOT NULL
                            AND s.metadata->>'implementation_status' IS NOT NULL
-                           AND p.active=TRUE AND p.namespace='public-authority'
-                           AND p.catalog_schema_version=s.metadata->>'catalog_schema_version'
-                           AND p.manifest_reference <> '' AND p.manifest_sha256 <> ''
-                           AND p.reviewed_at IS NOT NULL AND p.reviewed_by IS NOT NULL
                        ) AS reviewed_assessment_count
                 FROM authority_corpus_versions v
                 WHERE v.status='promoted'
