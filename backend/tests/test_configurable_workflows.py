@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy.dialects import postgresql
 
 from app.models.configurable_workflow import (
     CustomFieldDefinition,
@@ -131,7 +132,12 @@ async def test_template_bundle_locks_fields_by_id_but_returns_field_key_order():
     )
 
     assert [field.field_key for field in returned_fields] == ["court", "zoning"]
-    assert "custom_field_definitions.id" in str(db.queries[-1][0])
+    field_lock_sql = str(db.queries[-1][0].compile(dialect=postgresql.dialect()))
+    assert "ORDER BY custom_field_definitions.id" in field_lock_sql
+    assert (
+        "FOR SHARE OF matter_workflow_field_requirements, custom_field_definitions"
+        in field_lock_sql
+    )
 
 
 def _run(**overrides):
