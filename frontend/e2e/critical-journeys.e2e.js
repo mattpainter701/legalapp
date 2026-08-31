@@ -133,6 +133,9 @@ test('Firm Memory capability enables firm-wide query-first research with honest 
     const path = new URL(request.url()).pathname
     const json = (body, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
 
+    if (path === '/api/version' && request.method() === 'GET') {
+      return json({ version: 'firm-memory-e2e', latest_release: null, release_notes: [] })
+    }
     if (path === '/api/auth/login' && request.method() === 'POST') return json({ ok: true })
     if (path === '/api/auth/me' && request.method() === 'GET') {
       return json({
