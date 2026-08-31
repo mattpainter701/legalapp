@@ -23,6 +23,7 @@ from app.models.demo_session import DemoSession
 from app.models.operator_audit import OperatorAuditLog
 from app.models.tenant import Tenant
 from app.services.demo_registry import DEMO_TABLE_REGISTRY
+from app.services.studio_drafts import authorize_studio_retention_purge
 
 _DEMO_DOMAIN_SUFFIX = ".demo.invalid"
 _RESEARCH_IMMUTABLE_TABLES = (
@@ -32,6 +33,11 @@ _RESEARCH_IMMUTABLE_TABLES = (
 )
 _RESEARCH_PURGE_TENANT_GUC = "app.research_workspace_demo_purge_tenant_id"
 _RESEARCH_PURGE_SESSION_GUC = "app.research_workspace_demo_purge_session_id"
+_STUDIO_IMMUTABLE_TABLES = (
+    "studio_source_artifacts",
+    "studio_draft_snapshots",
+    "studio_draft_audit_events",
+)
 
 # A worker that dies between claiming a session and reaching a terminal state
 # leaves the row in "purging".  Without a reclaim window the hourly job would
@@ -233,9 +239,10 @@ async def _purge_demo_tenant_locked(
         deleted = await _purge_immutable_research_history(
             db, tables, tenant_id=tenant_id, session_id=session_id
         )
+        await authorize_studio_retention_purge(db, tenant_id, "demo")
         # Break optional cycles (invoice/retainer and self-references) first.
         for name, table in tables.items():
-            if name in _RESEARCH_IMMUTABLE_TABLES:
+            if name in _RESEARCH_IMMUTABLE_TABLES or name in _STUDIO_IMMUTABLE_TABLES:
                 continue
             values = {}
             for column in table.columns:

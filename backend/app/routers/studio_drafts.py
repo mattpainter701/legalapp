@@ -4,7 +4,15 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Response
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Header,
+    HTTPException,
+    Response,
+    UploadFile,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -41,6 +49,22 @@ def _set_etag(response: Response, payload: dict) -> dict:
         response.headers["ETag"] = payload["etag"]
     response.headers["Cache-Control"] = "private, no-store"
     return payload
+
+
+@router.post("/sources", response_model=StudioSourceContract, status_code=201)
+async def register_studio_source(
+    source: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(require_capability("manage_documents")),
+):
+    service = _service(db, current_user)
+    max_bytes = service.settings.MAX_FILE_SIZE_MB * 1024 * 1024
+    content = await source.read(max_bytes + 1)
+    return await _result(
+        service.register_source(
+            content, source.content_type or "application/octet-stream"
+        )
+    )
 
 
 @router.post("", response_model=StudioDraftResponse, status_code=201)

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -30,7 +32,10 @@ from app.schemas.studio_draft import (
     StudioDraftPatch,
     StudioPromoteRequest,
     StudioRevisionRequest,
+    canonical_placement_anchor,
 )
+from app.services.automation_capabilities import CapabilityError
+from app.services.document_template_workspace import verified_template_source
 
 MAX_JSON_BYTES = 256_000
 MAX_JSON_DEPTH = 7
@@ -86,6 +91,9 @@ _ALLOWED_FIELD_DEFINITION_KEYS = {
     "semantic_type",
     "validation",
 }
+_SOURCE_RESOLVER_PATTERN = re.compile(
+    r"^studio-db:v1:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
 
 
 class StudioError(Exception):
@@ -160,6 +168,14 @@ def _bounded_redacted(value: Any) -> Any:
                     "message": "string exceeds durable limit",
                 },
             )
+        if isinstance(item, float) and not math.isfinite(item):
+            raise StudioError(
+                422,
+                {
+                    "code": "non_finite_number",
+                    "message": "durable numbers must be finite",
+                },
+            )
         if item is None or isinstance(item, (str, int, float, bool)):
             return item
         raise StudioError(
@@ -212,6 +228,159 @@ def source_contract(draft: StudioDraft) -> dict[str, Any]:
     }
 
 
+def _published_template_base(template: DocumentTemplate) -> str:
+    source_sha = (
+        template.source_sha256
+        or hashlib.sha256(str(template.body or "").encode("utf-8")).hexdigest()
+    )
+    return _sha256(
+        {
+            "title": template.title,
+            "status": template.status,
+            "variable_schema": template.variable_schema or {},
+            "format": template.format or "markdown",
+            "source_sha256": source_sha,
+            "source_content_type": template.source_content_type,
+            "source_file_size": template.source_file_size,
+            "body_sha256": hashlib.sha256(
+                str(template.body or "").encode("utf-8")
+            ).hexdigest(),
+        }
+    )
+
+
+class StudioSourceRegistry:
+    """Server-owned, tenant-scoped registration and verified source read boundary."""
+
+    def __init__(
+        self, db: AsyncSession, tenant_id: uuid.UUID, actor_user_id: uuid.UUID
+    ):
+        self.db = db
+        self.tenant_id = tenant_id
+        self.actor_user_id = actor_user_id
+        self.settings = get_settings()
+
+    async def register(self, content: bytes, media_type: str) -> StudioSourceArtifact:
+        normalized_media = str(media_type or "").split(";", 1)[0].strip().lower()
+        if (
+            not normalized_media
+            or len(normalized_media) > 100
+            or any(ord(char) < 32 or ord(char) == 127 for char in normalized_media)
+        ):
+            raise StudioError(422, {"code": "invalid_source_media_type"})
+        max_bytes = self.settings.MAX_FILE_SIZE_MB * 1024 * 1024
+        if not content or len(content) > max_bytes:
+            raise StudioError(
+                413,
+                {
+                    "code": "source_size_invalid",
+                    "message": "source bytes must be non-empty and within the upload limit",
+                },
+            )
+        digest = hashlib.sha256(content).hexdigest()
+        scope = f"studio-source:{self.tenant_id}:{digest}:{normalized_media}"
+        await self.db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
+            {"scope": scope},
+        )
+        existing = await self.db.scalar(
+            select(StudioSourceArtifact).where(
+                StudioSourceArtifact.tenant_id == self.tenant_id,
+                StudioSourceArtifact.sha256 == digest,
+                StudioSourceArtifact.media_type == normalized_media,
+            )
+        )
+        if existing is not None:
+            await self.read(
+                existing.id,
+                expected_sha256=digest,
+                expected_media_type=normalized_media,
+            )
+            return existing
+        artifact_id = uuid.uuid4()
+        artifact = StudioSourceArtifact(
+            id=artifact_id,
+            tenant_id=self.tenant_id,
+            sha256=digest,
+            media_type=normalized_media,
+            byte_size=len(content),
+            resolver_key=f"studio-db:v1:{uuid.uuid4()}",
+            content_bytes=bytes(content),
+            created_by_user_id=self.actor_user_id,
+        )
+        self.db.add(artifact)
+        await self.db.flush()
+        return artifact
+
+    async def resolve(self, artifact_id: uuid.UUID) -> StudioSourceArtifact:
+        artifact = await self.db.scalar(
+            select(StudioSourceArtifact).where(
+                StudioSourceArtifact.id == artifact_id,
+                StudioSourceArtifact.tenant_id == self.tenant_id,
+            )
+        )
+        if artifact is None:
+            raise StudioError(404, "Template Studio source artifact not found")
+        return artifact
+
+    async def read(
+        self,
+        artifact_id: uuid.UUID,
+        *,
+        expected_sha256: str | None = None,
+        expected_media_type: str | None = None,
+    ) -> bytes:
+        artifact = await self.resolve(artifact_id)
+        content = bytes(artifact.content_bytes or b"")
+        digest = hashlib.sha256(content).hexdigest()
+        if (
+            not _SOURCE_RESOLVER_PATTERN.fullmatch(artifact.resolver_key or "")
+            or artifact.byte_size != len(content)
+            or artifact.sha256 != digest
+            or (expected_sha256 is not None and expected_sha256 != digest)
+            or (
+                expected_media_type is not None
+                and expected_media_type != artifact.media_type
+            )
+        ):
+            raise StudioError(
+                409,
+                {
+                    "code": "source_integrity_failed",
+                    "message": "registered source failed its integrity contract",
+                },
+            )
+        return content
+
+    @staticmethod
+    def contract(artifact: StudioSourceArtifact) -> dict[str, Any]:
+        return {
+            "contract_version": 1,
+            "artifact_id": artifact.id,
+            "sha256": artifact.sha256,
+            "media_type": artifact.media_type,
+        }
+
+
+async def authorize_studio_retention_purge(
+    db: AsyncSession, tenant_id: uuid.UUID, reason: str
+) -> None:
+    """Authorize append-only row deletion for this transaction and tenant only."""
+
+    if reason not in {"demo", "retention"}:
+        raise ValueError("Studio purge reason must be demo or retention")
+    await db.execute(
+        text(
+            "SELECT set_config('app.studio_retention_purge_tenant_id', :tenant, true)"
+        ),
+        {"tenant": str(tenant_id)},
+    )
+    await db.execute(
+        text("SELECT set_config('app.studio_retention_purge_reason', :reason, true)"),
+        {"reason": reason},
+    )
+
+
 class StudioDraftService:
     """Owns all draft reads/mutations and their transaction boundaries.
 
@@ -228,6 +397,7 @@ class StudioDraftService:
         self.tenant_id = tenant_id
         self.actor_user_id = actor_user_id
         self.settings = get_settings()
+        self.sources = StudioSourceRegistry(db, tenant_id, actor_user_id)
 
     async def _idempotency(
         self, operation: str, key: str, request: Any
@@ -294,33 +464,48 @@ class StudioDraftService:
             raise StudioError(404, "Template Studio draft not found")
         return draft
 
-    async def _ensure_source_artifact(
-        self, artifact_id: uuid.UUID, sha256: str, media_type: str
-    ) -> None:
-        artifact = await self.db.scalar(
-            select(StudioSourceArtifact).where(
-                StudioSourceArtifact.id == artifact_id,
-                StudioSourceArtifact.tenant_id == self.tenant_id,
+    async def register_source(self, content: bytes, media_type: str) -> dict[str, Any]:
+        artifact = await self.sources.register(content, media_type)
+        response = self.sources.contract(artifact)
+        await self.db.commit()
+        return response
+
+    async def read_source_bytes(
+        self,
+        artifact_id: uuid.UUID,
+        *,
+        expected_sha256: str | None = None,
+        expected_media_type: str | None = None,
+    ) -> bytes:
+        """Authoritative internal worker read with tenant and integrity checks."""
+
+        return await self.sources.read(
+            artifact_id,
+            expected_sha256=expected_sha256,
+            expected_media_type=expected_media_type,
+        )
+
+    async def _tenant_admission_lock(self) -> None:
+        await self.db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
+            {"scope": f"studio-active-draft-admission:{self.tenant_id}"},
+        )
+
+    async def _enforce_active_quota(self) -> None:
+        count = await self.db.scalar(
+            select(func.count())
+            .select_from(StudioDraft)
+            .where(
+                StudioDraft.tenant_id == self.tenant_id,
+                StudioDraft.lifecycle_state == "active",
             )
         )
-        if artifact is None:
-            self.db.add(
-                StudioSourceArtifact(
-                    id=artifact_id,
-                    tenant_id=self.tenant_id,
-                    sha256=sha256,
-                    media_type=media_type,
-                    created_by_user_id=self.actor_user_id,
-                )
-            )
-            await self.db.flush()
-            return
-        if artifact.sha256 != sha256 or artifact.media_type != media_type:
+        if (count or 0) >= self.settings.TEMPLATE_STUDIO_ACTIVE_DRAFT_QUOTA:
             raise StudioError(
-                409,
+                429,
                 {
-                    "code": "source_hash_mismatch",
-                    "message": "an immutable artifact ID cannot be rebound to different bytes",
+                    "code": "draft_quota_exceeded",
+                    "message": "tenant active draft quota reached",
                 },
             )
 
@@ -366,6 +551,72 @@ class StudioDraftService:
             ).all()
         )
         return fields, placements
+
+    @staticmethod
+    def _validate_parts(
+        draft: StudioDraft,
+        fields: list[StudioDraftField],
+        placements: list[StudioDraftPlacement],
+        *,
+        raise_on_invalid: bool = False,
+    ) -> list[dict[str, str]]:
+        """Apply the canonical persisted-state validator at every boundary."""
+
+        issues: list[dict[str, str]] = []
+        keys: set[str] = set()
+        for field in fields:
+            if field.automation_key in keys:
+                issues.append(
+                    {"code": "duplicate_automation_key", "field_id": str(field.id)}
+                )
+            keys.add(field.automation_key)
+            try:
+                _field_definition(field.definition or {})
+            except StudioError:
+                issues.append(
+                    {"code": "invalid_field_definition", "field_id": str(field.id)}
+                )
+        field_ids = {field.id for field in fields}
+        for placement in placements:
+            if placement.field_id not in field_ids:
+                issues.append(
+                    {"code": "orphan_placement", "placement_id": str(placement.id)}
+                )
+            if placement.format != draft.format:
+                issues.append(
+                    {
+                        "code": "placement_format_mismatch",
+                        "placement_id": str(placement.id),
+                    }
+                )
+            try:
+                canonical = canonical_placement_anchor(
+                    placement.format, placement.anchor_kind, placement.anchor
+                )
+                if canonical != placement.anchor:
+                    issues.append(
+                        {
+                            "code": "noncanonical_placement",
+                            "placement_id": str(placement.id),
+                        }
+                    )
+            except (TypeError, ValueError, ValidationError):
+                issues.append(
+                    {
+                        "code": "invalid_placement_contract",
+                        "placement_id": str(placement.id),
+                    }
+                )
+        if raise_on_invalid and issues:
+            raise StudioError(
+                422,
+                {
+                    "code": "draft_validation_failed",
+                    "message": "draft contains an invalid field or placement contract",
+                    "issues": issues,
+                },
+            )
+        return issues
 
     @staticmethod
     def _identity_payload(
@@ -485,61 +736,35 @@ class StudioDraftService:
         idempotency_key: str,
         *,
         operation: str = "create",
+        published_template_id: uuid.UUID | None = None,
+        published_base_sha256: str | None = None,
     ) -> dict[str, Any]:
         reservation, replay = await self._idempotency(
-            operation, idempotency_key, request
+            operation,
+            idempotency_key,
+            {
+                "request": request,
+                "published_template_id": published_template_id,
+                "published_base_sha256": published_base_sha256,
+            },
         )
         if replay is not None:
             return replay
-        count = await self.db.scalar(
-            select(func.count())
-            .select_from(StudioDraft)
-            .where(
-                StudioDraft.tenant_id == self.tenant_id,
-                StudioDraft.lifecycle_state == "active",
-            )
-        )
-        if (count or 0) >= self.settings.TEMPLATE_STUDIO_ACTIVE_DRAFT_QUOTA:
-            raise StudioError(
-                429,
-                {
-                    "code": "draft_quota_exceeded",
-                    "message": "tenant active draft quota reached",
-                },
-            )
-
-        if request.published_template_id is not None:
-            template = await self.db.scalar(
-                select(DocumentTemplate).where(
-                    DocumentTemplate.id == request.published_template_id,
-                    DocumentTemplate.tenant_id == self.tenant_id,
-                )
-            )
-            if template is None:
-                raise StudioError(404, "Published template not found")
-            template_hash = (
-                template.source_sha256
-                or hashlib.sha256(template.body.encode("utf-8")).hexdigest()
-            )
-            if template_hash != request.source_sha256:
-                raise StudioError(
-                    409,
-                    {
-                        "code": "source_hash_mismatch",
-                        "message": "draft source does not match the published compatibility record",
-                    },
-                )
-
-        artifact_id = request.source_artifact_id or uuid.uuid4()
-        await self._ensure_source_artifact(
-            artifact_id, request.source_sha256, request.source_media_type
+        await self._tenant_admission_lock()
+        await self._enforce_active_quota()
+        artifact = await self.sources.resolve(request.source_artifact_id)
+        await self.sources.read(
+            artifact.id,
+            expected_sha256=artifact.sha256,
+            expected_media_type=artifact.media_type,
         )
         draft = StudioDraft(
             tenant_id=self.tenant_id,
-            published_template_id=request.published_template_id,
-            source_artifact_id=artifact_id,
-            source_sha256=request.source_sha256,
-            source_media_type=request.source_media_type,
+            published_template_id=published_template_id,
+            published_base_sha256=published_base_sha256,
+            source_artifact_id=artifact.id,
+            source_sha256=artifact.sha256,
+            source_media_type=artifact.media_type,
             title=request.title.strip(),
             format=request.format,
             identity_sha256="0" * 64,
@@ -548,10 +773,13 @@ class StudioDraftService:
         )
         self.db.add(draft)
         await self.db.flush()
+        field_ids: dict[str, uuid.UUID] = {}
         for field in request.fields:
+            field_id = uuid.uuid4()
+            field_ids[field.client_key] = field_id
             self.db.add(
                 StudioDraftField(
-                    id=field.id or uuid.uuid4(),
+                    id=field_id,
                     tenant_id=self.tenant_id,
                     draft_id=draft.id,
                     automation_key=field.automation_key,
@@ -565,16 +793,24 @@ class StudioDraftService:
         for placement in request.placements:
             self.db.add(
                 StudioDraftPlacement(
-                    id=placement.id or uuid.uuid4(),
+                    id=uuid.uuid4(),
                     tenant_id=self.tenant_id,
                     draft_id=draft.id,
-                    field_id=placement.field_id,
+                    field_id=field_ids[placement.field_client_key],
                     format=placement.format,
                     anchor_kind=placement.anchor_kind,
-                    anchor=_bounded_redacted(placement.anchor),
+                    anchor=_bounded_redacted(
+                        canonical_placement_anchor(
+                            placement.format,
+                            placement.anchor_kind,
+                            placement.anchor,
+                        )
+                    ),
                 )
             )
         await self.db.flush()
+        fields, placements = await self._parts(draft.id)
+        self._validate_parts(draft, fields, placements, raise_on_invalid=True)
         await self._refresh_identity(draft)
         self._audit(
             draft,
@@ -583,7 +819,6 @@ class StudioDraftService:
             {
                 "field_count": len(request.fields),
                 "placement_count": len(request.placements),
-                "source_artifact_id": str(draft.source_artifact_id),
             },
         )
         await self.db.flush()
@@ -603,11 +838,39 @@ class StudioDraftService:
         )
         if template is None:
             raise StudioError(404, "Published template not found")
-        source_sha = (
-            template.source_sha256
-            or hashlib.sha256(template.body.encode("utf-8")).hexdigest()
+        if template.source_storage_path:
+            try:
+                source_bytes = await verified_template_source(template)
+            except CapabilityError as exc:
+                raise StudioError(
+                    409,
+                    {"code": exc.code, "message": exc.message},
+                ) from exc
+        else:
+            source_bytes = str(template.body or "").encode("utf-8")
+            body_sha = hashlib.sha256(source_bytes).hexdigest()
+            if template.source_sha256 and template.source_sha256 != body_sha:
+                raise StudioError(
+                    409,
+                    {
+                        "code": "template_integrity_failed",
+                        "message": "published template body failed its integrity check",
+                    },
+                )
+        artifact = await self.sources.register(
+            source_bytes,
+            template.source_content_type or "text/markdown",
         )
-        raw_fields = (template.variable_schema or {}).get("fields") or []
+        raw_schema = template.variable_schema or {}
+        if not isinstance(raw_schema, dict):
+            raise StudioError(
+                422,
+                {
+                    "code": "invalid_variable_schema",
+                    "message": "published variable schema must be an object",
+                },
+            )
+        raw_fields = raw_schema.get("fields") or []
         if not isinstance(raw_fields, list) or len(raw_fields) > 200:
             raise StudioError(
                 422,
@@ -616,7 +879,7 @@ class StudioDraftService:
                     "message": "published variable schema is not safely importable",
                 },
             )
-        fields = []
+        fields: list[dict[str, Any]] = []
         placements: list[dict[str, Any]] = []
         for position, raw in enumerate(raw_fields):
             if not isinstance(raw, dict):
@@ -636,39 +899,67 @@ class StudioDraftService:
                         "message": "field key is required",
                     },
                 )
-            try:
-                field_id = (
-                    uuid.UUID(str(raw["studio_field_id"]))
-                    if raw.get("studio_field_id")
-                    else uuid.uuid4()
-                )
-            except (TypeError, ValueError) as exc:
-                raise StudioError(
-                    422,
-                    {
-                        "code": "invalid_variable_schema",
-                        "message": "studio_field_id must be a UUID",
-                    },
-                ) from exc
+            client_key = f"field-{position}"
             definition = {
                 k: v for k, v in raw.items() if k in _ALLOWED_FIELD_DEFINITION_KEYS
             }
             fields.append(
                 {
-                    "id": field_id,
+                    "client_key": client_key,
                     "automation_key": key,
                     "label": str(raw.get("label") or key)[:300],
                     "field_type": str(raw.get("type") or "text")[:40],
                     "required": bool(raw.get("required", False)),
-                    "position": int(raw.get("position", position)),
+                    "position": raw.get("position", position),
                     "definition": _field_definition(definition),
                 }
             )
+            canonical_items = raw.get("placements")
+            if canonical_items is not None:
+                if not isinstance(canonical_items, list) or len(canonical_items) > 20:
+                    raise StudioError(
+                        422,
+                        {
+                            "code": "invalid_variable_schema",
+                            "message": "placement list is not safely importable",
+                        },
+                    )
+                for canonical_item in canonical_items:
+                    if not isinstance(canonical_item, dict):
+                        raise StudioError(
+                            422,
+                            {
+                                "code": "invalid_variable_schema",
+                                "message": "placement entries must be objects",
+                            },
+                        )
+                    unknown_placement_keys = set(canonical_item).difference(
+                        {"studio_placement_id", "format", "anchor_kind", "anchor"}
+                    )
+                    if unknown_placement_keys:
+                        raise StudioError(
+                            422,
+                            {
+                                "code": "invalid_variable_schema",
+                                "message": "placement entry contains unsupported metadata",
+                            },
+                        )
+                    placements.append(
+                        {
+                            "client_key": f"placement-{len(placements)}",
+                            "field_client_key": client_key,
+                            "format": canonical_item.get("format"),
+                            "anchor_kind": canonical_item.get("anchor_kind"),
+                            "anchor": canonical_item.get("anchor"),
+                        }
+                    )
+                if canonical_items:
+                    continue
             if raw.get("pdf_field_name"):
                 placements.append(
                     {
-                        "id": uuid.uuid4(),
-                        "field_id": field_id,
+                        "client_key": f"placement-{len(placements)}",
+                        "field_client_key": client_key,
                         "format": "pdf",
                         "anchor_kind": "acroform_field",
                         "anchor": {"field_name": str(raw["pdf_field_name"])[:500]},
@@ -677,42 +968,50 @@ class StudioDraftService:
             overlay_items = raw.get("pdf_overlays") or (
                 [raw["pdf_overlay"]] if isinstance(raw.get("pdf_overlay"), dict) else []
             )
+            if not isinstance(overlay_items, list) or len(overlay_items) > 20:
+                raise StudioError(
+                    422,
+                    {
+                        "code": "invalid_variable_schema",
+                        "message": "PDF overlay list is not safely importable",
+                    },
+                )
             for overlay in overlay_items[:20]:
-                if isinstance(overlay, dict):
-                    clean_overlay = {
-                        k: v
-                        for k, v in overlay.items()
-                        if k not in {"source_text", "text", "value", "default"}
-                    }
-                    placements.append(
+                if not isinstance(overlay, dict):
+                    raise StudioError(
+                        422,
                         {
-                            "id": uuid.uuid4(),
-                            "field_id": field_id,
-                            "format": "pdf",
-                            "anchor_kind": "overlay",
-                            "anchor": _bounded_redacted(clean_overlay),
-                        }
+                            "code": "invalid_variable_schema",
+                            "message": "PDF overlay entries must be objects",
+                        },
                     )
-            if isinstance(raw.get("docx_anchor"), dict):
-                clean_anchor = {
-                    k: v
-                    for k, v in raw["docx_anchor"].items()
-                    if k not in {"source_text", "text", "value", "default"}
-                }
                 placements.append(
                     {
-                        "id": uuid.uuid4(),
-                        "field_id": field_id,
+                        "client_key": f"placement-{len(placements)}",
+                        "field_client_key": client_key,
+                        "format": "pdf",
+                        "anchor_kind": "overlay",
+                        "anchor": overlay,
+                    }
+                )
+            if isinstance(raw.get("docx_anchor"), dict):
+                docx_anchor = dict(raw["docx_anchor"])
+                if raw.get("docx_source_key"):
+                    docx_anchor["source_key"] = raw["docx_source_key"]
+                placements.append(
+                    {
+                        "client_key": f"placement-{len(placements)}",
+                        "field_client_key": client_key,
                         "format": "docx",
-                        "anchor_kind": "docx_anchor",
-                        "anchor": _bounded_redacted(clean_anchor),
+                        "anchor_kind": "semantic_anchor",
+                        "anchor": docx_anchor,
                     }
                 )
             elif raw.get("docx_source_key"):
                 placements.append(
                     {
-                        "id": uuid.uuid4(),
-                        "field_id": field_id,
+                        "client_key": f"placement-{len(placements)}",
+                        "field_client_key": client_key,
                         "format": "docx",
                         "anchor_kind": "source_key",
                         "anchor": {"source_key": str(raw["docx_source_key"])[:500]},
@@ -721,8 +1020,8 @@ class StudioDraftService:
             elif (template.format or "markdown") == "markdown":
                 placements.append(
                     {
-                        "id": uuid.uuid4(),
-                        "field_id": field_id,
+                        "client_key": f"placement-{len(placements)}",
+                        "field_client_key": client_key,
                         "format": "markdown",
                         "anchor_kind": "template_token",
                         "anchor": {"token": key},
@@ -733,11 +1032,7 @@ class StudioDraftService:
                 {
                     "title": request.title or template.title,
                     "format": template.format or "markdown",
-                    "source_artifact_id": uuid.uuid4(),
-                    "source_sha256": source_sha,
-                    "source_media_type": template.source_content_type
-                    or "text/markdown",
-                    "published_template_id": template.id,
+                    "source_artifact_id": artifact.id,
                     "fields": fields,
                     "placements": placements,
                 }
@@ -751,7 +1046,11 @@ class StudioDraftService:
                 },
             ) from exc
         return await self.create(
-            create_request, idempotency_key, operation="import_template"
+            create_request,
+            idempotency_key,
+            operation="import_template",
+            published_template_id=template.id,
+            published_base_sha256=_published_template_base(template),
         )
 
     async def patch(
@@ -767,6 +1066,8 @@ class StudioDraftService:
         )
         if replay is not None:
             return replay
+        if any(item.op in {"archive", "restore"} for item in request.operations):
+            await self._tenant_admission_lock()
         draft = await self._locked_draft(draft_id)
         self._check_revision(draft, request.base_revision)
         identity_changed = False
@@ -781,21 +1082,15 @@ class StudioDraftService:
                 payload = item.field
                 row = None
                 if payload.id is not None:
-                    scoped_row = await self.db.scalar(
+                    row = await self.db.scalar(
                         select(StudioDraftField).where(
                             StudioDraftField.id == payload.id,
                             StudioDraftField.tenant_id == self.tenant_id,
+                            StudioDraftField.draft_id == draft.id,
                         )
                     )
-                    if scoped_row is not None and scoped_row.draft_id != draft.id:
-                        raise StudioError(
-                            409,
-                            {
-                                "code": "field_scope_mismatch",
-                                "message": "field UUID already belongs to another draft",
-                            },
-                        )
-                    row = scoped_row
+                    if row is None:
+                        raise StudioError(404, "Draft field not found")
                 duplicate_key = await self.db.scalar(
                     select(StudioDraftField.id).where(
                         StudioDraftField.draft_id == draft.id,
@@ -814,7 +1109,7 @@ class StudioDraftService:
                     )
                 if row is None:
                     row = StudioDraftField(
-                        id=payload.id or uuid.uuid4(),
+                        id=uuid.uuid4(),
                         tenant_id=self.tenant_id,
                         draft_id=draft.id,
                         automation_key=payload.automation_key,
@@ -856,46 +1151,47 @@ class StudioDraftService:
                     )
                 )
                 if field_exists is None:
+                    raise StudioError(404, "Draft field not found")
+                if payload.format != draft.format:
                     raise StudioError(
                         422,
                         {
-                            "code": "unknown_field",
-                            "message": "placement field is not in this draft",
+                            "code": "placement_format_mismatch",
+                            "message": "placement format must match the draft format",
                         },
                     )
                 row = None
                 if payload.id is not None:
-                    scoped_row = await self.db.scalar(
+                    row = await self.db.scalar(
                         select(StudioDraftPlacement).where(
                             StudioDraftPlacement.id == payload.id,
                             StudioDraftPlacement.tenant_id == self.tenant_id,
+                            StudioDraftPlacement.draft_id == draft.id,
                         )
                     )
-                    if scoped_row is not None and scoped_row.draft_id != draft.id:
-                        raise StudioError(
-                            409,
-                            {
-                                "code": "placement_scope_mismatch",
-                                "message": "placement UUID already belongs to another draft",
-                            },
-                        )
-                    row = scoped_row
+                    if row is None:
+                        raise StudioError(404, "Draft placement not found")
+                anchor = _bounded_redacted(
+                    canonical_placement_anchor(
+                        payload.format, payload.anchor_kind, payload.anchor
+                    )
+                )
                 if row is None:
                     row = StudioDraftPlacement(
-                        id=payload.id or uuid.uuid4(),
+                        id=uuid.uuid4(),
                         tenant_id=self.tenant_id,
                         draft_id=draft.id,
                         field_id=payload.field_id,
                         format=payload.format,
                         anchor_kind=payload.anchor_kind,
-                        anchor=_bounded_redacted(payload.anchor),
+                        anchor=anchor,
                     )
                     self.db.add(row)
                 else:
                     row.field_id = payload.field_id
                     row.format = payload.format
                     row.anchor_kind = payload.anchor_kind
-                    row.anchor = _bounded_redacted(payload.anchor)
+                    row.anchor = anchor
                 identity_changed = True
                 invalidation_reason = "placement_contract_changed"
             elif item.op == "remove_placement":
@@ -911,12 +1207,15 @@ class StudioDraftService:
                 identity_changed = True
                 invalidation_reason = "placement_contract_changed"
             elif item.op == "replace_source":
-                await self._ensure_source_artifact(
-                    item.source_artifact_id, item.source_sha256, item.source_media_type
+                artifact = await self.sources.resolve(item.source_artifact_id)
+                await self.sources.read(
+                    artifact.id,
+                    expected_sha256=artifact.sha256,
+                    expected_media_type=artifact.media_type,
                 )
-                draft.source_artifact_id = item.source_artifact_id
-                draft.source_sha256 = item.source_sha256
-                draft.source_media_type = item.source_media_type
+                draft.source_artifact_id = artifact.id
+                draft.source_sha256 = artifact.sha256
+                draft.source_media_type = artifact.media_type
                 identity_changed = True
                 invalidation_reason = "source_changed"
             elif item.op == "archive":
@@ -924,8 +1223,10 @@ class StudioDraftService:
                 draft.archived_at = datetime.now(timezone.utc)
                 invalidation_reason = "archived"
             elif item.op == "restore":
-                draft.lifecycle_state = "active"
-                draft.archived_at = None
+                if draft.lifecycle_state == "archived":
+                    await self._enforce_active_quota()
+                    draft.lifecycle_state = "active"
+                    draft.archived_at = None
             elif item.op == "request_cancel":
                 draft.cancellation_requested_at = datetime.now(timezone.utc)
                 invalidation_reason = "cancellation_requested"
@@ -936,6 +1237,8 @@ class StudioDraftService:
         draft.updated_by_user_id = self.actor_user_id
         draft.updated_at = datetime.now(timezone.utc)
         await self.db.flush()
+        fields, placements = await self._parts(draft.id)
+        self._validate_parts(draft, fields, placements, raise_on_invalid=True)
         if identity_changed:
             await self._refresh_identity(draft)
         invalidation_reason = invalidation_reason or "draft_revision_changed"
@@ -964,27 +1267,7 @@ class StudioDraftService:
         draft = await self._locked_draft(draft_id)
         self._check_revision(draft, request.expected_revision)
         fields, placements = await self._parts(draft.id)
-        issues: list[dict[str, str]] = []
-        keys: set[str] = set()
-        for field in fields:
-            if field.automation_key in keys:
-                issues.append(
-                    {"code": "duplicate_automation_key", "field_id": str(field.id)}
-                )
-            keys.add(field.automation_key)
-        field_ids = {field.id for field in fields}
-        for placement in placements:
-            if placement.field_id not in field_ids:
-                issues.append(
-                    {"code": "orphan_placement", "placement_id": str(placement.id)}
-                )
-            if placement.format != draft.format:
-                issues.append(
-                    {
-                        "code": "placement_format_mismatch",
-                        "placement_id": str(placement.id),
-                    }
-                )
+        issues = self._validate_parts(draft, fields, placements)
         if draft.lifecycle_state == "archived":
             issues.append({"code": "draft_archived"})
         return {
@@ -1041,13 +1324,13 @@ class StudioDraftService:
                 },
             )
         fields, placements = await self._parts(draft.id)
+        self._validate_parts(draft, fields, placements, raise_on_invalid=True)
         payload = _bounded_redacted(
             {
                 "contract_version": 1,
                 "draft_id": str(draft.id),
                 "revision": draft.revision,
                 "identity_sha256": draft.identity_sha256,
-                "title": draft.title,
                 "format": draft.format,
                 "lifecycle_state": draft.lifecycle_state,
                 "source": source_contract(draft),
@@ -1136,6 +1419,7 @@ class StudioDraftService:
         fields: list[StudioDraftField], placements: list[StudioDraftPlacement]
     ) -> dict[str, Any]:
         by_field: dict[uuid.UUID, list[dict[str, Any]]] = {}
+        legacy_by_field: dict[uuid.UUID, dict[str, Any]] = {}
         for item in placements:
             by_field.setdefault(item.field_id, []).append(
                 {
@@ -1145,6 +1429,21 @@ class StudioDraftService:
                     "anchor": item.anchor,
                 }
             )
+            legacy = legacy_by_field.setdefault(item.field_id, {})
+            if item.format == "pdf" and item.anchor_kind == "acroform_field":
+                legacy.setdefault("pdf_field_name", item.anchor["field_name"])
+            elif item.format == "pdf" and item.anchor_kind == "overlay":
+                overlays = legacy.setdefault("pdf_overlays", [])
+                overlays.append(item.anchor)
+                legacy.setdefault("pdf_overlay", item.anchor)
+            elif item.format == "docx" and item.anchor_kind == "source_key":
+                legacy.setdefault("docx_source_key", item.anchor["source_key"])
+            elif item.format == "docx" and item.anchor_kind == "semantic_anchor":
+                anchor = dict(item.anchor)
+                source_key = anchor.pop("source_key", None)
+                legacy.setdefault("docx_anchor", anchor)
+                if source_key:
+                    legacy.setdefault("docx_source_key", source_key)
         return {
             "version": 2,
             "fields": [
@@ -1156,6 +1455,7 @@ class StudioDraftService:
                     "required": field.required,
                     "position": field.position,
                     **field.definition,
+                    **legacy_by_field.get(field.id, {}),
                     "placements": by_field.get(field.id, []),
                 }
                 for field in fields
@@ -1201,6 +1501,18 @@ class StudioDraftService:
         )
         if template is None:
             raise StudioError(404, "Published template not found")
+        current_base = _published_template_base(template)
+        if (
+            draft.published_base_sha256 is None
+            or draft.published_base_sha256 != current_base
+        ):
+            raise StudioError(
+                409,
+                {
+                    "code": "stale_published_template",
+                    "message": "published compatibility record changed since import",
+                },
+            )
         current_source_hash = (
             template.source_sha256
             or hashlib.sha256(template.body.encode("utf-8")).hexdigest()
@@ -1213,13 +1525,20 @@ class StudioDraftService:
                     "message": "published source changed outside this draft",
                 },
             )
+        await self.sources.read(
+            draft.source_artifact_id,
+            expected_sha256=draft.source_sha256,
+            expected_media_type=draft.source_media_type,
+        )
         fields, placements = await self._parts(draft.id)
+        self._validate_parts(draft, fields, placements, raise_on_invalid=True)
         template.title = draft.title
         template.variable_schema = _bounded_redacted(
             self.variable_schema(fields, placements)
         )
         template.status = request.status
         template.updated_at = datetime.now(timezone.utc)
+        draft.published_base_sha256 = _published_template_base(template)
         base = draft.revision
         draft.revision += 1
         draft.updated_by_user_id = self.actor_user_id

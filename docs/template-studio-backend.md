@@ -11,20 +11,26 @@ revision, identity, and source-reference semantics documented here.
 
 All Studio routes use the existing `manage_documents` capability and tenant
 context. Every Studio table has `ENABLE ROW LEVEL SECURITY`, `FORCE ROW LEVEL
-SECURITY`, and a fail-closed tenant policy. Snapshots and audit events are
-immutable. Durable Studio JSON rejects raw variable values, document body/text,
-provider paths or item IDs, and signed/download URLs.
+SECURITY`, and a fail-closed tenant policy. Source, snapshot, and audit rows are
+append-only to ordinary application transactions: both UPDATE and DELETE are
+rejected. Deletion exists only through a transaction-scoped, tenant-bound
+demo/retention purge boundary; retention is not scheduled automatically and
+these rows are not claimed to be legally permanent. Durable Studio JSON rejects
+raw variable values, document body/text, provider paths or item IDs, and
+signed/download URLs.
 
 ## Draft and source contract
 
 A draft has a stable UUID, a monotonic positive revision, a canonical SHA-256
 identity, and an `active` or `archived` lifecycle. Its source is identified by
-an application-owned opaque UUID, SHA-256, and media type. An artifact UUID can
-never be rebound to different bytes or a different media type. Provider
-locations and credentials are resolved behind the source reader and are not
-part of this domain. The identity/hash/media tuple lives in the immutable
-`studio_source_artifacts` table, so it cannot be rebound after a draft moves to
-a newer source.
+an application-owned opaque UUID, SHA-256, and media type. Clients first upload
+bytes to `POST /api/template-studio/drafts/sources`; the server computes SHA-256,
+stores the exact immutable bytes with a private resolver binding, and returns
+only the safe projection below. Draft creation can reference only an existing
+artifact visible to the same tenant. It cannot mint metadata from a caller's
+hash or media assertion. Published-template import reads and verifies the
+current stored template source (or its markdown body), then registers those
+exact bytes. Provider locations and credentials remain private to the reader.
 
 The only worker-safe source projection is:
 
@@ -37,16 +43,30 @@ The only worker-safe source projection is:
 }
 ```
 
-Workers must resolve `artifact_id` under the already authenticated tenant
-context and verify the byte hash before use. This projection is not a signed
-URL and confers no storage authority by itself.
+Workers must call the authoritative internal source reader under the already
+authenticated tenant context. It resolves `(tenant, artifact_id)`, reads the
+exact bytes, and rechecks resolver binding, byte count, media type, and SHA-256
+before returning. This projection is not a signed URL and confers no storage
+authority by itself.
 
 Fields have stable UUIDs independent from their editable automation keys.
-Renaming a key updates the field while preserving that UUID. Field definitions
+The server generates source, field, and placement UUIDs; request-local bounded
+client keys correlate new fields and placements without becoming durable
+identities. A supplied UUID on patch must already resolve inside the current
+tenant and draft; foreign and nonexistent IDs produce the same 404. Renaming a
+key updates the field while preserving its UUID. Field definitions
 are separate from any number of format-specific semantic placements. Phase 2
 owns these canonical anchors and their revisions. Phase 5 owns DOCX renderer
 fidelity, layout interpretation, and mapping canonical anchors to preview
 geometry; Phase 5 must not create a second placement source of truth.
+
+Canonical placements are a closed format/kind vocabulary: markdown template
+tokens; PDF AcroForm fields or finite, ordered page rectangles; and DOCX source
+keys, semantic paragraph ranges, or content-control tags. The same strict
+validator runs on create, compatibility import, patch, validation, snapshot,
+and promotion. Unknown keys/kinds, format mismatches, non-finite or inverted
+geometry, out-of-range pages/coordinates/ranges, source fragments, raw values,
+and provider metadata fail closed. Input models forbid extra properties.
 
 ## Concurrency, idempotency, and evidence
 
@@ -93,9 +113,20 @@ limited to:
 Payloads are bounded by byte size, nesting depth, node count, field count,
 placement count, operation count, and per-string/array limits.
 
-Compatibility promotion is deliberately narrow. It updates the existing
-tenant-owned `DocumentTemplate` title, status, and `variable_schema` only when
-that template's current source hash still matches the draft. The schema keeps
+Snapshots intentionally omit the editable draft title and all source bytes.
+Field labels and bounded definitions are customer-authored semantic metadata
+needed to reconstruct the contract, so they are retained in tenant-scoped
+snapshots but never copied into audit detail or future MCP summaries. Audit
+detail contains operation names, counts, identifiers, and invalidation reasons,
+not document text, labels, source locations, or variable values.
+
+Compatibility promotion is deliberately narrow and Phase 2 permits only
+`status="draft"`; activation remains with the existing guarded human workflow.
+An imported draft stores a canonical base hash covering every compatibility
+field promotion overwrites (title, status, variable schema, format, source
+identity, and markdown body identity). Promotion locks and rechecks that base,
+revalidates the exact current draft, and returns structured 409
+`stale_published_template` instead of overwriting a concurrent edit. The schema keeps
 the established `name`, `label`, `type`, and `required` fields while adding
 stable `studio_field_id` and semantic placements. New-template byte
 materialization is not attempted here. Existing document-template rendering,

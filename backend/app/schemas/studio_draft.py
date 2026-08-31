@@ -1,11 +1,12 @@
-"""Bounded API contracts for the server-side Template Studio foundation."""
+"""Strict, bounded API contracts for the Template Studio foundation."""
 
 from __future__ import annotations
 
+import math
 import uuid
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 StudioFormat = Literal["markdown", "docx", "pdf"]
@@ -21,13 +22,98 @@ StudioOperationName = Literal[
     "request_cancel",
     "clear_cancel",
 ]
+AutomationKey = Annotated[
+    str, Field(min_length=1, max_length=120, pattern=r"^[A-Za-z][A-Za-z0-9_.-]*$")
+]
+ClientKey = Annotated[
+    str, Field(min_length=1, max_length=80, pattern=r"^[A-Za-z][A-Za-z0-9_.-]*$")
+]
+BoundedIdentifier = Annotated[
+    str, Field(min_length=1, max_length=200, pattern=r"^[^\x00-\x1f\x7f]+$")
+]
 
 
-class StudioFieldInput(BaseModel):
-    id: uuid.UUID | None = None
-    automation_key: str = Field(
-        min_length=1, max_length=120, pattern=r"^[A-Za-z][A-Za-z0-9_.-]*$"
-    )
+class StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class MarkdownTokenAnchor(StrictModel):
+    token: AutomationKey
+
+
+class PdfAcroFormAnchor(StrictModel):
+    field_name: BoundedIdentifier
+
+
+def _ordered_rect(value: tuple[float, float, float, float], field: str) -> None:
+    if not all(math.isfinite(number) for number in value):
+        raise ValueError(f"{field} coordinates must be finite")
+    left, bottom, right, top = value
+    if min(value) < 0 or max(value) > 20_000 or right <= left or top <= bottom:
+        raise ValueError(f"{field} must be an ordered rectangle within page bounds")
+
+
+class PdfOverlayAnchor(StrictModel):
+    page: int = Field(ge=1, le=10_000)
+    rect: tuple[float, float, float, float]
+    source_rect: tuple[float, float, float, float] | None = None
+    font_size: float | None = Field(default=None, gt=0, le=200)
+    erase_source: bool = False
+    source_kind: Literal["manual", "text", "ocr"] = "manual"
+
+    @model_validator(mode="after")
+    def validate_geometry(self):
+        _ordered_rect(self.rect, "rect")
+        if self.source_rect is not None:
+            _ordered_rect(self.source_rect, "source_rect")
+        if self.font_size is not None and not math.isfinite(self.font_size):
+            raise ValueError("font_size must be finite")
+        return self
+
+
+class DocxSourceKeyAnchor(StrictModel):
+    source_key: str = Field(pattern=r"^docx:[0-9a-f]{24}$")
+
+
+class DocxSemanticAnchor(StrictModel):
+    paragraph_ordinal: int = Field(ge=0, le=1_000_000)
+    start: int = Field(ge=0, le=10_000_000)
+    end: int = Field(gt=0, le=10_000_000)
+    source_key: str | None = Field(default=None, pattern=r"^docx:[0-9a-f]{24}$")
+
+    @model_validator(mode="after")
+    def validate_range(self):
+        if self.end <= self.start:
+            raise ValueError("DOCX anchor end must be greater than start")
+        return self
+
+
+class DocxContentControlAnchor(StrictModel):
+    tag: BoundedIdentifier
+
+
+_ANCHOR_MODELS = {
+    ("markdown", "template_token"): MarkdownTokenAnchor,
+    ("pdf", "acroform_field"): PdfAcroFormAnchor,
+    ("pdf", "overlay"): PdfOverlayAnchor,
+    ("docx", "source_key"): DocxSourceKeyAnchor,
+    ("docx", "semantic_anchor"): DocxSemanticAnchor,
+    ("docx", "content_control"): DocxContentControlAnchor,
+}
+
+
+def canonical_placement_anchor(
+    format_name: str, anchor_kind: str, anchor: dict[str, Any]
+) -> dict[str, Any]:
+    model_type = _ANCHOR_MODELS.get((format_name, anchor_kind))
+    if model_type is None:
+        raise ValueError("unsupported placement format/kind combination")
+    return model_type.model_validate(anchor).model_dump(exclude_none=True)
+
+
+class StudioFieldCreateInput(StrictModel):
+    client_key: ClientKey
+    automation_key: AutomationKey
     label: str = Field(min_length=1, max_length=300)
     field_type: str = Field(min_length=1, max_length=40)
     required: bool = False
@@ -35,101 +121,130 @@ class StudioFieldInput(BaseModel):
     definition: dict[str, Any] = Field(default_factory=dict)
 
 
-class StudioPlacementInput(BaseModel):
+class StudioFieldPatchInput(StrictModel):
+    id: uuid.UUID | None = None
+    automation_key: AutomationKey
+    label: str = Field(min_length=1, max_length=300)
+    field_type: str = Field(min_length=1, max_length=40)
+    required: bool = False
+    position: int = Field(default=0, ge=0, le=9999)
+    definition: dict[str, Any] = Field(default_factory=dict)
+
+
+class StudioPlacementCreateInput(StrictModel):
+    client_key: ClientKey
+    field_client_key: ClientKey
+    format: StudioFormat
+    anchor_kind: str = Field(min_length=1, max_length=40)
+    anchor: dict[str, Any]
+
+    @model_validator(mode="after")
+    def canonicalize_anchor(self):
+        self.anchor = canonical_placement_anchor(
+            self.format, self.anchor_kind, self.anchor
+        )
+        return self
+
+
+class StudioPlacementPatchInput(StrictModel):
     id: uuid.UUID | None = None
     field_id: uuid.UUID
     format: StudioFormat
     anchor_kind: str = Field(min_length=1, max_length=40)
     anchor: dict[str, Any]
 
+    @model_validator(mode="after")
+    def canonicalize_anchor(self):
+        self.anchor = canonical_placement_anchor(
+            self.format, self.anchor_kind, self.anchor
+        )
+        return self
 
-class StudioDraftCreate(BaseModel):
+
+class StudioDraftCreate(StrictModel):
     title: str = Field(min_length=1, max_length=300)
     format: StudioFormat
-    source_artifact_id: uuid.UUID | None = None
-    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    source_media_type: str = Field(min_length=1, max_length=100)
-    published_template_id: uuid.UUID | None = None
-    fields: list[StudioFieldInput] = Field(default_factory=list, max_length=200)
-    placements: list[StudioPlacementInput] = Field(
+    source_artifact_id: uuid.UUID
+    fields: list[StudioFieldCreateInput] = Field(default_factory=list, max_length=200)
+    placements: list[StudioPlacementCreateInput] = Field(
         default_factory=list, max_length=1000
     )
 
     @model_validator(mode="after")
-    def placement_fields_exist(self):
-        supplied_ids = [item.id for item in self.fields if item.id is not None]
-        supplied = set(supplied_ids)
-        if len(supplied) != len(supplied_ids):
-            raise ValueError("explicit field IDs must be unique")
-        keys = [item.automation_key for item in self.fields]
-        if len(set(keys)) != len(keys):
+    def validate_local_correlations(self):
+        field_keys = [item.client_key for item in self.fields]
+        if len(set(field_keys)) != len(field_keys):
+            raise ValueError("field client keys must be unique")
+        automation_keys = [item.automation_key for item in self.fields]
+        if len(set(automation_keys)) != len(automation_keys):
             raise ValueError("automation keys must be unique within a draft")
-        placement_ids = [item.id for item in self.placements if item.id is not None]
-        if len(set(placement_ids)) != len(placement_ids):
-            raise ValueError("explicit placement IDs must be unique")
-        if any(item.field_id not in supplied for item in self.placements):
+        placement_keys = [item.client_key for item in self.placements]
+        if len(set(placement_keys)) != len(placement_keys):
+            raise ValueError("placement client keys must be unique")
+        known_fields = set(field_keys)
+        if any(item.field_client_key not in known_fields for item in self.placements):
             raise ValueError(
-                "placements require explicit field IDs from the same request"
+                "placements must reference a field client key in this request"
             )
+        if any(item.format != self.format for item in self.placements):
+            raise ValueError("placement format must match the draft format")
         return self
 
 
-class StudioDraftImport(BaseModel):
-    """Create from the current published compatibility record."""
-
+class StudioDraftImport(StrictModel):
     template_id: uuid.UUID
     title: str | None = Field(default=None, min_length=1, max_length=300)
 
 
-class StudioOperation(BaseModel):
+class StudioOperation(StrictModel):
     op: StudioOperationName
-    field: StudioFieldInput | None = None
+    field: StudioFieldPatchInput | None = None
     field_id: uuid.UUID | None = None
-    placement: StudioPlacementInput | None = None
+    placement: StudioPlacementPatchInput | None = None
     placement_id: uuid.UUID | None = None
     title: str | None = Field(default=None, min_length=1, max_length=300)
     source_artifact_id: uuid.UUID | None = None
-    source_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-    source_media_type: str | None = Field(default=None, min_length=1, max_length=100)
 
     @model_validator(mode="after")
     def validate_shape(self):
-        required = {
-            "upsert_field": self.field is not None,
-            "remove_field": self.field_id is not None,
-            "upsert_placement": self.placement is not None,
-            "remove_placement": self.placement_id is not None,
-            "replace_source": all(
-                (self.source_artifact_id, self.source_sha256, self.source_media_type)
-            ),
-            "set_metadata": self.title is not None,
-        }
-        if self.op in required and not required[self.op]:
-            raise ValueError(f"operation {self.op} is missing its required payload")
+        allowed = {
+            "set_metadata": {"op", "title"},
+            "upsert_field": {"op", "field"},
+            "remove_field": {"op", "field_id"},
+            "upsert_placement": {"op", "placement"},
+            "remove_placement": {"op", "placement_id"},
+            "replace_source": {"op", "source_artifact_id"},
+            "archive": {"op"},
+            "restore": {"op"},
+            "request_cancel": {"op"},
+            "clear_cancel": {"op"},
+        }[self.op]
+        if self.model_fields_set != allowed:
+            raise ValueError(f"operation {self.op} has missing or extraneous payload")
         return self
 
 
-class StudioDraftPatch(BaseModel):
+class StudioDraftPatch(StrictModel):
     base_revision: int = Field(ge=1)
     operations: list[StudioOperation] = Field(min_length=1, max_length=100)
 
 
-class StudioRevisionRequest(BaseModel):
+class StudioRevisionRequest(StrictModel):
     expected_revision: int = Field(ge=1)
 
 
 class StudioPromoteRequest(StudioRevisionRequest):
-    status: Literal["draft", "active"] = "draft"
+    status: Literal["draft"] = "draft"
 
 
-class StudioSourceContract(BaseModel):
+class StudioSourceContract(StrictModel):
     contract_version: Literal[1] = 1
     artifact_id: uuid.UUID
     sha256: str
     media_type: str
 
 
-class StudioFieldResponse(BaseModel):
+class StudioFieldResponse(StrictModel):
     id: uuid.UUID
     automation_key: str
     label: str
@@ -139,7 +254,7 @@ class StudioFieldResponse(BaseModel):
     definition: dict[str, Any]
 
 
-class StudioPlacementResponse(BaseModel):
+class StudioPlacementResponse(StrictModel):
     id: uuid.UUID
     field_id: uuid.UUID
     format: str
@@ -147,7 +262,7 @@ class StudioPlacementResponse(BaseModel):
     anchor: dict[str, Any]
 
 
-class StudioDraftResponse(BaseModel):
+class StudioDraftResponse(StrictModel):
     id: uuid.UUID
     title: str
     format: str
@@ -164,7 +279,7 @@ class StudioDraftResponse(BaseModel):
     etag: str
 
 
-class StudioSnapshotResponse(BaseModel):
+class StudioSnapshotResponse(StrictModel):
     id: uuid.UUID
     draft_id: uuid.UUID
     revision: int
@@ -173,7 +288,7 @@ class StudioSnapshotResponse(BaseModel):
     payload: dict[str, Any]
 
 
-class StudioValidationResponse(BaseModel):
+class StudioValidationResponse(StrictModel):
     draft_id: uuid.UUID
     revision: int
     identity_sha256: str
@@ -181,8 +296,10 @@ class StudioValidationResponse(BaseModel):
     issues: list[dict[str, str]]
 
 
-class StudioConflictDetail(BaseModel):
-    code: Literal["stale_revision", "idempotency_key_mismatch"]
+class StudioConflictDetail(StrictModel):
+    code: Literal[
+        "stale_revision", "idempotency_key_mismatch", "stale_published_template"
+    ]
     message: str
     expected_revision: int | None = None
     current_revision: int | None = None

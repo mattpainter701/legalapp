@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -13,6 +14,7 @@ from sqlalchemy import (
     Index,
     Integer,
     JSON,
+    LargeBinary,
     String,
     UniqueConstraint,
 )
@@ -27,7 +29,7 @@ def _now() -> datetime:
 
 
 class StudioSourceArtifact(Base):
-    """Immutable opaque identity for source bytes resolved outside this domain."""
+    """Append-only, integrity-checked source bytes with an internal resolver binding."""
 
     __tablename__ = "studio_source_artifacts"
     __table_args__ = (
@@ -40,6 +42,22 @@ class StudioSourceArtifact(Base):
         ),
         CheckConstraint(
             "sha256 ~ '^[0-9a-f]{64}$'", name="ck_studio_source_artifacts_hash"
+        ),
+        CheckConstraint("byte_size > 0", name="ck_studio_source_artifacts_size"),
+        CheckConstraint(
+            "byte_size = octet_length(content_bytes)",
+            name="ck_studio_source_artifacts_byte_count",
+        ),
+        CheckConstraint(
+            "resolver_key ~ '^studio-db:v1:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'",
+            name="ck_studio_source_artifacts_resolver",
+        ),
+        UniqueConstraint("resolver_key", name="uq_studio_source_artifacts_resolver"),
+        UniqueConstraint(
+            "tenant_id",
+            "sha256",
+            "media_type",
+            name="uq_studio_source_artifacts_content",
         ),
         Index("ix_studio_source_artifacts_tenant_created", "tenant_id", "created_at"),
     )
@@ -55,6 +73,9 @@ class StudioSourceArtifact(Base):
     )
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     media_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    byte_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    resolver_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    content_bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
     )
@@ -90,7 +111,8 @@ class StudioDraft(Base):
             ondelete="RESTRICT",
         ),
         CheckConstraint(
-            "source_sha256 ~ '^[0-9a-f]{64}$' AND identity_sha256 ~ '^[0-9a-f]{64}$'",
+            "source_sha256 ~ '^[0-9a-f]{64}$' AND identity_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND (published_base_sha256 IS NULL OR published_base_sha256 ~ '^[0-9a-f]{64}$')",
             name="ck_studio_drafts_hashes",
         ),
         Index("ix_studio_drafts_tenant_updated", "tenant_id", "updated_at"),
@@ -113,6 +135,7 @@ class StudioDraft(Base):
     )
     source_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     source_media_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    published_base_sha256: Mapped[str | None] = mapped_column(String(64))
     title: Mapped[str] = mapped_column(String(300), nullable=False)
     format: Mapped[str] = mapped_column(String(30), nullable=False)
     lifecycle_state: Mapped[str] = mapped_column(

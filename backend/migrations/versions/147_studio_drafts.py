@@ -43,6 +43,9 @@ def upgrade() -> None:
         sa.Column("tenant_id", u, nullable=False),
         sa.Column("sha256", sa.String(64), nullable=False),
         sa.Column("media_type", sa.String(100), nullable=False),
+        sa.Column("byte_size", sa.BigInteger(), nullable=False),
+        sa.Column("resolver_key", sa.String(80), nullable=False),
+        sa.Column("content_bytes", sa.LargeBinary(), nullable=False),
         sa.Column("created_by_user_id", u),
         sa.Column(
             "created_at",
@@ -62,8 +65,24 @@ def upgrade() -> None:
             "media_type",
             name="uq_studio_source_artifacts_contract",
         ),
+        sa.UniqueConstraint("resolver_key", name="uq_studio_source_artifacts_resolver"),
+        sa.UniqueConstraint(
+            "tenant_id",
+            "sha256",
+            "media_type",
+            name="uq_studio_source_artifacts_content",
+        ),
         sa.CheckConstraint(
             "sha256 ~ '^[0-9a-f]{64}$'", name="ck_studio_source_artifacts_hash"
+        ),
+        sa.CheckConstraint("byte_size > 0", name="ck_studio_source_artifacts_size"),
+        sa.CheckConstraint(
+            "byte_size = octet_length(content_bytes)",
+            name="ck_studio_source_artifacts_byte_count",
+        ),
+        sa.CheckConstraint(
+            "resolver_key ~ '^studio-db:v1:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'",
+            name="ck_studio_source_artifacts_resolver",
         ),
     )
     op.create_index(
@@ -80,6 +99,7 @@ def upgrade() -> None:
         sa.Column("source_artifact_id", u, nullable=False),
         sa.Column("source_sha256", sa.String(64), nullable=False),
         sa.Column("source_media_type", sa.String(100), nullable=False),
+        sa.Column("published_base_sha256", sa.String(64)),
         sa.Column("title", sa.String(300), nullable=False),
         sa.Column("format", sa.String(30), nullable=False),
         sa.Column(
@@ -134,7 +154,8 @@ def upgrade() -> None:
             name="ck_studio_drafts_lifecycle",
         ),
         sa.CheckConstraint(
-            "source_sha256 ~ '^[0-9a-f]{64}$' AND identity_sha256 ~ '^[0-9a-f]{64}$'",
+            "source_sha256 ~ '^[0-9a-f]{64}$' AND identity_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND (published_base_sha256 IS NULL OR published_base_sha256 ~ '^[0-9a-f]{64}$')",
             name="ck_studio_drafts_hashes",
         ),
     )
@@ -380,7 +401,11 @@ def upgrade() -> None:
     op.execute("""
         CREATE FUNCTION prevent_studio_immutable_mutation() RETURNS trigger AS $$
         BEGIN
-            RAISE EXCEPTION 'studio snapshots and audit events are immutable';
+            IF TG_OP = 'DELETE'
+               AND current_setting('app.studio_retention_purge_tenant_id', true) = OLD.tenant_id::text
+               AND current_setting('app.studio_retention_purge_reason', true) IN ('demo', 'retention')
+            THEN RETURN OLD; END IF;
+            RAISE EXCEPTION 'studio source, snapshot, and audit rows are append-only until authorized purge';
         END;
         $$ LANGUAGE plpgsql
     """)
@@ -390,7 +415,7 @@ def upgrade() -> None:
         "studio_draft_audit_events",
     ):
         op.execute(
-            f"CREATE TRIGGER {table}_immutable BEFORE UPDATE ON {table} FOR EACH ROW EXECUTE FUNCTION prevent_studio_immutable_mutation()"
+            f"CREATE TRIGGER {table}_immutable BEFORE UPDATE OR DELETE ON {table} FOR EACH ROW EXECUTE FUNCTION prevent_studio_immutable_mutation()"
         )
 
 
