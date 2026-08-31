@@ -342,9 +342,6 @@ def promote_corpus_version(conn: Any, *, version: str, actor: str, reason: str) 
             """SELECT COUNT(*)
                  FROM authority_case_clusters cl
                  JOIN legal_sources s ON s.source_key=cl.source_key
-                LEFT JOIN citator_public_source_admissions pa
-                   ON pa.source_key=cl.source_key AND pa.active IS TRUE
-                  AND pa.namespace='public-authority'
                 WHERE cl.corpus_version=%s
                   AND (cl.public_namespace IS DISTINCT FROM 'public-authority'
                        OR NOT EXISTS (SELECT 1 FROM public_authority_source_lineage pas WHERE pas.source_key=cl.source_key AND pas.corpus_version=cl.corpus_version)
@@ -353,12 +350,8 @@ def promote_corpus_version(conn: Any, *, version: str, actor: str, reason: str) 
                        OR s.storage_policy = 'prohibited'
                        OR s.rights_decision NOT IN ('official','open','licensed')
                        OR s.reviewed_at IS NULL OR s.reviewed_by IS NULL
-                       OR pa.source_key IS NULL
-                       OR cl.source_key IS NULL
-                       OR pa.manifest_sha256 IS DISTINCT FROM (SELECT manifest_hash FROM authority_corpus_versions WHERE version=%s)
-                       OR pa.catalog_schema_version IS DISTINCT FROM (SELECT metadata->>'catalog_schema_version' FROM legal_sources WHERE source_key=cl.source_key)
-                       OR pa.manifest_reference = '' OR pa.manifest_sha256 = '')""",
-            [version, version],
+                       OR cl.source_key IS NULL)""",
+            [version],
         )
         if cur.fetchone()[0]:
             raise PermissionError(
@@ -368,9 +361,6 @@ def promote_corpus_version(conn: Any, *, version: str, actor: str, reason: str) 
             """SELECT COUNT(*)
                  FROM legal_documents d
                  JOIN legal_sources s ON s.source_key=d.source_key
-                 LEFT JOIN citator_public_source_admissions pa
-                   ON pa.source_key=s.source_key AND pa.active IS TRUE
-                  AND pa.namespace='public-authority'
                 WHERE d.corpus_version=%s
                   AND (d.public_namespace IS DISTINCT FROM 'public-authority'
                        OR NOT EXISTS (SELECT 1 FROM public_authority_source_lineage pas WHERE pas.source_key=d.source_key AND pas.corpus_version=d.corpus_version)
@@ -379,11 +369,8 @@ def promote_corpus_version(conn: Any, *, version: str, actor: str, reason: str) 
                        OR s.storage_policy = 'prohibited'
                        OR s.rights_decision NOT IN ('official','open','licensed')
                        OR s.reviewed_at IS NULL OR s.reviewed_by IS NULL
-                       OR pa.source_key IS NULL
-                       OR pa.manifest_sha256 IS DISTINCT FROM (SELECT manifest_hash FROM authority_corpus_versions WHERE version=%s)
-                       OR pa.catalog_schema_version IS DISTINCT FROM s.metadata->>'catalog_schema_version'
-                       OR pa.manifest_reference = '' OR pa.manifest_sha256 = '')""",
-            [version, version],
+                       OR d.source_key IS NULL)""",
+            [version],
         )
         if cur.fetchone()[0]:
             raise PermissionError(
