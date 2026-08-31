@@ -90,6 +90,8 @@ class CourtListenerRepository:
         filters = [
             f"oc.corpus_version = {promoted_version}",
             f"cl.corpus_version = {promoted_version}",
+            "cl.public_namespace = 'public-authority'",
+            "EXISTS (SELECT 1 FROM citator_public_source_admissions pa WHERE pa.source_key = cl.source_key AND pa.active IS TRUE AND pa.namespace = 'public-authority')",
         ]
         params: list[Any] = []
         if jurisdiction:
@@ -150,6 +152,9 @@ class CourtListenerRepository:
         # candidates.
         filters = [
             "s.enabled IS TRUE",
+            "s.public_namespace = 'public-authority'",
+            "d.public_namespace = 'public-authority'",
+            "EXISTS (SELECT 1 FROM citator_public_source_admissions pa WHERE pa.source_key = s.source_key AND pa.active IS TRUE AND pa.namespace = 'public-authority')",
             "d.document_status IN ('current', 'current_with_supplement')",
             "d.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status = 'promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)",
             "c.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status = 'promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)",
@@ -452,6 +457,8 @@ class CourtListenerRepository:
                 LEFT JOIN courts c ON c.court_id = d.court_id
                 WHERE {where}
                   AND o.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
+                  AND cl.public_namespace = 'public-authority'
+                  AND EXISTS (SELECT 1 FROM citator_public_source_admissions pa WHERE pa.source_key = cl.source_key AND pa.active IS TRUE AND pa.namespace='public-authority')
                 LIMIT 1
                 """,
                 [value],
@@ -462,11 +469,15 @@ class CourtListenerRepository:
             detail = rows[0]
             cur.execute(
                 """
-                SELECT chunk_id::text AS chunk_id, chunk_index, content
-                FROM authority_case_chunks
-                WHERE opinion_id = %s
-                  AND corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
-                ORDER BY chunk_index
+                SELECT ch.chunk_id::text AS chunk_id, ch.chunk_index, ch.content
+                FROM authority_case_chunks ch
+                JOIN authority_case_clusters cl
+                  ON cl.corpus_version=ch.corpus_version AND cl.cluster_id=ch.cluster_id
+                WHERE ch.opinion_id = %s
+                  AND ch.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
+                  AND cl.public_namespace = 'public-authority'
+                  AND EXISTS (SELECT 1 FROM citator_public_source_admissions pa WHERE pa.source_key=cl.source_key AND pa.active IS TRUE AND pa.namespace='public-authority')
+                ORDER BY ch.chunk_index
                 """,
                 [detail["opinion_id"]],
             )
@@ -560,6 +571,8 @@ class CourtListenerRepository:
                 LEFT JOIN courts c ON c.court_id = d.court_id
                 WHERE cit.cited_volume = %s AND cit.cited_reporter = %s AND cit.cited_page = %s
                   AND cit.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
+                  AND cl.public_namespace = 'public-authority'
+                  AND EXISTS (SELECT 1 FROM citator_public_source_admissions pa WHERE pa.source_key=cl.source_key AND pa.active IS TRUE AND pa.namespace='public-authority')
                 LIMIT 20
                 """,
                 [parsed["volume"], parsed["reporter"], parsed["page"]],
@@ -600,14 +613,16 @@ class CourtListenerRepository:
             cur.execute(
                 """SELECT cit.cited_opinion_id, cit.cited_reporter, cit.cited_volume, cit.cited_page, cit.depth
                    FROM authority_case_citations cit
-                   WHERE cit.citing_opinion_id = %s AND cit.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1) LIMIT 100""",
+                   WHERE cit.citing_opinion_id = %s AND cit.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
+                     AND EXISTS (SELECT 1 FROM authority_case_opinions ao JOIN authority_case_clusters acl ON acl.corpus_version=ao.corpus_version AND acl.cluster_id=ao.cluster_id WHERE ao.corpus_version=cit.corpus_version AND ao.opinion_id=cit.citing_opinion_id AND acl.public_namespace='public-authority' AND EXISTS (SELECT 1 FROM citator_public_source_admissions pa WHERE pa.source_key=acl.source_key AND pa.active IS TRUE AND pa.namespace='public-authority')) LIMIT 100""",
                 [opinion_id],
             )
             cited = dict_rows(cur)
             cur.execute(
                 """SELECT cit.citing_opinion_id, cit.depth
                    FROM authority_case_citations cit
-                   WHERE cit.cited_opinion_id = %s AND cit.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1) LIMIT 100""",
+                   WHERE cit.cited_opinion_id = %s AND cit.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
+                     AND EXISTS (SELECT 1 FROM authority_case_opinions ao JOIN authority_case_clusters acl ON acl.corpus_version=ao.corpus_version AND acl.cluster_id=ao.cluster_id WHERE ao.corpus_version=cit.corpus_version AND ao.opinion_id=cit.cited_opinion_id AND acl.public_namespace='public-authority' AND EXISTS (SELECT 1 FROM citator_public_source_admissions pa WHERE pa.source_key=acl.source_key AND pa.active IS TRUE AND pa.namespace='public-authority')) LIMIT 100""",
                 [opinion_id],
             )
             citing = dict_rows(cur)
@@ -716,19 +731,23 @@ class CourtListenerRepository:
                 [authority_key],
             )
             assessments = dict_rows(cur)
-        assessment = assessments[0] if assessments else {
-            "treatment_label": "unknown",
-            "assessment_state": "unavailable",
-            "abstained": True,
-            "abstention_reason": "No current machine assessment is available.",
-            "attorney_reviewed": False,
-        }
+        assessment = (
+            assessments[0]
+            if assessments
+            else {
+                "treatment_label": "unknown",
+                "assessment_state": "unavailable",
+                "abstained": True,
+                "abstention_reason": "No current machine assessment is available.",
+                "attorney_reviewed": False,
+            }
+        )
         if assessments:
             stale_at = assessment.get("stale_at")
-            is_stale = (
-                assessment.get("assessment_state") in {"stale", "superseded"}
-                or (stale_at is not None and stale_at <= datetime.now(timezone.utc))
-            )
+            is_stale = assessment.get("assessment_state") in {
+                "stale",
+                "superseded",
+            } or (stale_at is not None and stale_at <= datetime.now(timezone.utc))
             decision = assessment.get("review_decision")
             if is_stale:
                 assessment["review_state"] = "stale"
@@ -761,7 +780,9 @@ class CourtListenerRepository:
             and bool(record.get("implementation_status"))
         )
         has_reviewable_evidence = bool(history or citing_references)
-        status = "review_ready" if source_ready and has_reviewable_evidence else "incomplete"
+        status = (
+            "review_ready" if source_ready and has_reviewable_evidence else "incomplete"
+        )
         if assessments and not source_ready:
             assessment["review_state"] = "source_suppressed"
             assessment["attorney_reviewed"] = False
@@ -775,9 +796,15 @@ class CourtListenerRepository:
                 "Source coverage/currentness is stale, unavailable, incomplete, or not established for this authority."
             )
         if not has_reviewable_evidence:
-            limitations.append("No direct/later-history or citing-reference evidence is available in this promoted snapshot.")
+            limitations.append(
+                "No direct/later-history or citing-reference evidence is available in this promoted snapshot."
+            )
         if assessments and assessment.get("review_state") in {
-            "stale", "rejected", "needs_more_evidence", "not_reviewed", "source_suppressed"
+            "stale",
+            "rejected",
+            "needs_more_evidence",
+            "not_reviewed",
+            "source_suppressed",
         }:
             limitations.append(
                 "The latest treatment assessment is not an effective current attorney conclusion; "
@@ -875,6 +902,8 @@ class CourtListenerRepository:
                 LEFT JOIN authority_case_clusters cl ON cl.corpus_version = oc.corpus_version AND cl.cluster_id = oc.cluster_id
                 WHERE c.court_id = %s
                   AND oc.corpus_version = (SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
+                  AND cl.public_namespace = 'public-authority'
+                  AND EXISTS (SELECT 1 FROM citator_public_source_admissions pa WHERE pa.source_key=cl.source_key AND pa.active IS TRUE AND pa.namespace='public-authority')
                 GROUP BY c.court_id, c.short_name, c.full_name, c.jurisdiction
                 """,
                 [court_id],
@@ -888,7 +917,12 @@ class CourtListenerRepository:
         jurisdiction: str | None = None,
     ) -> list[dict[str, Any]]:
         promoted = "(SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)"
-        filters = [f"oc.corpus_version = {promoted}", f"ch.corpus_version = {promoted}"]
+        filters = [
+            f"oc.corpus_version = {promoted}",
+            f"ch.corpus_version = {promoted}",
+            "oc.public_namespace = 'public-authority'",
+            "EXISTS (SELECT 1 FROM citator_public_source_admissions pa WHERE pa.source_key=oc.source_key AND pa.active IS TRUE AND pa.namespace='public-authority')",
+        ]
         params: list[Any] = []
         if court_id:
             filters.append("c.court_id = %s")
@@ -934,6 +968,10 @@ class CourtListenerRepository:
         ]
         promoted = "(SELECT version FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)"
         filters.append(f"oc.corpus_version = {promoted}")
+        filters.append("oc.public_namespace = 'public-authority'")
+        filters.append(
+            "EXISTS (SELECT 1 FROM citator_public_source_admissions pa WHERE pa.source_key=oc.source_key AND pa.active IS TRUE AND pa.namespace='public-authority')"
+        )
         pattern = f"%{query}%"
         params: list[Any] = [pattern, pattern, pattern]
         if court_id:
@@ -1181,6 +1219,8 @@ class CourtListenerRepository:
                        reviewed_by
                 FROM legal_sources
                 WHERE storage_policy <> 'prohibited'
+                  AND public_namespace = 'public-authority'
+                  AND EXISTS (SELECT 1 FROM citator_public_source_admissions pa WHERE pa.source_key=legal_sources.source_key AND pa.active IS TRUE AND pa.namespace='public-authority')
                   AND enabled IS TRUE
                   AND rights_decision IN ('official', 'open', 'licensed')
                   AND reviewed_at IS NOT NULL AND reviewed_by IS NOT NULL
@@ -1200,12 +1240,15 @@ class CourtListenerRepository:
                        cp.retry_count, cp.next_retry_at, cp.dead_letter_at
                 FROM authority_harvest_checkpoints cp
                 JOIN legal_sources s ON s.source_key = cp.source_key
+                JOIN citator_public_source_admissions pa ON pa.source_key = s.source_key
                 WHERE corpus_version = %s
                   AND s.enabled IS TRUE
                   AND s.rights_decision IN ('official', 'open', 'licensed')
                   AND s.reviewed_at IS NOT NULL AND s.reviewed_by IS NOT NULL
                   AND s.claim_safe_wording IS NOT NULL
                   AND s.storage_policy <> 'prohibited'
+                  AND s.public_namespace = 'public-authority'
+                  AND pa.active IS TRUE AND pa.namespace='public-authority'
                   AND s.metadata->>'catalog_schema_version' IS NOT NULL
                   AND s.metadata->>'implementation_status' IS NOT NULL
                   AND NOT starts_with(s.source_key, 'tenant:')

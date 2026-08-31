@@ -160,6 +160,16 @@ ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS claim_safe_wording text;
 ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS reviewed_at timestamptz;
 ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS reviewed_by text;
 ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS review_reason text;
+-- Public authority is an explicit reviewed admission, never a URL/prefix or
+-- caller-controlled metadata inference.  Unknown is the safe upgrade value.
+ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS public_namespace text NOT NULL DEFAULT 'unknown';
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='legal_sources'::regclass
+                   AND conname='legal_sources_public_namespace_check') THEN
+        ALTER TABLE legal_sources ADD CONSTRAINT legal_sources_public_namespace_check
+            CHECK (public_namespace IN ('public-authority', 'unknown', 'private'));
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS authority_corpus_versions (
     version text PRIMARY KEY,
@@ -342,11 +352,20 @@ CREATE TABLE IF NOT EXISTS legal_documents (
     parser_version text,
     text_content text,
     metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    public_namespace text NOT NULL DEFAULT 'unknown',
     corpus_version text REFERENCES authority_corpus_versions(version),
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (source_key, external_id, corpus_version)
 );
+ALTER TABLE legal_documents ADD COLUMN IF NOT EXISTS public_namespace text NOT NULL DEFAULT 'unknown';
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='legal_documents'::regclass
+                   AND conname='legal_documents_public_namespace_check') THEN
+        ALTER TABLE legal_documents ADD CONSTRAINT legal_documents_public_namespace_check
+            CHECK (public_namespace IN ('public-authority', 'unknown', 'private'));
+    END IF;
+END $$;
 
 -- These additive upgrades must precede indexes that reference the new column
 -- when an older installation already has the table.
@@ -460,6 +479,8 @@ ALTER TABLE authority_embedding_shards
 
 CREATE TABLE IF NOT EXISTS authority_case_clusters (
     corpus_version text NOT NULL REFERENCES authority_corpus_versions(version),
+    source_key text NOT NULL DEFAULT 'courtlistener:ohio-caselaw' REFERENCES legal_sources(source_key) ON DELETE RESTRICT,
+    public_namespace text NOT NULL DEFAULT 'unknown',
     cluster_id bigint NOT NULL,
     docket_id bigint,
     case_name text,
@@ -467,6 +488,25 @@ CREATE TABLE IF NOT EXISTS authority_case_clusters (
     citations jsonb NOT NULL DEFAULT '[]'::jsonb,
     PRIMARY KEY (corpus_version, cluster_id)
 );
+ALTER TABLE authority_case_clusters ADD COLUMN IF NOT EXISTS source_key text;
+ALTER TABLE authority_case_clusters ALTER COLUMN source_key SET DEFAULT 'courtlistener:ohio-caselaw';
+UPDATE authority_case_clusters SET source_key = 'courtlistener:ohio-caselaw' WHERE source_key IS NULL;
+ALTER TABLE authority_case_clusters ALTER COLUMN source_key SET NOT NULL;
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='authority_case_clusters'::regclass
+                   AND conname='fk_authority_case_clusters_source') THEN
+        ALTER TABLE authority_case_clusters ADD CONSTRAINT fk_authority_case_clusters_source
+            FOREIGN KEY (source_key) REFERENCES legal_sources(source_key) ON DELETE RESTRICT;
+    END IF;
+END $$;
+ALTER TABLE authority_case_clusters ADD COLUMN IF NOT EXISTS public_namespace text NOT NULL DEFAULT 'unknown';
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='authority_case_clusters'::regclass
+                   AND conname='authority_case_clusters_public_namespace_check') THEN
+        ALTER TABLE authority_case_clusters ADD CONSTRAINT authority_case_clusters_public_namespace_check
+            CHECK (public_namespace IN ('public-authority', 'unknown', 'private'));
+    END IF;
+END $$;
 CREATE TABLE IF NOT EXISTS authority_case_chunks (
     corpus_version text NOT NULL REFERENCES authority_corpus_versions(version),
     chunk_id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -691,6 +731,43 @@ CREATE TABLE IF NOT EXISTS citator_public_source_admissions (
     CHECK (length(trim(manifest_sha256)) >= 16),
     CHECK (length(trim(reviewed_by)) > 0)
 );
+
+-- The admission table is the sole public-source allowlist.  Storage rows may
+-- carry a display label, but that label cannot grant public authority access.
+CREATE OR REPLACE FUNCTION apply_public_authority_admission() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE admitted boolean;
+BEGIN
+    SELECT EXISTS (
+        SELECT 1 FROM citator_public_source_admissions p
+        WHERE p.source_key = NEW.source_key
+          AND p.active IS TRUE
+          AND p.namespace = 'public-authority'
+    ) INTO admitted;
+    IF TG_TABLE_NAME = 'legal_documents' THEN
+        IF NEW.public_namespace = 'public-authority' AND NOT admitted THEN
+            RAISE EXCEPTION 'source % is not an admitted public authority source', NEW.source_key;
+        END IF;
+        NEW.public_namespace := CASE WHEN admitted THEN 'public-authority' ELSE 'unknown' END;
+    ELSIF TG_TABLE_NAME = 'authority_case_clusters' THEN
+        IF NEW.public_namespace = 'public-authority' AND NOT admitted THEN
+            RAISE EXCEPTION 'caselaw source % is not an admitted public authority source', NEW.source_key;
+        END IF;
+        NEW.public_namespace := CASE WHEN admitted THEN 'public-authority' ELSE 'unknown' END;
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION install_public_authority_guard(table_name text) RETURNS void
+LANGUAGE plpgsql AS $$
+BEGIN
+    EXECUTE format('DROP TRIGGER IF EXISTS public_authority_admission_guard ON %I', table_name);
+    EXECUTE format('CREATE TRIGGER public_authority_admission_guard
+                    BEFORE INSERT OR UPDATE ON %I
+                    FOR EACH ROW EXECUTE FUNCTION apply_public_authority_admission()', table_name);
+END $$;
+SELECT install_public_authority_guard('legal_documents');
+SELECT install_public_authority_guard('authority_case_clusters');
+DROP FUNCTION install_public_authority_guard(text);
 
 CREATE TABLE IF NOT EXISTS authority_history_facts (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

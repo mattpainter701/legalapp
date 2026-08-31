@@ -287,18 +287,21 @@ def fetch_document(
             )
         media_type = response.headers.get("content-type", "text/html").split(";", 1)[0]
         if document["parser"] == "pdf_text":
-            if media_type != "application/pdf" and not document["canonical_url"].lower().endswith(
-                ".pdf"
-            ):
+            if media_type != "application/pdf" and not document[
+                "canonical_url"
+            ].lower().endswith(".pdf"):
                 raise RuntimeError(
                     f"{document['canonical_url']} returned unsupported media type {media_type}"
                 )
             try:
                 from pypdf import PdfReader
             except ImportError as exc:
-                raise RuntimeError("pypdf is required for reviewed PDF ingestion") from exc
+                raise RuntimeError(
+                    "pypdf is required for reviewed PDF ingestion"
+                ) from exc
             text = "\n".join(
-                page.extract_text() or "" for page in PdfReader(BytesIO(response.content)).pages
+                page.extract_text() or ""
+                for page in PdfReader(BytesIO(response.content)).pages
             )
             media_type = "application/pdf"
         else:
@@ -334,7 +337,9 @@ def fetch_document(
             client.close()
 
 
-def ingest_document(conn: Any, document: dict[str, Any], fetched: FetchedDocument) -> dict[str, Any]:
+def ingest_document(
+    conn: Any, document: dict[str, Any], fetched: FetchedDocument
+) -> dict[str, Any]:
     extraction_status = extracted_text_status(fetched.text)
     if extraction_status != "passed_heuristic":
         raise RuntimeError(
@@ -363,7 +368,9 @@ def ingest_document(conn: Any, document: dict[str, Any], fetched: FetchedDocumen
             metadata[field] = document[field]
     metadata.update(document.get("metadata", {}))
     with conn.cursor() as cursor:
-        requested_version = os.environ.get("AUTHORITY_INGEST_CORPUS_VERSION", "").strip()
+        requested_version = os.environ.get(
+            "AUTHORITY_INGEST_CORPUS_VERSION", ""
+        ).strip()
         cursor.execute(
             """SELECT version FROM authority_corpus_versions
                WHERE status IN ('staged', 'canary')
@@ -374,17 +381,35 @@ def ingest_document(conn: Any, document: dict[str, Any], fetched: FetchedDocumen
         )
         version_row = cursor.fetchone()
         if not version_row:
-            raise PermissionError("ingest requires an explicitly staged or canary corpus version")
+            raise PermissionError(
+                "ingest requires an explicitly staged or canary corpus version"
+            )
         corpus_version = version_row[0]
-        cursor.execute("""
-            SELECT rights_decision, reviewed_at, reviewed_by, storage_policy
-            FROM legal_sources WHERE source_key=%s
-        """, [document["source_key"]])
+        cursor.execute(
+            """
+            SELECT s.rights_decision, s.reviewed_at, s.reviewed_by, s.storage_policy,
+                   s.public_namespace, p.source_key IS NOT NULL
+            FROM legal_sources s
+            LEFT JOIN citator_public_source_admissions p
+              ON p.source_key=s.source_key AND p.active IS TRUE
+             AND p.namespace='public-authority'
+            WHERE s.source_key=%s
+        """,
+            [document["source_key"]],
+        )
         source_row = cursor.fetchone()
-        if (not source_row or source_row[0] not in {"official", "open", "licensed"}
-                or not source_row[1] or not source_row[2]
-                or source_row[3] == "prohibited"):
-            raise PermissionError("source rights review is required before public ingestion")
+        if (
+            not source_row
+            or source_row[0] not in {"official", "open", "licensed"}
+            or not source_row[1]
+            or not source_row[2]
+            or source_row[3] == "prohibited"
+            or source_row[4] != "public-authority"
+            or not source_row[5]
+        ):
+            raise PermissionError(
+                "source requires a reviewed public-authority admission before ingestion"
+            )
         cursor.execute(
             """
             SELECT id, content_hash
@@ -454,7 +479,10 @@ def ingest_document(conn: Any, document: dict[str, Any], fetched: FetchedDocumen
         document_id = cursor.fetchone()[0]
         chunks_created = 0
         if changed:
-            cursor.execute("DELETE FROM legal_document_chunks WHERE document_id = %s", [document_id])
+            cursor.execute(
+                "DELETE FROM legal_document_chunks WHERE document_id = %s",
+                [document_id],
+            )
             for index, content in enumerate(chunk_text(fetched.text)):
                 cursor.execute(
                     """
@@ -517,19 +545,32 @@ def ingest_document(conn: Any, document: dict[str, Any], fetched: FetchedDocumen
                 document.get("citation"),
                 document.get("court_id"),
                 document.get("effective_date"),
-                json.dumps({"namespace": "public-authority", "parser_version": document["parser_version"]}),
+                json.dumps(
+                    {
+                        "namespace": "public-authority",
+                        "parser_version": document["parser_version"],
+                    }
+                ),
             ],
         )
         if cursor.rowcount == 0:
-            cursor.execute("""
+            cursor.execute(
+                """
                 INSERT INTO authority_harvest_events
                   (source_key, partition_key, corpus_version, external_id,
                    content_hash, event_status, metadata)
                 VALUES (%s, %s, %s, %s, %s, 'duplicate', %s::jsonb)
                 ON CONFLICT DO NOTHING
-            """, [document["source_key"], f"manifest:{document['source_key']}",
-                  corpus_version, document["external_id"], fetched.content_hash,
-                  json.dumps({"namespace": "public-authority", "replay": True})])
+            """,
+                [
+                    document["source_key"],
+                    f"manifest:{document['source_key']}",
+                    corpus_version,
+                    document["external_id"],
+                    fetched.content_hash,
+                    json.dumps({"namespace": "public-authority", "replay": True}),
+                ],
+            )
         cursor.execute(
             """INSERT INTO source_sync_states
                  (source_key, partition_key, checkpoint_at, cursor_url, status,
@@ -543,8 +584,12 @@ def ingest_document(conn: Any, document: dict[str, Any], fetched: FetchedDocumen
                  rows_processed=source_sync_states.rows_processed + 1,
                  last_cursor_hash=EXCLUDED.last_cursor_hash, next_retry_at=NULL,
                  retry_count=0, updated_at=now()""",
-            [document["source_key"], f"manifest:{document['source_key']}",
-             document["canonical_url"], fetched.content_hash],
+            [
+                document["source_key"],
+                f"manifest:{document['source_key']}",
+                document["canonical_url"],
+                fetched.content_hash,
+            ],
         )
         cursor.execute(
             """INSERT INTO authority_harvest_checkpoints
@@ -555,8 +600,13 @@ def ingest_document(conn: Any, document: dict[str, Any], fetched: FetchedDocumen
                  cursor_url=EXCLUDED.cursor_url, cursor_hash=EXCLUDED.cursor_hash,
                  status='complete', retry_count=0, next_retry_at=NULL,
                  dead_letter_at=NULL, last_successful_harvest_at=now(), updated_at=now()""",
-            [document["source_key"], f"manifest:{document['source_key']}",
-             corpus_version, document["canonical_url"], fetched.content_hash],
+            [
+                document["source_key"],
+                f"manifest:{document['source_key']}",
+                corpus_version,
+                document["canonical_url"],
+                fetched.content_hash,
+            ],
         )
     conn.commit()
     return {
@@ -579,7 +629,9 @@ def selected_documents(
     documents = manifest["documents"]
     if source_keys:
         wanted = set(source_keys)
-        documents = [document for document in documents if document["source_key"] in wanted]
+        documents = [
+            document for document in documents if document["source_key"] in wanted
+        ]
         missing = wanted - {document["source_key"] for document in documents}
         if missing:
             raise ManifestValidationError(
@@ -622,7 +674,9 @@ def _write_preview_artifact(
     # platforms so its SHA-256 is the same canonical content hash recorded in
     # the preview manifest and later stored in Postgres.
     text_path.write_text(fetched.text, encoding="utf-8", newline="\n")
-    return raw_path.relative_to(output_dir).as_posix(), text_path.relative_to(output_dir).as_posix()
+    return raw_path.relative_to(output_dir).as_posix(), text_path.relative_to(
+        output_dir
+    ).as_posix()
 
 
 def preview(
@@ -727,11 +781,13 @@ def sync_documents(
             for index, document in enumerate(documents):
                 partition_key = f"manifest:{document['source_key']}"
                 with conn.cursor() as cursor:
-                    cursor.execute("""SELECT cursor_url, status FROM authority_harvest_checkpoints
+                    cursor.execute(
+                        """SELECT cursor_url, status FROM authority_harvest_checkpoints
                                       WHERE source_key=%s AND partition_key=%s
                                       AND corpus_version=(SELECT version FROM authority_corpus_versions WHERE status IN ('staged','canary') ORDER BY created_at DESC LIMIT 1)""",
-                                   [document["source_key"], partition_key])
-                    checkpoint = cursor.fetchone()
+                        [document["source_key"], partition_key],
+                    )
+                    cursor.fetchone()
                 # A successful URL is only a checkpoint hint.  Re-fetch it so
                 # ETag/Last-Modified/hash semantics can detect upstream change
                 # and cadence staleness; dedupe remains enforced at ingest.
@@ -742,16 +798,36 @@ def sync_documents(
                     conn.rollback()
                     with conn.cursor() as cursor:
                         failure_text = str(exc)[:2000]
-                        cursor.execute("SELECT version FROM authority_corpus_versions WHERE status IN ('staged','canary') ORDER BY created_at DESC LIMIT 1")
+                        cursor.execute(
+                            "SELECT version FROM authority_corpus_versions WHERE status IN ('staged','canary') ORDER BY created_at DESC LIMIT 1"
+                        )
                         version_row = cursor.fetchone()
                         corpus_version = version_row[0] if version_row else None
-                        cursor.execute("SELECT retry_count FROM source_sync_states WHERE source_key=%s AND partition_key=%s", [document["source_key"], f"manifest:{document['source_key']}"])
+                        cursor.execute(
+                            "SELECT retry_count FROM source_sync_states WHERE source_key=%s AND partition_key=%s",
+                            [
+                                document["source_key"],
+                                f"manifest:{document['source_key']}",
+                            ],
+                        )
                         retry_row = cursor.fetchone()
                         retry_count = int(retry_row[0] or 0) + 1 if retry_row else 1
-                        event_status = "quarantined" if any(
-                            marker in failure_text.lower()
-                            for marker in ("extraction", "unsupported media", "too little readable")
-                        ) else ("dead_letter" if retry_count >= 3 else "retryable_failure")
+                        event_status = (
+                            "quarantined"
+                            if any(
+                                marker in failure_text.lower()
+                                for marker in (
+                                    "extraction",
+                                    "unsupported media",
+                                    "too little readable",
+                                )
+                            )
+                            else (
+                                "dead_letter"
+                                if retry_count >= 3
+                                else "retryable_failure"
+                            )
+                        )
                         cursor.execute(
                             """
                             INSERT INTO authority_harvest_events
@@ -770,7 +846,9 @@ def sync_documents(
                                 document.get("canonical_url"),
                                 event_status,
                                 retry_count,
-                                failure_text if event_status in {"quarantined", "dead_letter"} else None,
+                                failure_text
+                                if event_status in {"quarantined", "dead_letter"}
+                                else None,
                                 document.get("court_id"),
                                 json.dumps({"namespace": "public-authority"}),
                             ],
@@ -792,11 +870,19 @@ def sync_documents(
                                  dead_letter_count=source_sync_states.dead_letter_count
                                    + CASE WHEN EXCLUDED.status IN ('quarantined', 'dead_letter') THEN 1 ELSE 0 END,
                                  updated_at=now()""",
-                            [document["source_key"], f"manifest:{document['source_key']}",
-                             event_status, failure_text, retry_count, event_status, event_status],
+                            [
+                                document["source_key"],
+                                f"manifest:{document['source_key']}",
+                                event_status,
+                                failure_text,
+                                retry_count,
+                                event_status,
+                                event_status,
+                            ],
                         )
                         if corpus_version:
-                            cursor.execute("""INSERT INTO authority_harvest_checkpoints
+                            cursor.execute(
+                                """INSERT INTO authority_harvest_checkpoints
                                  (source_key, partition_key, corpus_version, cursor_url,
                                  status, retry_count, next_retry_at, dead_letter_at)
                                VALUES (%s, %s, %s, %s, %s, %s,
@@ -807,9 +893,17 @@ def sync_documents(
                                  status=EXCLUDED.status, retry_count=EXCLUDED.retry_count,
                                  next_retry_at=EXCLUDED.next_retry_at,
                                  dead_letter_at=EXCLUDED.dead_letter_at, updated_at=now()""",
-                                [document["source_key"], partition_key, corpus_version,
-                                 document.get("canonical_url"), event_status, retry_count,
-                                 event_status, event_status])
+                                [
+                                    document["source_key"],
+                                    partition_key,
+                                    corpus_version,
+                                    document.get("canonical_url"),
+                                    event_status,
+                                    retry_count,
+                                    event_status,
+                                    event_status,
+                                ],
+                            )
                         cursor.execute(
                             """
                             UPDATE legal_sources
@@ -819,18 +913,28 @@ def sync_documents(
                             [failure_text, document["source_key"]],
                         )
                     conn.commit()
-                    results.append({"source_key": document["source_key"],
-                                    "external_id": document["external_id"],
-                                    "status": event_status, "error": failure_text})
+                    results.append(
+                        {
+                            "source_key": document["source_key"],
+                            "external_id": document["external_id"],
+                            "status": event_status,
+                            "error": failure_text,
+                        }
+                    )
                     continue
                 if index + 1 < len(documents):
-                    time.sleep(float(os.getenv("LEGAL_SOURCE_REQUEST_DELAY_SECONDS", "1")))
+                    time.sleep(
+                        float(os.getenv("LEGAL_SOURCE_REQUEST_DELAY_SECONDS", "1"))
+                    )
     return results
 
 
 def retry_due_documents(
-    documents: list[dict[str, Any]], catalog: dict[str, Any], db_url: str | None,
-    *, limit: int = 50,
+    documents: list[dict[str, Any]],
+    catalog: dict[str, Any],
+    db_url: str | None,
+    *,
+    limit: int = 50,
 ) -> list[dict[str, Any]]:
     """Run one bounded retry tranche from durable source checkpoints."""
     if limit < 1:
@@ -839,13 +943,16 @@ def retry_due_documents(
     due_sources: set[str] = set()
     with connect(db_url) as conn:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT DISTINCT source_key
                 FROM authority_harvest_checkpoints
                 WHERE status IN ('retryable_failure', 'retryable')
                   AND next_retry_at IS NOT NULL AND next_retry_at <= now()
                 ORDER BY source_key LIMIT %s
-            """, [limit])
+            """,
+                [limit],
+            )
             due_sources = {row[0] for row in cur.fetchall()}
     if not due_sources:
         return []
@@ -854,18 +961,24 @@ def retry_due_documents(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Fetch reviewed public-authority manifests")
+    parser = argparse.ArgumentParser(
+        description="Fetch reviewed public-authority manifests"
+    )
     parser.add_argument("--manifest")
     parser.add_argument("--catalog")
     parser.add_argument("--source-key", action="append", dest="source_keys")
     parser.add_argument("--limit", type=int)
-    parser.add_argument("--preview", action="store_true", help="Fetch and parse without database writes")
+    parser.add_argument(
+        "--preview", action="store_true", help="Fetch and parse without database writes"
+    )
     parser.add_argument(
         "--download-dir",
         help="With --preview, retain raw and normalized artifacts plus preview-manifest.json",
     )
     parser.add_argument("--delay-seconds", type=float, default=1.0)
-    parser.add_argument("--sync", action="store_true", help="Fetch and upsert documents/chunks")
+    parser.add_argument(
+        "--sync", action="store_true", help="Fetch and upsert documents/chunks"
+    )
     parser.add_argument("--db-url")
     args = parser.parse_args()
     if args.preview and args.sync:

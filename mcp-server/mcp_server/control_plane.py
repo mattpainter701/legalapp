@@ -287,7 +287,13 @@ def promote_corpus_version(conn: Any, *, version: str, actor: str, reason: str) 
                        OR c.embedding_model IS DISTINCT FROM %s
                        OR c.embedding_version::text IS DISTINCT FROM %s
                        OR vector_dims(c.embedding) IS DISTINCT FROM %s)""",
-            [version, version, target_contract[0], target_contract[1], target_contract[2]],
+            [
+                version,
+                version,
+                target_contract[0],
+                target_contract[1],
+                target_contract[2],
+            ],
         )
         legal_invalid = cur.fetchone()[0]
         cur.execute(
@@ -317,6 +323,40 @@ def promote_corpus_version(conn: Any, *, version: str, actor: str, reason: str) 
         )
         if cur.fetchone()[0]:
             raise PermissionError("corpus snapshot contains orphaned chunks")
+        cur.execute(
+            """SELECT COUNT(*)
+                 FROM authority_case_chunks ch
+                 JOIN authority_case_clusters cl
+                   ON cl.corpus_version=ch.corpus_version AND cl.cluster_id=ch.cluster_id
+                 LEFT JOIN citator_public_source_admissions pa
+                   ON pa.source_key=cl.source_key AND pa.active IS TRUE
+                  AND pa.namespace='public-authority'
+                WHERE ch.corpus_version=%s
+                  AND (cl.public_namespace IS DISTINCT FROM 'public-authority'
+                       OR pa.source_key IS NULL)""",
+            [version],
+        )
+        if cur.fetchone()[0]:
+            raise PermissionError(
+                "corpus snapshot contains non-public authority lineage"
+            )
+        cur.execute(
+            """SELECT COUNT(*)
+                 FROM legal_documents d
+                 JOIN legal_sources s ON s.source_key=d.source_key
+                 LEFT JOIN citator_public_source_admissions pa
+                   ON pa.source_key=s.source_key AND pa.active IS TRUE
+                  AND pa.namespace='public-authority'
+                WHERE d.corpus_version=%s
+                  AND (d.public_namespace IS DISTINCT FROM 'public-authority'
+                       OR s.public_namespace IS DISTINCT FROM 'public-authority'
+                       OR pa.source_key IS NULL)""",
+            [version],
+        )
+        if cur.fetchone()[0]:
+            raise PermissionError(
+                "corpus contains legal material without public authority lineage"
+            )
         cur.execute(
             "UPDATE authority_corpus_versions SET status='retired' WHERE status='promoted' AND version <> %s",
             [version],
@@ -732,7 +772,9 @@ def _consume_citator_command_assertion(
         or (tenant_id is not None and str(claims.get("tenant_id")) != str(tenant_id))
         or (matter_id is not None and str(claims.get("matter_id")) != str(matter_id))
     ):
-        raise PermissionError("invalid, expired, or mismatched citator command assertion")
+        raise PermissionError(
+            "invalid, expired, or mismatched citator command assertion"
+        )
     with conn.cursor() as cur:
         cur.execute("DELETE FROM citator_command_assertions WHERE expires_at < now()")
         cur.execute(
@@ -798,7 +840,9 @@ def _consume_citator_matter_scope(
     )
 
 
-def _citator_authority_is_permitted(conn: Any, *, corpus_version: str, authority_key: str) -> bool:
+def _citator_authority_is_permitted(
+    conn: Any, *, corpus_version: str, authority_key: str
+) -> bool:
     """Require a reviewed public source, never infer public status from a URL."""
     with conn.cursor() as cur:
         cur.execute(
@@ -872,7 +916,9 @@ def record_treatment_assessment(
     if not _citator_authority_is_permitted(
         conn, corpus_version=corpus_version, authority_key=authority_key
     ):
-        raise PermissionError("citator assessment requires promoted, reviewed public authority evidence")
+        raise PermissionError(
+            "citator assessment requires promoted, reviewed public authority evidence"
+        )
     bound_evidence: list[dict[str, Any]] = []
     if not abstained:
         fact_ids = list(dict.fromkeys(str(value) for value in evidence_fact_ids))
@@ -891,7 +937,14 @@ def record_treatment_assessment(
                 FROM authority_citation_facts
                 WHERE corpus_version=%s AND cited_authority_key=%s AND id::text = ANY(%s)
                 """,
-                [corpus_version, authority_key, fact_ids, corpus_version, authority_key, fact_ids],
+                [
+                    corpus_version,
+                    authority_key,
+                    fact_ids,
+                    corpus_version,
+                    authority_key,
+                    fact_ids,
+                ],
             )
             columns = [column.name for column in cur.description]
             bound_evidence = [dict(zip(columns, row)) for row in cur.fetchall()]
@@ -971,8 +1024,12 @@ def authorize_citator_reviewer(
                  authorization_basis=EXCLUDED.authorization_basis, active=TRUE,
                  verified_by=EXCLUDED.verified_by, verified_at=now(), revoked_at=NULL,
                  metadata=EXCLUDED.metadata""",
-            [principal.strip(), authorization_basis.strip()[:1000], actor,
-             json.dumps({"authorization_contract": "internal-rbac-principal"})],
+            [
+                principal.strip(),
+                authorization_basis.strip()[:1000],
+                actor,
+                json.dumps({"authorization_contract": "internal-rbac-principal"}),
+            ],
         )
     conn.commit()
 
@@ -1000,7 +1057,9 @@ def review_treatment_assessment(
         )
         authorized = cur.fetchone()
         if not authorized or not authorized[0] or not authorized[1]:
-            raise PermissionError("reviewer is not an authorized citator review principal")
+            raise PermissionError(
+                "reviewer is not an authorized citator review principal"
+            )
         cur.execute(
             """INSERT INTO authority_treatment_reviews
                  (assessment_id, reviewer, decision, override_label, note, metadata)
@@ -1011,11 +1070,13 @@ def review_treatment_assessment(
                 decision,
                 override_label if decision == "overridden" else None,
                 (note or "")[:4000] or None,
-                json.dumps({
-                    "review_workflow": "attorney_review_first",
-                    "authorization_basis": authorized[1],
-                    "principal": reviewer,
-                }),
+                json.dumps(
+                    {
+                        "review_workflow": "attorney_review_first",
+                        "authorization_basis": authorized[1],
+                        "principal": reviewer,
+                    }
+                ),
             ],
         )
         row = cur.fetchone()
@@ -1059,7 +1120,9 @@ def save_citator_watch(
     if not promoted or not _citator_authority_is_permitted(
         conn, corpus_version=str(promoted[0]), authority_key=authority_key
     ):
-        raise PermissionError("watches require promoted, reviewed public authority evidence")
+        raise PermissionError(
+            "watches require promoted, reviewed public authority evidence"
+        )
     with conn.cursor() as cur:
         cur.execute("SET LOCAL app.current_tenant_id = %s", [tenant_id])
         cur.execute(
@@ -1075,7 +1138,14 @@ def save_citator_watch(
                           state='active', revoked_at=NULL, deleted_at=NULL
             RETURNING id::text, (xmax = 0)
             """,
-            [tenant_id, matter_id, authority_key, created_by, json.dumps(delivery_channels), json.dumps(normalized_quiet_hours)],
+            [
+                tenant_id,
+                matter_id,
+                authority_key,
+                created_by,
+                json.dumps(delivery_channels),
+                json.dumps(normalized_quiet_hours),
+            ],
         )
         row = cur.fetchone()
         cur.execute(
@@ -1083,8 +1153,16 @@ def save_citator_watch(
                  (watch_id, tenant_id, action, actor, detail)
                VALUES (%s::uuid, %s::uuid, %s, %s, %s::jsonb)""",
             [
-                row[0], tenant_id, "created" if row[1] else "updated", created_by,
-                json.dumps({"authority_key": authority_key, "delivery_channels": delivery_channels}),
+                row[0],
+                tenant_id,
+                "created" if row[1] else "updated",
+                created_by,
+                json.dumps(
+                    {
+                        "authority_key": authority_key,
+                        "delivery_channels": delivery_channels,
+                    }
+                ),
             ],
         )
     conn.commit()
@@ -1142,7 +1220,9 @@ def _citator_alert_evidence(
         columns = [column.name for column in cur.description]
         rows = [dict(zip(columns, row)) for row in cur.fetchall()]
     if len(rows) != 1 or not rows[0].get("source_url"):
-        raise PermissionError("citator alert requires a stored same-version authority evidence fact")
+        raise PermissionError(
+            "citator alert requires a stored same-version authority evidence fact"
+        )
     evidence = rows[0]
     return str(evidence["source_url"]), {
         "evidence_fact_id": evidence["fact_id"],
@@ -1174,7 +1254,9 @@ def enqueue_citator_alert(
     if not _citator_authority_is_permitted(
         conn, corpus_version=corpus_version, authority_key=authority_key
     ):
-        raise PermissionError("alerts require promoted, reviewed public authority evidence")
+        raise PermissionError(
+            "alerts require promoted, reviewed public authority evidence"
+        )
     source_url, payload = _citator_alert_evidence(
         conn,
         corpus_version=corpus_version,
@@ -1201,8 +1283,16 @@ def enqueue_citator_alert(
                VALUES (%s::uuid, %s::uuid, %s, %s, %s, %s, %s, %s::jsonb)
                ON CONFLICT (watch_id, event_fingerprint) DO NOTHING
                RETURNING id::text""",
-            [watch_id, tenant_id, corpus_version, authority_key, event_fingerprint,
-             event_kind, source_url, json.dumps(payload)],
+            [
+                watch_id,
+                tenant_id,
+                corpus_version,
+                authority_key,
+                event_fingerprint,
+                event_kind,
+                source_url,
+                json.dumps(payload),
+            ],
         )
         row = cur.fetchone()
     conn.commit()
@@ -1289,8 +1379,14 @@ def record_citator_alert_delivery(
             ON CONFLICT (alert_event_id, channel, delivery_key) DO NOTHING
             RETURNING id::text
             """,
-            [alert_event_id, tenant_id, channel[:100], delivery_key[:200], outcome,
-             (detail or "")[:2000] or None],
+            [
+                alert_event_id,
+                tenant_id,
+                channel[:100],
+                delivery_key[:200],
+                outcome,
+                (detail or "")[:2000] or None,
+            ],
         )
         row = cur.fetchone()
     conn.commit()

@@ -25,8 +25,25 @@ dates, cadence, currentness state, audits, and caveats. They never select tenant
 IDs, private document text, or private query text. Chat displays this evidence
 beside firm sources and labels suppressed or bounded claims explicitly.
 
+Public serving requires an explicit active row in
+`citator_public_source_admissions`, an operator-reviewed catalog/manifest
+decision containing the catalog schema version, manifest reference and digest,
+reviewer, and active state. `legal_documents` and `authority_case_clusters`
+have protected `public_namespace` fields populated by database triggers from
+that admission; caller metadata cannot grant public status. Search, detail,
+citation/network, court/docket, coverage, isolation, and promotion paths
+require the same active admission and public classification. Unknown, private,
+custom, tenant, and firm sources therefore remain non-searchable and cannot
+support a coverage claim, even when their payload says `public-authority`.
+
 Query embeddings must match corpus model, version, and dimension exactly. A
 vector outage or mismatch degrades to keyword/source search; vectors are never
 padded and semantic completeness is never implied. This control plane does not
 claim comprehensive coverage, current law, or good law from corpus volume or
 absence of a negative record.
+
+Release boundary: the versioned control plane is merged and release-gated; the
+explicit-public boundary requires fresh PostgreSQL negative evidence before a
+new production corpus claim. No production harvest, deploy, comprehensive
+coverage, currentness, or good-law claim is implied. Brief Check
+promoted-version/currentness integration remains separate COMP-05 work.
