@@ -92,6 +92,11 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
         def add_fixture(version_name, suffix):
             with conn.cursor() as cur:
                 cur.execute(
+                    """INSERT INTO courts (court_id, full_name)
+                       VALUES ('ohio', 'Ohio rehearsal court')
+                       ON CONFLICT (court_id) DO NOTHING"""
+                )
+                cur.execute(
                     """INSERT INTO legal_sources
                     (source_key, publisher, source_type, canonical_url, enabled,
                      storage_policy, rights_decision, reviewed_at, reviewed_by,
@@ -3760,9 +3765,13 @@ def test_legal_only_upgrade_bootstrap_rehearsal():
     with connect(scoped_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """SELECT COUNT(*) FROM legal_documents WHERE external_id='statute-1'"""
+                """SELECT corpus_version FROM legal_documents
+                    WHERE external_id='statute-1' ORDER BY corpus_version"""
             )
-            assert cur.fetchone()[0] == 1
+            assert {row[0] for row in cur.fetchall()} == {
+                "legacy-bootstrap",
+                reviewed_version,
+            }
 
 
 def test_legacy_upgrade_bootstrap_rehearsal():
