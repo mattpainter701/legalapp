@@ -279,15 +279,19 @@ def promote_corpus_version(conn: Any, *, version: str, actor: str, reason: str) 
                 "latest passing release, completeness, freshness, and isolation audits are required"
             )
         cur.execute(
-            """
-            SELECT COUNT(*) FROM authority_case_chunks
-            WHERE corpus_version=%s
-        """,
-            [version],
+            """SELECT
+                 (SELECT COUNT(*)
+                    FROM legal_document_chunks c
+                    JOIN legal_documents d ON d.id=c.document_id
+                   WHERE d.corpus_version=%s AND c.corpus_version=%s)
+                 +
+                 (SELECT COUNT(*) FROM authority_case_chunks
+                   WHERE corpus_version=%s)""",
+            [version, version, version],
         )
         if not cur.fetchone()[0]:
             raise PermissionError(
-                "a corpus version must contain searchable authority snapshot chunks"
+                "a corpus version must contain searchable authority chunks"
             )
         cur.execute(
             """SELECT COUNT(*) FROM legal_document_chunks c
@@ -481,8 +485,14 @@ def stage_corpus_version(
     embedding_model: str,
     embedding_version: str,
     embedding_dimension: int,
+    inherit_current: bool = True,
 ) -> None:
-    """Create a staged immutable release and record its rollback target."""
+    """Create a staged release and optionally seed it from the current snapshot.
+
+    ``inherit_current=False`` is the explicit full-rebuild path.  It avoids
+    copying immutable deterministic evidence when an operator is assembling a
+    replacement corpus entirely from reviewed source inputs.
+    """
     actor, reason = _authorized(actor, reason)
     if (
         not manifest_hash
@@ -522,7 +532,7 @@ def stage_corpus_version(
         )
         if cur.rowcount != 1:
             raise ValueError("corpus version already exists")
-        if current:
+        if current and inherit_current:
             # Seed a side-by-side candidate from the last good snapshot. New
             # harvest/chunk material can then replace only the candidate rows.
             cur.execute(

@@ -46,7 +46,10 @@ retrieval, logs, and tests.
 
 Public authority eligibility is an explicit active row in
 `citator_public_source_admissions`, containing reviewed catalog/manifest
-identity, digest, reviewer, and namespace. Database admission triggers protect
+identity, digest, reviewer, and namespace. Admissions are source-and-manifest
+scoped, preserving the current promoted lineage while a reviewed
+staged/canary successor is assembled.
+Database admission triggers protect
 the `public_namespace` fields on legal documents and caselaw clusters; source
 payload metadata cannot promote a tenant, firm, private, custom, or unknown
 source. Public search, detail, citation/network, court/docket, coverage,

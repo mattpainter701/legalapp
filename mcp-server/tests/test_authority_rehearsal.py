@@ -128,7 +128,7 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                        SELECT %s, 'rehearsal', 'fixture-manifest', manifest_hash,
                               now(), 'rehearsal-admin'
                          FROM authority_corpus_versions WHERE version=%s
-                       ON CONFLICT (source_key) DO UPDATE SET active=TRUE,
+                       ON CONFLICT (source_key, manifest_sha256) DO UPDATE SET active=TRUE,
                          manifest_sha256=EXCLUDED.manifest_sha256""",
                     [source_key, version_name],
                 )
@@ -140,7 +140,7 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                               'fixture-manifest', manifest_hash, now(),
                               'rehearsal-admin'
                          FROM authority_corpus_versions WHERE version=%s
-                       ON CONFLICT (source_key) DO UPDATE SET active=TRUE,
+                       ON CONFLICT (source_key, manifest_sha256) DO UPDATE SET active=TRUE,
                          manifest_sha256=EXCLUDED.manifest_sha256""",
                     [version_name],
                 )
@@ -267,6 +267,7 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
             embedding_model="mixedbread-ai/mxbai-embed-large-v1",
             embedding_version="1",
             embedding_dimension=1024,
+            inherit_current=False,
         )
         with conn.cursor() as cur:
             cur.execute(
@@ -321,7 +322,7 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                           'fixture-manifest', manifest_hash, now(),
                           'rehearsal-admin'
                      FROM authority_corpus_versions WHERE version=%s
-                   ON CONFLICT (source_key) DO UPDATE SET active=TRUE,
+                   ON CONFLICT (source_key, manifest_sha256) DO UPDATE SET active=TRUE,
                      catalog_schema_version=EXCLUDED.catalog_schema_version,
                      manifest_reference=EXCLUDED.manifest_reference,
                      manifest_sha256=EXCLUDED.manifest_sha256""",
@@ -2039,13 +2040,11 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
             embedding_model="mixedbread-ai/mxbai-embed-large-v1",
             embedding_version="1",
             embedding_dimension=1024,
+            inherit_current=False,
         )
         with conn.cursor() as cur:
-            # Staging copies the prior promoted snapshot, including chunks
-            # whose vector contract intentionally belongs to that prior
-            # release. This isolated citator rehearsal supplies its own
-            # complete candidate snapshot instead of weakening promotion or
-            # accepting those old/null vectors.
+            # This is an explicit full-rebuild candidate. It does not inherit
+            # immutable facts or vectors from the prior promoted release.
             cur.execute(
                 "DELETE FROM authority_citation_facts WHERE corpus_version=%s",
                 [version],
@@ -3650,13 +3649,100 @@ def test_legal_only_upgrade_bootstrap_rehearsal():
                     WHERE source_key='legacy:statute'"""
             )
         conn.commit()
+        reviewed_version = "legacy-statute-reviewed-" + uuid.uuid4().hex
+        stage_corpus_version(
+            conn,
+            version=reviewed_version,
+            manifest_hash="legacy-statute-reviewed",
+            as_of="2026-08-31T00:00:00Z",
+            actor="legacy-upgrade-reviewer",
+            reason="review legacy statute through a staged successor",
+            embedding_model="mixedbread-ai/mxbai-embed-large-v1",
+            embedding_version="1",
+            embedding_dimension=1024,
+            inherit_current=False,
+        )
         admit_public_source(
             conn,
             source_key="legacy:statute",
             catalog_schema_version="legacy-rehearsal",
             manifest_reference="legacy-bootstrap-manifest",
-            manifest_sha256="legacy-bootstrap",
+            manifest_sha256="legacy-statute-reviewed",
             reviewed_by="legacy-upgrade-reviewer",
+        )
+        ingest_result = ingest_document(
+            conn,
+            {
+                "source_key": "legacy:statute",
+                "external_id": "statute-1",
+                "document_type": "statute",
+                "title": "Legacy statute",
+                "citation": None,
+                "jurisdiction": "US",
+                "authority_tier": "binding_primary",
+                "document_status": "current",
+                "canonical_url": "https://legacy.example/statute",
+                "parser_version": "legacy-reviewed-parser-v1",
+                "practice_areas": ["legacy-rehearsal"],
+                "parser": "legacy-reviewed-parser-v1",
+                "official_status": "official",
+                "acquisition_basis": "reviewed legacy migration fixture",
+                "coverage_notes": "bounded legacy statute fixture",
+            },
+            FetchedDocument(
+                text="Legacy statute text",
+                content_hash="legacy-reviewed-hash",
+                media_type="text/html",
+                retrieved_at=datetime.now(timezone.utc),
+                source_modified_at=None,
+                etag="legacy-reviewed-etag",
+                resolved_url="https://legacy.example/statute",
+            ),
+            corpus_version=reviewed_version,
+        )
+        assert ingest_result["chunks_created"] == 1
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE legal_document_chunks
+                      SET embedding=('[' || array_to_string(array_fill(0, ARRAY[1024]), ',') || ']')::vector,
+                          embedding_model='mixedbread-ai/mxbai-embed-large-v1',
+                          embedding_version=1
+                    WHERE corpus_version=%s""",
+                [reviewed_version],
+            )
+        conn.commit()
+        for kind in ("release", "completeness", "freshness", "isolation"):
+            result = sampled_audit(
+                (
+                    [{"ready": True}]
+                    if kind == "release"
+                    else (
+                        [{"expected": 1, "observed": 1, "declared": True}]
+                        if kind == "completeness"
+                        else (
+                            [{"lag_seconds": 0}]
+                            if kind == "freshness"
+                            else [{"namespace": "public-authority", "private": False}]
+                        )
+                    )
+                ),
+                audit_kind=kind,
+            )
+            record_audit(
+                conn,
+                corpus_version=reviewed_version,
+                audit_kind=kind,
+                methodology="legacy statute reviewed successor rehearsal",
+                thresholds={},
+                result=result,
+                passed=True,
+                auditor="legacy-upgrade-reviewer",
+            )
+        promote_corpus_version(
+            conn,
+            version=reviewed_version,
+            actor="legacy-upgrade-reviewer",
+            reason="promote reviewed legacy statute successor",
         )
         with conn.cursor() as cur:
             result = CourtListenerRepository(conn).search_legal_authorities(

@@ -28,7 +28,10 @@ beside firm sources and labels suppressed or bounded claims explicitly.
 Public serving requires an explicit active row in
 `citator_public_source_admissions`, an operator-reviewed catalog/manifest
 decision containing the catalog schema version, manifest reference and digest,
-reviewer, and active state. `legal_documents` and `authority_case_clusters`
+reviewer, and active state. Admissions are keyed by source and release
+manifest so the current promoted release and a reviewed staged/canary
+successor can coexist during cutover.
+`legal_documents` and `authority_case_clusters`
 have protected `public_namespace` fields populated by database triggers from
 that admission; caller metadata cannot grant public status. Search, detail,
 citation/network, court/docket, coverage, isolation, and promotion paths

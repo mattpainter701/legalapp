@@ -455,7 +455,7 @@ def admit_public_source(
                  (source_key, catalog_schema_version, manifest_reference,
                   manifest_sha256, reviewed_at, reviewed_by)
                VALUES (%s, %s, %s, %s, now(), %s)
-               ON CONFLICT (source_key) DO UPDATE SET
+               ON CONFLICT (source_key, manifest_sha256) DO UPDATE SET
                  catalog_schema_version=EXCLUDED.catalog_schema_version,
                  manifest_reference=EXCLUDED.manifest_reference,
                  manifest_sha256=EXCLUDED.manifest_sha256,

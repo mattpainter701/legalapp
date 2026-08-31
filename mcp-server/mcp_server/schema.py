@@ -716,7 +716,7 @@ CREATE TABLE IF NOT EXISTS authority_records (
 -- authority surface can use it. Metadata on an arbitrary source row is never
 -- an admission.
 CREATE TABLE IF NOT EXISTS citator_public_source_admissions (
-    source_key text PRIMARY KEY REFERENCES legal_sources(source_key) ON DELETE RESTRICT,
+    source_key text NOT NULL REFERENCES legal_sources(source_key) ON DELETE RESTRICT,
     catalog_schema_version text NOT NULL,
     manifest_reference text NOT NULL,
     manifest_sha256 text NOT NULL,
@@ -729,8 +729,37 @@ CREATE TABLE IF NOT EXISTS citator_public_source_admissions (
     CHECK (length(trim(catalog_schema_version)) > 0),
     CHECK (length(trim(manifest_reference)) > 0),
     CHECK (length(trim(manifest_sha256)) >= 16),
-    CHECK (length(trim(reviewed_by)) > 0)
+    CHECK (length(trim(reviewed_by)) > 0),
+    PRIMARY KEY (source_key, manifest_sha256)
 );
+-- Older control-plane installations admitted at most one manifest per source.
+-- Preserve that row while allowing the current promoted and next staged
+-- release to retain independent reviewed admissions during canary/cutover.
+DO $$
+DECLARE admission_pk text;
+BEGIN
+    SELECT conname INTO admission_pk
+      FROM pg_constraint
+     WHERE conrelid='citator_public_source_admissions'::regclass
+       AND contype='p';
+    IF admission_pk IS NOT NULL
+       AND pg_get_constraintdef(
+             (SELECT oid FROM pg_constraint
+               WHERE conrelid='citator_public_source_admissions'::regclass
+                 AND conname=admission_pk)
+           ) <> 'PRIMARY KEY (source_key, manifest_sha256)' THEN
+        EXECUTE format(
+          'ALTER TABLE citator_public_source_admissions DROP CONSTRAINT %I',
+          admission_pk
+        );
+        admission_pk := NULL;
+    END IF;
+    IF admission_pk IS NULL THEN
+        ALTER TABLE citator_public_source_admissions
+          ADD CONSTRAINT citator_public_source_admissions_pkey
+          PRIMARY KEY (source_key, manifest_sha256);
+    END IF;
+END $$;
 
 -- Single version-bound public-source contract consumed by retrieval,
 -- coverage, audits, and operational projections.  Keeping this as a view

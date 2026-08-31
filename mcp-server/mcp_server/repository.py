@@ -969,7 +969,7 @@ class CourtListenerRepository:
     def court_info(self, court_id: str) -> dict[str, Any] | None:
         with self.conn.cursor() as cur:
             cur.execute(
-                """
+                f"""
                 SELECT c.court_id, c.short_name, c.full_name, c.jurisdiction,
                        COUNT(DISTINCT oc.opinion_id) AS opinion_count,
                        MIN(cl.date_filed) AS first_date,
