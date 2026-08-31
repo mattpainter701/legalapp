@@ -30,6 +30,19 @@ def upgrade() -> None:
         "communication_logs",
         ["tenant_id", "id"],
     )
+    op.drop_constraint(
+        "task_automation_runs_task_id_fkey",
+        "task_automation_runs",
+        type_="foreignkey",
+    )
+    op.create_foreign_key(
+        "fk_task_automation_runs_tenant_task",
+        "task_automation_runs",
+        "tasks",
+        ["tenant_id", "task_id"],
+        ["tenant_id", "id"],
+        ondelete="CASCADE",
+    )
     op.alter_column(
         "task_automation_runs",
         "delivery_certainty",
@@ -300,6 +313,72 @@ def upgrade() -> None:
         ),
     )
     op.create_table(
+        "sms_provider_credentials",
+        sa.Column(
+            "id",
+            UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
+        sa.Column(
+            "tenant_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("tenants.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column("provider", sa.String(30), nullable=False, server_default="twilio"),
+        sa.Column("generation", sa.Integer(), nullable=False),
+        sa.Column("account_sid", sa.String(100), nullable=False),
+        sa.Column("encrypted_auth_token", sa.Text()),
+        sa.Column("messaging_service_sid", sa.String(100)),
+        sa.Column("from_number", sa.String(30)),
+        sa.Column("retired_at", sa.DateTime(timezone=True)),
+        sa.Column(
+            "retired_by_user_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("users.id", ondelete="SET NULL"),
+        ),
+        sa.Column("retirement_reason", sa.String(120)),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+        sa.UniqueConstraint(
+            "tenant_id", "id", name="uq_sms_provider_credentials_tenant_id"
+        ),
+        sa.UniqueConstraint(
+            "tenant_id",
+            "provider",
+            "generation",
+            name="uq_sms_provider_credentials_tenant_generation",
+        ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "retired_by_user_id"],
+            ["users.tenant_id", "users.id"],
+            name="fk_sms_provider_credentials_tenant_user",
+        ),
+        sa.CheckConstraint(
+            "provider = 'twilio'", name="ck_sms_provider_credentials_provider"
+        ),
+        sa.CheckConstraint(
+            "generation > 0", name="ck_sms_provider_credentials_generation"
+        ),
+        sa.CheckConstraint(
+            "(retired_at IS NULL AND encrypted_auth_token IS NOT NULL "
+            "AND retired_by_user_id IS NULL AND retirement_reason IS NULL) OR "
+            "(retired_at IS NOT NULL AND encrypted_auth_token IS NULL "
+            "AND retired_by_user_id IS NOT NULL "
+            "AND NULLIF(BTRIM(retirement_reason), '') IS NOT NULL)",
+            name="ck_sms_provider_credentials_retirement",
+        ),
+        sa.CheckConstraint(
+            "from_number IS NULL OR from_number ~ '^\\+[1-9][0-9]{7,14}$'",
+            name="ck_sms_provider_credentials_from_number_e164",
+        ),
+    )
+    op.create_table(
         "sms_number_suppressions",
         sa.Column(
             "id",
@@ -430,6 +509,7 @@ def upgrade() -> None:
         sa.Column("provider_account_sid", sa.String(100)),
         sa.Column("provider_messaging_service_sid", sa.String(100)),
         sa.Column("provider_config_generation", sa.Integer()),
+        sa.Column("provider_credential_id", UUID(as_uuid=True)),
         sa.Column("dispatch_attempt_id", UUID(as_uuid=True)),
         sa.Column("dispatch_started_at", sa.DateTime(timezone=True)),
         sa.Column("provider_submission_started_at", sa.DateTime(timezone=True)),
@@ -491,6 +571,11 @@ def upgrade() -> None:
         ),
         sa.UniqueConstraint(
             "tenant_id", "provider_message_id", name="uq_sms_messages_provider_id"
+        ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "provider_credential_id"],
+            ["sms_provider_credentials.tenant_id", "sms_provider_credentials.id"],
+            name="fk_sms_messages_tenant_provider_credential",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "contact_id"],
@@ -702,6 +787,11 @@ def upgrade() -> None:
         ["tenant_id", "is_active"],
     )
     op.create_index(
+        "idx_sms_provider_credentials_tenant_generation",
+        "sms_provider_credentials",
+        ["tenant_id", "provider", "generation"],
+    )
+    op.create_index(
         "uq_sms_provider_configs_active_account_service",
         "sms_provider_configs",
         ["account_sid", "messaging_service_sid"],
@@ -736,6 +826,11 @@ def upgrade() -> None:
         ["tenant_id", "matter_id", "created_at"],
     )
     op.create_index(
+        "idx_sms_messages_tenant_provider_credential",
+        "sms_messages",
+        ["tenant_id", "provider_credential_id"],
+    )
+    op.create_index(
         "idx_sms_review_items_tenant_status",
         "sms_review_items",
         ["tenant_id", "status", "created_at"],
@@ -750,6 +845,7 @@ def upgrade() -> None:
         "sms_number_suppressions",
         "sms_number_suppression_events",
         "sms_provider_configs",
+        "sms_provider_credentials",
         "sms_messages",
         "sms_review_items",
     ):
@@ -817,6 +913,19 @@ def downgrade() -> None:
     op.execute("DROP FUNCTION IF EXISTS prevent_sms_evidence_event_mutation()")
     op.execute("DROP FUNCTION IF EXISTS sms_demo_purge_authorized(uuid)")
     op.drop_constraint(
+        "fk_task_automation_runs_tenant_task",
+        "task_automation_runs",
+        type_="foreignkey",
+    )
+    op.create_foreign_key(
+        "task_automation_runs_task_id_fkey",
+        "task_automation_runs",
+        "tasks",
+        ["task_id"],
+        ["id"],
+        ondelete="CASCADE",
+    )
+    op.drop_constraint(
         "fk_task_automation_runs_tenant_sms_message",
         "task_automation_runs",
         type_="foreignkey",
@@ -840,6 +949,7 @@ def downgrade() -> None:
         "sms_messages",
         "sms_number_suppression_events",
         "sms_number_suppressions",
+        "sms_provider_credentials",
         "sms_provider_configs",
         "sms_consent_events",
     ):

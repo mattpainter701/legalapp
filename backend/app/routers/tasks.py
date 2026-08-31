@@ -50,6 +50,7 @@ from app.services.matter_access import accessible_matter_ids, can_access_matter
 from app.services.matter_file_store import MatterFileReadError, MatterFileTooLarge
 from app.services.provider_http import ProviderError
 from app.services.task_history import record_customer_contact, record_task_event
+from app.services.task_visibility import user_can_receive_sms_task
 from app.services.task_notifications import (
     notify_task_created,
     notify_task_updated,
@@ -2267,6 +2268,21 @@ async def update_task(
     await _require_task_references_for_tenant(
         db, uuid.UUID(tenant_id), changed_references
     )
+    if await _task_contains_sms(db, task):
+        for field in ("assigned_to_user_id", "reviewer_user_id"):
+            if field not in payload.model_fields_set:
+                continue
+            target_user_id = changed_references.get(field)
+            if target_user_id is not None and not await user_can_receive_sms_task(
+                db, task=task, user_id=target_user_id
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "SMS task assignees and reviewers must be active, hold "
+                        "manage_matters, and have access to the linked matter"
+                    ),
+                )
     if expected_version is not None and expected_version != task.version:
         current_response = await _task_response_with_delivery(db, task, current_user)
         raise HTTPException(

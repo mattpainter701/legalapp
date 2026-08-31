@@ -133,6 +133,85 @@ class SmsProviderConfig(Base):
     )
 
 
+class SmsProviderCredential(Base):
+    """Bounded, immutable-identity credentials retained for prior generations."""
+
+    __tablename__ = "sms_provider_credentials"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "id", name="uq_sms_provider_credentials_tenant_id"
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "provider",
+            "generation",
+            name="uq_sms_provider_credentials_tenant_generation",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "retired_by_user_id"],
+            ["users.tenant_id", "users.id"],
+            name="fk_sms_provider_credentials_tenant_user",
+        ),
+        CheckConstraint(
+            "provider = 'twilio'", name="ck_sms_provider_credentials_provider"
+        ),
+        CheckConstraint(
+            "generation > 0", name="ck_sms_provider_credentials_generation"
+        ),
+        CheckConstraint(
+            "(retired_at IS NULL AND encrypted_auth_token IS NOT NULL "
+            "AND retired_by_user_id IS NULL AND retirement_reason IS NULL) OR "
+            "(retired_at IS NOT NULL AND encrypted_auth_token IS NULL "
+            "AND retired_by_user_id IS NOT NULL "
+            "AND NULLIF(BTRIM(retirement_reason), '') IS NOT NULL)",
+            name="ck_sms_provider_credentials_retirement",
+        ),
+        CheckConstraint(
+            "from_number IS NULL OR from_number ~ '^\\+[1-9][0-9]{7,14}$'",
+            name="ck_sms_provider_credentials_from_number_e164",
+        ),
+        Index(
+            "idx_sms_provider_credentials_tenant_generation",
+            "tenant_id",
+            "provider",
+            "generation",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default="gen_random_uuid()",
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    provider: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="twilio", server_default="twilio"
+    )
+    generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    account_sid: Mapped[str] = mapped_column(String(100), nullable=False)
+    encrypted_auth_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    messaging_service_sid: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )
+    from_number: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    retired_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    retired_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    retirement_reason: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default="now()",
+    )
+
+
 class SmsNumberSuppression(Base):
     __tablename__ = "sms_number_suppressions"
     __table_args__ = (
@@ -257,6 +336,11 @@ class SmsMessage(Base):
         ),
         UniqueConstraint(
             "tenant_id", "provider_message_id", name="uq_sms_messages_provider_id"
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "provider_credential_id"],
+            ["sms_provider_credentials.tenant_id", "sms_provider_credentials.id"],
+            name="fk_sms_messages_tenant_provider_credential",
         ),
         ForeignKeyConstraint(
             ["tenant_id", "contact_id"],
@@ -388,6 +472,11 @@ class SmsMessage(Base):
         ),
         Index("idx_sms_messages_tenant_matter", "tenant_id", "matter_id", "created_at"),
         Index(
+            "idx_sms_messages_tenant_provider_credential",
+            "tenant_id",
+            "provider_credential_id",
+        ),
+        Index(
             "idx_sms_messages_reconciliation",
             "status",
             "dispatch_started_at",
@@ -429,6 +518,9 @@ class SmsMessage(Base):
     )
     provider_config_generation: Mapped[int | None] = mapped_column(
         Integer, nullable=True
+    )
+    provider_credential_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
     )
     dispatch_attempt_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), nullable=True

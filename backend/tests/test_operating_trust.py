@@ -18,6 +18,7 @@ from app.services.operating_trust import (
     issue_tenant_export_snapshot,
     reconcile_counts,
     support_acknowledgement_due,
+    sms_copy_export_mode,
     verify_tenant_export_snapshot,
 )
 from tests.platform_auth_helpers import TEST_PLATFORM_SIGNING_KEY, platform_headers
@@ -76,6 +77,20 @@ def test_sms_export_modes_are_explicit_and_unknown_sms_tables_fail_closed():
         database_export_mode("sms_provider_configs")
         == "security-metadata-only-no-secret-values"
     )
+    assert (
+        database_export_mode("sms_provider_credentials")
+        == "security-metadata-only-no-secret-values"
+    )
+    assert (
+        sms_copy_export_mode("communication_logs:sms") == "existing-product-export-path"
+    )
+    assert sms_copy_export_mode("tasks:sms") == "existing-product-export-path"
+    assert sms_copy_export_mode("task_events:sms") == "immutable-evidence-summary"
+    assert (
+        sms_copy_export_mode("task_automation_runs:sms") == "immutable-evidence-summary"
+    )
+    with pytest.raises(ValueError, match="unclassified"):
+        sms_copy_export_mode("future_table:sms")
     with pytest.raises(ValueError, match="unclassified"):
         database_export_mode("sms_future_sensitive_store")
 

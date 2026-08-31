@@ -21,6 +21,7 @@ from app.models.compliance import (
     RetentionPolicy,
     TenantAgreementAcceptance,
 )
+from app.models.communication_log import CommunicationLog
 from app.models.conversion_loop import LeadChannelConsent, SmsConsentEvent
 from app.models.conversation import Conversation, Message
 from app.models.document import Document
@@ -32,8 +33,10 @@ from app.models.sms import (
     SmsNumberSuppression,
     SmsNumberSuppressionEvent,
     SmsProviderConfig,
+    SmsProviderCredential,
     SmsReviewItem,
 )
+from app.models.task import Task, TaskAutomationRun, TaskEvent
 from app.models.tenant import Tenant
 
 settings = get_settings()
@@ -50,6 +53,10 @@ SmsDataClassification = Literal[
     "immutable_stop_start_evidence",
     "operational_review_evidence",
     "security_configuration_metadata",
+    "customer_communication_timeline_copy",
+    "workflow_sms_proposal_copy",
+    "workflow_sms_event_metadata",
+    "workflow_sms_action_snapshot",
 ]
 SmsRetentionMode = Literal[
     "firm_records_policy_with_reconciliation_evidence",
@@ -59,6 +66,8 @@ SmsRetentionMode = Literal[
     "stop_start_evidence",
     "review_evidence",
     "security_configuration_metadata",
+    "firm_records_policy_sms_copy",
+    "workflow_evidence_copy",
 ]
 SmsExportBoundary = Literal[
     "customer_export_includes_content_and_delivery_state",
@@ -66,6 +75,8 @@ SmsExportBoundary = Literal[
     "customer_export_includes_current_consent_state",
     "immutable_evidence_summary_only",
     "security_metadata_only_no_secret_values",
+    "customer_export_includes_timeline_copy",
+    "customer_export_includes_workflow_copy",
 ]
 
 
@@ -132,6 +143,36 @@ _SMS_RETENTION_SPECS: dict[str, _SmsRetentionSpec] = {
         data_classification="security_configuration_metadata",
         retention_mode="security_configuration_metadata",
         export_boundary="security_metadata_only_no_secret_values",
+    ),
+    "sms_provider_credentials": _SmsRetentionSpec(
+        name="sms_provider_credential_generations",
+        data_classification="security_configuration_metadata",
+        retention_mode="security_configuration_metadata",
+        export_boundary="security_metadata_only_no_secret_values",
+    ),
+    "communication_logs_sms": _SmsRetentionSpec(
+        name="sms_timeline_copies",
+        data_classification="customer_communication_timeline_copy",
+        retention_mode="firm_records_policy_sms_copy",
+        export_boundary="customer_export_includes_timeline_copy",
+    ),
+    "tasks_sms": _SmsRetentionSpec(
+        name="sms_task_proposal_copies",
+        data_classification="workflow_sms_proposal_copy",
+        retention_mode="firm_records_policy_sms_copy",
+        export_boundary="customer_export_includes_workflow_copy",
+    ),
+    "task_events_sms": _SmsRetentionSpec(
+        name="sms_task_event_copies",
+        data_classification="workflow_sms_event_metadata",
+        retention_mode="workflow_evidence_copy",
+        export_boundary="immutable_evidence_summary_only",
+    ),
+    "task_automation_runs_sms": _SmsRetentionSpec(
+        name="sms_automation_action_snapshots",
+        data_classification="workflow_sms_action_snapshot",
+        retention_mode="workflow_evidence_copy",
+        export_boundary="immutable_evidence_summary_only",
     ),
 }
 
@@ -423,6 +464,57 @@ async def retention_inventory(db: AsyncSession, tenant_id: uuid.UUID) -> dict[st
         created_column=SmsProviderConfig.created_at,
         where=[SmsProviderConfig.tenant_id == tenant_id],
     )
+    sms_provider_credentials = await _aggregate(
+        db,
+        id_column=SmsProviderCredential.id,
+        created_column=SmsProviderCredential.created_at,
+        where=[SmsProviderCredential.tenant_id == tenant_id],
+    )
+    historical_sms_task_ids = select(TaskAutomationRun.task_id).where(
+        TaskAutomationRun.tenant_id == tenant_id,
+        TaskAutomationRun.action_type == "sms_client",
+    )
+    sms_task_condition = or_(
+        func.coalesce(Task.pending_action["type"].as_string(), "") == "sms_client",
+        Task.id.in_(historical_sms_task_ids),
+    )
+    sms_timeline_copies = await _aggregate(
+        db,
+        id_column=CommunicationLog.id,
+        created_column=CommunicationLog.created_at,
+        where=[
+            CommunicationLog.tenant_id == tenant_id,
+            CommunicationLog.channel == "sms",
+        ],
+    )
+    sms_task_copies = await _aggregate(
+        db,
+        id_column=Task.id,
+        created_column=Task.created_at,
+        where=[Task.tenant_id == tenant_id, sms_task_condition],
+    )
+    sms_task_ids = select(Task.id).where(
+        Task.tenant_id == tenant_id,
+        sms_task_condition,
+    )
+    sms_task_event_copies = await _aggregate(
+        db,
+        id_column=TaskEvent.id,
+        created_column=TaskEvent.created_at,
+        where=[
+            TaskEvent.tenant_id == tenant_id,
+            TaskEvent.task_id.in_(sms_task_ids),
+        ],
+    )
+    sms_automation_snapshots = await _aggregate(
+        db,
+        id_column=TaskAutomationRun.id,
+        created_column=TaskAutomationRun.created_at,
+        where=[
+            TaskAutomationRun.tenant_id == tenant_id,
+            TaskAutomationRun.action_type == "sms_client",
+        ],
+    )
 
     provider_rows = (
         await db.execute(
@@ -508,6 +600,11 @@ async def retention_inventory(db: AsyncSession, tenant_id: uuid.UUID) -> dict[st
         _sms_retention_category("sms_number_suppression_events", sms_number_evidence),
         _sms_retention_category("sms_review_items", sms_review_evidence),
         _sms_retention_category("sms_provider_configs", sms_provider_configuration),
+        _sms_retention_category("sms_provider_credentials", sms_provider_credentials),
+        _sms_retention_category("communication_logs_sms", sms_timeline_copies),
+        _sms_retention_category("tasks_sms", sms_task_copies),
+        _sms_retention_category("task_events_sms", sms_task_event_copies),
+        _sms_retention_category("task_automation_runs_sms", sms_automation_snapshots),
     ]
 
     actions = list(

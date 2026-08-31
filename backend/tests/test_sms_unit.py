@@ -10,6 +10,7 @@ from app.models.sms import (
     SmsNumberSuppression,
     SmsNumberSuppressionEvent,
     SmsProviderConfig,
+    SmsProviderCredential,
     SmsReviewItem,
 )
 from app.models.task import TaskAutomationRun
@@ -246,6 +247,7 @@ def test_sms_records_have_tenant_composite_referential_guards():
             LeadChannelConsent.__table__,
             SmsConsentEvent.__table__,
             SmsProviderConfig.__table__,
+            SmsProviderCredential.__table__,
             SmsNumberSuppression.__table__,
             SmsNumberSuppressionEvent.__table__,
             SmsMessage.__table__,
@@ -256,6 +258,8 @@ def test_sms_records_have_tenant_composite_referential_guards():
     }
     assert {
         "fk_sms_provider_configs_tenant_user",
+        "fk_sms_provider_credentials_tenant_user",
+        "fk_sms_messages_tenant_provider_credential",
         "fk_sms_number_suppression_events_tenant_suppression",
         "fk_sms_messages_tenant_contact",
         "fk_sms_messages_tenant_matter",
@@ -270,6 +274,7 @@ def test_sms_records_have_tenant_composite_referential_guards():
         "fk_sms_consent_events_tenant_contact",
         "fk_sms_consent_events_tenant_user",
         "fk_task_automation_runs_tenant_sms_message",
+        "fk_task_automation_runs_tenant_task",
     } <= constraints
 
 
@@ -279,6 +284,7 @@ def test_sms_evidence_models_expose_database_coherence_guards():
         for table in (
             SmsConsentEvent.__table__,
             SmsProviderConfig.__table__,
+            SmsProviderCredential.__table__,
             SmsNumberSuppressionEvent.__table__,
             SmsMessage.__table__,
             SmsReviewItem.__table__,
@@ -288,6 +294,7 @@ def test_sms_evidence_models_expose_database_coherence_guards():
     assert {
         "ck_sms_consent_events_active_evidence",
         "ck_sms_provider_configs_active_evidence",
+        "ck_sms_provider_credentials_retirement",
         "ck_sms_number_suppression_events_state",
         "ck_sms_messages_status_certainty",
         "ck_sms_review_items_review_evidence",

@@ -34,6 +34,7 @@ from app.models.sms import (
     SmsNumberSuppression,
     SmsNumberSuppressionEvent,
     SmsProviderConfig,
+    SmsProviderCredential,
     SmsReviewItem,
 )
 from app.models.task import TaskAutomationRun
@@ -45,6 +46,7 @@ from app.services.token_vault import decrypt_token
 
 _DETERMINISTIC_PROVIDER_REJECTION_CODES = frozenset({400, 401, 403, 404, 422})
 _TRANSIENT_PROVIDER_HTTP_CODES = frozenset({408, 409, 425, 429})
+_MAX_RETAINED_PROVIDER_GENERATIONS = 5
 
 
 class SmsError(ValueError):
@@ -496,7 +498,7 @@ async def _config(
     return config
 
 
-def provider_auth_token(config: SmsProviderConfig) -> str:
+def provider_auth_token(config: SmsProviderConfig | SmsProviderCredential) -> str:
     """Decrypt and validate the Twilio Account Auth Token at each use."""
     try:
         token = decrypt_token(config.encrypted_auth_token).strip()
@@ -505,6 +507,179 @@ def provider_auth_token(config: SmsProviderConfig) -> str:
     if not token:
         raise SmsError("SMS provider credentials are unavailable", 503)
     return token
+
+
+async def provider_credentials_for_generation(
+    db: AsyncSession,
+    *,
+    tenant_id,
+    generation: int,
+    credential_id: uuid.UUID | None = None,
+    lock_for_provider_io: bool = False,
+) -> SmsProviderConfig | SmsProviderCredential:
+    """Load exactly the credential generation bound to a durable message."""
+    if credential_id is not None:
+        bound_stmt = select(SmsProviderCredential).where(
+            SmsProviderCredential.id == credential_id,
+            SmsProviderCredential.tenant_id == tenant_id,
+            SmsProviderCredential.provider == "twilio",
+            SmsProviderCredential.generation == generation,
+            SmsProviderCredential.retired_at.is_(None),
+            SmsProviderCredential.encrypted_auth_token.is_not(None),
+        )
+        if lock_for_provider_io:
+            bound_stmt = bound_stmt.with_for_update(read=True)
+        bound = await db.scalar(bound_stmt)
+        if bound is None:
+            raise SmsError(
+                "SMS provider credential generation is unavailable",
+                409,
+                code="sms_provider_generation_unavailable",
+            )
+        return bound
+    current_stmt = select(SmsProviderConfig).where(
+        SmsProviderConfig.tenant_id == tenant_id,
+        SmsProviderConfig.provider == "twilio",
+        SmsProviderConfig.generation == generation,
+    )
+    if lock_for_provider_io:
+        current_stmt = current_stmt.with_for_update(read=True)
+    current = await db.scalar(current_stmt)
+    if current is not None and current.encrypted_auth_token:
+        return current
+
+    historical_stmt = select(SmsProviderCredential).where(
+        SmsProviderCredential.tenant_id == tenant_id,
+        SmsProviderCredential.provider == "twilio",
+        SmsProviderCredential.generation == generation,
+        SmsProviderCredential.retired_at.is_(None),
+        SmsProviderCredential.encrypted_auth_token.is_not(None),
+    )
+    if lock_for_provider_io:
+        historical_stmt = historical_stmt.with_for_update(read=True)
+    historical = await db.scalar(historical_stmt)
+    if historical is None:
+        raise SmsError(
+            "SMS provider credential generation is unavailable",
+            409,
+            code="sms_provider_generation_unavailable",
+        )
+    return historical
+
+
+async def ensure_provider_config_credential(
+    db: AsyncSession, *, config: SmsProviderConfig
+) -> SmsProviderCredential:
+    """Materialize one immutable identity row for the current config generation."""
+    existing = await db.scalar(
+        select(SmsProviderCredential).where(
+            SmsProviderCredential.tenant_id == config.tenant_id,
+            SmsProviderCredential.provider == config.provider,
+            SmsProviderCredential.generation == config.generation,
+        )
+    )
+    if existing is not None:
+        exact = (
+            existing.retired_at is None
+            and existing.encrypted_auth_token is not None
+            and existing.account_sid == config.account_sid
+            and existing.messaging_service_sid == config.messaging_service_sid
+            and existing.from_number == config.from_number
+        )
+        if exact:
+            try:
+                exact = hmac.compare_digest(
+                    provider_auth_token(existing), provider_auth_token(config)
+                )
+            except SmsError:
+                exact = False
+        if not exact:
+            raise SmsError(
+                "SMS provider generation identity conflicts with stored credentials",
+                409,
+                code="sms_provider_generation_conflict",
+            )
+        return existing
+    if not config.account_sid or not config.encrypted_auth_token:
+        raise SmsError("SMS provider credentials are unavailable", 503)
+    credential = SmsProviderCredential(
+        tenant_id=config.tenant_id,
+        provider=config.provider,
+        generation=config.generation,
+        account_sid=config.account_sid,
+        encrypted_auth_token=config.encrypted_auth_token,
+        messaging_service_sid=config.messaging_service_sid,
+        from_number=config.from_number,
+    )
+    db.add(credential)
+    await db.flush()
+    return credential
+
+
+async def archive_current_provider_credentials(
+    db: AsyncSession,
+    *,
+    config: SmsProviderConfig,
+    actor_user_id,
+) -> list[SmsProviderCredential]:
+    """Prepare a bounded rotation without retiring in-flight provider truth."""
+    await ensure_provider_config_credential(db, config=config)
+    retained = list(
+        (
+            await db.scalars(
+                select(SmsProviderCredential)
+                .where(
+                    SmsProviderCredential.tenant_id == config.tenant_id,
+                    SmsProviderCredential.provider == config.provider,
+                    SmsProviderCredential.retired_at.is_(None),
+                )
+                .order_by(
+                    SmsProviderCredential.generation.asc(),
+                    SmsProviderCredential.id.asc(),
+                )
+                .with_for_update()
+            )
+        ).all()
+    )
+    retired: list[SmsProviderCredential] = []
+    while len(retained) >= _MAX_RETAINED_PROVIDER_GENERATIONS:
+        retirement_target = None
+        for candidate in retained:
+            unresolved = await db.scalar(
+                select(SmsMessage.id)
+                .where(
+                    SmsMessage.tenant_id == config.tenant_id,
+                    SmsMessage.direction == "outbound",
+                    SmsMessage.provider_config_generation == candidate.generation,
+                    or_(
+                        SmsMessage.status.in_(
+                            ["dispatching", "provider_unknown", "submitted"]
+                        ),
+                        and_(
+                            SmsMessage.reconciliation_required_at.is_not(None),
+                            SmsMessage.reconciliation_resolved_at.is_(None),
+                        ),
+                    ),
+                )
+                .limit(1)
+            )
+            if unresolved is None:
+                retirement_target = candidate
+                break
+        if retirement_target is None:
+            raise SmsError(
+                "SMS credentials cannot rotate while every retained generation has unresolved messages",
+                409,
+                code="sms_provider_generation_retention_blocked",
+            )
+        retirement_target.encrypted_auth_token = None
+        retirement_target.retired_at = datetime.now(timezone.utc)
+        retirement_target.retired_by_user_id = actor_user_id
+        retirement_target.retirement_reason = "bounded_rotation_after_resolution"
+        retained.remove(retirement_target)
+        retired.append(retirement_target)
+
+    return retired
 
 
 def append_sms_consent_event(
@@ -1120,6 +1295,7 @@ async def _persist_unknown_dispatch(
     user_id,
     provider_account_sid: str,
     provider_config_generation: int,
+    provider_credential_id: uuid.UUID,
     provider_messaging_service_sid: str | None = None,
     provider_message_id: str | None = None,
     provider_status: str | None = None,
@@ -1147,6 +1323,7 @@ async def _persist_unknown_dispatch(
             message.provider_account_sid = provider_account_sid
             message.provider_messaging_service_sid = provider_messaging_service_sid
             message.provider_config_generation = provider_config_generation
+            message.provider_credential_id = provider_credential_id
             message.provider_message_id = provider_message_id
             message.provider_status = provider_status
             message.from_number = provider_from_number or message.from_number
@@ -1189,6 +1366,31 @@ async def send_sms(
     before_success_commit: Callable[[SmsMessage], Awaitable[None]] | None = None,
 ) -> SmsMessage:
     now = datetime.now(timezone.utc)
+    if matter_id is None:
+        raise SmsError(
+            "A matter-bound SMS target is required",
+            422,
+            code="sms_matter_required",
+        )
+    # Authorize before even interpreting a matching idempotency reservation.
+    # A caller who lost capability, matter assignment, or party binding must
+    # not learn whether a prior provider request exists or how it resolved.
+    if (
+        await _lock_sms_matter_authorization(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            matter_id=matter_id,
+            contact_id=contact_id,
+            required_capabilities=required_capabilities,
+        )
+        is None
+    ):
+        raise SmsError(
+            "SMS target was not found",
+            404,
+            code="sms_target_not_found",
+        )
     replay = await db.scalar(
         select(SmsMessage).where(
             SmsMessage.tenant_id == tenant_id,
@@ -1215,28 +1417,6 @@ async def send_sms(
             await before_success_commit(resolved)
             await db.commit()
         return resolved
-    if matter_id is None:
-        raise SmsError(
-            "A matter-bound SMS target is required",
-            422,
-            code="sms_matter_required",
-        )
-    if (
-        await _lock_sms_matter_authorization(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
-            matter_id=matter_id,
-            contact_id=contact_id,
-            required_capabilities=required_capabilities,
-        )
-        is None
-    ):
-        raise SmsError(
-            "SMS target was not found",
-            404,
-            code="sms_target_not_found",
-        )
     contact = await db.scalar(
         select(Contact).where(Contact.id == contact_id, Contact.tenant_id == tenant_id)
     )
@@ -1250,6 +1430,12 @@ async def send_sms(
         raise SmsError("SMS follow-up is not currently consented", 403)
     initial_config = await _config(db, tenant_id)
     provider_auth_token(initial_config)
+    initial_credential = await ensure_provider_config_credential(
+        db, config=initial_config
+    )
+    initial_from_number = str(initial_config.from_number or "").strip() or None
+    if initial_from_number:
+        initial_from_number = normalize_e164(initial_from_number)
     request_digest = _request_digest(
         contact_id=contact.id,
         matter_id=matter_id,
@@ -1273,6 +1459,13 @@ async def send_sms(
         body=body,
         category=category,
         created_by_user_id=user_id,
+        provider_account_sid=str(initial_config.account_sid).strip(),
+        provider_messaging_service_sid=(
+            str(initial_config.messaging_service_sid or "").strip() or None
+        ),
+        provider_config_generation=initial_config.generation,
+        provider_credential_id=initial_credential.id,
+        from_number=initial_from_number,
     )
     db.add(message)
     observed_provider_message_id = None
@@ -1281,6 +1474,7 @@ async def send_sms(
     observed_provider_created_at = None
     provider_submission_started_at = None
     messaging_service_sid = None
+    provider_credential_id = initial_credential.id
     dispatch_message_id = None
     try:
         await db.flush()
@@ -1440,13 +1634,16 @@ async def send_sms(
         # rotation/deactivation waits until this exact outcome is durable.
         config = await _config(db, tenant_id, lock_for_provider_io=True)
         auth_token = provider_auth_token(config)
+        credential = await ensure_provider_config_credential(db, config=config)
         provider_config_generation = config.generation
+        provider_credential_id = credential.id
         account_sid = str(config.account_sid).strip()
         messaging_service_sid = str(config.messaging_service_sid or "").strip() or None
         from_number = str(config.from_number or "").strip() or None
         if from_number:
             from_number = normalize_e164(from_number)
         message.provider_config_generation = provider_config_generation
+        message.provider_credential_id = provider_credential_id
         message.provider_account_sid = account_sid
         message.provider_messaging_service_sid = messaging_service_sid
         message.from_number = from_number
@@ -1645,6 +1842,7 @@ async def send_sms(
             user_id=user_id,
             provider_account_sid=account_sid,
             provider_config_generation=provider_config_generation,
+            provider_credential_id=provider_credential_id,
             provider_messaging_service_sid=messaging_service_sid,
             provider_message_id=observed_provider_message_id,
             provider_status=observed_provider_status,
@@ -1868,32 +2066,32 @@ async def resolve_review_item(
     if message is None or message.direction != "inbound":
         raise SmsError("Inbound SMS evidence was not found", 404)
     now = datetime.now(timezone.utc)
+    reviewer = await _lock_sms_actor(
+        db,
+        tenant_id=tenant_id,
+        user_id=reviewer_user_id,
+        required_capabilities=frozenset({"manage_matters"}),
+    )
+    if reviewer is None:
+        raise SmsError("SMS review item was not found", 404)
+    candidate_matter_ids = sorted(
+        {uuid.UUID(str(value)) for value in (item.candidate_matter_ids or [])},
+        key=str,
+    )
+    if not candidate_matter_ids and reviewer.role != "admin":
+        raise SmsError("SMS review item was not found", 404)
+    for candidate_matter_id in candidate_matter_ids:
+        if (
+            await _lock_sms_matter_access(
+                db,
+                tenant_id=tenant_id,
+                user=reviewer,
+                matter_id=candidate_matter_id,
+            )
+            is None
+        ):
+            raise SmsError("SMS review item was not found", 404)
     if decision == "reject":
-        reviewer = await _lock_sms_actor(
-            db,
-            tenant_id=tenant_id,
-            user_id=reviewer_user_id,
-            required_capabilities=frozenset({"manage_matters"}),
-        )
-        if reviewer is None:
-            raise SmsError("SMS review item was not found", 404)
-        candidate_matter_ids = sorted(
-            {uuid.UUID(str(value)) for value in (item.candidate_matter_ids or [])},
-            key=str,
-        )
-        if not candidate_matter_ids and reviewer.role != "admin":
-            raise SmsError("SMS review item was not found", 404)
-        for candidate_matter_id in candidate_matter_ids:
-            if (
-                await _lock_sms_matter_access(
-                    db,
-                    tenant_id=tenant_id,
-                    user=reviewer,
-                    matter_id=candidate_matter_id,
-                )
-                is None
-            ):
-                raise SmsError("SMS review item was not found", 404)
         item.status = "rejected"
         item.reviewed_by_user_id = reviewer_user_id
         item.reviewed_at = now
@@ -2060,20 +2258,34 @@ async def reconcile_sms_message(
                 reconciliation_required=True,
                 code="sms_provider_identity_mismatch",
             )
-        config = await _config(db, tenant_id, lock_for_provider_io=True)
-        account_sid = str(config.account_sid or "").strip()
+        if message.provider_config_generation is None:
+            raise SmsError(
+                "The provider credential generation is not bound to this dispatch",
+                409,
+                sms_message_id=message.id,
+                reconciliation_required=True,
+                code="sms_provider_generation_unavailable",
+            )
+        credential = await provider_credentials_for_generation(
+            db,
+            tenant_id=tenant_id,
+            generation=message.provider_config_generation,
+            credential_id=message.provider_credential_id,
+            lock_for_provider_io=True,
+        )
+        account_sid = str(credential.account_sid or "").strip()
         if (
             not message.provider_account_sid
             or message.provider_account_sid != account_sid
         ):
             raise SmsError(
-                "The current provider account cannot verify this dispatch",
+                "The bound provider generation cannot verify this dispatch",
                 409,
                 sms_message_id=message.id,
                 reconciliation_required=True,
                 code="sms_provider_account_mismatch",
             )
-        auth_token = provider_auth_token(config)
+        auth_token = provider_auth_token(credential)
         try:
             async with httpx.AsyncClient(timeout=15) as http:
                 response = await http.get(

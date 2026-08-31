@@ -17,6 +17,7 @@ from app.models.tenant import Tenant
 from app.models.user import User
 from app.services import google_calendar, microsoft_calendar
 from app.services.email import EmailDeliveryResult, email_service
+from app.services.task_visibility import user_can_receive_sms_task
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -202,6 +203,13 @@ async def send_task_assignment_alert(
         return EmailDeliveryResult.NOT_REQUIRED
     if not task.assigned_to_user_id:
         return EmailDeliveryResult.NOT_REQUIRED
+    if not await user_can_receive_sms_task(
+        db, task=task, user_id=task.assigned_to_user_id
+    ):
+        logger.info(
+            "Task %s assignment alert skipped: assignee lacks live task access", task.id
+        )
+        return EmailDeliveryResult.NOT_REQUIRED
     assignee = (
         await db.execute(
             select(User).where(
@@ -272,13 +280,17 @@ async def notify_task_created(
     if await _demo_notifications_disabled(db, tenant_id):
         return EmailDeliveryResult.NOT_REQUIRED
     creator, contact, _matter = await _load_task_context(db, task)
-    push_task_to_calendars(
-        task,
-        tenant_id,
-        creator_name=_user_label(creator),
-        customer_name=contact.display_name if contact else None,
-        task_url=_task_url(task),
-    )
+    calendar_user_id = task.assigned_to_user_id or task.created_by_user_id
+    if calendar_user_id is None or await user_can_receive_sms_task(
+        db, task=task, user_id=calendar_user_id
+    ):
+        push_task_to_calendars(
+            task,
+            tenant_id,
+            creator_name=_user_label(creator),
+            customer_name=contact.display_name if contact else None,
+            task_url=_task_url(task),
+        )
     if task.assigned_to_user_id:
         return await send_task_assignment_alert(db, task, assignment_note)
     return EmailDeliveryResult.NOT_REQUIRED
@@ -306,7 +318,11 @@ async def notify_task_updated(
             remove_task_from_calendars(
                 str(task.id), tenant_id, task_calendar_user_id(task)
             )
-        else:
+        elif (
+            calendar_user_id := task.assigned_to_user_id or task.created_by_user_id
+        ) is None or await user_can_receive_sms_task(
+            db, task=task, user_id=calendar_user_id
+        ):
             push_task_to_calendars(task, tenant_id)
     if assignment_changed and task.assigned_to_user_id:
         return await send_task_assignment_alert(db, task, assignment_note)

@@ -80,18 +80,23 @@ uncertain outcomes remain visible for operator review.
 
 ## Retention, export, and legal hold
 
-The tenant retention inventory reports count/age metadata for seven separate SMS
-stores: message content and delivery/reconciliation state, current lead consent
-state, current number suppression, immutable consent events, immutable
-STOP/START number events, inbound review evidence, and provider configuration.
+The tenant retention inventory reports count/age metadata for every dedicated
+SMS store: message content and delivery/reconciliation state, current lead
+consent state, current number suppression, immutable consent events, immutable
+STOP/START number events, inbound review evidence, current provider
+configuration, and bounded credential-generation records. It also reports the
+SMS-bearing copies in shared `communication_logs`, `tasks`, `task_events`, and
+`task_automation_runs` rows (including approved action snapshots).
 The endpoint never emits message bodies, phone numbers, provider account or
 sender identifiers, compliance snapshots, or encrypted authentication tokens.
 
 Authorized customer export treats SMS messages, current consent state, and
 current suppression state as customer records. Immutable consent/STOP events and
 review evidence are exposed only as bounded evidence summaries. Provider
-configuration is classified as security metadata only, with no secret or
-configured-provider values. Message reconciliation fields travel with the
+configuration and credential generations are classified as security metadata
+only, with no secret or configured-provider values. Timeline/task copies use
+their existing authorized customer export path; task-event and automation-run
+copies expose bounded evidence summaries rather than action content. Message reconciliation fields travel with the
 authorized message record; audit and receipt surfaces must continue to use
 sanitized evidence rather than content.
 
@@ -99,7 +104,7 @@ There is no automated SMS deletion path. The chat-attachment retention job does
 not remove SMS rows, and normal demo cleanup is a separate purge boundary. When
 a tenant legal hold is active, preserve SMS content, suppression truth, consent
 and number events, review evidence, configuration metadata, related audit
-records, and applicable backups. Lifting the hold does not itself authorize SMS
+records, all shared-table SMS copies, and applicable backups. Lifting the hold does not itself authorize SMS
 deletion. Counsel and operations must approve a future disposition policy that
 covers customer authority, provider copies, backups, and immutable compliance
 evidence before any destructive workflow is introduced.

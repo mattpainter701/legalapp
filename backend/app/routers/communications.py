@@ -256,10 +256,12 @@ async def update_communication_log(
     await set_tenant_context(db, tenant_id)
 
     result = await db.execute(
-        select(CommunicationLog).where(
+        select(CommunicationLog)
+        .where(
             CommunicationLog.id == log_id,
             CommunicationLog.tenant_id == uuid.UUID(tenant_id),
         )
+        .with_for_update()
     )
     log = result.scalar_one_or_none()
     if not log:
@@ -268,6 +270,11 @@ async def update_communication_log(
         db, current_user, log.matter_id
     ):
         raise HTTPException(status_code=404, detail="Communication log not found")
+    if log.channel == "sms":
+        raise HTTPException(
+            status_code=409,
+            detail="Provider SMS communication evidence is immutable",
+        )
 
     previous_matter_id = log.matter_id
     for field, value in payload.model_dump(exclude_none=True).items():
@@ -294,10 +301,12 @@ async def delete_communication_log(
     await set_tenant_context(db, tenant_id)
 
     result = await db.execute(
-        select(CommunicationLog).where(
+        select(CommunicationLog)
+        .where(
             CommunicationLog.id == log_id,
             CommunicationLog.tenant_id == uuid.UUID(tenant_id),
         )
+        .with_for_update()
     )
     log = result.scalar_one_or_none()
     if not log:
@@ -306,6 +315,11 @@ async def delete_communication_log(
         db, current_user, log.matter_id
     ):
         raise HTTPException(status_code=404, detail="Communication log not found")
+    if log.channel == "sms":
+        raise HTTPException(
+            status_code=409,
+            detail="Provider SMS communication evidence is immutable",
+        )
 
     log.status = "deleted"
     await db.commit()

@@ -64,14 +64,16 @@
   inactive until provider credentials, sender readiness, ownership, consent,
   and quiet-hours evidence are configured. Outbound messages require verified,
   provenance-bearing consent and stable idempotency; provider account and
-  account-scoped active destination ownership, shared configuration-generation
-  fences, and signed tenant-bound inbound/status callbacks prevent cross-tenant
-  routing; inactive senders cannot ingest new inbound messages. Unknown outcomes
-  retain one timeline marker and sanitized audit record, recover matching
-  in-flight task runs, and preserve provider-vs-delivery truth. Unauthorized SMS
-  tasks are omitted from generic task aggregates, counts, and Workspace MCP task
-  reads. STOP-family replies revoke consent,
-  ambiguous inbound routes enter capability- and matter-scoped review, and
+  account-scoped active destination ownership, locked configuration-generation
+  checks, and signed tenant-bound inbound/status callbacks fail closed on
+  cross-tenant routing; inactive senders cannot ingest new inbound messages.
+  Durable unknown-outcome recovery retains one authorized timeline marker and
+  sanitized audit record, rebinds matching in-flight task runs, and does not
+  claim delivery. Unauthorized SMS tasks are omitted from generic task, report,
+  calendar, and Workspace MCP reads. Provider timeline rows cannot be edited or
+  deleted through the generic communications API. STOP-family replies revoke consent,
+  ambiguous inbound routes require access to every candidate matter before
+  content is listed or a route is resolved, and
   assistant proposals remain human-approved with explicit retry identity and
   approval-time consent checks. Demo purge treats pre-SMS and complete-SMS
   schemas coherently and refuses a partially installed SMS table family.

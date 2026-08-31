@@ -35,6 +35,7 @@ from app.models.sms import (
     SmsNumberSuppression,
     SmsNumberSuppressionEvent,
     SmsProviderConfig,
+    SmsProviderCredential,
     SmsReviewItem,
 )
 from app.models.task import Task, TaskAutomationRun, TaskEvent
@@ -230,6 +231,8 @@ async def _seed_lifecycle(
         updated_by_user_id=user.id,
     )
     db.add_all([consent, party, config])
+    await db.flush()
+    await sms_service.ensure_provider_config_credential(db, config=config)
     await db.commit()
     return SimpleNamespace(
         contact=contact,
@@ -493,6 +496,208 @@ async def test_signed_status_webhook_is_tenant_bound_and_never_regresses_truth(
         ),
     )
     assert cross_tenant.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_rotation_preserves_exact_historical_callback_and_reconciliation_credentials(
+    db_session, client, test_tenant, test_user, monkeypatch
+):
+    seeded = await _seed_lifecycle(
+        db_session,
+        tenant=test_tenant,
+        user=test_user,
+        suffix="credential-generation",
+    )
+    old_account_sid = seeded.config.account_sid
+    old_service_sid = seeded.config.messaging_service_sid
+    old_auth_token = seeded.auth_token
+    contact_id = seeded.contact.id
+    contact_phone = seeded.contact.phone
+    matter_id = seeded.matter.id
+    provider_calls = 0
+
+    async def old_dispatch(**_kwargs):
+        nonlocal provider_calls
+        provider_calls += 1
+        if provider_calls == 1:
+            return _Response(
+                201,
+                {
+                    "sid": "SM-OLD-CALLBACK",
+                    "status": "queued",
+                    "from": "+15550001111",
+                },
+            )
+        raise TimeoutError("provider outcome unavailable")
+
+    old_provider = _Provider(old_dispatch)
+    _install_provider(monkeypatch, old_provider)
+    historical = await send_sms(
+        db_session,
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        contact_id=contact_id,
+        matter_id=matter_id,
+        body="Historical callback",
+        category="appointment",
+        idempotency_key="historical-callback-generation",
+    )
+    with pytest.raises(SmsError) as uncertain:
+        await send_sms(
+            db_session,
+            tenant_id=test_tenant.id,
+            user_id=test_user.id,
+            contact_id=contact_id,
+            matter_id=matter_id,
+            body="Historical reconciliation",
+            category="appointment",
+            idempotency_key="historical-reconcile-generation",
+        )
+    assert uncertain.value.reconciliation_required is True
+    unknown = await db_session.scalar(
+        select(SmsMessage).where(
+            SmsMessage.tenant_id == test_tenant.id,
+            SmsMessage.idempotency_key == "historical-reconcile-generation",
+        )
+    )
+    assert unknown.status == "provider_unknown"
+    assert historical.provider_credential_id == unknown.provider_credential_id
+    old_credential_id = historical.provider_credential_id
+    unknown_id = unknown.id
+    unknown_created_at = unknown.provider_submission_started_at.isoformat()
+
+    rotated_auth_token = "rotated-generation-auth-token"
+    rotated = await client.put(
+        "/api/sms/config",
+        json={
+            "account_sid": "AC-NEW-GENERATION",
+            "auth_token": rotated_auth_token,
+            "messaging_service_sid": "MG-NEW-GENERATION",
+            "sender_ready": True,
+            "is_active": True,
+            "compliance_snapshot": {
+                "ownership_model": "firm-owned",
+                "consent_policy": "documented-opt-in",
+                "quiet_hours_policy": "recipient-timezone",
+            },
+        },
+    )
+    assert rotated.status_code == 200
+    assert rotated.json()["generation"] == 2
+    assert old_auth_token not in rotated.text
+    assert rotated_auth_token not in rotated.text
+
+    status_path = f"/api/sms/webhooks/{test_tenant.id}/status"
+    status_params = {
+        "MessageSid": "SM-OLD-CALLBACK",
+        "MessageStatus": "delivered",
+        "AccountSid": old_account_sid,
+    }
+    historical_status = await client.post(
+        status_path,
+        data=status_params,
+        headers=_signed_headers(
+            path=status_path,
+            params=status_params,
+            secret=old_auth_token,
+        ),
+    )
+    assert historical_status.status_code == 200
+    assert historical_status.json()["status"] == "delivered"
+    wrong_generation_signature = await client.post(
+        status_path,
+        data=status_params,
+        headers=_signed_headers(
+            path=status_path,
+            params=status_params,
+            secret=rotated_auth_token,
+        ),
+    )
+    assert wrong_generation_signature.status_code == 401
+
+    async def new_dispatch(**kwargs):
+        assert kwargs["auth"] == ("AC-NEW-GENERATION", rotated_auth_token)
+        return _Response(
+            201,
+            {
+                "sid": "SM-NEW-GENERATION",
+                "status": "queued",
+                "from": "+15550002222",
+            },
+        )
+
+    async def old_lookup(**kwargs):
+        assert kwargs["auth"] == (old_account_sid, old_auth_token)
+        return _Response(
+            200,
+            {
+                "sid": "SM-OLD-UNKNOWN",
+                "account_sid": old_account_sid,
+                "to": contact_phone,
+                "from": "+15550001111",
+                "body": "Historical reconciliation",
+                "messaging_service_sid": old_service_sid,
+                "direction": "outbound-api",
+                "date_created": unknown_created_at,
+                "uri": (
+                    f"/2010-04-01/Accounts/{old_account_sid}/Messages/"
+                    "SM-OLD-UNKNOWN.json"
+                ),
+                "status": "delivered",
+            },
+        )
+
+    rotated_provider = _Provider(new_dispatch, lookup_handler=old_lookup)
+    _install_provider(monkeypatch, rotated_provider)
+    reconciled = await client.post(
+        f"/api/sms/messages/{unknown_id}/reconcile",
+        json={
+            "resolution": "provider_lookup",
+            "provider_message_id": "SM-OLD-UNKNOWN",
+        },
+    )
+    assert reconciled.status_code == 200
+    assert reconciled.json()["status"] == "delivered"
+    assert len(rotated_provider.lookup_calls) == 1
+
+    await set_tenant_context(db_session, str(test_tenant.id))
+    db_session.expire_all()
+    current = await send_sms(
+        db_session,
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        contact_id=contact_id,
+        matter_id=matter_id,
+        body="Current generation",
+        category="appointment",
+        idempotency_key="current-credential-generation",
+    )
+    assert current.provider_config_generation == 2
+    assert current.provider_credential_id != old_credential_id
+    assert len(rotated_provider.calls) == 1
+    credentials = list(
+        (
+            await db_session.scalars(
+                select(SmsProviderCredential)
+                .where(SmsProviderCredential.tenant_id == test_tenant.id)
+                .order_by(SmsProviderCredential.generation)
+            )
+        ).all()
+    )
+    assert [row.generation for row in credentials] == [1, 2]
+    assert all(row.retired_at is None for row in credentials)
+    audits = list(
+        (
+            await db_session.scalars(
+                select(OperatorAuditLog).where(
+                    OperatorAuditLog.tenant_id == test_tenant.id
+                )
+            )
+        ).all()
+    )
+    serialized_audits = repr([row.metadata_json for row in audits])
+    assert old_auth_token not in serialized_audits
+    assert rotated_auth_token not in serialized_audits
 
 
 @pytest.mark.asyncio
@@ -3088,6 +3293,15 @@ async def test_composite_fk_and_runtime_rls_reject_cross_tenant_sms_links(
     other = await _seed_lifecycle(
         db_session, tenant=other_tenant, user=other_user, suffix="tenant-b"
     )
+    other_task = Task(
+        tenant_id=other_tenant.id,
+        title="Other tenant SMS task",
+        matter_id=other.matter.id,
+        contact_id=other.contact.id,
+        created_by_user_id=other_user.id,
+    )
+    db_session.add(other_task)
+    await db_session.commit()
     other_suppression = SmsNumberSuppression(
         tenant_id=other_tenant.id,
         mobile_e164=other.contact.phone,
@@ -3231,6 +3445,20 @@ async def test_composite_fk_and_runtime_rls_reject_cross_tenant_sms_links(
         await db_session.flush()
     await db_session.rollback()
 
+    await set_tenant_context(db_session, str(tenant_id))
+    db_session.add(
+        TaskAutomationRun(
+            tenant_id=tenant_id,
+            task_id=other_task.id,
+            action_type="sms_client",
+            idempotency_key="cross-tenant-task",
+            status="queued",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
+    await db_session.rollback()
+
     runtime_url = os.getenv("RLS_TEST_DATABASE_URL")
     if not runtime_url:
         pytest.skip("RLS_TEST_DATABASE_URL is required for runtime-role rehearsal")
@@ -3299,6 +3527,7 @@ async def test_expired_demo_purge_removes_sms_secrets_content_and_review_but_kee
 
     sms_tables = {
         "sms_provider_configs",
+        "sms_provider_credentials",
         "sms_messages",
         "sms_review_items",
         "sms_consent_events",
@@ -3359,7 +3588,15 @@ async def test_expired_demo_purge_removes_sms_secrets_content_and_review_but_kee
         body="Sensitive prospective-client message",
         category="customer_reply",
     )
-    db_session.add_all([session, config, message])
+    credential = SmsProviderCredential(
+        tenant_id=demo.id,
+        provider="twilio",
+        generation=1,
+        account_sid=config.account_sid,
+        encrypted_auth_token=encrypt_token("demo-historical-auth-token"),
+        messaging_service_sid=config.messaging_service_sid,
+    )
+    db_session.add_all([session, config, credential, message])
     await db_session.flush()
     contact = Contact(
         tenant_id=demo.id,
@@ -3431,6 +3668,7 @@ async def test_expired_demo_purge_removes_sms_secrets_content_and_review_but_kee
 
     assert {name: deleted[name] for name in sms_tables} == {
         "sms_provider_configs": 1,
+        "sms_provider_credentials": 1,
         "sms_messages": 1,
         "sms_review_items": 1,
         "sms_consent_events": 1,
@@ -4692,11 +4930,9 @@ async def test_custom_role_capability_controls_staff_sms_send(
     assert allowed_detail.json()["channel"] == "sms"
     allowed_headers = {"Authorization": f"Bearer {_user_token(allowed)}"}
     allowed_review = await client.get("/api/sms/review", headers=allowed_headers)
-    visible_review = next(
-        row for row in allowed_review.json() if row["id"] == str(review_item.id)
-    )
-    assert visible_review["candidate_contact_ids"] == [str(seeded.contact.id)]
-    assert visible_review["candidate_matter_ids"] == [str(seeded.matter.id)]
+    assert all(row["id"] != str(review_item.id) for row in allowed_review.json())
+    assert "Route this reply" not in allowed_review.text
+    assert seeded.contact.phone not in allowed_review.text
     assert str(hidden_contact.id) not in allowed_review.text
     assert str(hidden_matter.id) not in allowed_review.text
     reject_hidden_candidates = await client.post(
@@ -4705,6 +4941,28 @@ async def test_custom_role_capability_controls_staff_sms_send(
         headers=allowed_headers,
     )
     assert reject_hidden_candidates.status_code == 404
+    db_session.add(
+        MatterAssignment(
+            tenant_id=test_tenant.id,
+            matter_id=hidden_matter.id,
+            user_id=allowed.id,
+            role="associate",
+        )
+    )
+    await db_session.commit()
+    all_candidate_review = await client.get("/api/sms/review", headers=allowed_headers)
+    visible_review = next(
+        row for row in all_candidate_review.json() if row["id"] == str(review_item.id)
+    )
+    assert set(visible_review["candidate_contact_ids"]) == {
+        str(seeded.contact.id),
+        str(hidden_contact.id),
+    }
+    assert set(visible_review["candidate_matter_ids"]) == {
+        str(seeded.matter.id),
+        str(hidden_matter.id),
+    }
+    assert visible_review["body"] == "Route this reply"
     resolved_visible_candidate = await client.post(
         f"/api/sms/review/{review_item.id}",
         json={
@@ -4726,6 +4984,57 @@ async def test_custom_role_capability_controls_staff_sms_send(
         headers=allowed_headers,
     )
     assert allowed_reconciliation_detail.status_code == 200
+    for mutation in (
+        {"body": "fabricated provider body"},
+        {"status": "sent"},
+        {"matter_id": str(hidden_matter.id)},
+        {"contact_id": str(hidden_contact.id)},
+    ):
+        immutable = await client.patch(
+            f"/api/communications/{sent_message.communication_log_id}",
+            json=mutation,
+            headers=allowed_headers,
+        )
+        assert immutable.status_code == 409
+        assert "immutable" in immutable.json()["detail"].lower()
+    immutable_delete = await client.delete(
+        f"/api/communications/{sent_message.communication_log_id}",
+        headers=allowed_headers,
+    )
+    assert immutable_delete.status_code == 409
+    await db_session.refresh(sent_message)
+    immutable_log = await db_session.get(
+        CommunicationLog, sent_message.communication_log_id
+    )
+    assert immutable_log.body == "Permission-bound reminder"
+    assert immutable_log.status != "deleted"
+    await db_session.delete(
+        await db_session.scalar(
+            select(MatterAssignment).where(
+                MatterAssignment.tenant_id == test_tenant.id,
+                MatterAssignment.matter_id == seeded.matter.id,
+                MatterAssignment.user_id == allowed.id,
+            )
+        )
+    )
+    await db_session.commit()
+    unauthorized_replay = await client.post(
+        "/api/sms/send", json=payload, headers=allowed_headers
+    )
+    assert unauthorized_replay.status_code == 404
+    assert "provider" not in unauthorized_replay.text.lower()
+    conversion_replay = await client.post(
+        f"/api/intake/leads/{seeded.lead.id}/follow-up",
+        json={
+            "channel": "sms",
+            "subject": "Unauthorized replay",
+            "body": payload["body"],
+            "idempotency_key": payload["idempotency_key"],
+        },
+        headers=allowed_headers,
+    )
+    assert conversion_replay.status_code == 404
+    assert "provider" not in conversion_replay.text.lower()
     send_audit = await db_session.scalar(
         select(OperatorAuditLog).where(
             OperatorAuditLog.action == "sms.send.submitted",
@@ -4893,6 +5202,35 @@ async def test_generic_task_surfaces_redact_or_hide_sms_for_unauthorized_users(
         assert str(seeded.contact.id) not in board.text
         assert str(seeded.matter.id) not in board.text
 
+        overdue_report = await client.get("/api/reports/overdue-tasks", headers=headers)
+        assert overdue_report.status_code == 200, overdue_report.text
+        assert str(historical_task.id) not in overdue_report.text
+        assert secret_body not in overdue_report.text
+        assert secret_phone not in overdue_report.text
+        report_bundle = await client.get("/api/reports/bundle", headers=headers)
+        assert report_bundle.status_code == 200, report_bundle.text
+        assert str(historical_task.id) not in report_bundle.text
+        assert secret_body not in report_bundle.text
+        calendar = await client.get(
+            "/api/calendar/events",
+            params={
+                "start": (datetime.now(timezone.utc) - timedelta(days=2))
+                .date()
+                .isoformat(),
+                "end": (datetime.now(timezone.utc) + timedelta(days=2))
+                .date()
+                .isoformat(),
+            },
+            headers=headers,
+        )
+        assert calendar.status_code == 200, calendar.text
+        assert all(
+            row.get("task_id") not in restricted_ids
+            for row in calendar.json()["events"]
+        )
+        assert secret_body not in calendar.text
+        assert secret_phone not in calendar.text
+
         await set_tenant_context(db_session, str(test_tenant.id))
         mcp_context = CapabilityContext(
             db=db_session,
@@ -4957,6 +5295,18 @@ async def test_generic_task_surfaces_redact_or_hide_sms_for_unauthorized_users(
             assert secret_body not in response.text
             assert secret_phone not in response.text
             assert "SMS-TASK-SECRET" not in response.text
+
+    for target_user in (denied, unassigned):
+        for reference_field in ("assigned_to_user_id", "reviewer_user_id"):
+            rejected_assignment = await client.patch(
+                f"/api/tasks/{task.id}",
+                json={
+                    reference_field: str(target_user.id),
+                    "expected_version": task.version,
+                },
+            )
+            assert rejected_assignment.status_code == 422
+            assert "manage_matters" in rejected_assignment.text
 
     db_session.add(
         MatterAssignment(

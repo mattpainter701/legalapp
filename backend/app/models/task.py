@@ -354,6 +354,12 @@ class TaskAutomationRun(Base):
             "created_at",
         ),
         ForeignKeyConstraint(
+            ["tenant_id", "task_id"],
+            ["tasks.tenant_id", "tasks.id"],
+            name="fk_task_automation_runs_tenant_task",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
             ["tenant_id", "sms_message_id"],
             ["sms_messages.tenant_id", "sms_messages.id"],
             name="fk_task_automation_runs_tenant_sms_message",
@@ -378,7 +384,6 @@ class TaskAutomationRun(Base):
     )
     task_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("tasks.id", ondelete="CASCADE"),
         nullable=False,
     )
     # Matches ``pending_action["type"]``, kept denormalized so an operator can

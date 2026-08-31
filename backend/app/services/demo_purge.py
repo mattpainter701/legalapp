@@ -68,6 +68,7 @@ _SMS_IMMUTABLE_TABLES = (
 _SMS_TABLES = frozenset(
     {
         "sms_provider_configs",
+        "sms_provider_credentials",
         "sms_messages",
         "sms_review_items",
         "sms_consent_events",

@@ -56,9 +56,12 @@ The same inventory accounts for every SMS data surface without returning
 message bodies, phone numbers, sender identifiers, provider account values, or
 credentials. It separately reports SMS communication/delivery records, current
 number suppressions, immutable consent events, immutable STOP/START number
-events, inbound-routing review evidence, and provider-configuration metadata.
-Provider configuration is security metadata only; encrypted authentication
-tokens and configured provider/sender values are never part of this response.
+events, inbound-routing review evidence, provider-configuration metadata, and
+bounded credential generations. It separately counts SMS copies in
+`communication_logs`, `tasks`, `task_events`, and `task_automation_runs`,
+including approved action snapshots. Provider configuration and credential
+generations are security metadata only; encrypted authentication tokens and
+configured provider/sender values are never part of this response.
 
 The only automated deletion category in this release is an expired `Document`
 that is linked to a conversation, is not linked to a matter, has an expiry time,
@@ -67,7 +70,8 @@ Matter-linked records, cloud originals, conversations, messages, templates,
 inbound email, and agreement evidence are inventory-only.
 SMS records are also inventory-only: this retention executor never deletes
 message content, current consent and suppression state, consent or number
-events, review evidence, or provider configuration. Message, current-consent,
+events, review evidence, provider configuration/credential generations, or
+shared timeline/task/action copies. Message, current-consent,
 and current-suppression records belong on the authorized customer export path.
 Immutable consent/STOP and review evidence use bounded evidence summaries, while
 provider configuration uses a count-only security-metadata summary.
@@ -80,8 +84,9 @@ attachments and optionally places the tenant on legal hold. A hold requires a
 reason and blocks destructive execution. Policy changes reschedule existing
 expirable chat attachments from their original creation time and create an
 audit action containing before/after values.
-The legal-hold snapshot covers the reported SMS stores as well: an active hold
-requires preserving their content, compliance state, and evidence. A hold does
+The legal-hold snapshot covers dedicated SMS stores and every reported
+shared-table copy: an active hold requires preserving their content, workflow
+snapshots, compliance state, and evidence. A hold does
 not create a new SMS deletion path, and lifting it does not authorize deletion;
 any future SMS disposition workflow requires a separately reviewed policy,
 customer authority, provider/backup handling, and auditable execution.

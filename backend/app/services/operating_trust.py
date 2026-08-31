@@ -87,6 +87,13 @@ _SMS_TABLE_EXPORT_MODES: dict[str, ExportMode] = {
     "sms_number_suppression_events": "immutable-evidence-summary",
     "sms_review_items": "immutable-evidence-summary",
     "sms_provider_configs": "security-metadata-only-no-secret-values",
+    "sms_provider_credentials": "security-metadata-only-no-secret-values",
+}
+_SMS_COPY_EXPORT_MODES: dict[str, ExportMode] = {
+    "communication_logs:sms": "existing-product-export-path",
+    "tasks:sms": "existing-product-export-path",
+    "task_events:sms": "immutable-evidence-summary",
+    "task_automation_runs:sms": "immutable-evidence-summary",
 }
 _EXPORT_MODES = frozenset(
     {
@@ -183,6 +190,14 @@ def database_export_mode(table_name: str) -> ExportMode:
     if table_name in _EVIDENCE_ONLY_TABLES:
         return "immutable-evidence-summary"
     return "existing-product-export-path"
+
+
+def sms_copy_export_mode(copy_name: str) -> ExportMode:
+    """Classify SMS-bearing rows stored in shared workflow/timeline tables."""
+    try:
+        return _SMS_COPY_EXPORT_MODES[copy_name]
+    except KeyError as exc:
+        raise ValueError(f"SMS shared-table copy is unclassified: {copy_name}") from exc
 
 
 def _validated_export_categories(value: Any) -> list[ExportInventoryCategory]:

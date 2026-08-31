@@ -37,6 +37,7 @@ def test_sms_migration_enforces_rls_and_tenant_composite_references():
         "sms_number_suppressions",
         "sms_number_suppression_events",
         "sms_provider_configs",
+        "sms_provider_credentials",
         "sms_messages",
         "sms_review_items",
     ):
@@ -57,6 +58,8 @@ def test_sms_migration_enforces_rls_and_tenant_composite_references():
         "fk_sms_number_suppression_events_tenant_suppression",
         "uq_sms_messages_tenant_id",
         "fk_sms_provider_configs_tenant_user",
+        "fk_sms_provider_credentials_tenant_user",
+        "fk_sms_messages_tenant_provider_credential",
         "fk_sms_messages_tenant_contact",
         "fk_sms_messages_tenant_matter",
         "fk_sms_messages_tenant_communication",
@@ -66,12 +69,15 @@ def test_sms_migration_enforces_rls_and_tenant_composite_references():
         "fk_sms_review_items_tenant_message",
         "fk_sms_review_items_tenant_user",
         "fk_task_automation_runs_tenant_sms_message",
+        "fk_task_automation_runs_tenant_task",
     ):
         assert constraint in source
     assert "prevent_sms_evidence_event_mutation" in source
     assert "sms_demo_purge_authorized" in source
     for index_name in (
         "idx_sms_provider_configs_tenant",
+        "idx_sms_provider_credentials_tenant_generation",
+        "idx_sms_messages_tenant_provider_credential",
         "uq_sms_provider_configs_active_account_service",
         "uq_sms_provider_configs_active_account_number",
         "idx_sms_number_suppressions_tenant_state",
@@ -98,6 +104,10 @@ def test_sms_migration_enforces_rls_and_tenant_composite_references():
         "ck_sms_provider_configs_active",
         "ck_sms_provider_configs_active_evidence",
         "ck_sms_provider_configs_from_number_e164",
+        "ck_sms_provider_credentials_provider",
+        "ck_sms_provider_credentials_generation",
+        "ck_sms_provider_credentials_retirement",
+        "ck_sms_provider_credentials_from_number_e164",
         "ck_sms_number_suppression_events_action",
         "ck_sms_number_suppression_events_state",
         "ck_sms_messages_direction",
@@ -123,6 +133,7 @@ def test_sms_migration_enforces_rls_and_tenant_composite_references():
     assert "AND delivery_certainty = 'confirmed_received')" in source
     for provider_truth_field in (
         '"provider_messaging_service_sid"',
+        '"provider_credential_id"',
         '"provider_submission_started_at"',
         '"provider_created_at"',
         '"operator_observed_absent_at"',

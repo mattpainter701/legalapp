@@ -82,6 +82,7 @@ from app.models.sms import (  # noqa: F401
     SmsNumberSuppression,
     SmsNumberSuppressionEvent,
     SmsProviderConfig,
+    SmsProviderCredential,
     SmsReviewItem,
 )
 from app.models.document_template import DocumentTemplate

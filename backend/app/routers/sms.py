@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import require_admin
 from app.models.contact import Contact
-from app.models.matter_party import MatterParty
 from app.models.plugin import Matter
 from app.models.sms import SmsMessage, SmsProviderConfig, SmsReviewItem
 from app.schemas.sms import (
@@ -35,8 +34,11 @@ from app.services.sms import (
     SmsError,
     apply_inbound,
     apply_status,
+    archive_current_provider_credentials,
+    ensure_provider_config_credential,
     normalize_e164,
     provider_auth_token,
+    provider_credentials_for_generation,
     reconcile_sms_message,
     resolve_review_item,
     send_sms,
@@ -68,6 +70,30 @@ async def update_sms_config(
         row = SmsProviderConfig(tenant_id=tenant_id, provider="twilio")
         db.add(row)
     else:
+        try:
+            retired_generations = await archive_current_provider_credentials(
+                db,
+                config=row,
+                actor_user_id=current_user.id,
+            )
+        except SmsError as exc:
+            raise HTTPException(exc.status_code, exc.api_detail()) from exc
+        for retired in retired_generations:
+            await record_operator_audit(
+                db,
+                request,
+                action="sms.provider_credential.retired",
+                resource_type="sms_provider_credential",
+                resource_id=str(retired.id),
+                actor_type="tenant_user",
+                actor_id=str(current_user.id),
+                metadata={
+                    "tenant_id": str(tenant_id),
+                    "provider": retired.provider,
+                    "generation": retired.generation,
+                    "reason": retired.retirement_reason,
+                },
+            )
         row.generation += 1
     row.account_sid = body.account_sid.strip()
     row.encrypted_auth_token = encrypt_token(body.auth_token)
@@ -80,6 +106,10 @@ async def update_sms_config(
     )
     row.updated_by_user_id = current_user.id
     await db.flush()
+    try:
+        await ensure_provider_config_credential(db, config=row)
+    except SmsError as exc:
+        raise HTTPException(exc.status_code, exc.api_detail()) from exc
     await record_operator_audit(
         db,
         request,
@@ -203,22 +233,57 @@ async def _signed_params(
     db: AsyncSession,
     require_inbound_ownership: bool = False,
 ):
-    config = await db.scalar(
-        select(SmsProviderConfig).where(
-            SmsProviderConfig.tenant_id == tenant_id,
-            SmsProviderConfig.provider == "twilio",
-        )
-    )
-    if not config:
-        raise HTTPException(503, "SMS webhook is not configured")
-    if require_inbound_ownership and (not config.is_active or not config.sender_ready):
-        raise HTTPException(503, "Inbound SMS is not active for this workspace")
-    try:
-        secret = provider_auth_token(config)
-    except SmsError as exc:
-        raise HTTPException(exc.status_code, str(exc)) from exc
     form = await request.form()
     params = {str(key): str(value) for key, value in form.items()}
+    message = None
+    if require_inbound_ownership:
+        credential = await db.scalar(
+            select(SmsProviderConfig)
+            .where(
+                SmsProviderConfig.tenant_id == tenant_id,
+                SmsProviderConfig.provider == "twilio",
+            )
+            .with_for_update(read=True)
+        )
+        if not credential:
+            raise HTTPException(503, "SMS webhook is not configured")
+        if not credential.is_active or not credential.sender_ready:
+            raise HTTPException(503, "Inbound SMS is not active for this workspace")
+    else:
+        provider_message_id = str(params.get("MessageSid") or "").strip()
+        if provider_message_id:
+            message = await db.scalar(
+                select(SmsMessage).where(
+                    SmsMessage.tenant_id == tenant_id,
+                    SmsMessage.provider_message_id == provider_message_id,
+                )
+            )
+        if message is not None and message.provider_config_generation is not None:
+            try:
+                credential = await provider_credentials_for_generation(
+                    db,
+                    tenant_id=tenant_id,
+                    generation=message.provider_config_generation,
+                    credential_id=message.provider_credential_id,
+                    lock_for_provider_io=True,
+                )
+            except SmsError as exc:
+                raise HTTPException(exc.status_code, exc.api_detail()) from exc
+        else:
+            credential = await db.scalar(
+                select(SmsProviderConfig)
+                .where(
+                    SmsProviderConfig.tenant_id == tenant_id,
+                    SmsProviderConfig.provider == "twilio",
+                )
+                .with_for_update(read=True)
+            )
+            if not credential:
+                raise HTTPException(503, "SMS webhook is not configured")
+    try:
+        secret = provider_auth_token(credential)
+    except SmsError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
     supplied = request.headers.get("X-Twilio-Signature")
     if not verify_twilio_signature(
         auth_token=secret,
@@ -228,7 +293,7 @@ async def _signed_params(
     ):
         raise HTTPException(401, "Invalid SMS webhook signature")
     supplied_account_sid = str(params.get("AccountSid") or "").strip()
-    configured_account_sid = str(config.account_sid or "").strip()
+    configured_account_sid = str(credential.account_sid or "").strip()
     if (
         require_inbound_ownership
         and (not supplied_account_sid or supplied_account_sid != configured_account_sid)
@@ -238,14 +303,20 @@ async def _signed_params(
         and supplied_account_sid != configured_account_sid
     ):
         raise HTTPException(401, "SMS webhook provider account mismatch")
+    if (
+        message is not None
+        and message.provider_account_sid
+        and message.provider_account_sid != configured_account_sid
+    ):
+        raise HTTPException(401, "SMS webhook credential generation mismatch")
     if require_inbound_ownership:
-        configured_service = str(config.messaging_service_sid or "").strip()
+        configured_service = str(credential.messaging_service_sid or "").strip()
         supplied_service = str(params.get("MessagingServiceSid") or "").strip()
         if configured_service:
             destination_matches = supplied_service == configured_service
         else:
             destination_matches = False
-            configured_number = str(config.from_number or "").strip()
+            configured_number = str(credential.from_number or "").strip()
             try:
                 destination_matches = bool(configured_number) and normalize_e164(
                     params.get("To")
@@ -327,68 +398,22 @@ async def list_sms_review_items(
         rows = [
             (item, message)
             for item, message in rows
-            if any(
+            if item.candidate_matter_ids
+            and all(
                 uuid.UUID(str(candidate_id)) in visible_matter_ids
-                for candidate_id in (item.candidate_matter_ids or [])
+                for candidate_id in item.candidate_matter_ids
             )
         ]
-    visible_candidates_by_item: dict[uuid.UUID, tuple[list[str], list[str]]] = {}
-    if visible_matter_ids is None:
-        for item, _message in rows:
-            visible_candidates_by_item[item.id] = (
-                [str(value) for value in (item.candidate_contact_ids or [])],
-                [str(value) for value in (item.candidate_matter_ids or [])],
-            )
-    else:
-        candidate_matter_ids = {
-            uuid.UUID(str(candidate_id))
-            for item, _message in rows
-            for candidate_id in (item.candidate_matter_ids or [])
-            if uuid.UUID(str(candidate_id)) in visible_matter_ids
-        }
-        contacts_by_matter: dict[uuid.UUID, set[uuid.UUID]] = {
-            matter_id: set() for matter_id in candidate_matter_ids
-        }
-        if candidate_matter_ids:
-            for matter_id, client_contact_id in (
-                await db.execute(
-                    select(Matter.id, Matter.client_contact_id).where(
-                        Matter.tenant_id == current_user.tenant_id,
-                        Matter.id.in_(candidate_matter_ids),
-                    )
-                )
-            ).all():
-                if client_contact_id:
-                    contacts_by_matter[matter_id].add(client_contact_id)
-            for matter_id, contact_id in (
-                await db.execute(
-                    select(MatterParty.matter_id, MatterParty.contact_id).where(
-                        MatterParty.tenant_id == current_user.tenant_id,
-                        MatterParty.matter_id.in_(candidate_matter_ids),
-                    )
-                )
-            ).all():
-                contacts_by_matter[matter_id].add(contact_id)
-        for item, _message in rows:
-            allowed_matters = [
-                uuid.UUID(str(value))
-                for value in (item.candidate_matter_ids or [])
-                if uuid.UUID(str(value)) in visible_matter_ids
-            ]
-            allowed_contacts = set().union(
-                *(
-                    contacts_by_matter.get(matter_id, set())
-                    for matter_id in allowed_matters
-                )
-            )
-            visible_candidates_by_item[item.id] = (
-                [
-                    str(value)
-                    for value in (item.candidate_contact_ids or [])
-                    if uuid.UUID(str(value)) in allowed_contacts
-                ],
-                [str(value) for value in allowed_matters],
-            )
+    # The phone/body can identify a client across every candidate matter. A
+    # reviewer who sees only one candidate must not learn content originating
+    # from another matter, so unresolved rows are all-candidate-or-nothing.
+    visible_candidates_by_item = {
+        item.id: (
+            [str(value) for value in (item.candidate_contact_ids or [])],
+            [str(value) for value in (item.candidate_matter_ids or [])],
+        )
+        for item, _message in rows
+    }
     contact_ids = {
         uuid.UUID(str(candidate_id))
         for item, _message in rows

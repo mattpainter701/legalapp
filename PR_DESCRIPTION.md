@@ -45,8 +45,9 @@ Inbound webhooks require an active sender and bind the exact provider account
 and configured destination; active provider destinations are unique within
 each provider account, and shared provider-config fences prevent rotation or
 deactivation from racing an in-flight dispatch or reconciliation lookup.
-Unknown outcomes always leave a single customer-timeline marker and sanitized
-audit evidence, and crash recovery binds any matching in-flight task run.
+When durable recovery succeeds, unknown outcomes converge on one authorized
+customer-timeline marker plus sanitized audit evidence, and matching in-flight
+task runs are rebound for reconciliation instead of being reported as sent.
 
 Migration 149 follows the merged configurable-workflow migration 148 and adds
 tenant-composite constraints, immutable consent evidence, RLS, reconciliation
@@ -54,15 +55,17 @@ state, and rolling-upgrade-safe demo-purge coverage. The intake and task
 interfaces expose restricted review and informed SMS approval workflows;
 provider credentials and unresolved message content remain out of unauthorized
 responses and audit metadata; unauthorized SMS tasks are omitted from generic
-task aggregates, their counts, and Workspace MCP task reads. This PR does not
+task, report, calendar, and Workspace MCP reads. Provider-generated SMS
+timeline rows are API-immutable, while delivery state changes remain confined
+to the signed callback/reconciliation service. This PR does not
 close COMP-02 or COMP-03 and does not deploy or configure a production provider.
 
 ## Validation
 
-- Ruff lint/format and Python compilation passed; 65 database-independent
+- Ruff lint/format and Python compilation passed; 85 database-independent
   backend, migration, demo-purge, Workspace MCP, CI-contract, and release-note
   tests passed.
-- The complete SMS CI target collects 79 tests, including 63 PostgreSQL/provider-
+- The complete SMS CI target collects 80 tests, including 64 PostgreSQL/provider-
   shaped rehearsals covering
   concurrent idempotency, tenant constraints/RLS, consent provenance and
   conflicts, quiet hours/categories, signed webhook replay/order, STOP/START/HELP,
