@@ -115,6 +115,11 @@ There is deliberately no model-facing `execute` effect. In particular:
   matter-party IDs, resolves current addresses server-side, and creates a
   review item. Its reviewed approval path can enqueue the approved email for
   deterministic delivery;
+- `propose_client_sms` accepts exactly one verified matter-party binding and
+  creates reviewable work only. It requires `matters:read` and
+  `communications:propose` workspace scopes plus the actor's live
+  `manage_matters` capability and matter access. It never accepts an arbitrary
+  phone number or dispatches during the MCP call;
 - `propose_matter_document` creates and read-back verifies a tenant-cloud DOCX
   working copy linked to a versioned artifact and Review task; it does not file,
   approve, or deliver the document. Attorney approval records approval of the
@@ -146,6 +151,27 @@ tasks; load client/party/team/event/note/communication context; read bounded
 uploaded-document and template text; and prepare a task, email, fresh DOCX, or
 template-rendered DOCX for LawHand review. It cannot silently approve, send to
 a client, or file a document as final.
+
+### SMS proposal contract
+
+Workspace MCP treats request correlation and proposal idempotency as separate
+identities. Mutating clients should send a stable `X-Idempotency-Key`; a fresh
+`X-Request-ID` may be used when retrying the same logical proposal. LawHand
+binds the idempotency key to the tenant, tool, and canonical request digest.
+Reusing it for changed content fails closed instead of returning or creating a
+different proposal.
+
+An SMS proposal binds one verified, consented matter party, a message category,
+the exact body, and immutable local source-document hashes. It creates a Review
+task and returns that review identity; provider dispatch is never part of the
+MCP response. The LawHand approval path revalidates the live actor and custom
+role, matter access, exact proposal/action hash, source bindings, consent
+provenance and expiry, allowed category, recipient phone, provider
+configuration, suppression state, and quiet-hours policy. Any mismatch,
+revocation, ambiguous consent, stale source, or uncertain prior provider
+outcome remains blocked or routed for operator reconciliation. No autonomous
+engagement, legal advice, bulk messaging, or model-facing approval/send tool is
+exposed.
 
 Approved DOCX templates preserve their source layout and bind the retained
 template hash and filled-variable snapshot to the immutable artifact revision.
