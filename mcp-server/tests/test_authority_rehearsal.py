@@ -1778,12 +1778,29 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
             )
             assert cur.fetchone()[0] == 0
             cur.execute(
-                """SELECT COUNT(*) FROM authority_case_chunks
-                WHERE corpus_version=%s AND opinion_id=%s
-                  AND content='Legacy upgrade searchable text'""",
-                [version, legacy_cluster],
+                """SELECT
+                  (SELECT COUNT(*) FROM authority_case_clusters
+                    WHERE corpus_version=%s AND cluster_id=%s),
+                  (SELECT COUNT(*) FROM authority_case_opinions
+                    WHERE corpus_version=%s AND opinion_id=%s),
+                  (SELECT COUNT(*) FROM authority_case_chunks
+                    WHERE corpus_version=%s AND opinion_id=%s),
+                  (SELECT COUNT(*) FROM authority_case_citations
+                    WHERE corpus_version=%s
+                      AND (citing_opinion_id=%s OR cited_opinion_id=%s))""",
+                [
+                    version,
+                    legacy_cluster,
+                    version,
+                    legacy_cluster,
+                    version,
+                    legacy_cluster,
+                    version,
+                    legacy_cluster,
+                    legacy_cluster,
+                ],
             )
-            assert cur.fetchone()[0] == 1
+            assert cur.fetchone() == (0, 0, 0, 0)
 
         # Composite snapshot relationships reject cross-version and missing
         # parents; this is stronger than an application orphan count.
