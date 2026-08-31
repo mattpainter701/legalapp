@@ -1685,6 +1685,17 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
         # customer claim is state-digested.  A change suppresses claims until
         # the production audits are recomputed for that exact state.
         audited_claim_mutations = [
+            ("coverage_kind", "'complete'", "'bounded'"),
+            ("coverage_start", "DATE '2025-01-01'", "NULL"),
+            ("coverage_end", "DATE '2026-12-31'", "NULL"),
+            ("jurisdiction", "'US-OH'", "NULL"),
+            (
+                "canonical_url",
+                "'https://example.test/changed-source'",
+                "'https://example.test'",
+            ),
+            ("display_name", "'Changed rehearsal source'", "NULL"),
+            ("publisher", "'Changed publisher'", "'Rehearsal'"),
             (
                 "geographic_scope",
                 '\'["US-OH","US-FED"]\'::jsonb',
@@ -2174,6 +2185,35 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                 )
                 assert cur.fetchone()[0] > 0
         _run_production_audits(conn, version=follow_up, auditor="rehearsal-admin")
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT coverage_kind FROM legal_sources WHERE source_key=%s",
+                [source_key],
+            )
+            original_coverage_kind = cur.fetchone()[0]
+            changed_coverage_kind = (
+                "bounded" if original_coverage_kind == "complete" else "complete"
+            )
+            cur.execute(
+                "UPDATE legal_sources SET coverage_kind=%s WHERE source_key=%s",
+                [changed_coverage_kind, source_key],
+            )
+        conn.commit()
+        with pytest.raises(PermissionError, match="stale, fabricated, or invalid"):
+            promote_corpus_version(
+                conn,
+                version=follow_up,
+                actor="rehearsal-admin",
+                reason="claim metadata changed after audit",
+            )
+        conn.rollback()
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE legal_sources SET coverage_kind=%s WHERE source_key=%s",
+                [original_coverage_kind, source_key],
+            )
+        conn.commit()
+        _run_production_audits(conn, version=follow_up, auditor="rehearsal-admin")
         promote_corpus_version(
             conn, version=follow_up, actor="rehearsal-admin", reason="cutover fixture"
         )
@@ -2575,6 +2615,12 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
             assert cur.fetchone() == (True,)
             cur.execute(
                 """SELECT convalidated FROM pg_constraint
+                     WHERE conrelid='citator_alert_events'::regclass
+                       AND conname='citator_alert_events_evidence_check'"""
+            )
+            assert cur.fetchone() == (True,)
+            cur.execute(
+                """SELECT convalidated FROM pg_constraint
                      WHERE conrelid='citator_alert_deliveries'::regclass
                        AND conname='citator_alert_deliveries_event_tenant_fk'"""
             )
@@ -2776,6 +2822,19 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
                 [version, citing_authority_key, authority_key],
             )
             two_sided_citation_fact_id = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO authority_citation_facts
+                     (corpus_version, citing_authority_key, cited_authority_key,
+                      citing_opinion_id, depth, source_url, evidence_span,
+                      evidence_locator, source_hash)
+                   VALUES (%s, %s, %s, %s, 0,
+                     'https://example.test/mismatched-citing-edge',
+                     'Unrelated public opinion cannot launder a citing authority',
+                     '{"paragraph":5}', 'mismatched-citing-edge-sha')
+                   RETURNING id::text""",
+                [version, citing_authority_key, authority_key, opinion_id],
+            )
+            mismatched_citation_fact_id = cur.fetchone()[0]
             foreign_version = version + "-foreign"
             stage_corpus_version(
                 conn,
@@ -2851,6 +2910,13 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
             actor="rehearsal-admin",
             reason="citator rehearsal cutover",
         )
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT COUNT(*) FROM public_authority_citation_facts
+                    WHERE id=%s::uuid""",
+                [mismatched_citation_fact_id],
+            )
+            assert cur.fetchone()[0] == 0
         for unsafe_authority_key in (
             custom_authority_key,
             private_shaped_authority_key,
@@ -3632,6 +3698,55 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
             != "unavailable"
         )
 
+        lineage_delivery_watch = save_race_watch("rehearsal-lineage-delivery")
+        healthy_lineage_alert = enqueue_citator_alert(
+            conn,
+            tenant_id=tenant_id,
+            watch_id=lineage_delivery_watch,
+            corpus_version=version,
+            authority_key=authority_key,
+            event_fingerprint="two-sided-lineage-healthy",
+            event_kind="treatment",
+            evidence_fact_id=two_sided_citation_fact_id,
+        )
+        assert healthy_lineage_alert
+        record_citator_alert_delivery(
+            conn,
+            tenant_id=tenant_id,
+            alert_event_id=healthy_lineage_alert,
+            channel="in_app",
+            delivery_key="two-sided-lineage-healthy",
+            attempted_outcome="sent",
+            now=datetime(2026, 8, 30, 12, tzinfo=timezone.utc),
+        )
+        revoked_lineage_alert = enqueue_citator_alert(
+            conn,
+            tenant_id=tenant_id,
+            watch_id=lineage_delivery_watch,
+            corpus_version=version,
+            authority_key=authority_key,
+            event_fingerprint="two-sided-lineage-revoked-before-delivery",
+            event_kind="treatment",
+            evidence_fact_id=two_sided_citation_fact_id,
+        )
+        assert revoked_lineage_alert
+        with conn.cursor() as cur:
+            cur.execute("SET LOCAL app.current_tenant_id = %s", [tenant_id])
+            cur.execute(
+                """SELECT e.evidence_fact_id::text, e.evidence_type, d.outcome
+                     FROM citator_alert_events e
+                     JOIN citator_alert_deliveries d ON d.alert_event_id=e.id
+                    WHERE e.id=%s::uuid
+                      AND d.delivery_key='two-sided-lineage-healthy'""",
+                [healthy_lineage_alert],
+            )
+            assert cur.fetchone() == (
+                two_sided_citation_fact_id,
+                "citation",
+                "sent",
+            )
+        conn.commit()
+
         citation_assessment_id = record_treatment_assessment(
             conn,
             corpus_version=version,
@@ -3649,12 +3764,44 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
                 [citing_source_key],
             )
         conn.commit()
+        record_citator_alert_delivery(
+            conn,
+            tenant_id=tenant_id,
+            alert_event_id=revoked_lineage_alert,
+            channel="in_app",
+            delivery_key="two-sided-lineage-revoked-before-delivery",
+            attempted_outcome="sent",
+            now=datetime(2026, 8, 30, 12, tzinfo=timezone.utc),
+        )
         with conn.cursor() as cur:
+            cur.execute("SET LOCAL app.current_tenant_id = %s", [tenant_id])
+            cur.execute(
+                """SELECT outcome, detail FROM citator_alert_deliveries
+                    WHERE alert_event_id=%s::uuid
+                      AND delivery_key='two-sided-lineage-revoked-before-delivery'""",
+                [revoked_lineage_alert],
+            )
+            assert cur.fetchone() == (
+                "revoked",
+                "authority evidence lineage is no longer admitted",
+            )
+            cur.execute(
+                """SELECT COUNT(*) FROM citator_alert_deliveries
+                    WHERE alert_event_id=%s::uuid AND outcome='sent'""",
+                [revoked_lineage_alert],
+            )
+            assert cur.fetchone()[0] == 0
             cur.execute(
                 "SELECT COUNT(*) FROM public_authority_citation_facts WHERE id=%s::uuid",
                 [two_sided_citation_fact_id],
             )
             assert cur.fetchone()[0] == 0
+            cur.execute(
+                "SELECT COUNT(*) FROM public_authority_citation_facts WHERE id=%s::uuid",
+                [mismatched_citation_fact_id],
+            )
+            assert cur.fetchone()[0] == 0
+        conn.commit()
         two_sided_suppressed = CourtListenerRepository(conn).authority_treatment(
             opinion_id
         )

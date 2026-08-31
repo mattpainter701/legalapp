@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.31.5 — Revalidate authority evidence before alerts
+
+Released August 31, 2026.
+
+Public-authority alerts and coverage claims now remain bound to the exact reviewed evidence lineage and source state that supported them.
+
+- **Stop revoked evidence from sending.** Queued authority alerts recheck the stored history or citation fact and both public source lineages before recording a successful delivery.
+- **Keep coverage claims audit-bound.** Changes to coverage scope, source identity, publisher, URLs, cadence, caveats, or other customer-visible source facts suppress claims until fresh audits pass.
+- **Reject mismatched citation identities.** Citation facts must link each opinion to the same reviewed source as its authority, preventing unrelated public opinions from laundering revoked or private evidence.
+
 ## 2026.08.31.4 — Fail-closed public-authority source boundaries
 
 Released August 31, 2026.

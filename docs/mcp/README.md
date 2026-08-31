@@ -102,10 +102,17 @@ release and later singleton rows cannot be adopted into a promoted corpus.
 review tools. They separate promoted, reviewed, source-bound deterministic
 history/citation/amendment facts from machine-derived treatment assessments,
 show source/version/as-of/currentness evidence and known gaps, and never make a
-good-law determination. Tenant/matter watch persistence is isolated with RLS
-and is not exposed through a Research key. The canonical data model, alert
-controls, evaluation gate, and remaining licensed-benchmark requirement are in
-[Citator control plane](../CITATOR_CONTROL_PLANE.md).
+good-law determination. Citation facts require each linked versioned opinion to
+belong to the same reviewed public source as its authority. Tenant/matter watch
+persistence is isolated with RLS and is not exposed through a Research key.
+Queued alert events bind the exact stored fact identity and revalidate its
+current promoted public lineage under release/source locks before a delivery
+can be recorded as sent; a revoked citing or cited source produces a non-sent
+`revoked` outcome. The release-state digest includes every customer-visible
+source/admission/manifest fact, so changes suppress coverage claims until fresh
+audits pass. The canonical data model, alert controls, evaluation gate, and
+remaining licensed-benchmark requirement are in [Citator control
+plane](../CITATOR_CONTROL_PLANE.md).
 
 ### Collaborative research workspace boundary
 

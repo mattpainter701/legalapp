@@ -14,8 +14,11 @@ and release methodology, thresholds, result, auditor, and immutable hash.
 Production audits include a deterministic digest of the exact searchable
 documents, chunks, caselaw snapshots, citator facts, source/admission review,
 partition evidence, embedding contract, and customer-visible source scope,
-cadence, caveats, and wording. Promotion recomputes those audits under the same
-release lock and rejects stale or caller-fabricated passes. Promotion requires
+cadence, caveats, wording, names, publisher, URLs, jurisdictions, coverage
+dates/kind, and operational source state. Every source mutation takes the same
+release transaction lock, so no newly served claim field can race promotion or
+escape the audit digest. Promotion recomputes those audits under that lock and
+rejects stale or caller-fabricated passes. Promotion requires
 passing release, completeness, freshness, and isolation evidence for the same
 version; the previous promoted version remains active until that atomic cutover
 succeeds.

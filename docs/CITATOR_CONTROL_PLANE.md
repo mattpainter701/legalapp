@@ -86,7 +86,13 @@ before later enqueueing and appends a durable watch audit row.
 
 An alert's customer-visible source URL, evidence span/locator/hash, and payload
 are constructed from one stored history or citation fact for the same promoted
-authority/version. Callers cannot supply an alert URL or free-form payload.
+authority/version. The queued event also stores that fact's immutable identity
+and type. Before a delivery can be recorded as sent, the control plane locks the
+event/watch and release lineage, re-resolves the fact through the current
+promoted public history or citation projection, and verifies both authority and
+opinion/source identities. If either endpoint is no longer reviewed and
+admitted, the attempt is recorded as `revoked`, not `sent`. Callers cannot
+supply an alert URL or free-form payload.
 
 This release contains no production notification delivery. A production sender
 must honor quiet-hour configuration, record every delivery attempt, recheck
