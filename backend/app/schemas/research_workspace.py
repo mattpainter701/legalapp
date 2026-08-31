@@ -71,10 +71,10 @@ class RecordCreate(BaseModel):
     @field_validator("title")
     @classmethod
     def record_title_is_not_blank(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
+        title = value.strip()
+        if not title:
             raise ValueError("title must not be blank")
-        return value
+        return title
 
     @model_validator(mode="after")
     def cited_records_require_a_source(self):

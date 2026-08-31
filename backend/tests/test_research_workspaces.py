@@ -16,7 +16,13 @@ from app.models.research_workspace import (
     ResearchWorkspaceEvent,
 )
 from app.routers import research_workspaces as router
-from app.schemas.research_workspace import RecordCreate, RecordUpdate, WorkspaceCreate
+from app.schemas.research_workspace import (
+    MemberUpsert,
+    RecordCreate,
+    RecordUpdate,
+    SnapshotCreate,
+    WorkspaceCreate,
+)
 
 
 class Result:
@@ -71,7 +77,8 @@ class DB:
 
     async def refresh(self, row):
         row.created_at = row.created_at or datetime.now(timezone.utc)
-        row.updated_at = row.updated_at or row.created_at
+        if hasattr(row, "updated_at"):
+            row.updated_at = row.updated_at or row.created_at
 
 
 def actor():
@@ -155,8 +162,11 @@ def test_cited_and_excluded_records_cannot_lose_required_provenance():
     )
     assert row.evidence_class == "cited"
     assert str(row.source_url) == "https://example.test/opinion"
+    assert RecordCreate(record_type="memo", title="  Trimmed  ").title == "Trimmed"
     with pytest.raises(ValidationError, match="title must not be blank"):
         WorkspaceCreate(title="   ")
+    with pytest.raises(ValidationError, match="title must not be blank"):
+        RecordCreate(record_type="memo", title="   ")
     with pytest.raises(ValidationError):
         RecordCreate(record_type="memo", title="Bad state", currentness_state="made_up")
     with pytest.raises(ValidationError):
@@ -420,3 +430,398 @@ async def test_snapshot_payload_preserves_classes_source_and_limitations():
     assert [row["evidence_class"] for row in payload["records"]] == ["cited", "model"]
     assert payload["records"][0]["source_url"] == "https://example.test/source"
     assert any("Bluebook-ready" in item for item in payload["limitations"])
+
+
+@pytest.mark.asyncio
+async def test_workspace_listing_archive_and_member_listing_are_scoped(monkeypatch):
+    user, matter_id, workspace_id = actor(), uuid.uuid4(), uuid.uuid4()
+    workspace = ResearchWorkspace(
+        id=workspace_id, tenant_id=user.tenant_id, matter_id=matter_id, title="Research"
+    )
+    member = SimpleNamespace(user_id=user.id, role="owner", revoked_at=None)
+    monkeypatch.setattr(router, "set_tenant_context", AsyncMock())
+    monkeypatch.setattr(router, "_matter", AsyncMock())
+    listed = await router.list_workspaces(
+        matter_id, DB(Result(rows=[(workspace, "owner")])), user
+    )
+    assert listed["items"][0]["id"] == workspace_id
+
+    monkeypatch.setattr(
+        router, "_workspace", AsyncMock(return_value=(workspace, member))
+    )
+    members = await router.list_members(
+        matter_id, workspace_id, DB(Result(rows=[member])), user
+    )
+    assert members["items"] == [
+        {"user_id": user.id, "role": "owner", "revoked_at": None}
+    ]
+
+    db = DB()
+    archived = await router.archive_workspace(matter_id, workspace_id, db, user)
+    assert archived.status_code == 204
+    assert workspace.deleted_at is not None
+    event = next(row for row in db.added if isinstance(row, ResearchWorkspaceEvent))
+    assert event.detail["before"]["deleted_at"] is None
+    assert event.detail["after"]["deleted_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_member_add_and_revoke_record_auditable_changes(monkeypatch):
+    user, matter_id, workspace_id, invited_id = (
+        actor(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+    )
+    workspace = ResearchWorkspace(
+        id=workspace_id, tenant_id=user.tenant_id, matter_id=matter_id, title="Research"
+    )
+    owner = SimpleNamespace(role="owner")
+    monkeypatch.setattr(router, "set_tenant_context", AsyncMock())
+    monkeypatch.setattr(
+        router, "_workspace", AsyncMock(return_value=(workspace, owner))
+    )
+    monkeypatch.setattr(router, "_assert_same_tenant_user", AsyncMock())
+    add_db = DB(Result(row=None))
+    added = await router.upsert_member(
+        matter_id,
+        workspace_id,
+        MemberUpsert(user_id=invited_id, role="editor"),
+        add_db,
+        user,
+    )
+    assert added["user_id"] == invited_id
+    assert any(
+        isinstance(row, ResearchWorkspaceEvent) and row.action == "member_added"
+        for row in add_db.added
+    )
+
+    active_member = SimpleNamespace(user_id=invited_id, role="editor", revoked_at=None)
+    revoke_db = DB(Result(row=active_member))
+    response = await router.revoke_member(
+        matter_id, workspace_id, invited_id, revoke_db, user
+    )
+    assert response.status_code == 204
+    assert active_member.revoked_at is not None
+    assert any(
+        isinstance(row, ResearchWorkspaceEvent) and row.action == "member_revoked"
+        for row in revoke_db.added
+    )
+
+
+@pytest.mark.asyncio
+async def test_record_create_list_update_and_archive_preserve_history(monkeypatch):
+    user, matter_id, workspace_id, record_id = (
+        actor(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+    )
+    workspace = ResearchWorkspace(
+        id=workspace_id, tenant_id=user.tenant_id, matter_id=matter_id, title="Research"
+    )
+    member = SimpleNamespace(role="editor")
+    monkeypatch.setattr(router, "set_tenant_context", AsyncMock())
+    monkeypatch.setattr(
+        router, "_workspace", AsyncMock(return_value=(workspace, member))
+    )
+    reviewer_check = AsyncMock()
+    folder_check = AsyncMock()
+    monkeypatch.setattr(router, "_assert_active_workspace_member", reviewer_check)
+    monkeypatch.setattr(router, "_assert_active_folder", folder_check)
+
+    create_db = DB()
+    reviewer_id, folder_id = uuid.uuid4(), uuid.uuid4()
+    created = await router.create_record(
+        matter_id,
+        workspace_id,
+        RecordCreate(
+            record_type="memo",
+            title="Initial",
+            body="Machine synthesis",
+            assigned_reviewer_id=reviewer_id,
+            folder_id=folder_id,
+        ),
+        create_db,
+        user,
+    )
+    assert created["evidence_class"] == "model"
+    assert any(isinstance(row, ResearchRecordRevision) for row in create_db.added)
+    reviewer_check.assert_awaited_once_with(create_db, workspace, reviewer_id)
+    folder_check.assert_awaited_once_with(create_db, workspace, folder_id)
+
+    existing = ResearchRecord(
+        id=record_id,
+        tenant_id=user.tenant_id,
+        workspace_id=workspace_id,
+        record_type="memo",
+        title="Initial",
+        body="Machine synthesis",
+        evidence_class="model",
+        revision=1,
+    )
+    updated = ResearchRecord(
+        id=record_id,
+        tenant_id=user.tenant_id,
+        workspace_id=workspace_id,
+        record_type="memo",
+        title="Revised",
+        body="Attorney review needed",
+        evidence_class="verify",
+        revision=2,
+    )
+    update_db = DB(Result(row=existing), Result(row=updated))
+    response = await router.update_record(
+        matter_id,
+        workspace_id,
+        record_id,
+        RecordUpdate(
+            record_type="memo",
+            title="Revised",
+            body="Attorney review needed",
+            evidence_class="verify",
+            revision=1,
+        ),
+        update_db,
+        user,
+    )
+    assert response["revision"] == 2
+    event = next(row for row in update_db.added if isinstance(row, ResearchWorkspaceEvent))
+    assert event.detail["before"]["evidence_class"] == "model"
+    assert event.detail["after"]["evidence_class"] == "verify"
+
+    records = await router.list_records(
+        matter_id, workspace_id, DB(Result(rows=[updated])), user
+    )
+    assert records["items"][0]["title"] == "Revised"
+
+    archived = ResearchRecord(
+        id=record_id,
+        tenant_id=user.tenant_id,
+        workspace_id=workspace_id,
+        record_type="memo",
+        title="Revised",
+        evidence_class="verify",
+        revision=3,
+        deleted_at=datetime.now(timezone.utc),
+    )
+    archive_db = DB(Result(row=updated), Result(row=archived))
+    archived_response = await router.archive_record(
+        matter_id, workspace_id, record_id, archive_db, user
+    )
+    assert archived_response.status_code == 204
+    archive_event = next(
+        row for row in archive_db.added if isinstance(row, ResearchWorkspaceEvent)
+    )
+    assert archive_event.detail["after"]["revision"] == 3
+
+
+@pytest.mark.asyncio
+async def test_snapshots_export_and_history_keep_reviewable_provenance(monkeypatch):
+    user, matter_id, workspace_id, snapshot_id = (
+        actor(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+    )
+    workspace = ResearchWorkspace(
+        id=workspace_id, tenant_id=user.tenant_id, matter_id=matter_id, title="Research"
+    )
+    member = SimpleNamespace(role="editor")
+    cited = ResearchRecord(
+        id=uuid.uuid4(),
+        tenant_id=user.tenant_id,
+        workspace_id=workspace_id,
+        record_type="authority",
+        title="Source",
+        evidence_class="cited",
+        source_url="https://example.test/source",
+        revision=1,
+    )
+    monkeypatch.setattr(router, "set_tenant_context", AsyncMock())
+    monkeypatch.setattr(
+        router, "_workspace", AsyncMock(return_value=(workspace, member))
+    )
+    monkeypatch.setattr(router, "_idempotency_lock", AsyncMock())
+    monkeypatch.setattr(router, "_idempotent_response", AsyncMock(return_value=None))
+    reservation = SimpleNamespace(response_json=None)
+    monkeypatch.setattr(
+        router, "_reserve_idempotency", AsyncMock(return_value=reservation)
+    )
+    snapshot_db = DB(Result(scalar=1), Result(rows=[cited]))
+    created = await router.create_snapshot(
+        matter_id,
+        workspace_id,
+        SnapshotCreate(label="Attorney review"),
+        "snapshot-key-1",
+        snapshot_db,
+        user,
+    )
+    assert created["sequence"] == 1
+    snapshot = next(
+        row for row in snapshot_db.added if row.__class__.__name__ == "ResearchWorkspaceSnapshot"
+    )
+    snapshot.id = snapshot_id
+
+    listed = await router.list_snapshots(
+        matter_id, workspace_id, DB(Result(rows=[snapshot])), user
+    )
+    assert listed["items"][0]["sha256"] == created["sha256"]
+    exported = await router.export_snapshot(
+        matter_id, workspace_id, snapshot_id, DB(Result(row=snapshot)), user
+    )
+    assert exported.headers["x-research-snapshot-sha256"] == created["sha256"]
+    with pytest.raises(Exception) as missing_export:
+        await router.export_snapshot(
+            matter_id, workspace_id, uuid.uuid4(), DB(Result(row=None)), user
+        )
+    assert missing_export.value.status_code == 404
+
+    event = SimpleNamespace(
+        id=uuid.uuid4(),
+        record_id=cited.id,
+        action="snapshot_created",
+        detail={"snapshot": created},
+        actor_user_id=user.id,
+        created_at=datetime.now(timezone.utc),
+    )
+    history = await router.workspace_history(
+        matter_id, workspace_id, DB(Result(rows=[event])), user
+    )
+    assert history["items"][0]["detail"]["snapshot"]["sha256"] == created["sha256"]
+
+
+@pytest.mark.asyncio
+async def test_create_replays_are_side_effect_free(monkeypatch):
+    user, matter_id, workspace_id = actor(), uuid.uuid4(), uuid.uuid4()
+    monkeypatch.setattr(router, "set_tenant_context", AsyncMock())
+    monkeypatch.setattr(router, "_matter", AsyncMock())
+    monkeypatch.setattr(router, "_idempotency_lock", AsyncMock())
+    monkeypatch.setattr(
+        router, "_idempotent_response", AsyncMock(return_value={"id": "replayed"})
+    )
+    reserve = AsyncMock()
+    monkeypatch.setattr(router, "_reserve_idempotency", reserve)
+    workspace_db = DB()
+    assert await router.create_workspace(
+        matter_id, WorkspaceCreate(title="Research"), "workspace-key-2", workspace_db, user
+    ) == {"id": "replayed"}
+    assert workspace_db.added == []
+
+    workspace = ResearchWorkspace(
+        id=workspace_id, tenant_id=user.tenant_id, matter_id=matter_id, title="Research"
+    )
+    monkeypatch.setattr(
+        router,
+        "_workspace",
+        AsyncMock(return_value=(workspace, SimpleNamespace(role="editor"))),
+    )
+    snapshot_db = DB()
+    assert await router.create_snapshot(
+        matter_id,
+        workspace_id,
+        SnapshotCreate(),
+        "snapshot-key-2",
+        snapshot_db,
+        user,
+    ) == {"id": "replayed"}
+    assert snapshot_db.added == []
+    reserve.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_idempotency_replay_is_stable_and_rejects_misuse():
+    user = actor()
+    request = {"matter_id": str(uuid.uuid4()), "title": "Research"}
+    stored = SimpleNamespace(
+        request_sha256=router._digest(request), response_json={"id": "stored"}
+    )
+    assert await router._idempotent_response(
+        DB(Result(row=stored)), user, "workspace_create", "stable-key", request
+    ) == {"id": "stored"}
+    with pytest.raises(Exception) as mismatch:
+        await router._idempotent_response(
+            DB(Result(row=stored)),
+            user,
+            "workspace_create",
+            "stable-key",
+            {"matter_id": request["matter_id"], "title": "Different"},
+        )
+    assert mismatch.value.status_code == 409
+    pending = SimpleNamespace(request_sha256=router._digest(request), response_json=None)
+    with pytest.raises(Exception) as in_progress:
+        await router._idempotent_response(
+            DB(Result(row=pending)), user, "workspace_create", "stable-key", request
+        )
+    assert in_progress.value.status_code == 409
+    assert (
+        await router._idempotent_response(
+            DB(Result(row=None)), user, "workspace_create", "new-key", request
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_member_and_record_denial_paths_preserve_collaboration_guards(
+    monkeypatch,
+):
+    user, matter_id, workspace_id, owner_id, record_id = (
+        actor(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+    )
+    workspace = ResearchWorkspace(
+        id=workspace_id, tenant_id=user.tenant_id, matter_id=matter_id, title="Research"
+    )
+    owner = SimpleNamespace(user_id=owner_id, role="owner", revoked_at=None)
+    monkeypatch.setattr(router, "set_tenant_context", AsyncMock())
+    monkeypatch.setattr(
+        router,
+        "_workspace",
+        AsyncMock(return_value=(workspace, SimpleNamespace(role="owner"))),
+    )
+    monkeypatch.setattr(router, "_assert_same_tenant_user", AsyncMock())
+    with pytest.raises(Exception) as demotion:
+        await router.upsert_member(
+            matter_id,
+            workspace_id,
+            MemberUpsert(user_id=owner_id, role="viewer"),
+            DB(Result(row=owner), Result(scalar=1)),
+            user,
+        )
+    assert demotion.value.status_code == 409
+
+    monkeypatch.setattr(
+        router,
+        "_workspace",
+        AsyncMock(return_value=(workspace, SimpleNamespace(role="reviewer"))),
+    )
+    with pytest.raises(Exception) as reviewer_denied:
+        await router.archive_record(
+            matter_id, workspace_id, record_id, DB(), user
+        )
+    assert reviewer_denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_workspace_and_optional_record_references_fail_closed(monkeypatch):
+    user, matter_id, workspace_id = actor(), uuid.uuid4(), uuid.uuid4()
+    monkeypatch.setattr(router, "_matter", AsyncMock())
+    with pytest.raises(Exception) as missing_workspace:
+        await router._workspace(matter_id, workspace_id, user, DB(Result(row=None)))
+    assert missing_workspace.value.status_code == 404
+
+    workspace = ResearchWorkspace(
+        id=workspace_id, tenant_id=user.tenant_id, matter_id=matter_id, title="Research"
+    )
+    with pytest.raises(Exception) as missing_reviewer:
+        await router._assert_active_workspace_member(
+            DB(Result(row=None)), workspace, uuid.uuid4()
+        )
+    assert missing_reviewer.value.status_code == 409
+    with pytest.raises(Exception) as missing_folder:
+        await router._assert_active_folder(DB(Result(row=None)), workspace, uuid.uuid4())
+    assert missing_folder.value.status_code == 409
