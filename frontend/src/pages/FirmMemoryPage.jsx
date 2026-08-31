@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Check, Clipboard, FileText, Search, SlidersHorizontal, Sparkles } from 'lucide-react'
 import { getFirmMemoryFile, getMattersV2, searchFirmMemory } from '../api'
+import UnifiedFirmMemoryPage from './firm-memory/UnifiedFirmMemoryPage'
 
 const EXTENSIONS = ['All files', 'PDF', 'DOCX', 'DOC', 'TXT']
 
@@ -49,7 +50,7 @@ function statusLabel(result) {
   return 'Index status unavailable'
 }
 
-export default function FirmMemoryPage() {
+export function MatterFirmMemoryPage() {
   const [matters, setMatters] = useState([])
   const [matterId, setMatterId] = useState('')
   const [query, setQuery] = useState('')
@@ -190,4 +191,8 @@ export default function FirmMemoryPage() {
       </div>
     </main>
   )
+}
+
+export default function FirmMemoryPage({ unifiedEnabled = false }) {
+  return unifiedEnabled ? <UnifiedFirmMemoryPage /> : <MatterFirmMemoryPage />
 }

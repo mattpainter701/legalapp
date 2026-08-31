@@ -50,6 +50,16 @@ Treat this embedded index as a representative-corpus control, not proof that a 4
 
 File permissions can change after indexing. Establish a process for rescans, deletions, renamed folders, and permission updates so search does not retain content beyond its intended availability.
 
+## Unified Firm Memory rollout
+
+The query-first Firm Memory interface is default-off. It appears only when `GET /api/v1/firm-memory/capabilities` reports `unified_research_available: true`, an effective server decision that requires both the search entitlement and the generalized-search rollout flag. When the endpoint reports false or is unavailable, the same `/firm-memory` route returns to the existing matter-required page. The interface does not decide authorization. The source-authorization service must independently admit the tenant member, entitlement, optional matter filter, source policy, and any native provider decision, with unknown decisions failing closed.
+
+Before enabling the rollout, verify the version 1 Firm Memory contract and source catalog are deployed. The portal calls `POST /api/v1/firm-memory/search` with `source_scope`, optional `matter_ids`, `source_ids` or `collection_ids`, file-extension and modified-date filters, and an audit correlation ID. It uses the returned per-source coverage array to distinguish ready, partial, indexing, stale, and offline searches. Do not map unsupported or missing coverage to ready.
+
+Provider-open, stable LawHand result, and on-device actions are server-issued metadata. The portal accepts provider destinations only over HTTPS and accepts LawHand or opener handoffs only on the current origin. Missing actions remain unavailable. FM-01 intentionally does not issue a stable result action because its HMAC document IDs are non-reversible; that action requires a later durable opaque-ID mapping and current-authorization resolver. A returned on-premises relative or canonical path may be copied, but it is never converted into a browser file URL.
+
+This UX PR depends on the separate Firm Memory source-authorization foundation. Do not infer unified rollout from the user's broad `search_firm_memory` entitlement, the legacy matter-only endpoint, or an existing SMB matter binding.
+
 ## Diagnose safely
 
 Start with **Status**. Its counts describe the tenant's registered agents,
