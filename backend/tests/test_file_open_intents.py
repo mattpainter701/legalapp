@@ -174,17 +174,23 @@ async def test_redeem_is_single_use_and_records_authenticated_peer_identity():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "intent,action,message",
+    "intent_overrides,action,message",
     [
         (
-            _intent(expires_at=datetime.now(timezone.utc) - timedelta(seconds=1)),
+            {"expired": True},
             "open",
             "expired",
         ),
-        (_intent(action="show"), "open", "action"),
+        ({"action": "show"}, "open", "action"),
     ],
 )
-async def test_redeem_rejects_expired_or_mismatched_context(intent, action, message):
+async def test_redeem_rejects_expired_or_mismatched_context(
+    intent_overrides, action, message
+):
+    overrides = dict(intent_overrides)
+    if overrides.pop("expired", False):
+        overrides["expires_at"] = datetime.now(timezone.utc) - timedelta(seconds=1)
+    intent = _intent(**overrides)
     with pytest.raises(service.OpenIntentError, match=message):
         await service.redeem_intent(
             _DB(intent),
