@@ -9,7 +9,7 @@ from sqlalchemy import and_, func, or_, select
 from app.config import get_settings
 from app.models.contact import Contact, Lead
 from app.models.plugin import Matter
-from app.models.task import Task, TaskEvent
+from app.models.task import Task, TaskAutomationRun, TaskEvent
 from app.models.user import User
 from app.schemas.workspace_mcp import (
     GetClientArgs,
@@ -21,6 +21,7 @@ from app.schemas.workspace_mcp import (
     SearchTasksArgs,
 )
 from app.services.automation_capabilities import CapabilityContext, CapabilityError
+from app.services.matter_access import matter_access_predicate
 
 settings = get_settings()
 _CLIENT_CONTACT_TYPES = ("client", "prospect")
@@ -167,6 +168,34 @@ def _pending_action_summary(value: Any) -> dict[str, Any] | None:
         "source_ids",
     }
     return {key: value[key] for key in allowed if key in value}
+
+
+def _task_visibility(context: CapabilityContext):
+    """Apply live matter access and hide matterless SMS work from global reads."""
+    historical_sms = (
+        select(TaskAutomationRun.id)
+        .where(
+            TaskAutomationRun.tenant_id == context.tenant_id,
+            TaskAutomationRun.task_id == Task.id,
+            TaskAutomationRun.action_type == "sms_client",
+        )
+        .correlate(Task)
+        .exists()
+    )
+    is_sms = or_(
+        func.coalesce(Task.pending_action["type"].as_string(), "") == "sms_client",
+        historical_sms,
+    )
+    matter_access = matter_access_predicate(
+        tenant_id=context.tenant_id,
+        user_id=context.actor_user_id,
+        is_admin=getattr(context.user, "role", None) == "admin",
+        matter_id_column=Task.matter_id,
+    )
+    return or_(
+        and_(Task.matter_id.is_(None), ~is_sms),
+        and_(Task.matter_id.is_not(None), matter_access),
+    )
 
 
 async def search_clients(
@@ -414,7 +443,10 @@ async def search_matters(
 async def search_tasks(
     context: CapabilityContext, args: SearchTasksArgs
 ) -> dict[str, Any]:
-    filters = [Task.tenant_id == context.tenant_id]
+    filters = [
+        Task.tenant_id == context.tenant_id,
+        _task_visibility(context),
+    ]
     for column, value in (
         (Task.matter_id, args.matter_id),
         (Task.contact_id, args.contact_id),
@@ -466,6 +498,7 @@ async def get_task(context: CapabilityContext, args: GetTaskArgs) -> dict[str, A
         select(Task).where(
             Task.id == args.task_id,
             Task.tenant_id == context.tenant_id,
+            _task_visibility(context),
         )
     )
     if task is None:

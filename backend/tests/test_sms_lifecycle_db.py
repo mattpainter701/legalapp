@@ -45,8 +45,11 @@ from app.schemas.chat_action import (
     SmsClientAction,
     SmsConsentEvidenceBinding,
 )
+from app.schemas.workspace_mcp import GetTaskArgs, SearchTasksArgs
 from app.services import sms as sms_service
 from app.services import task_automation
+from app.services import workspace_lifecycle_capabilities as workspace_lifecycle
+from app.services.automation_capabilities import CapabilityContext, CapabilityError
 from app.services.chat_tools import ChatToolError, resolve_tool
 from app.services.chat_tools.handlers import ChatToolContext
 from app.services.demo_purge import purge_demo_tenant
@@ -437,6 +440,14 @@ async def test_signed_status_webhook_is_tenant_bound_and_never_regresses_truth(
     communication = await db_session.get(CommunicationLog, message.communication_log_id)
     assert communication.status == "delivered"
 
+    # Deactivation stops new inbound conversations but must not discard signed
+    # delivery truth for a message submitted while the sender was active.
+    seeded.config.is_active = False
+    await db_session.commit()
+    historical_status = await callback("delivered")
+    assert historical_status.status_code == 200
+    assert historical_status.json()["status"] == "delivered"
+
     params = {"MessageSid": "SM-STATUS", "MessageStatus": "failed"}
     invalid = await client.post(
         path, data=params, headers={"X-Twilio-Signature": "bad"}
@@ -612,6 +623,26 @@ async def test_signed_inbound_requires_exact_account_and_destination_ownership(
         ),
     )
     assert refused_wrong_fixed.status_code == 401
+
+    seeded.config.is_active = False
+    await db_session.commit()
+    other.config.messaging_service_sid = None
+    other.config.from_number = base["To"]
+    await db_session.commit()
+    inactive_shared_destination = {
+        **fixed_destination,
+        "MessageSid": "SM-INBOUND-INACTIVE-SHARED-DESTINATION",
+    }
+    refused_inactive = await client.post(
+        path,
+        data=inactive_shared_destination,
+        headers=_signed_headers(
+            path=path,
+            params=inactive_shared_destination,
+            secret=seeded.auth_token,
+        ),
+    )
+    assert refused_inactive.status_code == 503
 
 
 @pytest.mark.asyncio
@@ -2069,6 +2100,37 @@ async def test_reconciliation_requires_exact_provider_truth_and_is_audited(
         )
     message_id = unknown.value.sms_message_id
     message = await db_session.get(SmsMessage, message_id)
+    stranded_task = Task(
+        tenant_id=test_tenant.id,
+        title="Reconcile stranded SMS automation",
+        matter_id=seeded.matter.id,
+        contact_id=seeded.contact.id,
+        status="in_progress",
+        source="assistant",
+        pending_action={
+            "type": "sms_client",
+            "idempotency_key": "reconcile-provider-truth",
+        },
+        created_by_user_id=test_user.id,
+    )
+    db_session.add(stranded_task)
+    await db_session.flush()
+    stranded_run = TaskAutomationRun(
+        tenant_id=test_tenant.id,
+        task_id=stranded_task.id,
+        action_type="sms_client",
+        idempotency_key="stranded-reconcile-run",
+        action_snapshot=stranded_task.pending_action,
+        action_sha256="9" * 64,
+        status="sending",
+        delivery_certainty="outcome_unknown",
+        reconciliation_required=False,
+        sms_message_id=None,
+        triggered_by_user_id=test_user.id,
+    )
+    db_session.add(stranded_run)
+    await db_session.commit()
+    stranded_run_id = stranded_run.id
     created_at = message.provider_submission_started_at.isoformat()
     exact = {
         "sid": "SM-RECOVERED",
@@ -2168,6 +2230,11 @@ async def test_reconciliation_requires_exact_provider_truth_and_is_audited(
     communication = await db_session.get(CommunicationLog, message.communication_log_id)
     assert communication.status == "delivered"
     assert message.reconciliation_resolution == "provider_lookup"
+    reconciled_run = await db_session.get(TaskAutomationRun, stranded_run_id)
+    assert reconciled_run.sms_message_id == message_id
+    assert reconciled_run.status == "sent"
+    assert reconciled_run.delivery_certainty == "confirmed_sent"
+    assert reconciled_run.reconciliation_required is False
     assert provider.calls == []
     assert len(provider.lookup_calls) == 7
 
@@ -2743,6 +2810,35 @@ async def test_stale_dispatch_lease_becomes_reconciliation_work_without_resend(
     )
     provider = _Provider(lambda **_kwargs: pytest.fail("provider must not be called"))
     _install_provider(monkeypatch, provider)
+    crash_task = Task(
+        tenant_id=test_tenant.id,
+        title="Worker crashed after SMS reservation",
+        matter_id=seeded.matter.id,
+        contact_id=seeded.contact.id,
+        status="in_progress",
+        source="assistant",
+        pending_action={
+            "type": "sms_client",
+            "idempotency_key": "stale-dispatch-lease",
+        },
+        created_by_user_id=test_user.id,
+    )
+    db_session.add(crash_task)
+    await db_session.flush()
+    crash_run = TaskAutomationRun(
+        tenant_id=test_tenant.id,
+        task_id=crash_task.id,
+        action_type="sms_client",
+        idempotency_key="crash-before-message-bind",
+        action_snapshot=crash_task.pending_action,
+        action_sha256="8" * 64,
+        status="sending",
+        delivery_certainty="outcome_unknown",
+        reconciliation_required=False,
+        sms_message_id=None,
+        triggered_by_user_id=test_user.id,
+    )
+    db_session.add(crash_run)
     stale = SmsMessage(
         tenant_id=test_tenant.id,
         contact_id=seeded.contact.id,
@@ -2780,6 +2876,7 @@ async def test_stale_dispatch_lease_becomes_reconciliation_work_without_resend(
     )
     db_session.add_all([stale, stale_submitted])
     await db_session.commit()
+    crash_run_id = crash_run.id
     assert await mark_stale_sms_dispatches_for_reconciliation() >= 2
     await set_tenant_context(db_session, str(test_tenant.id))
     await db_session.refresh(stale)
@@ -2797,6 +2894,13 @@ async def test_stale_dispatch_lease_becomes_reconciliation_work_without_resend(
     )
     assert stale_audit.metadata_json["reason"] == ("scheduler:dispatch_lease_expired")
     assert stale_audit.actor_type == "system"
+    recovered_run = await db_session.get(TaskAutomationRun, crash_run_id)
+    assert recovered_run.sms_message_id == stale.id
+    assert recovered_run.status == "failed"
+    assert recovered_run.delivery_certainty == "outcome_unknown"
+    assert recovered_run.reconciliation_required is True
+    assert "requires reconciliation" in recovered_run.error_message
+    assert recovered_run.completed_at is not None
     await db_session.refresh(stale_submitted)
     assert stale_submitted.status == "submitted"
     assert stale_submitted.reconciliation_required_at is not None
@@ -4739,6 +4843,16 @@ async def test_generic_task_surfaces_redact_or_hide_sms_for_unauthorized_users(
             triggered_by_user_id=test_user.id,
         )
     )
+    db_session.add(
+        TaskEvent(
+            tenant_id=test_tenant.id,
+            task_id=historical_task.id,
+            event_type="comment_added",
+            actor_user_id=test_user.id,
+            note="SMS-TASK-SECRET-EVENT",
+            metadata_json={},
+        )
+    )
     await db_session.commit()
 
     for restricted_user in (denied, unassigned):
@@ -4778,6 +4892,30 @@ async def test_generic_task_surfaces_redact_or_hide_sms_for_unauthorized_users(
         assert "SMS-TASK-SECRET" not in board.text
         assert str(seeded.contact.id) not in board.text
         assert str(seeded.matter.id) not in board.text
+
+        await set_tenant_context(db_session, str(test_tenant.id))
+        mcp_context = CapabilityContext(
+            db=db_session,
+            user=restricted_user,
+            channel="workspace_mcp",
+            granted_scopes=frozenset({"tasks:read"}),
+        )
+        mcp_search = await workspace_lifecycle.search_tasks(
+            mcp_context,
+            SearchTasksArgs(query="SMS-TASK-SECRET", limit=20),
+        )
+        assert restricted_ids.isdisjoint(
+            {row["task_id"] for row in mcp_search["tasks"]}
+        )
+        assert secret_body not in str(mcp_search)
+        assert secret_phone not in str(mcp_search)
+        for restricted_task in (task, historical_task):
+            with pytest.raises(CapabilityError) as hidden_task:
+                await workspace_lifecycle.get_task(
+                    mcp_context,
+                    GetTaskArgs(task_id=restricted_task.id),
+                )
+            assert hidden_task.value.code == "task_not_found"
 
         direct_calls = (
             ("get", f"/api/tasks/{task.id}", None),
@@ -4819,6 +4957,35 @@ async def test_generic_task_surfaces_redact_or_hide_sms_for_unauthorized_users(
             assert secret_body not in response.text
             assert secret_phone not in response.text
             assert "SMS-TASK-SECRET" not in response.text
+
+    db_session.add(
+        MatterAssignment(
+            tenant_id=test_tenant.id,
+            matter_id=seeded.matter.id,
+            user_id=unassigned.id,
+            role="associate",
+        )
+    )
+    await db_session.commit()
+    await set_tenant_context(db_session, str(test_tenant.id))
+    assigned_context = CapabilityContext(
+        db=db_session,
+        user=unassigned,
+        channel="workspace_mcp",
+        granted_scopes=frozenset({"tasks:read"}),
+    )
+    assigned_search = await workspace_lifecycle.search_tasks(
+        assigned_context,
+        SearchTasksArgs(query="SMS-TASK-SECRET", limit=20),
+    )
+    assert {str(task.id), str(historical_task.id)} <= {
+        row["task_id"] for row in assigned_search["tasks"]
+    }
+    assigned_detail = await workspace_lifecycle.get_task(
+        assigned_context,
+        GetTaskArgs(task_id=historical_task.id),
+    )
+    assert assigned_detail["events"][0]["note"] == "SMS-TASK-SECRET-EVENT"
 
 
 async def _mutate_sms_actor(

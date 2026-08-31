@@ -87,9 +87,9 @@ class CapabilityContext:
     conversation_id: uuid.UUID | None = None
     request_id: str | None = None
     # Transport request correlation and mutation idempotency are separate
-    # identities. Workspace MCP supplies this from X-Idempotency-Key (falling
-    # back to X-Request-ID only for older clients), so retries may use a fresh
-    # request id without creating a second proposal.
+    # identities. Workspace MCP supplies this from an explicit
+    # X-Idempotency-Key, so retries may use a fresh request id without creating
+    # a second proposal.
     idempotency_key: str | None = None
     # Normal in-app sessions are already authorized by LawHand's route/RBAC
     # layer and leave this as ``None``. External adapters must provide the

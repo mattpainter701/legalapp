@@ -29,7 +29,7 @@
       "summary": "Firms can configure provider-backed SMS that stays reviewable, consent-bound, tenant-scoped, and honest about provider acceptance and delivery.",
       "highlights": [
         {"title": "Send only with current consent", "description": "Each outbound message rechecks verified phone ownership, consent provenance, approved message category, quiet hours, matter access, and provider configuration."},
-        {"title": "Honor replies and opt-outs safely", "description": "Signed inbound messages handle STOP, START, and HELP, deduplicate retries, and place ambiguous client or matter matches into a staff review queue."},
+        {"title": "Honor replies and opt-outs safely", "description": "Signed inbound messages require an active owned sender, handle STOP, START, and HELP, deduplicate retries, and route ambiguous matches to staff review."},
         {"title": "Keep provider truth visible", "description": "Provider acceptance stays separate from delivery, unknown outcomes remain visible on the client timeline, and signed callbacks or reconciliation cannot regress known truth."},
         {"title": "Review assistant proposals first", "description": "Workspace SMS proposals create review work for one verified matter party and require an explicit retry key; they cannot dispatch autonomously."}
       ]

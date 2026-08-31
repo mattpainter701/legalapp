@@ -51,10 +51,10 @@ class _DB:
         return _Result(self.result_values.pop(0))
 
 
-def _context(db, tenant_id):
+def _context(db, tenant_id, *, role="user"):
     return CapabilityContext(
         db=db,
-        user=SimpleNamespace(id=uuid4(), tenant_id=tenant_id),
+        user=SimpleNamespace(id=uuid4(), tenant_id=tenant_id, role=role),
         channel="workspace_mcp",
         granted_scopes=frozenset(
             {"contacts:read", "intakes:read", "matters:read", "tasks:read"}
@@ -263,6 +263,10 @@ async def test_matter_and_task_searches_are_bounded_and_task_detail_hides_body()
     assert tasks["tasks"][0]["task_url"].endswith(f"/tasks/{task.id}")
     assert detail["events"][0]["actor_label"] == "Pat"
     assert "body" not in detail["task"]["pending_action"]
+    task_search_sql = str(context.db.statements[1])
+    task_detail_sql = str(context.db.statements[2])
+    assert "matter_assignments" in task_search_sql
+    assert "matter_assignments" in task_detail_sql
 
 
 @pytest.mark.asyncio

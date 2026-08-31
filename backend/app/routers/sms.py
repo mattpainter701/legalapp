@@ -211,6 +211,8 @@ async def _signed_params(
     )
     if not config:
         raise HTTPException(503, "SMS webhook is not configured")
+    if require_inbound_ownership and (not config.is_active or not config.sender_ready):
+        raise HTTPException(503, "Inbound SMS is not active for this workspace")
     try:
         secret = provider_auth_token(config)
     except SmsError as exc:

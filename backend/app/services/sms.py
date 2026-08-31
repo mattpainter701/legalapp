@@ -15,7 +15,7 @@ from typing import Awaitable, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
-from sqlalchemy import or_, select, text
+from sqlalchemy import and_, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -904,6 +904,35 @@ def _record_communication(
     db.add(log)
 
 
+async def _lock_sms_automation_run(
+    db: AsyncSession, *, tenant_id, message: SmsMessage
+) -> TaskAutomationRun | None:
+    """Bind a run even when a crash preceded its SmsMessage foreign key write."""
+    bindings = [
+        TaskAutomationRun.sms_message_id == message.id,
+        and_(
+            TaskAutomationRun.sms_message_id.is_(None),
+            TaskAutomationRun.action_snapshot["idempotency_key"].as_string()
+            == message.idempotency_key,
+        ),
+    ]
+    if message.provider_message_id:
+        bindings.append(
+            TaskAutomationRun.provider_message_id == message.provider_message_id
+        )
+    return await db.scalar(
+        select(TaskAutomationRun)
+        .where(
+            TaskAutomationRun.tenant_id == tenant_id,
+            TaskAutomationRun.action_type == "sms_client",
+            or_(*bindings),
+        )
+        .order_by(TaskAutomationRun.created_at.desc(), TaskAutomationRun.id.desc())
+        .limit(1)
+        .with_for_update()
+    )
+
+
 async def _ensure_unknown_delivery_evidence(
     db: AsyncSession,
     *,
@@ -932,6 +961,25 @@ async def _ensure_unknown_delivery_evidence(
         )
     else:
         communication.status = "unknown"
+
+    automation_run = await _lock_sms_automation_run(
+        db, tenant_id=tenant_id, message=message
+    )
+    if automation_run:
+        detail = "SMS dispatch outcome is unknown and requires reconciliation"
+        automation_run.sms_message_id = message.id
+        automation_run.status = "failed"
+        automation_run.delivery_certainty = "outcome_unknown"
+        automation_run.reconciliation_required = True
+        automation_run.error_message = detail
+        automation_run.delivery_detail = detail
+        automation_run.provider = "twilio"
+        automation_run.provider_message_id = (
+            message.provider_message_id or automation_run.provider_message_id
+        )
+        automation_run.completed_at = automation_run.completed_at or datetime.now(
+            timezone.utc
+        )
 
     raw_event = dict(message.raw_provider_event or {})
     evidence_reasons = list(raw_event.get("unknown_evidence_reasons") or [])
@@ -1979,13 +2027,8 @@ async def reconcile_sms_message(
             actor_user_id=operator_user_id,
             reason="operator_attested_unknown",
         )
-        automation_run = await db.scalar(
-            select(TaskAutomationRun)
-            .where(
-                TaskAutomationRun.tenant_id == tenant_id,
-                TaskAutomationRun.sms_message_id == message.id,
-            )
-            .with_for_update()
+        automation_run = await _lock_sms_automation_run(
+            db, tenant_id=tenant_id, message=message
         )
         if automation_run:
             automation_run.status = "failed"
@@ -2239,13 +2282,8 @@ async def reconcile_sms_message(
                     else ("failed" if resolved_status == "failed" else "submitted")
                 ),
             )
-    automation_run = await db.scalar(
-        select(TaskAutomationRun)
-        .where(
-            TaskAutomationRun.tenant_id == tenant_id,
-            TaskAutomationRun.sms_message_id == message.id,
-        )
-        .with_for_update()
+    automation_run = await _lock_sms_automation_run(
+        db, tenant_id=tenant_id, message=message
     )
     if automation_run:
         automation_run.reconciliation_required = False
@@ -2408,21 +2446,8 @@ async def apply_status(
                 if incoming in {"failed", "undelivered"}
                 else "submitted"
             )
-        automation_run = await db.scalar(
-            select(TaskAutomationRun)
-            .where(
-                TaskAutomationRun.tenant_id == tenant_id,
-                TaskAutomationRun.action_type == "sms_client",
-                or_(
-                    TaskAutomationRun.sms_message_id == message.id,
-                    TaskAutomationRun.provider_message_id == sid,
-                    TaskAutomationRun.action_snapshot["idempotency_key"].as_string()
-                    == message.idempotency_key,
-                ),
-            )
-            .order_by(TaskAutomationRun.created_at.desc(), TaskAutomationRun.id.desc())
-            .limit(1)
-            .with_for_update()
+        automation_run = await _lock_sms_automation_run(
+            db, tenant_id=tenant_id, message=message
         )
         if automation_run:
             automation_run.sms_message_id = message.id

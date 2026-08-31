@@ -41,11 +41,12 @@ provenance-bearing consent, category and quiet-hours approval, race-safe
 idempotency, and review-first staff approval. Signed inbound/status webhooks
 handle STOP/START/HELP, replay and out-of-order delivery callbacks, ambiguous
 routing, and provider-unknown reconciliation without reporting fake delivery.
-Inbound webhooks bind the exact provider account and configured destination;
-active provider destinations are unique within each provider account, and
-shared provider-config fences prevent rotation or deactivation from racing an
-in-flight dispatch or reconciliation lookup. Unknown outcomes always leave a
-single customer-timeline marker and sanitized audit evidence.
+Inbound webhooks require an active sender and bind the exact provider account
+and configured destination; active provider destinations are unique within
+each provider account, and shared provider-config fences prevent rotation or
+deactivation from racing an in-flight dispatch or reconciliation lookup.
+Unknown outcomes always leave a single customer-timeline marker and sanitized
+audit evidence, and crash recovery binds any matching in-flight task run.
 
 Migration 149 follows the merged configurable-workflow migration 148 and adds
 tenant-composite constraints, immutable consent evidence, RLS, reconciliation
@@ -53,12 +54,12 @@ state, and rolling-upgrade-safe demo-purge coverage. The intake and task
 interfaces expose restricted review and informed SMS approval workflows;
 provider credentials and unresolved message content remain out of unauthorized
 responses and audit metadata; unauthorized SMS tasks are omitted from generic
-task aggregates and their counts. This PR does not close COMP-02 or COMP-03
-and does not deploy or configure a production provider.
+task aggregates, their counts, and Workspace MCP task reads. This PR does not
+close COMP-02 or COMP-03 and does not deploy or configure a production provider.
 
 ## Validation
 
-- Ruff lint/format and Python compilation passed; 61 database-independent
+- Ruff lint/format and Python compilation passed; 65 database-independent
   backend, migration, demo-purge, Workspace MCP, CI-contract, and release-note
   tests passed.
 - The complete SMS CI target collects 79 tests, including 63 PostgreSQL/provider-
@@ -68,7 +69,8 @@ and does not deploy or configure a production provider.
   durable unmatched-number suppression, exact account/destination ownership,
   review routing and lock order, exact-provider reconciliation, actor and config
   revocation ordering, callback-before-worker-finalization truth, unknown-outcome
-  timeline/audit evidence, rolling-upgrade/full demo purge, generic-Task omission,
+  timeline/audit evidence, crash recovery for unbound task runs,
+  rolling-upgrade/full demo purge, generic/Workspace-MCP task omission,
   custom-role gating, and credential non-leakage.
 - The full frontend suite passed (92 files, 514 tests), along with frontend lint
   and the production build; the focused SMS queue subset passed 6 tests.

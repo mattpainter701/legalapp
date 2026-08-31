@@ -66,9 +66,11 @@
   provenance-bearing consent and stable idempotency; provider account and
   account-scoped active destination ownership, shared configuration-generation
   fences, and signed tenant-bound inbound/status callbacks prevent cross-tenant
-  routing and preserve provider-vs-delivery truth. Unknown outcomes retain one
-  timeline marker and sanitized audit record, while unauthorized SMS tasks are
-  omitted from generic task aggregates and counts. STOP-family replies revoke consent,
+  routing; inactive senders cannot ingest new inbound messages. Unknown outcomes
+  retain one timeline marker and sanitized audit record, recover matching
+  in-flight task runs, and preserve provider-vs-delivery truth. Unauthorized SMS
+  tasks are omitted from generic task aggregates, counts, and Workspace MCP task
+  reads. STOP-family replies revoke consent,
   ambiguous inbound routes enter capability- and matter-scoped review, and
   assistant proposals remain human-approved with explicit retry identity and
   approval-time consent checks. Demo purge treats pre-SMS and complete-SMS
