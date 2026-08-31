@@ -6,11 +6,32 @@ import uuid
 import pytest
 
 from app.models.document_template import DocumentTemplate
+from app.models.rbac import Role, UserRole
 from app.models.studio_draft import StudioDraft, StudioDraftSnapshot
 from app.schemas.studio_draft import StudioDraftPatch
 from app.services.studio_drafts import StudioDraftService
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest.fixture(autouse=True)
+async def _grant_manage_documents(db_session, test_tenant, test_user):
+    role = Role(
+        tenant_id=test_tenant.id,
+        name="Studio document managers",
+        capabilities=["manage_documents"],
+    )
+    db_session.add(role)
+    await db_session.flush()
+    db_session.add(
+        UserRole(
+            tenant_id=test_tenant.id,
+            user_id=test_user.id,
+            role_id=role.id,
+            source="manual",
+        )
+    )
+    await db_session.commit()
 
 
 def _create_payload(field_id=None):
