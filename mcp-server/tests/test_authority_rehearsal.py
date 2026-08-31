@@ -201,7 +201,10 @@ def test_authority_release_rehearsal(monkeypatch, tmp_path: Path):
                               %s, manifest_hash, now(),
                               'rehearsal-admin'
                          FROM authority_corpus_versions WHERE version=%s
-                       ON CONFLICT (source_key, manifest_sha256) DO UPDATE SET active=TRUE,
+                       ON CONFLICT (source_key, manifest_sha256) DO UPDATE SET
+                         active=TRUE,
+                         catalog_schema_version=EXCLUDED.catalog_schema_version,
+                         manifest_reference=EXCLUDED.manifest_reference,
                          manifest_sha256=EXCLUDED.manifest_sha256""",
                     [
                         catalog_schema,
@@ -3504,7 +3507,9 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
                     [source_key],
                 )
             conn.commit()
-            assert_citator_lineage_suppressed(column, review_candidate)
+            assert_citator_lineage_suppressed(
+                column, review_candidate, expect_release_unavailable=False
+            )
             with conn.cursor() as cur:
                 cur.execute(
                     f"UPDATE legal_sources SET {column}={good_value} WHERE source_key=%s",
@@ -3527,7 +3532,9 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
                     [source_key],
                 )
             conn.commit()
-            assert_citator_lineage_suppressed(label, review_candidate)
+            assert_citator_lineage_suppressed(
+                label, review_candidate, expect_release_unavailable=False
+            )
             with conn.cursor() as cur:
                 cur.execute(
                     f"UPDATE legal_sources SET {good_set} WHERE source_key=%s",
@@ -3572,7 +3579,9 @@ def test_citator_review_watch_and_tenant_isolation_rehearsal(monkeypatch):
                     [source_key],
                 )
             conn.commit()
-            assert_citator_lineage_suppressed(label, review_candidate)
+            assert_citator_lineage_suppressed(
+                label, review_candidate, expect_release_unavailable=False
+            )
             with conn.cursor() as cur:
                 cur.execute(
                     f"UPDATE citator_public_source_admissions SET {good_set} WHERE source_key=%s",
@@ -4584,6 +4593,7 @@ def test_legacy_upgrade_bootstrap_rehearsal():
                       SET enabled=TRUE, storage_policy='normalized_text',
                           rights_decision='official', reviewed_at=now(),
                           reviewed_by='legacy-upgrade-reviewer',
+                          expected_cadence='daily',
                           claim_safe_wording='Reviewed legacy caselaw fixture only',
                           metadata=metadata ||
                             '{"catalog_schema_version":"legacy-rehearsal",
