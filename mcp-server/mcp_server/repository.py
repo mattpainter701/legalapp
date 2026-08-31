@@ -1324,7 +1324,7 @@ class CourtListenerRepository:
                 FROM legal_sources
                 WHERE storage_policy <> 'prohibited'
                   AND public_namespace = 'public-authority'
-                  AND EXISTS (SELECT 1 FROM citator_public_source_admissions pa WHERE pa.source_key=legal_sources.source_key AND pa.active IS TRUE AND pa.namespace='public-authority')
+                  AND EXISTS (SELECT 1 FROM citator_public_source_admissions pa WHERE pa.source_key=legal_sources.source_key AND pa.active IS TRUE AND pa.namespace='public-authority' AND pa.manifest_sha256=(SELECT manifest_hash FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1) AND pa.catalog_schema_version=legal_sources.metadata->>'catalog_schema_version')
                   AND enabled IS TRUE
                   AND rights_decision IN ('official', 'open', 'licensed')
                   AND reviewed_at IS NOT NULL AND reviewed_by IS NOT NULL
@@ -1353,6 +1353,9 @@ class CourtListenerRepository:
                   AND s.storage_policy <> 'prohibited'
                   AND s.public_namespace = 'public-authority'
                   AND pa.active IS TRUE AND pa.namespace='public-authority'
+                  AND pa.manifest_sha256=(SELECT manifest_hash FROM authority_corpus_versions WHERE version=%s)
+                  AND pa.catalog_schema_version=s.metadata->>'catalog_schema_version'
+                  AND pa.manifest_sha256=(SELECT manifest_hash FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
                   AND s.metadata->>'catalog_schema_version' IS NOT NULL
                   AND s.metadata->>'implementation_status' IS NOT NULL
                   AND NOT starts_with(s.source_key, 'tenant:')
@@ -1365,15 +1368,19 @@ class CourtListenerRepository:
             partitions = dict_rows(cur)
             cur.execute(
                 """
-                SELECT source_key, partition_key, source_release AS corpus_version,
+                SELECT l.source_key, l.partition_key, source_release AS corpus_version,
                        NULL AS cursor_url, acquisition_state AS status, updated_at,
                        CASE WHEN acquisition_state IN ('complete', 'indexed')
                             THEN last_checked_at ELSE NULL END
                             AS last_successful_harvest_at, 0 AS retry_count,
                        NULL AS next_retry_at, NULL AS dead_letter_at
-                FROM corpus_coverage_ledger
+                FROM corpus_coverage_ledger l
+                JOIN legal_sources s ON s.source_key=l.source_key
+                JOIN citator_public_source_admissions pa ON pa.source_key=s.source_key AND pa.active IS TRUE AND pa.namespace='public-authority'
                 WHERE source_release = %s
-                ORDER BY source_key, partition_key
+                  AND pa.manifest_sha256=(SELECT manifest_hash FROM authority_corpus_versions WHERE status='promoted' ORDER BY promoted_at DESC NULLS LAST LIMIT 1)
+                  AND pa.catalog_schema_version=s.metadata->>'catalog_schema_version'
+                ORDER BY l.source_key, l.partition_key
             """,
                 [version_key],
             )
