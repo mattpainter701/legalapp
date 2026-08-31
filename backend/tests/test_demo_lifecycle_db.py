@@ -666,20 +666,17 @@ async def test_verified_purge_deletes_demo_and_preserves_fixture(
         ]
     )
     await db_session.flush()
-    db_session.add(
-        MatterWorkflowTemplateVersion(
-            id=version_id,
-            tenant_id=tenant_id,
-            template_id=template_id,
-            version=1,
-            status="approved",
-            initial_stage_key="initial",
-            definition_sha256="a" * 64,
-            created_by_user_id=user_id,
-            approved_by_user_id=user_id,
-            approved_at=datetime.now(timezone.utc),
-        )
+    workflow_version = MatterWorkflowTemplateVersion(
+        id=version_id,
+        tenant_id=tenant_id,
+        template_id=template_id,
+        version=1,
+        status="draft",
+        initial_stage_key="initial",
+        definition_sha256="a" * 64,
+        created_by_user_id=user_id,
     )
+    db_session.add(workflow_version)
     await db_session.flush()
     db_session.add_all(
         [
@@ -714,38 +711,43 @@ async def test_verified_purge_deletes_demo_and_preserves_fixture(
         ]
     )
     await db_session.flush()
-    db_session.add_all(
-        [
-            MatterWorkflowChecklistDefinition(
-                tenant_id=tenant_id,
-                template_version_id=version_id,
-                stage_key="initial",
-                item_key="review",
-                title="Review demo file",
-                position=0,
-                task_type="review",
-                priority="medium",
-                due_offset_days=1,
-                assignee_role="matter_owner",
-            ),
-            MatterWorkflowRun(
-                id=run_id,
-                tenant_id=tenant_id,
-                matter_id=matter_id,
-                template_version_id=version_id,
-                idempotency_key="demo-applied-workflow",
-                request_sha256="d" * 64,
-                template_sha256="a" * 64,
-                matter_sha256="e" * 64,
-                preview_sha256="f" * 64,
-                preview_json={"initial_stage": {"label": "Initial"}, "tasks": []},
-                status="applied",
-                prior_stage="New",
-                planned_by_user_id=user_id,
-                approved_by_user_id=user_id,
-                approved_at=datetime.now(timezone.utc),
-            ),
-        ]
+    db_session.add(
+        MatterWorkflowChecklistDefinition(
+            tenant_id=tenant_id,
+            template_version_id=version_id,
+            stage_key="initial",
+            item_key="review",
+            title="Review demo file",
+            position=0,
+            task_type="review",
+            priority="medium",
+            due_offset_days=1,
+            assignee_role="matter_owner",
+        )
+    )
+    await db_session.flush()
+    workflow_version.status = "approved"
+    workflow_version.approved_by_user_id = user_id
+    workflow_version.approved_at = datetime.now(timezone.utc)
+    await db_session.flush()
+    db_session.add(
+        MatterWorkflowRun(
+            id=run_id,
+            tenant_id=tenant_id,
+            matter_id=matter_id,
+            template_version_id=version_id,
+            idempotency_key="demo-applied-workflow",
+            request_sha256="d" * 64,
+            template_sha256="a" * 64,
+            matter_sha256="e" * 64,
+            preview_sha256="f" * 64,
+            preview_json={"initial_stage": {"label": "Initial"}, "tasks": []},
+            status="applied",
+            prior_stage="New",
+            planned_by_user_id=user_id,
+            approved_by_user_id=user_id,
+            approved_at=datetime.now(timezone.utc),
+        )
     )
     await db_session.flush()
     db_session.add_all(
