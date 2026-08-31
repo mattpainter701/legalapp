@@ -26,10 +26,15 @@ from app.models.studio_draft import (
     StudioDraftSnapshot,
     StudioSourceArtifact,
 )
-from app.models.studio_render import StudioRenderArtifact
+from app.models.studio_render import (
+    StudioPreferredRenderEvidence,
+    StudioRenderArtifact,
+)
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.schemas.studio_render import (
+    StudioGeometryManifest,
+    StudioPageGeometry,
     StudioRendererComponent,
     StudioRendererManifest,
     StudioRenderOptions,
@@ -90,6 +95,28 @@ def _manifest():
         converter=component("converter", "7"),
         validator=component("validator", "8"),
     )
+
+
+def _geometry_kwargs(page_count: int = 1) -> dict:
+    manifest = StudioGeometryManifest(
+        artifact_page_count=page_count,
+        document_page_count=page_count,
+        pages=[
+            StudioPageGeometry(
+                page_number=page,
+                coordinate_space="points",
+                width_points=612,
+                height_points=792,
+            )
+            for page in range(1, page_count + 1)
+        ],
+    )
+    return {
+        "artifact_page_count": page_count,
+        "document_page_count": page_count,
+        "geometry_manifest": manifest,
+        "geometry_manifest_sha256": manifest.sha256,
+    }
 
 
 class _TestServices:
@@ -812,7 +839,7 @@ async def test_available_artifact_foreign_keys_reject_cross_tenant_substitution(
         artifact_kind="test_render",
         runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
         artifact_ttl_seconds=300,
-        page_count=1,
+        **_geometry_kwargs(),
     )
 
     other_tenant = Tenant(
@@ -1234,7 +1261,7 @@ async def test_current_and_stale_adoption_flush_exact_artifact_ids(
             artifact_kind="test_render",
             runtime_manifest_sha256=current_lease.payload.runtime_manifest_sha256,
             artifact_ttl_seconds=3600,
-            page_count=1,
+        **_geometry_kwargs(),
         )
     assert tuple_error.value.code == "validation_failed"
     output = object_store.put(
@@ -1249,19 +1276,26 @@ async def test_current_and_stale_adoption_flush_exact_artifact_ids(
         artifact_kind="test_render",
         runtime_manifest_sha256=current_lease.payload.runtime_manifest_sha256,
         artifact_ttl_seconds=3600,
-        page_count=1,
+        **_geometry_kwargs(),
     )
     assert outcome == "current_evidence"
     current_row = await db_session.get(DurableJob, current_job.job_id)
     current_artifact = await db_session.get(StudioRenderArtifact, artifact_id)
+    preferred = await db_session.get(
+        StudioPreferredRenderEvidence,
+        (test_tenant.id, foundation["draft_id"]),
+    )
     current_draft = await db_session.get(StudioDraft, foundation["draft_id"])
     assert current_artifact.id == artifact_id
+    assert preferred.artifact_id == artifact_id
+    assert preferred.job_id == current_job.job_id
     assert current_row.result["artifact_id"] == str(artifact_id)
     assert current_draft.evidence_revision == 1
-    assert current_artifact.page_count == 1
+    assert current_artifact.artifact_page_count == 1
+    assert current_artifact.document_page_count == 1
     current_status = await service.status(current_job.job_id)
-    assert current_status.adopted_as_current_evidence is True
-    assert current_status.is_current_evidence is True
+    assert current_status.adopted_as_preferred_evidence is True
+    assert current_status.is_preferred_evidence is True
     assert current_status.auto_open is True
     assert (
         current_status.effective_request_sha256
@@ -1277,16 +1311,17 @@ async def test_current_and_stale_adoption_flush_exact_artifact_ids(
         cached.effective_request_sha256
         == current_lease.payload.effective_request_sha256
     )
-    assert cached.page_count == 1
-    assert cached.mapping_manifest_sha256 is None
+    assert cached.artifact_page_count == 1
+    assert cached.document_page_count == 1
+    assert cached.geometry_manifest.sha256 == cached.geometry_manifest_sha256
 
     current_draft = await db_session.get(StudioDraft, foundation["draft_id"])
     current_draft.revision = 2
     current_draft.identity_sha256 = "d" * 64
     await db_session.commit()
     superseded_status = await service.status(current_job.job_id)
-    assert superseded_status.adopted_as_current_evidence is True
-    assert superseded_status.is_current_evidence is False
+    assert superseded_status.adopted_as_preferred_evidence is True
+    assert superseded_status.is_preferred_evidence is False
     assert superseded_status.auto_open is False
     await db_session.rollback()
     stale_service, stale_job = await _enqueue_with_stale_request(
@@ -1300,7 +1335,7 @@ async def test_current_and_stale_adoption_flush_exact_artifact_ids(
         artifact_kind="test_render",
         runtime_manifest_sha256=stale_lease.payload.runtime_manifest_sha256,
         artifact_ttl_seconds=3600,
-        page_count=1,
+        **_geometry_kwargs(),
     )
     assert stale_outcome == "stale_output"
     stale_row = await db_session.get(DurableJob, stale_job.job_id)
@@ -1337,7 +1372,7 @@ async def test_completed_status_revalidates_owned_live_artifact(
         artifact_kind="test_render",
         runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
         artifact_ttl_seconds=300,
-        page_count=1,
+        **_geometry_kwargs(),
     )
     row = await db_session.get(DurableJob, accepted.job_id)
     artifact = await db_session.get(StudioRenderArtifact, artifact_id)
@@ -1353,7 +1388,7 @@ async def test_completed_status_revalidates_owned_live_artifact(
         )
         artifact.job_id = other_job.job_id
     elif poison == "metadata":
-        artifact.page_count = 2
+        artifact.artifact_page_count = 2
     await db_session.commit()
 
     with pytest.raises(StudioRenderServiceError) as caught:
@@ -1387,7 +1422,7 @@ async def test_completed_status_preserves_expired_artifact_result_and_returns_41
         artifact_kind="test_render",
         runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
         artifact_ttl_seconds=300,
-        page_count=1,
+        **_geometry_kwargs(),
     )
     available = await run_studio_consumer_transaction(
         db_session, lambda: service.status(accepted.job_id)
@@ -1412,10 +1447,10 @@ async def test_completed_status_preserves_expired_artifact_result_and_returns_41
 
     artifact = await db_session.get(StudioRenderArtifact, artifact_id)
     row = await db_session.get(DurableJob, accepted.job_id)
-    artifact.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    artifact.content_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     row.result = {
         **row.result,
-        "artifact_expires_at": artifact.expires_at.isoformat(),
+        "content_expires_at": artifact.content_expires_at.isoformat(),
     }
     immutable_result = dict(row.result)
     await db_session.commit()
@@ -1445,8 +1480,12 @@ async def test_completed_status_preserves_expired_artifact_result_and_returns_41
     assert deleted.artifact_availability == "expired"
     assert deleted.artifact_id == artifact_id
 
+    retained_metadata = await run_studio_consumer_transaction(
+        db_session, lambda: service.artifact_result(artifact_id)
+    )
+    assert retained_metadata.artifact_id == artifact_id
+    assert retained_metadata.artifact_metadata_availability == "available"
     for operation in (
-        lambda: service.artifact_result(artifact_id),
         lambda: service.artifact_content(
             artifact_id,
             object_store=object_store,
@@ -1483,13 +1522,13 @@ async def test_cache_rechecks_expiry_after_blocking_verified_read(
         artifact_kind="test_render",
         runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
         artifact_ttl_seconds=300,
-        page_count=1,
+        **_geometry_kwargs(),
     )
     artifact = await db_session.get(StudioRenderArtifact, artifact_id)
-    artifact.expires_at = await db_session.scalar(
+    artifact.content_expires_at = await db_session.scalar(
         select(func.clock_timestamp())
     ) + timedelta(seconds=3)
-    expires_at = artifact.expires_at
+    expires_at = artifact.content_expires_at
     await db_session.commit()
 
     started = threading.Event()
@@ -1532,17 +1571,17 @@ async def test_content_read_releases_row_lock_and_rechecks_expiry_after_io(
         artifact_kind="test_render",
         runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
         artifact_ttl_seconds=300,
-        page_count=1,
+        **_geometry_kwargs(),
     )
     expires_at = await db_session.scalar(
         select(func.clock_timestamp())
     ) + timedelta(seconds=2)
     artifact = await db_session.get(StudioRenderArtifact, artifact_id)
     row = await db_session.get(DurableJob, accepted.job_id)
-    artifact.expires_at = expires_at
+    artifact.content_expires_at = expires_at
     row.result = {
         **row.result,
-        "artifact_expires_at": expires_at.isoformat(),
+        "content_expires_at": expires_at.isoformat(),
     }
     await db_session.commit()
     started = threading.Event()
@@ -1606,17 +1645,17 @@ async def test_completed_status_rechecks_expiry_after_artifact_lock_wait(
         artifact_kind="test_render",
         runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
         artifact_ttl_seconds=300,
-        page_count=1,
+        **_geometry_kwargs(),
     )
     expires_at = await db_session.scalar(
         select(func.clock_timestamp())
     ) + timedelta(seconds=3)
     artifact = await db_session.get(StudioRenderArtifact, artifact_id)
     row = await db_session.get(DurableJob, accepted.job_id)
-    artifact.expires_at = expires_at
+    artifact.content_expires_at = expires_at
     row.result = {
         **row.result,
-        "artifact_expires_at": expires_at.isoformat(),
+        "content_expires_at": expires_at.isoformat(),
     }
     await db_session.commit()
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
@@ -1716,7 +1755,7 @@ async def test_adoption_rechecks_exact_snapshot_and_source_bindings(
             artifact_kind="test_render",
             runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
             artifact_ttl_seconds=300,
-            page_count=1,
+        **_geometry_kwargs(),
         )
     assert caught.value.code == expected_code
     artifact = await db_session.scalar(
@@ -1759,7 +1798,7 @@ async def test_cancellation_rechecks_immutable_inputs_before_materialization(
             artifact_kind="test_render",
             runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
             artifact_ttl_seconds=300,
-            page_count=1,
+        **_geometry_kwargs(),
         )
     assert caught.value.code == "validation_failed"
     assert await db_session.scalar(
@@ -1798,7 +1837,7 @@ async def test_stale_draft_does_not_mask_immutable_corruption(
             artifact_kind="test_render",
             runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
             artifact_ttl_seconds=300,
-            page_count=1,
+        **_geometry_kwargs(),
         )
     assert caught.value.code == "validation_failed"
     assert await db_session.scalar(
@@ -1887,7 +1926,7 @@ async def test_adoption_rechecks_server_owned_input_binding_identity(
             artifact_kind="test_render",
             runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
             artifact_ttl_seconds=300,
-            page_count=1,
+        **_geometry_kwargs(),
         )
     assert caught.value.code == "validation_failed"
     assert await db_session.scalar(
@@ -1934,7 +1973,7 @@ async def test_phase2_rollback_recovery_rechecks_immutable_inputs(
                 artifact_kind="test_render",
                 runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
                 artifact_ttl_seconds=300,
-                page_count=1,
+        **_geometry_kwargs(),
             )
     assert caught.value.code == "validation_failed"
     assert await db_session.scalar(
@@ -1969,7 +2008,7 @@ async def test_adoption_uses_fresh_database_clock_after_blocking_storage_io(
             artifact_kind="test_render",
             runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
             artifact_ttl_seconds=300,
-            page_count=1,
+        **_geometry_kwargs(),
         )
     )
     assert await asyncio.to_thread(started.wait, 2)
@@ -2036,7 +2075,7 @@ async def test_cancelled_output_materializes_without_current_evidence(
         artifact_kind="test_render",
         runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
         artifact_ttl_seconds=3600,
-        page_count=1,
+        **_geometry_kwargs(),
     )
     assert outcome == "cancelled_output"
     status = await service.status(accepted.job_id)
@@ -2176,13 +2215,13 @@ async def test_retention_deletes_shared_cas_only_after_last_reference(
             artifact_kind="test_render",
             runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
             artifact_ttl_seconds=300,
-            page_count=1,
+        **_geometry_kwargs(),
         )
         artifact_ids.append(artifact_id)
     for artifact_id in artifact_ids:
         artifact = await db_session.get(StudioRenderArtifact, artifact_id)
         artifact.adoption_outcome = "stale_output"
-        artifact.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        artifact.content_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     await db_session.commit()
 
     async def not_held(_candidate):
@@ -2222,11 +2261,11 @@ async def test_retention_refreshes_clock_after_hold_and_storage_boundaries(
         artifact_kind="test_render",
         runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
         artifact_ttl_seconds=300,
-        page_count=1,
+        **_geometry_kwargs(),
     )
     artifact = await db_session.get(StudioRenderArtifact, artifact_id)
     artifact.adoption_outcome = "stale_output"
-    artifact.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    artifact.content_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     await db_session.commit()
 
     hold_started = asyncio.Event()
@@ -2285,12 +2324,12 @@ async def test_retention_recovers_or_preserves_durable_pending_state(
         artifact_kind="test_render",
         runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
         artifact_ttl_seconds=300,
-        page_count=1,
+        **_geometry_kwargs(),
     )
     now = datetime.now(timezone.utc)
     artifact = await db_session.get(StudioRenderArtifact, artifact_id)
     artifact.adoption_outcome = "stale_output"
-    artifact.expires_at = now - timedelta(seconds=1)
+    artifact.content_expires_at = now - timedelta(seconds=1)
     artifact.storage_state = "delete_pending"
     artifact.delete_requested_at = now
     artifact.legal_hold_at = now
@@ -2362,7 +2401,7 @@ async def test_late_stage_keeps_object_fence_until_cross_worker_adoption_is_safe
                 artifact_kind="test_render",
                 runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
                 artifact_ttl_seconds=300,
-                page_count=1,
+        **_geometry_kwargs(),
             )
 
     timeout = 0.05 if exit_mode == "timeout" else 30.0
@@ -2453,7 +2492,7 @@ async def test_cancelled_staged_delete_holds_fence_until_republish_is_durable(
                 artifact_kind="test_render",
                 runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
                 artifact_ttl_seconds=300,
-                page_count=1,
+        **_geometry_kwargs(),
             )
 
     cleanup = asyncio.create_task(reconcile())
@@ -2555,7 +2594,7 @@ async def test_production_stage_reconciler_covers_pre_adoption_and_post_commit_c
         artifact_kind="test_render",
         runtime_manifest_sha256=committed_lease.payload.runtime_manifest_sha256,
         artifact_ttl_seconds=300,
-        page_count=1,
+        **_geometry_kwargs(),
     )
     acknowledged = await reconciler.reconcile_batch(limit=10)
     assert [(item.action, item.reason) for item in acknowledged] == [
@@ -2584,7 +2623,7 @@ async def test_force_rls_rebinds_cache_retention_and_worker_transactions(
         artifact_kind="test_render",
         runtime_manifest_sha256=cache_lease.payload.runtime_manifest_sha256,
         artifact_ttl_seconds=3600,
-        page_count=1,
+        **_geometry_kwargs(),
     )
 
     _, cleanup_job = await _enqueue(
@@ -2603,13 +2642,13 @@ async def test_force_rls_rebinds_cache_retention_and_worker_transactions(
         artifact_kind="test_render",
         runtime_manifest_sha256=cleanup_lease.payload.runtime_manifest_sha256,
         artifact_ttl_seconds=300,
-        page_count=1,
+        **_geometry_kwargs(),
     )
     cleanup_artifact = await db_session.get(
         StudioRenderArtifact, cleanup_artifact_id
     )
     cleanup_artifact.adoption_outcome = "stale_output"
-    cleanup_artifact.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    cleanup_artifact.content_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     await db_session.commit()
 
     _, worker_job = await _enqueue(
@@ -2636,7 +2675,11 @@ async def test_force_rls_rebinds_cache_retention_and_worker_transactions(
     db_session.add(hidden_job)
     await db_session.commit()
 
-    tables = ("durable_jobs", "studio_render_artifacts")
+    tables = (
+        "durable_jobs",
+        "studio_render_artifacts",
+        "studio_preferred_render_evidence",
+    )
     original_rls = {}
     async with test_engine.begin() as conn:
         for table in tables:

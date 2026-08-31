@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.database import set_tenant_context
 from app.models.studio_draft import StudioDraft, StudioDraftSnapshot
-from app.schemas.studio_render import StudioRendererManifest
+from app.schemas.studio_render import StudioGeometryManifest, StudioRendererManifest
 from app.services.studio_drafts import StudioError, StudioSourceRegistry
 from app.services.studio_object_storage import (
     StudioObjectRef,
@@ -63,8 +63,10 @@ class StudioProcessorOutput:
     artifact_kind: str
     renderer_manifest: StudioRendererManifest
     runtime_manifest_sha256: str
-    page_count: int
-    mapping_manifest_sha256: str
+    artifact_page_count: int
+    document_page_count: int
+    geometry_manifest: StudioGeometryManifest
+    geometry_manifest_sha256: str
     retention_class: str = "review"
 
 
@@ -104,6 +106,7 @@ class StudioRenderWorker:
         heartbeat_seconds: int = 60,
         processor_timeout_seconds: int = 300,
         artifact_ttl_seconds: int = 86_400,
+        metadata_ttl_seconds: int = 2_592_000,
     ):
         if not 30 <= lease_seconds <= 3600:
             raise ValueError("lease_seconds must be between 30 and 3600")
@@ -113,6 +116,10 @@ class StudioRenderWorker:
             raise ValueError("processor timeout must be between 5 and 1800 seconds")
         if not 300 <= artifact_ttl_seconds <= 604_800:
             raise ValueError("artifact TTL must be between five minutes and seven days")
+        if not 86_400 <= metadata_ttl_seconds <= 31_536_000:
+            raise ValueError("metadata TTL must be between one day and one year")
+        if metadata_ttl_seconds <= artifact_ttl_seconds:
+            raise ValueError("metadata TTL must outlive temporary artifact bytes")
         if any(
             type(processor) is not StudioTrustedProcessorAdapter
             or not str(getattr(processor, "isolation_policy_id", "")).strip()
@@ -129,6 +136,7 @@ class StudioRenderWorker:
         self.heartbeat_seconds = heartbeat_seconds
         self.processor_timeout_seconds = processor_timeout_seconds
         self.artifact_ttl_seconds = artifact_ttl_seconds
+        self.metadata_ttl_seconds = metadata_ttl_seconds
 
     @property
     def processors(self) -> Mapping[str, StudioProcessor]:
@@ -385,8 +393,11 @@ class StudioRenderWorker:
                     getattr(processor_output, "retention_class", "review")
                 ),
                 artifact_ttl_seconds=self.artifact_ttl_seconds,
-                page_count=processor_output.page_count,
-                mapping_manifest_sha256=processor_output.mapping_manifest_sha256,
+                artifact_page_count=processor_output.artifact_page_count,
+                document_page_count=processor_output.document_page_count,
+                geometry_manifest=processor_output.geometry_manifest,
+                geometry_manifest_sha256=processor_output.geometry_manifest_sha256,
+                metadata_ttl_seconds=self.metadata_ttl_seconds,
             )
 
     async def _stage_and_adopt(
@@ -418,10 +429,11 @@ class StudioRenderWorker:
                 ),
                 retention_class=processor_output.retention_class,
                 artifact_ttl_seconds=self.artifact_ttl_seconds,
-                page_count=processor_output.page_count,
-                mapping_manifest_sha256=(
-                    processor_output.mapping_manifest_sha256
-                ),
+                artifact_page_count=processor_output.artifact_page_count,
+                document_page_count=processor_output.document_page_count,
+                geometry_manifest=processor_output.geometry_manifest,
+                geometry_manifest_sha256=processor_output.geometry_manifest_sha256,
+                metadata_ttl_seconds=self.metadata_ttl_seconds,
             )
             return staged
 
@@ -552,11 +564,30 @@ class StudioRenderWorker:
                     "validation_failed",
                     "Studio processor attestation is invalid.",
                 )
-            if not 1 <= result.page_count <= lease.payload.render_options.max_pages:
+            if not 1 <= result.artifact_page_count <= lease.payload.render_options.max_pages:
                 raise StudioRenderServiceError(
                     409,
                     "validation_failed",
                     "Studio processor page metadata is invalid.",
+                )
+            if not 1 <= result.document_page_count <= lease.payload.render_options.max_pages:
+                raise StudioRenderServiceError(
+                    409,
+                    "validation_failed",
+                    "Studio processor document page metadata is invalid.",
+                )
+            if (
+                result.geometry_manifest.artifact_page_count
+                != result.artifact_page_count
+                or result.geometry_manifest.document_page_count
+                != result.document_page_count
+                or result.geometry_manifest.sha256
+                != result.geometry_manifest_sha256
+            ):
+                raise StudioRenderServiceError(
+                    409,
+                    "validation_failed",
+                    "Studio processor geometry metadata is invalid.",
                 )
             if len(result.content) > lease.payload.render_options.max_output_bytes:
                 raise StudioRenderServiceError(

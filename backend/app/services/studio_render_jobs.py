@@ -23,7 +23,10 @@ from app.models.studio_draft import (
     StudioDraftSnapshot,
     StudioSourceArtifact,
 )
-from app.models.studio_render import StudioRenderArtifact
+from app.models.studio_render import (
+    StudioPreferredRenderEvidence,
+    StudioRenderArtifact,
+)
 from app.schemas.studio_render import (
     STUDIO_RENDER_JOB_KINDS,
     STUDIO_PUBLIC_ERROR_DETAIL_KEYS,
@@ -32,6 +35,8 @@ from app.schemas.studio_render import (
     STUDIO_PUBLIC_ERROR_STATUS,
     STUDIO_PUBLIC_FAILURES,
     StrictModel,
+    StudioArtifactGeometry,
+    StudioGeometryManifest,
     StudioRenderAccepted,
     StudioRenderErrorDetails,
     StudioRenderJobStatus,
@@ -86,6 +91,27 @@ _CANONICAL_STATUS_BASE = "/api/template-studio/render-jobs"
 _STORAGE_STAGE_TIMEOUT_SECONDS = 30.0
 _STORAGE_READ_TIMEOUT_SECONDS = 30.0
 _ConsumerResult = TypeVar("_ConsumerResult")
+
+
+def _geometry_matches_request(
+    manifest: StudioGeometryManifest,
+    *,
+    artifact_kind: str,
+    requested_page_number: int | None,
+) -> bool:
+    page_numbers = [page.page_number for page in manifest.pages]
+    if artifact_kind == "page_preview":
+        return (
+            requested_page_number is not None
+            and manifest.artifact_page_count == 1
+            and page_numbers == [requested_page_number]
+            and requested_page_number <= manifest.document_page_count
+        )
+    return (
+        requested_page_number is None
+        and manifest.artifact_page_count == manifest.document_page_count
+        and page_numbers == list(range(1, manifest.document_page_count + 1))
+    )
 
 
 class StudioRenderServiceError(RuntimeError):
@@ -293,16 +319,16 @@ class _PersistedResult(StrictModel):
     error_code: str | None = None
     artifact_id: uuid.UUID | None = None
     adoption_outcome: str | None = None
-    current_evidence_at_completion: bool | None = None
-    artifact_expires_at: AwareDatetime | None = None
+    preferred_evidence_at_completion: bool | None = None
+    content_expires_at: AwareDatetime | None = None
+    metadata_expires_at: AwareDatetime | None = None
     retention_class: str | None = None
     output_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     media_type: str | None = Field(default=None, min_length=1, max_length=100)
     byte_size: int | None = Field(default=None, ge=1, le=100 * 1024 * 1024)
-    page_count: int | None = Field(default=None, ge=1, le=10_000)
-    mapping_manifest_sha256: str | None = Field(
-        default=None, pattern=r"^[0-9a-f]{64}$"
-    )
+    artifact_page_count: int | None = Field(default=None, ge=1, le=1_000)
+    document_page_count: int | None = Field(default=None, ge=1, le=10_000)
+    geometry_manifest_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     input_binding_sha256: str | None = Field(
         default=None, pattern=r"^[0-9a-f]{64}$"
     )
@@ -318,14 +344,16 @@ class _PersistedResult(StrictModel):
                 for value in (
                     self.artifact_id,
                     self.adoption_outcome,
-                    self.current_evidence_at_completion,
-                    self.artifact_expires_at,
+                    self.preferred_evidence_at_completion,
+                    self.content_expires_at,
+                    self.metadata_expires_at,
                     self.retention_class,
                     self.output_sha256,
                     self.media_type,
                     self.byte_size,
-                    self.page_count,
-                    self.mapping_manifest_sha256,
+                    self.artifact_page_count,
+                    self.document_page_count,
+                    self.geometry_manifest_sha256,
                     self.input_binding_sha256,
                     self.input_binding_version,
                 )
@@ -335,23 +363,26 @@ class _PersistedResult(StrictModel):
         materialized = (
             self.artifact_id,
             self.adoption_outcome,
-            self.current_evidence_at_completion,
+            self.preferred_evidence_at_completion,
             self.retention_class,
             self.output_sha256,
             self.media_type,
             self.byte_size,
-            self.page_count,
+            self.artifact_page_count,
+            self.document_page_count,
+            self.geometry_manifest_sha256,
         )
         if any(value is not None for value in materialized) and not all(
             value is not None for value in materialized
         ):
             raise ValueError("artifact result is incomplete")
-        if self.artifact_expires_at is not None and self.artifact_id is None:
+        if (
+            self.content_expires_at is not None or self.metadata_expires_at is not None
+        ) and self.artifact_id is None:
             raise ValueError("artifact expiry has no artifact")
         if self.artifact_id is None and any(
             value is not None
             for value in (
-                self.mapping_manifest_sha256,
                 self.input_binding_sha256,
                 self.input_binding_version,
             )
@@ -367,7 +398,7 @@ class _PersistedResult(StrictModel):
             "cancelled_output",
         }:
             raise ValueError("invalid adoption outcome")
-        if self.adoption_outcome is not None and self.current_evidence_at_completion != (
+        if self.adoption_outcome is not None and self.preferred_evidence_at_completion != (
             self.adoption_outcome == "current_evidence"
         ):
             raise ValueError("current-evidence completion flag is invalid")
@@ -375,10 +406,16 @@ class _PersistedResult(StrictModel):
             raise ValueError("invalid retention class")
         if (
             self.retention_class in {"ephemeral", "review"}
-            and self.artifact_expires_at is None
+            and (
+                self.content_expires_at is None
+                or self.metadata_expires_at is None
+                or self.metadata_expires_at <= self.content_expires_at
+            )
         ):
-            raise ValueError("temporary artifact expiry is required")
-        if self.retention_class == "evidence" and self.artifact_expires_at is not None:
+            raise ValueError("temporary artifact retention expiry is required")
+        if self.retention_class == "evidence" and (
+            self.content_expires_at is not None or self.metadata_expires_at is not None
+        ):
             raise ValueError("evidence artifact cannot expire")
         return self
 
@@ -399,8 +436,10 @@ class StudioCachedOutput:
     artifact_kind: str
     effective_request_sha256: str
     runtime_manifest_sha256: str
-    page_count: int
-    mapping_manifest_sha256: str | None
+    artifact_page_count: int
+    document_page_count: int
+    geometry_manifest: StudioGeometryManifest
+    geometry_manifest_sha256: str
 
 
 @dataclass(frozen=True)
@@ -1124,16 +1163,18 @@ class _StudioRenderJobStore:
             audit=audit,
         )
 
-    async def _is_live_current_evidence(
+    async def _is_live_preferred_evidence(
         self,
         queued: _QueuedPayload,
+        artifact_id: uuid.UUID | None,
+        job_id: uuid.UUID,
         adoption_outcome: str | None,
     ) -> bool | None:
-        """Resolve current evidence from the live draft, not historical adoption."""
+        """Resolve the exact preferred artifact, not revision identity alone."""
 
         if adoption_outcome is None:
             return None
-        if adoption_outcome != "current_evidence":
+        if adoption_outcome != "current_evidence" or artifact_id is None:
             return False
         draft = await self.db.scalar(
             select(StudioDraft).where(
@@ -1141,21 +1182,66 @@ class _StudioRenderJobStore:
                 StudioDraft.tenant_id == self.tenant_id,
             )
         )
+        preferred = await self.db.scalar(
+            select(StudioPreferredRenderEvidence).where(
+                StudioPreferredRenderEvidence.tenant_id == self.tenant_id,
+                StudioPreferredRenderEvidence.draft_id == queued.draft_id,
+            )
+        )
         return bool(
             draft is not None
+            and preferred is not None
             and draft.lifecycle_state == "active"
             and draft.cancellation_requested_at is None
             and draft.revision == queued.rendered_revision
             and draft.identity_sha256 == queued.identity_sha256
             and draft.evidence_revision == queued.rendered_revision
+            and preferred.artifact_id == artifact_id
+            and preferred.job_id == job_id
+            and preferred.revision == queued.rendered_revision
+            and preferred.identity_sha256 == queued.identity_sha256
         )
+
+    async def _stage_preferred_evidence(
+        self,
+        *,
+        queued: _QueuedPayload,
+        artifact: StudioRenderArtifact,
+        now: datetime,
+    ) -> None:
+        preferred = await self.db.scalar(
+            select(StudioPreferredRenderEvidence)
+            .where(
+                StudioPreferredRenderEvidence.tenant_id == self.tenant_id,
+                StudioPreferredRenderEvidence.draft_id == queued.draft_id,
+            )
+            .with_for_update()
+        )
+        if preferred is None:
+            preferred = StudioPreferredRenderEvidence(
+                tenant_id=self.tenant_id,
+                draft_id=queued.draft_id,
+                artifact_id=artifact.id,
+                job_id=artifact.job_id,
+                revision=queued.rendered_revision,
+                identity_sha256=queued.identity_sha256,
+                updated_at=now,
+            )
+            self.db.add(preferred)
+        else:
+            preferred.artifact_id = artifact.id
+            preferred.job_id = artifact.job_id
+            preferred.revision = queued.rendered_revision
+            preferred.identity_sha256 = queued.identity_sha256
+            preferred.updated_at = now
+        await self.db.flush()
 
     async def _completed_artifact_availability(
         self,
         row: DurableJob,
         queued: _QueuedPayload,
         result: _PersistedResult,
-    ) -> str | None:
+    ) -> tuple[str, str] | None:
         """Verify immutable evidence and classify only legitimate expiry."""
 
         if result.artifact_id is None:
@@ -1179,14 +1265,24 @@ class _StudioRenderJobStore:
             or artifact.artifact_kind not in _MEDIA_TYPES_BY_ARTIFACT_KIND
             or not _is_aware_database_time(artifact.created_at)
             or (
-                artifact.expires_at is not None
-                and not _is_aware_database_time(artifact.expires_at)
+                artifact.content_expires_at is not None
+                and not _is_aware_database_time(artifact.content_expires_at)
+            )
+            or (
+                artifact.metadata_expires_at is not None
+                and not _is_aware_database_time(artifact.metadata_expires_at)
             )
         ):
             return None
         expected_object_key = (
             f"studio-content/v1/{content_sha256[:2]}/{content_sha256}"
         )
+        try:
+            geometry_manifest = StudioGeometryManifest.model_validate(
+                artifact.geometry_manifest
+            )
+        except (ValidationError, TypeError, ValueError):
+            return None
         exact = bool(
             artifact.job_id == row.id
             and artifact.draft_id == queued.draft_id
@@ -1201,6 +1297,12 @@ class _StudioRenderJobStore:
             and artifact.source_media_type == queued.source.media_type
             and artifact.source_format == queued.source.format
             and artifact.request_sha256 == queued.request_sha256
+            and artifact.effective_request_sha256 == queued.effective_request_sha256
+            and artifact.render_options == queued.render_options.model_dump(mode="json")
+            and artifact.render_options_sha256 == queued.render_options_sha256
+            and artifact.requested_page_number == queued.render_options.page_number
+            and artifact.requested_page_range_start is None
+            and artifact.requested_page_range_end is None
             and artifact.cache_key == queued.cache_key
             and artifact.artifact_kind == _ARTIFACT_KIND_BY_JOB[queued.kind]
             and content_sha256 == result.output_sha256
@@ -1219,12 +1321,19 @@ class _StudioRenderJobStore:
             and artifact.input_binding_version
             == queued.input_binding_version
             == result.input_binding_version
-            and artifact.page_count == result.page_count
-            and artifact.mapping_manifest_sha256
-            == result.mapping_manifest_sha256
+            and artifact.artifact_page_count == result.artifact_page_count
+            and artifact.document_page_count == result.document_page_count
+            and artifact.geometry_manifest_sha256 == result.geometry_manifest_sha256
+            and geometry_manifest.sha256 == result.geometry_manifest_sha256
+            and _geometry_matches_request(
+                geometry_manifest,
+                artifact_kind=artifact.artifact_kind,
+                requested_page_number=artifact.requested_page_number,
+            )
             and artifact.adoption_outcome == result.adoption_outcome
             and artifact.retention_class == result.retention_class
-            and artifact.expires_at == result.artifact_expires_at
+            and artifact.content_expires_at == result.content_expires_at
+            and artifact.metadata_expires_at == result.metadata_expires_at
         )
         if not exact:
             return None
@@ -1245,12 +1354,30 @@ class _StudioRenderJobStore:
         )
         if not (active or delete_pending or deleted):
             return None
-        expired = artifact.expires_at is not None and artifact.expires_at <= now
-        if expired:
-            return "expired"
-        if not active:
+        live_preferred = await self._is_live_preferred_evidence(
+            queued,
+            result.artifact_id,
+            row.id,
+            result.adoption_outcome,
+        )
+        preserved = artifact.legal_hold_at is not None or live_preferred is True
+        content_expired = (
+            artifact.content_expires_at is not None
+            and artifact.content_expires_at <= now
+            and not preserved
+        )
+        metadata_expired = (
+            artifact.metadata_expires_at is not None
+            and artifact.metadata_expires_at <= now
+            and not preserved
+        )
+        if not active and not content_expired:
             return None
-        return "available"
+        content_availability = (
+            "expired" if content_expired or not active else "available"
+        )
+        metadata_availability = "expired" if metadata_expired else "available"
+        return content_availability, metadata_availability
 
     async def status(self, job_id: uuid.UUID) -> StudioRenderJobStatus:
         await self._bind_tenant_context()
@@ -1275,9 +1402,13 @@ class _StudioRenderJobStore:
                 STUDIO_PUBLIC_FAILURES["job_data_unavailable"],
                 durable_state_changed=True,
             )
-        if self.actor_user_id is None or queued.requested_by != self.actor_user_id:
+        if self.actor_user_id is None:
             raise StudioRenderServiceError(
                 403, "actor_mismatch", "Studio actor binding is invalid."
+            )
+        if queued.requested_by != self.actor_user_id:
+            raise StudioRenderServiceError(
+                404, "job_not_found", "Studio job not found."
             )
         if row.status in _ACTIVE_STATES and queued.expires_at <= now:
             if row.status == "cancel_requested":
@@ -1322,10 +1453,6 @@ class _StudioRenderJobStore:
             and (
                 result.input_binding_sha256 != queued.input_binding_sha256
                 or result.input_binding_version != queued.input_binding_version
-                or (
-                    queued.kind == "studio_page_preview"
-                    and result.mapping_manifest_sha256 is None
-                )
             )
         ) or (
             (state in _TERMINAL_STATES) != (row.completed_at is not None)
@@ -1351,11 +1478,14 @@ class _StudioRenderJobStore:
                 durable_state_changed=True,
             )
         artifact_availability = None
+        artifact_metadata_availability = None
         if state == "completed":
-            artifact_availability = await self._completed_artifact_availability(
+            availability = await self._completed_artifact_availability(
                 row, queued, result
             )
-        if state == "completed" and artifact_availability is None:
+            if availability is not None:
+                artifact_availability, artifact_metadata_availability = availability
+        if state == "completed" and artifact_metadata_availability is None:
             _terminalize_poison(row, now=now)
             await self.db.flush()
             raise StudioRenderServiceError(
@@ -1369,14 +1499,18 @@ class _StudioRenderJobStore:
             error_code, error_message = sanitized_failure(result.error_code or "")
         artifact_id = result.artifact_id if state == "completed" else None
         status_url = f"/api/template-studio/render-jobs/{row.id}"
+        expose_metadata = artifact_metadata_availability == "available"
         result_url = (
             f"/api/template-studio/render-artifacts/{artifact_id}"
-            if artifact_id is not None
+            if artifact_id is not None and expose_metadata
             else None
         )
         download_url = f"{result_url}/content" if result_url is not None else None
-        live_current_evidence = await self._is_live_current_evidence(
+        geometry_url = f"{result_url}/geometry" if result_url is not None else None
+        live_current_evidence = await self._is_live_preferred_evidence(
             queued,
+            artifact_id,
+            row.id,
             result.adoption_outcome if state == "completed" else None,
         )
         response = StudioRenderJobStatus(
@@ -1412,25 +1546,45 @@ class _StudioRenderJobStore:
             input_binding_version=queued.input_binding_version,
             artifact_id=artifact_id,
             artifact_availability=artifact_availability,
+            artifact_metadata_availability=artifact_metadata_availability,
             result_url=result_url,
             download_url=download_url,
             adoption_outcome=result.adoption_outcome if state == "completed" else None,
-            adopted_as_current_evidence=(
-                result.current_evidence_at_completion
+            geometry_url=geometry_url,
+            adopted_as_preferred_evidence=(
+                result.preferred_evidence_at_completion
                 if state == "completed"
                 else None
             ),
-            is_current_evidence=live_current_evidence,
+            is_preferred_evidence=live_current_evidence,
             auto_open=(
                 live_current_evidence is True
                 and artifact_availability == "available"
+                and expose_metadata
             ),
-            output_sha256=result.output_sha256 if state == "completed" else None,
-            output_media_type=result.media_type if state == "completed" else None,
-            output_byte_size=result.byte_size if state == "completed" else None,
-            page_count=result.page_count if state == "completed" else None,
-            mapping_manifest_sha256=(
-                result.mapping_manifest_sha256 if state == "completed" else None
+            output_sha256=(
+                result.output_sha256 if state == "completed" and expose_metadata else None
+            ),
+            output_media_type=(
+                result.media_type if state == "completed" and expose_metadata else None
+            ),
+            output_byte_size=(
+                result.byte_size if state == "completed" and expose_metadata else None
+            ),
+            artifact_page_count=(
+                result.artifact_page_count
+                if state == "completed" and expose_metadata
+                else None
+            ),
+            document_page_count=(
+                result.document_page_count
+                if state == "completed" and expose_metadata
+                else None
+            ),
+            geometry_manifest_sha256=(
+                result.geometry_manifest_sha256
+                if state == "completed" and expose_metadata
+                else None
             ),
             retention_class=result.retention_class if state == "completed" else None,
             error_code=error_code,
@@ -1441,8 +1595,11 @@ class _StudioRenderJobStore:
                 else None
             ),
             job_expires_at=queued.expires_at,
-            artifact_expires_at=(
-                result.artifact_expires_at if state == "completed" else None
+            content_expires_at=(
+                result.content_expires_at if state == "completed" else None
+            ),
+            metadata_expires_at=(
+                result.metadata_expires_at if state == "completed" else None
             ),
         )
         await self.db.flush()
@@ -1469,11 +1626,54 @@ class _StudioRenderJobStore:
             raise StudioRenderServiceError(
                 404, "artifact_not_found", "Studio artifact not found."
             )
-        if status.artifact_availability == "expired":
+        if status.artifact_metadata_availability == "expired":
             raise StudioRenderServiceError(
                 410, "artifact_expired", "The Studio artifact has expired."
             )
         return status
+
+    async def artifact_geometry(
+        self, artifact_id: uuid.UUID
+    ) -> StudioArtifactGeometry:
+        """Return authenticated geometry even after content bytes expire."""
+
+        status = await self.artifact_result(artifact_id)
+        if status.geometry_manifest_sha256 is None:
+            raise StudioRenderServiceError(
+                409,
+                "job_data_unavailable",
+                STUDIO_PUBLIC_FAILURES["job_data_unavailable"],
+            )
+        artifact = await self.db.scalar(
+            select(StudioRenderArtifact).where(
+                StudioRenderArtifact.id == artifact_id,
+                StudioRenderArtifact.tenant_id == self.tenant_id,
+            )
+        )
+        if artifact is None:
+            raise StudioRenderServiceError(
+                404, "artifact_not_found", "Studio artifact not found."
+            )
+        try:
+            geometry = StudioGeometryManifest.model_validate(artifact.geometry_manifest)
+            result = StudioArtifactGeometry(
+                artifact_id=artifact_id,
+                geometry_manifest=geometry,
+                geometry_manifest_sha256=artifact.geometry_manifest_sha256,
+            )
+        except (ValidationError, TypeError, ValueError) as exc:
+            raise StudioRenderServiceError(
+                409,
+                "job_data_unavailable",
+                STUDIO_PUBLIC_FAILURES["job_data_unavailable"],
+            ) from exc
+        if result.geometry_manifest_sha256 != status.geometry_manifest_sha256:
+            raise StudioRenderServiceError(
+                409,
+                "job_data_unavailable",
+                STUDIO_PUBLIC_FAILURES["job_data_unavailable"],
+            )
+        return result
 
     async def artifact_content(
         self,
@@ -1491,6 +1691,10 @@ class _StudioRenderJobStore:
         ):
             raise ValueError("artifact content bound is invalid")
         status = await self.artifact_result(artifact_id)
+        if status.artifact_availability == "expired":
+            raise StudioRenderServiceError(
+                410, "artifact_expired", "The Studio artifact has expired."
+            )
         if (
             status.output_sha256 is None
             or status.output_media_type is None
@@ -1589,7 +1793,7 @@ class _StudioRenderJobStore:
             )
         if queued.requested_by != self.actor_user_id:
             raise StudioRenderServiceError(
-                403, "actor_mismatch", "Studio actor binding is invalid."
+                404, "job_not_found", "Studio job not found."
             )
         prior_status = row.status
         if row.status == "pending":
@@ -1844,9 +2048,12 @@ class _StudioRenderJobStore:
         artifact_kind: str,
         adoption_outcome: str,
         retention_class: str,
-        expires_at: datetime | None,
-        page_count: int,
-        mapping_manifest_sha256: str | None,
+        content_expires_at: datetime | None,
+        metadata_expires_at: datetime | None,
+        artifact_page_count: int,
+        document_page_count: int,
+        geometry_manifest: StudioGeometryManifest,
+        geometry_manifest_sha256: str,
     ) -> StudioRenderArtifact:
         return StudioRenderArtifact(
             tenant_id=self.tenant_id,
@@ -1862,6 +2069,12 @@ class _StudioRenderJobStore:
             source_media_type=queued.source.media_type,
             source_format=queued.source.format,
             request_sha256=queued.request_sha256,
+            effective_request_sha256=queued.effective_request_sha256,
+            render_options=queued.render_options.model_dump(mode="json"),
+            render_options_sha256=queued.render_options_sha256,
+            requested_page_number=queued.render_options.page_number,
+            requested_page_range_start=None,
+            requested_page_range_end=None,
             cache_key=queued.cache_key,
             artifact_kind=artifact_kind,
             content_sha256=output.sha256,
@@ -1872,11 +2085,14 @@ class _StudioRenderJobStore:
             runtime_manifest_sha256=queued.runtime_manifest_sha256,
             input_binding_sha256=queued.input_binding_sha256,
             input_binding_version=queued.input_binding_version,
-            page_count=page_count,
-            mapping_manifest_sha256=mapping_manifest_sha256,
+            artifact_page_count=artifact_page_count,
+            document_page_count=document_page_count,
+            geometry_manifest=geometry_manifest.model_dump(mode="json"),
+            geometry_manifest_sha256=geometry_manifest_sha256,
             adoption_outcome=adoption_outcome,
             retention_class=retention_class,
-            expires_at=expires_at,
+            content_expires_at=content_expires_at,
+            metadata_expires_at=metadata_expires_at,
         )
 
     async def _materialize_terminal(
@@ -1888,9 +2104,12 @@ class _StudioRenderJobStore:
         artifact_kind: str,
         adoption_outcome: str,
         retention_class: str,
-        expires_at: datetime | None,
-        page_count: int,
-        mapping_manifest_sha256: str | None,
+        content_expires_at: datetime | None,
+        metadata_expires_at: datetime | None,
+        artifact_page_count: int,
+        document_page_count: int,
+        geometry_manifest: StudioGeometryManifest,
+        geometry_manifest_sha256: str,
         now: datetime,
     ) -> StudioRenderArtifact:
         artifact = self._new_artifact(
@@ -1900,9 +2119,12 @@ class _StudioRenderJobStore:
             artifact_kind=artifact_kind,
             adoption_outcome=adoption_outcome,
             retention_class=retention_class,
-            expires_at=expires_at,
-            page_count=page_count,
-            mapping_manifest_sha256=mapping_manifest_sha256,
+            content_expires_at=content_expires_at,
+            metadata_expires_at=metadata_expires_at,
+            artifact_page_count=artifact_page_count,
+            document_page_count=document_page_count,
+            geometry_manifest=geometry_manifest,
+            geometry_manifest_sha256=geometry_manifest_sha256,
         )
         artifact.created_at = now
         self.db.add(artifact)
@@ -1912,16 +2134,22 @@ class _StudioRenderJobStore:
         row.result = {
             "artifact_id": str(artifact.id),
             "adoption_outcome": adoption_outcome,
-            "current_evidence_at_completion": adoption_outcome == "current_evidence",
-            "artifact_expires_at": (
-                expires_at.isoformat() if expires_at is not None else None
+            "preferred_evidence_at_completion": adoption_outcome == "current_evidence",
+            "content_expires_at": (
+                content_expires_at.isoformat() if content_expires_at is not None else None
+            ),
+            "metadata_expires_at": (
+                metadata_expires_at.isoformat()
+                if metadata_expires_at is not None
+                else None
             ),
             "retention_class": retention_class,
             "output_sha256": output.sha256,
             "media_type": output.media_type,
             "byte_size": output.byte_size,
-            "page_count": page_count,
-            "mapping_manifest_sha256": mapping_manifest_sha256,
+            "artifact_page_count": artifact_page_count,
+            "document_page_count": document_page_count,
+            "geometry_manifest_sha256": geometry_manifest_sha256,
             "input_binding_sha256": queued.input_binding_sha256,
             "input_binding_version": queued.input_binding_version,
         }
@@ -1938,8 +2166,11 @@ class _StudioRenderJobStore:
         runtime_manifest_sha256: str,
         retention_class: str = "review",
         artifact_ttl_seconds: int,
-        page_count: int,
-        mapping_manifest_sha256: str | None = None,
+        artifact_page_count: int,
+        document_page_count: int,
+        geometry_manifest: StudioGeometryManifest,
+        geometry_manifest_sha256: str,
+        metadata_ttl_seconds: int = 2_592_000,
     ) -> tuple[uuid.UUID, str]:
         """Materialize job-owned artifact evidence with a fenced exact adoption."""
 
@@ -1986,29 +2217,48 @@ class _StudioRenderJobStore:
             raise StudioRenderServiceError(
                 409, "validation_failed", "Studio output media type is invalid."
             )
-        if not 1 <= page_count <= lease.payload.render_options.max_pages:
+        if not 1 <= artifact_page_count <= lease.payload.render_options.max_pages:
             raise StudioRenderServiceError(
                 409,
                 "validation_failed",
                 "Studio output page metadata is invalid.",
             )
-        if mapping_manifest_sha256 is not None and re.fullmatch(
-            r"[0-9a-f]{64}", mapping_manifest_sha256
-        ) is None:
+        if not 1 <= document_page_count <= lease.payload.render_options.max_pages:
             raise StudioRenderServiceError(
                 409,
                 "validation_failed",
-                "Studio output mapping metadata is invalid.",
+                "Studio document page metadata is invalid.",
             )
-        if artifact_kind == "page_preview" and mapping_manifest_sha256 is None:
+        if (
+            geometry_manifest.artifact_page_count != artifact_page_count
+            or geometry_manifest.document_page_count != document_page_count
+            or geometry_manifest.sha256 != geometry_manifest_sha256
+            or not _geometry_matches_request(
+                geometry_manifest,
+                artifact_kind=artifact_kind,
+                requested_page_number=lease.payload.render_options.page_number,
+            )
+        ):
             raise StudioRenderServiceError(
                 409,
                 "validation_failed",
-                "Studio page-preview metadata is invalid.",
+                "Studio geometry metadata is invalid.",
+            )
+        if artifact_kind == "page_preview" and artifact_page_count != 1:
+            raise StudioRenderServiceError(
+                409, "validation_failed", "Studio page-preview metadata is invalid."
             )
         if retention_class not in _RETENTION_CLASSES:
             raise StudioRenderServiceError(
                 409, "validation_failed", "Studio retention class is invalid."
+            )
+        if not 86_400 <= metadata_ttl_seconds <= 31_536_000:
+            raise StudioRenderServiceError(
+                409, "validation_failed", "Studio metadata TTL is invalid."
+            )
+        if retention_class != "evidence" and metadata_ttl_seconds <= artifact_ttl_seconds:
+            raise StudioRenderServiceError(
+                409, "validation_failed", "Studio retention windows are invalid."
             )
         if (
             runtime_manifest_sha256
@@ -2045,10 +2295,15 @@ class _StudioRenderJobStore:
             raise StudioRenderServiceError(
                 409, "lease_lost", "Studio job lease is no longer owned."
             )
-        expires_at = (
+        content_expires_at = (
             None
             if retention_class == "evidence"
             else now + timedelta(seconds=artifact_ttl_seconds)
+        )
+        metadata_expires_at = (
+            None
+            if retention_class == "evidence"
+            else now + timedelta(seconds=metadata_ttl_seconds)
         )
         if queued.expires_at <= now:
             code, message = sanitized_failure("expired")
@@ -2067,9 +2322,12 @@ class _StudioRenderJobStore:
                 artifact_kind=artifact_kind,
                 adoption_outcome="cancelled_output",
                 retention_class=retention_class,
-                expires_at=expires_at,
-                page_count=page_count,
-                mapping_manifest_sha256=mapping_manifest_sha256,
+                content_expires_at=content_expires_at,
+                metadata_expires_at=metadata_expires_at,
+                artifact_page_count=artifact_page_count,
+                document_page_count=document_page_count,
+                geometry_manifest=geometry_manifest,
+                geometry_manifest_sha256=geometry_manifest_sha256,
                 now=now,
             )
             await self.db.commit()
@@ -2082,9 +2340,12 @@ class _StudioRenderJobStore:
                 artifact_kind=artifact_kind,
                 adoption_outcome="stale_output",
                 retention_class=retention_class,
-                expires_at=expires_at,
-                page_count=page_count,
-                mapping_manifest_sha256=mapping_manifest_sha256,
+                content_expires_at=content_expires_at,
+                metadata_expires_at=metadata_expires_at,
+                artifact_page_count=artifact_page_count,
+                document_page_count=document_page_count,
+                geometry_manifest=geometry_manifest,
+                geometry_manifest_sha256=geometry_manifest_sha256,
                 now=now,
             )
             await self.db.commit()
@@ -2097,12 +2358,20 @@ class _StudioRenderJobStore:
             artifact_kind=artifact_kind,
             adoption_outcome="current_evidence",
             retention_class=retention_class,
-            expires_at=expires_at,
-            page_count=page_count,
-            mapping_manifest_sha256=mapping_manifest_sha256,
+            content_expires_at=content_expires_at,
+            metadata_expires_at=metadata_expires_at,
+            artifact_page_count=artifact_page_count,
+            document_page_count=document_page_count,
+            geometry_manifest=geometry_manifest,
+            geometry_manifest_sha256=geometry_manifest_sha256,
             now=now,
         )
         artifact_id = artifact.id
+        await self._stage_preferred_evidence(
+            queued=queued,
+            artifact=artifact,
+            now=now,
+        )
         current = await StudioDraftService(
             self.db, self.tenant_id, queued.requested_by
         ).mark_render_evidence_if_current(
@@ -2172,10 +2441,15 @@ class _StudioRenderJobStore:
             _transition(row, "failed", now=stale_now)
             await self.db.commit()
             raise StudioRenderServiceError(409, code, message)
-        expires_at = (
+        content_expires_at = (
             None
             if retention_class == "evidence"
             else stale_now + timedelta(seconds=artifact_ttl_seconds)
+        )
+        metadata_expires_at = (
+            None
+            if retention_class == "evidence"
+            else stale_now + timedelta(seconds=metadata_ttl_seconds)
         )
         if input_state.disposition == "corrupt":
             await self._fail_corrupt_adoption(row, input_state, now=stale_now)
@@ -2187,9 +2461,12 @@ class _StudioRenderJobStore:
                 artifact_kind=artifact_kind,
                 adoption_outcome="cancelled_output",
                 retention_class=retention_class,
-                expires_at=expires_at,
-                page_count=page_count,
-                mapping_manifest_sha256=mapping_manifest_sha256,
+                content_expires_at=content_expires_at,
+                metadata_expires_at=metadata_expires_at,
+                artifact_page_count=artifact_page_count,
+                document_page_count=document_page_count,
+                geometry_manifest=geometry_manifest,
+                geometry_manifest_sha256=geometry_manifest_sha256,
                 now=stale_now,
             )
             await self.db.commit()
@@ -2201,9 +2478,12 @@ class _StudioRenderJobStore:
             artifact_kind=artifact_kind,
             adoption_outcome="stale_output",
             retention_class=retention_class,
-            expires_at=expires_at,
-            page_count=page_count,
-            mapping_manifest_sha256=mapping_manifest_sha256,
+            content_expires_at=content_expires_at,
+            metadata_expires_at=metadata_expires_at,
+            artifact_page_count=artifact_page_count,
+            document_page_count=document_page_count,
+            geometry_manifest=geometry_manifest,
+            geometry_manifest_sha256=geometry_manifest_sha256,
             now=stale_now,
         )
         await self.db.commit()
@@ -2219,8 +2499,11 @@ class _StudioRenderJobStore:
         runtime_manifest_sha256: str,
         retention_class: str = "review",
         artifact_ttl_seconds: int,
-        page_count: int,
-        mapping_manifest_sha256: str | None = None,
+        artifact_page_count: int,
+        document_page_count: int,
+        geometry_manifest: StudioGeometryManifest,
+        geometry_manifest_sha256: str,
+        metadata_ttl_seconds: int = 2_592_000,
     ) -> tuple[uuid.UUID, str]:
         """Adopt with guaranteed release of row and advisory locks on errors."""
 
@@ -2233,8 +2516,11 @@ class _StudioRenderJobStore:
                 runtime_manifest_sha256=runtime_manifest_sha256,
                 retention_class=retention_class,
                 artifact_ttl_seconds=artifact_ttl_seconds,
-                page_count=page_count,
-                mapping_manifest_sha256=mapping_manifest_sha256,
+                artifact_page_count=artifact_page_count,
+                document_page_count=document_page_count,
+                geometry_manifest=geometry_manifest,
+                geometry_manifest_sha256=geometry_manifest_sha256,
+                metadata_ttl_seconds=metadata_ttl_seconds,
             )
         except BaseException:
             if self.db.in_transaction():
@@ -2253,8 +2539,11 @@ class _StudioRenderJobStore:
         runtime_manifest_sha256: str,
         retention_class: str = "review",
         artifact_ttl_seconds: int,
-        page_count: int,
-        mapping_manifest_sha256: str | None = None,
+        artifact_page_count: int,
+        document_page_count: int,
+        geometry_manifest: StudioGeometryManifest,
+        geometry_manifest_sha256: str,
+        metadata_ttl_seconds: int = 2_592_000,
     ) -> tuple[uuid.UUID, str, StudioStagedObject]:
         """Durably stage and adopt fresh bytes under the shared object lock."""
 
@@ -2295,8 +2584,11 @@ class _StudioRenderJobStore:
                 runtime_manifest_sha256=runtime_manifest_sha256,
                 retention_class=retention_class,
                 artifact_ttl_seconds=artifact_ttl_seconds,
-                page_count=page_count,
-                mapping_manifest_sha256=mapping_manifest_sha256,
+                artifact_page_count=artifact_page_count,
+                document_page_count=document_page_count,
+                geometry_manifest=geometry_manifest,
+                geometry_manifest_sha256=geometry_manifest_sha256,
+                metadata_ttl_seconds=metadata_ttl_seconds,
             )
             return artifact_id, outcome, staged
         except BaseException:
@@ -2321,8 +2613,8 @@ class _StudioRenderJobStore:
                 StudioRenderArtifact.cache_key == cache_key,
                 StudioRenderArtifact.storage_state == "active",
                 or_(
-                    StudioRenderArtifact.expires_at.is_(None),
-                    StudioRenderArtifact.expires_at > instant,
+                    StudioRenderArtifact.content_expires_at.is_(None),
+                    StudioRenderArtifact.content_expires_at > instant,
                 ),
             )
             .order_by(StudioRenderArtifact.created_at.desc())
@@ -2348,8 +2640,8 @@ class _StudioRenderJobStore:
                 StudioRenderArtifact.object_key == object_key,
                 StudioRenderArtifact.storage_state == "active",
                 or_(
-                    StudioRenderArtifact.expires_at.is_(None),
-                    StudioRenderArtifact.expires_at > instant,
+                    StudioRenderArtifact.content_expires_at.is_(None),
+                    StudioRenderArtifact.content_expires_at > instant,
                 ),
             )
             .with_for_update()
@@ -2362,7 +2654,8 @@ class _StudioRenderJobStore:
             f"studio-content/v1/{content_sha256[:2]}/{content_sha256}"
         )
         if (
-            artifact.page_count is None
+            artifact.artifact_page_count is None
+            or artifact.document_page_count is None
             or artifact.artifact_kind not in _MEDIA_TYPES_BY_ARTIFACT_KIND
             or re.fullmatch(
                 r"[0-9a-f]{64}", content_sha256
@@ -2384,20 +2677,32 @@ class _StudioRenderJobStore:
             is None
             or (artifact.input_binding_sha256 is None)
             != (artifact.input_binding_version is None)
-            or (
-                artifact.artifact_kind == "page_preview"
-                and artifact.mapping_manifest_sha256 is None
-            )
         ):
             await self.db.rollback()
             return None
         try:
-            effective_request_sha256 = canonical_effective_render_request_hash(
+            expected_effective_request_sha256 = canonical_effective_render_request_hash(
                 request_sha256=artifact.request_sha256,
                 input_binding_sha256=artifact.input_binding_sha256,
                 input_binding_version=artifact.input_binding_version,
             )
-        except ValueError:
+            geometry_manifest = StudioGeometryManifest.model_validate(
+                artifact.geometry_manifest
+            )
+        except (ValidationError, TypeError, ValueError):
+            await self.db.rollback()
+            return None
+        if (
+            artifact.effective_request_sha256 != expected_effective_request_sha256
+            or geometry_manifest.artifact_page_count != artifact.artifact_page_count
+            or geometry_manifest.document_page_count != artifact.document_page_count
+            or geometry_manifest.sha256 != artifact.geometry_manifest_sha256
+            or not _geometry_matches_request(
+                geometry_manifest,
+                artifact_kind=artifact.artifact_kind,
+                requested_page_number=artifact.requested_page_number,
+            )
+        ):
             await self.db.rollback()
             return None
         cached = StudioCachedOutput(
@@ -2409,10 +2714,12 @@ class _StudioRenderJobStore:
                 media_type=artifact.media_type,
             ),
             artifact_kind=artifact.artifact_kind,
-            effective_request_sha256=effective_request_sha256,
+            effective_request_sha256=artifact.effective_request_sha256,
             runtime_manifest_sha256=artifact.runtime_manifest_sha256,
-            page_count=artifact.page_count,
-            mapping_manifest_sha256=artifact.mapping_manifest_sha256,
+            artifact_page_count=artifact.artifact_page_count,
+            document_page_count=artifact.document_page_count,
+            geometry_manifest=geometry_manifest,
+            geometry_manifest_sha256=artifact.geometry_manifest_sha256,
         )
         try:
             await asyncio.to_thread(
@@ -2429,8 +2736,8 @@ class _StudioRenderJobStore:
             or artifact.delete_requested_at is not None
             or artifact.deleted_at is not None
             or (
-                artifact.expires_at is not None
-                and artifact.expires_at <= fresh
+                artifact.content_expires_at is not None
+                and artifact.content_expires_at <= fresh
             )
             or artifact.cache_key != cache_key
             or artifact.object_key != expected_object_key
@@ -2441,9 +2748,10 @@ class _StudioRenderJobStore:
             or artifact.artifact_kind != cached.artifact_kind
             or artifact.runtime_manifest_sha256
             != cached.runtime_manifest_sha256
-            or artifact.page_count != cached.page_count
-            or artifact.mapping_manifest_sha256
-            != cached.mapping_manifest_sha256
+            or artifact.artifact_page_count != cached.artifact_page_count
+            or artifact.document_page_count != cached.document_page_count
+            or artifact.geometry_manifest_sha256
+            != cached.geometry_manifest_sha256
         ):
             await self.db.rollback()
             return None
@@ -2534,6 +2842,11 @@ class StudioRenderJobService:
         self, artifact_id: uuid.UUID
     ) -> StudioRenderJobStatus:
         return await self._store.artifact_result(artifact_id)
+
+    async def artifact_geometry(
+        self, artifact_id: uuid.UUID
+    ) -> StudioArtifactGeometry:
+        return await self._store.artifact_geometry(artifact_id)
 
     async def artifact_content(
         self,
@@ -2629,8 +2942,11 @@ class StudioRenderWorkerService:
         runtime_manifest_sha256: str,
         retention_class: str = "review",
         artifact_ttl_seconds: int,
-        page_count: int,
-        mapping_manifest_sha256: str | None = None,
+        artifact_page_count: int,
+        document_page_count: int,
+        geometry_manifest: StudioGeometryManifest,
+        geometry_manifest_sha256: str,
+        metadata_ttl_seconds: int = 2_592_000,
     ) -> tuple[uuid.UUID, str]:
         await self._store._bind_tenant_context()
         return await self._store.adopt_output(
@@ -2641,8 +2957,11 @@ class StudioRenderWorkerService:
             runtime_manifest_sha256=runtime_manifest_sha256,
             retention_class=retention_class,
             artifact_ttl_seconds=artifact_ttl_seconds,
-            page_count=page_count,
-            mapping_manifest_sha256=mapping_manifest_sha256,
+            artifact_page_count=artifact_page_count,
+            document_page_count=document_page_count,
+            geometry_manifest=geometry_manifest,
+            geometry_manifest_sha256=geometry_manifest_sha256,
+            metadata_ttl_seconds=metadata_ttl_seconds,
         )
 
     async def find_cached_output(
@@ -2671,8 +2990,11 @@ class StudioRenderWorkerService:
         runtime_manifest_sha256: str,
         retention_class: str = "review",
         artifact_ttl_seconds: int,
-        page_count: int,
-        mapping_manifest_sha256: str | None = None,
+        artifact_page_count: int,
+        document_page_count: int,
+        geometry_manifest: StudioGeometryManifest,
+        geometry_manifest_sha256: str,
+        metadata_ttl_seconds: int = 2_592_000,
     ) -> tuple[uuid.UUID, str, StudioStagedObject]:
         await self._store._bind_tenant_context()
         return await self._store.stage_and_adopt_output(
@@ -2685,8 +3007,11 @@ class StudioRenderWorkerService:
             runtime_manifest_sha256=runtime_manifest_sha256,
             retention_class=retention_class,
             artifact_ttl_seconds=artifact_ttl_seconds,
-            page_count=page_count,
-            mapping_manifest_sha256=mapping_manifest_sha256,
+            artifact_page_count=artifact_page_count,
+            document_page_count=document_page_count,
+            geometry_manifest=geometry_manifest,
+            geometry_manifest_sha256=geometry_manifest_sha256,
+            metadata_ttl_seconds=metadata_ttl_seconds,
         )
 
 

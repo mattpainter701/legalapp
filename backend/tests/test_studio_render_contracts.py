@@ -10,11 +10,14 @@ from app.schemas.studio_render import (
     STUDIO_PUBLIC_ERROR_MESSAGES,
     STUDIO_PUBLIC_ERROR_RETRYABLE,
     STUDIO_PUBLIC_ERROR_STATUS,
+    StudioGeometryManifest,
+    StudioPageGeometry,
     StudioRendererComponent,
     StudioRendererManifest,
     StudioRenderAccepted,
     StudioRenderErrorDetails,
     StudioRenderJobStatus,
+    StudioRenderIntent,
     StudioRenderOptions,
     StudioRenderPublicError,
     StudioRenderRequest,
@@ -92,12 +95,51 @@ def _effective_request_sha256(request):
     )
 
 
+def _geometry(page_count=1):
+    return StudioGeometryManifest(
+        artifact_page_count=page_count,
+        document_page_count=page_count,
+        pages=[
+            StudioPageGeometry(
+                page_number=page,
+                coordinate_space="points",
+                width_points=612,
+                height_points=792,
+            )
+            for page in range(1, page_count + 1)
+        ],
+    )
+
+
 def test_request_hash_is_canonical_and_tamper_evident():
     request = StudioRenderRequest.model_validate(_request_payload())
     tampered = request.model_dump()
     tampered["render_options"]["flatten_pdf"] = True
     with pytest.raises(ValidationError, match="request hash mismatch"):
         StudioRenderRequest.model_validate(tampered)
+
+
+def test_client_intent_binds_actor_and_hash_on_the_server():
+    payload = _request_payload()
+    actor = payload.pop("requested_by")
+    payload.pop("request_sha256")
+    intent = StudioRenderIntent.model_validate(payload)
+    request = intent.bind_actor(actor)
+    assert request.requested_by == actor
+    assert request.request_sha256 == canonical_render_request_hash(
+        kind=request.kind,
+        draft_id=request.draft_id,
+        expected_revision=request.expected_revision,
+        identity_sha256=request.identity_sha256,
+        snapshot_id=request.snapshot_id,
+        content_sha256=request.content_sha256,
+        source=request.source,
+        render_options=request.render_options,
+        requested_by=actor,
+        input_binding_id=request.input_binding_id,
+    )
+    with pytest.raises(ValidationError):
+        StudioRenderIntent.model_validate({**payload, "requested_by": uuid.uuid4()})
 
 
 @pytest.mark.parametrize(
@@ -131,6 +173,8 @@ def test_kind_specific_options_and_binding_are_bounded():
                 kind="studio_template_ocr", input_binding_id=uuid.uuid4()
             )
         )
+    with pytest.raises(ValidationError, match="cannot exceed max_pages"):
+        StudioRenderOptions(page_number=3, max_pages=2)
 
 
 def test_status_exposes_artifact_only_after_materialization():
@@ -161,6 +205,7 @@ def test_status_exposes_artifact_only_after_materialization():
         "runtime_manifest_sha256": manifest.sha256,
         "job_expires_at": now + timedelta(hours=1),
     }
+    geometry = _geometry()
     with pytest.raises(ValidationError, match="only after materialization"):
         StudioRenderJobStatus(
             **{**common, "progress": 10},
@@ -168,15 +213,20 @@ def test_status_exposes_artifact_only_after_materialization():
             leased_at=now,
             artifact_id=uuid.uuid4(),
             artifact_availability="available",
+            artifact_metadata_availability="available",
             adoption_outcome="current_evidence",
-            artifact_expires_at=now + timedelta(hours=1),
+            content_expires_at=now + timedelta(hours=1),
+            metadata_expires_at=now + timedelta(days=1),
             result_url="/api/template-studio/render-artifacts/123",
             download_url="/api/template-studio/render-artifacts/123/content",
-            adopted_as_current_evidence=True,
+            geometry_url="/api/template-studio/render-artifacts/123/geometry",
+            adopted_as_preferred_evidence=True,
             output_sha256="9" * 64,
             output_media_type="application/pdf",
             output_byte_size=100,
-            page_count=1,
+            artifact_page_count=1,
+            document_page_count=1,
+            geometry_manifest_sha256=geometry.sha256,
             retention_class="review",
         )
     artifact_id = uuid.uuid4()
@@ -186,17 +236,22 @@ def test_status_exposes_artifact_only_after_materialization():
         completed_at=now,
         artifact_id=artifact_id,
         artifact_availability="available",
+        artifact_metadata_availability="available",
         result_url=f"/api/template-studio/render-artifacts/{artifact_id}",
         download_url=f"/api/template-studio/render-artifacts/{artifact_id}/content",
+        geometry_url=f"/api/template-studio/render-artifacts/{artifact_id}/geometry",
         adoption_outcome="stale_output",
-        adopted_as_current_evidence=False,
-        is_current_evidence=False,
+        adopted_as_preferred_evidence=False,
+        is_preferred_evidence=False,
         output_sha256="9" * 64,
         output_media_type="application/pdf",
         output_byte_size=100,
-        page_count=1,
+        artifact_page_count=1,
+        document_page_count=1,
+        geometry_manifest_sha256=geometry.sha256,
         retention_class="review",
-        artifact_expires_at=now + timedelta(hours=1),
+        content_expires_at=now + timedelta(hours=1),
+        metadata_expires_at=now + timedelta(days=1),
     )
     public_json = completed.model_dump_json()
     for forbidden in (
@@ -214,6 +269,7 @@ def test_expired_completed_status_preserves_metadata_but_disables_auto_open():
     now = datetime.now(timezone.utc)
     manifest = _manifest()
     artifact_id = uuid.uuid4()
+    geometry = _geometry()
     values = {
         "job_id": uuid.uuid4(),
         "status_url": "/api/template-studio/render-jobs/expired-status",
@@ -239,21 +295,26 @@ def test_expired_completed_status_preserves_metadata_but_disables_auto_open():
         "runtime_manifest_sha256": manifest.sha256,
         "artifact_id": artifact_id,
         "artifact_availability": "expired",
+        "artifact_metadata_availability": "available",
         "result_url": f"/api/template-studio/render-artifacts/{artifact_id}",
         "download_url": (
             f"/api/template-studio/render-artifacts/{artifact_id}/content"
         ),
+        "geometry_url": f"/api/template-studio/render-artifacts/{artifact_id}/geometry",
         "adoption_outcome": "current_evidence",
-        "adopted_as_current_evidence": True,
-        "is_current_evidence": True,
+        "adopted_as_preferred_evidence": True,
+        "is_preferred_evidence": True,
         "auto_open": False,
         "output_sha256": "9" * 64,
         "output_media_type": "application/pdf",
         "output_byte_size": 100,
-        "page_count": 1,
+        "artifact_page_count": 1,
+        "document_page_count": 1,
+        "geometry_manifest_sha256": geometry.sha256,
         "retention_class": "review",
         "job_expires_at": now + timedelta(hours=1),
-        "artifact_expires_at": now - timedelta(seconds=1),
+        "content_expires_at": now - timedelta(seconds=1),
+        "metadata_expires_at": now + timedelta(days=30),
     }
     expired = StudioRenderJobStatus(**values)
     assert expired.state == "completed"
@@ -262,6 +323,28 @@ def test_expired_completed_status_preserves_metadata_but_disables_auto_open():
     assert expired.auto_open is False
     with pytest.raises(ValidationError, match="auto-open"):
         StudioRenderJobStatus(**{**values, "auto_open": True})
+
+    redacted_values = {
+        **values,
+        "artifact_metadata_availability": "expired",
+        "result_url": None,
+        "download_url": None,
+        "geometry_url": None,
+        "output_sha256": None,
+        "output_media_type": None,
+        "output_byte_size": None,
+        "artifact_page_count": None,
+        "document_page_count": None,
+        "geometry_manifest_sha256": None,
+        "metadata_expires_at": now - timedelta(microseconds=1),
+    }
+    redacted = StudioRenderJobStatus(**redacted_values)
+    assert redacted.artifact_id == artifact_id
+    assert redacted.output_sha256 is None
+    with pytest.raises(ValidationError, match="must be redacted"):
+        StudioRenderJobStatus(
+            **{**redacted_values, "geometry_manifest_sha256": geometry.sha256}
+        )
 
 
 @pytest.mark.parametrize("code", sorted(STUDIO_PUBLIC_ERROR_MESSAGES))

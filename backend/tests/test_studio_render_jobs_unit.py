@@ -3,12 +3,18 @@
 import uuid
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from app.models.durable_job import DurableJob
-from app.models.studio_render import StudioRenderArtifact
+from app.models.studio_render import (
+    StudioPreferredRenderEvidence,
+    StudioRenderArtifact,
+)
 from app.schemas.studio_render import (
+    StudioGeometryManifest,
+    StudioPageGeometry,
     StudioRendererComponent,
     StudioRendererManifest,
     StudioRenderOptions,
@@ -20,7 +26,9 @@ from app.services.studio_render_jobs import (
     StudioJobLease,
     StudioRenderJobService,
     StudioRenderWorkerService,
+    _geometry_matches_request,
     StudioRenderServiceError,
+    _StudioRenderJobStore,
     _QueuedPayload,
     _parse_queued,
     _parse_result,
@@ -257,7 +265,7 @@ def test_malformed_persisted_payload_and_result_terminalize_safely():
     assert row.result == {"error_code": "job_data_unavailable"}
 
     row, _ = _lease()
-    row.result = {"mapping_manifest_sha256": "f" * 64}
+    row.result = {"geometry_manifest_sha256": "f" * 64}
     assert _parse_result(row, now=now) is None
     assert row.status == "failed"
     assert row.result == {"error_code": "job_data_unavailable"}
@@ -272,6 +280,26 @@ def test_consumer_and_worker_facades_do_not_cross_expose_operations():
     assert not hasattr(consumer, "adopt_output")
     assert not hasattr(worker, "enqueue")
     assert not hasattr(worker, "status")
+
+
+@pytest.mark.asyncio
+async def test_same_tenant_other_actor_status_is_tenant_safe_not_found():
+    row, lease = _lease()
+    database_now = datetime.now(timezone.utc)
+    db = AsyncMock()
+    db.scalar = AsyncMock(side_effect=[row, database_now])
+    store = _StudioRenderJobStore(
+        db,
+        tenant_id=lease.tenant_id,
+        actor_user_id=uuid.uuid4(),
+    )
+    with patch(
+        "app.services.studio_render_jobs.set_tenant_context", AsyncMock()
+    ):
+        with pytest.raises(StudioRenderServiceError) as caught:
+            await store.status(row.id)
+    assert caught.value.status_code == 404
+    assert caught.value.code == "job_not_found"
 
 
 def test_artifact_model_uses_available_tenant_composite_references():
@@ -292,5 +320,68 @@ def test_artifact_model_uses_available_tenant_composite_references():
         if constraint.name == "ck_studio_render_artifact_temporary_expiry"
     )
     retention_sql = str(retention.sqltext)
-    assert "retention_class = 'evidence' AND expires_at IS NULL" in retention_sql
+    assert "retention_class = 'evidence' AND content_expires_at IS NULL" in retention_sql
+    assert "metadata_expires_at IS NULL" in retention_sql
     assert "retention_class IN ('ephemeral', 'review')" in retention_sql
+    assert "metadata_expires_at > content_expires_at" in retention_sql
+    columns = StudioRenderArtifact.__table__.c
+    assert columns.render_options.nullable is False
+    assert columns.effective_request_sha256.nullable is False
+    assert columns.geometry_manifest.nullable is False
+    assert columns.artifact_page_count.nullable is False
+    assert columns.document_page_count.nullable is False
+    preferred_names = {
+        constraint.name
+        for constraint in StudioPreferredRenderEvidence.__table__.constraints
+        if constraint.name
+    }
+    assert {
+        "fk_studio_preferred_render_draft_tenant",
+        "fk_studio_preferred_render_artifact_tenant",
+        "uq_studio_preferred_render_artifact",
+    }.issubset(preferred_names)
+
+
+def test_adoption_geometry_coverage_rechecks_preview_and_full_document():
+    preview = StudioGeometryManifest(
+        artifact_page_count=1,
+        document_page_count=3,
+        pages=[
+            StudioPageGeometry(
+                page_number=2,
+                coordinate_space="pixels",
+                width_px=20,
+                height_px=30,
+                dpi_x=150,
+                dpi_y=150,
+            )
+        ],
+    )
+    assert _geometry_matches_request(
+        preview,
+        artifact_kind="page_preview",
+        requested_page_number=2,
+    )
+    assert not _geometry_matches_request(
+        preview,
+        artifact_kind="page_preview",
+        requested_page_number=1,
+    )
+    full = StudioGeometryManifest(
+        artifact_page_count=2,
+        document_page_count=2,
+        pages=[
+            StudioPageGeometry(page_number=1, coordinate_space="none"),
+            StudioPageGeometry(page_number=2, coordinate_space="none"),
+        ],
+    )
+    assert _geometry_matches_request(
+        full,
+        artifact_kind="analysis",
+        requested_page_number=None,
+    )
+    assert not _geometry_matches_request(
+        full,
+        artifact_kind="analysis",
+        requested_page_number=1,
+    )

@@ -16,6 +16,7 @@ from app.services.studio_artifact_retention import (
     bounded_durable_job_cleanup,
     bounded_cleanup_candidates,
     cleanup_decision,
+    metadata_is_retained,
     reconcile_staged_batch,
 )
 from app.services.studio_object_storage import LocalStudioObjectStore
@@ -30,7 +31,8 @@ def _candidate(now, **updates):
         "job_terminal": True,
         "adoption_outcome": "stale_output",
         "retention_class": "review",
-        "expires_at": now - timedelta(seconds=1),
+        "content_expires_at": now - timedelta(seconds=1),
+        "metadata_expires_at": now + timedelta(days=30),
         "legal_hold_at": None,
         "live_evidence_reference": False,
     }
@@ -53,7 +55,10 @@ async def test_expiry_requires_terminal_non_evidence_without_hold():
         (_candidate(now, job_terminal=False), "job_not_terminal"),
         (_candidate(now, live_evidence_reference=True), "current_evidence"),
         (_candidate(now, retention_class="evidence"), "evidence_retention"),
-        (_candidate(now, expires_at=now + timedelta(seconds=1)), "not_expired"),
+        (
+            _candidate(now, content_expires_at=now + timedelta(seconds=1)),
+            "not_expired",
+        ),
         (_candidate(now, legal_hold_at=now), "legal_hold"),
     ]
     for candidate, reason in cases:
@@ -62,6 +67,39 @@ async def test_expiry_requires_terminal_non_evidence_without_hold():
         )
         assert decision.eligible is False
         assert decision.reason == reason
+
+
+async def test_metadata_expiry_respects_exact_evidence_and_legal_hold():
+    now = datetime.now(timezone.utc)
+    expired = _candidate(
+        now,
+        metadata_expires_at=now - timedelta(seconds=1),
+    )
+    assert metadata_is_retained(expired, now=now) is False
+    assert metadata_is_retained(
+        _candidate(
+            now,
+            metadata_expires_at=now - timedelta(seconds=1),
+            live_evidence_reference=True,
+        ),
+        now=now,
+    ) is True
+    assert metadata_is_retained(
+        _candidate(
+            now,
+            metadata_expires_at=now - timedelta(seconds=1),
+            legal_hold_at=now,
+        ),
+        now=now,
+    ) is True
+    assert metadata_is_retained(
+        _candidate(
+            now,
+            metadata_expires_at=now - timedelta(seconds=1),
+            live_evidence_reference=None,
+        ),
+        now=now,
+    ) is True
 
 
 async def test_authoritative_hold_check_fails_closed():

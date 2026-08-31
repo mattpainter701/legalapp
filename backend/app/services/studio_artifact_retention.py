@@ -32,7 +32,8 @@ class StudioCleanupCandidate:
     job_terminal: bool
     adoption_outcome: str
     retention_class: str
-    expires_at: datetime | None
+    content_expires_at: datetime | None
+    metadata_expires_at: datetime | None
     legal_hold_at: datetime | None = None
     live_evidence_reference: bool | None = None
 
@@ -46,6 +47,21 @@ class StudioCleanupDecision:
 
 LegalHoldCheck = Callable[[StudioCleanupCandidate], Awaitable[bool]]
 CurrentEvidenceCheck = Callable[[uuid.UUID, uuid.UUID], Awaitable[bool]]
+
+
+def metadata_is_retained(candidate: StudioCleanupCandidate, *, now: datetime) -> bool:
+    """Fail closed for legal hold, exact preferred evidence, or unknown evidence state."""
+
+    if (
+        candidate.legal_hold_at is not None
+        or candidate.live_evidence_reference is not False
+        or candidate.retention_class == "evidence"
+    ):
+        return True
+    return (
+        candidate.metadata_expires_at is None
+        or candidate.metadata_expires_at > now
+    )
 
 
 async def cleanup_decision(
@@ -67,7 +83,7 @@ async def cleanup_decision(
         return StudioCleanupDecision(candidate.artifact_id, False, "current_evidence")
     if candidate.retention_class == "evidence":
         return StudioCleanupDecision(candidate.artifact_id, False, "evidence_retention")
-    if candidate.expires_at is None or candidate.expires_at > now:
+    if candidate.content_expires_at is None or candidate.content_expires_at > now:
         return StudioCleanupDecision(candidate.artifact_id, False, "not_expired")
     if candidate.legal_hold_at is not None:
         return StudioCleanupDecision(candidate.artifact_id, False, "legal_hold")
@@ -350,7 +366,8 @@ class StudioStagedReceiptReconciler:
                 and job.status in {"completed", "failed", "cancelled"},
                 adoption_outcome=artifact.adoption_outcome,
                 retention_class=artifact.retention_class,
-                expires_at=artifact.expires_at,
+                content_expires_at=artifact.content_expires_at,
+                metadata_expires_at=artifact.metadata_expires_at,
                 legal_hold_at=artifact.legal_hold_at,
                 live_evidence_reference=None,
             )
@@ -457,7 +474,8 @@ class StudioArtifactRetentionService:
             and job.status in {"completed", "failed", "cancelled"},
             adoption_outcome=artifact.adoption_outcome,
             retention_class=artifact.retention_class,
-            expires_at=artifact.expires_at,
+            content_expires_at=artifact.content_expires_at,
+            metadata_expires_at=artifact.metadata_expires_at,
             legal_hold_at=artifact.legal_hold_at,
             live_evidence_reference=live_reference,
         )
@@ -669,7 +687,7 @@ class StudioArtifactRetentionService:
                         ),
                         or_(
                             StudioRenderArtifact.storage_state == "delete_pending",
-                            StudioRenderArtifact.expires_at <= now,
+                            StudioRenderArtifact.content_expires_at <= now,
                         ),
                     )
                     .order_by(StudioRenderArtifact.created_at, StudioRenderArtifact.id)

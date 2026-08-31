@@ -81,15 +81,20 @@ def _validator_report(
     artifact_kind="test_render",
     media_type="application/pdf",
     pages=None,
+    document_page_count=None,
 ):
     pages = pages or [{"page_number": 1, "width_points": 612, "height_points": 792}]
+    document_page_count = document_page_count or max(
+        page["page_number"] for page in pages
+    )
     return json.dumps(
         {
             "contract_version": 1,
             "artifact_sha256": hashlib.sha256(content).hexdigest(),
             "artifact_kind": artifact_kind,
             "media_type": media_type,
-            "page_count": len(pages),
+            "artifact_page_count": len(pages),
+            "document_page_count": document_page_count,
             "pages": pages,
         },
         sort_keys=True,
@@ -242,7 +247,9 @@ async def test_concrete_adapter_stages_inputs_and_owns_isolated_execution(tmp_pa
     assert not observed["workspace"].exists()
     assert output.content == _pdf_bytes()
     assert output.content_sha256 == hashlib.sha256(_pdf_bytes()).hexdigest()
-    assert output.page_count == 1
+    assert output.artifact_page_count == 1
+    assert output.document_page_count == 1
+    assert output.geometry_manifest.sha256 == output.geometry_manifest_sha256
     assert output.runtime_manifest_sha256 == output.renderer_manifest.sha256
 
 
@@ -501,7 +508,7 @@ def test_kind_specific_output_parsers_fail_closed():
         media_type="application/json",
         max_pages=10,
     )
-    assert analysis.page_count == 1
+    assert analysis.artifact_page_count == 1
     pdf = validate_studio_output(
         _validator_report(_pdf_bytes()),
         content=_pdf_bytes(),
@@ -510,7 +517,7 @@ def test_kind_specific_output_parsers_fail_closed():
         media_type="application/pdf",
         max_pages=10,
     )
-    assert pdf.page_count == 1
+    assert pdf.artifact_page_count == 1
     with pytest.raises(StudioIsolationError) as malformed:
         validate_studio_output(
             _validator_report(b"different"),
@@ -657,8 +664,52 @@ def test_png_decode_dimensions_dpi_and_mapping_are_authoritative():
         max_pages=10,
         page_number=3,
     )
-    assert validated.page_count == 1
-    assert len(validated.mapping_manifest_sha256) == 64
+    assert validated.artifact_page_count == 1
+    assert validated.document_page_count == 3
+    assert len(validated.geometry_manifest_sha256) == 64
+    assert validated.geometry_manifest.pages[0].coordinate_space == "pixels"
+
+
+def test_validator_rejects_impossible_document_count_or_preview_page():
+    content = _pdf_bytes()
+    with pytest.raises(StudioIsolationError):
+        validate_studio_output(
+            _validator_report(content, document_page_count=2),
+            content=content,
+            content_sha256=hashlib.sha256(content).hexdigest(),
+            artifact_kind="test_render",
+            media_type="application/pdf",
+            max_pages=10,
+        )
+    from PIL import Image
+
+    stream = io.BytesIO()
+    Image.new("RGB", (20, 30), "white").save(stream, format="PNG")
+    preview = stream.getvalue()
+    with pytest.raises(StudioIsolationError):
+        validate_studio_output(
+            _validator_report(
+                preview,
+                artifact_kind="page_preview",
+                media_type="image/png",
+                pages=[
+                    {
+                        "page_number": 2,
+                        "width_px": 20,
+                        "height_px": 30,
+                        "dpi_x": 96,
+                        "dpi_y": 96,
+                    }
+                ],
+                document_page_count=2,
+            ),
+            content=preview,
+            content_sha256=hashlib.sha256(preview).hexdigest(),
+            artifact_kind="page_preview",
+            media_type="image/png",
+            max_pages=10,
+            page_number=1,
+        )
 
 
 def test_docx_package_parser_and_page_bound():
@@ -687,4 +738,5 @@ def test_docx_package_parser_and_page_bound():
         ),
         max_pages=10,
     )
-    assert validated.page_count == 2
+    assert validated.artifact_page_count == 2
+    assert validated.document_page_count == 2

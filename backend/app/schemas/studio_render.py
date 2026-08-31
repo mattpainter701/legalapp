@@ -31,6 +31,7 @@ StudioAdoptionOutcome = Literal[
     "current_evidence", "stale_output", "cancelled_output"
 ]
 StudioArtifactAvailability = Literal["available", "expired"]
+StudioArtifactMetadataAvailability = Literal["available", "expired"]
 StudioJobFailureCode = Literal[
     "cancelled",
     "expired",
@@ -223,11 +224,75 @@ class StudioRenderOptions(StrictModel):
 
     @model_validator(mode="after")
     def finite_and_bounded(self):
+        if self.page_number is not None and self.page_number > self.max_pages:
+            raise ValueError("page_number cannot exceed max_pages")
         values = self.model_dump(mode="json")
         if any(isinstance(value, float) and not math.isfinite(value) for value in values.values()):
             raise ValueError("render options must be finite")
         if len(json.dumps(values, separators=(",", ":"), allow_nan=False)) > 2048:
             raise ValueError("render options exceed their bounded contract")
+        return self
+
+    @property
+    def sha256(self) -> str:
+        return canonical_json_sha256(self.model_dump(mode="json"))
+
+
+class StudioPageGeometry(StrictModel):
+    """Normalized geometry for one source-document page."""
+
+    page_number: int = Field(ge=1, le=10_000)
+    coordinate_space: Literal["none", "points", "pixels"]
+    width_points: float | None = Field(default=None, gt=0, le=100_000_000)
+    height_points: float | None = Field(default=None, gt=0, le=100_000_000)
+    width_px: int | None = Field(default=None, ge=1, le=100_000_000)
+    height_px: int | None = Field(default=None, ge=1, le=100_000_000)
+    dpi_x: float | None = Field(default=None, gt=0, le=100_000_000)
+    dpi_y: float | None = Field(default=None, gt=0, le=100_000_000)
+
+    @model_validator(mode="after")
+    def validate_coordinate_space(self):
+        points = (self.width_points, self.height_points)
+        pixels = (self.width_px, self.height_px, self.dpi_x, self.dpi_y)
+        if self.coordinate_space == "none" and any(
+            value is not None for value in (*points, *pixels)
+        ):
+            raise ValueError("geometry-free pages cannot carry dimensions")
+        if self.coordinate_space == "points" and (
+            any(value is None for value in points)
+            or any(value is not None for value in pixels)
+        ):
+            raise ValueError("point geometry is incomplete")
+        if self.coordinate_space == "pixels" and (
+            any(value is None for value in pixels)
+            or any(value is not None for value in points)
+        ):
+            raise ValueError("pixel geometry is incomplete")
+        for value in (*points, *pixels):
+            if isinstance(value, float) and not math.isfinite(value):
+                raise ValueError("page geometry must be finite")
+        return self
+
+
+class StudioGeometryManifest(StrictModel):
+    """Hashable page evidence independent of artifact byte representation."""
+
+    contract_version: Literal[1] = 1
+    artifact_page_count: int = Field(ge=1, le=1_000)
+    document_page_count: int = Field(ge=1, le=10_000)
+    pages: list[StudioPageGeometry] = Field(min_length=1, max_length=1_000)
+
+    @model_validator(mode="after")
+    def validate_pages(self):
+        if len(self.pages) != self.artifact_page_count:
+            raise ValueError("artifact page count does not match geometry")
+        page_numbers = [page.page_number for page in self.pages]
+        if len(set(page_numbers)) != len(page_numbers):
+            raise ValueError("page geometry contains duplicates")
+        if page_numbers != sorted(page_numbers):
+            raise ValueError("page geometry is not ordered")
+        if page_numbers[-1] > self.document_page_count:
+            raise ValueError("page geometry exceeds the source document")
         return self
 
     @property
@@ -378,6 +443,39 @@ class StudioRenderRequest(StrictModel):
         return self
 
 
+class StudioRenderIntent(StrictModel):
+    """Client intent; actor identity and request hash are server-owned."""
+
+    kind: StudioRenderJobKind = "studio_test_render"
+    draft_id: uuid.UUID
+    expected_revision: int = Field(ge=1)
+    identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    snapshot_id: uuid.UUID
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source: StudioRenderSourceContract
+    render_options: StudioRenderOptions = Field(default_factory=StudioRenderOptions)
+    input_binding_id: uuid.UUID | None = None
+
+    def bind_actor(self, actor_user_id: uuid.UUID) -> StudioRenderRequest:
+        request_sha256 = canonical_render_request_hash(
+            kind=self.kind,
+            draft_id=self.draft_id,
+            expected_revision=self.expected_revision,
+            identity_sha256=self.identity_sha256,
+            snapshot_id=self.snapshot_id,
+            content_sha256=self.content_sha256,
+            source=self.source,
+            render_options=self.render_options,
+            requested_by=actor_user_id,
+            input_binding_id=self.input_binding_id,
+        )
+        return StudioRenderRequest(
+            **self.model_dump(),
+            requested_by=actor_user_id,
+            request_sha256=request_sha256,
+        )
+
+
 class StudioRenderAccepted(StrictModel):
     """202 response: only an opaque job handle and tenant-safe status resource."""
 
@@ -388,6 +486,20 @@ class StudioRenderAccepted(StrictModel):
         pattern=r"^/api/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*$",
     )
     job_expires_at: AwareDatetime
+
+
+class StudioArtifactGeometry(StrictModel):
+    """Authenticated, hash-verifiable page geometry for one artifact."""
+
+    artifact_id: uuid.UUID
+    geometry_manifest: StudioGeometryManifest
+    geometry_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def validate_manifest_hash(self):
+        if self.geometry_manifest.sha256 != self.geometry_manifest_sha256:
+            raise ValueError("geometry manifest hash mismatch")
+        return self
 
 
 class StudioRenderErrorDetails(StrictModel):
@@ -462,6 +574,7 @@ class StudioRenderJobStatus(StrictModel):
     input_binding_version: int | None = Field(default=None, ge=1)
     artifact_id: uuid.UUID | None = None
     artifact_availability: StudioArtifactAvailability | None = None
+    artifact_metadata_availability: StudioArtifactMetadataAvailability | None = None
     result_url: str | None = Field(
         default=None,
         max_length=500,
@@ -472,15 +585,21 @@ class StudioRenderJobStatus(StrictModel):
         max_length=500,
         pattern=r"^/api/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*$",
     )
+    geometry_url: str | None = Field(
+        default=None,
+        max_length=500,
+        pattern=r"^/api/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*$",
+    )
     adoption_outcome: StudioAdoptionOutcome | None = None
-    adopted_as_current_evidence: bool | None = None
-    is_current_evidence: bool | None = None
+    adopted_as_preferred_evidence: bool | None = None
+    is_preferred_evidence: bool | None = None
     auto_open: bool = False
     output_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     output_media_type: str | None = Field(default=None, min_length=1, max_length=100)
     output_byte_size: int | None = Field(default=None, ge=1, le=100 * 1024 * 1024)
-    page_count: int | None = Field(default=None, ge=1, le=10_000)
-    mapping_manifest_sha256: str | None = Field(
+    artifact_page_count: int | None = Field(default=None, ge=1, le=1_000)
+    document_page_count: int | None = Field(default=None, ge=1, le=10_000)
+    geometry_manifest_sha256: str | None = Field(
         default=None, pattern=r"^[0-9a-f]{64}$"
     )
     retention_class: Literal["ephemeral", "review", "evidence"] | None = None
@@ -488,7 +607,8 @@ class StudioRenderJobStatus(StrictModel):
     error_message: str | None = Field(default=None, max_length=300)
     error_retryable: bool | None = None
     job_expires_at: AwareDatetime
-    artifact_expires_at: AwareDatetime | None = None
+    content_expires_at: AwareDatetime | None = None
+    metadata_expires_at: AwareDatetime | None = None
 
     @model_validator(mode="after")
     def validate_state_shape(self):
@@ -528,44 +648,70 @@ class StudioRenderJobStatus(StrictModel):
                 raise ValueError("completed jobs require materialized artifact evidence")
             required_metadata = (
                 self.artifact_availability,
-                self.result_url,
-                self.download_url,
-                self.adopted_as_current_evidence,
-                self.is_current_evidence,
-                self.output_sha256,
-                self.output_media_type,
-                self.output_byte_size,
-                self.page_count,
+                self.artifact_metadata_availability,
+                self.adopted_as_preferred_evidence,
+                self.is_preferred_evidence,
                 self.retention_class,
             )
             if any(value is None for value in required_metadata):
                 raise ValueError("completed jobs require artifact metadata")
             if (
                 self.retention_class in {"ephemeral", "review"}
-                and self.artifact_expires_at is None
+                and (
+                    self.content_expires_at is None
+                    or self.metadata_expires_at is None
+                    or self.metadata_expires_at <= self.content_expires_at
+                )
             ):
-                raise ValueError("temporary artifacts require expiry")
+                raise ValueError("temporary artifacts require ordered retention expiry")
             if (
                 self.retention_class == "evidence"
-                and self.artifact_expires_at is not None
+                and (
+                    self.content_expires_at is not None
+                    or self.metadata_expires_at is not None
+                )
             ):
                 raise ValueError("evidence artifacts do not expire")
-            if self.kind == "studio_page_preview" and (
-                self.mapping_manifest_sha256 is None
+            if self.kind == "studio_page_preview" and self.artifact_page_count != 1:
+                if self.artifact_metadata_availability == "available":
+                    raise ValueError("page previews contain exactly one artifact page")
+            metadata = (
+                self.result_url,
+                self.download_url,
+                self.geometry_url,
+                self.output_sha256,
+                self.output_media_type,
+                self.output_byte_size,
+                self.artifact_page_count,
+                self.document_page_count,
+                self.geometry_manifest_sha256,
+            )
+            if self.artifact_metadata_availability == "available" and any(
+                value is None for value in metadata
             ):
-                raise ValueError("page previews require authoritative page metadata")
-            if self.adopted_as_current_evidence != (
+                raise ValueError("available artifact metadata is incomplete")
+            if self.artifact_metadata_availability == "expired" and any(
+                value is not None for value in metadata
+            ):
+                raise ValueError("expired artifact metadata must be redacted")
+            if (
+                self.artifact_metadata_availability == "expired"
+                and self.artifact_availability != "expired"
+            ):
+                raise ValueError("metadata cannot expire before artifact content")
+            if self.adopted_as_preferred_evidence != (
                 self.adoption_outcome == "current_evidence"
             ):
                 raise ValueError("adoption evidence state is inconsistent")
             if self.adoption_outcome in {"stale_output", "cancelled_output"} and (
-                self.is_current_evidence is not False or self.auto_open
+                self.is_preferred_evidence is not False or self.auto_open
             ):
                 raise ValueError("diagnostic output cannot be current or auto-opened")
             if self.auto_open and not (
                 self.adoption_outcome == "current_evidence"
-                and self.is_current_evidence is True
+                and self.is_preferred_evidence is True
                 and self.artifact_availability == "available"
+                and self.artifact_metadata_availability == "available"
             ):
                 raise ValueError("only live current evidence may auto-open")
             if self.artifact_availability == "expired" and self.auto_open:
@@ -574,20 +720,24 @@ class StudioRenderJobStatus(StrictModel):
             raise ValueError("artifact evidence exists only after materialization")
         elif self.artifact_availability is not None:
             raise ValueError("artifact availability exists only after materialization")
-        elif self.artifact_expires_at is not None:
+        elif self.artifact_metadata_availability is not None:
+            raise ValueError("artifact metadata availability exists only after materialization")
+        elif self.content_expires_at is not None or self.metadata_expires_at is not None:
             raise ValueError("artifact expiry exists only after materialization")
         elif any(
             value is not None
             for value in (
                 self.result_url,
                 self.download_url,
-                self.adopted_as_current_evidence,
-                self.is_current_evidence,
+                self.geometry_url,
+                self.adopted_as_preferred_evidence,
+                self.is_preferred_evidence,
                 self.output_sha256,
                 self.output_media_type,
                 self.output_byte_size,
-                self.page_count,
-                self.mapping_manifest_sha256,
+                self.artifact_page_count,
+                self.document_page_count,
+                self.geometry_manifest_sha256,
                 self.retention_class,
             )
         ):

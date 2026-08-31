@@ -17,6 +17,8 @@ from types import MappingProxyType
 from typing import Any, Callable, Mapping, TypeVar
 
 from app.schemas.studio_render import (
+    StudioGeometryManifest,
+    StudioPageGeometry,
     StudioRendererComponent,
     StudioRendererManifest,
     canonical_json_sha256,
@@ -97,15 +99,19 @@ class StudioIsolatedProcessorOutput:
     artifact_kind: str
     renderer_manifest: StudioRendererManifest
     runtime_manifest_sha256: str
-    page_count: int
-    mapping_manifest_sha256: str
+    artifact_page_count: int
+    document_page_count: int
+    geometry_manifest: StudioGeometryManifest
+    geometry_manifest_sha256: str
     retention_class: str
 
 
 @dataclass(frozen=True)
 class StudioValidatedOutput:
-    page_count: int
-    mapping_manifest_sha256: str
+    artifact_page_count: int
+    document_page_count: int
+    geometry_manifest: StudioGeometryManifest
+    geometry_manifest_sha256: str
 
 
 def validate_studio_output(
@@ -138,22 +144,27 @@ def validate_studio_output(
             "artifact_sha256",
             "artifact_kind",
             "media_type",
-            "page_count",
+            "artifact_page_count",
+            "document_page_count",
             "pages",
         }:
             raise ValueError("invalid validator contract")
         pages = decoded["pages"]
-        page_count = decoded["page_count"]
+        artifact_page_count = decoded["artifact_page_count"]
+        document_page_count = decoded["document_page_count"]
         if (
             decoded["contract_version"] != 1
             or decoded["artifact_sha256"] != content_sha256
             or decoded["artifact_kind"] != artifact_kind
             or decoded["media_type"] != media_type
-            or isinstance(page_count, bool)
-            or not isinstance(page_count, int)
-            or not 1 <= page_count <= max_pages
+            or isinstance(artifact_page_count, bool)
+            or not isinstance(artifact_page_count, int)
+            or not 1 <= artifact_page_count <= max_pages
+            or isinstance(document_page_count, bool)
+            or not isinstance(document_page_count, int)
+            or not 1 <= document_page_count <= max_pages
             or not isinstance(pages, list)
-            or len(pages) != page_count
+            or len(pages) != artifact_page_count
         ):
             raise ValueError("validator evidence mismatch")
         required_page_keys = {"page_number"}
@@ -166,7 +177,7 @@ def validate_studio_output(
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         }:
             required_page_keys.update({"width_points", "height_points"})
-        canonical_pages: list[dict[str, int | float]] = []
+        canonical_pages: list[StudioPageGeometry] = []
         for index, page in enumerate(pages, start=1):
             if not isinstance(page, dict) or set(page) != required_page_keys:
                 raise ValueError("invalid validator page evidence")
@@ -177,7 +188,16 @@ def validate_studio_output(
                 or page["page_number"] != expected_page
             ):
                 raise ValueError("invalid validator page ordering")
-            canonical_page: dict[str, int | float] = {}
+            canonical_page: dict[str, int | float | str] = {
+                "page_number": page["page_number"],
+                "coordinate_space": (
+                    "pixels"
+                    if artifact_kind == "page_preview"
+                    else "points"
+                    if "width_points" in required_page_keys
+                    else "none"
+                ),
+            }
             for key, value in page.items():
                 if isinstance(value, bool) or not isinstance(value, (int, float)):
                     raise ValueError("invalid validator page value")
@@ -188,12 +208,19 @@ def validate_studio_output(
                 numeric = float(value)
                 if not math.isfinite(numeric) or numeric <= 0 or numeric > 100_000_000:
                     raise ValueError("invalid validator page bound")
-                canonical_page[key] = value
-            canonical_pages.append(canonical_page)
+                if key != "page_number":
+                    canonical_page[key] = value
+            canonical_pages.append(StudioPageGeometry(**canonical_page))
         if artifact_kind == "page_preview" and (
-            page_number is None or page_count != 1
+            page_number is None or artifact_page_count != 1
         ):
             raise ValueError("invalid preview evidence")
+        if artifact_kind != "page_preview" and (
+            artifact_page_count != document_page_count
+        ):
+            raise ValueError("full-document page evidence is incomplete")
+        if page_number is not None and page_number > document_page_count:
+            raise ValueError("preview page exceeds the source document")
         if artifact_kind == "page_preview":
             if (
                 len(content) < 24
@@ -204,19 +231,24 @@ def validate_studio_output(
             width_px = int.from_bytes(content[16:20], "big")
             height_px = int.from_bytes(content[20:24], "big")
             if (
-                canonical_pages[0]["width_px"] != width_px
-                or canonical_pages[0]["height_px"] != height_px
+                canonical_pages[0].width_px != width_px
+                or canonical_pages[0].height_px != height_px
             ):
                 raise ValueError("preview geometry mismatch")
     except Exception as exc:
         raise StudioIsolationError(
             "validation_failed", "Studio validator evidence is invalid."
         ) from exc
+    geometry_manifest = StudioGeometryManifest(
+        artifact_page_count=artifact_page_count,
+        document_page_count=document_page_count,
+        pages=canonical_pages,
+    )
     return StudioValidatedOutput(
-        page_count=page_count,
-        mapping_manifest_sha256=canonical_json_sha256(
-            {"contract_version": 1, "pages": canonical_pages}
-        ),
+        artifact_page_count=artifact_page_count,
+        document_page_count=document_page_count,
+        geometry_manifest=geometry_manifest,
+        geometry_manifest_sha256=geometry_manifest.sha256,
     )
 
 
@@ -785,8 +817,10 @@ class StudioTrustedProcessorAdapter:
             artifact_kind=self.artifact_kind,
             renderer_manifest=self.renderer_manifest,
             runtime_manifest_sha256=self.runtime_manifest_sha256,
-            page_count=validation.page_count,
-            mapping_manifest_sha256=validation.mapping_manifest_sha256,
+            artifact_page_count=validation.artifact_page_count,
+            document_page_count=validation.document_page_count,
+            geometry_manifest=validation.geometry_manifest,
+            geometry_manifest_sha256=validation.geometry_manifest_sha256,
             retention_class=self.retention_class,
         )
 
