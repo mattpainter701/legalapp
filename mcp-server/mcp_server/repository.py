@@ -1472,16 +1472,16 @@ class CourtListenerRepository:
             partitions = dict_rows(cur)
             cur.execute(
                 """
-                SELECT l.source_key, l.partition_key, source_release AS corpus_version,
-                       NULL AS cursor_url, acquisition_state AS status, updated_at,
-                       CASE WHEN acquisition_state IN ('complete', 'indexed')
-                            THEN last_checked_at ELSE NULL END
+                SELECT l.source_key, l.partition_key, l.source_release AS corpus_version,
+                       NULL AS cursor_url, l.acquisition_state AS status, l.updated_at,
+                       CASE WHEN l.acquisition_state IN ('complete', 'indexed')
+                            THEN l.last_checked_at ELSE NULL END
                             AS last_successful_harvest_at, 0 AS retry_count,
                        NULL AS next_retry_at, NULL AS dead_letter_at
                 FROM corpus_coverage_ledger l
                 JOIN legal_sources s ON s.source_key=l.source_key
                 JOIN public_authority_source_lineage pas ON pas.source_key=l.source_key AND pas.corpus_version=l.source_release
-                WHERE source_release = %s
+                WHERE l.source_release = %s
                 ORDER BY l.source_key, l.partition_key
             """,
                 [version_key],
