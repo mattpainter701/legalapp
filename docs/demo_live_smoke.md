@@ -18,6 +18,13 @@ command-line access-code option, so it does not appear in shell history or the
 process argument list. HTTPS is required for non-loopback hosts. HTTP is allowed
 only for local disposable testing (`localhost`, `127.0.0.1`, or `::1`).
 
+For an Access-protected isolated QA hostname, set the paired
+`CLOUDFLARE_ACCESS_CLIENT_ID` and `CLOUDFLARE_ACCESS_CLIENT_SECRET` environment
+variables. The harness sends them only as the Cloudflare Access service-token
+headers, never prints them, and rejects a partial pair. The QA promotion
+workflow supplies these values from the `skynet-development` environment; do
+not pass them on the command line or reuse a production demo access code.
+
 The command provisions one normal disposable demo session, verifies
 `/api/auth/me`, and confirms that the fixture clone contains synthetic matters,
 conversations, or tasks. The access code is sent only in the bootstrap request;

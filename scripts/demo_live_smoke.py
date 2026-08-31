@@ -15,6 +15,10 @@ Optional:
   DEMO_EMAIL          Email used for the disposable workspace
                       (default: demo-smoke-<random>@demo.example.com)
   DEMO_TIMEOUT_SECONDS (default: 30)
+  CLOUDFLARE_ACCESS_CLIENT_ID / CLOUDFLARE_ACCESS_CLIENT_SECRET
+                      Paired Cloudflare Access service-token credentials for
+                      an Access-protected origin. Both are required when either
+                      is set and are never printed.
 
 The command exits non-zero on a failed check and prints only redacted, stable
 check results. The access code and session cookies never appear in output.
@@ -61,10 +65,27 @@ class Client:
         self.opener = urllib.request.build_opener(
             urllib.request.HTTPCookieProcessor(self.cookies)
         )
+        access_client_id = os.getenv("CLOUDFLARE_ACCESS_CLIENT_ID", "").strip()
+        access_client_secret = os.getenv(
+            "CLOUDFLARE_ACCESS_CLIENT_SECRET", ""
+        ).strip()
+        if bool(access_client_id) != bool(access_client_secret):
+            raise SmokeFailure(
+                "Cloudflare Access client ID and secret must be configured together"
+            )
+        self.default_headers = {
+            "Accept": "application/json",
+            "User-Agent": "lawhand-demo-smoke/1",
+        }
+        if access_client_id:
+            self.default_headers |= {
+                "CF-Access-Client-Id": access_client_id,
+                "CF-Access-Client-Secret": access_client_secret,
+            }
 
     def request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> Response:
         body = None
-        headers = {"Accept": "application/json", "User-Agent": "lawhand-demo-smoke/1"}
+        headers = dict(self.default_headers)
         if payload is not None:
             body = json.dumps(payload).encode("utf-8")
             headers["Content-Type"] = "application/json"

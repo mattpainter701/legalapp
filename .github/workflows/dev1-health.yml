@@ -17,19 +17,35 @@ jobs:
   health:
     if: vars.LAWHAND_DEV1_ENABLED == 'true'
     runs-on: ubuntu-latest
+    environment:
+      name: skynet-development
+      url: https://${{ vars.LAWHAND_QA_HOSTNAME }}
     timeout-minutes: 5
     steps:
       - name: Probe readiness and TLS
         id: probe
         continue-on-error: true
+        env:
+          QA_HOSTNAME: ${{ vars.LAWHAND_QA_HOSTNAME }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.LAWHAND_QA_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.LAWHAND_QA_ACCESS_CLIENT_SECRET }}
         run: |
           set -Eeuo pipefail
-          curl --fail --silent --show-error --max-time 20 \
-            https://dev1.getlawhand.com/health/readiness \
+          [[ "$QA_HOSTNAME" =~ ^[A-Za-z0-9.-]+$ ]]
+          [[ -n "$CF_ACCESS_CLIENT_ID" && -n "$CF_ACCESS_CLIENT_SECRET" ]]
+          access_headers=(
+            --header "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID"
+            --header "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET"
+          )
+          curl --fail --silent --show-error --max-time 20 "${access_headers[@]}" \
+            "https://$QA_HOSTNAME/health/readiness" \
             | jq -e '.status == "ok"' >/dev/null
+          curl --fail --silent --show-error --max-time 20 "${access_headers[@]}" \
+            "https://$QA_HOSTNAME/api/version" \
+            | jq -e '.status == "ok" and (.commit | test("^[0-9a-f]{40}$"))' >/dev/null
           timeout 20 openssl s_client \
-            -connect dev1.getlawhand.com:443 \
-            -servername dev1.getlawhand.com </dev/null 2>/dev/null \
+            -connect "${QA_HOSTNAME}:443" \
+            -servername "$QA_HOSTNAME" </dev/null 2>/dev/null \
             | openssl x509 -checkend 1209600 -noout
 
       - name: Reconcile dev1 alert issue
@@ -44,11 +60,11 @@ jobs:
             const existing = issues.find((issue) => issue.title === title);
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             if (failed && existing) {
-              await github.rest.issues.update({ owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number, body: `Dev1 readiness or TLS failed.\n\nRun: ${runUrl}` });
+              await github.rest.issues.update({ owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number, body: `QA readiness, exact version, Cloudflare Access, or TLS failed.\n\nRun: ${runUrl}` });
             } else if (failed) {
-              await github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title, body: `Dev1 readiness or TLS failed.\n\nRun: ${runUrl}` });
+              await github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title, body: `QA readiness, exact version, Cloudflare Access, or TLS failed.\n\nRun: ${runUrl}` });
             } else if (existing) {
               await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number, body: `Dev1 recovered: ${runUrl}` });
               await github.rest.issues.update({ owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number, state: 'closed' });
             }
-            if (failed) core.setFailed('Dev1 readiness or TLS failed.');
+            if (failed) core.setFailed('QA readiness, exact version, Cloudflare Access, or TLS failed.');
