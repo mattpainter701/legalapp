@@ -713,6 +713,53 @@ export default function WorkflowSettingsPage({ user, embedded = false }) {
                     </button>
                   )}
                 </span>
+                <div className="mt-2 text-sm space-y-2">
+                  {template.template_description && (
+                    <p>{template.template_description}</p>
+                  )}
+                  <p>
+                    Initial stage: {" "}
+                    {template.stages?.find(
+                      (stage) =>
+                        stage.stage_key === template.initial_stage_key,
+                    )?.label || template.initial_stage_key}
+                  </p>
+                  <div>
+                    <strong>Stages</strong>
+                    <ol>
+                      {(template.stages || []).map((stage) => (
+                        <li key={stage.stage_key}>
+                          {stage.label} ({stage.stage_key})
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                  <div>
+                    <strong>Checklist</strong>
+                    <ul>
+                      {(template.checklist || []).map((item) => (
+                        <li key={item.item_key}>
+                          {item.title} · {item.stage_key} · due +
+                          {item.due_offset_days} days · {item.assignee_role}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div>
+                    <strong>Required fields</strong>
+                    {(template.required_fields || []).length ? (
+                      <ul>
+                        {template.required_fields.map((field) => (
+                          <li key={field.id || field.field_definition_id}>
+                            {field.label || field.field_key || field.id}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p>None</p>
+                    )}
+                  </div>
+                </div>
                 {canManage && template.version ===
                   Math.max(
                     ...templates

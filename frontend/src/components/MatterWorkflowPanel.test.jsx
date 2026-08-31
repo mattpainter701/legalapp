@@ -69,7 +69,12 @@ describe("MatterWorkflowPanel", () => {
     vi.unstubAllGlobals();
   });
   it("loads fields and gates apply behind approval capability", async () => {
-    render(<MatterWorkflowPanel matterId="m1" user={{ capabilities: [] }} />);
+    render(
+      <MatterWorkflowPanel
+        matterId="m1"
+        user={{ capabilities: ["manage_matters"] }}
+      />,
+    );
     expect(await screen.findByLabelText("Court")).toBeInTheDocument();
     await waitFor(() =>
       expect(screen.getByText(/No workflow runs/)).toBeInTheDocument(),
@@ -77,7 +82,10 @@ describe("MatterWorkflowPanel", () => {
   });
   it("embeds firm configuration only for workflow managers", async () => {
     const { rerender } = render(
-      <MatterWorkflowPanel matterId="m1" user={{ capabilities: [] }} />,
+      <MatterWorkflowPanel
+        matterId="m1"
+        user={{ capabilities: ["manage_matters"] }}
+      />,
     );
     await screen.findByLabelText("Court");
     expect(
@@ -87,7 +95,7 @@ describe("MatterWorkflowPanel", () => {
     rerender(
       <MatterWorkflowPanel
         matterId="m1"
-        user={{ capabilities: ["manage_workflows"] }}
+        user={{ capabilities: ["manage_workflows", "manage_matters"] }}
       />,
     );
     expect(
@@ -108,7 +116,12 @@ describe("MatterWorkflowPanel", () => {
         },
       ],
     });
-    render(<MatterWorkflowPanel matterId="m1" user={{ capabilities: [] }} />);
+    render(
+      <MatterWorkflowPanel
+        matterId="m1"
+        user={{ capabilities: ["manage_matters"] }}
+      />,
+    );
     expect(
       await screen.findByText(/Sensitive value stored/),
     ).toBeInTheDocument();
@@ -137,6 +150,9 @@ describe("MatterWorkflowPanel", () => {
     expect(
       await screen.findByText("Firm workflow configuration"),
     ).toBeInTheDocument();
+    expect(api.getMatterCustomFields).not.toHaveBeenCalled();
+    expect(api.getMatterWorkflowTemplates).not.toHaveBeenCalled();
+    expect(api.getMatterWorkflowRuns).not.toHaveBeenCalled();
   });
   it("does not expose raw UUID editing for contact-linked values", async () => {
     api.getMatterCustomFields.mockResolvedValue({
@@ -149,7 +165,12 @@ describe("MatterWorkflowPanel", () => {
         },
       ],
     });
-    render(<MatterWorkflowPanel matterId="m1" user={{ capabilities: [] }} />);
+    render(
+      <MatterWorkflowPanel
+        matterId="m1"
+        user={{ capabilities: ["manage_matters"] }}
+      />,
+    );
     expect(
       await screen.findByText(/Primary contact: contact-linked values require/i),
     ).toBeInTheDocument();
@@ -190,7 +211,12 @@ describe("MatterWorkflowPanel", () => {
     api.previewMatterWorkflow.mockRejectedValueOnce({
       response: { status: 503, data: { detail: "Try again" } },
     });
-    render(<MatterWorkflowPanel matterId="m1" user={{ capabilities: [] }} />);
+    render(
+      <MatterWorkflowPanel
+        matterId="m1"
+        user={{ capabilities: ["manage_matters"] }}
+      />,
+    );
     fireEvent.change(
       await screen.findByLabelText("Approved workflow template"),
       { target: { value: "v1" } },
@@ -219,7 +245,12 @@ describe("MatterWorkflowPanel", () => {
     api.previewMatterWorkflow.mockRejectedValueOnce({
       response: { status: 409 },
     });
-    render(<MatterWorkflowPanel matterId="m1" user={{ capabilities: [] }} />);
+    render(
+      <MatterWorkflowPanel
+        matterId="m1"
+        user={{ capabilities: ["manage_matters"] }}
+      />,
+    );
     fireEvent.change(
       await screen.findByLabelText("Approved workflow template"),
       { target: { value: "v1" } },

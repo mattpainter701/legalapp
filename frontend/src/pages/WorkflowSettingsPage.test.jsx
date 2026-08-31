@@ -16,6 +16,7 @@ const api = vi.hoisted(() => ({
         {
           template_id: "t1",
           template_name: "Opening",
+          template_description: "Review-first opening workflow",
           version_id: "v1",
           version: 1,
           status: "draft",
@@ -33,7 +34,9 @@ const api = vi.hoisted(() => ({
               assignee_role: "matter_owner",
             },
           ],
-          required_fields: [{ id: "field-1" }],
+          required_fields: [
+            { id: "field-1", field_key: "court", label: "Court" },
+          ],
         },
       ],
     }),
@@ -59,6 +62,7 @@ describe("WorkflowSettingsPage", () => {
         {
           template_id: "t1",
           template_name: "Opening",
+          template_description: "Review-first opening workflow",
           version_id: "v1",
           version: 1,
           status: "draft",
@@ -76,7 +80,9 @@ describe("WorkflowSettingsPage", () => {
               assignee_role: "matter_owner",
             },
           ],
-          required_fields: [{ id: "field-1" }],
+          required_fields: [
+            { id: "field-1", field_key: "court", label: "Court" },
+          ],
         },
       ],
     });
@@ -149,6 +155,15 @@ describe("WorkflowSettingsPage", () => {
       <WorkflowSettingsPage user={{ capabilities: ["approve_legal_work"] }} />,
     );
     expect(await screen.findByText("Opening")).toBeInTheDocument();
+    expect(
+      screen.getByText("Review-first opening workflow"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Initial stage:\s*Initial/)).toBeInTheDocument();
+    expect(screen.getByText("Initial (initial)")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Review file.*initial.*due \+2 days.*matter_owner/),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Court")).toBeInTheDocument();
     expect(api.listWorkflowFields).not.toHaveBeenCalled();
     expect(
       screen.queryByRole("button", { name: "Create template draft" }),

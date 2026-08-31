@@ -669,7 +669,7 @@ async def rollback_run(
                 select(Task)
                 .where(Task.tenant_id == run.tenant_id, Task.id.in_(task_ids))
                 .order_by(Task.created_at)
-                .with_for_update()
+                .with_for_update(of=Task)
             )
         )
         .scalars()

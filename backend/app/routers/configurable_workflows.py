@@ -88,7 +88,7 @@ async def _matter_or_404(
 ) -> Matter:
     query = select(Matter).where(Matter.id == matter_id, Matter.tenant_id == tenant_id)
     if lock:
-        query = query.with_for_update()
+        query = query.with_for_update(of=Matter)
     matter = await db.scalar(query)
     if matter is None:
         raise HTTPException(status_code=404, detail="Matter not found")
@@ -106,7 +106,7 @@ async def _contact_or_404(
         Contact.id == contact_id, Contact.tenant_id == tenant_id
     )
     if lock:
-        query = query.with_for_update()
+        query = query.with_for_update(of=Contact)
     contact = await db.scalar(query)
     if contact is None:
         raise HTTPException(status_code=404, detail="Contact not found")
@@ -189,7 +189,7 @@ async def update_field_definition(
             CustomFieldDefinition.id == field_id,
             CustomFieldDefinition.tenant_id == user.tenant_id,
         )
-        .with_for_update()
+        .with_for_update(of=CustomFieldDefinition)
     )
     if field is None:
         raise HTTPException(status_code=404, detail="Custom field not found")
@@ -623,7 +623,7 @@ async def create_workflow_template_version(
             MatterWorkflowTemplate.id == template_id,
             MatterWorkflowTemplate.tenant_id == user.tenant_id,
         )
-        .with_for_update()
+        .with_for_update(of=MatterWorkflowTemplate)
     )
     if template is None:
         raise HTTPException(status_code=404, detail="Workflow template not found")
@@ -774,7 +774,7 @@ async def archive_workflow_template(
             MatterWorkflowTemplate.id == template_id,
             MatterWorkflowTemplate.tenant_id == user.tenant_id,
         )
-        .with_for_update()
+        .with_for_update(of=MatterWorkflowTemplate)
     )
     if template is None:
         raise HTTPException(status_code=404, detail="Workflow template not found")
@@ -934,7 +934,7 @@ async def _run_or_404(
         MatterWorkflowRun.matter_id == matter_id,
     )
     if lock:
-        query = query.with_for_update()
+        query = query.with_for_update(of=MatterWorkflowRun)
     run = await db.scalar(query)
     if run is None:
         raise HTTPException(status_code=404, detail="Workflow run not found")

@@ -14,6 +14,7 @@ import json
 import hashlib
 import os
 import threading
+import time
 import uuid
 from datetime import date
 from typing import Any
@@ -514,6 +515,30 @@ def seed_demo_purge_fixture(owner, fixture_tenant_id: uuid.UUID) -> dict[str, An
     }
 
 
+def assert_seeded_draft_approval_transitions(owner, fixture: dict[str, Any]) -> int:
+    """Prove the trigger permits the exact draft-to-approved transition."""
+
+    version_ids = [record["version"] for record in fixture["records"]]
+    with owner.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT count(*)
+              FROM public.matter_workflow_template_versions
+             WHERE id = ANY(%s)
+               AND status = 'approved'
+               AND approved_by_user_id IS NOT NULL
+               AND approved_at IS NOT NULL
+            """,
+            (version_ids,),
+        )
+        approved = cursor.fetchone()[0]
+    if approved != len(version_ids):
+        raise AssertionError(
+            "the exact draft-to-approved version transition was not permitted"
+        )
+    return approved
+
+
 def assert_catalog(owner, runtime_role: str) -> None:
     with owner.cursor() as cursor:
         cursor.execute(
@@ -646,7 +671,9 @@ def assert_effective_rls(runtime_url: str, fixture: dict[str, Any]) -> dict[str,
     return visible
 
 
-def assert_integrity_and_immutability(owner, fixture: dict[str, Any]) -> list[str]:
+def assert_integrity_and_immutability(
+    owner, fixture: dict[str, Any]
+) -> tuple[list[str], list[str]]:
     tenant_a = fixture["tenants"][0]
     user_a, user_b = fixture["users"]
     matter_a, matter_b = fixture["matters"]
@@ -882,21 +909,63 @@ def assert_integrity_and_immutability(owner, fixture: dict[str, Any]) -> list[st
             {"P0001"},
         ),
         (
-            "approved_child_update",
+            "approved_stage_update",
             "UPDATE matter_workflow_stage_definitions SET label='Changed' WHERE id=%s",
             (record_a["stage"],),
             {"P0001"},
         ),
         (
-            "approved_child_delete",
+            "approved_stage_delete",
+            "DELETE FROM matter_workflow_stage_definitions WHERE id=%s",
+            (record_a["stage"],),
+            {"P0001"},
+        ),
+        (
+            "approved_stage_insert",
+            "INSERT INTO matter_workflow_stage_definitions (tenant_id,template_version_id,stage_key,label,position) VALUES (%s,%s,'late','Late',2)",
+            (tenant_a, record_a["version"]),
+            {"P0001"},
+        ),
+        (
+            "approved_checklist_update",
+            "UPDATE matter_workflow_checklist_definitions SET title='Changed' WHERE id=%s",
+            (record_a["checklist"],),
+            {"P0001"},
+        ),
+        (
+            "approved_requirement_update",
+            "UPDATE matter_workflow_field_requirements SET field_definition_id=%s WHERE id=%s",
+            (typed_field, record_a["requirement"]),
+            {"P0001"},
+        ),
+        (
+            "approved_checklist_delete",
             "DELETE FROM matter_workflow_checklist_definitions WHERE id=%s",
             (record_a["checklist"],),
             {"P0001"},
         ),
         (
-            "approved_child_insert",
-            "INSERT INTO matter_workflow_stage_definitions (tenant_id,template_version_id,stage_key,label,position) VALUES (%s,%s,'late','Late',2)",
+            "approved_checklist_insert",
+            "INSERT INTO matter_workflow_checklist_definitions (tenant_id,template_version_id,stage_key,item_key,title,position,task_type,priority,due_offset_days,assignee_role) VALUES (%s,%s,'start','late_check','Late check',9,'review','medium',0,'unassigned')",
             (tenant_a, record_a["version"]),
+            {"P0001"},
+        ),
+        (
+            "approved_requirement_delete",
+            "DELETE FROM matter_workflow_field_requirements WHERE id=%s",
+            (record_a["requirement"],),
+            {"P0001"},
+        ),
+        (
+            "approved_requirement_insert",
+            "INSERT INTO matter_workflow_field_requirements (tenant_id,template_version_id,field_definition_id) VALUES (%s,%s,%s)",
+            (tenant_a, record_a["version"], typed_field),
+            {"P0001"},
+        ),
+        (
+            "mutated_draft_approval_transition",
+            "UPDATE matter_workflow_template_versions SET status='approved', approved_by_user_id=%s, approved_at=now(), definition_sha256=%s WHERE id=%s",
+            (user_a, HASH_B, draft_version),
             {"P0001"},
         ),
     )
@@ -926,11 +995,54 @@ def assert_integrity_and_immutability(owner, fixture: dict[str, Any]) -> list[st
             "UPDATE matter_workflow_stage_definitions SET label='Draft changed' WHERE id=%s",
             (draft_stage,),
         )
+        draft_insert_stage = uuid.uuid4()
+        cursor.execute(
+            "INSERT INTO matter_workflow_stage_definitions (id,tenant_id,template_version_id,stage_key,label,position) VALUES (%s,%s,%s,'draft_insert','Draft insert',1)",
+            (draft_insert_stage, tenant_a, draft_version),
+        )
+        cursor.execute(
+            "UPDATE matter_workflow_stage_definitions SET label='Draft updated' WHERE id=%s",
+            (draft_insert_stage,),
+        )
+        cursor.execute(
+            "DELETE FROM matter_workflow_stage_definitions WHERE id=%s",
+            (draft_insert_stage,),
+        )
+        draft_checklist = uuid.uuid4()
+        cursor.execute(
+            "INSERT INTO matter_workflow_checklist_definitions (id,tenant_id,template_version_id,stage_key,item_key,title,position,task_type,priority,due_offset_days,assignee_role) VALUES (%s,%s,%s,'draft','draft_check','Draft check',0,'review','medium',0,'unassigned')",
+            (draft_checklist, tenant_a, draft_version),
+        )
+        cursor.execute(
+            "UPDATE matter_workflow_checklist_definitions SET title='Draft check updated' WHERE id=%s",
+            (draft_checklist,),
+        )
+        cursor.execute(
+            "DELETE FROM matter_workflow_checklist_definitions WHERE id=%s",
+            (draft_checklist,),
+        )
         cursor.execute(
             "DELETE FROM matter_workflow_stage_definitions WHERE id=%s", (draft_stage,)
         )
+        draft_requirement = uuid.uuid4()
+        cursor.execute(
+            "INSERT INTO matter_workflow_field_requirements (id,tenant_id,template_version_id,field_definition_id) VALUES (%s,%s,%s,%s)",
+            (draft_requirement, tenant_a, draft_version, typed_field),
+        )
+        cursor.execute(
+            "UPDATE matter_workflow_field_requirements SET field_definition_id=%s WHERE id=%s",
+            (relationship_field, draft_requirement),
+        )
+        cursor.execute(
+            "DELETE FROM matter_workflow_field_requirements WHERE id=%s",
+            (draft_requirement,),
+        )
     owner.commit()
-    return rejected
+    return rejected, [
+        "draft_stage_insert_update_delete",
+        "draft_checklist_insert_update_delete",
+        "draft_requirement_insert_update_delete",
+    ]
 
 
 def assert_temp_shadow_resistance(
@@ -1082,6 +1194,43 @@ def assert_demo_purge_lifecycle(
             sqlstates={"P0001"},
             tenant_id=tenant_id,
         )
+        with owner.cursor() as cursor:
+            cursor.execute(
+                "UPDATE public.tenants SET is_active=false WHERE id=%s",
+                (tenant_id,),
+            )
+            cursor.execute(
+                """
+                UPDATE public.demo_sessions
+                   SET status='purging', purge_started_at=now(),
+                       expires_at=now() + interval '1 hour'
+                 WHERE id=%s
+                """,
+                (session_id,),
+            )
+        owner.commit()
+        expect_database_error(
+            runtime,
+            "DELETE FROM public.matter_workflow_run_events WHERE run_id=%s",
+            (purge_fixture["run_id"],),
+            sqlstates={"P0001"},
+            tenant_id=tenant_id,
+        )
+        with owner.cursor() as cursor:
+            cursor.execute(
+                "UPDATE public.tenants SET is_active=true WHERE id=%s",
+                (tenant_id,),
+            )
+            cursor.execute(
+                """
+                UPDATE public.demo_sessions
+                   SET status='active', purge_started_at=NULL,
+                       expires_at=now() - interval '1 minute'
+                 WHERE id=%s
+                """,
+                (session_id,),
+            )
+        owner.commit()
 
     async def run_verified_purge() -> dict[str, int]:
         from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -1132,6 +1281,7 @@ def assert_demo_purge_lifecycle(
     return {
         "invalid_context_rejected": True,
         "mismatched_session_rejected": True,
+        "future_session_expiry_rejected": True,
         "deleted_rows": actual,
         "terminal_audit": True,
     }
@@ -1201,6 +1351,133 @@ def assert_concurrent_idempotency(
             f"expected one durable claim, got {outcomes}; errors={failures}"
         )
     return sorted(outcomes)
+
+
+def assert_approval_child_mutation_serialization(
+    owner, runtime_url: str, fixture: dict[str, Any]
+) -> dict[str, Any]:
+    """Prove approval and child mutation cannot cross an immutable snapshot."""
+
+    tenant_id = fixture["tenants"][0]
+    actor_user_id = fixture["users"][0]
+    template_id = uuid.uuid4()
+    version_id = uuid.uuid4()
+    stage_id = uuid.uuid4()
+    with owner.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO matter_workflow_templates (id,tenant_id,name,created_by_user_id) VALUES (%s,%s,'Approval race',%s)",
+            (template_id, tenant_id, actor_user_id),
+        )
+        cursor.execute(
+            "INSERT INTO matter_workflow_template_versions (id,tenant_id,template_id,version,initial_stage_key,definition_sha256,created_by_user_id) VALUES (%s,%s,%s,1,'initial',%s,%s)",
+            (version_id, tenant_id, template_id, HASH_A, actor_user_id),
+        )
+        cursor.execute(
+            "INSERT INTO matter_workflow_stage_definitions (id,tenant_id,template_version_id,stage_key,label,position) VALUES (%s,%s,%s,'initial','Initial',0)",
+            (stage_id, tenant_id, version_id),
+        )
+    owner.commit()
+
+    approval = connect(runtime_url)
+    mutation = connect(runtime_url)
+    mutation_pid = mutation.get_backend_pid()
+    set_tenant(approval, tenant_id)
+    set_tenant(mutation, tenant_id)
+    started = threading.Event()
+    outcomes: list[str] = []
+
+    def mutate_child() -> None:
+        try:
+            with mutation.cursor() as cursor:
+                started.set()
+                cursor.execute(
+                    "UPDATE public.matter_workflow_stage_definitions SET label='Raced mutation' WHERE id=%s",
+                    (stage_id,),
+                )
+            mutation.commit()
+            outcomes.append("committed")
+        except psycopg2.Error as exc:
+            mutation.rollback()
+            outcomes.append(exc.pgcode or type(exc).__name__)
+
+    thread = threading.Thread(target=mutate_child, daemon=True)
+    try:
+        with approval.cursor() as cursor:
+            cursor.execute(
+                "SELECT id FROM public.matter_workflow_template_versions WHERE id=%s FOR UPDATE",
+                (version_id,),
+            )
+            cursor.execute(
+                "SELECT label FROM public.matter_workflow_stage_definitions WHERE id=%s",
+                (stage_id,),
+            )
+            if cursor.fetchone()[0] != "Initial":
+                raise AssertionError("approval race seed was unexpectedly mutated")
+            cursor.execute(
+                "UPDATE public.matter_workflow_template_versions SET status='approved', approved_by_user_id=%s, approved_at=now() WHERE id=%s",
+                (actor_user_id, version_id),
+            )
+        thread.start()
+        if not started.wait(timeout=5):
+            raise AssertionError("approval race mutation did not start")
+        deadline = time.monotonic() + 5
+        blocked_before_approval_commit = False
+        while time.monotonic() < deadline:
+            with owner.cursor() as cursor:
+                cursor.execute(
+                    "SELECT wait_event_type FROM pg_catalog.pg_stat_activity WHERE pid=%s",
+                    (mutation_pid,),
+                )
+                row = cursor.fetchone()
+            if row is not None and row[0] == "Lock":
+                blocked_before_approval_commit = True
+                break
+            if not thread.is_alive():
+                break
+            time.sleep(0.05)
+        approval.commit()
+        thread.join(timeout=10)
+        if thread.is_alive():
+            raise AssertionError("approval race mutation deadlocked")
+    finally:
+        if approval.closed == 0:
+            approval.rollback()
+        if thread.is_alive():
+            thread.join(timeout=10)
+        if thread.is_alive() and mutation.closed == 0:
+            mutation.cancel()
+            thread.join(timeout=5)
+        if approval.closed == 0:
+            approval.close()
+        if mutation.closed == 0:
+            mutation.rollback()
+            mutation.close()
+
+    if not blocked_before_approval_commit or outcomes != ["P0001"]:
+        raise AssertionError(
+            "approval/child serialization failed: "
+            f"blocked={blocked_before_approval_commit}, outcomes={outcomes}"
+        )
+    with owner.cursor() as cursor:
+        cursor.execute(
+            "SELECT status FROM public.matter_workflow_template_versions WHERE id=%s",
+            (version_id,),
+        )
+        status = cursor.fetchone()[0]
+        cursor.execute(
+            "SELECT label FROM public.matter_workflow_stage_definitions WHERE id=%s",
+            (stage_id,),
+        )
+        label = cursor.fetchone()[0]
+    if status != "approved" or label != "Initial":
+        raise AssertionError(
+            f"approval race crossed its snapshot: status={status}, label={label}"
+        )
+    return {
+        "mutation_blocked_until_approval_commit": True,
+        "mutation_rejected_after_approval": True,
+        "approved_snapshot_unchanged": True,
+    }
 
 
 async def assert_concurrent_apply(
@@ -1765,11 +2042,17 @@ def main() -> int:
             )
         assert_catalog(owner, runtime_role)
         fixture = seed_fixture(owner)
+        approved_transitions = assert_seeded_draft_approval_transitions(owner, fixture)
         purge_fixture = seed_demo_purge_fixture(owner, fixture["tenants"][0])
         visible = assert_effective_rls(runtime_url, fixture)
-        rejected = assert_integrity_and_immutability(owner, fixture)
+        rejected, draft_child_mutations = assert_integrity_and_immutability(
+            owner, fixture
+        )
         shadow_rejections = assert_temp_shadow_resistance(runtime_url, fixture)
         demo_purge = assert_demo_purge_lifecycle(owner, runtime_url, purge_fixture)
+        approval_serialization = assert_approval_child_mutation_serialization(
+            owner, runtime_url, fixture
+        )
         concurrent = assert_concurrent_idempotency(runtime_url, fixture)
         concurrent_apply = asyncio.run(assert_concurrent_apply(runtime_url, fixture))
 
@@ -1781,8 +2064,11 @@ def main() -> int:
                 "runtime_role": {"superuser": False, "bypassrls": False},
                 "visible_rows_by_tenant": visible,
                 "database_rejections": rejected,
+                "draft_child_mutations": draft_child_mutations,
+                "draft_to_approved_transitions": approved_transitions,
                 "temp_shadow_rejections": shadow_rejections,
                 "verified_demo_purge": demo_purge,
+                "approval_child_serialization": approval_serialization,
                 "concurrent_claim_rowcounts": concurrent,
                 "concurrent_apply": concurrent_apply,
             },

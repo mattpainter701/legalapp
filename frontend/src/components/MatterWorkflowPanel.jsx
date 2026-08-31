@@ -139,6 +139,14 @@ export default function MatterWorkflowPanel({
   const load = useCallback(async () => {
     setLoading(true);
     setMessage(null);
+    if (!canManageMatters) {
+      setFields([]);
+      setValues({});
+      setTemplates([]);
+      setRuns([]);
+      setLoading(false);
+      return;
+    }
     try {
       const [fieldData, templateData, runData] = await Promise.all([
         getMatterCustomFields(matterId),
@@ -170,7 +178,7 @@ export default function MatterWorkflowPanel({
     } finally {
       setLoading(false);
     }
-  }, [matterId]);
+  }, [canManageMatters, matterId]);
   useEffect(() => {
     load();
   }, [load]);

@@ -24,7 +24,7 @@ advertised as editable in the matter UI pending coordinated CRM integration.
 ## Validation
 
 - Focused backend workflow, schema, migration, capability, demo-registry,
-  release, and Alembic tests: 97 passed. The rebased migration-safety gate's
+  release, and Alembic tests: 84 passed. The rebased migration-safety gate's
   focused contract suite added another 11 passed.
 - Focused frontend workflow/settings tests: 20 passed. Full frontend suite:
   90 files and 502 tests passed. ESLint completed with zero
@@ -32,11 +32,12 @@ advertised as editable in the matter UI pending coordinated CRM integration.
   `ProfilePage.jsx`; the production Vite build passed.
 - Ruff lint and format checks passed for every changed Python file.
   `git diff --check`, release catalog regeneration/check, committed migration
-  safety from merge base `3871f1f5`, and offline Alembic SQL generation for
+  safety from merge base `0acf2d53`, and offline Alembic SQL generation for
   `147_studio_drafts -> 148_configurable_workflows` passed.
 - This host has no PostgreSQL listener or `psql`, and its Docker Desktop engine
   pipe is absent. The replacement rehearsal now covers the deployed
-  147-to-148 migration, NOBYPASSRLS TEMP-shadow attacks, production
+  147-to-148 migration, NOBYPASSRLS TEMP-shadow attacks, exact-only template
+  approval, approval-versus-child-mutation serialization, production
   `autoflush=False` multi-evidence rollback, and exact-session deletion of all
   11 workflow tables through the real expired-demo purge service. That
   executable evidence remains mandatory on the final pushed head through the

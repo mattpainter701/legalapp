@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import date
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -474,3 +475,23 @@ def test_workflow_routes_declare_required_capabilities():
             elif isinstance(value, tuple):
                 declared.update(value)
         assert capabilities <= declared
+
+
+def test_lock_helpers_scope_postgresql_row_locks_to_canonical_tables():
+    router_source = (
+        Path(__file__)
+        .parents[1]
+        .joinpath("app/routers/configurable_workflows.py")
+        .read_text()
+    )
+    service_source = (
+        Path(__file__)
+        .parents[1]
+        .joinpath("app/services/configurable_workflows.py")
+        .read_text()
+    )
+    assert "with_for_update(of=Matter)" in router_source
+    assert "with_for_update(of=Contact)" in router_source
+    assert "with_for_update(of=MatterWorkflowRun)" in router_source
+    assert "with_for_update(of=MatterWorkflowTemplate)" in router_source
+    assert "with_for_update(of=Task)" in service_source

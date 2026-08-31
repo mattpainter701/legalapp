@@ -95,7 +95,22 @@ async def test_workflow_authoring_and_approval_are_independently_enforced(
     await db_session.commit()
     approval_review = await client.get("/api/workflow-config/templates")
     assert approval_review.status_code == 200, approval_review.text
-    assert approval_review.json()["items"][0]["version_id"] == template["version_id"]
+    review = approval_review.json()["items"][0]
+    assert review["version_id"] == template["version_id"]
+    assert review["template_description"] == "Bounded opening"
+    assert review["initial_stage_key"] == "initial"
+    assert review["stages"] == [{"stage_key": "initial", "label": "Initial"}]
+    assert review["checklist"][0] == {
+        "item_key": "review",
+        "stage_key": "initial",
+        "title": "Review file",
+        "description": None,
+        "task_type": "review",
+        "priority": "medium",
+        "due_offset_days": 2,
+        "assignee_role": "matter_owner",
+    }
+    assert review["required_fields"] == []
     denied_authoring = await client.post(
         "/api/workflow-config/fields",
         json={

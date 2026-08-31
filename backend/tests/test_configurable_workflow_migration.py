@@ -83,6 +83,8 @@ def test_composite_parent_targets_and_immutable_triggers_are_present() -> None:
     assert "prevent_approved_workflow_mutation" in source
     assert "148_configurable_workflows_created" in source
     assert "OLD.template_version_id" in source and "NEW.template_version_id" in source
+    assert source.count("FOR SHARE;") == 4
+    assert "workflow template approval transition must be exact" in source
 
 
 def test_immutable_history_has_only_verified_demo_purge_delete_carve_out() -> None:
@@ -96,6 +98,7 @@ def test_immutable_history_has_only_verified_demo_purge_delete_carve_out() -> No
         "tenant.is_active = false",
         "tenant.expires_at <= now()",
         "demo.status = 'purging'",
+        "demo.expires_at <= now()",
         "demo.fixture_tenant_id <> demo.tenant_id",
         "demo.purge_started_at IS NOT NULL",
     ):
@@ -133,7 +136,27 @@ def test_rehearsal_requires_runtime_role_and_reports_evidence() -> None:
     assert "failed apply left partial effects" in source
     assert "no_context" in source and "cross_write" in source
     assert "thread.join" in source and "[0, 1]" in source
-    assert "approved_child_insert" in source
+    for evidence in (
+        "approved_stage_insert",
+        "approved_stage_update",
+        "approved_stage_delete",
+        "approved_checklist_insert",
+        "approved_checklist_update",
+        "approved_checklist_delete",
+        "approved_requirement_insert",
+        "approved_requirement_update",
+        "approved_requirement_delete",
+        "mutated_draft_approval_transition",
+        "approval_child_serialization",
+        "mutation_blocked_until_approval_commit",
+        "mutation_rejected_after_approval",
+        "approved_snapshot_unchanged",
+        "draft_to_approved_transitions",
+        "draft_stage_insert_update_delete",
+        "draft_checklist_insert_update_delete",
+        "draft_requirement_insert_update_delete",
+    ):
+        assert evidence in source
     assert "history_event_update" in source
     assert "typed_value_mismatch" in source
     assert "cross_linked_contact_fk" in source

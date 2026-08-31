@@ -21,8 +21,10 @@ services, send email, or generate documents.
 
 Users with `manage_workflows` reach firm configuration from the Workflow tab
 of an existing matter. Approval-only users can review and approve pending
-versions from the same matter-owned surface without receiving authoring or
-matter-mutation authority. There is no new global route or Template Studio
+versions—including the description, initial stage, ordered stages, checklist
+due offsets and assignee roles, and required fields—from the same matter-owned
+surface without receiving authoring or matter-mutation authority. There is no
+new global route or Template Studio
 seam in this slice. The migration adds `manage_workflows` to existing system
 Administrator roles, and the role editor exposes authoring and approval as
 separate grants for custom roles.
@@ -170,7 +172,8 @@ events or steps. A separate later-step assignee failure proves the transaction
 leaves no partial tasks, apply events/steps, status change, or matter-stage
 change. Finally, an expired demo with approved definitions and applied run
 history is deleted through the real, exact-session purge path, while invalid
-and mismatched purge contexts remain rejected and a terminal operator audit is
+and mismatched purge contexts, including a future-expiry demo session paired
+with an expired tenant, remain rejected and a terminal operator audit is
 preserved. The repository's global migration-safety rehearsal and
 tenant-schema verifier remain mandatory; ORM `create_all` is not accepted as
 migration evidence.

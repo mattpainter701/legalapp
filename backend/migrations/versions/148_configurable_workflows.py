@@ -303,6 +303,7 @@ def upgrade() -> None:
               AND tenant.expires_at <= now()
               AND demo.id::text = current_setting('app.config_workflow_demo_purge_session_id', true)
               AND demo.status = 'purging'
+              AND demo.expires_at <= now()
               AND demo.fixture_tenant_id <> demo.tenant_id
               AND demo.purge_started_at IS NOT NULL
           );
@@ -343,50 +344,89 @@ def upgrade() -> None:
         "CREATE TRIGGER matter_workflow_runs_snapshot_immutable BEFORE UPDATE OR DELETE ON matter_workflow_runs FOR EACH ROW EXECUTE FUNCTION prevent_config_workflow_run_tamper()"
     )
     op.execute("""CREATE FUNCTION prevent_approved_workflow_mutation() RETURNS trigger AS $$
-    DECLARE version_status text;
+    DECLARE version_status text; new_version_status text;
     BEGIN
-      IF TG_OP = 'DELETE' AND public.config_workflow_demo_purge_authorized(OLD.tenant_id)
-      THEN RETURN OLD; END IF;
-      IF TG_OP = 'INSERT' AND TG_TABLE_NAME = 'matter_workflow_template_versions' THEN
-        IF NEW.status <> 'draft' OR NEW.approved_by_user_id IS NOT NULL OR NEW.approved_at IS NOT NULL THEN
-          RAISE EXCEPTION 'workflow template versions must be created as drafts';
+      IF TG_TABLE_NAME = 'matter_workflow_template_versions' THEN
+        IF TG_OP = 'INSERT' THEN
+          IF NEW.status <> 'draft' OR NEW.approved_by_user_id IS NOT NULL OR NEW.approved_at IS NOT NULL THEN
+            RAISE EXCEPTION 'workflow template versions must be created as drafts';
+          END IF;
+          RETURN NEW;
+        END IF;
+        IF TG_OP = 'DELETE' THEN
+          IF public.config_workflow_demo_purge_authorized(OLD.tenant_id) THEN
+            RETURN OLD;
+          END IF;
+          IF OLD.status = 'approved' THEN
+            RAISE EXCEPTION 'approved workflow template definitions are immutable';
+          END IF;
+          RETURN OLD;
+        END IF;
+        IF OLD.status = 'draft' AND NEW.status = 'approved'
+           AND OLD.approved_by_user_id IS NULL AND OLD.approved_at IS NULL
+           AND NEW.approved_by_user_id IS NOT NULL AND NEW.approved_at IS NOT NULL
+           AND OLD.id=NEW.id AND OLD.tenant_id=NEW.tenant_id
+           AND OLD.template_id=NEW.template_id AND OLD.version=NEW.version
+           AND OLD.initial_stage_key=NEW.initial_stage_key
+           AND OLD.definition_sha256=NEW.definition_sha256
+           AND OLD.created_by_user_id=NEW.created_by_user_id
+           AND OLD.created_at=NEW.created_at THEN
+          RETURN NEW;
+        END IF;
+        IF OLD.status = 'approved' THEN
+          RAISE EXCEPTION 'approved workflow template definitions are immutable';
+        END IF;
+        IF NEW.status <> 'draft'
+           OR NEW.approved_by_user_id IS NOT NULL
+           OR NEW.approved_at IS NOT NULL THEN
+          RAISE EXCEPTION 'workflow template approval transition must be exact';
         END IF;
         RETURN NEW;
       END IF;
+
+      -- Child tables do not have version-only fields such as status. Branch
+      -- by operation before dereferencing OLD/NEW so PostgreSQL never plans a
+      -- table-incompatible record-field access.
       IF TG_OP = 'INSERT' THEN
-        version_status := (SELECT status FROM public.matter_workflow_template_versions WHERE tenant_id=NEW.tenant_id AND id=NEW.template_version_id);
+        SELECT status INTO version_status
+          FROM public.matter_workflow_template_versions
+         WHERE tenant_id=NEW.tenant_id AND id=NEW.template_version_id
+         FOR SHARE;
         IF version_status = 'approved' THEN
           RAISE EXCEPTION 'approved workflow template definitions are immutable';
         END IF;
         RETURN NEW;
       END IF;
-      IF TG_TABLE_NAME = 'matter_workflow_template_versions' AND TG_OP='UPDATE'
-         AND OLD.status='draft' AND NEW.status='approved'
-         AND OLD.approved_by_user_id IS NULL AND OLD.approved_at IS NULL
-         AND NEW.approved_by_user_id IS NOT NULL AND NEW.approved_at IS NOT NULL
-         AND OLD.id=NEW.id AND OLD.tenant_id=NEW.tenant_id
-         AND OLD.template_id=NEW.template_id AND OLD.version=NEW.version
-         AND OLD.initial_stage_key=NEW.initial_stage_key
-         AND OLD.definition_sha256=NEW.definition_sha256
-         AND OLD.created_by_user_id=NEW.created_by_user_id
-         AND OLD.created_at=NEW.created_at THEN RETURN NEW; END IF;
-      IF TG_TABLE_NAME = 'matter_workflow_template_versions' THEN
-        IF (SELECT status FROM public.matter_workflow_template_versions WHERE tenant_id=OLD.tenant_id AND id=OLD.id) = 'approved' THEN
-          RAISE EXCEPTION 'approved workflow template definitions are immutable';
-        END IF;
-        IF TG_OP = 'DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
-      END IF;
       IF TG_OP = 'DELETE' THEN
-        version_status := (SELECT status FROM public.matter_workflow_template_versions WHERE tenant_id=OLD.tenant_id AND id=OLD.template_version_id);
-        IF version_status <> 'approved' THEN RETURN OLD; END IF;
-      ELSE
-        IF (SELECT status FROM public.matter_workflow_template_versions WHERE tenant_id=OLD.tenant_id AND id=OLD.template_version_id) = 'approved'
-           OR (SELECT status FROM public.matter_workflow_template_versions WHERE tenant_id=NEW.tenant_id AND id=NEW.template_version_id) = 'approved' THEN
+        IF public.config_workflow_demo_purge_authorized(OLD.tenant_id) THEN
+          RETURN OLD;
+        END IF;
+        SELECT status INTO version_status
+          FROM public.matter_workflow_template_versions
+         WHERE tenant_id=OLD.tenant_id AND id=OLD.template_version_id
+         FOR SHARE;
+        IF version_status = 'approved' THEN
           RAISE EXCEPTION 'approved workflow template definitions are immutable';
         END IF;
-        RETURN NEW;
+        RETURN OLD;
       END IF;
-      RAISE EXCEPTION 'approved workflow template definitions are immutable';
+      SELECT status INTO version_status
+        FROM public.matter_workflow_template_versions
+       WHERE tenant_id=OLD.tenant_id AND id=OLD.template_version_id
+       FOR SHARE;
+      IF OLD.tenant_id = NEW.tenant_id
+         AND OLD.template_version_id = NEW.template_version_id THEN
+        new_version_status := version_status;
+      ELSE
+        SELECT status INTO new_version_status
+          FROM public.matter_workflow_template_versions
+         WHERE tenant_id=NEW.tenant_id AND id=NEW.template_version_id
+         FOR SHARE;
+      END IF;
+      IF version_status = 'approved' OR new_version_status = 'approved' THEN
+        RAISE EXCEPTION 'approved workflow template definitions are immutable';
+      END IF;
+      RETURN NEW;
     END; $$ LANGUAGE plpgsql SET search_path = pg_catalog, public""")
     for table in (
         "matter_workflow_template_versions",
