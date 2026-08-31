@@ -55,6 +55,15 @@ from app.services.smb_credentials import (
     SmbCredentialError,
     smb_credential_service,
 )
+from app.services.native_authorization import (
+    NativeAuthorizationError,
+    require_matter_authorization,
+    resolve_native_identity,
+)
+from app.services.search_identity_ticket import (
+    SearchIdentity,
+    mint_search_identity_ticket,
+)
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -415,6 +424,19 @@ def _normalize_folder_path(folder_path: str | None) -> str | None:
         raise ValueError("Folder path must stay within the assigned share")
     normalized = "/".join(parts)
     return normalized or None
+
+
+def _path_is_within_binding(
+    file_path: str, share_path: str, folder_path: str | None
+) -> bool:
+    """Match one file to the exact bound share folder without sibling widening."""
+    share_root = (share_path or "").replace("/", "\\").rstrip("\\").casefold()
+    candidate = (file_path or "").replace("/", "\\").rstrip("\\").casefold()
+    folder = _normalize_folder_path(folder_path)
+    root = share_root
+    if folder:
+        root += "\\" + folder.replace("/", "\\").casefold()
+    return bool(root) and (candidate == root or candidate.startswith(root + "\\"))
 
 
 def _escape_like(value: str, escape: str = "!") -> str:
@@ -1067,6 +1089,7 @@ class SmbService:
                 "tenant_id": task_tenant_id,
                 "agent_id": agent_id,
                 "file_id": task_meta.get("file_id"),
+                "user_id": task_meta.get("user_id"),
                 "share_id": task_meta.get("share_id"),
                 "content": result.content,
                 "truncated": result.truncated,
@@ -1121,6 +1144,7 @@ class SmbService:
         conversation_id: str | None,
         reason: str,
         redis=None,
+        matter_id: str | None = None,
     ) -> tuple[str, str]:
         """Create a content fetch task, log access, return (task_id, agent_id).
 
@@ -1169,6 +1193,53 @@ class SmbService:
         if assignment is None:
             raise ValueError("File share agent is unavailable")
 
+        identity_ticket = None
+        if settings.FIRM_MEMORY_NATIVE_AUTHZ_ENABLED:
+            if not settings.FIRM_MEMORY_ACL_COVERAGE_HEALTHY:
+                raise ValueError("Matter file not found")
+            if not matter_id:
+                raise ValueError("Matter file not found")
+            try:
+                await require_matter_authorization(db, tenant_id, user_id, matter_id)
+                identity = await resolve_native_identity(db, tenant_id, user_id)
+            except NativeAuthorizationError as exc:
+                raise ValueError("Matter file not found") from exc
+            binding_row = (
+                await db.execute(
+                    select(MatterSmbShare, SmbShare)
+                    .join(SmbShare, SmbShare.id == MatterSmbShare.share_id)
+                    .where(
+                        MatterSmbShare.tenant_id == tenant_uuid,
+                        MatterSmbShare.matter_id == _uuid(matter_id),
+                        MatterSmbShare.share_id == _uuid(share_id),
+                        SmbShare.tenant_id == tenant_uuid,
+                    )
+                )
+            ).one_or_none()
+            if (
+                binding_row is None
+                or not _path_is_within_binding(
+                    file_entry.path,
+                    binding_row[1].share_path,
+                    binding_row[0].folder_path,
+                )
+                or not settings.FIRM_MEMORY_IDENTITY_TICKET_PRIVATE_KEY
+            ):
+                raise ValueError("Matter file not found")
+            identity_ticket = mint_search_identity_ticket(
+                SearchIdentity(
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    source_ids=(share_id,),
+                    principal_sids=identity.principal_sids,
+                    identity_version=identity.version,
+                ),
+                private_key=settings.FIRM_MEMORY_IDENTITY_TICKET_PRIVATE_KEY,
+                audience=agent_id,
+                filters={"matter_id": matter_id, "file_id": file_id},
+                ttl_seconds=settings.FIRM_MEMORY_IDENTITY_TICKET_TTL_SECONDS,
+            )
+
         task_id = secrets.token_urlsafe(16)
 
         access_log = SmbAccessLog(
@@ -1188,6 +1259,7 @@ class SmbService:
             file_path=file_entry.path,
             share_id=share_id,
             reason=reason,
+            identity_ticket=identity_ticket,
         )
 
         pending_key = f"smb_task_pending:{agent_id}:{task_id}"
@@ -1196,6 +1268,8 @@ class SmbService:
             {
                 "tenant_id": tenant_id,
                 "file_id": file_id,
+                "user_id": user_id,
+                "matter_id": matter_id,
                 "access_log_id": str(access_log.id),
             }
         )
@@ -1221,6 +1295,7 @@ class SmbService:
         file_id: str | None = None,
         share_id: str | None = None,
         kind: str | None = None,
+        user_id: str | None = None,
     ) -> dict | None:
         """Return the full stored result payload for a task, or None if pending."""
         if not redis:
@@ -1240,6 +1315,8 @@ class SmbService:
             raise ValueError("Task is not bound to this share")
         if kind and payload.get("kind") != kind:
             raise ValueError("Task kind mismatch")
+        if user_id and str(payload.get("user_id")) != str(user_id):
+            raise ValueError("Task user mismatch")
         return payload
 
     async def get_content_result(
@@ -1305,6 +1382,11 @@ class SmbService:
         """
         await set_tenant_context(db, tenant_id)
 
+        # The SaaS metadata index has no authoritative native ACL snapshot.
+        # Once native trimming is enabled, it must not release filenames or
+        # snippets; callers use the identity-aware customer-node search path.
+        if settings.FIRM_MEMORY_NATIVE_AUTHZ_ENABLED:
+            return []
         tenant_uuid = _uuid(tenant_id)
 
         ts_query = func.plainto_tsquery("english", query)
@@ -1392,8 +1474,10 @@ class SmbService:
         self,
         db: AsyncSession,
         tenant_id: str,
+        user_id: str,
         matter_id: str,
         file_id: str,
+        redis=None,
     ) -> FirmMemorySearchHit:
         """Resolve one opaque file id inside the same matter scope as search.
 
@@ -1408,6 +1492,10 @@ class SmbService:
             raise ValueError("Matter file not found")
 
         await set_tenant_context(db, tenant_id)
+        try:
+            await require_matter_authorization(db, tenant_id, user_id, matter_id)
+        except NativeAuthorizationError as exc:
+            raise ValueError("Matter file not found") from exc
         rows = (
             await db.execute(
                 select(SmbFileIndex, SmbShare, MatterSmbShare)
@@ -1445,6 +1533,17 @@ class SmbService:
                 and not candidate.casefold().startswith(allowed_root.casefold() + "\\")
             ):
                 continue
+            if settings.FIRM_MEMORY_NATIVE_AUTHZ_ENABLED:
+                await self._revalidate_file_authorization(
+                    db,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    matter_id=matter_id,
+                    file_entry=file_entry,
+                    agent_id=str(file_entry.agent_id or ""),
+                    share_id=str(file_entry.share_id or ""),
+                    redis=redis,
+                )
             return FirmMemorySearchHit(
                 id=str(file_entry.id),
                 path=file_entry.path,
@@ -1463,6 +1562,99 @@ class SmbService:
                 created_time=file_entry.created_time,
                 share_id=str(file_entry.share_id),
             )
+        raise ValueError("Matter file not found")
+
+    async def _revalidate_file_authorization(
+        self,
+        db: AsyncSession,
+        *,
+        tenant_id: str,
+        user_id: str,
+        matter_id: str,
+        file_entry: SmbFileIndex,
+        agent_id: str,
+        share_id: str,
+        redis,
+    ) -> None:
+        """Ask the customer node for a fresh fail-closed ACL decision."""
+        if redis is None or not agent_id or not share_id:
+            raise ValueError("Matter file not found")
+        if not settings.FIRM_MEMORY_ACL_COVERAGE_HEALTHY:
+            raise ValueError("Matter file not found")
+        try:
+            identity = await resolve_native_identity(db, tenant_id, user_id)
+        except NativeAuthorizationError as exc:
+            raise ValueError("Matter file not found") from exc
+        if not settings.FIRM_MEMORY_IDENTITY_TICKET_PRIVATE_KEY:
+            raise ValueError("Matter file not found")
+        ticket = mint_search_identity_ticket(
+            SearchIdentity(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                source_ids=(share_id,),
+                principal_sids=identity.principal_sids,
+                identity_version=identity.version,
+            ),
+            private_key=settings.FIRM_MEMORY_IDENTITY_TICKET_PRIVATE_KEY,
+            audience=agent_id,
+            filters={"matter_id": matter_id, "file_id": str(file_entry.id)},
+            ttl_seconds=settings.FIRM_MEMORY_IDENTITY_TICKET_TTL_SECONDS,
+        )
+        task_id = secrets.token_urlsafe(16)
+        task = ContentFetchTask(
+            task_id=task_id,
+            kind="authorize_file",
+            file_path=file_entry.path,
+            share_id=share_id,
+            reason="preview_open_revalidation",
+            identity_ticket=ticket,
+        )
+        access_log = SmbAccessLog(
+            tenant_id=_uuid(tenant_id),
+            user_id=_uuid(user_id),
+            agent_id=_uuid(agent_id),
+            file_path=file_entry.path,
+            access_reason="authorization_revalidate",
+        )
+        db.add(access_log)
+        await db.flush()
+        pending_key = f"smb_task_pending:{agent_id}:{task_id}"
+        await _commit_audit_then_publish(
+            db,
+            redis,
+            pending_key,
+            {
+                **task.model_dump(),
+                "tenant_id": tenant_id,
+                "agent_id": agent_id,
+                "matter_id": matter_id,
+                "file_id": str(file_entry.id),
+                "access_log_id": str(access_log.id),
+            },
+        )
+        deadline = time.monotonic() + LOCAL_SEARCH_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            payload = await self.get_task_result(
+                task_id,
+                tenant_id,
+                redis=redis,
+                file_id=str(file_entry.id),
+                kind="authorize_file",
+            )
+            if payload is not None:
+                detail = (
+                    payload.get("detail")
+                    if isinstance(payload.get("detail"), dict)
+                    else {}
+                )
+                if payload.get("ok") and detail.get("authorized") is True:
+                    return
+                raise ValueError("Matter file not found")
+            await asyncio.sleep(LOCAL_SEARCH_POLL_SECONDS)
+        try:
+            await redis.delete(pending_key)
+        except Exception:
+            pass
         raise ValueError("Matter file not found")
 
     async def search_local_files(
@@ -1574,6 +1766,20 @@ class SmbService:
 
         started = time.monotonic()
         await set_tenant_context(db, tenant_id)
+        try:
+            await require_matter_authorization(db, tenant_id, user_id, matter_id)
+        except NativeAuthorizationError as exc:
+            raise ValueError(str(exc)) from exc
+        native_identity = None
+        if settings.FIRM_MEMORY_NATIVE_AUTHZ_ENABLED:
+            if not settings.FIRM_MEMORY_ACL_COVERAGE_HEALTHY:
+                raise RuntimeError("native ACL coverage is not healthy")
+            try:
+                native_identity = await resolve_native_identity(db, tenant_id, user_id)
+            except NativeAuthorizationError as exc:
+                raise RuntimeError(str(exc)) from exc
+            if not settings.FIRM_MEMORY_IDENTITY_TICKET_PRIVATE_KEY:
+                raise RuntimeError("native authorization signing is unavailable")
 
         # The paired binding/share predicates are deliberately kept together;
         # a folder from one share must never widen another share's scope.
@@ -1615,6 +1821,26 @@ class SmbService:
         ]
         for agent_id, group in grouped.items():
             task_id = secrets.token_urlsafe(16)
+            identity_ticket = None
+            if native_identity is not None:
+                identity_ticket = mint_search_identity_ticket(
+                    SearchIdentity(
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        source_ids=tuple(
+                            scope["share_id"] for scope in group["scopes"]
+                        ),
+                        principal_sids=native_identity.principal_sids,
+                        identity_version=native_identity.version,
+                    ),
+                    private_key=settings.FIRM_MEMORY_IDENTITY_TICKET_PRIVATE_KEY,
+                    audience=agent_id,
+                    filters={
+                        "matter_id": matter_id,
+                        "file_extensions": file_extensions or [],
+                    },
+                    ttl_seconds=settings.FIRM_MEMORY_IDENTITY_TICKET_TTL_SECONDS,
+                )
             task = ContentFetchTask(
                 task_id=task_id,
                 kind="local_search",
@@ -1624,6 +1850,7 @@ class SmbService:
                 file_extensions=file_extensions,
                 limit=limit,
                 correlation_id=correlation_id,
+                identity_ticket=identity_ticket,
             )
             await redis.set(
                 f"smb_task_pending:{agent_id}:{task_id}",

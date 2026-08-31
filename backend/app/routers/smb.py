@@ -5,6 +5,8 @@ import hashlib
 import json
 import logging
 import secrets
+import uuid
+from datetime import datetime, timezone
 
 from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
@@ -19,6 +21,8 @@ from app.middleware.tenant import get_current_user, require_admin
 from app.models.smb_agent import SmbAgent
 from app.models.smb_file_index import SmbFileIndex
 from app.models.smb_share import SmbShare
+from app.models.native_identity import NativeIdentityMapping
+from app.models.user import User
 from app.schemas.smb import (
     AgentHeartbeatRequest,
     AgentInfo,
@@ -30,6 +34,9 @@ from app.schemas.smb import (
     FirmMemorySearchHit,
     FirmMemorySearchRequest,
     FirmMemorySearchResponse,
+    NativeAuthorizationStatus,
+    NativeIdentityDiagnostic,
+    NativeIdentityUpdate,
     MatterSmbShareCreate,
     MatterSmbShareInfo,
     PairingCodeResponse,
@@ -56,7 +63,9 @@ from app.services.smb_credentials import (
     smb_credential_service,
 )
 from app.services.rbac_service import get_user_capabilities
+from app.services.operator_audit import record_operator_audit
 from app.services.token_vault import decrypt_token, encrypt_token
+from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +73,7 @@ router = APIRouter(prefix="/api/v1/smb", tags=["smb"])
 
 _REGISTRATION_RECEIPT_PREFIX = "smb_registration_receipt:v1:"
 _REGISTRATION_RECEIPT_TTL_SECONDS = 120
+settings = get_settings()
 
 
 async def require_firm_memory_user(
@@ -421,6 +431,7 @@ async def search_local_files(
 async def get_matter_file(
     file_id: str,
     matter_id: str = Query(...),
+    request: Request = None,
     db: AsyncSession = Depends(get_db),
     user=Depends(require_firm_memory_user),
 ):
@@ -429,8 +440,10 @@ async def get_matter_file(
         return await smb_service.get_matter_file(
             db,
             str(user.tenant_id),
+            str(user.id),
             matter_id,
             file_id,
+            redis=getattr(request.app.state, "redis", None) if request else None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
@@ -441,6 +454,7 @@ async def request_content_fetch(
     file_id: str,
     reason: str = Query("search_result"),
     conversation_id: str | None = Query(None),
+    matter_id: str | None = Query(None),
     request: Request = None,
     db: AsyncSession = Depends(get_db),
     user=Depends(get_current_user),
@@ -459,6 +473,7 @@ async def request_content_fetch(
             conversation_id,
             reason,
             redis=redis,
+            matter_id=matter_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
@@ -499,6 +514,7 @@ async def get_content_status(
             redis=redis,
             file_id=file_id,
             kind="content_fetch",
+            user_id=str(user.id),
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
@@ -519,6 +535,177 @@ async def get_content_status(
 # ═══════════════════════════════════════════════════════════════════════
 #  Admin endpoints (JWT + admin role)
 # ═══════════════════════════════════════════════════════════════════════
+
+
+def _identity_diagnostic(row: NativeIdentityMapping) -> NativeIdentityDiagnostic:
+    return NativeIdentityDiagnostic(
+        id=str(row.id),
+        user_id=str(row.user_id),
+        provider=row.provider,
+        state=row.state,
+        version=row.version,
+        principal_count=1 + len(row.effective_sids or []),
+        resolved_at=row.resolved_at,
+        expires_at=row.expires_at,
+        error_code=row.error_code,
+    )
+
+
+@router.get("/native-authz/status", response_model=NativeAuthorizationStatus)
+async def native_authorization_status(
+    db: AsyncSession = Depends(get_db), admin=Depends(require_admin)
+):
+    """Privacy-safe rollout diagnostics; no SIDs or object ids are returned."""
+    await set_tenant_context(db, str(admin.tenant_id))
+    users = (
+        (
+            await db.execute(
+                select(User).where(
+                    User.tenant_id == admin.tenant_id, User.is_active.is_(True)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    identities = (
+        (
+            await db.execute(
+                select(NativeIdentityMapping).where(
+                    NativeIdentityMapping.tenant_id == admin.tenant_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    now = datetime.now(timezone.utc)
+    healthy = sum(
+        row.state == "healthy" and row.expires_at is not None and row.expires_at > now
+        for row in identities
+    )
+    signing = bool(settings.FIRM_MEMORY_IDENTITY_TICKET_PRIVATE_KEY)
+    coverage = bool(settings.FIRM_MEMORY_ACL_COVERAGE_HEALTHY)
+    return NativeAuthorizationStatus(
+        enabled=settings.FIRM_MEMORY_NATIVE_AUTHZ_ENABLED,
+        signing_configured=signing,
+        acl_coverage_confirmed=coverage,
+        active_users=len(users),
+        healthy_identities=healthy,
+        unhealthy_identities=max(0, len(users) - healthy),
+        rollout_ready=bool(users) and healthy == len(users) and signing and coverage,
+    )
+
+
+@router.get("/native-identities", response_model=list[NativeIdentityDiagnostic])
+async def list_native_identities(
+    db: AsyncSession = Depends(get_db), admin=Depends(require_admin)
+):
+    await set_tenant_context(db, str(admin.tenant_id))
+    rows = (
+        (
+            await db.execute(
+                select(NativeIdentityMapping)
+                .where(NativeIdentityMapping.tenant_id == admin.tenant_id)
+                .order_by(NativeIdentityMapping.user_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [_identity_diagnostic(row) for row in rows]
+
+
+@router.put("/native-identities/{user_id}", response_model=NativeIdentityDiagnostic)
+async def update_native_identity(
+    user_id: str,
+    body: NativeIdentityUpdate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(require_admin),
+):
+    """Record immutable AD/Entra identity plus versioned group expansion."""
+    try:
+        user_uuid = uuid.UUID(user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="User not found") from exc
+    await set_tenant_context(db, str(admin.tenant_id))
+    user = await db.scalar(
+        select(User).where(User.id == user_uuid, User.tenant_id == admin.tenant_id)
+    )
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    row = await db.scalar(
+        select(NativeIdentityMapping).where(
+            NativeIdentityMapping.tenant_id == admin.tenant_id,
+            NativeIdentityMapping.user_id == user_uuid,
+        )
+    )
+    immutable = (
+        body.provider,
+        body.directory_tenant_id,
+        body.object_id,
+        body.primary_sid.upper(),
+    )
+    if row is None:
+        row = NativeIdentityMapping(
+            tenant_id=admin.tenant_id,
+            user_id=user_uuid,
+            provider=immutable[0],
+            directory_tenant_id=immutable[1],
+            object_id=immutable[2],
+            primary_sid=immutable[3],
+        )
+        db.add(row)
+    elif immutable != (
+        row.provider,
+        row.directory_tenant_id,
+        row.object_id,
+        row.primary_sid.upper(),
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Immutable native identity does not match the existing mapping",
+        )
+    if body.state == "healthy" and (
+        not body.group_expansion_complete
+        or body.expires_at is None
+        or body.expires_at <= datetime.now(timezone.utc)
+        or body.resolved_at is None
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Healthy identity requires complete group expansion and fresh "
+                "resolution timestamps"
+            ),
+        )
+    row.effective_sids = body.effective_sids
+    row.state = body.state
+    row.resolved_at = body.resolved_at
+    row.expires_at = body.expires_at
+    row.error_code = body.error_code if body.state != "healthy" else None
+    row.version = int(row.version or 0) + 1
+    await record_operator_audit(
+        db,
+        request,
+        action="firm_memory.native_identity.updated",
+        resource_type="native_identity_mapping",
+        resource_id=user_id,
+        actor_type="tenant_admin",
+        actor_id=str(admin.id),
+        metadata={
+            "tenant_id": str(admin.tenant_id),
+            "provider": body.provider,
+            "state": body.state,
+            "version": row.version,
+            "principal_count": 1 + len(body.effective_sids),
+            "group_expansion_complete": body.group_expansion_complete,
+        },
+    )
+    await db.commit()
+    await db.refresh(row)
+    return _identity_diagnostic(row)
 
 
 @router.post("/pairing-code", response_model=PairingCodeResponse)

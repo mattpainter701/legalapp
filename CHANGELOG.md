@@ -29,6 +29,12 @@
   bindings. Production activation remains fail-closed until encrypted CAS
   backup and restore rehearsal join the deployment gate; DOCX fidelity remains
   Phase 5 work.
+- **Default-off Firm Memory identity and native authorization gate:** the SaaS
+  can map a user to an immutable AD/Entra object and SID set, expand versioned
+  effective group SIDs, and mint one-use Ed25519 search tickets bound to tenant,
+  authorizer so inaccessible matter names and association counts are never
+  returned through a second policy path. The rollout remains disabled until
+  identity resolution, signing, and ACL coverage are explicitly healthy.
 - **Configurable matter data and review-first workflow execution:** tenant
   administrators can define bounded typed matter fields in the matter workflow
   UI, with tenant-safe contact field definitions and values available as an API
@@ -2473,3 +2479,4 @@
 - Document upload with vector embedding
 - Plugin system: Litigation Matters, Commercial Renewals
 - Admin dashboard (tenant users, usage stats)
+

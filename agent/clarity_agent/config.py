@@ -77,6 +77,9 @@ _ENV_MAP = {
     "search_max_results": "LAWHAND_SEARCH_MAX_RESULTS",
     "search_max_bulk_documents": "LAWHAND_SEARCH_MAX_BULK_DOCUMENTS",
     "search_max_bulk_mb": "LAWHAND_SEARCH_MAX_BULK_MB",
+    "native_authz_enabled": "CLARITY_NATIVE_AUTHZ_ENABLED",
+    "search_identity_public_key": "CLARITY_SEARCH_IDENTITY_PUBLIC_KEY",
+    "acl_max_age_seconds": "CLARITY_ACL_MAX_AGE_SECONDS",
 }
 
 _INT_FIELDS = (
@@ -89,6 +92,7 @@ _INT_FIELDS = (
     "search_max_results",
     "search_max_bulk_documents",
     "search_max_bulk_mb",
+    "acl_max_age_seconds",
 )
 
 _BOOL_FIELDS = ("local_index_enabled", "search_node_enabled")
@@ -239,6 +243,9 @@ class AgentConfig:
     search_max_results: int = 100
     search_max_bulk_documents: int = 500
     search_max_bulk_mb: int = 8
+    native_authz_enabled: bool = False
+    search_identity_public_key: str = ""
+    acl_max_age_seconds: int = 3600
     _encrypted_smb_password: str = field(default="", repr=False)
     _encrypted_opensearch_password: str = field(default="", repr=False)
     _encrypted_search_gateway_token: str = field(default="", repr=False)
@@ -279,6 +286,7 @@ class AgentConfig:
                 if field_name in _INT_FIELDS:
                     val = int(val)
                 elif field_name in _BOOL_FIELDS:
+                elif field_name in {"local_index_enabled", "native_authz_enabled"}:
                     val = val.strip().lower() not in {"0", "false", "no", "off"}
                 setattr(cfg, field_name, val)
         return cfg
@@ -338,6 +346,9 @@ class AgentConfig:
                 "search_max_results": self.search_max_results,
                 "search_max_bulk_documents": self.search_max_bulk_documents,
                 "search_max_bulk_mb": self.search_max_bulk_mb,
+                "native_authz_enabled": self.native_authz_enabled,
+                "search_identity_public_key": self.search_identity_public_key,
+                "acl_max_age_seconds": self.acl_max_age_seconds,
             }
         }
         temp_path = CONFIG_FILE.with_suffix(".tmp")

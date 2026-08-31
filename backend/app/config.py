@@ -478,6 +478,13 @@ class Settings(BaseSettings):
     SMB_TASK_POLL_INTERVAL: int = 30  # Seconds between agent task polls
     SMB_CONTENT_FETCH_TIMEOUT: int = 120  # Seconds to wait for content fetch
     SMB_AGENT_MANIFEST_CACHE_SECONDS: int = 300
+    # Broad-release security gate.  This stays off until directory identity
+    # and native ACL coverage are healthy for the customer deployment.
+    FIRM_MEMORY_NATIVE_AUTHZ_ENABLED: bool = False
+    FIRM_MEMORY_ACL_COVERAGE_HEALTHY: bool = False
+    FIRM_MEMORY_IDENTITY_TICKET_PRIVATE_KEY: str = ""
+    FIRM_MEMORY_IDENTITY_TICKET_TTL_SECONDS: int = 60
+    FIRM_MEMORY_IDENTITY_MAX_AGE_SECONDS: int = 900
 
     @property
     def research_mcp_endpoint(self) -> str:
