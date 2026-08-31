@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import uuid
 from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
@@ -25,6 +26,15 @@ from app.models.research_workspace import (
     ResearchWorkspaceIdempotency,
     ResearchWorkspaceMember,
     ResearchWorkspaceSnapshot,
+)
+from app.models.studio_draft import (
+    StudioDraft,
+    StudioDraftAuditEvent,
+    StudioDraftField,
+    StudioDraftIdempotency,
+    StudioDraftPlacement,
+    StudioDraftSnapshot,
+    StudioSourceArtifact,
 )
 from app.models.tenant import Tenant, TenantSettings
 from app.models.user import User
@@ -522,21 +532,109 @@ async def test_verified_purge_deletes_demo_and_preserves_fixture(
             ),
         ]
     )
+    source_id, draft_id, field_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    source_content = b"Disposable demo Studio source"
+    db_session.add(
+        StudioSourceArtifact(
+            id=source_id,
+            tenant_id=tenant_id,
+            sha256=hashlib.sha256(source_content).hexdigest(),
+            media_type="text/markdown",
+            format="markdown",
+            byte_size=len(source_content),
+            resolver_key=f"studio-db:v1:{uuid.uuid4()}",
+            content_bytes=source_content,
+            created_by_user_id=user_id,
+        )
+    )
+    await db_session.flush()
+    db_session.add(
+        StudioDraft(
+            id=draft_id,
+            tenant_id=tenant_id,
+            source_artifact_id=source_id,
+            source_sha256=hashlib.sha256(source_content).hexdigest(),
+            source_media_type="text/markdown",
+            title="Disposable Studio draft",
+            format="markdown",
+            identity_sha256="c" * 64,
+            created_by_user_id=user_id,
+            updated_by_user_id=user_id,
+        )
+    )
+    await db_session.flush()
+    db_session.add(
+        StudioDraftField(
+            id=field_id,
+            tenant_id=tenant_id,
+            draft_id=draft_id,
+            automation_key="client_name",
+            label="Client name",
+            field_type="text",
+        )
+    )
+    await db_session.flush()
+    db_session.add_all(
+        [
+            StudioDraftPlacement(
+                tenant_id=tenant_id,
+                draft_id=draft_id,
+                field_id=field_id,
+                format="markdown",
+                anchor_kind="template_token",
+                anchor={"token": "client_name"},
+            ),
+            StudioDraftSnapshot(
+                tenant_id=tenant_id,
+                draft_id=draft_id,
+                source_artifact_id=source_id,
+                revision=1,
+                identity_sha256="c" * 64,
+                content_sha256="d" * 64,
+                payload={},
+                created_by_user_id=user_id,
+            ),
+            StudioDraftIdempotency(
+                tenant_id=tenant_id,
+                actor_user_id=user_id,
+                operation="create",
+                idempotency_key="demo-studio-create",
+                request_sha256="e" * 64,
+                expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            ),
+            StudioDraftAuditEvent(
+                tenant_id=tenant_id,
+                draft_id=draft_id,
+                event_type="created",
+                revision=1,
+                actor_user_id=user_id,
+                detail={},
+            ),
+        ]
+    )
     await db_session.commit()
     # Matching user-settable context is still insufficient while this is an
     # active demo session. The DB trigger requires the service's claimed,
     # inactive, expired lifecycle facts before it allows immutable DELETE.
     await db_session.execute(
-        text("SELECT set_config('app.research_workspace_demo_purge_tenant_id', :value, true)"),
+        text(
+            "SELECT set_config('app.research_workspace_demo_purge_tenant_id', :value, true)"
+        ),
         {"value": str(tenant_id)},
     )
     await db_session.execute(
-        text("SELECT set_config('app.research_workspace_demo_purge_session_id', :value, true)"),
+        text(
+            "SELECT set_config('app.research_workspace_demo_purge_session_id', :value, true)"
+        ),
         {"value": str(demo_session_id)},
     )
-    with pytest.raises(Exception, match="research history, snapshots, and revisions are immutable"):
+    with pytest.raises(
+        Exception, match="research history, snapshots, and revisions are immutable"
+    ):
         await db_session.execute(
-            text("DELETE FROM research_workspace_snapshots WHERE tenant_id = :tenant_id"),
+            text(
+                "DELETE FROM research_workspace_snapshots WHERE tenant_id = :tenant_id"
+            ),
             {"tenant_id": str(tenant_id)},
         )
     await db_session.rollback()
@@ -554,14 +652,20 @@ async def test_verified_purge_deletes_demo_and_preserves_fixture(
     await db_session.commit()
     await set_tenant_context(db_session, str(tenant_id))
     await db_session.execute(
-        text("SELECT set_config('app.research_workspace_demo_purge_tenant_id', :value, true)"),
+        text(
+            "SELECT set_config('app.research_workspace_demo_purge_tenant_id', :value, true)"
+        ),
         {"value": str(tenant_id)},
     )
     await db_session.execute(
-        text("SELECT set_config('app.research_workspace_demo_purge_session_id', :value, true)"),
+        text(
+            "SELECT set_config('app.research_workspace_demo_purge_session_id', :value, true)"
+        ),
         {"value": str(uuid.uuid4())},
     )
-    with pytest.raises(Exception, match="research history, snapshots, and revisions are immutable"):
+    with pytest.raises(
+        Exception, match="research history, snapshots, and revisions are immutable"
+    ):
         await db_session.execute(
             text("DELETE FROM research_record_revisions WHERE tenant_id = :tenant_id"),
             {"tenant_id": str(tenant_id)},
@@ -584,8 +688,12 @@ async def test_verified_purge_deletes_demo_and_preserves_fixture(
     assert deleted["research_record_revisions"] == 1
     assert deleted["research_workspace_idempotency"] == 1
     assert deleted["research_workspace_members"] == 1
+    for studio_table in demo_purge._STUDIO_PURGE_ORDER:
+        assert deleted[studio_table] == 1
     assert await db_session.scalar(
-        select(OperatorAuditLog.id).where(OperatorAuditLog.action == "demo.session.purged")
+        select(OperatorAuditLog.id).where(
+            OperatorAuditLog.action == "demo.session.purged"
+        )
     )
     assert not target_file.exists()
 

@@ -23,6 +23,7 @@ from app.models.demo_session import DemoSession
 from app.models.operator_audit import OperatorAuditLog
 from app.models.tenant import Tenant
 from app.services.demo_registry import DEMO_TABLE_REGISTRY
+from app.services.studio_drafts import authorize_studio_demo_purge
 
 _DEMO_DOMAIN_SUFFIX = ".demo.invalid"
 _RESEARCH_IMMUTABLE_TABLES = (
@@ -32,6 +33,16 @@ _RESEARCH_IMMUTABLE_TABLES = (
 )
 _RESEARCH_PURGE_TENANT_GUC = "app.research_workspace_demo_purge_tenant_id"
 _RESEARCH_PURGE_SESSION_GUC = "app.research_workspace_demo_purge_session_id"
+_STUDIO_PURGE_ORDER = (
+    "studio_draft_placements",
+    "studio_draft_fields",
+    "studio_draft_snapshots",
+    "studio_draft_audit_events",
+    "studio_draft_idempotency",
+    "studio_drafts",
+    "studio_source_artifacts",
+)
+_STUDIO_TABLES = frozenset(_STUDIO_PURGE_ORDER)
 
 # A worker that dies between claiming a session and reaching a terminal state
 # leaves the row in "purging".  Without a reclaim window the hourly job would
@@ -233,9 +244,19 @@ async def _purge_demo_tenant_locked(
         deleted = await _purge_immutable_research_history(
             db, tables, tenant_id=tenant_id, session_id=session_id
         )
+        await authorize_studio_demo_purge(db, tenant_id, session_id)
+        # Studio's append-only trigger verifies the live demo_sessions claim.
+        # Purge this whole dependency chain before the generic order can remove
+        # that claim row.
+        for name in _STUDIO_PURGE_ORDER:
+            table = tables[name]
+            result = await db.execute(
+                delete(table).where(table.c.tenant_id == tenant_id)
+            )
+            deleted[name] = int(result.rowcount or 0)
         # Break optional cycles (invoice/retainer and self-references) first.
         for name, table in tables.items():
-            if name in _RESEARCH_IMMUTABLE_TABLES:
+            if name in _RESEARCH_IMMUTABLE_TABLES or name in _STUDIO_TABLES:
                 continue
             values = {}
             for column in table.columns:
@@ -249,7 +270,7 @@ async def _purge_demo_tenant_locked(
                 )
 
         for name in _delete_order(tables):
-            if name in _RESEARCH_IMMUTABLE_TABLES:
+            if name in _RESEARCH_IMMUTABLE_TABLES or name in _STUDIO_TABLES:
                 continue
             table = tables[name]
             result = await db.execute(

@@ -65,6 +65,15 @@ from app.models.scheduled_event import ScheduledEvent
 from app.models.communication_log import CommunicationLog
 from app.models.document_template import DocumentTemplate
 from app.models.document_template_preview import DocumentTemplatePreview
+from app.models.studio_draft import (
+    StudioDraft,
+    StudioDraftAuditEvent,
+    StudioDraftField,
+    StudioDraftIdempotency,
+    StudioDraftPlacement,
+    StudioDraftSnapshot,
+    StudioSourceArtifact,
+)
 from app.models.cloud_metadata import CloudMetadata
 from app.models.mediation import (
     MediationParty,
@@ -237,6 +246,13 @@ __all__ = [
     "LeadFunnelEvent",
     "DocumentTemplate",
     "DocumentTemplatePreview",
+    "StudioDraft",
+    "StudioDraftField",
+    "StudioDraftPlacement",
+    "StudioDraftSnapshot",
+    "StudioDraftIdempotency",
+    "StudioDraftAuditEvent",
+    "StudioSourceArtifact",
     "PromptOverride",
     "CloudMetadata",
     "SmbAgent",

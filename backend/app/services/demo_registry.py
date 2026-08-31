@@ -139,6 +139,16 @@ _PURGE_ONLY_TABLES = {
     "research_workspace_members",
     "research_workspace_snapshots",
     "research_workspaces",
+    # Studio drafts contain tenant-specific source identities, attorney-authored
+    # automation contracts, immutable snapshots, and audit/retry evidence. Purge
+    # them with an expired demo, but never clone them across tenant boundaries.
+    "studio_draft_audit_events",
+    "studio_draft_fields",
+    "studio_draft_idempotency",
+    "studio_draft_placements",
+    "studio_draft_snapshots",
+    "studio_drafts",
+    "studio_source_artifacts",
     "retention_actions",
     "retention_policies",
     "customer_lifecycle_receipts",

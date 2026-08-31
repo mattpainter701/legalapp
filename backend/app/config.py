@@ -155,6 +155,15 @@ class Settings(BaseSettings):
     TEMPLATE_OCR_AZURE_TIMEOUT_SECONDS: float = 30.0
     TEMPLATE_OCR_AZURE_MAX_POLL_SECONDS: float = 75.0
     TEMPLATE_OCR_AZURE_MAX_POLL_INTERVAL_SECONDS: float = 10.0
+    # Template Studio stays conservative until Phase 3 job cleanup and tenant
+    # administration expose explicit retention controls.
+    TEMPLATE_STUDIO_ACTIVE_DRAFT_QUOTA: int = 100
+    TEMPLATE_STUDIO_SNAPSHOT_QUOTA: int = 100
+    TEMPLATE_STUDIO_SOURCE_ARTIFACT_QUOTA: int = 100
+    TEMPLATE_STUDIO_SOURCE_BYTES_QUOTA: int = 250 * 1024 * 1024
+    TEMPLATE_STUDIO_SOURCE_ORPHAN_TTL_HOURS: int = 24
+    TEMPLATE_STUDIO_DRAFT_TTL_DAYS: int = 30
+    TEMPLATE_STUDIO_IDEMPOTENCY_TTL_HOURS: int = 24
 
     # OpenRouter — free model access (OpenAI-compatible)
     OPENROUTER_API_KEY: str = ""
@@ -1201,6 +1210,33 @@ def validate_template_ocr_settings(settings: Settings) -> None:
         )
 
 
+def validate_template_studio_settings(settings: Settings) -> None:
+    if not 1 <= settings.TEMPLATE_STUDIO_ACTIVE_DRAFT_QUOTA <= 1000:
+        raise ValueError(
+            "TEMPLATE_STUDIO_ACTIVE_DRAFT_QUOTA must be between 1 and 1000"
+        )
+    if not 1 <= settings.TEMPLATE_STUDIO_SNAPSHOT_QUOTA <= 1000:
+        raise ValueError("TEMPLATE_STUDIO_SNAPSHOT_QUOTA must be between 1 and 1000")
+    if not 1 <= settings.TEMPLATE_STUDIO_SOURCE_ARTIFACT_QUOTA <= 10_000:
+        raise ValueError(
+            "TEMPLATE_STUDIO_SOURCE_ARTIFACT_QUOTA must be between 1 and 10000"
+        )
+    if not 1_048_576 <= settings.TEMPLATE_STUDIO_SOURCE_BYTES_QUOTA <= 10_737_418_240:
+        raise ValueError(
+            "TEMPLATE_STUDIO_SOURCE_BYTES_QUOTA must be between 1 MiB and 10 GiB"
+        )
+    if not 1 <= settings.TEMPLATE_STUDIO_SOURCE_ORPHAN_TTL_HOURS <= 168:
+        raise ValueError(
+            "TEMPLATE_STUDIO_SOURCE_ORPHAN_TTL_HOURS must be between 1 and 168"
+        )
+    if not 1 <= settings.TEMPLATE_STUDIO_DRAFT_TTL_DAYS <= 365:
+        raise ValueError("TEMPLATE_STUDIO_DRAFT_TTL_DAYS must be between 1 and 365")
+    if not 1 <= settings.TEMPLATE_STUDIO_IDEMPOTENCY_TTL_HOURS <= 168:
+        raise ValueError(
+            "TEMPLATE_STUDIO_IDEMPOTENCY_TTL_HOURS must be between 1 and 168"
+        )
+
+
 def validate_worker_settings(settings: Settings) -> None:
     if not 1 <= settings.DURABLE_JOB_TENANT_CONCURRENCY <= 16:
         raise ValueError("DURABLE_JOB_TENANT_CONCURRENCY must be between 1 and 16")
@@ -1219,6 +1255,7 @@ def get_settings() -> Settings:
     validate_qbo_settings(settings)
     validate_inbound_email_settings(settings)
     validate_template_ocr_settings(settings)
+    validate_template_studio_settings(settings)
     validate_worker_settings(settings)
     validate_dev_mode_urls(settings)
     return settings

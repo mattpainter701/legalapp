@@ -11,6 +11,7 @@ from app.config import (
     validate_mcp_security_settings,
     validate_platform_bootstrap_settings,
     validate_qbo_settings,
+    validate_template_studio_settings,
     validate_token_encryption_key,
     validate_worker_settings,
 )
@@ -34,6 +35,24 @@ def test_durable_worker_concurrency_is_bounded():
             validate_worker_settings(
                 SimpleNamespace(DURABLE_JOB_TENANT_CONCURRENCY=concurrency)
             )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("TEMPLATE_STUDIO_SOURCE_ARTIFACT_QUOTA", 0),
+        ("TEMPLATE_STUDIO_SOURCE_BYTES_QUOTA", 1_048_575),
+        ("TEMPLATE_STUDIO_SOURCE_ORPHAN_TTL_HOURS", 0),
+    ],
+)
+def test_template_studio_source_limits_are_conservative_and_bounded(field, value):
+    settings = _demo_settings()
+    assert settings.TEMPLATE_STUDIO_SOURCE_ARTIFACT_QUOTA == 100
+    assert settings.TEMPLATE_STUDIO_SOURCE_BYTES_QUOTA == 250 * 1024 * 1024
+    assert settings.TEMPLATE_STUDIO_SOURCE_ORPHAN_TTL_HOURS == 24
+    setattr(settings, field, value)
+    with pytest.raises(ValueError, match=field):
+        validate_template_studio_settings(settings)
 
 
 def test_demo_settings_are_inert_while_disabled():

@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["146_research_workspaces"]
+    assert heads == ["147_studio_drafts"]
 
 
 def test_mediation_confidentiality_migration_is_additive_and_tenant_scoped():
@@ -483,3 +483,83 @@ def test_inbound_email_tables_are_force_rls_with_select_only_route_lookup():
     assert "ON inbound_email_aliases FOR SELECT" in source
     assert "app.inbound_email_route_lookup" in source
     assert "WITH CHECK (current_setting('app.inbound_email_route_lookup'" not in source
+
+
+def test_studio_draft_migration_is_post_146_force_rls_and_immutable():
+    backend_dir = Path(__file__).resolve().parents[1]
+    source = (
+        backend_dir / "migrations" / "versions" / "147_studio_drafts.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'revision = "147_studio_drafts"' in source
+    assert 'down_revision = "146_research_workspaces"' in source
+    tables = (
+        "studio_source_artifacts",
+        "studio_drafts",
+        "studio_draft_fields",
+        "studio_draft_placements",
+        "studio_draft_snapshots",
+        "studio_draft_idempotency",
+        "studio_draft_audit_events",
+    )
+    assert "for table in TABLES" in source
+    assert "ENABLE ROW LEVEL SECURITY" in source
+    assert "FORCE ROW LEVEL SECURITY" in source
+    assert "app.current_tenant_id" in source
+    for table in tables:
+        assert f'"{table}"' in source
+    assert "studio_drafts_source_identity_guard" in source
+    immutable_upgrade = source.split(
+        "CREATE FUNCTION prevent_studio_immutable_mutation", 1
+    )[1].split("def downgrade", 1)[0]
+    for table in (
+        "studio_source_artifacts",
+        "studio_draft_snapshots",
+        "studio_draft_audit_events",
+    ):
+        assert f'"{table}"' in immutable_upgrade
+    assert "CREATE TRIGGER {table}_immutable BEFORE UPDATE OR DELETE ON" in source
+    assert "prevent_studio_immutable_mutation" in source
+    assert "app.studio_demo_purge_tenant_id" in source
+    assert "app.studio_demo_purge_session_id" in source
+    assert "demo.status = 'purging'" in source
+    assert "demo.fixture_tenant_id <> demo.tenant_id" in source
+    assert "app.studio_retention_purge_reason" not in source
+    assert "ck_studio_source_artifacts_format_media" in source
+    assert "app.studio_orphan_cleanup_tenant_id" in source
+    assert "app.studio_orphan_cleanup_cutoff" in source
+    assert "NOT EXISTS (" in immutable_upgrade
+    assert "snapshot.source_artifact_id = OLD.id" in immutable_upgrade
+    assert '["tenant_id", "source_artifact_id"]' in source
+    assert (
+        '["studio_source_artifacts.tenant_id", "studio_source_artifacts.id"]' in source
+    )
+
+
+def test_studio_model_and_migration_table_column_parity():
+    from app.models.studio_draft import (
+        StudioDraft,
+        StudioDraftAuditEvent,
+        StudioDraftField,
+        StudioDraftIdempotency,
+        StudioDraftPlacement,
+        StudioDraftSnapshot,
+        StudioSourceArtifact,
+    )
+
+    backend_dir = Path(__file__).resolve().parents[1]
+    source = (
+        backend_dir / "migrations" / "versions" / "147_studio_drafts.py"
+    ).read_text(encoding="utf-8")
+    for model in (
+        StudioDraft,
+        StudioDraftField,
+        StudioDraftPlacement,
+        StudioDraftSnapshot,
+        StudioDraftIdempotency,
+        StudioDraftAuditEvent,
+        StudioSourceArtifact,
+    ):
+        assert f'"{model.__tablename__}"' in source
+        for column in model.__table__.columns:
+            assert f'"{column.name}"' in source
