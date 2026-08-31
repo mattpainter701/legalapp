@@ -2,10 +2,10 @@
   "recent_release_days": 30,
   "releases": [
     {
-      "id": "2026.08.30.10",
-      "version": "2026.08.30.10",
+      "id": "2026.08.31.1",
+      "version": "2026.08.31.1",
       "title": "Template Studio workspaces and resumable setup",
-      "published_at": "2026-08-30",
+      "published_at": "2026-08-31",
       "summary": "Document templates now have a first-class Studio home, persistent workspaces, and clearer paths from source preparation to generation.",
       "highlights": [
         {"title": "Resume template setup", "description": "Studio home groups loaded templates into continue setup, needs attention, ready to generate, and recent views using the existing library status."},

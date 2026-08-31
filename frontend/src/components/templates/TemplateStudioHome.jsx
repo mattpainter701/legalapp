@@ -14,7 +14,7 @@ const newestFirst = (left, right) => (
 function TemplateLink({ template }) {
   return (
     <Link
-      to={`/templates/${template.id}/studio`}
+      to={`/templates/${encodeURIComponent(template.id)}/studio`}
       className="group flex items-center justify-between gap-3 rounded-lg border border-brand-line bg-brand-bg px-3 py-2.5 hover:border-brand-accent/40"
     >
       <span className="min-w-0">

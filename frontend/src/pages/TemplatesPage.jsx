@@ -4,7 +4,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import PrepareFormWorkspace from '../components/templates/PrepareFormWorkspace'
 import TemplateStudioHome from '../components/templates/TemplateStudioHome'
 import TemplateStudioWorkspace from '../components/templates/TemplateStudioWorkspace'
-import { buildOpenStudioTarget, isStudioServerId, OPEN_STUDIO_EVENT, readStudioFocus } from '../components/templates/studioRouting'
+import { buildOpenStudioTarget, canonicalStudioServerId, OPEN_STUDIO_EVENT, readStudioFocus } from '../components/templates/studioRouting'
 import {
   getTemplate,
   getTemplates,
@@ -1808,6 +1808,7 @@ export default function TemplatesPage() {
 
   const workspaceMatch = location.pathname.match(/^\/templates\/([^/]+)\/studio(?:\/(test|versions|activity))?\/?$/)
   const workspaceTemplateId = workspaceMatch?.[1] || null
+  const canonicalWorkspaceTemplateId = canonicalStudioServerId(workspaceTemplateId)
   const workspaceSection = workspaceMatch?.[2] || 'workspace'
   const isNewRoute = /^\/templates\/new\/?$/.test(location.pathname)
 
@@ -1912,18 +1913,20 @@ export default function TemplatesPage() {
     if (!workspaceTemplateId) {
       setWorkspaceTemplate(null)
       setWorkspaceError(null)
+      setWorkspaceLoading(false)
       return
     }
-    if (!isStudioServerId(workspaceTemplateId)) {
-      setWorkspaceTemplate(null)
+    setWorkspaceTemplate(null)
+    setWorkspaceError(null)
+    if (!canonicalWorkspaceTemplateId) {
       setWorkspaceError('This Template Studio URL does not contain a valid template ID.')
+      setWorkspaceLoading(false)
       return
     }
 
     let cancelled = false
     setWorkspaceLoading(true)
-    setWorkspaceError(null)
-    getTemplate(workspaceTemplateId)
+    getTemplate(canonicalWorkspaceTemplateId)
       .then((template) => {
         if (!cancelled) setWorkspaceTemplate(template)
       })
@@ -1934,13 +1937,23 @@ export default function TemplatesPage() {
         if (!cancelled) setWorkspaceLoading(false)
       })
     return () => { cancelled = true }
-  }, [workspaceTemplateId])
+  }, [canonicalWorkspaceTemplateId, workspaceTemplateId])
 
   useEffect(() => {
     if (!workspaceTemplateId) return
+    if (!canonicalWorkspaceTemplateId) {
+      const message = 'This Template Studio URL does not contain a valid template ID. Showing Template Studio home.'
+      setRouteStatus(message)
+      if (location.search) navigate('/templates', { replace: true, state: { studioStatus: message } })
+      return
+    }
     const focusState = readStudioFocus(location.search)
     if (!focusState.valid) {
       setRouteStatus(focusState.message)
+      navigate(`/templates/${encodeURIComponent(workspaceTemplateId)}/studio`, {
+        replace: true,
+        state: { studioStatus: focusState.message },
+      })
       return
     }
     if (focusState.focus) {
@@ -1948,7 +1961,7 @@ export default function TemplatesPage() {
       return
     }
     setRouteStatus(location.state?.studioStatus || '')
-  }, [location.search, location.state, workspaceTemplateId])
+  }, [canonicalWorkspaceTemplateId, location.search, location.state, navigate, workspaceTemplateId])
 
   useEffect(() => {
     const handleOpenStudio = (event) => {
@@ -1965,7 +1978,7 @@ export default function TemplatesPage() {
     setShowCreate(false)
     await load()
     if (activeTab === 'generate') await loadGenerationTemplates()
-    if (created?.id) navigate(`/templates/${created.id}/studio`)
+    if (created?.id) navigate(`/templates/${encodeURIComponent(created.id)}/studio`)
     else if (isNewRoute) navigate('/templates')
   }
 
@@ -1974,12 +1987,15 @@ export default function TemplatesPage() {
     setPage(0)
     await load()
     if (activeTab === 'generate') await loadGenerationTemplates()
-    if (created?.id) navigate(`/templates/${created.id}/studio`)
+    if (created?.id) navigate(`/templates/${encodeURIComponent(created.id)}/studio`)
     else if (isNewRoute) navigate('/templates')
   }
 
   const handleUpdate = async (data) => {
-    await updateTemplate(editTemplate.id, data)
+    const savedTemplate = await updateTemplate(editTemplate.id, data)
+    if (canonicalStudioServerId(savedTemplate?.id) === canonicalWorkspaceTemplateId) {
+      setWorkspaceTemplate(savedTemplate)
+    }
     setEditTemplate(null)
     await load()
   }
@@ -2187,7 +2203,7 @@ export default function TemplatesPage() {
                     <div className="mt-auto flex items-center gap-2 pt-4">
                       <button
                         type="button"
-                        onClick={() => navigate(`/templates/${tpl.id}/studio`)}
+                        onClick={() => navigate(`/templates/${encodeURIComponent(tpl.id)}/studio`)}
                         className="inline-flex items-center justify-center gap-1 rounded-lg border border-brand-line px-3 py-2 text-xs font-semibold text-brand-ink hover:bg-brand-bg"
                       >
                         Open in Studio
@@ -2343,15 +2359,16 @@ export default function TemplatesPage() {
   )
 
   if (workspaceTemplateId) {
-    if (workspaceLoading) {
+    const workspaceMatchesRoute = canonicalStudioServerId(workspaceTemplate?.id) === canonicalWorkspaceTemplateId
+    if (canonicalWorkspaceTemplateId && (workspaceLoading || !workspaceMatchesRoute)) {
       return <div role="status" className="flex h-full items-center justify-center bg-brand-bg text-brand-muted">Loading template workspace…</div>
     }
-    if (workspaceError || !workspaceTemplate) {
+    if (!canonicalWorkspaceTemplateId || workspaceError || !workspaceTemplate || !workspaceMatchesRoute) {
       return (
         <div className="flex h-full items-center justify-center bg-brand-bg p-6">
           <div role="alert" className="max-w-lg rounded-xl border border-brand-rose/30 bg-brand-surface-2 p-6 text-center">
             <h1 className="text-lg font-semibold text-brand-ink">Template workspace unavailable</h1>
-            <p className="mt-2 text-sm text-brand-muted">{workspaceError || 'The requested template could not be loaded.'}</p>
+            <p className="mt-2 text-sm text-brand-muted">{workspaceError || (!canonicalWorkspaceTemplateId ? 'This Template Studio URL does not contain a valid template ID.' : 'The requested template could not be loaded.')}</p>
             <button type="button" onClick={() => navigate('/templates')} className="mt-4 rounded-lg bg-brand-ink px-4 py-2 text-sm font-semibold text-white">Return to Template Studio</button>
           </div>
         </div>

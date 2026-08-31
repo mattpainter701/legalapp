@@ -5,9 +5,9 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
-## 2026.08.30.10 — Template Studio workspaces and resumable setup
+## 2026.08.31.1 — Template Studio workspaces and resumable setup
 
-Released August 30, 2026.
+Released August 31, 2026.
 
 Document templates now have a first-class Studio home, persistent workspaces, and clearer paths from source preparation to generation.
 

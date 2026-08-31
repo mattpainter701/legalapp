@@ -12,6 +12,22 @@ describe('Template Studio routing contract', () => {
     })
   })
 
+  it('canonicalizes uppercase template and focus UUIDs', () => {
+    expect(buildOpenStudioTarget({
+      template_id: TEMPLATE_ID.toUpperCase(),
+      focus: 'draft',
+      draft_id: DRAFT_ID.toUpperCase(),
+    })).toEqual({
+      url: `/templates/${TEMPLATE_ID}/studio?focus=draft&draft_id=${DRAFT_ID}`,
+      valid: true,
+    })
+    expect(readStudioFocus(`?focus=draft&draft_id=${DRAFT_ID.toUpperCase()}`)).toMatchObject({
+      focus: 'draft',
+      focusId: DRAFT_ID,
+      valid: true,
+    })
+  })
+
   it('allows exactly one allowlisted focus and matching server ID', () => {
     const target = buildOpenStudioTarget({ template_id: TEMPLATE_ID, focus: 'draft', draft_id: DRAFT_ID })
     expect(target).toEqual({
@@ -42,5 +58,15 @@ describe('Template Studio routing contract', () => {
   it('rejects invalid query focus state', () => {
     expect(readStudioFocus(`?focus=proposal&draft_id=${DRAFT_ID}`)).toMatchObject({ valid: false, focus: null })
     expect(readStudioFocus(`?focus=draft&draft_id=${DRAFT_ID}&redirect_url=https://example.test`)).toMatchObject({ valid: false, focus: null })
+    expect(readStudioFocus(`?focus=draft&focus=draft&draft_id=${DRAFT_ID}`)).toMatchObject({ valid: false, focus: null })
+    expect(readStudioFocus(`?focus=draft&draft_id=${DRAFT_ID}&draft_id=${DRAFT_ID}`)).toMatchObject({ valid: false, focus: null })
+  })
+
+  it.each([null, 'draft', 42, []])('normalizes non-object event detail without throwing: %o', (detail) => {
+    expect(buildOpenStudioTarget(detail)).toEqual({
+      url: '/templates',
+      valid: false,
+      message: 'The Studio event did not include a valid template ID. Showing Template Studio home.',
+    })
   })
 })

@@ -1,4 +1,5 @@
 import { AlertTriangle, ArrowLeft, Clock3, Eye, FileText, FlaskConical, History, Pencil, Sparkles } from 'lucide-react'
+import { useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 
 const tabs = [
@@ -9,9 +10,14 @@ const tabs = [
 ]
 
 export default function TemplateStudioWorkspace({ template, section = 'workspace', statusMessage, onEdit, onGenerate }) {
-  const base = `/templates/${template.id}/studio`
+  const base = `/templates/${encodeURIComponent(String(template.id).toLowerCase())}/studio`
+  const statusRef = useRef(null)
   const sourceMissing = template.source_ready === false
     || (['pdf', 'docx'].includes(template.format) && (!template.source_filename || !template.source_sha256))
+
+  useEffect(() => {
+    if (statusMessage) statusRef.current?.focus()
+  }, [statusMessage])
 
   return (
     <div className="h-full overflow-y-auto bg-brand-bg p-4 md:p-6">
@@ -46,7 +52,7 @@ export default function TemplateStudioWorkspace({ template, section = 'workspace
           ))}
         </nav>
 
-        {statusMessage && <div role="status" tabIndex={-1} className="mt-4 rounded-lg border border-brand-amber/40 bg-brand-amber/10 px-4 py-3 text-sm text-brand-ink">{statusMessage}</div>}
+        {statusMessage && <div ref={statusRef} role="status" tabIndex={-1} className="mt-4 rounded-lg border border-brand-amber/40 bg-brand-amber/10 px-4 py-3 text-sm text-brand-ink">{statusMessage}</div>}
 
         {section === 'workspace' ? (
           <section className="mt-4 grid gap-4 md:grid-cols-3" aria-label="Template workspace summary">

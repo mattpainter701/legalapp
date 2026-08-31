@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render as rtlRender, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import TemplatesPage from './TemplatesPage'
 import {
   analyzeTemplateUpload,
@@ -38,10 +38,22 @@ vi.mock('../api', () => ({
 
 const render = (ui) => rtlRender(<MemoryRouter initialEntries={['/templates']}>{ui}</MemoryRouter>)
 
+function StudioRouteTestControls() {
+  const location = useLocation()
+  const navigate = useNavigate()
+  return (
+    <>
+      <div data-testid="studio-location">{location.pathname}{location.search}</div>
+      <button type="button" onClick={() => navigate('/templates/not-a-template-id/studio')}>Open invalid Studio route</button>
+      <button type="button" onClick={() => navigate('/templates/not-a-template-id/studio?secret=do-not-keep')}>Open unsafe invalid Studio route</button>
+    </>
+  )
+}
+
 const renderStudioRoute = (route) => rtlRender(
   <MemoryRouter initialEntries={[route]}>
     <Routes>
-      <Route path="/templates/*" element={<TemplatesPage />} />
+      <Route path="/templates/*" element={<><TemplatesPage /><StudioRouteTestControls /></>} />
     </Routes>
   </MemoryRouter>,
 )
@@ -137,6 +149,105 @@ describe('document template workflow', () => {
     expect(getTemplate).toHaveBeenCalledWith(templateId)
     expect(screen.getByRole('status')).toHaveTextContent(`Draft ${draftId} is not available in Phase 1`)
     expect(screen.getByRole('link', { name: 'Workspace' })).toHaveAttribute('aria-current', 'page')
+  })
+
+  it('keys workspace loading to the route and never renders the prior template at a new URL', async () => {
+    const firstId = '11111111-1111-4111-8111-111111111111'
+    const secondId = '22222222-2222-4222-8222-222222222222'
+    let resolveFirst
+    const firstRequest = new Promise((resolve) => { resolveFirst = resolve })
+    getTemplate.mockImplementation((id) => id === firstId
+      ? firstRequest
+      : Promise.resolve({ id: secondId, title: 'Second workspace', format: 'markdown', is_active: false }))
+
+    renderStudioRoute(`/templates/${firstId}/studio`)
+    expect(screen.getByRole('status')).toHaveTextContent('Loading template workspace')
+    expect(screen.queryByRole('heading', { name: 'Template workspace unavailable' })).not.toBeInTheDocument()
+
+    act(() => window.dispatchEvent(new CustomEvent('lawhand.open_studio', { detail: { template_id: secondId } })))
+    expect(await screen.findByRole('heading', { name: 'Second workspace' })).toBeInTheDocument()
+    expect(screen.getByTestId('studio-location')).toHaveTextContent(`/templates/${secondId}/studio`)
+
+    await act(async () => resolveFirst({ id: firstId, title: 'First workspace', format: 'markdown', is_active: false }))
+    expect(screen.queryByRole('heading', { name: 'First workspace' })).not.toBeInTheDocument()
+  })
+
+  it('loads an uppercase UUID route against the canonical lowercase template response', async () => {
+    const templateId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    getTemplate.mockResolvedValue({ id: templateId, title: 'Canonical UUID workspace', format: 'markdown', is_active: false })
+    renderStudioRoute(`/templates/${templateId.toUpperCase()}/studio`)
+
+    expect(await screen.findByRole('heading', { name: 'Canonical UUID workspace' })).toBeInTheDocument()
+    expect(getTemplate).toHaveBeenCalledWith(templateId)
+    expect(screen.queryByText('Loading template workspace…')).not.toBeInTheDocument()
+  })
+
+  it('leaves loading and rejects stale responses when a valid route changes to an invalid ID', async () => {
+    const templateId = '11111111-1111-4111-8111-111111111111'
+    let resolveRequest
+    getTemplate.mockReturnValue(new Promise((resolve) => { resolveRequest = resolve }))
+    renderStudioRoute(`/templates/${templateId}/studio`)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Open invalid Studio route' }))
+    expect(await screen.findByRole('heading', { name: 'Template workspace unavailable' })).toBeInTheDocument()
+    expect(screen.queryByText('Loading template workspace…')).not.toBeInTheDocument()
+
+    await act(async () => resolveRequest({ id: templateId, title: 'Stale workspace', format: 'markdown', is_active: false }))
+    expect(screen.queryByRole('heading', { name: 'Stale workspace' })).not.toBeInTheDocument()
+  })
+
+  it('never paints a loaded workspace on an invalid route and removes its query material', async () => {
+    const templateId = '11111111-1111-4111-8111-111111111111'
+    getTemplate.mockResolvedValue({ id: templateId, title: 'Resolved workspace', format: 'markdown', is_active: false })
+    renderStudioRoute(`/templates/${templateId}/studio`)
+    expect(await screen.findByRole('heading', { name: 'Resolved workspace' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open unsafe invalid Studio route' }))
+
+    await waitFor(() => expect(screen.getByTestId('studio-location')).toHaveTextContent(/^\/templates$/))
+    expect(screen.getByTestId('studio-location')).not.toHaveTextContent('secret')
+    expect(screen.queryByRole('heading', { name: 'Resolved workspace' })).not.toBeInTheDocument()
+  })
+
+  it('scrubs invalid direct-route query material while preserving an accessible fallback status', async () => {
+    const templateId = '11111111-1111-4111-8111-111111111111'
+    getTemplate.mockResolvedValue({ id: templateId, title: 'Canonical workspace', format: 'markdown', is_active: false })
+    renderStudioRoute(`/templates/${templateId}/studio?focus=draft&draft_id=javascript:alert(1)&redirect_url=https://example.test`)
+
+    expect(await screen.findByRole('heading', { name: 'Canonical workspace' })).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent(/unsupported data/i)
+    expect(screen.getByRole('status')).toHaveFocus()
+    expect(screen.getByTestId('studio-location')).toHaveTextContent(`/templates/${templateId}/studio`)
+    expect(screen.getByTestId('studio-location')).not.toHaveTextContent('example.test')
+  })
+
+  it('uses the saved template response throughout the open workspace after editing', async () => {
+    const templateId = '11111111-1111-4111-8111-111111111111'
+    getTemplate.mockResolvedValue({ id: templateId, title: 'Draft workspace', format: 'markdown', body: 'Hello', variable_schema: { fields: [] }, is_active: false })
+    updateTemplate.mockResolvedValue({
+      id: templateId,
+      title: 'Saved workspace',
+      format: 'markdown',
+      body: 'Hello {{client_name}}',
+      category: 'other',
+      variable_schema: { fields: [{ name: 'client_name' }, { name: 'matter_name' }] },
+      is_active: true,
+    })
+    const user = userEvent.setup()
+    renderStudioRoute(`/templates/${templateId}/studio`)
+
+    await user.click(await screen.findByRole('button', { name: 'Edit template' }))
+    const dialog = screen.getByRole('dialog', { name: 'Edit Template' })
+    const title = within(dialog).getByRole('textbox', { name: 'Title' })
+    await user.clear(title)
+    await user.type(title, 'Saved workspace')
+    await user.click(within(dialog).getByRole('button', { name: 'Update' }))
+
+    expect(await screen.findByRole('heading', { name: 'Saved workspace' })).toBeInTheDocument()
+    expect(screen.getByText('Ready to generate')).toBeInTheDocument()
+    expect(screen.getByText('2')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Generate' }))
+    expect(screen.getByRole('dialog', { name: 'Generate Document: Saved workspace' })).toBeInTheDocument()
   })
 
   it('exposes version, test, and activity routes as unavailable shells without fake controls', async () => {

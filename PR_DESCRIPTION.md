@@ -17,16 +17,17 @@ resource, arbitrary redirect/provider URL, executable content, or raw payload.
 ## Validation
 
 - focused Studio routing/event/home/workspace, TemplatesPage, Sidebar, SEO, and
-  platform-doc tests: 72 passed
+  platform-doc tests: 83 passed
 - full frontend `npm run check`: lint completed with two pre-existing
-  `no-alert` warnings and no errors; 467 tests passed; production build passed
-- release catalog generation and `--check` passed for `2026.08.30.10`
+  `no-alert` warnings and no errors; 478 tests passed; production build passed
+- release catalog generation, `--check`, and 17 release-contract tests passed
+  for `2026.08.31.1`
 
 ## Merge policy attestations
 
 - [x] Documentation updated
 - [ ] No documentation impact
-- [x] Customer release notes updated (`2026.08.30.10`)
+- [x] Customer release notes updated (`2026.08.31.1`)
 - [ ] No customer-facing release note
 - [x] Security and privacy impact reviewed
 
