@@ -113,6 +113,45 @@ async def test_create_is_source_based_matter_optional_and_handle_is_only_hashed(
     assert db.commits == 1
 
 
+@pytest.mark.asyncio
+async def test_create_fails_closed_when_disabled_or_source_is_unavailable(monkeypatch):
+    tenant_id, user_id, file_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    monkeypatch.setattr(
+        service,
+        "get_settings",
+        lambda: SimpleNamespace(FILE_OPEN_ENABLED=False),
+    )
+    with pytest.raises(service.OpenIntentError, match="not enabled"):
+        await service.create_intent(
+            _DB(),
+            tenant_id=str(tenant_id),
+            user_id=str(user_id),
+            file_id=str(file_id),
+            matter_id=None,
+            action="open",
+        )
+
+    monkeypatch.setattr(
+        service,
+        "get_settings",
+        lambda: SimpleNamespace(FILE_OPEN_ENABLED=True),
+    )
+    with pytest.raises(service.OpenIntentError, match="resynced"):
+        await service.create_intent(
+            _DB(None),
+            tenant_id=str(tenant_id),
+            user_id=str(user_id),
+            file_id=str(file_id),
+            matter_id=None,
+            action="open",
+        )
+
+
+def test_invalid_file_open_identity_is_rejected():
+    with pytest.raises(service.OpenIntentError, match="identity is invalid"):
+        service._uuid("not-a-uuid")
+
+
 def _intent(**overrides):
     now = datetime.now(timezone.utc)
     values = {
@@ -231,6 +270,43 @@ async def test_redeem_fails_closed_for_wrong_tenant_agent_or_moved_revision():
 
 
 @pytest.mark.asyncio
+async def test_redeem_rejects_disabled_feature_and_wrong_agent(monkeypatch):
+    intent = _intent()
+    monkeypatch.setattr(
+        service,
+        "get_settings",
+        lambda: SimpleNamespace(FILE_OPEN_ENABLED=False),
+    )
+    with pytest.raises(service.OpenIntentError, match="not enabled"):
+        await service.redeem_intent(
+            _DB(),
+            tenant_id=str(intent.tenant_id),
+            agent_id=str(intent.agent_id),
+            handle="e" * 32,
+            action="open",
+            session_id="1",
+            user_sid="S-1-5-1",
+        )
+
+    monkeypatch.setattr(
+        service,
+        "get_settings",
+        lambda: SimpleNamespace(FILE_OPEN_ENABLED=True),
+    )
+    with pytest.raises(service.OpenIntentError, match="agent does not match"):
+        await service.redeem_intent(
+            _DB(intent),
+            tenant_id=str(intent.tenant_id),
+            agent_id=str(uuid.uuid4()),
+            handle="f" * 32,
+            action="open",
+            session_id="1",
+            user_sid="S-1-5-1",
+        )
+    assert intent.last_failure == "agent_mismatch"
+
+
+@pytest.mark.asyncio
 async def test_outcome_audit_uses_redeemed_intent_id_and_stores_no_path_or_token():
     intent = _intent(redeemed_at=datetime.now(timezone.utc))
     db = _DB(intent)
@@ -246,3 +322,16 @@ async def test_outcome_audit_uses_redeemed_intent_id_and_stores_no_path_or_token
     assert "path" not in fields and "file_path" not in fields
     assert "handle" not in fields
     assert FileOpenIntentOutcomeRequest(outcome="opened").outcome == "opened"
+
+
+@pytest.mark.asyncio
+async def test_outcome_requires_a_redeemed_intent():
+    intent = _intent()
+    with pytest.raises(service.OpenIntentError, match="not redeemed"):
+        await service.record_outcome(
+            _DB(intent),
+            tenant_id=str(intent.tenant_id),
+            agent_id=str(intent.agent_id),
+            intent_id=str(intent.id),
+            outcome="opened",
+        )
