@@ -141,6 +141,10 @@ _PURGE_ONLY_TABLES = {
     "matter_workflow_templates",
     "mcp_product_keys",
     "mcp_usage_events",
+    # Immutable directory-object/SID mappings are identity security state.
+    # Disposable demo tenants may create them, but fixtures must never clone
+    # them across tenant or directory boundaries.
+    "native_identity_mappings",
     "mediation_invites",
     "office_action_runs",
     "offboarding_approvals",
@@ -228,6 +232,7 @@ SENSITIVE_NEVER_CLONE = frozenset(
         "inbound_email_aliases",
         "inbound_emails",
         "mcp_product_keys",
+        "native_identity_mappings",
         "smb_agents",
         "smb_credentials",
         "smb_shares",
