@@ -135,6 +135,20 @@ def test_rehearsal_requires_runtime_role_and_reports_evidence() -> None:
     assert "same_blockers" in source
     assert "failed_apply" in source
     assert "failed apply left partial effects" in source
+    assert "workflow_dependency_serialization" in source
+    assert "preview_snapshot_races" in source
+    for race in (
+        "archive",
+        "field_deactivation",
+        "active_field_phantom",
+        "matter_value",
+        "assignee_deactivation",
+        "apply_first_exactly_once_and_replayed",
+        "writer_first_stale_409_zero_effects",
+        "preview_first_snapshot_coherent",
+        "writer_first_snapshot_includes_mutation",
+    ):
+        assert race in source
     assert "no_context" in source and "cross_write" in source
     assert "thread.join" in source and "[0, 1]" in source
     for evidence in (

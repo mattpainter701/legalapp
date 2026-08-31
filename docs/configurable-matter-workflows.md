@@ -84,11 +84,22 @@ run evidence.
 Preview creation requires a caller-owned idempotency key. Reusing the key with
 the same request returns the same run; reusing it with different input returns
 409. Apply requires the exact preview hash and an explicit `confirm_apply`.
-The service locks the run and matter, recomputes all hashes, and returns 409 if
-the matter, active field set, values, assignees, template, or approval state is
-stale. Matter-stage change, task creation, task events, run steps, and final
-status commit in one transaction. Concurrent apply calls therefore produce
-one task set and replay the applied run to the loser.
+The service locks the run and matter, then takes a transaction-scoped shared
+tenant workflow-configuration lock. It locks the selected template/version,
+ordered definition rows, every current matter-field definition, and all
+resolved assignee users before recomputing the hashes. Field and template
+configuration writers take the matching exclusive tenant lock before their
+row locks. This prevents active-field insert/reactivation phantoms and ensures
+apply cannot cross an archive, definition change, or assignee deactivation.
+The deterministic order is run (apply only), matter, tenant configuration,
+template definition, field definitions, then assignee users. A stale matter,
+active field set, value, assignee, template, or approval state returns 409
+before any apply evidence or task is created.
+
+Matter-stage change, task creation, task events, run steps, and final status
+commit in one transaction. Concurrent apply calls therefore produce one task
+set and replay the applied run to the loser. A preview uses the same matter and
+shared-configuration snapshot discipline but makes no execution changes.
 
 Run events and steps are append-only tables protected by database `BEFORE
 UPDATE OR DELETE` triggers. A separate trigger prevents deletion of a run or
@@ -118,8 +129,8 @@ perform the remaining compensation outside this bounded automatic path.
 | Sensitive values do not leak | API redaction, `has_value`, HMAC-only preview evidence, UI does not overwrite or retain a saved secret | Router/service and focused frontend tests |
 | Approved version immutability | Definition hash plus DB triggers covering parent and child INSERT/UPDATE/DELETE | Direct-SQL tamper rehearsal |
 | Preview has no execution side effects | Durable planned run/evidence; no task or matter-stage mutation | Focused service tests |
-| Stale preview is rejected | Exact template, matter, and preview hashes recomputed under locks; 409 on change; explicit fresh-key recovery in the UI | Service tests and frontend stale-recovery/key-retention tests |
-| Apply is atomic and idempotent | Locked run/matter, one transaction, stable external task references | PostgreSQL concurrent service rehearsal proving one task set and later-step failure rehearsal proving no partial effects |
+| Stale preview is rejected | Exact template, matter, field-set/value, and preview hashes recomputed under a shared tenant-config lock plus deterministic dependency row locks; 409 on change; explicit fresh-key recovery in the UI | Service tests, frontend stale-recovery/key-retention tests, and two-session PostgreSQL races |
+| Apply is atomic and idempotent | Locked run/matter/config/dependencies/assignees, one transaction, stable external task references | PostgreSQL concurrent service rehearsal proving one task set, replay, writer blocking in both commit orders, and no partial effects on stale rejection |
 | Run history is durable | Immutable event/step triggers and immutable planning snapshot fields | Catalog/static contracts and direct-SQL tamper rehearsal |
 | Rollback is bounded and repeatable | Unchanged-task cancellation, stage restoration, stable rollback key/request hash, compensation blockers | Service tests plus PostgreSQL changed-task/replay rehearsal with one immutable evidence set |
 | Permissions fail closed | Separate author, matter-manager, and approver capabilities; tenant-bound generic 404 lookups | Capability/router tests plus RLS rehearsal |
@@ -141,6 +152,11 @@ COMP-09 APIs or UI:
 - automated resolution of `compensation_required` runs; and
 - hardening legacy MatterParty or Task foreign keys unrelated to new COMP-09
   relations.
+
+Two lower-priority follow-ups remain explicit: the run-history response still
+loads each run's evidence separately, and the UI does not proactively explain
+that a previously selected assignee became inactive before apply. The service
+still locks and rejects an inactive assignee with a side-effect-free 409.
 
 No production deployment, external email send, tenant seeding, or automatic
 activation is part of this change.
@@ -178,3 +194,11 @@ with an expired tenant, remain rejected and a terminal operator audit is
 preserved. The repository's global migration-safety rehearsal and
 tenant-schema verifier remain mandatory; ORM `create_all` is not accepted as
 migration evidence.
+
+The same runtime-role rehearsal also runs READ COMMITTED two-session races in
+both transaction orders for template archive, required-field deactivation, a
+new active-field phantom, matter-value mutation, and assignee deactivation. It
+observes a PostgreSQL lock wait in every race. Apply-first cases prove one task
+and evidence set plus idempotent replay; writer-first cases prove a stale 409
+with the run still planned, no stage change, no tasks, and no apply events or
+steps.
