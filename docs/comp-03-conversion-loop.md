@@ -15,8 +15,10 @@ requires current channel consent and records the actual provider result. SMS is
 available only for tenants with complete provider and compliance configuration;
 it requires provenance-bearing consent, verified category and quiet-hours
 clearance, dedicated human approval, and signed webhook reconciliation. STOP
-suppression is independent of matter routing, while ambiguous inbound messages
-remain in an authorized review queue until explicitly routed or rejected.
+suppression is durable even before a contact is known and remains independent
+of matter routing. Ambiguous inbound messages and uncertain outbound dispatches
+remain in authorized review queues until explicitly routed, rejected, or
+reconciled against exact provider truth.
 Existing BK26 fee
 agreement packet review/e-signature and lead conversion remain the canonical
 agreement/matter path; the new funnel ledger records those downstream events

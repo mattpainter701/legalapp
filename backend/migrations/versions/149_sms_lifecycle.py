@@ -179,6 +179,7 @@ def upgrade() -> None:
         sa.Column("sender_ready", sa.Boolean(), nullable=False, server_default="false"),
         sa.Column("is_active", sa.Boolean(), nullable=False, server_default="false"),
         sa.Column("compliance_snapshot", JSONB(), nullable=False, server_default="{}"),
+        sa.Column("generation", sa.Integer(), nullable=False, server_default="1"),
         sa.Column(
             "updated_by_user_id",
             UUID(as_uuid=True),
@@ -203,6 +204,87 @@ def upgrade() -> None:
             ["tenant_id", "updated_by_user_id"],
             ["users.tenant_id", "users.id"],
             name="fk_sms_provider_configs_tenant_user",
+        ),
+    )
+    op.create_table(
+        "sms_number_suppressions",
+        sa.Column(
+            "id",
+            UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
+        sa.Column(
+            "tenant_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("tenants.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column("mobile_e164", sa.String(30), nullable=False),
+        sa.Column(
+            "is_suppressed", sa.Boolean(), nullable=False, server_default="true"
+        ),
+        sa.Column("reason", sa.String(80)),
+        sa.Column("provider_message_id", sa.String(255)),
+        sa.Column("suppressed_at", sa.DateTime(timezone=True)),
+        sa.Column("released_at", sa.DateTime(timezone=True)),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+        sa.UniqueConstraint(
+            "tenant_id",
+            "mobile_e164",
+            name="uq_sms_number_suppressions_tenant_mobile",
+        ),
+        sa.UniqueConstraint(
+            "tenant_id", "id", name="uq_sms_number_suppressions_tenant_id"
+        ),
+    )
+    op.create_table(
+        "sms_number_suppression_events",
+        sa.Column(
+            "id",
+            UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
+        sa.Column(
+            "tenant_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("tenants.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "suppression_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("sms_number_suppressions.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column("mobile_e164", sa.String(30), nullable=False),
+        sa.Column("action", sa.String(40), nullable=False),
+        sa.Column("keyword", sa.String(20), nullable=False),
+        sa.Column("is_suppressed", sa.Boolean(), nullable=False),
+        sa.Column("provider_message_id", sa.String(255)),
+        sa.Column(
+            "occurred_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "suppression_id"],
+            ["sms_number_suppressions.tenant_id", "sms_number_suppressions.id"],
+            name="fk_sms_number_suppression_events_tenant_suppression",
+            ondelete="CASCADE",
         ),
     )
     op.create_table(
@@ -237,6 +319,8 @@ def upgrade() -> None:
         sa.Column("idempotency_key", sa.String(200), nullable=False),
         sa.Column("request_digest", sa.String(64), nullable=False),
         sa.Column("provider_message_id", sa.String(255)),
+        sa.Column("provider_account_sid", sa.String(100)),
+        sa.Column("provider_config_generation", sa.Integer()),
         sa.Column("dispatch_attempt_id", UUID(as_uuid=True)),
         sa.Column("dispatch_started_at", sa.DateTime(timezone=True)),
         sa.Column("reconciliation_required_at", sa.DateTime(timezone=True)),
@@ -385,6 +469,16 @@ def upgrade() -> None:
         ["tenant_id", "is_active"],
     )
     op.create_index(
+        "idx_sms_number_suppressions_tenant_state",
+        "sms_number_suppressions",
+        ["tenant_id", "is_suppressed"],
+    )
+    op.create_index(
+        "idx_sms_number_suppression_events_tenant_number",
+        "sms_number_suppression_events",
+        ["tenant_id", "mobile_e164", "occurred_at"],
+    )
+    op.create_index(
         "idx_sms_messages_tenant_contact",
         "sms_messages",
         ["tenant_id", "contact_id", "created_at"],
@@ -406,6 +500,8 @@ def upgrade() -> None:
     )
     for table in (
         "sms_consent_events",
+        "sms_number_suppressions",
+        "sms_number_suppression_events",
         "sms_provider_configs",
         "sms_messages",
         "sms_review_items",
@@ -421,7 +517,8 @@ def upgrade() -> None:
         "sms_messages",
         ["status", "dispatch_started_at"],
         postgresql_where=sa.text(
-            "status IN ('dispatching', 'provider_unknown') AND direction = 'outbound'"
+            "status IN ('dispatching', 'provider_unknown', 'submitted') "
+            "AND direction = 'outbound'"
         ),
     )
     op.execute(
@@ -443,25 +540,34 @@ def upgrade() -> None:
         $$ LANGUAGE sql STABLE SET search_path = pg_catalog, public"""
     )
     op.execute(
-        """CREATE FUNCTION prevent_sms_consent_event_mutation() RETURNS trigger AS $$
+        """CREATE FUNCTION prevent_sms_evidence_event_mutation() RETURNS trigger AS $$
         BEGIN
           IF TG_OP = 'DELETE' AND public.sms_demo_purge_authorized(OLD.tenant_id)
           THEN RETURN OLD; END IF;
-          RAISE EXCEPTION 'SMS consent evidence is immutable';
+          RAISE EXCEPTION 'SMS evidence events are immutable';
         END; $$ LANGUAGE plpgsql SET search_path = pg_catalog, public"""
     )
     op.execute(
         "CREATE TRIGGER sms_consent_events_immutable BEFORE UPDATE OR DELETE "
         "ON sms_consent_events FOR EACH ROW "
-        "EXECUTE FUNCTION prevent_sms_consent_event_mutation()"
+        "EXECUTE FUNCTION prevent_sms_evidence_event_mutation()"
+    )
+    op.execute(
+        "CREATE TRIGGER sms_number_suppression_events_immutable "
+        "BEFORE UPDATE OR DELETE ON sms_number_suppression_events FOR EACH ROW "
+        "EXECUTE FUNCTION prevent_sms_evidence_event_mutation()"
     )
 
 
 def downgrade() -> None:
     op.execute(
+        "DROP TRIGGER IF EXISTS sms_number_suppression_events_immutable "
+        "ON sms_number_suppression_events"
+    )
+    op.execute(
         "DROP TRIGGER IF EXISTS sms_consent_events_immutable ON sms_consent_events"
     )
-    op.execute("DROP FUNCTION IF EXISTS prevent_sms_consent_event_mutation()")
+    op.execute("DROP FUNCTION IF EXISTS prevent_sms_evidence_event_mutation()")
     op.execute("DROP FUNCTION IF EXISTS sms_demo_purge_authorized(uuid)")
     op.drop_constraint(
         "fk_task_automation_runs_tenant_sms_message",
@@ -473,6 +579,8 @@ def downgrade() -> None:
     for table in (
         "sms_review_items",
         "sms_messages",
+        "sms_number_suppression_events",
+        "sms_number_suppressions",
         "sms_provider_configs",
         "sms_consent_events",
     ):

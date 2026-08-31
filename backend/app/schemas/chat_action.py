@@ -9,7 +9,9 @@ model never supplies an email address (see ``ProposeClientEmailArgs``).
 
 from __future__ import annotations
 
-from datetime import date
+import hashlib
+import json
+from datetime import date, datetime
 from typing import Annotated, Literal, Union
 from uuid import UUID
 
@@ -253,6 +255,50 @@ class SourceDocumentBinding(ChatActionModel):
     )
 
 
+class SmsConsentEvidenceBinding(ChatActionModel):
+    """Sanitized exact consent snapshot displayed and rechecked at approval."""
+
+    consent_id: UUID
+    contact_id: UUID
+    mobile_e164: str = Field(pattern=r"^\+[1-9]\d{7,14}$")
+    phone_verified: bool
+    consent_source: str = Field(min_length=1, max_length=80)
+    disclosure_version: str = Field(min_length=1, max_length=80)
+    consented_at: datetime
+    consent_expires_at: datetime | None = None
+    consent_timezone: str = Field(min_length=1, max_length=100)
+    quiet_hours_start: str = Field(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    quiet_hours_end: str = Field(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    allowed_categories: list[str] = Field(min_length=1, max_length=20)
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    def digest(self) -> str:
+        payload = {
+            "consent_id": str(self.consent_id),
+            "contact_id": str(self.contact_id),
+            "mobile_e164": self.mobile_e164,
+            "phone_verified": self.phone_verified,
+            "consent_source": self.consent_source,
+            "disclosure_version": self.disclosure_version,
+            "consented_at": self.consented_at.isoformat(),
+            "consent_expires_at": (
+                self.consent_expires_at.isoformat() if self.consent_expires_at else None
+            ),
+            "consent_timezone": self.consent_timezone,
+            "quiet_hours_start": self.quiet_hours_start,
+            "quiet_hours_end": self.quiet_hours_end,
+            "allowed_categories": sorted(self.allowed_categories),
+        }
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode()).hexdigest()
+
+    @model_validator(mode="after")
+    def hash_matches_snapshot(self):
+        if self.digest() != self.evidence_sha256:
+            raise ValueError("SMS consent evidence hash does not match its snapshot")
+        return self
+
+
 class EmailClientAction(ChatActionModel):
     type: Literal["email_client"]
     # Server-resolved. Present so the board can show the attorney exactly who
@@ -316,6 +362,9 @@ class SmsClientAction(ChatActionModel):
         max_length=10,
     )
     sources: list[dict] = Field(default_factory=list, max_length=10)
+    consent_evidence: list[SmsConsentEvidenceBinding] = Field(
+        min_length=1, max_length=1
+    )
     idempotency_key: str = Field(min_length=8, max_length=200)
 
     @model_validator(mode="after")
@@ -329,6 +378,14 @@ class SmsClientAction(ChatActionModel):
             raise ValueError(
                 "Every local source document must have an exact content binding"
             )
+        evidence = self.consent_evidence[0]
+        recipient = self.recipient_bindings[0]
+        if (
+            evidence.contact_id != recipient.contact_id
+            or evidence.mobile_e164 != recipient.phone
+            or self.category not in evidence.allowed_categories
+        ):
+            raise ValueError("SMS consent evidence must match recipient and category")
         return self
 
 

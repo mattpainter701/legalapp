@@ -8,6 +8,7 @@ import CreatableCombobox from '../components/CreatableCombobox'
 import useMatterFieldOptions from '../hooks/useMatterFieldOptions'
 import AfterCallConcierge from '../components/intake/AfterCallConcierge'
 import SmsReviewQueue from '../components/intake/SmsReviewQueue'
+import SmsReconciliationQueue from '../components/intake/SmsReconciliationQueue'
 
 const AFTER_CALL_ASSISTANT_ENABLED = import.meta.env.VITE_ENABLE_AFTER_CALL_ASSISTANT === 'true'
 
@@ -267,6 +268,7 @@ export default function IntakePage() {
           </button>
         </div>
 
+        <SmsReconciliationQueue />
         <SmsReviewQueue />
 
         {/* Pipeline header */}

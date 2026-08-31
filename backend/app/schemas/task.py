@@ -108,6 +108,7 @@ class PendingActionEdit(BaseModel):
     subject: Optional[str] = Field(None, min_length=1, max_length=300)
     body: Optional[str] = Field(None, min_length=1, max_length=50_000)
     title: Optional[str] = Field(None, min_length=1, max_length=300)
+    category: Optional[str] = Field(None, min_length=1, max_length=50)
     expected_version: int = Field(ge=1)
 
     @field_validator("subject")

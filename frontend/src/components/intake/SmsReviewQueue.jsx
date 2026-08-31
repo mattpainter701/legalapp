@@ -69,17 +69,17 @@ export default function SmsReviewQueue() {
               <div className="mt-3 grid gap-2 sm:grid-cols-2">
                 <label className="text-xs font-semibold text-brand-ink">
                   Contact
-                  <select aria-label={`Contact for ${item.from_number}`} value={choice.contactId || ''} onChange={event => choose(item.id, 'contactId', event.target.value)} className="mt-1 w-full rounded-lg border border-brand-line px-2 py-1.5 font-normal">
-                    <option value="">Select exact contact</option>
-                    {item.candidate_contact_ids.map(id => <option key={id} value={id}>{id}</option>)}
-                  </select>
+                  <input aria-label={`Contact for ${item.from_number}`} list={`sms-contact-${item.id}`} value={choice.contactId || ''} onChange={event => choose(item.id, 'contactId', event.target.value)} placeholder="Select or enter authorized contact ID" className="mt-1 w-full rounded-lg border border-brand-line px-2 py-1.5 font-normal" />
+                  <datalist id={`sms-contact-${item.id}`}>
+                    {(item.candidate_contacts || []).map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.label}</option>)}
+                  </datalist>
                 </label>
                 <label className="text-xs font-semibold text-brand-ink">
                   Matter
-                  <select aria-label={`Matter for ${item.from_number}`} value={choice.matterId || ''} onChange={event => choose(item.id, 'matterId', event.target.value)} className="mt-1 w-full rounded-lg border border-brand-line px-2 py-1.5 font-normal">
-                    <option value="">Select exact matter</option>
-                    {item.candidate_matter_ids.map(id => <option key={id} value={id}>{id}</option>)}
-                  </select>
+                  <input aria-label={`Matter for ${item.from_number}`} list={`sms-matter-${item.id}`} value={choice.matterId || ''} onChange={event => choose(item.id, 'matterId', event.target.value)} placeholder="Select or enter authorized matter ID" className="mt-1 w-full rounded-lg border border-brand-line px-2 py-1.5 font-normal" />
+                  <datalist id={`sms-matter-${item.id}`}>
+                    {(item.candidate_matters || []).map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.label}</option>)}
+                  </datalist>
                 </label>
               </div>
               <div className="mt-3 flex justify-end gap-2">

@@ -4,7 +4,9 @@ SMS is disabled unless a tenant administrator configures the Twilio Account SID
 and encrypted Account Auth Token, a sender, and the compliance snapshot required by
 the configuration API. The system never reports delivery from the outbound
 request alone: provider acceptance is recorded as `submitted`, and delivery is
-updated only by a valid signed status callback.
+updated only by a valid signed status callback or an authenticated provider
+lookup that matches the configured account, message SID, destination, and
+provider status exactly.
 
 ## Consent and routing
 
@@ -21,13 +23,16 @@ only when the verified mobile, disclosure, category grants, and consent expiry
 remain valid. LawHand records HELP and opt-out keywords; the provider messaging
 service remains responsible for its configured regulatory keyword responses.
 
-STOP-family suppression is resolved by tenant and normalized phone before
-matter routing, applies to every matching contact/lead consent, and serializes
-against the final outbound consent check. Inbound messages with missing,
-duplicate, or ambiguous contact/matter matches become review items and are not
-attached to a matter timeline automatically. Authorized staff must select an
-exact contact and matter or reject the item; both decisions are audited without
-copying message content into operator metadata.
+STOP-family suppression is persisted by tenant and normalized phone before
+matter routing, even when no contact exists yet. It applies to every matching
+contact/lead consent and serializes against the final outbound consent check.
+Every STOP and START attempt appends immutable number-level evidence; an
+unmatched, ambiguous, expired, or otherwise invalid START stays suppressed.
+Inbound messages with missing, duplicate, or ambiguous contact/matter matches
+become review items and are not attached to a matter timeline automatically.
+Authorized staff must select an exact contact and matter or reject the item;
+both decisions are audited without copying message content into operator
+metadata.
 
 ## Provider configuration
 
@@ -39,8 +44,12 @@ response. Do not create a replacement key while an outcome is uncertain,
 because the provider may have accepted the first request. A dispatch lease that
 expires becomes explicit `provider_unknown` work; the scheduler never resends
 it. An authorized operator must record either confirmed-not-sent or the
-provider message ID. After confirmed non-delivery, create and review a new SMS
-proposal with a new key rather than re-approving the old attempt.
+provider message ID for an authenticated lookup. A lookup cannot manufacture
+acceptance: its configured account, SID, destination, and returned status must
+match the reserved dispatch. After confirmed non-delivery, create and review a
+new SMS proposal with a new key rather than re-approving the old attempt. The
+Intake reconciliation queue shows unresolved dispatches and keeps failed
+lookups unresolved for later review.
 
 Webhook endpoints verify Twilio's request signature with the tenant's actual
 Account Auth Token; there is no second application-defined webhook secret. They
@@ -57,5 +66,8 @@ verified, consented matter party and exact source-document hashes. Task Board
 shows the destination, body, category, source chips, consent/quiet-hours checks,
 and retry risk, then requires a dedicated acknowledgment before approval. The
 server revalidates sources, consent, category, and party membership at approval
-and immediately before dispatch. No model action sends SMS autonomously, and
-provider outages or uncertain outcomes remain visible for operator review.
+and immediately before dispatch. External or mutable citations are displayed as
+unverified and block approval until exact local evidence exists. Workspace MCP
+request identities are idempotent and cannot be reused for changed proposal
+content. No model action sends SMS autonomously, and provider outages or
+uncertain outcomes remain visible for operator review.

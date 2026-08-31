@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import uuid
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,7 @@ from app.schemas.chat_action import (
     ProposeTaskArgs,
     ResolvedRecipientBinding,
     ResolvedSmsRecipientBinding,
+    SmsConsentEvidenceBinding,
     SmsClientAction,
     normalize_single_mailbox,
 )
@@ -317,6 +319,9 @@ async def _promote_action_document_sources(
         except (TypeError, ValueError):
             continue
     if not document_ids:
+        for chip in chips:
+            chip["snapshot_sha256"] = None
+            chip["verification_state"] = "unverified_external"
         return
 
     documents = (
@@ -392,6 +397,14 @@ async def _promote_action_document_sources(
             continue
         if document_id in content_hashes:
             chip["document_sha256"] = content_hashes[document_id]
+            chip["snapshot_sha256"] = content_hashes[document_id]
+            chip["verification_state"] = "exact"
+    for chip in chips:
+        if chip.get("verification_state") != "exact":
+            # A URL/citation is useful context but is not immutable review
+            # evidence. Keep it visible and prevent exact-action approval.
+            chip["snapshot_sha256"] = None
+            chip["verification_state"] = "unverified_external"
     if corpus_promoted:
         await advance_rag_corpus_revision(context.db, context.tenant_id)
     await context.db.flush()
@@ -440,6 +453,27 @@ def _source_document_bindings(chips: list[dict[str, Any]]) -> list[dict[str, Any
         {"document_id": document_id, "sha256": hashes_by_id.get(document_id, "")}
         for document_id in document_ids
     ]
+
+
+def _sms_consent_evidence(consent, contact_id) -> SmsConsentEvidenceBinding:
+    values = {
+        "consent_id": consent.id,
+        "contact_id": contact_id,
+        "mobile_e164": consent.mobile_e164,
+        "phone_verified": consent.phone_verified,
+        "consent_source": consent.consent_source,
+        "disclosure_version": consent.disclosure_version,
+        "consented_at": consent.consented_at,
+        "consent_expires_at": consent.consent_expires_at,
+        "consent_timezone": consent.consent_timezone,
+        "quiet_hours_start": consent.quiet_hours_start,
+        "quiet_hours_end": consent.quiet_hours_end,
+        "allowed_categories": sorted(consent.allowed_categories or []),
+    }
+    provisional = SmsConsentEvidenceBinding.model_construct(
+        **values, evidence_sha256=""
+    )
+    return SmsConsentEvidenceBinding(**values, evidence_sha256=provisional.digest())
 
 
 async def _require_matter(context: ChatToolContext, matter_id: uuid.UUID) -> Matter:
@@ -711,6 +745,8 @@ async def _create_proposed_task(
     review_policy: str = "single",
     staff_reviewer_user_id: uuid.UUID | None = None,
     attorney_reviewer_user_id: uuid.UUID | None = None,
+    external_ref: str | None = None,
+    idempotency_prefix: str | None = None,
 ) -> Task:
     staged = review_policy == "staff_then_attorney"
     if staged and (staff_reviewer_user_id is None or attorney_reviewer_user_id is None):
@@ -744,6 +780,25 @@ async def _create_proposed_task(
     if locked_matter_id is None:
         raise ChatToolError("matter_not_found", "Matter not found")
 
+    if external_ref and idempotency_prefix:
+        existing_idempotent = await context.db.scalar(
+            select(Task)
+            .where(
+                Task.tenant_id == context.tenant_id,
+                Task.matter_id == matter_id,
+                Task.external_ref.like(f"{idempotency_prefix}%"),
+            )
+            .order_by(Task.created_at, Task.id)
+            .with_for_update()
+        )
+        if existing_idempotent is not None:
+            if existing_idempotent.external_ref == external_ref:
+                return existing_idempotent
+            raise ChatToolError(
+                "idempotency_conflict",
+                "This request identity was already used for different SMS proposal data",
+            )
+
     requested_title = _normalize_task_title(title)
     existing_rows = (
         await context.db.execute(
@@ -775,6 +830,7 @@ async def _create_proposed_task(
         reviewer_user_id=current_reviewer_id,
         due_date=due_date,
         source="assistant",
+        external_ref=external_ref,
         task_type="follow_up",
         pending_action=pending_action,
         review_policy=review_policy,
@@ -1021,7 +1077,7 @@ async def propose_client_sms(
             )
         )
     ).all()
-    resolved: dict[uuid.UUID, tuple[uuid.UUID, str]] = {}
+    resolved: dict[uuid.UUID, tuple[uuid.UUID, str, Any]] = {}
     for party_id, contact_id, phone in rows:
         try:
             stored = normalize_e164(phone)
@@ -1033,7 +1089,7 @@ async def propose_client_sms(
             to_number=stored,
             category=args.category,
         ):
-            resolved[party_id] = (contact_id, stored)
+            resolved[party_id] = (contact_id, stored, consent)
     missing = [party_id for party_id in requested if party_id not in resolved]
     if missing:
         raise ChatToolError(
@@ -1048,6 +1104,25 @@ async def propose_client_sms(
         )
         for party_id in requested
     ]
+    idempotency_prefix = None
+    proposal_external_ref = None
+    proposal_idempotency_key = f"chat-sms-{uuid.uuid4()}"
+    if context.channel == "workspace_mcp" and context.request_id:
+        request_identity = hashlib.sha256(
+            (
+                f"{context.tenant_id}:{context.actor_user_id}:" f"{context.request_id}"
+            ).encode()
+        ).hexdigest()
+        args_digest = hashlib.sha256(
+            json.dumps(
+                args.model_dump(mode="json"),
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        idempotency_prefix = f"workspace-mcp:sms:{request_identity}:"
+        proposal_external_ref = f"{idempotency_prefix}{args_digest}"
+        proposal_idempotency_key = f"workspace-mcp-sms-{request_identity}-{args_digest}"
     async with context.db.begin_nested():
         chips = await _resolve_source_chips(
             context, args.source_ids, matter_id=args.matter_id
@@ -1062,7 +1137,11 @@ async def propose_client_sms(
             source_document_ids=_source_document_ids(chips),
             source_document_bindings=_source_document_bindings(chips),
             sources=chips,
-            idempotency_key=f"chat-sms-{uuid.uuid4()}",
+            consent_evidence=[
+                _sms_consent_evidence(resolved[party_id][2], resolved[party_id][0])
+                for party_id in requested
+            ],
+            idempotency_key=proposal_idempotency_key,
         )
         task = await _create_proposed_task(
             context,
@@ -1072,7 +1151,10 @@ async def propose_client_sms(
             due_date=args.due_date,
             source_ids=args.source_ids,
             pending_action=action.model_dump(mode="json"),
+            external_ref=proposal_external_ref,
+            idempotency_prefix=idempotency_prefix,
         )
+        action = SmsClientAction.model_validate(task.pending_action)
     return {
         "task_id": str(task.id),
         "version": task.version,

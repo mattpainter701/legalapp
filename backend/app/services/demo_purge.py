@@ -61,7 +61,10 @@ _CONFIG_WORKFLOW_PURGE_ORDER = (
 _CONFIG_WORKFLOW_TABLES = frozenset(_CONFIG_WORKFLOW_PURGE_ORDER)
 _CONFIG_WORKFLOW_PURGE_TENANT_GUC = "app.config_workflow_demo_purge_tenant_id"
 _CONFIG_WORKFLOW_PURGE_SESSION_GUC = "app.config_workflow_demo_purge_session_id"
-_SMS_IMMUTABLE_TABLES = ("sms_consent_events",)
+_SMS_IMMUTABLE_TABLES = (
+    "sms_number_suppression_events",
+    "sms_consent_events",
+)
 _SMS_PURGE_TENANT_GUC = "app.sms_demo_purge_tenant_id"
 _SMS_PURGE_SESSION_GUC = "app.sms_demo_purge_session_id"
 

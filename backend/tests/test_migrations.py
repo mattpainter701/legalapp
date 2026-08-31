@@ -13,6 +13,8 @@ def test_alembic_revision_graph_resolves_heads():
     heads = script.get_heads()
 
     assert heads == ["152_file_open_intents"]
+    assert heads == ["150_studio_render_jobs"]
+    assert heads == ["149_sms_lifecycle"]
 
 
 def test_configurable_workflow_migration_is_tenant_safe_and_immutable():

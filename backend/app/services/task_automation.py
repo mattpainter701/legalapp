@@ -45,6 +45,7 @@ from app.models.matter_party import MatterParty
 from app.schemas.chat_action import (
     EmailClientAction,
     MatterDocumentDraftAction,
+    SmsConsentEvidenceBinding,
     SmsClientAction,
     normalize_single_mailbox,
 )
@@ -737,6 +738,11 @@ async def _sms_bindings_are_current(
     current = {party_id: (contact_id, phone) for party_id, contact_id, phone in rows}
     if len(current) != len(set(requested_ids)):
         return False
+    evidence_by_contact = {
+        evidence.contact_id: evidence for evidence in action.consent_evidence
+    }
+    if len(evidence_by_contact) != len(action.recipient_bindings):
+        return False
     for binding in action.recipient_bindings:
         row = current.get(binding.party_id)
         if row is None or row[0] != binding.contact_id:
@@ -752,6 +758,28 @@ async def _sms_bindings_are_current(
             category=action.category,
         ):
             return False
+        evidence = evidence_by_contact.get(binding.contact_id)
+        if evidence is None or consent is None:
+            return False
+        values = {
+            "consent_id": consent.id,
+            "contact_id": binding.contact_id,
+            "mobile_e164": consent.mobile_e164,
+            "phone_verified": consent.phone_verified,
+            "consent_source": consent.consent_source,
+            "disclosure_version": consent.disclosure_version,
+            "consented_at": consent.consented_at,
+            "consent_expires_at": consent.consent_expires_at,
+            "consent_timezone": consent.consent_timezone,
+            "quiet_hours_start": consent.quiet_hours_start,
+            "quiet_hours_end": consent.quiet_hours_end,
+            "allowed_categories": sorted(consent.allowed_categories or []),
+        }
+        current_evidence = SmsConsentEvidenceBinding.model_construct(
+            **values, evidence_sha256=""
+        )
+        if current_evidence.digest() != evidence.evidence_sha256:
+            return False
     return True
 
 
@@ -761,8 +789,19 @@ async def _action_sources_are_current(
     action: EmailClientAction | SmsClientAction,
 ) -> bool:
     """Lock and verify every local source before approval/delivery."""
+    source_ids = [str(source.get("source_id") or "") for source in action.sources]
+    if action.source_ids and source_ids != action.source_ids:
+        return False
+    for source in action.sources:
+        digest = str(source.get("snapshot_sha256") or "")
+        if (
+            source.get("verification_state") != "exact"
+            or len(digest) != 64
+            or any(char not in "0123456789abcdef" for char in digest)
+        ):
+            return False
     if not action.source_document_ids:
-        return True
+        return not action.sources
     documents = (
         (
             await db.execute(
@@ -799,6 +838,11 @@ async def _action_sources_are_current(
             return False
         actual_hash = await asyncio.to_thread(_file_sha256, storage_path)
         if actual_hash != expected_hash:
+            return False
+        if not any(
+            str(source.get("snapshot_sha256") or "") == actual_hash
+            for source in action.sources
+        ):
             return False
     return True
 

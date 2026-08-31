@@ -26,9 +26,19 @@ from app.schemas.communication_log import (
     CommunicationLogUpdate,
 )
 from app.services.cache import ExpertiseCacheManager
+from app.services.rbac_service import get_user_capabilities
 
 router = APIRouter(prefix="/api/communications", tags=["communications"])
 communication_context_cache = ExpertiseCacheManager()
+
+
+async def _can_access_sms(db: AsyncSession, user_id: uuid.UUID) -> bool:
+    return "manage_matters" in await get_user_capabilities(db, user_id)
+
+
+def _require_sms_access(*, channel: str | None, allowed: bool) -> None:
+    if channel == "sms" and not allowed:
+        raise HTTPException(status_code=403, detail="SMS communication access required")
 
 
 async def _record_client_contact(
@@ -101,6 +111,8 @@ async def list_communications(
 ):
     tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
+    can_access_sms = await _can_access_sms(db, current_user.id)
+    _require_sms_access(channel=channel, allowed=can_access_sms)
 
     stmt = select(CommunicationLog).where(
         CommunicationLog.tenant_id == uuid.UUID(tenant_id),
@@ -112,6 +124,8 @@ async def list_communications(
         stmt = stmt.where(CommunicationLog.contact_id == contact_id)
     if channel:
         stmt = stmt.where(CommunicationLog.channel == channel)
+    elif not can_access_sms:
+        stmt = stmt.where(CommunicationLog.channel != "sms")
     if direction:
         stmt = stmt.where(CommunicationLog.direction == direction)
     if occurred_after:
@@ -139,6 +153,10 @@ async def create_communication_log(
 ):
     tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
+    _require_sms_access(
+        channel=payload.channel,
+        allowed=await _can_access_sms(db, current_user.id),
+    )
 
     data = payload.model_dump(exclude_none=True)
     if "occurred_at" not in data:
@@ -177,6 +195,10 @@ async def get_communication_log(
     log = result.scalar_one_or_none()
     if not log:
         raise HTTPException(status_code=404, detail="Communication log not found")
+    _require_sms_access(
+        channel=log.channel,
+        allowed=await _can_access_sms(db, current_user.id),
+    )
     return CommunicationLogResponse.model_validate(log)
 
 
@@ -199,6 +221,10 @@ async def update_communication_log(
     log = result.scalar_one_or_none()
     if not log:
         raise HTTPException(status_code=404, detail="Communication log not found")
+    _require_sms_access(
+        channel=log.channel,
+        allowed=await _can_access_sms(db, current_user.id),
+    )
 
     previous_matter_id = log.matter_id
     for field, value in payload.model_dump(exclude_none=True).items():
@@ -233,6 +259,10 @@ async def delete_communication_log(
     log = result.scalar_one_or_none()
     if not log:
         raise HTTPException(status_code=404, detail="Communication log not found")
+    _require_sms_access(
+        channel=log.channel,
+        allowed=await _can_access_sms(db, current_user.id),
+    )
 
     log.status = "deleted"
     await db.commit()

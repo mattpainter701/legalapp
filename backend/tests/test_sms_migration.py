@@ -34,6 +34,8 @@ def test_sms_migration_enforces_rls_and_tenant_composite_references():
 
     for table in (
         "sms_consent_events",
+        "sms_number_suppressions",
+        "sms_number_suppression_events",
         "sms_provider_configs",
         "sms_messages",
         "sms_review_items",
@@ -51,6 +53,8 @@ def test_sms_migration_enforces_rls_and_tenant_composite_references():
         "fk_sms_consent_events_tenant_lead",
         "fk_sms_consent_events_tenant_contact",
         "fk_sms_consent_events_tenant_user",
+        "uq_sms_number_suppressions_tenant_id",
+        "fk_sms_number_suppression_events_tenant_suppression",
         "uq_sms_messages_tenant_id",
         "fk_sms_provider_configs_tenant_user",
         "fk_sms_messages_tenant_contact",
@@ -62,10 +66,12 @@ def test_sms_migration_enforces_rls_and_tenant_composite_references():
         "fk_task_automation_runs_tenant_sms_message",
     ):
         assert constraint in source
-    assert "prevent_sms_consent_event_mutation" in source
+    assert "prevent_sms_evidence_event_mutation" in source
     assert "sms_demo_purge_authorized" in source
     for index_name in (
         "idx_sms_provider_configs_tenant",
+        "idx_sms_number_suppressions_tenant_state",
+        "idx_sms_number_suppression_events_tenant_number",
         "idx_sms_messages_tenant_contact",
         "idx_sms_messages_tenant_matter",
         "idx_sms_messages_reconciliation",
@@ -75,12 +81,15 @@ def test_sms_migration_enforces_rls_and_tenant_composite_references():
         assert index_name in source
 
 
-def test_ci_rehearses_sms_from_148_without_moving_comp09s_head_assertion():
+def test_ci_rehearses_sms_from_148_with_149_as_the_canonical_head():
     source = CI.read_text(encoding="utf-8")
 
     assert "sms-lifecycle-rehearsal:" in source
     assert "alembic upgrade 148_configurable_workflows" in source
     assert "alembic upgrade 149_sms_lifecycle" in source
+    assert "149_sms_lifecycle" in (ROOT / "backend/tests/test_migrations.py").read_text(
+        encoding="utf-8"
+    )
     assert "test_sms_lifecycle_db.py" in source
     assert "sms-dispatch-reconciliation" in (
         ROOT / "backend/app/services/scheduler.py"

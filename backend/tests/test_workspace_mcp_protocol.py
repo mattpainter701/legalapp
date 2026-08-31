@@ -456,6 +456,85 @@ async def test_workspace_call_returns_reviewable_proposal_as_structured_content(
 
 
 @pytest.mark.asyncio
+async def test_workspace_sms_call_preserves_idempotency_identity_and_review_boundary(
+    monkeypatch, protocol_app
+):
+    identity = _identity(
+        scopes={"matters:read", "contacts:read", "communications:propose"},
+        app_capabilities={"manage_matters"},
+    )
+    await _allow_identity(monkeypatch, identity)
+    calls = []
+    task_id = str(uuid.uuid4())
+
+    async def execute(*, name, arguments, request, identity):
+        assert name == "propose_client_sms"
+        assert request.headers["X-Idempotency-Key"] == "mcp-sms-request-1"
+        calls.append((arguments, identity.user_id))
+        return {
+            "task_id": task_id,
+            "status": "review",
+            "approval_effect": "Human approval is required before provider submission.",
+            "pending_action": {
+                "type": "sms_client",
+                "recipient_bindings": [
+                    {
+                        "party_id": arguments["recipient_party_ids"][0],
+                        "contact_id": str(uuid.uuid4()),
+                        "phone": "+15551234567",
+                    }
+                ],
+            },
+        }
+
+    monkeypatch.setattr(workspace_mcp_protocol, "execute_workspace_capability", execute)
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 9,
+        "method": "tools/call",
+        "params": {
+            "name": "propose_client_sms",
+            "arguments": {
+                "matter_id": str(uuid.uuid4()),
+                "recipient_party_ids": [str(uuid.uuid4())],
+                "title": "Review appointment SMS",
+                "body": "Your appointment is tomorrow.",
+                "category": "appointment",
+            },
+        },
+    }
+    async with AsyncClient(
+        transport=ASGITransport(app=protocol_app),
+        base_url="http://localhost:8000",
+    ) as client:
+        responses = []
+        for request_id in (9, 10):
+            response_payload = {**payload, "id": request_id}
+            responses.append(
+                await client.post(
+                    workspace_mcp_protocol.MCP_ENDPOINT_PATH,
+                    headers={
+                        **_headers(),
+                        "Mcp-Protocol-Version": workspace_mcp_protocol.MCP_PROTOCOL_VERSION,
+                        "X-Idempotency-Key": "mcp-sms-request-1",
+                    },
+                    json=response_payload,
+                )
+            )
+
+    assert [response.status_code for response in responses] == [200, 200]
+    assert [
+        response.json()["result"]["structuredContent"]["task_id"]
+        for response in responses
+    ] == [task_id, task_id]
+    assert all(
+        response.json()["result"]["structuredContent"]["status"] == "review"
+        for response in responses
+    )
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
 async def test_workspace_call_rechecks_scope_before_dispatch(monkeypatch, protocol_app):
     identity = _identity(
         scopes={"matters:read"},

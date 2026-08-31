@@ -10,11 +10,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import require_admin
+from app.models.contact import Contact
+from app.models.plugin import Matter
 from app.models.sms import SmsMessage, SmsProviderConfig, SmsReviewItem
 from app.schemas.sms import (
     SmsMessageResponse,
     SmsProviderConfigResponse,
     SmsProviderConfigUpdate,
+    SmsReconciliationItemResponse,
     SmsReconciliationRequest,
     SmsReviewDecision,
     SmsReviewResponse,
@@ -47,21 +50,27 @@ async def update_sms_config(
     tenant_id = current_user.tenant_id
     await set_tenant_context(db, str(tenant_id))
     row = await db.scalar(
-        select(SmsProviderConfig).where(
+        select(SmsProviderConfig)
+        .where(
             SmsProviderConfig.tenant_id == tenant_id,
             SmsProviderConfig.provider == "twilio",
         )
+        .with_for_update()
     )
     if row is None:
         row = SmsProviderConfig(tenant_id=tenant_id, provider="twilio")
         db.add(row)
+    else:
+        row.generation += 1
     row.account_sid = body.account_sid.strip()
     row.encrypted_auth_token = encrypt_token(body.auth_token)
     row.messaging_service_sid = body.messaging_service_sid
     row.from_number = body.from_number
     row.sender_ready = body.sender_ready
     row.is_active = body.is_active
-    row.compliance_snapshot = body.compliance_snapshot
+    row.compliance_snapshot = (
+        body.compliance_snapshot.model_dump() if body.compliance_snapshot else {}
+    )
     row.updated_by_user_id = current_user.id
     await db.flush()
     await record_operator_audit(
@@ -77,6 +86,7 @@ async def update_sms_config(
             "provider": row.provider,
             "sender_ready": row.sender_ready,
             "is_active": row.is_active,
+            "generation": row.generation,
             "ownership_model": row.compliance_snapshot.get("ownership_model"),
         },
     )
@@ -109,6 +119,27 @@ async def send_sms_message(
     db: AsyncSession = Depends(get_db),
 ):
     await set_tenant_context(db, str(current_user.tenant_id))
+
+    async def audit_success(row: SmsMessage) -> None:
+        await record_operator_audit(
+            db,
+            request,
+            action="sms.send.submitted",
+            resource_type="sms_message",
+            resource_id=str(row.id),
+            actor_type="tenant_user",
+            actor_id=str(current_user.id),
+            metadata={
+                "tenant_id": str(current_user.tenant_id),
+                "contact_id": str(body.contact_id),
+                "matter_id": str(body.matter_id) if body.matter_id else None,
+                "category": body.category,
+                "provider": "twilio",
+                "provider_status": row.provider_status,
+                "provider_config_generation": row.provider_config_generation,
+            },
+        )
+
     try:
         row = await send_sms(
             db,
@@ -119,6 +150,7 @@ async def send_sms_message(
             body=body.body,
             category=body.category,
             idempotency_key=body.idempotency_key,
+            before_success_commit=audit_success,
         )
     except SmsError as exc:
         await set_tenant_context(db, str(current_user.tenant_id))
@@ -142,25 +174,6 @@ async def send_sms_message(
         )
         await db.commit()
         raise HTTPException(exc.status_code, exc.api_detail()) from exc
-    await set_tenant_context(db, str(current_user.tenant_id))
-    await record_operator_audit(
-        db,
-        request,
-        action="sms.send.submitted",
-        resource_type="sms_message",
-        resource_id=str(row.id),
-        actor_type="tenant_user",
-        actor_id=str(current_user.id),
-        metadata={
-            "tenant_id": str(current_user.tenant_id),
-            "contact_id": str(body.contact_id),
-            "matter_id": str(body.matter_id) if body.matter_id else None,
-            "category": body.category,
-            "provider": "twilio",
-            "provider_status": row.provider_status,
-        },
-    )
-    await db.commit()
     return row
 
 
@@ -187,6 +200,10 @@ async def _signed_params(request: Request, *, tenant_id: uuid.UUID, db: AsyncSes
         supplied=supplied,
     ):
         raise HTTPException(401, "Invalid SMS webhook signature")
+    supplied_account_sid = str(params.get("AccountSid") or "").strip()
+    configured_account_sid = str(config.account_sid or "").strip()
+    if supplied_account_sid and supplied_account_sid != configured_account_sid:
+        raise HTTPException(401, "SMS webhook provider account mismatch")
     return params
 
 
@@ -243,6 +260,46 @@ async def list_sms_review_items(
             .order_by(SmsReviewItem.created_at)
         )
     ).all()
+    contact_ids = {
+        uuid.UUID(str(candidate_id))
+        for item, _message in rows
+        for candidate_id in (item.candidate_contact_ids or [])
+    }
+    matter_ids = {
+        uuid.UUID(str(candidate_id))
+        for item, _message in rows
+        for candidate_id in (item.candidate_matter_ids or [])
+    }
+    contact_labels = {
+        str(contact.id): contact.display_name
+        for contact in (
+            (
+                await db.scalars(
+                    select(Contact).where(
+                        Contact.tenant_id == current_user.tenant_id,
+                        Contact.id.in_(contact_ids),
+                    )
+                )
+            ).all()
+            if contact_ids
+            else []
+        )
+    }
+    matter_labels = {
+        str(matter.id): matter.matter_name
+        for matter in (
+            (
+                await db.scalars(
+                    select(Matter).where(
+                        Matter.tenant_id == current_user.tenant_id,
+                        Matter.id.in_(matter_ids),
+                    )
+                )
+            ).all()
+            if matter_ids
+            else []
+        )
+    }
     return [
         {
             "id": item.id,
@@ -251,6 +308,22 @@ async def list_sms_review_items(
             "status": item.status,
             "candidate_contact_ids": item.candidate_contact_ids,
             "candidate_matter_ids": item.candidate_matter_ids,
+            "candidate_contacts": [
+                {
+                    "id": candidate_id,
+                    "label": contact_labels.get(
+                        str(candidate_id), "Unavailable contact"
+                    ),
+                }
+                for candidate_id in (item.candidate_contact_ids or [])
+            ],
+            "candidate_matters": [
+                {
+                    "id": candidate_id,
+                    "label": matter_labels.get(str(candidate_id), "Unavailable matter"),
+                }
+                for candidate_id in (item.candidate_matter_ids or [])
+            ],
             "from_number": message.from_number,
             "body": message.body,
             "created_at": message.created_at,
@@ -318,7 +391,23 @@ async def reconcile_uncertain_sms(
             provider_message_id=body.provider_message_id,
         )
     except SmsError as exc:
-        raise HTTPException(exc.status_code, str(exc)) from exc
+        await record_operator_audit(
+            db,
+            request,
+            action="sms.dispatch.reconciliation_rejected",
+            resource_type="sms_message",
+            resource_id=str(sms_message_id),
+            actor_type="tenant_user",
+            actor_id=str(current_user.id),
+            metadata={
+                "tenant_id": str(current_user.tenant_id),
+                "resolution": body.resolution,
+                "provider_message_id": body.provider_message_id,
+                "code": exc.code,
+            },
+        )
+        await db.commit()
+        raise HTTPException(exc.status_code, exc.api_detail()) from exc
     await record_operator_audit(
         db,
         request,
@@ -334,4 +423,59 @@ async def reconcile_uncertain_sms(
         },
     )
     await db.commit()
+    return message
+
+
+@router.get("/reconciliation", response_model=list[SmsReconciliationItemResponse])
+async def list_sms_reconciliation_items(
+    current_user=Depends(require_capability("manage_matters")),
+    db: AsyncSession = Depends(get_db),
+):
+    await set_tenant_context(db, str(current_user.tenant_id))
+    return list(
+        (
+            await db.scalars(
+                select(SmsMessage)
+                .where(
+                    SmsMessage.tenant_id == current_user.tenant_id,
+                    SmsMessage.direction == "outbound",
+                    SmsMessage.reconciliation_required_at.is_not(None),
+                    SmsMessage.reconciliation_resolved_at.is_(None),
+                )
+                .order_by(
+                    SmsMessage.reconciliation_required_at,
+                    SmsMessage.created_at,
+                )
+            )
+        ).all()
+    )
+
+
+@router.get(
+    "/reconciliation/{sms_message_id}",
+    response_model=SmsReconciliationItemResponse,
+)
+async def get_sms_reconciliation_item(
+    sms_message_id: uuid.UUID,
+    current_user=Depends(require_capability("manage_matters")),
+    db: AsyncSession = Depends(get_db),
+):
+    await set_tenant_context(db, str(current_user.tenant_id))
+    message = await db.scalar(
+        select(SmsMessage).where(
+            SmsMessage.id == sms_message_id,
+            SmsMessage.tenant_id == current_user.tenant_id,
+            SmsMessage.direction == "outbound",
+            SmsMessage.reconciliation_required_at.is_not(None),
+            SmsMessage.reconciliation_resolved_at.is_(None),
+        )
+    )
+    if message is None:
+        raise HTTPException(
+            404,
+            {
+                "code": "sms_reconciliation_not_found",
+                "message": "SMS reconciliation item was not found",
+            },
+        )
     return message

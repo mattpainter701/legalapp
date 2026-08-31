@@ -75,6 +75,22 @@ const props = {
   canOpenMatters: true,
 }
 
+const smsConsentEvidence = {
+  consent_id: 'consent-1',
+  contact_id: 'contact-1',
+  mobile_e164: '+15551234567',
+  phone_verified: true,
+  consent_source: 'public_intake',
+  disclosure_version: 'sms-v3',
+  consented_at: '2026-08-01T12:00:00Z',
+  consent_expires_at: '2027-08-01T12:00:00Z',
+  consent_timezone: 'America/Chicago',
+  quiet_hours_start: '21:00',
+  quiet_hours_end: '08:00',
+  allowed_categories: ['appointment'],
+  evidence_sha256: 'e'.repeat(64),
+}
+
 describe('TaskBoard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -304,6 +320,72 @@ describe('TaskBoard', () => {
     ))
   })
 
+  it('shows consent evidence and resets review identity when an SMS draft is edited', async () => {
+    const user = userEvent.setup()
+    let current = {
+      ...task,
+      id: 'task-sms-edit',
+      title: 'Review appointment SMS',
+      status: 'review',
+      version: 4,
+      source: 'assistant',
+      pending_action: {
+        type: 'sms_client',
+        recipient_bindings: [{ party_id: 'party-1', contact_id: 'contact-1', phone: '+15551234567' }],
+        body: 'Original appointment reminder.',
+        category: 'appointment',
+        idempotency_key: 'sms-before-edit',
+        consent_evidence: [smsConsentEvidence],
+        sources: [],
+      },
+    }
+    getTask.mockImplementation(async () => current)
+    updateTaskPendingAction.mockImplementation(async (_id, payload) => {
+      current = {
+        ...current,
+        version: 5,
+        pending_action: {
+          ...current.pending_action,
+          body: payload.body,
+          category: payload.category,
+          idempotency_key: 'sms-after-edit',
+        },
+      }
+      return current
+    })
+    const draftedData = {
+      ...data,
+      columns: data.columns.map(column => (
+        column.status === 'review'
+          ? { ...column, total: 1, items: [current] }
+          : { ...column, total: 0, items: [] }
+      )),
+    }
+
+    render(<TaskBoard {...props} data={draftedData} taskId="task-sms-edit" />)
+
+    expect(await screen.findByText('Reviewable SMS draft')).toBeInTheDocument()
+    expect(screen.getByText('public_intake')).toBeInTheDocument()
+    expect(screen.getByText('sms-v3')).toBeInTheDocument()
+    expect(screen.getByText('e'.repeat(64))).toBeInTheDocument()
+    expect(screen.getByText('+15551234567')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Edit SMS' }))
+    await user.clear(screen.getByRole('textbox', { name: 'Category' }))
+    await user.type(screen.getByRole('textbox', { name: 'Category' }), 'appointment')
+    await user.clear(screen.getByRole('textbox', { name: 'SMS body' }))
+    await user.type(screen.getByRole('textbox', { name: 'SMS body' }), 'Updated appointment reminder.')
+    expect(screen.getByRole('button', { name: /^Move to/ })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Save fresh SMS review' }))
+
+    await waitFor(() => expect(updateTaskPendingAction).toHaveBeenCalledWith('task-sms-edit', {
+      body: 'Updated appointment reminder.',
+      category: 'appointment',
+      expected_version: 4,
+    }))
+    expect(await screen.findByText('Updated appointment reminder.')).toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: /recipient/i })).not.toBeInTheDocument()
+  })
+
   it('loads the immutable delivery action snapshot from task detail after the live draft clears', async () => {
     const boardCard = {
       ...task,
@@ -527,7 +609,10 @@ describe('TaskBoard', () => {
           source_id: 'document:appointment',
           label: 'Consultation schedule',
           url: '/api/documents/document-1/download',
+          verification_state: 'exact',
+          snapshot_sha256: 'a'.repeat(64),
         }],
+        consent_evidence: [smsConsentEvidence],
       },
     }
     const draftedData = {
@@ -553,6 +638,9 @@ describe('TaskBoard', () => {
     expect(dialog).toHaveTextContent('+15551234567')
     expect(dialog).toHaveTextContent('appointment')
     expect(dialog).toHaveTextContent('Your consultation is confirmed')
+    expect(dialog).toHaveTextContent('public_intake')
+    expect(dialog).toHaveTextContent('sms-v3')
+    expect(dialog).toHaveTextContent('e'.repeat(64))
     expect(within(dialog).getByRole('link', { name: 'Consultation schedule' })).toBeInTheDocument()
     const confirm = within(dialog).getByRole('button', { name: 'Approve and submit SMS' })
     expect(confirm).toBeDisabled()
@@ -603,6 +691,50 @@ describe('TaskBoard', () => {
     await user.click(screen.getByRole('button', { name: /^In Progress/ }))
     const dialog = screen.getByRole('dialog', { name: 'Approve consented SMS' })
     expect(within(dialog).getByRole('alert')).toHaveTextContent(/Reconcile SMS sms-message-1/i)
+    expect(within(dialog).getByRole('button', { name: 'Approve and submit SMS' })).toBeDisabled()
+  })
+
+  it('blocks SMS approval when an external citation is not exact evidence', async () => {
+    const user = userEvent.setup()
+    const drafted = {
+      ...task,
+      id: 'task-sms-unverified-source',
+      title: 'Externally sourced SMS',
+      status: 'review',
+      source: 'assistant',
+      pending_action: {
+        type: 'sms_client',
+        recipient_bindings: [{ party_id: 'party-1', contact_id: 'contact-1', phone: '+15551234567' }],
+        body: 'Please review the cited authority.',
+        category: 'appointment',
+        matter_id: 'matter-1',
+        idempotency_key: 'sms-unverified-source',
+        consent_evidence: [smsConsentEvidence],
+        sources: [{
+          source_id: 'courtlistener:123',
+          label: 'Mutable authority',
+          url: 'https://www.courtlistener.com/opinion/123/example/',
+          verification_state: 'unverified_external',
+          snapshot_sha256: null,
+        }],
+      },
+    }
+    const draftedData = {
+      ...data,
+      columns: data.columns.map(column => (
+        column.status === 'review'
+          ? { ...column, total: 1, items: [drafted] }
+          : { ...column, total: 0, items: [] }
+      )),
+    }
+    render(<TaskBoard {...props} data={draftedData} />)
+    await user.click(screen.getByRole('button', {
+      name: 'Choose a destination for Externally sourced SMS',
+    }))
+    await user.click(screen.getByRole('button', { name: /^In Progress/ }))
+    const dialog = screen.getByRole('dialog', { name: 'Approve consented SMS' })
+    expect(within(dialog).getByRole('alert')).toHaveTextContent(/approval is blocked/i)
+    expect(within(dialog).getByRole('checkbox')).toBeDisabled()
     expect(within(dialog).getByRole('button', { name: 'Approve and submit SMS' })).toBeDisabled()
   })
 

@@ -5,11 +5,18 @@ from uuid import uuid4
 import pytest
 
 from app.models.conversion_loop import LeadChannelConsent, SmsConsentEvent
-from app.models.sms import SmsMessage, SmsProviderConfig, SmsReviewItem
+from app.models.sms import (
+    SmsMessage,
+    SmsNumberSuppression,
+    SmsNumberSuppressionEvent,
+    SmsProviderConfig,
+    SmsReviewItem,
+)
 from app.models.task import TaskAutomationRun
 from app.schemas.chat_action import (
     ProposeClientSmsArgs,
     ResolvedSmsRecipientBinding,
+    SmsConsentEvidenceBinding,
     SmsClientAction,
     SourceDocumentBinding,
 )
@@ -26,6 +33,27 @@ from app.services.sms import (
     verify_twilio_signature,
 )
 from app.services.sms import _request_digest
+
+
+def _consent_evidence(contact_id, *, categories=None):
+    values = {
+        "consent_id": uuid4(),
+        "contact_id": contact_id,
+        "mobile_e164": "+15551234567",
+        "phone_verified": True,
+        "consent_source": "public_intake",
+        "disclosure_version": "sms-v3",
+        "consented_at": datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
+        "consent_expires_at": datetime(2027, 8, 1, 12, 0, tzinfo=timezone.utc),
+        "consent_timezone": "America/Chicago",
+        "quiet_hours_start": "21:00",
+        "quiet_hours_end": "08:00",
+        "allowed_categories": categories or ["staff_authored"],
+    }
+    provisional = SmsConsentEvidenceBinding.model_construct(
+        **values, evidence_sha256=""
+    )
+    return SmsConsentEvidenceBinding(**values, evidence_sha256=provisional.digest())
 
 
 def test_sms_destination_normalizes_only_e164_compatible_numbers():
@@ -87,7 +115,7 @@ def test_quiet_hours_supports_overnight_window_and_invalid_timezone_fails_closed
 
 
 def test_sms_provider_activation_requires_explicit_compliance_evidence():
-    with pytest.raises(ValueError, match="compliance evidence"):
+    with pytest.raises(ValueError, match="ownership_model"):
         SmsProviderConfigUpdate(
             account_sid="AC123",
             auth_token="auth-token",
@@ -107,7 +135,7 @@ def test_sms_provider_activation_requires_explicit_compliance_evidence():
         },
     )
     assert config.is_active
-    with pytest.raises(ValueError, match="compliance evidence"):
+    with pytest.raises(ValueError, match="consent_policy"):
         SmsProviderConfigUpdate(
             account_sid="AC123",
             auth_token="auth-token",
@@ -137,13 +165,15 @@ def test_sms_provider_activation_requires_explicit_compliance_evidence():
 
 def test_sms_action_is_phone_bound_and_reviewable():
     party_id = uuid4()
+    contact_id = uuid4()
     action = SmsClientAction(
         type="sms_client",
         recipient_bindings=[
             ResolvedSmsRecipientBinding(
-                party_id=party_id, contact_id=uuid4(), phone="+15551234567"
+                party_id=party_id, contact_id=contact_id, phone="+15551234567"
             )
         ],
+        consent_evidence=[_consent_evidence(contact_id)],
         body="Your appointment is confirmed.",
         matter_id=uuid4(),
         idempotency_key="chat-sms-123456",
@@ -170,11 +200,12 @@ def test_sms_action_is_phone_bound_and_reviewable():
 
 def test_sms_action_binds_every_local_source_to_exact_bytes():
     document_id = uuid4()
+    contact_id = uuid4()
     action = SmsClientAction(
         type="sms_client",
         recipient_bindings=[
             ResolvedSmsRecipientBinding(
-                party_id=uuid4(), contact_id=uuid4(), phone="+15551234567"
+                party_id=uuid4(), contact_id=contact_id, phone="+15551234567"
             )
         ],
         body="Source-bound update",
@@ -183,7 +214,15 @@ def test_sms_action_binds_every_local_source_to_exact_bytes():
         source_document_bindings=[
             SourceDocumentBinding(document_id=document_id, sha256="a" * 64)
         ],
-        sources=[{"source_id": "document:1", "label": "Exact source"}],
+        sources=[
+            {
+                "source_id": "document:1",
+                "label": "Exact source",
+                "snapshot_sha256": "a" * 64,
+                "verification_state": "exact",
+            }
+        ],
+        consent_evidence=[_consent_evidence(contact_id)],
         idempotency_key="chat-sms-source-123",
     )
     assert action.source_document_bindings[0].sha256 == "a" * 64
@@ -195,6 +234,7 @@ def test_sms_action_binds_every_local_source_to_exact_bytes():
             matter_id=action.matter_id,
             source_document_ids=[document_id],
             source_document_bindings=[],
+            consent_evidence=action.consent_evidence,
             idempotency_key="chat-sms-source-456",
         )
 
@@ -206,6 +246,8 @@ def test_sms_records_have_tenant_composite_referential_guards():
             LeadChannelConsent.__table__,
             SmsConsentEvent.__table__,
             SmsProviderConfig.__table__,
+            SmsNumberSuppression.__table__,
+            SmsNumberSuppressionEvent.__table__,
             SmsMessage.__table__,
             SmsReviewItem.__table__,
             TaskAutomationRun.__table__,
@@ -214,6 +256,7 @@ def test_sms_records_have_tenant_composite_referential_guards():
     }
     assert {
         "fk_sms_provider_configs_tenant_user",
+        "fk_sms_number_suppression_events_tenant_suppression",
         "fk_sms_messages_tenant_contact",
         "fk_sms_messages_tenant_matter",
         "fk_sms_messages_tenant_communication",

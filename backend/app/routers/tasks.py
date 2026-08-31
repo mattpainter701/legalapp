@@ -31,7 +31,7 @@ from app.models.plugin import Matter
 from app.models.task import Task, TaskAutomationRun, TaskEvent
 from app.models.tenant import TenantSettings
 from app.models.user import User
-from app.schemas.chat_action import MatterDocumentDraftAction
+from app.schemas.chat_action import MatterDocumentDraftAction, SmsClientAction
 from app.services.cloud_artifact_materialization import (
     CloudArtifactMaterializationError,
     cloud_artifact_materializer,
@@ -1497,11 +1497,10 @@ async def update_pending_action(
 ):
     """Revise the text of a drafted action before approving it.
 
-    Narrow on purpose. Only the subject and body are editable: recipients were
-    resolved from the matter's own parties, and accepting them here would undo
-    that guarantee. The automation key is derived from the canonical action
-    payload, so a meaningful draft edit creates a reviewable new attempt while
-    unrelated task/version changes and unchanged re-approvals still collide.
+    Narrow on purpose. Only content fields (including an SMS category) are
+    editable: recipients were resolved from the matter's own parties, and
+    accepting them here would undo that guarantee. A meaningful SMS edit gets
+    a new provider idempotency identity and resets staged review.
     """
     tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
@@ -1542,6 +1541,7 @@ async def update_pending_action(
     action_type = str(task.pending_action.get("type") or "")
     allowed_fields = {
         "email_client": {"subject", "body"},
+        "sms_client": {"body", "category"},
         "matter_document_draft": {"title", "body"},
     }.get(action_type, set())
     if set(updates) - allowed_fields:
@@ -1554,6 +1554,18 @@ async def update_pending_action(
     action = dict(task.pending_action)
     action.update(updates)
     artifact_revision_no = None
+    if action_type == "sms_client":
+        action["idempotency_key"] = f"task-sms-{task.id}-{uuid.uuid4()}"
+        try:
+            action = SmsClientAction.model_validate(action).model_dump(mode="json")
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "The revised SMS must stay within the displayed consent and "
+                    "approved categories"
+                ),
+            ) from exc
     if action_type == "matter_document_draft" and action.get("artifact_id"):
         try:
             bound_action = MatterDocumentDraftAction.model_validate(action)

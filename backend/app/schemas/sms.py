@@ -2,8 +2,17 @@
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
+
+
+class SmsComplianceSnapshot(BaseModel):
+    ownership_model: Literal["firm-owned"]
+    consent_policy: Literal["documented-opt-in"]
+    quiet_hours_policy: Literal["recipient-timezone"]
+
+    model_config = {"extra": "forbid"}
 
 
 class SmsProviderConfigUpdate(BaseModel):
@@ -13,7 +22,7 @@ class SmsProviderConfigUpdate(BaseModel):
     from_number: str | None = Field(default=None, max_length=30)
     sender_ready: bool = False
     is_active: bool = False
-    compliance_snapshot: dict = Field(default_factory=dict)
+    compliance_snapshot: SmsComplianceSnapshot | None = None
 
     @model_validator(mode="after")
     def active_config_has_compliance_evidence(self):
@@ -29,11 +38,12 @@ class SmsProviderConfigUpdate(BaseModel):
             raise ValueError("Active SMS configuration requires a ready sender")
         if self.sender_ready or self.is_active:
             required = {"ownership_model", "consent_policy", "quiet_hours_policy"}
-            missing = sorted(
-                key
-                for key in required
-                if not str(self.compliance_snapshot.get(key) or "").strip()
+            snapshot = (
+                self.compliance_snapshot.model_dump()
+                if self.compliance_snapshot is not None
+                else {}
             )
+            missing = sorted(key for key in required if not snapshot.get(key))
             if missing:
                 raise ValueError(
                     "Active SMS configuration requires compliance evidence: "
@@ -54,6 +64,7 @@ class SmsProviderConfigResponse(BaseModel):
     sender_ready: bool
     is_active: bool
     compliance_snapshot: dict
+    generation: int
 
 
 class SmsSendRequest(BaseModel):
@@ -70,12 +81,18 @@ class SmsMessageResponse(BaseModel):
     direction: str
     provider_message_id: str | None
     provider_status: str | None
+    provider_config_generation: int | None
     to_number: str | None
     body: str
     category: str
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class SmsRouteCandidate(BaseModel):
+    id: uuid.UUID
+    label: str
 
 
 class SmsReviewResponse(BaseModel):
@@ -85,6 +102,8 @@ class SmsReviewResponse(BaseModel):
     status: str
     candidate_contact_ids: list
     candidate_matter_ids: list
+    candidate_contacts: list[SmsRouteCandidate] = Field(default_factory=list)
+    candidate_matters: list[SmsRouteCandidate] = Field(default_factory=list)
     from_number: str | None = None
     body: str | None = None
     created_at: datetime | None = None
@@ -107,16 +126,31 @@ class SmsReviewDecision(BaseModel):
 
 
 class SmsReconciliationRequest(BaseModel):
-    resolution: str = Field(pattern=r"^(confirmed_not_sent|provider_accepted)$")
+    resolution: Literal["confirmed_not_sent", "provider_lookup"]
     provider_message_id: str | None = Field(default=None, max_length=255)
 
     @model_validator(mode="after")
-    def provider_acceptance_has_identity(self):
+    def provider_lookup_has_identity_when_needed(self):
         if (
-            self.resolution == "provider_accepted"
-            and not str(self.provider_message_id or "").strip()
+            self.resolution == "confirmed_not_sent"
+            and self.provider_message_id is not None
         ):
-            raise ValueError("Provider acceptance requires the provider message id")
+            raise ValueError("A non-send attestation cannot bind a provider message id")
         if self.provider_message_id:
             self.provider_message_id = self.provider_message_id.strip()
         return self
+
+
+class SmsReconciliationItemResponse(BaseModel):
+    id: uuid.UUID
+    status: str
+    provider_message_id: str | None
+    provider_status: str | None
+    to_number: str | None
+    body: str
+    category: str
+    reconciliation_required_at: datetime | None
+    reconciliation_resolution: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}

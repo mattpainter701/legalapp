@@ -20,18 +20,28 @@ describe('SmsReviewQueue', () => {
       body: 'Please call about my appointment.',
       candidate_contact_ids: ['contact-1', 'contact-2'],
       candidate_matter_ids: ['matter-1', 'matter-2'],
+      candidate_contacts: [
+        { id: 'contact-1', label: 'Dana Client' },
+        { id: 'contact-2', label: 'Alex Client' },
+      ],
+      candidate_matters: [
+        { id: 'matter-1', label: 'Estate plan' },
+        { id: 'matter-2', label: 'Guardianship' },
+      ],
     }])
     decideSmsReviewItem.mockResolvedValue({ id: 'review-1', status: 'resolved' })
   })
 
   it('keeps ambiguous content in a review surface until an exact route is chosen', async () => {
     const user = userEvent.setup()
-    render(<SmsReviewQueue />)
+    const { container } = render(<SmsReviewQueue />)
     expect(await screen.findByText('Please call about my appointment.')).toBeInTheDocument()
     const resolve = screen.getByRole('button', { name: 'Resolve route' })
     expect(resolve).toBeDisabled()
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Contact for +15551234567' }), 'contact-1')
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Matter for +15551234567' }), 'matter-2')
+    expect(container.querySelector('option[value="contact-1"]')).toHaveTextContent('Dana Client')
+    expect(container.querySelector('option[value="matter-2"]')).toHaveTextContent('Guardianship')
+    await user.type(screen.getByRole('combobox', { name: 'Contact for +15551234567' }), 'contact-1')
+    await user.type(screen.getByRole('combobox', { name: 'Matter for +15551234567' }), 'matter-2')
     expect(resolve).toBeEnabled()
     await user.click(resolve)
     await waitFor(() => expect(decideSmsReviewItem).toHaveBeenCalledWith('review-1', {
