@@ -1,0 +1,27 @@
+# LawHand Search Node baseline. Install this as the local OpenSearch config on
+# either supported agent platform. Also install the adjacent Performance
+# Analyzer properties file (or uninstall that plugin); do not publish 9200/9600.
+cluster.name: lawhand-search-node
+node.name: lawhand-search-node-1
+discovery.type: single-node
+network.host: 127.0.0.1
+http.port: 9200
+transport.host: 127.0.0.1
+plugins.security.disabled: false
+plugins.security.ssl.http.enabled: true
+plugins.security.ssl.http.pemcert_filepath: certs/node.pem
+plugins.security.ssl.http.pemkey_filepath: certs/node-key.pem
+plugins.security.ssl.http.pemtrustedcas_filepath: certs/ca.pem
+plugins.security.ssl.transport.pemcert_filepath: certs/node.pem
+plugins.security.ssl.transport.pemkey_filepath: certs/node-key.pem
+plugins.security.ssl.transport.pemtrustedcas_filepath: certs/ca.pem
+plugins.security.ssl.transport.enforce_hostname_verification: true
+plugins.security.allow_default_init_securityindex: false
+path.data: ${LAWHAND_OPENSEARCH_DATA}
+path.logs: ${LAWHAND_OPENSEARCH_LOGS}
+bootstrap.memory_lock: true
+action.destructive_requires_name: true
+cluster.routing.allocation.disk.threshold_enabled: true
+cluster.routing.allocation.disk.watermark.low: 80%
+cluster.routing.allocation.disk.watermark.high: 90%
+cluster.routing.allocation.disk.watermark.flood_stage: 95%

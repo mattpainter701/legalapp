@@ -13,6 +13,11 @@ AGENT_ROOT = Path(SPECPATH).resolve().parent
 
 hidden = [
     "clarity_agent.service",
+    "clarity_agent.search_node",
+    "clarity_agent.search_gateway",
+    "clarity_agent.search_control",
+    "clarity_agent.search_engine",
+    "clarity_agent.opensearch_engine",
     "smbclient",
     "smbprotocol",
     "spnego",
