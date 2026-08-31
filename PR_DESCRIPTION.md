@@ -52,7 +52,7 @@ of native ACL trimming.
 
 - [ ] MCP documentation updated
 - [x] MCP documentation not needed
-- MCP area: none
+- MCP area: Workspace MCP Firm Memory search authorization boundary
 - Wiki handoff note: This PR does not change an MCP endpoint, tool, scope, or
   protocol. A future Workspace MCP integration must consume the normalized API
   and retain the same source/matter/native authorization boundary.

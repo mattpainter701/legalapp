@@ -1,4 +1,15 @@
-# Firm Memory source policy
+---
+slug: firm-memory-source-policy
+title: Firm Memory Source Policy
+description: Configure authorization, rollout, and truthful coverage for Firm Memory sources.
+icon: shield
+order: 170
+read_time: 6 min
+---
+
+# Firm Memory Source Policy
+
+## Configure the authorization boundary
 
 Firm Memory is designed to search authorized firm knowledge across configured
 sources. Selecting **All** never bypasses permissions: it means all sources the
@@ -32,6 +43,8 @@ Search coverage is part of the result, not an internal diagnostic. When any
 selected authorized source is partial, stale, offline, indexing, or
 unsupported, users must be told that the response covers only available
 sources. “No matches” is appropriate only for a complete response.
+
+## Roll out the integration
 
 For schema, rollout, and integration details, see
 `docs/firm-memory-source-authorization.md`.
