@@ -216,6 +216,7 @@ class StudioRenderSourceContract(StrictModel):
 class StudioRenderOptions(StrictModel):
     """Bounded renderer controls; document/test values are intentionally absent."""
 
+    contract_version: Literal[1] = 1
     flatten_pdf: bool = False
     preview_purpose: Literal["editor", "test", "validation"] = "test"
     page_number: int | None = Field(default=None, ge=1, le=10_000)
@@ -322,6 +323,7 @@ class StudioRendererManifest(StrictModel):
     sandbox_policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     fixed_arguments_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     environment_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    runtime_bundle_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     font_pack_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     renderer: StudioRendererComponent
     rasterizer: StudioRendererComponent
@@ -331,6 +333,49 @@ class StudioRendererManifest(StrictModel):
     @property
     def sha256(self) -> str:
         return canonical_json_sha256(self.model_dump(mode="json"))
+
+
+class StudioRenderCapability(StrictModel):
+    """One server-owned supported admission and worker-dispatch combination."""
+
+    kind: StudioRenderJobKind
+    source_format: Literal["markdown", "docx", "pdf"]
+    render_options_contract_version: Literal[1] = 1
+    output_media_type: str = Field(min_length=1, max_length=100)
+    renderer_manifest: StudioRendererManifest
+
+    @model_validator(mode="after")
+    def validate_output_media_type(self):
+        expected = {
+            "studio_template_analysis": "application/json",
+            "studio_template_ocr": "application/json",
+            "studio_page_preview": "image/png",
+            "studio_test_render": "application/pdf",
+        }[self.kind]
+        if self.output_media_type != expected:
+            raise ValueError("Studio capability output media type is invalid")
+        return self
+
+    @property
+    def key(self) -> tuple[StudioRenderJobKind, str, int]:
+        return (self.kind, self.source_format, self.render_options_contract_version)
+
+    @property
+    def configuration_key(self) -> str:
+        return ":".join(
+            (self.kind, self.source_format, f"v{self.render_options_contract_version}")
+        )
+
+
+class StudioRenderCapabilities(StrictModel):
+    contract_version: Literal[1] = 1
+    capabilities: list[StudioRenderCapability] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def unique_capabilities(self):
+        if len({item.key for item in self.capabilities}) != len(self.capabilities):
+            raise ValueError("Studio render capabilities contain duplicates")
+        return self
 
 
 def canonical_render_request_hash(

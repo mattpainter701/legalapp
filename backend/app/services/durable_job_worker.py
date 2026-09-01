@@ -765,7 +765,11 @@ async def _run_bounded(
 
 async def process_pending_jobs() -> None:
     """Process general jobs without letting them block near-real-time calls."""
-    await _process_pending_jobs(exclude_kinds=VOICE_JOB_KINDS)
+    from app.schemas.studio_render import STUDIO_RENDER_JOB_KINDS
+
+    await _process_pending_jobs(
+        exclude_kinds=VOICE_JOB_KINDS | set(STUDIO_RENDER_JOB_KINDS)
+    )
 
 
 async def process_pending_zoom_phone_jobs() -> None:

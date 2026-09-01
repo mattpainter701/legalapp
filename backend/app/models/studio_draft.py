@@ -273,6 +273,7 @@ class StudioDraftSnapshot(Base):
 
     __tablename__ = "studio_draft_snapshots"
     __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_studio_snapshots_tenant_id"),
         UniqueConstraint("draft_id", "revision", name="uq_studio_snapshots_revision"),
         UniqueConstraint(
             "draft_id", "content_sha256", name="uq_studio_snapshots_content"

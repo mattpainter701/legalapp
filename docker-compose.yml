@@ -140,8 +140,13 @@ services:
       MCP_UPSTREAM_API_KEY: ${MCP_UPSTREAM_API_KEY:-}
       MCP_OPERATOR_ASSERTION_SECRET: ${MCP_OPERATOR_ASSERTION_SECRET:-}
       MCP_CITATOR_SCOPE_ASSERTION_SECRET: ${MCP_CITATOR_SCOPE_ASSERTION_SECRET:-}
+      TEMPLATE_STUDIO_RENDER_ENABLED: ${TEMPLATE_STUDIO_RENDER_ENABLED:-false}
+      TEMPLATE_STUDIO_RENDER_STORAGE_DIR: /app/studio-render-cas
+      TEMPLATE_STUDIO_RENDER_STORAGE_TOPOLOGY: single_host_local
+      TEMPLATE_STUDIO_RENDER_MANIFESTS_JSON: ${TEMPLATE_STUDIO_RENDER_MANIFESTS_JSON:-}
     volumes:
       - ${UPLOADS_HOST_DIR:-./uploads}:/app/uploads
+      - studio_render_cas:/app/studio-render-cas
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8000/health || exit 1"]
@@ -149,6 +154,38 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+
+  studio-render-worker:
+    profiles: ["studio-render"]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    env_file: ${APP_ENV_FILE:-.env}
+    environment:
+      DATABASE_URL: ${APP_DATABASE_URL:-${DATABASE_URL}}
+      TEMPLATE_STUDIO_RENDER_ENABLED: "true"
+      TEMPLATE_STUDIO_RENDER_WORKER_ENABLED: "true"
+      TEMPLATE_STUDIO_RENDER_STORAGE_DIR: /app/studio-render-cas
+      TEMPLATE_STUDIO_RENDER_STORAGE_TOPOLOGY: single_host_local
+      TEMPLATE_STUDIO_RENDER_WORKSPACE_DIR: /app/studio-render-workspace
+      TEMPLATE_STUDIO_RENDER_MANIFESTS_JSON: ${TEMPLATE_STUDIO_RENDER_MANIFESTS_JSON:-}
+      TEMPLATE_STUDIO_RENDER_PROFILES_JSON: ${TEMPLATE_STUDIO_RENDER_PROFILES_JSON:-}
+    volumes:
+      - studio_render_cas:/app/studio-render-cas
+      - studio_render_workspace:/app/studio-render-workspace
+      - ${STUDIO_RENDER_RUNTIME_HOST_DIR:-./studio-render-runtime}:/app/studio-render-runtime:ro
+    command: python -m app.studio_render_worker_main
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
 
   frontend:
     build:
@@ -188,3 +225,5 @@ volumes:
   postgres_data:
   redis_data:
   litellm_postgres_data:
+  studio_render_cas:
+  studio_render_workspace:

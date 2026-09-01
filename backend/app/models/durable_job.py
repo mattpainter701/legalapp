@@ -22,6 +22,7 @@ from app.database import Base
 class DurableJob(Base):
     __tablename__ = "durable_jobs"
     __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_durable_jobs_tenant_id"),
         UniqueConstraint(
             "tenant_id", "kind", "idempotency_key", name="uq_durable_job_idempotency"
         ),

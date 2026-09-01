@@ -197,16 +197,18 @@ def _is_link(path: Path) -> bool:
 class LocalStudioObjectStore:
     """Atomic tenant-local CAS with verified cache hits and bounded reads.
 
-    This rejects symlinks and junctions inside the configured storage root.
-    That protects the owned directory layout; deployment must also ensure the
-    configured root itself is private and not replaceable by untrusted users.
+    This rejects symlinks and junctions in and above the configured root.
+    Deployment must also keep the explicit single-host root private.
     """
 
     def __init__(self, root: str | Path, *, max_object_bytes: int):
         supplied_root = Path(root).absolute()
         if max_object_bytes < 1:
             raise ValueError("max_object_bytes must be positive")
-        if supplied_root.exists() and _is_link(supplied_root):
+        existing_ancestors = (
+            path for path in (supplied_root, *supplied_root.parents) if path.exists()
+        )
+        if any(_is_link(path) for path in existing_ancestors):
             raise StudioStorageError(
                 "unsafe_storage_root", "Studio storage root is not a safe directory"
             )

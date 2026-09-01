@@ -1,4 +1,4 @@
-"""Phase 3 render artifact metadata; registration/migration lands at gate 150."""
+"""Phase 3 tenant-isolated render artifact and preferred-evidence metadata."""
 
 from __future__ import annotations
 
@@ -34,11 +34,33 @@ class StudioRenderArtifact(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_studio_render_artifact_tenant_id"),
         UniqueConstraint("tenant_id", "job_id", name="uq_studio_render_artifact_job"),
+        UniqueConstraint(
+            "tenant_id",
+            "id",
+            "job_id",
+            "draft_id",
+            "revision",
+            "identity_sha256",
+            "evidence_basis_sha256",
+            name="uq_studio_render_artifact_evidence",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "job_id"],
+            ["durable_jobs.tenant_id", "durable_jobs.id"],
+            ondelete="RESTRICT",
+            name="fk_studio_render_artifact_job_tenant",
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "draft_id"],
             ["studio_drafts.tenant_id", "studio_drafts.id"],
             ondelete="RESTRICT",
             name="fk_studio_render_artifact_draft_tenant",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "snapshot_id"],
+            ["studio_draft_snapshots.tenant_id", "studio_draft_snapshots.id"],
+            ondelete="RESTRICT",
+            name="fk_studio_render_artifact_snapshot_tenant",
         ),
         ForeignKeyConstraint(
             [
@@ -76,6 +98,7 @@ class StudioRenderArtifact(Base):
         CheckConstraint(
             "runtime_manifest_sha256 ~ '^[0-9a-f]{64}$' "
             "AND geometry_manifest_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND evidence_basis_sha256 ~ '^[0-9a-f]{64}$' "
             "AND (input_binding_sha256 IS NULL OR input_binding_sha256 ~ '^[0-9a-f]{64}$')",
             name="ck_studio_render_artifact_manifest_hashes",
         ),
@@ -145,6 +168,12 @@ class StudioRenderArtifact(Base):
             "draft_id",
             "revision",
         ),
+        Index(
+            "ix_studio_render_object_state",
+            "tenant_id",
+            "object_key",
+            "storage_state",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -156,21 +185,11 @@ class StudioRenderArtifact(Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
     )
-    job_id: Mapped[uuid.UUID] = mapped_column(
-        # Migration 150 must first add durable_jobs(tenant_id, id) uniqueness,
-        # then replace this scalar FK with the tenant-composite constraint.
-        UUID(as_uuid=True), ForeignKey("durable_jobs.id", ondelete="RESTRICT"), nullable=False
-    )
+    job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     draft_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), nullable=False
     )
-    snapshot_id: Mapped[uuid.UUID] = mapped_column(
-        # The Phase 2 snapshot table likewise needs a tenant/id unique target
-        # before migration 150 can install the composite evidence reference.
-        UUID(as_uuid=True),
-        ForeignKey("studio_draft_snapshots.id", ondelete="RESTRICT"),
-        nullable=False,
-    )
+    snapshot_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     source_artifact_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), nullable=False
     )
@@ -179,6 +198,7 @@ class StudioRenderArtifact(Base):
     )
     revision: Mapped[int] = mapped_column(Integer, nullable=False)
     identity_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    evidence_basis_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     snapshot_content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     source_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     source_media_type: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -233,10 +253,26 @@ class StudioPreferredRenderEvidence(Base):
             name="fk_studio_preferred_render_draft_tenant",
         ),
         ForeignKeyConstraint(
-            ["tenant_id", "artifact_id"],
-            ["studio_render_artifacts.tenant_id", "studio_render_artifacts.id"],
+            [
+                "tenant_id",
+                "artifact_id",
+                "job_id",
+                "draft_id",
+                "revision",
+                "identity_sha256",
+                "evidence_basis_sha256",
+            ],
+            [
+                "studio_render_artifacts.tenant_id",
+                "studio_render_artifacts.id",
+                "studio_render_artifacts.job_id",
+                "studio_render_artifacts.draft_id",
+                "studio_render_artifacts.revision",
+                "studio_render_artifacts.identity_sha256",
+                "studio_render_artifacts.evidence_basis_sha256",
+            ],
             ondelete="RESTRICT",
-            name="fk_studio_preferred_render_artifact_tenant",
+            name="fk_studio_preferred_render_exact_evidence",
         ),
         CheckConstraint("revision > 0", name="ck_studio_preferred_render_revision"),
         CheckConstraint(
@@ -254,10 +290,11 @@ class StudioPreferredRenderEvidence(Base):
         primary_key=True,
     )
     draft_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
-    artifact_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    job_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("durable_jobs.id", ondelete="RESTRICT"), nullable=False
+    evidence_basis_sha256: Mapped[str] = mapped_column(
+        String(64), primary_key=True
     )
+    artifact_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     revision: Mapped[int] = mapped_column(Integer, nullable=False)
     identity_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(

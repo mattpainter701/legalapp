@@ -20,9 +20,12 @@ from app.schemas.studio_render import (
     StudioGeometryManifest,
     StudioPageGeometry,
     StudioRenderAccepted,
+    StudioRenderCapabilities,
+    StudioRenderCapability,
     StudioRenderOptions,
-    StudioRenderPublicErrorEnvelope,
     StudioRenderSourceContract,
+    StudioRendererComponent,
+    StudioRendererManifest,
 )
 from app.services.studio_render_jobs import StudioRenderArtifactContent
 
@@ -83,6 +86,24 @@ async def _audit(_event, _job_id):
 
 
 def _context(service, actor_id):
+    def component(name, value):
+        return StudioRendererComponent(
+            name=name, version="1.0.0", content_sha256=value * 64
+        )
+
+    manifest = StudioRendererManifest(
+        isolation_policy_id="studio-test-v1",
+        launcher_sha256="1" * 64,
+        sandbox_policy_sha256="2" * 64,
+        fixed_arguments_sha256="3" * 64,
+        environment_sha256="4" * 64,
+        runtime_bundle_sha256="5" * 64,
+        font_pack_sha256="6" * 64,
+        renderer=component("renderer", "7"),
+        rasterizer=component("rasterizer", "8"),
+        converter=component("converter", "9"),
+        validator=component("validator", "a"),
+    )
     return StudioRenderRouteContext(
         service=service,
         actor_user_id=actor_id,
@@ -90,6 +111,16 @@ def _context(service, actor_id):
         transaction=_transaction,
         object_store=object(),
         backend_url="https://configured.example",
+        capabilities=StudioRenderCapabilities(
+            capabilities=[
+                StudioRenderCapability(
+                    kind="studio_page_preview",
+                    source_format="markdown",
+                    output_media_type="image/png",
+                    renderer_manifest=manifest,
+                )
+            ]
+        ),
     )
 
 
@@ -177,6 +208,21 @@ async def test_routes_reject_client_actor_and_serve_hash_verified_geometry_conte
 
 
 @pytest.mark.asyncio
+async def test_capability_route_exposes_server_owned_dispatch_combinations():
+    context = _context(_FakeService(), uuid.uuid4())
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_studio_render_route_context] = lambda: context
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="https://test.invalid"
+    ) as client:
+        response = await client.get("/api/template-studio/render-capabilities")
+    assert response.status_code == 200
+    assert response.json()["capabilities"][0]["source_format"] == "markdown"
+    assert response.json()["capabilities"][0]["output_media_type"] == "image/png"
+
+
+@pytest.mark.asyncio
 async def test_route_transaction_propagates_task_cancellation():
     context = _context(_FakeService(), uuid.uuid4())
 
@@ -188,7 +234,7 @@ async def test_route_transaction_propagates_task_cancellation():
 
 
 @pytest.mark.asyncio
-async def test_unavailable_route_uses_its_declared_public_error_envelope():
+async def test_unavailable_route_authenticates_before_runtime_disclosure():
     app = FastAPI()
     app.include_router(router)
     async with AsyncClient(
@@ -199,9 +245,7 @@ async def test_unavailable_route_uses_its_declared_public_error_envelope():
             headers={"Idempotency-Key": "intent-key-123"},
             json=_intent(),
         )
-    assert response.status_code == 503
-    error = StudioRenderPublicErrorEnvelope.model_validate(response.json())
-    assert error.detail.code == "processor_unavailable"
+    assert response.status_code == 401
     response_schema = app.openapi()["paths"]["/api/template-studio/render-jobs"][
         "post"
     ]["responses"]["503"]["content"]["application/json"]["schema"]
@@ -217,4 +261,5 @@ def test_route_context_rejects_request_paths_and_non_https_origins():
             transaction=_transaction,
             object_store=object(),
             backend_url="http://configured.example",
+            capabilities=_context(_FakeService(), uuid.uuid4()).capabilities,
         )

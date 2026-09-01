@@ -147,3 +147,35 @@ def test_work_item_rejects_foreign_durable_job_kind():
             job_id=uuid.uuid4(),
             kind="send_email",  # type: ignore[arg-type]
         )
+
+
+@pytest.mark.asyncio
+async def test_maintenance_uses_monotonic_interval_not_each_idle_poll():
+    stop = asyncio.Event()
+    clock = [0.0]
+
+    class Maintenance:
+        def __init__(self):
+            self.calls = 0
+
+        async def run_once(self):
+            self.calls += 1
+            return 0
+
+    maintenance = Maintenance()
+
+    async def idle(_seconds):
+        clock[0] += 5
+        if clock[0] >= 15:
+            stop.set()
+
+    loop = StudioRenderWorkerLoop(
+        source=_Source([]),
+        worker=_Worker(),
+        maintenance=maintenance,
+        maintenance_interval_seconds=10,
+        monotonic=lambda: clock[0],
+        sleep=idle,
+    )
+    await loop.run_forever(stop)
+    assert maintenance.calls == 2

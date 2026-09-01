@@ -30,12 +30,14 @@ from app.services.studio_worker_isolation import (
 def _profile(tmp_path, **updates):
     launcher = tmp_path / "sandbox-launcher.bin"
     executable = tmp_path / "renderer.bin"
+    runtime_bundle = tmp_path / "runtime.bundle.manifest"
     font_pack = tmp_path / "fonts.bundle"
     rasterizer = tmp_path / "rasterizer.bin"
     converter = tmp_path / "converter.bin"
     validator = tmp_path / "validator.bin"
     launcher.write_bytes(b"verified sandbox")
     executable.write_bytes(b"renderer")
+    runtime_bundle.write_bytes(b"runtime bundle v1")
     font_pack.write_bytes(b"fonts")
     rasterizer.write_bytes(b"rasterizer")
     converter.write_bytes(b"converter")
@@ -47,6 +49,10 @@ def _profile(tmp_path, **updates):
         "launcher_sha256": hashlib.sha256(launcher.read_bytes()).hexdigest(),
         "executable": executable.absolute(),
         "executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+        "runtime_bundle_manifest": runtime_bundle.absolute(),
+        "runtime_bundle_sha256": hashlib.sha256(
+            runtime_bundle.read_bytes()
+        ).hexdigest(),
         "font_pack": font_pack.absolute(),
         "font_pack_sha256": hashlib.sha256(font_pack.read_bytes()).hexdigest(),
         "renderer_version": "1.0.0",
@@ -162,6 +168,14 @@ def test_launcher_is_re_attested_and_caller_cannot_choose_executable(tmp_path):
     with pytest.raises(StudioIsolationError, match="attestation"):
         component_registry.resolve(
             StudioIsolatedInvocation(profile_id=component_profile.profile_id)
+        )
+
+    bundle_profile = _profile(tmp_path)
+    bundle_registry = StudioIsolationRegistry([bundle_profile])
+    Path(bundle_profile.runtime_bundle_manifest).write_bytes(b"replaced bundle")
+    with pytest.raises(StudioIsolationError, match="attestation"):
+        bundle_registry.resolve(
+            StudioIsolatedInvocation(profile_id=bundle_profile.profile_id)
         )
 
 
@@ -343,6 +357,8 @@ async def test_no_shell_minimal_environment_and_literal_hostile_arguments(tmp_pa
     assert "--deny-network" in args
     assert "--kill-process-tree" in args
     assert "--verify-executable-sha256" in args
+    assert "--runtime-bundle-manifest" in args
+    assert "--verify-runtime-bundle-sha256" in args
     for component in ("font-pack", "rasterizer", "converter", "validator"):
         assert f"--verify-{component}-sha256" in args
     assert "shell" not in kwargs

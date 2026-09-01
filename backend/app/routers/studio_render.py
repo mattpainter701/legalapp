@@ -5,15 +5,21 @@ from __future__ import annotations
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import timedelta
+from functools import partial
 from typing import Protocol, TypeVar
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import Response as FastAPIResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
+from app.database import get_db
 from app.schemas.studio_render import (
     StudioArtifactGeometry,
     StudioRenderAccepted,
+    StudioRenderCapabilities,
     StudioRenderIntent,
     StudioRenderJobStatus,
     StudioRenderPublicErrorEnvelope,
@@ -22,8 +28,12 @@ from app.services.studio_object_storage import StudioObjectStore
 from app.services.studio_render_jobs import (
     StudioConsumerAudit,
     StudioRenderArtifactContent,
+    StudioRenderJobService,
+    append_studio_render_audit_event,
+    run_studio_consumer_transaction,
     studio_render_public_error,
 )
+from app.services.access_control import require_capability
 
 
 _Result = TypeVar("_Result")
@@ -57,6 +67,7 @@ class StudioRenderRouteContext:
     transaction: StudioTransaction
     object_store: StudioObjectStore
     backend_url: str
+    capabilities: StudioRenderCapabilities
     max_download_bytes: int = 100 * 1024 * 1024
 
     def __post_init__(self) -> None:
@@ -81,17 +92,73 @@ class StudioRenderRouteContext:
         return f"{self.backend_url.rstrip('/')}{resource}"
 
 
-async def get_studio_render_route_context() -> StudioRenderRouteContext:
-    """Fail closed until shared registration supplies auth/config/storage wiring."""
+_require_studio_user = require_capability("manage_documents")
 
-    public = studio_render_public_error(RuntimeError("Studio rendering is unavailable."))
-    raise HTTPException(
-        status_code=503,
-        detail=public.model_dump(mode="json", exclude_none=True),
-    )
+
+async def get_studio_render_route_context(
+    request: Request,
+    current_user=Depends(_require_studio_user),
+    db: AsyncSession = Depends(get_db),
+) -> StudioRenderRouteContext:
+    """Authenticate first, then expose only a fully initialized render runtime."""
+
+    settings = get_settings()
+    object_store = getattr(request.app.state, "studio_render_object_store", None)
+    manifests = getattr(request.app.state, "studio_render_manifests", None)
+    capabilities = getattr(request.app.state, "studio_render_capabilities", None)
+    if (
+        not settings.TEMPLATE_STUDIO_RENDER_ENABLED
+        or object_store is None
+        or not isinstance(manifests, dict)
+        or not isinstance(capabilities, StudioRenderCapabilities)
+    ):
+        raise _public_http_error(RuntimeError("Studio rendering is unavailable."))
+    try:
+        service = StudioRenderJobService(
+            db,
+            tenant_id=current_user.tenant_id,
+            actor_user_id=current_user.id,
+            active_job_limit=settings.TEMPLATE_STUDIO_RENDER_ACTIVE_JOB_LIMIT,
+            job_ttl=timedelta(
+                seconds=settings.TEMPLATE_STUDIO_RENDER_JOB_TTL_SECONDS
+            ),
+            renderer_manifests=manifests,
+            enqueue_rate_limit=settings.TEMPLATE_STUDIO_RENDER_ENQUEUE_RATE_LIMIT,
+            enqueue_rate_window=timedelta(
+                seconds=settings.TEMPLATE_STUDIO_RENDER_ENQUEUE_RATE_WINDOW_SECONDS
+            ),
+            queued_byte_limit=settings.TEMPLATE_STUDIO_RENDER_QUEUED_BYTE_LIMIT,
+            max_input_binding_bytes=(
+                settings.TEMPLATE_STUDIO_RENDER_MAX_INPUT_BINDING_BYTES
+            ),
+        )
+        return StudioRenderRouteContext(
+            service=service,
+            actor_user_id=current_user.id,
+            audit=partial(
+                append_studio_render_audit_event,
+                db,
+                tenant_id=current_user.tenant_id,
+                actor_user_id=current_user.id,
+            ),
+            transaction=partial(run_studio_consumer_transaction, db),
+            object_store=object_store,
+            backend_url=settings.BACKEND_URL,
+            capabilities=capabilities,
+            max_download_bytes=settings.TEMPLATE_STUDIO_RENDER_MAX_DOWNLOAD_BYTES,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _public_http_error(exc) from exc
 
 
 router = APIRouter(prefix="/api/template-studio", tags=["template-studio"])
+
+_OPERATIONAL_ERRORS = {
+    status: {"model": StudioRenderPublicErrorEnvelope}
+    for status in (404, 409, 410, 422, 429, 503, 504)
+}
 
 
 def _public_http_error(error: BaseException) -> HTTPException:
@@ -120,11 +187,22 @@ def _resource_headers(
     response.headers["Content-Location"] = context.absolute_url(resource)
 
 
+@router.get(
+    "/render-capabilities",
+    response_model=StudioRenderCapabilities,
+    responses=_OPERATIONAL_ERRORS,
+)
+async def read_studio_render_capabilities(
+    context: StudioRenderRouteContext = Depends(get_studio_render_route_context),
+):
+    return context.capabilities
+
+
 @router.post(
     "/render-jobs",
     response_model=StudioRenderAccepted,
     status_code=202,
-    responses={503: {"model": StudioRenderPublicErrorEnvelope}},
+    responses=_OPERATIONAL_ERRORS,
 )
 async def enqueue_studio_render(
     body: StudioRenderIntent,
@@ -146,7 +224,11 @@ async def enqueue_studio_render(
     return accepted
 
 
-@router.get("/render-jobs/{job_id}", response_model=StudioRenderJobStatus)
+@router.get(
+    "/render-jobs/{job_id}",
+    response_model=StudioRenderJobStatus,
+    responses=_OPERATIONAL_ERRORS,
+)
 async def read_studio_render_job(
     job_id: uuid.UUID,
     response: Response,
@@ -157,7 +239,11 @@ async def read_studio_render_job(
     return status
 
 
-@router.post("/render-jobs/{job_id}/cancel", response_model=StudioRenderJobStatus)
+@router.post(
+    "/render-jobs/{job_id}/cancel",
+    response_model=StudioRenderJobStatus,
+    responses=_OPERATIONAL_ERRORS,
+)
 async def cancel_studio_render_job(
     job_id: uuid.UUID,
     response: Response,
@@ -171,7 +257,11 @@ async def cancel_studio_render_job(
     return status
 
 
-@router.get("/render-artifacts/{artifact_id}", response_model=StudioRenderJobStatus)
+@router.get(
+    "/render-artifacts/{artifact_id}",
+    response_model=StudioRenderJobStatus,
+    responses=_OPERATIONAL_ERRORS,
+)
 async def read_studio_render_artifact(
     artifact_id: uuid.UUID,
     response: Response,
@@ -189,6 +279,7 @@ async def read_studio_render_artifact(
 @router.get(
     "/render-artifacts/{artifact_id}/geometry",
     response_model=StudioArtifactGeometry,
+    responses=_OPERATIONAL_ERRORS,
 )
 async def read_studio_render_geometry(
     artifact_id: uuid.UUID,
@@ -206,7 +297,10 @@ async def read_studio_render_geometry(
     return geometry
 
 
-@router.get("/render-artifacts/{artifact_id}/content")
+@router.get(
+    "/render-artifacts/{artifact_id}/content",
+    responses=_OPERATIONAL_ERRORS,
+)
 async def download_studio_render_artifact(
     artifact_id: uuid.UUID,
     context: StudioRenderRouteContext = Depends(get_studio_render_route_context),

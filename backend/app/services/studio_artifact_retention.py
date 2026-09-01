@@ -6,17 +6,22 @@ import asyncio
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from functools import partial
 from itertools import islice
 from typing import AsyncContextManager, Awaitable, Callable, Iterable
 
-from sqlalchemy import func, or_, select, text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import delete, func, or_, select, text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.database import set_tenant_context
 from app.models.durable_job import DurableJob
-from app.models.studio_render import StudioRenderArtifact
+from app.models.studio_draft import StudioDraft
+from app.models.studio_render import (
+    StudioPreferredRenderEvidence,
+    StudioRenderArtifact,
+)
+from app.models.tenant import Tenant
 from app.services.studio_object_storage import (
     StudioObjectRef,
     StudioObjectStore,
@@ -670,7 +675,7 @@ class StudioArtifactRetentionService:
         return decision
 
     async def cleanup_batch(self, *, limit: int) -> list[StudioCleanupDecision]:
-        """Process a bounded tenant batch; scheduler registration remains gated."""
+        """Process a bounded tenant batch of content-expiry candidates."""
 
         if not 1 <= limit <= 500:
             raise ValueError("cleanup limit must be between 1 and 500")
@@ -700,3 +705,320 @@ class StudioArtifactRetentionService:
         for artifact_id in artifact_ids:
             decisions.append(await self.delete_if_eligible(artifact_id))
         return decisions
+
+
+    async def cleanup_metadata_batch(
+        self, *, limit: int
+    ) -> list[StudioCleanupDecision]:
+        """Delete only expired metadata after rechecking every retention gate."""
+
+        if not 1 <= limit <= 500:
+            raise ValueError("metadata cleanup limit must be between 1 and 500")
+        await self._bind_tenant_context()
+        now = await self._clock_now()
+        artifact_ids = tuple(
+            (
+                await self.db.scalars(
+                    select(StudioRenderArtifact.id)
+                    .where(
+                        StudioRenderArtifact.tenant_id == self.tenant_id,
+                        StudioRenderArtifact.storage_state == "deleted",
+                        StudioRenderArtifact.metadata_expires_at <= now,
+                        StudioRenderArtifact.legal_hold_at.is_(None),
+                    )
+                    .order_by(StudioRenderArtifact.created_at, StudioRenderArtifact.id)
+                    .limit(limit)
+                )
+            ).all()
+        )
+        await self.db.rollback()
+        decisions: list[StudioCleanupDecision] = []
+        for artifact_id in artifact_ids:
+            await self._bind_tenant_context()
+            artifact = await self.db.scalar(
+                select(StudioRenderArtifact)
+                .where(
+                    StudioRenderArtifact.id == artifact_id,
+                    StudioRenderArtifact.tenant_id == self.tenant_id,
+                )
+                .with_for_update()
+            )
+            if artifact is None:
+                await self.db.rollback()
+                decisions.append(
+                    StudioCleanupDecision(artifact_id, False, "not_found")
+                )
+                continue
+            candidate = await self._candidate(artifact)
+            action_now = await self._clock_now()
+            if metadata_is_retained(candidate, now=action_now):
+                await self.db.rollback()
+                decisions.append(
+                    StudioCleanupDecision(artifact_id, False, "metadata_retained")
+                )
+                continue
+            try:
+                held = await asyncio.wait_for(
+                    self.legal_hold_check(candidate),
+                    timeout=self.legal_hold_timeout_seconds,
+                )
+            except Exception:
+                held = True
+            if held:
+                await self.db.rollback()
+                decisions.append(
+                    StudioCleanupDecision(artifact_id, False, "legal_hold")
+                )
+                continue
+            await self.db.delete(artifact)
+            await self.db.commit()
+            decisions.append(
+                StudioCleanupDecision(artifact_id, True, "metadata_expired")
+            )
+        return decisions
+
+    async def cleanup_durable_jobs_batch(
+        self,
+        *,
+        limit: int,
+        retain_for: timedelta = timedelta(days=7),
+    ) -> list[StudioDurableJobCleanupDecision]:
+        """Bound tenant idempotency growth after artifact and stage reclamation."""
+
+        if not 1 <= limit <= 500:
+            raise ValueError("job cleanup limit must be between 1 and 500")
+        if not timedelta(days=1) <= retain_for <= timedelta(days=365):
+            raise ValueError("job retention must be between one day and one year")
+        await self._bind_tenant_context()
+        now = await self._clock_now()
+        jobs = tuple(
+            (
+                await self.db.scalars(
+                    select(DurableJob)
+                    .where(
+                        DurableJob.tenant_id == self.tenant_id,
+                        DurableJob.kind.in_(
+                            {
+                                "studio_template_analysis",
+                                "studio_template_ocr",
+                                "studio_page_preview",
+                                "studio_test_render",
+                            }
+                        ),
+                        DurableJob.status.in_({"completed", "failed", "cancelled"}),
+                        DurableJob.completed_at <= now - retain_for,
+                    )
+                    .order_by(DurableJob.completed_at, DurableJob.id)
+                    .limit(limit)
+                )
+            ).all()
+        )
+        await self.db.rollback()
+        try:
+            stages = await asyncio.to_thread(
+                self.object_store.list_staged,
+                self.tenant_id,
+                reconcile_before=datetime.max.replace(tzinfo=timezone.utc),
+                limit=500,
+            )
+        except Exception:
+            stages = None
+        staged_jobs = {stage.job_id for stage in stages or ()}
+        decisions: list[StudioDurableJobCleanupDecision] = []
+        for candidate in jobs:
+            await self._bind_tenant_context()
+            artifact_exists = await self.db.scalar(
+                select(StudioRenderArtifact.id).where(
+                    StudioRenderArtifact.tenant_id == self.tenant_id,
+                    StudioRenderArtifact.job_id == candidate.id,
+                )
+            )
+            decision = durable_job_cleanup_decision(
+                StudioDurableJobCleanupCandidate(
+                    job_id=candidate.id,
+                    terminal=True,
+                    completed_at=candidate.completed_at,
+                    retain_until=(candidate.completed_at or now) + retain_for,
+                    has_artifact=artifact_exists is not None,
+                    has_staged_object=(
+                        stages is None or candidate.id in staged_jobs
+                    ),
+                ),
+                now=now,
+            )
+            if not decision.eligible:
+                await self.db.rollback()
+                decisions.append(decision)
+                continue
+            result = await self.db.execute(
+                delete(DurableJob).where(
+                    DurableJob.id == candidate.id,
+                    DurableJob.tenant_id == self.tenant_id,
+                    DurableJob.status.in_({"completed", "failed", "cancelled"}),
+                    DurableJob.completed_at <= now - retain_for,
+                )
+            )
+            if result.rowcount == 1:
+                await self.db.commit()
+                decisions.append(decision)
+            else:
+                await self.db.rollback()
+                decisions.append(
+                    StudioDurableJobCleanupDecision(
+                        candidate.id, False, "job_changed"
+                    )
+                )
+        return decisions
+
+
+class StudioRenderMaintenance:
+    """Bounded tenant/RLS maintenance owned by the dedicated render worker."""
+
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        *,
+        object_store: StudioObjectStore,
+        tenant_batch_size: int = 10,
+        item_batch_size: int = 25,
+    ) -> None:
+        if not 1 <= tenant_batch_size <= 100:
+            raise ValueError("maintenance tenant batch is invalid")
+        if not 1 <= item_batch_size <= 100:
+            raise ValueError("maintenance item batch is invalid")
+        self.session_factory = session_factory
+        self.object_store = object_store
+        self.tenant_batch_size = tenant_batch_size
+        self.item_batch_size = item_batch_size
+        self._tenant_cursor: uuid.UUID | None = None
+
+    async def _tenant_ids(self) -> tuple[uuid.UUID, ...]:
+        async with self.session_factory() as db:
+            query = select(Tenant.id).where(Tenant.is_active.is_(True))
+            if self._tenant_cursor is not None:
+                query = query.where(Tenant.id > self._tenant_cursor)
+            ids = tuple(
+                (
+                    await db.scalars(
+                        query.order_by(Tenant.id).limit(self.tenant_batch_size)
+                    )
+                ).all()
+            )
+            if not ids and self._tenant_cursor is not None:
+                ids = tuple(
+                    (
+                        await db.scalars(
+                            select(Tenant.id)
+                            .where(Tenant.is_active.is_(True))
+                            .order_by(Tenant.id)
+                            .limit(self.tenant_batch_size)
+                        )
+                    ).all()
+                )
+            return ids
+
+    async def run_once(self) -> int:
+        changed = 0
+        tenant_ids = await self._tenant_ids()
+        for tenant_id in tenant_ids:
+            async with self.session_factory() as db:
+                await set_tenant_context(db, str(tenant_id))
+                preferred_rows = tuple(
+                    (
+                        await db.scalars(
+                            select(StudioPreferredRenderEvidence)
+                            .where(
+                                StudioPreferredRenderEvidence.tenant_id == tenant_id
+                            )
+                            .order_by(
+                                StudioPreferredRenderEvidence.updated_at,
+                                StudioPreferredRenderEvidence.draft_id,
+                            )
+                            .with_for_update(skip_locked=True)
+                            .limit(self.item_batch_size)
+                        )
+                    ).all()
+                )
+                for preferred in preferred_rows:
+                    draft = await db.scalar(
+                        select(StudioDraft).where(
+                            StudioDraft.tenant_id == tenant_id,
+                            StudioDraft.id == preferred.draft_id,
+                        )
+                    )
+                    if not (
+                        draft is not None
+                        and draft.lifecycle_state == "active"
+                        and draft.cancellation_requested_at is None
+                        and draft.revision == preferred.revision
+                        and draft.identity_sha256 == preferred.identity_sha256
+                        and draft.evidence_revision == preferred.revision
+                    ):
+                        await db.delete(preferred)
+                        changed += 1
+                await db.commit()
+                await set_tenant_context(db, str(tenant_id))
+
+                async def current_evidence(
+                    checked_tenant_id: uuid.UUID, artifact_id: uuid.UUID
+                ) -> bool:
+                    if checked_tenant_id != tenant_id:
+                        return True
+                    row = await db.execute(
+                        select(StudioPreferredRenderEvidence.artifact_id)
+                        .join(
+                            StudioDraft,
+                            (
+                                StudioDraft.tenant_id
+                                == StudioPreferredRenderEvidence.tenant_id
+                            )
+                            & (
+                                StudioDraft.id
+                                == StudioPreferredRenderEvidence.draft_id
+                            ),
+                        )
+                        .where(
+                            StudioPreferredRenderEvidence.tenant_id == tenant_id,
+                            StudioPreferredRenderEvidence.artifact_id == artifact_id,
+                            StudioDraft.lifecycle_state == "active",
+                            StudioDraft.cancellation_requested_at.is_(None),
+                            StudioDraft.revision
+                            == StudioPreferredRenderEvidence.revision,
+                            StudioDraft.identity_sha256
+                            == StudioPreferredRenderEvidence.identity_sha256,
+                            StudioDraft.evidence_revision
+                            == StudioPreferredRenderEvidence.revision,
+                        )
+                    )
+                    return row.scalar_one_or_none() is not None
+
+                async def legal_hold(candidate: StudioCleanupCandidate) -> bool:
+                    return candidate.legal_hold_at is not None
+
+                retention = StudioArtifactRetentionService(
+                    db,
+                    tenant_id=tenant_id,
+                    object_store=self.object_store,
+                    legal_hold_check=legal_hold,
+                    current_evidence_check=current_evidence,
+                )
+                content = await retention.cleanup_batch(limit=self.item_batch_size)
+                metadata = await retention.cleanup_metadata_batch(
+                    limit=self.item_batch_size
+                )
+                jobs = await retention.cleanup_durable_jobs_batch(
+                    limit=self.item_batch_size
+                )
+                staged = await StudioStagedReceiptReconciler(
+                    db,
+                    tenant_id=tenant_id,
+                    object_store=self.object_store,
+                    legal_hold_check=legal_hold,
+                    current_evidence_check=current_evidence,
+                ).reconcile_batch(limit=self.item_batch_size)
+                changed += sum(item.eligible for item in (*content, *metadata, *jobs))
+                changed += sum(
+                    item.action in {"acknowledged", "deleted"} for item in staged
+                )
+            self._tenant_cursor = tenant_id
+        return changed

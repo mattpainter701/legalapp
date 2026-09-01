@@ -22,12 +22,14 @@ from app.services.studio_worker_isolation import (
 def _registry(tmp_path):
     launcher = Path(tmp_path) / "trusted-launcher.bin"
     executable = Path(tmp_path) / "renderer.bin"
+    runtime_bundle = Path(tmp_path) / "runtime.bundle.manifest"
     font_pack = Path(tmp_path) / "fonts.bundle"
     rasterizer = Path(tmp_path) / "rasterizer.bin"
     converter = Path(tmp_path) / "converter.bin"
     validator = Path(tmp_path) / "validator.bin"
     launcher.write_bytes(b"trusted launcher")
     executable.write_bytes(b"renderer")
+    runtime_bundle.write_bytes(b"runtime bundle v1")
     font_pack.write_bytes(b"fonts")
     rasterizer.write_bytes(b"rasterizer")
     converter.write_bytes(b"converter")
@@ -39,6 +41,10 @@ def _registry(tmp_path):
         launcher_sha256=hashlib.sha256(launcher.read_bytes()).hexdigest(),
         executable=executable.absolute(),
         executable_sha256=hashlib.sha256(executable.read_bytes()).hexdigest(),
+        runtime_bundle_manifest=runtime_bundle.absolute(),
+        runtime_bundle_sha256=hashlib.sha256(
+            runtime_bundle.read_bytes()
+        ).hexdigest(),
         font_pack=font_pack.absolute(),
         font_pack_sha256=hashlib.sha256(font_pack.read_bytes()).hexdigest(),
         renderer_version="1.0.0",

@@ -43,6 +43,7 @@ def _manifest():
         sandbox_policy_sha256="9" * 64,
         fixed_arguments_sha256="2" * 64,
         environment_sha256="3" * 64,
+        runtime_bundle_sha256="0" * 64,
         font_pack_sha256="4" * 64,
         renderer=component("renderer", "5"),
         rasterizer=component("rasterizer", "6"),

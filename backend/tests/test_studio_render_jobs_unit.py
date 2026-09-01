@@ -17,6 +17,7 @@ from app.schemas.studio_render import (
     StudioPageGeometry,
     StudioRendererComponent,
     StudioRendererManifest,
+    StudioRenderRequest,
     StudioRenderOptions,
     StudioRenderSourceContract,
     canonical_effective_render_request_hash,
@@ -27,6 +28,7 @@ from app.services.studio_render_jobs import (
     StudioRenderJobService,
     StudioRenderWorkerService,
     _geometry_matches_request,
+    _evidence_basis_sha256,
     StudioRenderServiceError,
     _StudioRenderJobStore,
     _QueuedPayload,
@@ -49,6 +51,7 @@ def _manifest():
         sandbox_policy_sha256="9" * 64,
         fixed_arguments_sha256="2" * 64,
         environment_sha256="3" * 64,
+        runtime_bundle_sha256="0" * 64,
         font_pack_sha256="4" * 64,
         renderer=component("renderer", "5"),
         rasterizer=component("rasterizer", "6"),
@@ -343,9 +346,55 @@ def test_artifact_model_uses_available_tenant_composite_references():
     }
     assert {
         "fk_studio_preferred_render_draft_tenant",
-        "fk_studio_preferred_render_artifact_tenant",
+        "fk_studio_preferred_render_exact_evidence",
         "uq_studio_preferred_render_artifact",
     }.issubset(preferred_names)
+
+
+def test_preferred_evidence_basis_separates_roles_pages_and_options():
+    first = _lease()[1].payload
+    preview = first.model_copy(
+        update={
+            "kind": "studio_page_preview",
+            "render_options": StudioRenderOptions(page_number=1),
+        }
+    )
+    second_page = preview.model_copy(
+        update={"render_options": StudioRenderOptions(page_number=2)}
+    )
+    assert _evidence_basis_sha256(first) != _evidence_basis_sha256(preview)
+    assert _evidence_basis_sha256(preview) != _evidence_basis_sha256(second_page)
+
+
+@pytest.mark.asyncio
+async def test_admission_rejects_unsupported_capability_before_database_access():
+    queued = _lease()[1].payload
+    request = StudioRenderRequest(
+        kind=queued.kind,
+        draft_id=queued.draft_id,
+        expected_revision=queued.rendered_revision,
+        identity_sha256=queued.identity_sha256,
+        snapshot_id=queued.snapshot_id,
+        content_sha256=queued.snapshot_content_sha256,
+        source=queued.source,
+        render_options=queued.render_options,
+        requested_by=queued.requested_by,
+        input_binding_id=queued.input_binding_id,
+        request_sha256=queued.request_sha256,
+    )
+    service = StudioRenderJobService(
+        object(),
+        tenant_id=uuid.uuid4(),
+        actor_user_id=queued.requested_by,
+        renderer_manifests={(queued.kind, "docx", 1): queued.renderer_manifest},
+    )
+
+    async def audit(_event, _job_id):
+        return None
+
+    with pytest.raises(StudioRenderServiceError) as caught:
+        await service.enqueue(request, idempotency_key="unsupported-123", audit=audit)
+    assert caught.value.code == "processor_unavailable"
 
 
 def test_adoption_geometry_coverage_rechecks_preview_and_full_document():

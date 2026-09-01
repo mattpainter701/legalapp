@@ -89,6 +89,7 @@ def _manifest():
         sandbox_policy_sha256="9" * 64,
         fixed_arguments_sha256="2" * 64,
         environment_sha256="3" * 64,
+        runtime_bundle_sha256="0" * 64,
         font_pack_sha256="4" * 64,
         renderer=component("renderer", "5"),
         rasterizer=component("rasterizer", "6"),
@@ -2101,12 +2102,14 @@ async def test_worker_missing_or_tampered_source_fails_sanitized(
 
     launcher = tmp_path / "sandbox-launcher.bin"
     executable = tmp_path / "renderer.bin"
+    runtime_bundle = tmp_path / "runtime.bundle.manifest"
     font_pack = tmp_path / "fonts.bundle"
     rasterizer = tmp_path / "rasterizer.bin"
     converter = tmp_path / "converter.bin"
     validator = tmp_path / "validator.bin"
     launcher.write_bytes(b"trusted sandbox")
     executable.write_bytes(b"renderer")
+    runtime_bundle.write_bytes(b"runtime bundle v1")
     font_pack.write_bytes(b"fonts")
     rasterizer.write_bytes(b"rasterizer")
     converter.write_bytes(b"converter")
@@ -2121,6 +2124,10 @@ async def test_worker_missing_or_tampered_source_fails_sanitized(
                 executable=executable.absolute(),
                 executable_sha256=hashlib.sha256(
                     executable.read_bytes()
+                ).hexdigest(),
+                runtime_bundle_manifest=runtime_bundle.absolute(),
+                runtime_bundle_sha256=hashlib.sha256(
+                    runtime_bundle.read_bytes()
                 ).hexdigest(),
                 font_pack=font_pack.absolute(),
                 font_pack_sha256=hashlib.sha256(font_pack.read_bytes()).hexdigest(),

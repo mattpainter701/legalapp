@@ -57,6 +57,8 @@ class StudioIsolationProfile:
     launcher_sha256: str
     executable: Path
     executable_sha256: str
+    runtime_bundle_manifest: Path
+    runtime_bundle_sha256: str
     font_pack: Path
     font_pack_sha256: str
     renderer_version: str
@@ -329,6 +331,7 @@ class StudioIsolationRegistry:
                 runtime_root=Path(profile.runtime_root),
                 launcher=Path(profile.launcher),
                 executable=Path(profile.executable),
+                runtime_bundle_manifest=Path(profile.runtime_bundle_manifest),
                 font_pack=Path(profile.font_pack),
                 rasterizer=Path(profile.rasterizer),
                 converter=Path(profile.converter),
@@ -357,6 +360,7 @@ class StudioIsolationRegistry:
         launcher = Path(profile.launcher)
         executable = Path(profile.executable)
         component_paths = (
+            Path(profile.runtime_bundle_manifest),
             Path(profile.font_pack),
             Path(profile.rasterizer),
             Path(profile.converter),
@@ -389,6 +393,7 @@ class StudioIsolationRegistry:
         digests = (
             profile.launcher_sha256,
             profile.executable_sha256,
+            profile.runtime_bundle_sha256,
             profile.font_pack_sha256,
             profile.rasterizer_sha256,
             profile.converter_sha256,
@@ -405,6 +410,10 @@ class StudioIsolationRegistry:
                 "isolation_unavailable", "Studio processor attestation failed."
             )
         expected_components = (
+            (
+                Path(profile.runtime_bundle_manifest),
+                profile.runtime_bundle_sha256,
+            ),
             (Path(profile.font_pack), profile.font_pack_sha256),
             (Path(profile.rasterizer), profile.rasterizer_sha256),
             (Path(profile.converter), profile.converter_sha256),
@@ -483,6 +492,9 @@ class StudioIsolationRegistry:
                     Path(profile.runtime_root), Path(profile.executable)
                 )
                 and _safe_runtime_file(
+                    Path(profile.runtime_root), Path(profile.runtime_bundle_manifest)
+                )
+                and _safe_runtime_file(
                     Path(profile.runtime_root), Path(profile.font_pack)
                 )
                 and _safe_runtime_file(
@@ -497,6 +509,8 @@ class StudioIsolationRegistry:
                 and _file_sha256(Path(profile.launcher)) == profile.launcher_sha256
                 and _file_sha256(Path(profile.executable))
                 == profile.executable_sha256
+                and _file_sha256(Path(profile.runtime_bundle_manifest))
+                == profile.runtime_bundle_sha256
                 and _file_sha256(Path(profile.font_pack))
                 == profile.font_pack_sha256
                 and _file_sha256(Path(profile.rasterizer))
@@ -539,6 +553,7 @@ class StudioIsolationRegistry:
                 list(profile.fixed_arguments)
             ),
             environment_sha256=canonical_json_sha256(dict(profile.environment)),
+            runtime_bundle_sha256=profile.runtime_bundle_sha256,
             font_pack_sha256=profile.font_pack_sha256,
             renderer=StudioRendererComponent(
                 name="studio-renderer",
@@ -977,6 +992,10 @@ def _supervisor_argv(
         str(limits.max_open_files),
         "--verify-executable-sha256",
         executable_sha256,
+        "--runtime-bundle-manifest",
+        str(profile.runtime_bundle_manifest),
+        "--verify-runtime-bundle-sha256",
+        profile.runtime_bundle_sha256,
         "--font-pack",
         str(profile.font_pack),
         "--verify-font-pack-sha256",

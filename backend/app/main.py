@@ -110,8 +110,13 @@ from app.routers.matter_document_revisions import (
 from app.routers.brief_checks import router as brief_checks_router
 from app.routers.research_workspaces import router as research_workspaces_router
 from app.routers.studio_drafts import router as studio_drafts_router
+from app.routers.studio_render import router as studio_render_router
 from app.routers.configurable_workflows import router as configurable_workflows_router
 from app.routers.demo import router as demo_router
+from app.services.studio_render_runtime import (
+    StudioRenderRuntimeError,
+    build_studio_render_api_runtime,
+)
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -165,6 +170,18 @@ async def lifespan(app: FastAPI):
             ) from exc
 
     app.state.jti_blacklist: dict[str, float] = {}
+    app.state.studio_render_object_store = None
+    app.state.studio_render_manifests = None
+    app.state.studio_render_capabilities = None
+    if settings.TEMPLATE_STUDIO_RENDER_ENABLED:
+        try:
+            render_runtime = build_studio_render_api_runtime(settings)
+            app.state.studio_render_object_store = render_runtime.object_store
+            app.state.studio_render_manifests = dict(render_runtime.manifests)
+            app.state.studio_render_capabilities = render_runtime.capabilities
+            logger.info("Template Studio render API runtime initialized")
+        except StudioRenderRuntimeError:
+            logger.error("Template Studio render API runtime is unavailable")
 
     # Database connection test + least-privilege role assertion.
     # RLS is only enforced when the runtime role is NOT a superuser and does NOT
@@ -477,6 +494,7 @@ app.include_router(matter_document_revisions_router)
 app.include_router(brief_checks_router)
 app.include_router(research_workspaces_router)
 app.include_router(studio_drafts_router)
+app.include_router(studio_render_router)
 app.include_router(configurable_workflows_router)
 
 

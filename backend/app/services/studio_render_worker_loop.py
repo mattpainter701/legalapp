@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
+from sqlalchemy import case, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.database import set_tenant_context
+from app.models.durable_job import DurableJob
+from app.models.tenant import Tenant
 from app.schemas.studio_render import STUDIO_RENDER_JOB_KINDS, StudioRenderJobKind
 
 
@@ -32,7 +39,87 @@ class StudioRenderWorkProcessor(Protocol):
     async def process(self, job_id: uuid.UUID, tenant_id: uuid.UUID) -> bool: ...
 
 
+class StudioRenderMaintenanceTask(Protocol):
+    async def run_once(self) -> int: ...
+
+
 Sleep = Callable[[float], Awaitable[None]]
+
+
+class PostgresStudioRenderWorkSource:
+    """Fair, tenant-bound discovery; authoritative claiming remains fenced."""
+
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self.session_factory = session_factory
+        self._tenant_cursor: uuid.UUID | None = None
+
+    async def _tenant_ids(self) -> tuple[uuid.UUID, ...]:
+        async with self.session_factory() as db:
+            ids = tuple(
+                (
+                    await db.scalars(
+                        select(Tenant.id)
+                        .where(Tenant.is_active.is_(True))
+                        .order_by(Tenant.id)
+                    )
+                ).all()
+            )
+        if not ids:
+            return ()
+        if self._tenant_cursor not in ids:
+            return ids
+        offset = ids.index(self._tenant_cursor) + 1
+        return ids[offset:] + ids[:offset]
+
+    async def next_batch(self, *, limit: int) -> Sequence[StudioRenderWorkItem]:
+        if not 1 <= limit <= 100:
+            raise ValueError("Studio work-source limit must be between 1 and 100")
+        items: list[StudioRenderWorkItem] = []
+        tenant_ids = await self._tenant_ids()
+        for tenant_id in tenant_ids:
+            async with self.session_factory() as db:
+                await set_tenant_context(db, str(tenant_id))
+                rows = (
+                    await db.execute(
+                        select(DurableJob.id, DurableJob.kind)
+                        .where(
+                            DurableJob.tenant_id == tenant_id,
+                            DurableJob.kind.in_(STUDIO_RENDER_JOB_KINDS),
+                            DurableJob.status.in_(
+                                {"pending", "running", "cancel_requested"}
+                            ),
+                            or_(
+                                DurableJob.status != "pending",
+                                DurableJob.available_at <= func.clock_timestamp(),
+                            ),
+                        )
+                        .order_by(
+                            case(
+                                (DurableJob.status == "cancel_requested", 0),
+                                (DurableJob.status == "pending", 1),
+                                else_=2,
+                            ),
+                            DurableJob.leased_at,
+                            DurableJob.available_at,
+                            DurableJob.created_at,
+                            DurableJob.id,
+                        )
+                        .limit(limit - len(items))
+                    )
+                ).all()
+                await db.rollback()
+            items.extend(
+                StudioRenderWorkItem(
+                    tenant_id=tenant_id,
+                    job_id=job_id,
+                    kind=kind,
+                )
+                for job_id, kind in rows
+            )
+            self._tenant_cursor = tenant_id
+            if len(items) >= limit:
+                break
+        return tuple(items)
 
 
 class StudioRenderWorkerLoop:
@@ -46,6 +133,9 @@ class StudioRenderWorkerLoop:
         batch_size: int = 8,
         concurrency: int = 2,
         idle_seconds: float = 1.0,
+        maintenance: StudioRenderMaintenanceTask | None = None,
+        maintenance_interval_seconds: float = 300.0,
+        monotonic: Callable[[], float] = time.monotonic,
         sleep: Sleep = asyncio.sleep,
     ) -> None:
         if not 1 <= batch_size <= 100:
@@ -54,11 +144,17 @@ class StudioRenderWorkerLoop:
             raise ValueError("Studio worker concurrency is invalid")
         if not 0.01 <= idle_seconds <= 60:
             raise ValueError("Studio worker idle interval is invalid")
+        if not 10 <= maintenance_interval_seconds <= 86_400:
+            raise ValueError("Studio maintenance interval is invalid")
         self.source = source
         self.worker = worker
         self.batch_size = batch_size
         self.concurrency = concurrency
         self.idle_seconds = idle_seconds
+        self.maintenance = maintenance
+        self.maintenance_interval_seconds = float(maintenance_interval_seconds)
+        self.monotonic = monotonic
+        self._next_maintenance_at = monotonic()
         self.sleep = sleep
 
     async def run_once(self) -> int:
@@ -98,6 +194,19 @@ class StudioRenderWorkerLoop:
                 if not stop_wait.done():
                     stop_wait.cancel()
                 await asyncio.gather(batch, stop_wait, return_exceptions=True)
+            if (
+                self.maintenance is not None
+                and self.monotonic() >= self._next_maintenance_at
+            ):
+                try:
+                    await self.maintenance.run_once()
+                except Exception:
+                    # Maintenance is fail-closed and retried; render claiming
+                    # must remain available when a retention dependency is down.
+                    pass
+                self._next_maintenance_at = (
+                    self.monotonic() + self.maintenance_interval_seconds
+                )
             if processed:
                 continue
             idle = asyncio.create_task(self.sleep(self.idle_seconds))

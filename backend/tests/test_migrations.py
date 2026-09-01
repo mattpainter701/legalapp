@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["149_firm_memory_source_auth"]
+    assert heads == ["150_studio_render_jobs"]
 
 
 def test_configurable_workflow_migration_is_tenant_safe_and_immutable():

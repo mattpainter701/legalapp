@@ -99,7 +99,7 @@ class StudioRenderWorker:
         session_factory: async_sessionmaker[AsyncSession],
         *,
         object_store: StudioObjectStore,
-        processors: Mapping[str, StudioProcessor],
+        processors: Mapping[object, StudioProcessor],
         input_bindings: StudioInputBindingResolver | None = None,
         owner: str | None = None,
         lease_seconds: int = 900,
@@ -107,6 +107,7 @@ class StudioRenderWorker:
         processor_timeout_seconds: int = 300,
         artifact_ttl_seconds: int = 86_400,
         metadata_ttl_seconds: int = 2_592_000,
+        max_input_binding_bytes: int = 25 * 1024 * 1024,
     ):
         if not 30 <= lease_seconds <= 3600:
             raise ValueError("lease_seconds must be between 30 and 3600")
@@ -120,6 +121,8 @@ class StudioRenderWorker:
             raise ValueError("metadata TTL must be between one day and one year")
         if metadata_ttl_seconds <= artifact_ttl_seconds:
             raise ValueError("metadata TTL must outlive temporary artifact bytes")
+        if not 1 <= max_input_binding_bytes <= 100 * 1024 * 1024:
+            raise ValueError("input binding limit is invalid")
         if any(
             type(processor) is not StudioTrustedProcessorAdapter
             or not str(getattr(processor, "isolation_policy_id", "")).strip()
@@ -129,7 +132,19 @@ class StudioRenderWorker:
             raise ValueError("every Studio processor requires an attested runtime")
         self.session_factory = session_factory
         self.object_store = object_store
-        self._processors = MappingProxyType(dict(processors))
+        normalized_processors: dict[tuple[str, str, int], StudioProcessor] = {}
+        for key, processor in processors.items():
+            if isinstance(key, tuple) and len(key) == 3:
+                normalized_processors[key] = processor
+            elif key in {
+                "studio_template_analysis",
+                "studio_template_ocr",
+                "studio_page_preview",
+                "studio_test_render",
+            }:
+                for source_format in ("markdown", "docx", "pdf"):
+                    normalized_processors[(str(key), source_format, 1)] = processor
+        self._processors = MappingProxyType(normalized_processors)
         self.input_bindings = input_bindings
         self.owner = owner or default_worker_owner()
         self.lease_seconds = lease_seconds
@@ -137,9 +152,10 @@ class StudioRenderWorker:
         self.processor_timeout_seconds = processor_timeout_seconds
         self.artifact_ttl_seconds = artifact_ttl_seconds
         self.metadata_ttl_seconds = metadata_ttl_seconds
+        self.max_input_binding_bytes = max_input_binding_bytes
 
     @property
-    def processors(self) -> Mapping[str, StudioProcessor]:
+    def processors(self) -> Mapping[tuple[str, str, int], StudioProcessor]:
         return self._processors
 
     async def _heartbeat(
@@ -312,7 +328,7 @@ class StudioRenderWorker:
                 asyncio.to_thread(
                     self.object_store.read,
                     ref,
-                    max_bytes=queued.render_options.max_output_bytes,
+                    max_bytes=self.max_input_binding_bytes,
                 ),
                 timeout=self.processor_timeout_seconds,
             )
@@ -479,7 +495,13 @@ class StudioRenderWorker:
             )
         if lease is None:
             return False
-        processor = self.processors.get(lease.payload.kind)
+        processor = self.processors.get(
+            (
+                lease.payload.kind,
+                lease.payload.source.format,
+                lease.payload.render_options.contract_version,
+            )
+        )
         if processor is None:
             await self._fail(lease, "processor_unavailable", retryable=False)
             return True

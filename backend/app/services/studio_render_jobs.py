@@ -10,7 +10,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import partial
-from typing import Any, Awaitable, Callable, Protocol, TypeVar
+from typing import Any, Awaitable, Callable, Mapping, Protocol, TypeVar
 
 from pydantic import AwareDatetime, Field, ValidationError, model_validator
 from sqlalchemy import func, or_, select, text
@@ -20,6 +20,7 @@ from app.database import set_tenant_context
 from app.models.durable_job import DurableJob
 from app.models.studio_draft import (
     StudioDraft,
+    StudioDraftAuditEvent,
     StudioDraftSnapshot,
     StudioSourceArtifact,
 )
@@ -202,6 +203,53 @@ async def run_studio_consumer_transaction(
         await db.rollback()
         raise
     return result
+
+
+async def append_studio_render_audit_event(
+    db: AsyncSession,
+    event: str,
+    job_id: uuid.UUID,
+    *,
+    tenant_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+) -> None:
+    """Append one redacted render event inside the caller-owned transaction."""
+
+    if event not in {"studio_render_enqueued", "studio_render_cancel_requested"}:
+        raise StudioRenderServiceError(
+            503, "audit_unavailable", "Studio auditing is temporarily unavailable."
+        )
+    tenant_id = uuid.UUID(str(tenant_id))
+    actor_user_id = uuid.UUID(str(actor_user_id))
+    await set_tenant_context(db, str(tenant_id))
+    row = await db.scalar(
+        select(DurableJob).where(
+            DurableJob.id == uuid.UUID(str(job_id)),
+            DurableJob.tenant_id == tenant_id,
+            DurableJob.kind.in_(STUDIO_RENDER_JOB_KINDS),
+        )
+    )
+    try:
+        queued = _QueuedPayload.model_validate(row.payload if row is not None else None)
+    except (ValidationError, TypeError, ValueError) as exc:
+        raise StudioRenderServiceError(
+            503, "audit_unavailable", "Studio auditing is temporarily unavailable."
+        ) from exc
+    if queued.requested_by != actor_user_id:
+        raise StudioRenderServiceError(
+            503, "audit_unavailable", "Studio auditing is temporarily unavailable."
+        )
+    db.add(
+        StudioDraftAuditEvent(
+            tenant_id=tenant_id,
+            draft_id=queued.draft_id,
+            event_type=event,
+            revision=queued.rendered_revision,
+            actor_user_id=actor_user_id,
+            detail={"job_id": str(row.id)},
+        )
+    )
+    await db.flush()
 
 
 class StudioConsumerAudit(Protocol):
@@ -464,7 +512,7 @@ class _AuthoritativeInputState:
     failure_code: str | None = None
 
     def __post_init__(self) -> None:
-        if self.disposition not in {"current", "stale", "corrupt"}:
+        if self.disposition not in {"current", "stale", "cancelled", "corrupt"}:
             raise ValueError("invalid authoritative input disposition")
         if (self.disposition == "corrupt") != (self.failure_code is not None):
             raise ValueError("invalid authoritative input failure state")
@@ -567,6 +615,17 @@ def _render_cache_key(
     )
 
 
+def _evidence_basis_sha256(queued: _QueuedPayload) -> str:
+    return canonical_json_sha256(
+        {
+            "contract_version": 1,
+            "kind": queued.kind,
+            "source_format": queued.source.format,
+            "render_options": queued.render_options.model_dump(mode="json"),
+        }
+    )
+
+
 def _transition(row: DurableJob, target: str, *, now: datetime) -> None:
     source = str(row.status)
     if target not in _TRANSITIONS.get(source, frozenset()):
@@ -640,10 +699,12 @@ class _StudioRenderJobStore:
         active_job_limit: int = 4,
         job_ttl: timedelta = timedelta(hours=24),
         renderer_manifest: StudioRendererManifest | None = None,
+        renderer_manifests: Mapping[object, StudioRendererManifest] | None = None,
         input_binding_resolver: StudioInputBindingResolver | None = None,
         enqueue_rate_limit: int = 20,
         enqueue_rate_window: timedelta = timedelta(minutes=1),
         queued_byte_limit: int = 500 * 1024 * 1024,
+        max_input_binding_bytes: int = 25 * 1024 * 1024,
     ):
         if not 1 <= active_job_limit <= 32:
             raise ValueError("active_job_limit must be between 1 and 32")
@@ -655,6 +716,8 @@ class _StudioRenderJobStore:
             raise ValueError("enqueue_rate_window must be between one second and one hour")
         if not 1 <= queued_byte_limit <= 100 * 1024**3:
             raise ValueError("queued_byte_limit is invalid")
+        if not 1 <= max_input_binding_bytes <= 100 * 1024 * 1024:
+            raise ValueError("max_input_binding_bytes is invalid")
         self.db = db
         self.tenant_id = uuid.UUID(str(tenant_id))
         self.actor_user_id = (
@@ -662,11 +725,33 @@ class _StudioRenderJobStore:
         )
         self.active_job_limit = active_job_limit
         self.job_ttl = job_ttl
-        self.renderer_manifest = renderer_manifest
+        if renderer_manifest is not None and renderer_manifests is not None:
+            raise ValueError("renderer manifest configuration is ambiguous")
+        if renderer_manifest is not None:
+            self.renderer_manifests = {
+                (kind, source_format, 1): renderer_manifest
+                for kind in STUDIO_RENDER_JOB_KINDS
+                for source_format in ("markdown", "docx", "pdf")
+            }
+        else:
+            self.renderer_manifests = {}
+            for key, manifest in dict(renderer_manifests or {}).items():
+                if isinstance(key, tuple) and len(key) == 3:
+                    kind, source_format, contract_version = key
+                    if (
+                        kind in STUDIO_RENDER_JOB_KINDS
+                        and source_format in {"markdown", "docx", "pdf"}
+                        and contract_version == 1
+                    ):
+                        self.renderer_manifests[key] = manifest
+                elif key in STUDIO_RENDER_JOB_KINDS:
+                    for source_format in ("markdown", "docx", "pdf"):
+                        self.renderer_manifests[(key, source_format, 1)] = manifest
         self.input_binding_resolver = input_binding_resolver
         self.enqueue_rate_limit = enqueue_rate_limit
         self.enqueue_rate_window = enqueue_rate_window
         self.queued_byte_limit = queued_byte_limit
+        self.max_input_binding_bytes = max_input_binding_bytes
 
     async def _bind_tenant_context(self) -> None:
         """Rebind transaction-local RLS state at every persistence boundary."""
@@ -841,6 +926,8 @@ class _StudioRenderJobStore:
                 binding_current = False
             if not binding_current:
                 return _AuthoritativeInputState("corrupt", "validation_failed")
+        if draft.cancellation_requested_at is not None:
+            return _AuthoritativeInputState("cancelled")
         draft_head_current = bool(
             draft.lifecycle_state == "active"
             and draft.cancellation_requested_at is None
@@ -926,7 +1013,14 @@ class _StudioRenderJobStore:
             raise StudioRenderServiceError(
                 500, "invalid_status_resource", "Studio status resource is unavailable."
             )
-        if self.renderer_manifest is None:
+        renderer_manifest = self.renderer_manifests.get(
+            (
+                request.kind,
+                request.source.format,
+                request.render_options.contract_version,
+            )
+        )
+        if renderer_manifest is None:
             raise StudioRenderServiceError(
                 503,
                 "processor_unavailable",
@@ -1006,6 +1100,12 @@ class _StudioRenderJobStore:
             binding_sha256 = resolved.object_ref.sha256
             binding_version = resolved.version
             binding_bytes = resolved.object_ref.byte_size
+            if binding_bytes > self.max_input_binding_bytes:
+                raise StudioRenderServiceError(
+                    413,
+                    "input_too_large",
+                    STUDIO_PUBLIC_FAILURES["input_too_large"],
+                )
         # Resolver I/O may span an expiry/rate boundary. Lock and expire active
         # jobs first, then timestamp admission after every possible lock wait.
         await self._expire_active_jobs()
@@ -1075,7 +1175,7 @@ class _StudioRenderJobStore:
             )
         source = request.source
         options_sha256 = request.render_options.sha256
-        manifest_sha256 = self.renderer_manifest.sha256
+        manifest_sha256 = renderer_manifest.sha256
         effective_request_sha256 = canonical_effective_render_request_hash(
             request_sha256=request.request_sha256,
             input_binding_sha256=binding_sha256,
@@ -1097,7 +1197,7 @@ class _StudioRenderJobStore:
             input_binding_id=request.input_binding_id,
             input_binding_sha256=binding_sha256,
             input_binding_version=binding_version,
-            renderer_manifest=self.renderer_manifest,
+            renderer_manifest=renderer_manifest,
             runtime_manifest_sha256=manifest_sha256,
             cache_key=_render_cache_key(
                 kind=request.kind,
@@ -1197,6 +1297,8 @@ class _StudioRenderJobStore:
             select(StudioPreferredRenderEvidence).where(
                 StudioPreferredRenderEvidence.tenant_id == self.tenant_id,
                 StudioPreferredRenderEvidence.draft_id == queued.draft_id,
+                StudioPreferredRenderEvidence.evidence_basis_sha256
+                == _evidence_basis_sha256(queued),
             )
         )
         return bool(
@@ -1225,6 +1327,8 @@ class _StudioRenderJobStore:
             .where(
                 StudioPreferredRenderEvidence.tenant_id == self.tenant_id,
                 StudioPreferredRenderEvidence.draft_id == queued.draft_id,
+                StudioPreferredRenderEvidence.evidence_basis_sha256
+                == artifact.evidence_basis_sha256,
             )
             .with_for_update()
         )
@@ -1232,6 +1336,7 @@ class _StudioRenderJobStore:
             preferred = StudioPreferredRenderEvidence(
                 tenant_id=self.tenant_id,
                 draft_id=queued.draft_id,
+                evidence_basis_sha256=artifact.evidence_basis_sha256,
                 artifact_id=artifact.id,
                 job_id=artifact.job_id,
                 revision=queued.rendered_revision,
@@ -1266,6 +1371,12 @@ class _StudioRenderJobStore:
             .with_for_update()
         )
         if artifact is None:
+            now = await self._clock_now()
+            if (
+                result.metadata_expires_at is not None
+                and result.metadata_expires_at <= now
+            ):
+                return "expired", "expired"
             return None
         # Artifact acquisition can block behind retention. Re-fence expiry
         # with wall-clock database time while both evidence rows are locked.
@@ -1302,6 +1413,7 @@ class _StudioRenderJobStore:
             and artifact.requested_by_user_id == queued.requested_by
             and artifact.revision == queued.rendered_revision
             and artifact.identity_sha256 == queued.identity_sha256
+            and artifact.evidence_basis_sha256 == _evidence_basis_sha256(queued)
             and artifact.snapshot_content_sha256
             == queued.snapshot_content_sha256
             and artifact.source_sha256 == queued.source.sha256
@@ -1632,7 +1744,14 @@ class _StudioRenderJobStore:
             raise StudioRenderServiceError(
                 404, "artifact_not_found", "Studio artifact not found."
             )
-        status = await self.status(job_id)
+        try:
+            status = await self.status(job_id)
+        except StudioRenderServiceError as exc:
+            if exc.code == "job_not_found":
+                raise StudioRenderServiceError(
+                    404, "artifact_not_found", "Studio artifact not found."
+                ) from exc
+            raise
         if status.artifact_id != artifact_id:
             raise StudioRenderServiceError(
                 404, "artifact_not_found", "Studio artifact not found."
@@ -1685,6 +1804,58 @@ class _StudioRenderJobStore:
                 STUDIO_PUBLIC_FAILURES["job_data_unavailable"],
             )
         return result
+
+    async def _quarantine_storage_failure(self, artifact_id: uuid.UUID) -> None:
+        """Revoke preferred evidence before reporting verified-read corruption."""
+
+        await self._bind_tenant_context()
+        artifact = await self.db.scalar(
+            select(StudioRenderArtifact)
+            .where(
+                StudioRenderArtifact.id == artifact_id,
+                StudioRenderArtifact.tenant_id == self.tenant_id,
+            )
+            .with_for_update()
+        )
+        if artifact is None:
+            return
+        now = await self._clock_now()
+        preferred = await self.db.scalar(
+            select(StudioPreferredRenderEvidence)
+            .where(
+                StudioPreferredRenderEvidence.tenant_id == self.tenant_id,
+                StudioPreferredRenderEvidence.draft_id == artifact.draft_id,
+                StudioPreferredRenderEvidence.artifact_id == artifact.id,
+                StudioPreferredRenderEvidence.job_id == artifact.job_id,
+            )
+            .with_for_update()
+        )
+        if preferred is not None:
+            await self.db.delete(preferred)
+            draft = await self.db.scalar(
+                select(StudioDraft)
+                .where(
+                    StudioDraft.id == artifact.draft_id,
+                    StudioDraft.tenant_id == self.tenant_id,
+                )
+                .with_for_update()
+            )
+            if (
+                draft is not None
+                and draft.evidence_revision == artifact.revision
+                and draft.identity_sha256 == artifact.identity_sha256
+            ):
+                draft.evidence_revision = None
+                draft.evidence_invalidated_at = now
+                draft.evidence_invalidation_reason = "render_storage_integrity_failed"
+        if artifact.storage_state == "active":
+            artifact.storage_state = "delete_pending"
+            artifact.delete_requested_at = now
+        artifact.retention_class = "review"
+        artifact.content_expires_at = now
+        if artifact.metadata_expires_at is None or artifact.metadata_expires_at <= now:
+            artifact.metadata_expires_at = now + timedelta(days=30)
+        await self.db.flush()
 
     async def artifact_content(
         self,
@@ -1746,11 +1917,12 @@ class _StudioRenderJobStore:
                 STUDIO_PUBLIC_FAILURES["processor_timeout"],
             ) from exc
         except Exception as exc:
-            await self.artifact_result(artifact_id)
+            await self._quarantine_storage_failure(artifact_id)
             raise StudioRenderServiceError(
                 409,
                 "storage_integrity_failed",
                 STUDIO_PUBLIC_FAILURES["storage_integrity_failed"],
+                durable_state_changed=True,
             ) from exc
         if (
             (fresh_status := await self.artifact_result(artifact_id)).output_sha256
@@ -1960,6 +2132,16 @@ class _StudioRenderJobStore:
             await self.db.rollback()
             return False
         queued = _QueuedPayload.model_validate(row.payload)
+        draft_cancelled = await self.db.scalar(
+            select(StudioDraft.cancellation_requested_at).where(
+                StudioDraft.id == queued.draft_id,
+                StudioDraft.tenant_id == self.tenant_id,
+            )
+        )
+        if draft_cancelled is not None:
+            _transition(row, "cancel_requested", now=now)
+            await self.db.commit()
+            return False
         if queued.expires_at <= now:
             code, message = sanitized_failure("expired")
             row.last_error = message
@@ -2075,6 +2257,7 @@ class _StudioRenderJobStore:
             requested_by_user_id=queued.requested_by,
             revision=queued.rendered_revision,
             identity_sha256=queued.identity_sha256,
+            evidence_basis_sha256=_evidence_basis_sha256(queued),
             snapshot_content_sha256=queued.snapshot_content_sha256,
             source_sha256=queued.source.sha256,
             source_media_type=queued.source.media_type,
@@ -2306,6 +2489,11 @@ class _StudioRenderJobStore:
             raise StudioRenderServiceError(
                 409, "lease_lost", "Studio job lease is no longer owned."
             )
+        if retention_class == "evidence" and (
+            row.status == "cancel_requested"
+            or input_state.disposition in {"stale", "cancelled"}
+        ):
+            retention_class = "review"
         content_expires_at = (
             None
             if retention_class == "evidence"
@@ -2325,7 +2513,7 @@ class _StudioRenderJobStore:
             raise StudioRenderServiceError(409, code, message)
         if input_state.disposition == "corrupt":
             await self._fail_corrupt_adoption(row, input_state, now=now)
-        if row.status == "cancel_requested":
+        if row.status == "cancel_requested" or input_state.disposition == "cancelled":
             artifact = await self._materialize_terminal(
                 row=row,
                 queued=queued,
@@ -2452,6 +2640,8 @@ class _StudioRenderJobStore:
             _transition(row, "failed", now=stale_now)
             await self.db.commit()
             raise StudioRenderServiceError(409, code, message)
+        if retention_class == "evidence":
+            retention_class = "review"
         content_expires_at = (
             None
             if retention_class == "evidence"
@@ -2464,7 +2654,7 @@ class _StudioRenderJobStore:
         )
         if input_state.disposition == "corrupt":
             await self._fail_corrupt_adoption(row, input_state, now=stale_now)
-        if row.status == "cancel_requested":
+        if row.status == "cancel_requested" or input_state.disposition == "cancelled":
             artifact = await self._materialize_terminal(
                 row=row,
                 queued=queued,
@@ -2786,10 +2976,12 @@ class StudioRenderJobService:
         active_job_limit: int = 4,
         job_ttl: timedelta = timedelta(hours=24),
         renderer_manifest: StudioRendererManifest | None = None,
+        renderer_manifests: Mapping[object, StudioRendererManifest] | None = None,
         input_binding_resolver: StudioInputBindingResolver | None = None,
         enqueue_rate_limit: int = 20,
         enqueue_rate_window: timedelta = timedelta(minutes=1),
         queued_byte_limit: int = 500 * 1024 * 1024,
+        max_input_binding_bytes: int = 25 * 1024 * 1024,
     ):
         self._store = _StudioRenderJobStore(
             db,
@@ -2798,10 +2990,12 @@ class StudioRenderJobService:
             active_job_limit=active_job_limit,
             job_ttl=job_ttl,
             renderer_manifest=renderer_manifest,
+            renderer_manifests=renderer_manifests,
             input_binding_resolver=input_binding_resolver,
             enqueue_rate_limit=enqueue_rate_limit,
             enqueue_rate_window=enqueue_rate_window,
             queued_byte_limit=queued_byte_limit,
+            max_input_binding_bytes=max_input_binding_bytes,
         )
 
     async def enqueue(

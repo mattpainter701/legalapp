@@ -173,6 +173,8 @@ _PURGE_ONLY_TABLES = {
     "studio_draft_placements",
     "studio_draft_snapshots",
     "studio_drafts",
+    "studio_preferred_render_evidence",
+    "studio_render_artifacts",
     "studio_source_artifacts",
     "retention_actions",
     "retention_policies",
