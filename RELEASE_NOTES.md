@@ -5,15 +5,6 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
-## 2026.08.31.7 — Secure opening for on-premise Firm Memory files
-
-Released August 31, 2026.
-
-When a firm explicitly enables the Windows helper, authorized Firm Memory results can open through the signed-in user's Windows session without placing a network path in a browser link.
-
-- **Open with one-time authorization.** Each action uses a short-lived, single-use request bound to the tenant, user, source file, assigned agent, revision, and requested action.
-- **Keep network paths local.** The browser and launch link carry no UNC, file, or SMB path; the local agent resolves the opaque source identity only after redemption.
-- **Honor current Windows access.** Windows rechecks reachability and the signed-in user's SMB/NTFS access; moved, expired, offline, and denied requests fail closed with a copy-path fallback.
 ## 2026.09.01.1 — Consent-aware SMS with review and opt-out controls
 
 Released September 1, 2026.
@@ -24,6 +15,16 @@ Firms can configure provider-backed SMS that stays reviewable, consent-bound, te
 - **Honor replies and opt-outs safely.** Signed inbound messages require an active owned sender, handle STOP, START, and HELP, deduplicate retries, and route ambiguous matches to staff review.
 - **Keep provider truth distinct.** Exact-generation callbacks and reconciliation update authorized timeline evidence without regressing known truth; provider acceptance remains distinct from confirmed delivery.
 - **Review assistant proposals first.** Workspace SMS proposals require current matter access and an explicit retry key, stay inside LawHand instead of email or third-party calendars, and cannot dispatch autonomously.
+
+## 2026.08.31.7 — Secure opening for on-premise Firm Memory files
+
+Released August 31, 2026.
+
+When a firm explicitly enables the Windows helper, authorized Firm Memory results can open through the signed-in user's Windows session without placing a network path in a browser link.
+
+- **Open with one-time authorization.** Each action uses a short-lived, single-use request bound to the tenant, user, source file, assigned agent, revision, and requested action.
+- **Keep network paths local.** The browser and launch link carry no UNC, file, or SMB path; the local agent resolves the opaque source identity only after redemption.
+- **Honor current Windows access.** Windows rechecks reachability and the signed-in user's SMB/NTFS access; moved, expired, offline, and denied requests fail closed with a copy-path fallback.
 
 ## 2026.08.31.6 — Durable Template Studio preview processing
 
@@ -252,36 +253,6 @@ The LawHand platform tour now shows how legal work moves from intake and conflic
 - **See every role's handoff.** Compare what attorneys, paralegals, intake staff, billing staff, and clients need from the same matter record.
 - **Evaluate the complete platform.** Review expanded capability, practice-area, integration, and control sections with clear rollout labels and concrete workflow details.
 
-## 2026.08.27.12 — Product claims now show rollout and research boundaries
-
-Released August 27, 2026.
-
-LawHand product and pricing pages now distinguish shipped behavior, controlled pilots, planned work, and provider-dependent connections.
-
-- **See the rollout state.** Capability cards identify implemented behavior, controlled pilots, and connections that require a separate provider account or approval.
-- **Evaluate Research MCP as a pilot.** Research MCP pricing and product pages now state the controlled-pilot gate and the configured public-authority coverage boundary.
-- **Keep research claims precise.** LawHand explains that source links support attorney review without claiming Westlaw replacement, comprehensive coverage, or a good-law determination.
-
-## 2026.08.27.11 — Agreement evidence and safer retention controls
-
-Released August 27, 2026.
-
-Firms can review current agreement acceptance evidence and preview safe expiry cleanup with legal-hold protection.
-
-- **Know what was accepted.** Tenant admins can review counsel-owned agreement versions and record signer, authority, and immutable document evidence.
-- **Retention with guardrails.** Review tenant data-store inventory, configure retention, preview cleanup, and protect held or matter data from deletion.
-
-## 2026.08.27.10 — Research API keys put staff access and spend under firm control
-
-Released August 27, 2026.
-
-Firm administrators can provision LawHand Research keys for staff, bound their lifetime and budget, and see usage and charges from the MCP portal.
-
-- **Issue keys with clear custody.** Name each key, record its purpose, assign it to a LawHand staff profile, and choose exactly which Research tools it may use.
-- **Bound time and spend.** Set an expiration, monthly dollar budget, call cap, and burst limit; the gateway stops successful calls before they exceed either hard monthly boundary.
-- **See the complete key ledger.** The portal shows active, expired, and revoked keys with creator, custodian, last use, successful and failed calls, current-month charges, and remaining budget.
-- **Connect standard API clients.** LawHand Research keys work as standard Bearer credentials while the existing custom header remains supported for compatible clients.
-
 ## 2026.08.27.9 — Document automation is faster, safer, and easier to manage
 
 Released August 27, 2026.
@@ -362,6 +333,36 @@ Staff can save and close a conflict review, and clients can download a firm-bran
 - **Conflict searches keep their evidence.** The new Conflict Search workspace saves the terms and results the reviewer saw, records notes and a decision, and locks the record after closing.
 - **Restricted matters stay restricted.** A reviewer is warned when a potential match exists on a matter they cannot access without exposing that matter's identity.
 - **Clients can download branded invoices.** A client-visible invoice is rendered with firm branding and streamed as a PDF; LawHand records download metadata and a hash without retaining another PDF copy.
+
+## 2026.08.27.12 — Product claims now show rollout and research boundaries
+
+Released August 27, 2026.
+
+LawHand product and pricing pages now distinguish shipped behavior, controlled pilots, planned work, and provider-dependent connections.
+
+- **See the rollout state.** Capability cards identify implemented behavior, controlled pilots, and connections that require a separate provider account or approval.
+- **Evaluate Research MCP as a pilot.** Research MCP pricing and product pages now state the controlled-pilot gate and the configured public-authority coverage boundary.
+- **Keep research claims precise.** LawHand explains that source links support attorney review without claiming Westlaw replacement, comprehensive coverage, or a good-law determination.
+
+## 2026.08.27.11 — Agreement evidence and safer retention controls
+
+Released August 27, 2026.
+
+Firms can review current agreement acceptance evidence and preview safe expiry cleanup with legal-hold protection.
+
+- **Know what was accepted.** Tenant admins can review counsel-owned agreement versions and record signer, authority, and immutable document evidence.
+- **Retention with guardrails.** Review tenant data-store inventory, configure retention, preview cleanup, and protect held or matter data from deletion.
+
+## 2026.08.27.10 — Research API keys put staff access and spend under firm control
+
+Released August 27, 2026.
+
+Firm administrators can provision LawHand Research keys for staff, bound their lifetime and budget, and see usage and charges from the MCP portal.
+
+- **Issue keys with clear custody.** Name each key, record its purpose, assign it to a LawHand staff profile, and choose exactly which Research tools it may use.
+- **Bound time and spend.** Set an expiration, monthly dollar budget, call cap, and burst limit; the gateway stops successful calls before they exceed either hard monthly boundary.
+- **See the complete key ledger.** The portal shows active, expired, and revoked keys with creator, custodian, last use, successful and failed calls, current-month charges, and remaining budget.
+- **Connect standard API clients.** LawHand Research keys work as standard Bearer credentials while the existing custom header remains supported for compatible clients.
 
 ## 2026.08.27.1 — Prepare document templates with a guided review workspace
 
