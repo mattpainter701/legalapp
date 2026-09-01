@@ -2706,7 +2706,20 @@ async def reconcile_sms_message(
                 account_sid=account_sid,
             )
         ]
-        if len(exact_candidates) != 1 or exact_candidates[0].id != message.id:
+        requested_candidate = next(
+            (candidate for candidate in exact_candidates if candidate.id == message.id),
+            None,
+        )
+        if requested_candidate is None:
+            raise SmsError(
+                "Provider did not verify the reserved dispatch identity",
+                409,
+                delivery_certainty="outcome_unknown",
+                sms_message_id=message.id,
+                reconciliation_required=True,
+                code="sms_provider_identity_mismatch",
+            )
+        if len(exact_candidates) != 1:
             raise SmsError(
                 "Provider record does not uniquely identify this local dispatch",
                 409,
@@ -2715,7 +2728,7 @@ async def reconcile_sms_message(
                 reconciliation_required=True,
                 code="sms_provider_identity_ambiguous",
             )
-        message = exact_candidates[0]
+        message = requested_candidate
         duplicate = await db.scalar(
             select(SmsMessage.id)
             .where(

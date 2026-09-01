@@ -7978,7 +7978,45 @@ async def test_messaging_service_lookup_requires_one_unique_local_dispatch(
         )
         for index in (1, 2)
     ]
-    db_session.add_all(rows)
+    probe_matter = Matter(
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        slug=f"sms-lookup-probe-{uuid.uuid4().hex[:8]}",
+        matter_name="SMS lookup privacy probe",
+        client_contact_id=seeded.contact.id,
+    )
+    db_session.add(probe_matter)
+    await db_session.flush()
+    probe_body = "Do not reveal another matter's provider match"
+    probe = SmsMessage(
+        tenant_id=test_tenant.id,
+        contact_id=seeded.contact.id,
+        matter_id=probe_matter.id,
+        idempotency_key="service-only-cross-matter-probe",
+        request_digest=sms_service._request_digest(
+            contact_id=seeded.contact.id,
+            matter_id=probe_matter.id,
+            to_number=seeded.contact.phone,
+            body=probe_body,
+            category="appointment",
+        ),
+        provider_account_sid=seeded.config.account_sid,
+        provider_messaging_service_sid=seeded.config.messaging_service_sid,
+        provider_config_generation=seeded.config.generation,
+        dispatch_attempt_id=uuid.uuid4(),
+        dispatch_started_at=submitted_at,
+        provider_submission_started_at=submitted_at,
+        reconciliation_required_at=submitted_at,
+        direction="outbound",
+        status="provider_unknown",
+        delivery_certainty="outcome_unknown",
+        from_number=None,
+        to_number=seeded.contact.phone,
+        body=probe_body,
+        category="appointment",
+        created_by_user_id=test_user.id,
+    )
+    db_session.add_all([*rows, probe])
     await db_session.commit()
     sid = "SM-SERVICE-ASSIGNED-SENDER"
     provider_from = "+15550002222"
@@ -8003,6 +8041,12 @@ async def test_messaging_service_lookup_requires_one_unique_local_dispatch(
         lookup_handler=lookup,
     )
     _install_provider(monkeypatch, provider)
+    hidden_multiple = await client.post(
+        f"/api/sms/messages/{probe.id}/reconcile",
+        json={"resolution": "provider_lookup", "provider_message_id": sid},
+    )
+    assert hidden_multiple.status_code == 409, hidden_multiple.text
+    assert hidden_multiple.json()["detail"]["code"] == "sms_provider_identity_mismatch"
     for row in rows:
         ambiguous = await client.post(
             f"/api/sms/messages/{row.id}/reconcile",
@@ -8015,6 +8059,12 @@ async def test_messaging_service_lookup_requires_one_unique_local_dispatch(
     second = await db_session.get(SmsMessage, rows[1].id)
     await db_session.delete(second)
     await db_session.commit()
+    hidden_single = await client.post(
+        f"/api/sms/messages/{probe.id}/reconcile",
+        json={"resolution": "provider_lookup", "provider_message_id": sid},
+    )
+    assert hidden_single.status_code == 409, hidden_single.text
+    assert hidden_single.json()["detail"]["code"] == "sms_provider_identity_mismatch"
     unique = await client.post(
         f"/api/sms/messages/{rows[0].id}/reconcile",
         json={"resolution": "provider_lookup", "provider_message_id": sid},
@@ -8023,7 +8073,7 @@ async def test_messaging_service_lookup_requires_one_unique_local_dispatch(
     assert unique.json()["status"] == "delivered"
     assert unique.json()["provider_message_id"] == sid
     assert unique.json()["from_number"] == provider_from
-    assert len(provider.lookup_calls) == 3
+    assert len(provider.lookup_calls) == 5
 
 
 @pytest.mark.asyncio
