@@ -1276,6 +1276,7 @@ async def test_stale_source_binding_and_expired_status_fail_closed(
 
     values = valid.model_dump(exclude={"request_sha256"})
     values["content_sha256"] = "f" * 64
+    values["source"] = valid.source
     values["render_options"] = valid.render_options
     mismatched_snapshot = StudioRenderRequest(
         **values,
