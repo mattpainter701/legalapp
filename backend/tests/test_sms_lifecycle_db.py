@@ -3548,11 +3548,12 @@ async def test_expired_dispatch_replay_creates_one_unknown_timeline_and_audit(
         created_by_user_id=test_user.id,
     )
     db_session.add(message)
-    message_id = message.id
     tenant_id = test_tenant.id
     user_id = test_user.id
     contact_id = seeded.contact.id
     matter_id = seeded.matter.id
+    await db_session.flush()
+    message_id = message.id
     await db_session.commit()
     _install_provider(
         monkeypatch,
