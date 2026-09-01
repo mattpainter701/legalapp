@@ -29,7 +29,7 @@ from clarity_agent.search_control import require_local_control_path
 from clarity_agent.config import _restrict
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 DEFAULT_MAX_FILE_SIZE = 32 * 1024 * 1024
 COMPLETED_JOB_RETENTION = 10_000
 ARTIFACT_REFERENCE_RE = re.compile(r"artifact:[0-9a-f]{64}\Z")
@@ -329,7 +329,9 @@ class CrawlManifest:
                     active_reconcile_token TEXT,
                     reconcile_lease_until REAL,
                     reconcile_generation INTEGER NOT NULL DEFAULT 0,
-                    hint_generation INTEGER NOT NULL DEFAULT 0
+                    hint_generation INTEGER NOT NULL DEFAULT 0,
+                    reconciliation_signal_generation INTEGER NOT NULL DEFAULT 0,
+                    active_reconcile_signal_generation INTEGER
                 );
                 CREATE TABLE IF NOT EXISTS files (
                     source_id TEXT NOT NULL,
@@ -397,6 +399,7 @@ class CrawlManifest:
             if existing_version > SCHEMA_VERSION:
                 raise RuntimeError("crawl manifest schema is newer than this agent")
             migrated = await self._migrate_schema(db, existing_version)
+            await self._assert_sanitized_schema(db)
             await db.execute(
                 """INSERT INTO metadata(key,value) VALUES('schema_version',?)
                    ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
@@ -425,22 +428,44 @@ class CrawlManifest:
         uri = f"{self.path.as_uri()}?mode=ro"
         db = await aiosqlite.connect(uri, uri=True)
         try:
+            tables = {
+                row[0]
+                for row in await (
+                    await db.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                    )
+                ).fetchall()
+            }
             metadata = await (
                 await db.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='metadata'"
                 )
             ).fetchone()
             if metadata is None:
+                if tables:
+                    raise RuntimeError("crawl manifest schema version is missing")
                 return
             row = await (
                 await db.execute(
                     "SELECT value FROM metadata WHERE key='schema_version'"
                 )
             ).fetchone()
+            if row is None:
+                raise RuntimeError("crawl manifest schema version is missing")
             if row is not None and int(row[0]) > SCHEMA_VERSION:
                 raise RuntimeError("crawl manifest schema is newer than this agent")
         finally:
             await db.close()
+
+    async def _assert_sanitized_schema(self, db: aiosqlite.Connection) -> None:
+        columns = {
+            row[1]
+            for row in await (await db.execute("PRAGMA table_info(jobs)")).fetchall()
+        }
+        if "payload_json" in columns:
+            raise RuntimeError(
+                "crawl manifest contains a forbidden durable payload column"
+            )
 
     async def _physical_scrub(self) -> None:
         vacuum_db = await aiosqlite.connect(self.path, timeout=30)
@@ -465,6 +490,8 @@ class CrawlManifest:
                 "reconcile_lease_until": "REAL",
                 "reconcile_generation": "INTEGER NOT NULL DEFAULT 0",
                 "hint_generation": "INTEGER NOT NULL DEFAULT 0",
+                "reconciliation_signal_generation": "INTEGER NOT NULL DEFAULT 0",
+                "active_reconcile_signal_generation": "INTEGER",
             },
             "files": {
                 "mutation_generation": "INTEGER NOT NULL DEFAULT 1",
@@ -662,7 +689,8 @@ class CrawlManifest:
             await db.execute("BEGIN IMMEDIATE")
             state = await (
                 await db.execute(
-                    "SELECT active_reconcile_token,reconcile_lease_until FROM sources WHERE source_id=?",
+                    """SELECT active_reconcile_token,reconcile_lease_until,
+                       reconciliation_signal_generation FROM sources WHERE source_id=?""",
                     (source_id,),
                 )
             ).fetchone()
@@ -679,7 +707,9 @@ class CrawlManifest:
                 """UPDATE sources SET last_reconcile_started=?, last_error=NULL,
                    active_reconcile_token=?, reconcile_lease_until=?,
                    reconcile_generation=reconcile_generation+1,
-                   reconciliation_required=1 WHERE source_id=?""",
+                   reconciliation_required=1,
+                   active_reconcile_signal_generation=reconciliation_signal_generation
+                   WHERE source_id=?""",
                 (now, run_id, now + max(1, lease_seconds), source_id),
             )
             await db.commit()
@@ -755,13 +785,32 @@ class CrawlManifest:
             if occupant:
                 # Path reuse: retain the old identity as a tombstone candidate,
                 # then free the unique live path for the replacement identity.
+                digest = hashlib.sha256(str(occupant["file_id"]).encode()).hexdigest()
+                ordinal = 0
+                while True:
+                    suffix = "" if ordinal == 0 else f"-{ordinal}"
+                    retired_path = f".crawl-retired/{digest}{suffix}"
+                    collision = await (
+                        await db.execute(
+                            """SELECT 1 FROM files WHERE source_id=? AND path=?
+                               AND file_id<>?""",
+                            (source.source_id, retired_path, occupant["file_id"]),
+                        )
+                    ).fetchone()
+                    if collision is None:
+                        break
+                    ordinal += 1
                 await db.execute(
-                    "UPDATE files SET path=path || '#reused-' || substr(file_id,1,12), updated_at=? WHERE source_id=? AND file_id=?",
-                    (now, source.source_id, occupant["file_id"]),
+                    """UPDATE files SET path=?,updated_at=?
+                       WHERE source_id=? AND file_id=?""",
+                    (retired_path, now, source.source_id, occupant["file_id"]),
                 )
                 if run_id is None:
                     await db.execute(
-                        "UPDATE sources SET reconciliation_required=1 WHERE source_id=?",
+                        """UPDATE sources SET reconciliation_required=1,
+                           reconciliation_signal_generation=
+                               reconciliation_signal_generation+1
+                           WHERE source_id=?""",
                         (source.source_id,),
                     )
             matter_ids_json = json.dumps(source.matter_ids)
@@ -856,7 +905,9 @@ class CrawlManifest:
             source_row = await (
                 await db.execute(
                     """SELECT config_json,active_reconcile_token,
-                       reconcile_lease_until FROM sources WHERE source_id=?""",
+                       reconcile_lease_until,reconciliation_signal_generation,
+                       active_reconcile_signal_generation
+                       FROM sources WHERE source_id=?""",
                     (source_id,),
                 )
             ).fetchone()
@@ -903,9 +954,15 @@ class CrawlManifest:
                     generation,
                 )
             cursor = await db.execute(
-                """UPDATE sources SET reconciliation_required=0,
-                   last_reconcile_completed=?,last_error=NULL,
-                   active_reconcile_token=NULL,reconcile_lease_until=NULL
+                """UPDATE sources SET reconciliation_required=CASE
+                       WHEN reconciliation_signal_generation=
+                            active_reconcile_signal_generation THEN 0 ELSE 1 END,
+                   last_reconcile_completed=?,last_error=CASE
+                       WHEN reconciliation_signal_generation=
+                            active_reconcile_signal_generation THEN NULL
+                       ELSE last_error END,
+                   active_reconcile_token=NULL,reconcile_lease_until=NULL,
+                   active_reconcile_signal_generation=NULL
                    WHERE source_id=? AND active_reconcile_token=?
                      AND reconcile_lease_until>=?""",
                 (now, source_id, run_id, now),
@@ -1170,6 +1227,83 @@ class CrawlManifest:
             await db.commit()
             return cursor.rowcount == 1
 
+    async def rearm_dead(self, job_id: int) -> bool:
+        """Rearm terminal work only when its durable generation is still current."""
+        now = time.time()
+        async with self._write_lock, self._connect() as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute("BEGIN IMMEDIATE")
+            job = await (
+                await db.execute(
+                    "SELECT * FROM jobs WHERE job_id=? AND state='dead'", (job_id,)
+                )
+            ).fetchone()
+            if job is None:
+                await db.rollback()
+                return False
+            source = await (
+                await db.execute(
+                    "SELECT config_json FROM sources WHERE source_id=?",
+                    (job["source_id"],),
+                )
+            ).fetchone()
+            if source is None:
+                await db.rollback()
+                return False
+            kind = JobKind(job["kind"])
+            if kind != JobKind.DISCOVER:
+                pending = await (
+                    await db.execute(
+                        """SELECT count(*) FROM jobs WHERE source_id=?
+                           AND kind<>'discover'
+                           AND state IN ('ready','retry','leased')""",
+                        (job["source_id"],),
+                    )
+                ).fetchone()
+                limit = int(json.loads(source["config_json"])["max_pending_jobs"])
+                if int(pending[0]) >= limit:
+                    await db.rollback()
+                    raise RuntimeError("source queue backpressure limit reached")
+            if kind == JobKind.STAT and not job["path"]:
+                await db.rollback()
+                return False
+            if kind in {
+                JobKind.EXTRACT,
+                JobKind.INDEX,
+                JobKind.DELETE,
+                JobKind.ACL_REFRESH,
+            }:
+                file_row = await (
+                    await db.execute(
+                        "SELECT * FROM files WHERE source_id=? AND file_id=?",
+                        (job["source_id"], job["file_id"]),
+                    )
+                ).fetchone()
+                expected_tombstone = kind == JobKind.DELETE
+                if (
+                    file_row is None
+                    or bool(file_row["tombstoned"]) != expected_tombstone
+                    or int(file_row["mutation_generation"])
+                    != int(job["mutation_generation"] or 0)
+                    or file_row["content_version"] != job["content_version"]
+                    or (
+                        kind == JobKind.INDEX
+                        and not valid_artifact_fields(
+                            job["artifact_ref"], job["artifact_hash"]
+                        )
+                    )
+                ):
+                    await db.rollback()
+                    return False
+            cursor = await db.execute(
+                """UPDATE jobs SET state='ready',attempts=0,available_at=0,
+                   lease_until=NULL,lease_token=NULL,last_error=NULL,updated_at=?
+                   WHERE job_id=? AND state='dead'""",
+                (now, job_id),
+            )
+            await db.commit()
+            return cursor.rowcount == 1
+
     async def defer(self, job: LeasedJob, *, seconds: float = 30) -> bool:
         """Return paused work without consuming an attempt."""
         async with self._write_lock, self._connect() as db:
@@ -1231,8 +1365,11 @@ class CrawlManifest:
         async with self._write_lock, self._connect() as db:
             await db.execute(
                 """UPDATE sources SET cursor=?,reconciliation_required=max(
-                   reconciliation_required,?) WHERE source_id=?""",
-                (cursor, int(require_reconcile), source_id),
+                   reconciliation_required,?),
+                   reconciliation_signal_generation=
+                       reconciliation_signal_generation+?
+                   WHERE source_id=?""",
+                (cursor, int(require_reconcile), int(require_reconcile), source_id),
             )
             await db.commit()
 
@@ -1244,6 +1381,8 @@ class CrawlManifest:
         async with self._write_lock, self._connect() as db:
             await db.execute(
                 """UPDATE sources SET reconciliation_required=1,
+                   reconciliation_signal_generation=
+                       reconciliation_signal_generation+1,
                    last_error=COALESCE(?,last_error) WHERE source_id=?""",
                 (error_code, source_id),
             )
@@ -1280,7 +1419,10 @@ class CrawlManifest:
             max_pending = int(json.loads(row["config_json"])["max_pending_jobs"])
             if int(pending[0]) + 1 > max_pending:
                 await db.execute(
-                    "UPDATE sources SET reconciliation_required=1 WHERE source_id=?",
+                    """UPDATE sources SET reconciliation_required=1,
+                       reconciliation_signal_generation=
+                           reconciliation_signal_generation+1
+                       WHERE source_id=?""",
                     (source_id,),
                 )
                 await db.commit()
@@ -1653,9 +1795,11 @@ class CrawlPipeline:
         async with budget.handles:
             before = await self.source_adapter.stat(source, path)
             if before is None:
-                raise SupersededJob("source identity changed before read")
+                await self.manifest.require_reconciliation(job.source_id)
+                raise SupersededJob("source disappeared before read")
             before = replace(before, path=canonical_relative_path(source, before.path))
             if before.identity_for(source) != job.file_id:
+                await self.manifest.observe(source, before, None)
                 raise SupersededJob("source identity changed before read")
             if (
                 row is None

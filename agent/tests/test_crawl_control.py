@@ -245,7 +245,7 @@ async def test_path_reuse_preserves_old_identity_for_safe_delete(tmp_path):
     old_row = await manifest.file("share-a", old.identity)
     new_row = await manifest.file("share-a", new.identity)
     assert old_row["tombstoned"]
-    assert "#reused-" in old_row["path"]
+    assert old_row["path"].startswith(".crawl-retired/")
     assert new_row["path"] == "same.txt"
 
 
@@ -654,7 +654,7 @@ async def test_v1_migration_scrubs_payload_and_regenerates_safe_work(tmp_path):
             "SELECT kind,file_id,mutation_generation FROM jobs ORDER BY kind,file_id"
         ).fetchall()
     assert "payload_json" not in columns
-    assert version == "3"
+    assert version == "4"
     assert ("extract", "live", 1) in work
     assert ("delete", "gone", 2) in work
     for db_file in db_path.parent.glob("crawl.db*"):
@@ -1006,3 +1006,108 @@ async def test_hint_path_reuse_requires_authoritative_reconciliation(tmp_path):
     await manifest.observe(source, replacement, None)
     assert (await manifest.source_state("share-a"))["reconciliation_required"]
     assert not (await manifest.file("share-a", old.identity))["tombstoned"]
+
+
+@pytest.mark.asyncio
+async def test_versionless_legacy_manifest_fails_closed_without_writes(tmp_path):
+    db_path = tmp_path / "private" / "crawl.db"
+    db_path.parent.mkdir(parents=True)
+    sentinel = "VERSIONLESS-LEGACY-SENTINEL"
+    with sqlite3.connect(db_path) as db:
+        db.executescript(
+            f"""CREATE TABLE jobs(
+                    job_id INTEGER PRIMARY KEY,
+                    payload_json TEXT NOT NULL
+                );
+                INSERT INTO jobs VALUES(1,'{sentinel}');"""
+        )
+    before = db_path.read_bytes()
+    with pytest.raises(RuntimeError, match="version is missing"):
+        await CrawlManifest(str(db_path)).initialize()
+    assert db_path.read_bytes() == before
+    assert sentinel.encode() in before
+
+
+@pytest.mark.asyncio
+async def test_repeated_path_reuse_uses_collision_safe_retired_paths(tmp_path):
+    first = FileStat("same.txt", 1, 1, stable_id="000001")
+    pipeline, manifest, adapter, _, _, _ = await setup(
+        tmp_path, {first.path: (first, b"1")}
+    )
+    await pipeline.reconcile("share-a")
+    identities = [first.identity]
+    for number in (2, 3):
+        replacement = FileStat("same.txt", 1, number, stable_id=f"00000{number}")
+        identities.append(replacement.identity)
+        adapter.files = {replacement.path: (replacement, str(number).encode())}
+        await pipeline.reconcile("share-a")
+    rows = [await manifest.file("share-a", identity) for identity in identities]
+    paths = [row["path"] for row in rows]
+    assert len(set(paths)) == 3
+    assert paths[-1] == "same.txt"
+    assert all(path.startswith(".crawl-retired/") for path in paths[:-1])
+
+
+@pytest.mark.asyncio
+async def test_dead_letter_rearm_validates_current_generation(tmp_path):
+    stat = FileStat("gone.txt", 1, 1, stable_id="gone", acl_version="acl-1")
+    pipeline, manifest, adapter, _, _, source = await setup(
+        tmp_path, {stat.path: (stat, b"x")}
+    )
+    await pipeline.reconcile("share-a")
+
+    acl_job = await manifest.claim(JobKind.ACL_REFRESH)
+    assert acl_job is not None
+    await manifest.retry(acl_job, OSError("acl failed"), max_attempts=1)
+    changed = FileStat("gone.txt", 1, 2, stable_id="gone", acl_version="acl-2")
+    adapter.files[changed.path] = (changed, b"y")
+    await manifest.observe(source, changed, None)
+    assert not await manifest.rearm_dead(acl_job.job_id)
+
+    adapter.files.clear()
+    await pipeline.reconcile("share-a")
+    delete_job = await manifest.claim(JobKind.DELETE)
+    assert delete_job is not None
+    await manifest.retry(delete_job, OSError("delete failed"), max_attempts=1)
+    assert await manifest.rearm_dead(delete_job.job_id)
+    rearmed = await manifest.claim(JobKind.DELETE)
+    assert rearmed is not None and rearmed.job_id == delete_job.job_id
+    assert rearmed.attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_finish_preserves_newer_required_signal(tmp_path):
+    _, manifest, _, _, _, _ = await setup(tmp_path, {})
+    run_id = await manifest.begin_reconciliation("share-a")
+    await manifest.require_reconciliation("share-a", error_code="source_io")
+    await manifest.finish_reconciliation("share-a", run_id)
+    state = await manifest.source_state("share-a")
+    assert state["reconciliation_required"]
+    assert state["last_error"] == "source_io"
+    assert state["active_reconcile_token"] is None
+
+
+@pytest.mark.asyncio
+async def test_extract_disappearance_requires_reconciliation(tmp_path):
+    stat = FileStat("vanished.txt", 1, 1, stable_id="old")
+    pipeline, manifest, adapter, _, _, _ = await setup(
+        tmp_path, {stat.path: (stat, b"x")}
+    )
+    await pipeline.reconcile("share-a")
+    adapter.files.clear()
+    assert await pipeline.process_one(JobKind.EXTRACT)
+    assert (await manifest.source_state("share-a"))["reconciliation_required"]
+
+
+@pytest.mark.asyncio
+async def test_extract_identity_replacement_is_observed(tmp_path):
+    old = FileStat("same.txt", 1, 1, stable_id="old")
+    pipeline, manifest, adapter, _, _, _ = await setup(
+        tmp_path, {old.path: (old, b"x")}
+    )
+    await pipeline.reconcile("share-a")
+    new = FileStat("same.txt", 1, 2, stable_id="new")
+    adapter.files = {new.path: (new, b"y")}
+    assert await pipeline.process_one(JobKind.EXTRACT)
+    assert await manifest.file("share-a", new.identity) is not None
+    assert (await manifest.source_state("share-a"))["reconciliation_required"]

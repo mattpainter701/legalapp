@@ -46,16 +46,19 @@ state for operator review.
 
 Only stable error codes are durable; adapter exception messages are never
 written to the database. Artifact shape is checked at the adapter, queue,
-schema, claim, and indexing boundaries. Schema upgrades reject future versions
-before any write. The v1/v2-to-v3 migration securely rebuilds the queue to
-remove legacy payload JSON or unconstrained references, sanitizes errors, and
-regenerates generation-qualified extract/delete/ACL work from the file
-manifest. A durable `scrub_required` marker remains set until a checked WAL
+schema, claim, and indexing boundaries. Schema upgrades reject future or
+versionless legacy databases before any write. The v1/v2/v3-to-v4 migration
+securely rebuilds the queue to remove legacy payload JSON or unconstrained
+references, sanitizes errors, and regenerates generation-qualified
+extract/delete/ACL work from the file manifest. A durable `scrub_required`
+marker remains set until a checked WAL
 truncate and `VACUUM` succeed; interrupted physical scrubs retry on startup.
 
 Each full reconciliation owns a durable, renewable per-source lease. Observe,
 finish, failure, and tombstone mutations are compare-and-swap fenced by its
-token, so an expired process cannot finish over a newer run. Files absent from
+token, so an expired process cannot finish over a newer run. A durable signal
+generation prevents a successful run from clearing overflow or recovery work
+recorded after that run began. Files absent from
 the successful leased run are tombstoned and queued for deletion only after the
 source walk finishes without an exception. Partial walks, SMB disconnects,
 queue backpressure, notification overflow, and cursor failure all retain live
@@ -63,11 +66,12 @@ files and set `reconciliation_required`.
 
 Stable provider file IDs preserve identity across renames. When unavailable, a
 normalized path hash uses the source's explicit case-sensitivity policy, and
-rename detection is conservative. Path reuse
-keeps the displaced identity until a successful reconciliation can tombstone
-it. Extraction reads are streamed in bounded chunks, capped by `max_file_size`,
-and fenced against the queued manifest stat plus pre/post source stats. Only
-stable bytes get a SHA-256 fingerprint and generation-qualified handoff.
+rename detection is conservative. Path reuse moves displaced identities into a
+collision-checked retired namespace until a successful reconciliation can
+tombstone them. Extraction reads are streamed in bounded chunks, capped by
+`max_file_size`, and fenced against the queued manifest stat plus pre/post
+source stats. Only stable bytes get a SHA-256 fingerprint and
+generation-qualified handoff.
 
 Cursor advancement and its STAT enqueue commit in one SQLite transaction.
 Cursorless notifications receive a durable per-source sequence, so repeated
@@ -114,9 +118,12 @@ stage/state, and process counters. Alert on:
 - sustained ready/retry growth or `reconciliations_backpressured` increments.
 
 After repairing credentials, connectivity, adapter availability, or downstream
-capacity, run a full reconciliation before retrying delete work. Do not clear
-tombstones or edit queue rows manually. Preserve the database and its `-wal`
-and `-shm` files together when collecting restart diagnostics.
+capacity, run a full reconciliation, then call the manifest's
+`rearm_dead(job_id)` operator operation. Rearming succeeds only when queue
+capacity is available and the file/tombstone content and mutation generation
+still match the dead job. Do not clear tombstones or edit queue rows manually.
+Preserve the database and its `-wal` and `-shm` files together when collecting
+restart diagnostics.
 
 ## Rollout checklist
 
