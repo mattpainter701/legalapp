@@ -6,7 +6,7 @@ from sqlalchemy.dialects.postgresql import UUID
 
 
 revision = "152_file_open_intents"
-down_revision = "150_studio_render_jobs"
+down_revision = "151_fm_native_authz"
 branch_labels = None
 depends_on = None
 
