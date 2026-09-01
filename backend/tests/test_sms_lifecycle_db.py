@@ -3913,6 +3913,7 @@ async def test_stale_dispatch_lease_becomes_reconciliation_work_without_resend(
     assert stale_audit.metadata_json["reason"] == ("scheduler:dispatch_lease_expired")
     assert stale_audit.actor_type == "system"
     recovered_run = await db_session.get(TaskAutomationRun, crash_run_id)
+    await db_session.refresh(recovered_run)
     assert recovered_run.sms_message_id == stale.id
     assert recovered_run.status == "failed"
     assert recovered_run.delivery_certainty == "outcome_unknown"
