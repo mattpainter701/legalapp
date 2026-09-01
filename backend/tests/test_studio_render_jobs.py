@@ -47,6 +47,7 @@ from app.services.studio_artifact_retention import (
     StudioArtifactRetentionService,
     StudioStagedReceiptReconciler,
 )
+from app.services import studio_render_jobs as studio_render_jobs_module
 from app.services import studio_render_worker as studio_render_worker_module
 from app.services.studio_drafts import (
     StudioDraftService,
@@ -2139,6 +2140,7 @@ async def test_phase2_rollback_recovery_rechecks_immutable_inputs(
             _AuthoritativeInputState("corrupt", "validation_failed"),
         ]
     )
+    real_set_tenant_context = studio_render_jobs_module.set_tenant_context
     with (
         patch.object(
             StudioDraftService,
@@ -2150,6 +2152,11 @@ async def test_phase2_rollback_recovery_rechecks_immutable_inputs(
             "_authoritative_inputs_state",
             authoritative_state,
         ),
+        patch.object(
+            studio_render_jobs_module,
+            "set_tenant_context",
+            wraps=real_set_tenant_context,
+        ) as tenant_context,
     ):
         with pytest.raises(StudioRenderServiceError) as caught:
             await service.adopt_output(
@@ -2170,7 +2177,91 @@ async def test_phase2_rollback_recovery_rechecks_immutable_inputs(
         )
         is None
     )
-    assert authoritative_state.await_count == 2
+    authoritative_calls = [item.args[0] for item in authoritative_state.await_args_list]
+    expected_binding = lease.payload.model_dump(mode="json")
+    assert [item.model_dump(mode="json") for item in authoritative_calls] == [
+        expected_binding,
+        expected_binding,
+    ]
+    assert authoritative_calls[0] is not authoritative_calls[1]
+    assert [item.args for item in tenant_context.await_args_list] == [
+        (db_session, str(test_tenant.id)),
+        (db_session, str(test_tenant.id)),
+    ]
+
+
+async def test_phase2_rollback_stale_recovery_uses_fresh_artifact_id(
+    db_session, test_tenant, test_user, tmp_path
+):
+    foundation = await _foundation(db_session, test_tenant, test_user)
+    service, accepted = await _enqueue(
+        db_session, test_tenant, test_user, foundation, "recovery-stale-output"
+    )
+    lease = await service.claim(accepted.job_id, owner="recovery-stale-worker")
+    object_store = LocalStudioObjectStore(tmp_path, max_object_bytes=4096)
+    output = object_store.put(
+        test_tenant.id, b"recovery-stale-output", media_type="application/pdf"
+    )
+    rolled_back_artifact_ids = []
+
+    async def capture_then_rollback(phase2_service, *_args):
+        staged_artifact = await phase2_service.db.scalar(
+            select(StudioRenderArtifact).where(
+                StudioRenderArtifact.job_id == accepted.job_id,
+                StudioRenderArtifact.tenant_id == test_tenant.id,
+            )
+        )
+        assert staged_artifact is not None
+        rolled_back_artifact_ids.append(staged_artifact.id)
+        await phase2_service.db.rollback()
+        return False
+
+    authoritative_state = AsyncMock(
+        side_effect=[
+            _AuthoritativeInputState("current"),
+            _AuthoritativeInputState("stale"),
+        ]
+    )
+    with (
+        patch.object(
+            StudioDraftService,
+            "mark_render_evidence_if_current",
+            new=capture_then_rollback,
+        ),
+        patch.object(
+            service.worker._store,
+            "_authoritative_inputs_state",
+            authoritative_state,
+        ),
+    ):
+        artifact_id, outcome = await service.adopt_output(
+            lease,
+            output,
+            object_store=object_store,
+            artifact_kind="test_render",
+            runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
+            artifact_ttl_seconds=300,
+            **_geometry_kwargs(),
+        )
+
+    assert outcome == "stale_output"
+    assert len(rolled_back_artifact_ids) == 1
+    assert artifact_id != rolled_back_artifact_ids[0]
+    assert (
+        await db_session.get(StudioRenderArtifact, rolled_back_artifact_ids[0]) is None
+    )
+    artifact = await db_session.get(StudioRenderArtifact, artifact_id)
+    assert artifact is not None
+    assert artifact.adoption_outcome == "stale_output"
+    row = await db_session.get(DurableJob, accepted.job_id)
+    assert row.result["artifact_id"] == str(artifact_id)
+    assert row.result["adoption_outcome"] == "stale_output"
+    authoritative_calls = [item.args[0] for item in authoritative_state.await_args_list]
+    expected_binding = lease.payload.model_dump(mode="json")
+    assert [item.model_dump(mode="json") for item in authoritative_calls] == [
+        expected_binding,
+        expected_binding,
+    ]
 
 
 async def test_adoption_uses_fresh_database_clock_after_blocking_storage_io(
@@ -2396,6 +2487,13 @@ async def test_worker_rehashes_snapshot_payload_before_processor_use(
         payload_check_results.append(result)
         return result
 
+    payload_check_kwargs = {
+        "draft_id": lease.payload.draft_id,
+        "revision": lease.payload.rendered_revision,
+        "identity_sha256": lease.payload.identity_sha256,
+        "content_sha256": lease.payload.snapshot_content_sha256,
+        "source": lease.payload.source,
+    }
     with patch.object(
         studio_render_worker_module,
         "_snapshot_payload_is_exact",
@@ -2408,13 +2506,23 @@ async def test_worker_rehashes_snapshot_payload_before_processor_use(
     assert input_binding is None
     payload_check.assert_called_once_with(
         snapshot.payload,
-        draft_id=lease.payload.draft_id,
-        revision=lease.payload.rendered_revision,
-        identity_sha256=lease.payload.identity_sha256,
-        content_sha256=lease.payload.snapshot_content_sha256,
-        source=lease.payload.source,
+        **payload_check_kwargs,
     )
     assert payload_check_results == [True]
+
+    with patch.object(
+        studio_render_worker_module,
+        "_snapshot_payload_is_exact",
+        return_value=False,
+    ) as rejected_payload_check:
+        with pytest.raises(StudioRenderServiceError) as caught:
+            await worker._load_inputs(lease)
+
+    assert caught.value.code == "validation_failed"
+    rejected_payload_check.assert_called_once_with(
+        snapshot.payload,
+        **payload_check_kwargs,
+    )
 
 
 async def test_retention_deletes_shared_cas_only_after_last_reference(
