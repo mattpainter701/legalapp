@@ -1041,6 +1041,27 @@
       "scope": "runtime/dev",
       "source": "scripts/tabs3_export/requirements.txt",
       "specifier": "==5.2.0"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "pytest",
+      "scope": "optional:dev",
+      "source": "search-node/pyproject.toml",
+      "specifier": ">=8.0"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "ruff",
+      "scope": "optional:dev",
+      "source": "search-node/pyproject.toml",
+      "specifier": ">=0.8"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "pypdf",
+      "scope": "runtime",
+      "source": "search-node/pyproject.toml",
+      "specifier": ">=4.0"
     }
   ],
   "generated_at": "generated from current working tree",
@@ -1089,6 +1110,12 @@
       "lockfile_present": false,
       "lockfiles": [],
       "path": "agent/pyproject.toml",
+      "type": "python project"
+    },
+    {
+      "lockfile_present": false,
+      "lockfiles": [],
+      "path": "search-node/pyproject.toml",
       "type": "python project"
     }
   ],
