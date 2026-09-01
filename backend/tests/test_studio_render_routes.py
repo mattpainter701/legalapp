@@ -526,6 +526,27 @@ async def test_enqueue_rejects_client_supplied_input_binding():
 
 
 
+def _route_settings(**overrides):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        TEMPLATE_STUDIO_RENDER_ENABLED=True,
+        TEMPLATE_STUDIO_RENDER_ACTIVE_JOB_LIMIT=4,
+        TEMPLATE_STUDIO_RENDER_JOB_TTL_SECONDS=3_600,
+        TEMPLATE_STUDIO_RENDER_ENQUEUE_RATE_LIMIT=20,
+        TEMPLATE_STUDIO_RENDER_ENQUEUE_RATE_WINDOW_SECONDS=60,
+        TEMPLATE_STUDIO_RENDER_QUEUED_BYTE_LIMIT=500 * 1024 * 1024,
+        TEMPLATE_STUDIO_RENDER_MAX_INPUT_BINDING_BYTES=25 * 1024 * 1024,
+        TEMPLATE_STUDIO_RENDER_MAX_DOWNLOAD_BYTES=25 * 1024 * 1024,
+        TEMPLATE_STUDIO_RENDER_RETAINED_ARTIFACT_LIMIT=500,
+        TEMPLATE_STUDIO_RENDER_RETAINED_BYTE_LIMIT=10 * 1024**3,
+        TEMPLATE_STUDIO_RENDER_LIVE_ARTIFACT_LIMIT=1_000,
+        TEMPLATE_STUDIO_RENDER_LIVE_BYTE_LIMIT=20 * 1024**3,
+        BACKEND_URL="https://configured.example",
+        **overrides,
+    )
+
+
 def test_route_context_rejects_invalid_download_bound():
     manifest = _context(_FakeService(), uuid.uuid4()).capabilities
     with pytest.raises(ValueError, match="download bound"):
@@ -583,3 +604,172 @@ async def test_context_creation_failure_returns_public_error(monkeypatch):
         response = await client.get("/api/template-studio/render-capabilities")
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "processor_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_get_route_context_creates_service_and_returns_context(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from fastapi import Request
+
+    from app.routers.studio_render import get_studio_render_route_context
+
+    app = FastAPI()
+    capabilities = _context(_FakeService(), uuid.uuid4()).capabilities
+    app.state.studio_render_object_store = _RouteObjectStore(fresh=True)
+    app.state.studio_render_manifests = {
+        "studio_test_render:markdown:v1": capabilities
+    }
+    app.state.studio_render_capabilities = capabilities
+
+    monkeypatch.setattr(
+        "app.routers.studio_render.get_settings",
+        lambda: _route_settings(),
+    )
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "scheme": "https",
+            "path": "/",
+            "query_string": b"",
+            "headers": [],
+            "app": app,
+        }
+    )
+    fake_user = SimpleNamespace(id=uuid.uuid4(), tenant_id=uuid.uuid4())
+    db = AsyncMock()
+
+    context = await get_studio_render_route_context(
+        request, current_user=fake_user, db=db
+    )
+    assert context.service is not None
+    assert context.actor_user_id == fake_user.id
+    assert context.backend_url == "https://configured.example"
+    assert context.object_store is app.state.studio_render_object_store
+
+
+@pytest.mark.asyncio
+async def test_get_route_context_re_raises_http_exception_from_service(monkeypatch):
+    from fastapi import Request
+
+    from app.routers.studio_render import get_studio_render_route_context
+
+    app = FastAPI()
+    capabilities = _context(_FakeService(), uuid.uuid4()).capabilities
+    app.state.studio_render_object_store = _RouteObjectStore(fresh=True)
+    app.state.studio_render_manifests = {}
+    app.state.studio_render_capabilities = capabilities
+
+    monkeypatch.setattr(
+        "app.routers.studio_render.get_settings",
+        lambda: _route_settings(),
+    )
+
+    def _raise_http(*args, **kwargs):
+        raise HTTPException(status_code=429, detail="rate limited")
+
+    monkeypatch.setattr(
+        "app.routers.studio_render.StudioRenderJobService", _raise_http
+    )
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "scheme": "https",
+            "path": "/",
+            "query_string": b"",
+            "headers": [],
+            "app": app,
+        }
+    )
+    fake_user = SimpleNamespace(id=uuid.uuid4(), tenant_id=uuid.uuid4())
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_studio_render_route_context(
+            request, current_user=fake_user, db=None
+        )
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.detail == "rate limited"
+
+
+@pytest.mark.asyncio
+async def test_artifact_result_route_returns_status_with_result_url():
+    service = _FakeService()
+    actor_id = uuid.uuid4()
+    now = datetime.now(timezone.utc)
+    options = StudioRenderOptions()
+    request_sha256 = "d" * 64
+
+    async def result_with_url(artifact_id):
+        return StudioRenderJobStatus(
+            job_id=uuid.uuid4(),
+            status_url=f"/api/template-studio/render-jobs/{artifact_id}",
+            kind="studio_test_render",
+            state="completed",
+            progress=100,
+            attempts=1,
+            max_attempts=3,
+            created_at=now,
+            updated_at=now,
+            completed_at=now,
+            draft_id=uuid.uuid4(),
+            rendered_revision=3,
+            identity_sha256="b" * 64,
+            snapshot_id=uuid.uuid4(),
+            snapshot_content_sha256="c" * 64,
+            source=StudioRenderSourceContract(
+                artifact_id=uuid.uuid4(),
+                sha256="a" * 64,
+                media_type="text/markdown",
+                format="markdown",
+            ),
+            render_options=options,
+            render_options_sha256=options.sha256,
+            request_sha256=request_sha256,
+            effective_request_sha256=canonical_effective_render_request_hash(
+                request_sha256=request_sha256,
+                input_binding_sha256=None,
+                input_binding_version=None,
+            ),
+            renderer_manifest=service.manifest,
+            runtime_manifest_sha256=service.manifest.sha256,
+            job_expires_at=now + timedelta(hours=1),
+            artifact_id=artifact_id,
+            artifact_availability="available",
+            artifact_metadata_availability="available",
+            result_url=f"/api/template-studio/render-artifacts/{artifact_id}",
+            download_url=f"/api/template-studio/render-artifacts/{artifact_id}/content",
+            geometry_url=f"/api/template-studio/render-artifacts/{artifact_id}/geometry",
+            adoption_outcome="current_evidence",
+            adopted_as_preferred_evidence=False,
+            is_preferred_evidence=False,
+            retention_class="review",
+            output_sha256="9" * 64,
+            output_media_type="application/pdf",
+            output_byte_size=100,
+            artifact_page_count=1,
+            document_page_count=1,
+            geometry_manifest_sha256=service.geometry.sha256,
+            content_expires_at=now + timedelta(hours=1),
+            metadata_expires_at=now + timedelta(days=30),
+        )
+
+    service.artifact_result = result_with_url
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_studio_render_route_context] = lambda: _context(
+        service, actor_id
+    )
+    artifact_id = uuid.uuid4()
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="https://test.invalid"
+    ) as client:
+        response = await client.get(
+            f"/api/template-studio/render-artifacts/{artifact_id}"
+        )
+    assert response.status_code == 200
+    assert response.headers["content-location"].endswith(str(artifact_id))
+    assert response.json()["result_url"] is not None

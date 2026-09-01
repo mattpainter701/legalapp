@@ -544,3 +544,81 @@ def test_studio_render_paths_workspace_optional_when_worker_disabled():
     )
     assert workspace is None
     assert storage is not None
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected"),
+    [
+        ("TEMPLATE_STUDIO_RENDER_MAX_OBJECT_BYTES", 0, "MAX_OBJECT_BYTES"),
+        (
+            "TEMPLATE_STUDIO_RENDER_MAX_OBJECT_BYTES",
+            100 * 1024 * 1024 + 1,
+            "MAX_OBJECT_BYTES",
+        ),
+        (
+            "TEMPLATE_STUDIO_RENDER_MAX_INPUT_BINDING_BYTES",
+            0,
+            "MAX_INPUT_BINDING_BYTES",
+        ),
+        (
+            "TEMPLATE_STUDIO_RENDER_MAX_INPUT_BINDING_BYTES",
+            200 * 1024 * 1024,
+            "MAX_INPUT_BINDING_BYTES",
+        ),
+        ("TEMPLATE_STUDIO_RENDER_MAX_DOWNLOAD_BYTES", 0, "MAX_DOWNLOAD_BYTES"),
+        (
+            "TEMPLATE_STUDIO_RENDER_MAX_DOWNLOAD_BYTES",
+            50 * 1024 * 1024,
+            "MAX_DOWNLOAD_BYTES",
+        ),
+        (
+            "TEMPLATE_STUDIO_RENDER_RETAINED_BYTE_LIMIT",
+            0,
+            "RETAINED_BYTE_LIMIT",
+        ),
+        ("TEMPLATE_STUDIO_RENDER_LIVE_BYTE_LIMIT", 0, "LIVE_BYTE_LIMIT"),
+        ("TEMPLATE_STUDIO_RENDER_TENANT_SCAN_BATCH", 0, "TENANT_SCAN_BATCH"),
+        (
+            "TEMPLATE_STUDIO_RENDER_MAINTENANCE_INTERVAL_SECONDS",
+            9,
+            "MAINTENANCE_INTERVAL",
+        ),
+    ],
+)
+def test_template_studio_render_settings_reject_additional_out_of_bounds_values(
+    field, value, expected
+):
+    settings = _render_settings(**{field: value})
+    with pytest.raises(ValueError, match=expected):
+        validate_template_studio_settings(settings)
+
+
+def test_template_studio_render_settings_require_retained_within_live_limits():
+    settings = _render_settings(
+        TEMPLATE_STUDIO_RENDER_RETAINED_ARTIFACT_LIMIT=200,
+        TEMPLATE_STUDIO_RENDER_LIVE_ARTIFACT_LIMIT=100,
+    )
+    with pytest.raises(ValueError, match="retained limits must fit"):
+        validate_template_studio_settings(settings)
+
+    settings = _render_settings(
+        TEMPLATE_STUDIO_RENDER_RETAINED_BYTE_LIMIT=200 * 1024**2,
+        TEMPLATE_STUDIO_RENDER_LIVE_BYTE_LIMIT=100 * 1024**2,
+    )
+    with pytest.raises(ValueError, match="retained limits must fit"):
+        validate_template_studio_settings(settings)
+
+
+def test_template_studio_render_metadata_ttl_must_outlive_artifact_ttl():
+    settings = _render_settings(
+        TEMPLATE_STUDIO_RENDER_ARTIFACT_TTL_SECONDS=86_400,
+        TEMPLATE_STUDIO_RENDER_METADATA_TTL_SECONDS=86_400,
+    )
+    with pytest.raises(ValueError, match="metadata TTL must outlive"):
+        validate_template_studio_settings(settings)
+
+
+def test_template_studio_render_rejects_malformed_profiles_json():
+    settings = _render_settings(TEMPLATE_STUDIO_RENDER_PROFILES_JSON="{broken")
+    with pytest.raises(ValueError, match="PROFILES_JSON"):
+        validate_template_studio_settings(settings)

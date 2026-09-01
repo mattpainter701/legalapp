@@ -1453,6 +1453,42 @@ async def test_purge_records_failure_when_file_removal_is_refused(
     assert status == "failed"
 
 
+def test_remove_studio_render_files_refuses_containment_failure(monkeypatch):
+    from app.services import demo_purge
+
+    tenant_id = uuid.uuid4()
+    storage_dir = "/tmp/studio-render-storage"
+    monkeypatch.setattr(
+        demo_purge.get_settings(),
+        "TEMPLATE_STUDIO_RENDER_STORAGE_DIR",
+        storage_dir,
+    )
+
+    class _FakePath:
+        def __init__(self, path):
+            self._path = str(path)
+
+        def strip(self):
+            return self._path.strip()
+
+        def resolve(self):
+            return _FakePath(self._path)
+
+        def __truediv__(self, other):
+            return _FakePath(self._path + "/" + str(other))
+
+        def is_relative_to(self, other):
+            return False
+
+        def exists(self):
+            return False
+
+    monkeypatch.setattr(demo_purge, "Path", _FakePath)
+
+    with pytest.raises(DemoPurgeRefused, match="render storage path failed"):
+        demo_purge._remove_studio_render_files(tenant_id)
+
+
 def test_claim_timestamps_are_normalised_to_utc():
     """A naive claim must not crash the staleness comparison."""
     aware = datetime(2026, 8, 21, 12, 0, tzinfo=timezone.utc)

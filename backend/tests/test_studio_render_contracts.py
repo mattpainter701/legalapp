@@ -10,11 +10,14 @@ from app.schemas.studio_render import (
     STUDIO_PUBLIC_ERROR_MESSAGES,
     STUDIO_PUBLIC_ERROR_RETRYABLE,
     STUDIO_PUBLIC_ERROR_STATUS,
+    StudioArtifactGeometry,
     StudioGeometryManifest,
     StudioPageGeometry,
     StudioRendererComponent,
     StudioRendererManifest,
     StudioRenderAccepted,
+    StudioRenderCapabilities,
+    StudioRenderCapability,
     StudioRenderErrorDetails,
     StudioRenderJobStatus,
     StudioRenderIntent,
@@ -820,4 +823,340 @@ def test_public_error_rejects_noncanonical_retryability_and_disallowed_details()
             message=STUDIO_PUBLIC_ERROR_MESSAGES["access_denied"],
             retryable=False,
             details={"current_revision": 1},
+        )
+
+
+def test_render_options_reject_non_finite_and_oversized_values():
+    with pytest.raises(ValidationError, match="finite"):
+        StudioRenderOptions(max_output_bytes=float("inf"))
+
+
+def test_render_capability_rejects_unexpected_output_media_type():
+    manifest = _manifest()
+    with pytest.raises(ValidationError, match="output media type"):
+        StudioRenderCapability(
+            kind="studio_test_render",
+            source_format="markdown",
+            output_media_type="image/png",
+            renderer_manifest=manifest,
+        )
+
+
+def test_render_capabilities_reject_duplicate_keys():
+    manifest = _manifest()
+    capability = StudioRenderCapability(
+        kind="studio_test_render",
+        source_format="markdown",
+        output_media_type="application/pdf",
+        renderer_manifest=manifest,
+    )
+    with pytest.raises(ValidationError, match="duplicates"):
+        StudioRenderCapabilities(capabilities=[capability, capability])
+
+
+def test_effective_request_hash_rejects_invalid_identities():
+    valid_sha256 = "a" * 64
+    with pytest.raises(ValueError, match="client request hash"):
+        canonical_effective_render_request_hash(
+            request_sha256="not-hex",
+            input_binding_sha256=None,
+            input_binding_version=None,
+        )
+    with pytest.raises(ValueError, match="input binding hash"):
+        canonical_effective_render_request_hash(
+            request_sha256=valid_sha256,
+            input_binding_sha256="short",
+            input_binding_version=1,
+        )
+    with pytest.raises(ValueError, match="input binding version"):
+        canonical_effective_render_request_hash(
+            request_sha256=valid_sha256,
+            input_binding_sha256=valid_sha256,
+            input_binding_version=0,
+        )
+    with pytest.raises(ValueError, match="input binding identity"):
+        canonical_effective_render_request_hash(
+            request_sha256=valid_sha256,
+            input_binding_sha256=valid_sha256,
+            input_binding_version=None,
+        )
+
+
+def test_artifact_geometry_rejects_manifest_hash_mismatch():
+    geometry = _geometry()
+    with pytest.raises(ValidationError, match="geometry manifest hash mismatch"):
+        StudioArtifactGeometry(
+            artifact_id=uuid.uuid4(),
+            geometry_manifest=geometry,
+            geometry_manifest_sha256="0" * 64,
+        )
+
+
+def test_request_rejects_page_number_for_non_preview_kinds():
+    with pytest.raises(ValidationError, match="only for page preview"):
+        StudioRenderRequest.model_validate(
+            _request_payload(
+                kind="studio_test_render",
+                render_options=StudioRenderOptions(page_number=2),
+            )
+        )
+
+
+def test_completed_status_rejects_incomplete_materialization():
+    request = StudioRenderRequest.model_validate(_request_payload())
+    now = datetime.now(timezone.utc)
+    manifest = _manifest()
+    base = {
+        "job_id": uuid.uuid4(),
+        "status_url": "/api/template-studio/render-jobs/completed-test",
+        "state": "completed",
+        "progress": 100,
+        "attempts": 1,
+        "max_attempts": 5,
+        "created_at": now,
+        "updated_at": now,
+        "completed_at": now,
+        "draft_id": request.draft_id,
+        "rendered_revision": request.expected_revision,
+        "identity_sha256": request.identity_sha256,
+        "snapshot_id": request.snapshot_id,
+        "snapshot_content_sha256": request.content_sha256,
+        "source": request.source,
+        "render_options": request.render_options,
+        "render_options_sha256": request.render_options.sha256,
+        "request_sha256": request.request_sha256,
+        "effective_request_sha256": _effective_request_sha256(request),
+        "renderer_manifest": manifest,
+        "runtime_manifest_sha256": manifest.sha256,
+        "job_expires_at": now + timedelta(hours=1),
+    }
+    with pytest.raises(ValidationError, match="materialized artifact evidence"):
+        StudioRenderJobStatus(
+            **base,
+            kind=request.kind,
+            artifact_id=None,
+            adoption_outcome="current_evidence",
+        )
+    with pytest.raises(ValidationError, match="completed jobs require artifact metadata"):
+        StudioRenderJobStatus(
+            **base,
+            kind=request.kind,
+            artifact_id=uuid.uuid4(),
+            adoption_outcome="current_evidence",
+            artifact_availability=None,
+        )
+    with pytest.raises(ValidationError, match="page previews contain exactly one artifact page"):
+        StudioRenderJobStatus(
+            **base,
+            kind="studio_page_preview",
+            artifact_id=uuid.uuid4(),
+            adoption_outcome="current_evidence",
+            artifact_availability="available",
+            artifact_metadata_availability="available",
+            adopted_as_preferred_evidence=False,
+            is_preferred_evidence=False,
+            artifact_page_count=2,
+            result_url="/api/template-studio/render-artifacts/123",
+            download_url="/api/template-studio/render-artifacts/123/content",
+            geometry_url="/api/template-studio/render-artifacts/123/geometry",
+            output_sha256="9" * 64,
+            output_media_type="application/pdf",
+            output_byte_size=100,
+            document_page_count=2,
+            geometry_manifest_sha256=_geometry(2).sha256,
+            retention_class="review",
+            content_expires_at=now + timedelta(hours=1),
+            metadata_expires_at=now + timedelta(days=30),
+        )
+
+
+def test_completed_status_rejects_preferred_evidence_inconsistencies():
+    request = StudioRenderRequest.model_validate(_request_payload())
+    now = datetime.now(timezone.utc)
+    manifest = _manifest()
+    artifact_id = uuid.uuid4()
+    geometry = _geometry()
+    base = {
+        "job_id": uuid.uuid4(),
+        "status_url": f"/api/template-studio/render-jobs/{artifact_id}",
+        "kind": request.kind,
+        "state": "completed",
+        "progress": 100,
+        "attempts": 1,
+        "max_attempts": 5,
+        "created_at": now,
+        "updated_at": now,
+        "completed_at": now,
+        "draft_id": request.draft_id,
+        "rendered_revision": request.expected_revision,
+        "identity_sha256": request.identity_sha256,
+        "snapshot_id": request.snapshot_id,
+        "snapshot_content_sha256": request.content_sha256,
+        "source": request.source,
+        "render_options": request.render_options,
+        "render_options_sha256": request.render_options.sha256,
+        "request_sha256": request.request_sha256,
+        "effective_request_sha256": _effective_request_sha256(request),
+        "renderer_manifest": manifest,
+        "runtime_manifest_sha256": manifest.sha256,
+        "artifact_id": artifact_id,
+        "artifact_availability": "available",
+        "artifact_metadata_availability": "available",
+        "result_url": f"/api/template-studio/render-artifacts/{artifact_id}",
+        "download_url": f"/api/template-studio/render-artifacts/{artifact_id}/content",
+        "geometry_url": f"/api/template-studio/render-artifacts/{artifact_id}/geometry",
+        "output_sha256": "9" * 64,
+        "output_media_type": "application/pdf",
+        "output_byte_size": 100,
+        "artifact_page_count": 1,
+        "document_page_count": 1,
+        "geometry_manifest_sha256": geometry.sha256,
+        "retention_class": "review",
+        "job_expires_at": now + timedelta(hours=1),
+        "content_expires_at": now + timedelta(hours=1),
+        "metadata_expires_at": now + timedelta(days=30),
+    }
+    with pytest.raises(ValidationError, match="only current output"):
+        StudioRenderJobStatus(
+            **base,
+            adoption_outcome="stale_output",
+            adopted_as_preferred_evidence=True,
+            is_preferred_evidence=False,
+        )
+    with pytest.raises(ValidationError, match="diagnostic output cannot be current"):
+        StudioRenderJobStatus(
+            **base,
+            adoption_outcome="stale_output",
+            adopted_as_preferred_evidence=False,
+            is_preferred_evidence=True,
+        )
+
+
+def test_auto_open_is_allowed_only_for_live_current_evidence():
+    request = StudioRenderRequest.model_validate(_request_payload())
+    now = datetime.now(timezone.utc)
+    manifest = _manifest()
+    artifact_id = uuid.uuid4()
+    geometry = _geometry()
+    completed_base = {
+        "job_id": uuid.uuid4(),
+        "status_url": f"/api/template-studio/render-jobs/{artifact_id}",
+        "kind": request.kind,
+        "attempts": 1,
+        "max_attempts": 5,
+        "created_at": now,
+        "updated_at": now,
+        "draft_id": request.draft_id,
+        "rendered_revision": request.expected_revision,
+        "identity_sha256": request.identity_sha256,
+        "snapshot_id": request.snapshot_id,
+        "snapshot_content_sha256": request.content_sha256,
+        "source": request.source,
+        "render_options": request.render_options,
+        "render_options_sha256": request.render_options.sha256,
+        "request_sha256": request.request_sha256,
+        "effective_request_sha256": _effective_request_sha256(request),
+        "renderer_manifest": manifest,
+        "runtime_manifest_sha256": manifest.sha256,
+        "artifact_id": artifact_id,
+        "artifact_metadata_availability": "available",
+        "result_url": f"/api/template-studio/render-artifacts/{artifact_id}",
+        "download_url": f"/api/template-studio/render-artifacts/{artifact_id}/content",
+        "geometry_url": f"/api/template-studio/render-artifacts/{artifact_id}/geometry",
+        "adoption_outcome": "current_evidence",
+        "adopted_as_preferred_evidence": False,
+        "is_preferred_evidence": True,
+        "output_sha256": "9" * 64,
+        "output_media_type": "application/pdf",
+        "output_byte_size": 100,
+        "artifact_page_count": 1,
+        "document_page_count": 1,
+        "geometry_manifest_sha256": geometry.sha256,
+        "retention_class": "review",
+        "job_expires_at": now + timedelta(hours=1),
+        "content_expires_at": now + timedelta(hours=1),
+        "metadata_expires_at": now + timedelta(days=30),
+    }
+    with pytest.raises(ValidationError, match="only live current evidence may auto-open"):
+        StudioRenderJobStatus(
+            **completed_base,
+            state="completed",
+            progress=100,
+            completed_at=now,
+            artifact_availability="expired",
+            auto_open=True,
+        )
+    pending_base = {
+        "job_id": uuid.uuid4(),
+        "status_url": "/api/template-studio/render-jobs/pending-auto-open",
+        "kind": request.kind,
+        "state": "pending",
+        "progress": 0,
+        "attempts": 0,
+        "max_attempts": 5,
+        "created_at": now,
+        "updated_at": now,
+        "draft_id": request.draft_id,
+        "rendered_revision": request.expected_revision,
+        "identity_sha256": request.identity_sha256,
+        "snapshot_id": request.snapshot_id,
+        "snapshot_content_sha256": request.content_sha256,
+        "source": request.source,
+        "render_options": request.render_options,
+        "render_options_sha256": request.render_options.sha256,
+        "request_sha256": request.request_sha256,
+        "effective_request_sha256": _effective_request_sha256(request),
+        "renderer_manifest": manifest,
+        "runtime_manifest_sha256": manifest.sha256,
+        "job_expires_at": now + timedelta(hours=1),
+        "auto_open": True,
+    }
+    with pytest.raises(ValidationError, match="only completed current evidence may auto-open"):
+        StudioRenderJobStatus(**pending_base)
+
+
+def test_non_completed_states_reject_failure_and_metadata_availability():
+    request = StudioRenderRequest.model_validate(_request_payload())
+    now = datetime.now(timezone.utc)
+    manifest = _manifest()
+    base = {
+        "job_id": uuid.uuid4(),
+        "status_url": "/api/template-studio/render-jobs/non-terminal",
+        "kind": request.kind,
+        "state": "pending",
+        "progress": 0,
+        "attempts": 0,
+        "max_attempts": 5,
+        "created_at": now,
+        "updated_at": now,
+        "draft_id": request.draft_id,
+        "rendered_revision": request.expected_revision,
+        "identity_sha256": request.identity_sha256,
+        "snapshot_id": request.snapshot_id,
+        "snapshot_content_sha256": request.content_sha256,
+        "source": request.source,
+        "render_options": request.render_options,
+        "render_options_sha256": request.render_options.sha256,
+        "request_sha256": request.request_sha256,
+        "effective_request_sha256": _effective_request_sha256(request),
+        "renderer_manifest": manifest,
+        "runtime_manifest_sha256": manifest.sha256,
+        "job_expires_at": now + timedelta(hours=1),
+    }
+    with pytest.raises(ValidationError, match="artifact metadata availability"):
+        StudioRenderJobStatus(
+            **base,
+            artifact_metadata_availability="available",
+        )
+    with pytest.raises(ValidationError, match="only completed current evidence may auto-open"):
+        StudioRenderJobStatus(
+            **base,
+            auto_open=True,
+        )
+    with pytest.raises(ValidationError, match="failure details exist only for failed jobs"):
+        StudioRenderJobStatus(
+            **base,
+            error_code="processor_unavailable",
+            error_message=STUDIO_PUBLIC_ERROR_MESSAGES["processor_unavailable"],
+            error_retryable=True,
         )
