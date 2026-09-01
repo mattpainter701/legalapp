@@ -26,6 +26,8 @@ const COVERAGE_COPY = {
   indexing: ['Indexing', 'Some authorized sources are still indexing, so results may change.'],
   stale: ['Stale index', 'Some authorized source indexes are older than their freshness target.'],
   offline: ['Source offline', 'One or more authorized sources could not be searched.'],
+  unsupported: ['Search unavailable', 'One or more authorized sources do not yet have a safe search adapter.'],
+  unauthorized: ['Access unavailable', 'One or more explicitly selected sources could not be authorized for this search.'],
 }
 
 const coverageClasses = {
@@ -34,6 +36,8 @@ const coverageClasses = {
   indexing: 'border-sky-200 bg-sky-50 text-sky-900',
   stale: 'border-orange-200 bg-orange-50 text-orange-900',
   offline: 'border-rose-200 bg-rose-50 text-rose-900',
+  unsupported: 'border-slate-300 bg-slate-50 text-slate-800',
+  unauthorized: 'border-rose-300 bg-rose-50 text-rose-900',
 }
 
 function matterName(matter) {
@@ -81,7 +85,7 @@ function CoverageStatus({ coverage }) {
       </div>
       <p className="mt-1 text-xs leading-5">{coverage?.message || fallback}</p>
       {coverage?.sources?.length > 0 && <div className="mt-2 flex flex-wrap gap-1.5">{coverage.sources.map((source) => (
-        <span key={`${source.id}-${source.label}`} className="rounded-full border border-current/20 bg-white/60 px-2 py-0.5 text-[11px]">{source.label} · {source.state}</span>
+        <span key={`${source.id}-${source.label}`} title={source.reason || undefined} className="rounded-full border border-current/20 bg-white/60 px-2 py-0.5 text-[11px]">{source.label} · {source.state}</span>
       ))}</div>}
     </div>
   )
@@ -308,7 +312,7 @@ export default function UnifiedFirmMemoryPage() {
 
         {result && <section className="mt-7 space-y-4" aria-live="polite">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><strong>{results.length} result{results.length === 1 ? '' : 's'}</strong><span className="ml-2 text-xs text-brand-muted">{result.durationMs ? `${Math.round(result.durationMs)} ms` : 'latency unavailable'}</span></div><div className="min-w-0 sm:max-w-xl"><CoverageStatus coverage={result.coverage} /></div></div>
-          {!results.length ? <div className="rounded-2xl border border-dashed border-brand-line-2 bg-brand-surface px-6 py-14 text-center"><FileText className="mx-auto mb-3 text-brand-muted" size={30} /><h2 className="text-lg font-semibold">{coverageComplete ? 'No matching documents' : 'No matches in available sources'}</h2><p className="mt-1 text-sm text-brand-muted">{coverageComplete ? 'Try a broader phrase or remove a filter.' : 'Coverage is incomplete. Retry when indexing or offline sources recover before treating this as a complete result.'}</p></div> : <div className="space-y-3">{results.map((item) => <SearchResult key={item.id} result={item} copied={copied} copy={copy} />)}</div>}
+          {!results.length ? <div className="rounded-2xl border border-dashed border-brand-line-2 bg-brand-surface px-6 py-14 text-center"><FileText className="mx-auto mb-3 text-brand-muted" size={30} /><h2 className="text-lg font-semibold">{coverageComplete ? 'No matching documents' : 'No matches in available sources'}</h2><p className="mt-1 text-sm text-brand-muted">{coverageComplete ? 'Try a broader phrase or remove a filter.' : 'Coverage is incomplete. Review unavailable, unauthorized, indexing, stale, or offline sources before treating this as a complete result.'}</p></div> : <div className="space-y-3">{results.map((item) => <SearchResult key={item.id} result={item} copied={copied} copy={copy} />)}</div>}
         </section>}
 
         {!result && !loading && <div className="mt-10 text-center text-sm text-brand-muted"><Search className="mx-auto mb-3 opacity-40" size={28} /><p>Search all authorized sources. A matter is optional.</p></div>}

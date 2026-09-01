@@ -7,7 +7,15 @@ export const DOCUMENT_SEARCH_SCOPES = Object.freeze({
   SELECTED: 'selected',
 })
 
-export const COVERAGE_STATES = Object.freeze(['ready', 'partial', 'indexing', 'stale', 'offline'])
+export const COVERAGE_STATES = Object.freeze([
+  'ready',
+  'partial',
+  'indexing',
+  'stale',
+  'offline',
+  'unsupported',
+  'unauthorized',
+])
 
 const list = (value) => (Array.isArray(value) ? value.filter(Boolean) : [])
 const first = (...values) => values.find((value) => value !== undefined && value !== null && value !== '')
@@ -20,13 +28,14 @@ function normalizeCoverage(raw = [], response = {}) {
       label: first(source.label, source.name, source.source_name, 'Authorized source'),
       state: COVERAGE_STATES.includes(requested) ? requested : 'partial',
       searched: source.searched === true,
+      reason: first(source.reason, ''),
     }
   })
   const states = sources.map((source) => source.state)
   const complete = response.complete === true && response.partial !== true
   const state = complete && states.every((value) => value === 'ready')
     ? 'ready'
-    : (['offline', 'indexing', 'stale'].find((value) => states.includes(value)) || 'partial')
+    : (['unauthorized', 'unsupported', 'offline', 'indexing', 'stale'].find((value) => states.includes(value)) || 'partial')
   return {
     state,
     complete,

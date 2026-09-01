@@ -83,6 +83,27 @@ describe('UnifiedFirmMemoryPage', () => {
     expect(screen.getByText('Archive agent is offline.')).toBeInTheDocument()
   })
 
+  it('shows unsupported coverage without collapsing it to a generic ready state', async () => {
+    searchAuthorizedDocuments.mockResolvedValue({
+      results: [],
+      coverage: {
+        state: 'unsupported',
+        complete: false,
+        checkedSources: 0,
+        totalSources: 1,
+        sources: [{ id: 'source-cloud', label: 'SharePoint', state: 'unsupported', reason: 'native_document_authorization_required' }],
+      },
+      durationMs: 4,
+    })
+    render(<UnifiedFirmMemoryPage />)
+    fireEvent.change(screen.getByLabelText('Research query'), { target: { value: 'indemnity' } })
+    fireEvent.click(screen.getByRole('button', { name: /search firm memory/i }))
+
+    expect(await screen.findByText('Search unavailable')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'No matches in available sources' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'No matching documents' })).not.toBeInTheDocument()
+  })
+
   it('keeps source provenance and source-specific actions visible', async () => {
     searchAuthorizedDocuments.mockResolvedValue({
       coverage: { state: 'partial', complete: false, sources: [] },

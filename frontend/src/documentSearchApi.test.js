@@ -59,6 +59,26 @@ describe('document search client contract', () => {
     })
   })
 
+  it('preserves landed unsupported and unauthorized coverage states', () => {
+    const unsupported = normalizeDocumentSearchResponse({
+      complete: false,
+      partial: true,
+      coverage: [{ source_id: 'source-1', source_name: 'Archive', state: 'unsupported', reason: 'native_document_authorization_required' }],
+    })
+    expect(unsupported.coverage).toMatchObject({
+      state: 'unsupported',
+      complete: false,
+      sources: [expect.objectContaining({ state: 'unsupported', reason: 'native_document_authorization_required' })],
+    })
+
+    const unauthorized = normalizeDocumentSearchResponse({
+      complete: false,
+      partial: true,
+      coverage: [{ source_id: 'source-2', state: 'unauthorized', authorization: 'denied' }],
+    })
+    expect(unauthorized.coverage.state).toBe('unauthorized')
+  })
+
   it('posts only the normalized request to the foundation endpoint', async () => {
     api.post.mockResolvedValue({ data: { coverage: { state: 'ready', complete: true }, results: [] } })
     await searchAuthorizedDocuments({ query: 'indemnity', scope: 'all' })

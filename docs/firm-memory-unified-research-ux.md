@@ -6,9 +6,9 @@ This frontend slice changes Firm Memory from a matter-gated file-share form into
 
 This slice does not implement source authorization, database models or migrations, OpenSearch, native ACL/SID evaluation, OCR, semantic retrieval, or the LawHand File Opener.
 
-## Foundation dependency
+## Landed foundation contract
 
-The unified page depends on the separate FM-01 source-authorization PR and its version 1 contract:
+The unified page depends on the FM-01 source-authorization foundation merged before this slice and its version 1 contract:
 
 - `POST /api/v1/firm-memory/search` accepts `schema_version`, `query`, `source_scope`, optional `matter_ids`, `source_ids`, and `collection_ids`, bounded filters, a limit, and an audit correlation ID.
 - `GET /api/v1/firm-memory/capabilities` combines the broad search entitlement with the default-off generalized-search flag; the frontend does not infer rollout from RBAC capabilities.
@@ -17,7 +17,7 @@ The unified page depends on the separate FM-01 source-authorization PR and its v
 - Optional result actions are server-issued typed entries: `provider_open`, `lawhand_result`, and `open_on_device`. The UI does not synthesize provider or workstation destinations. FM-01 emits no available `lawhand_result` action because its HMAC document identity is not reversible. Stable links remain visibly unavailable until a later durable opaque-ID mapping and fail-closed result-detail resolver exist.
 - A source-list endpoint supplies authorized filter options. The temporary adapter is isolated in `frontend/src/documentSearchApi.js` so route or additive field changes remain separate from the page.
 
-FM-02 intentionally contains no fallback that broadens an existing matter-scoped SMB search into firm-wide search. If FM-01 reports generalized search unsupported, partial, indexing, stale, or offline, the interface preserves that state.
+FM-02 intentionally contains no fallback that broadens an existing matter-scoped SMB search into firm-wide search. If the foundation reports generalized search unsupported, unauthorized, partial, indexing, stale, or offline, the interface preserves that state.
 
 ## Coverage truth rules
 
