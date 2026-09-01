@@ -234,8 +234,7 @@ def upgrade() -> None:
         sa.CheckConstraint("revision > 0", name="ck_studio_render_artifact_revision"),
         sa.CheckConstraint("byte_size > 0", name="ck_studio_render_artifact_size"),
         sa.CheckConstraint(
-            "artifact_page_count > 0 "
-            "AND document_page_count >= artifact_page_count",
+            "artifact_page_count > 0 " "AND document_page_count >= artifact_page_count",
             name="ck_studio_render_artifact_pages",
         ),
         sa.CheckConstraint(
@@ -357,9 +356,7 @@ def upgrade() -> None:
         sa.UniqueConstraint(
             "tenant_id", "artifact_id", name="uq_studio_preferred_render_artifact"
         ),
-        sa.CheckConstraint(
-            "revision > 0", name="ck_studio_preferred_render_revision"
-        ),
+        sa.CheckConstraint("revision > 0", name="ck_studio_preferred_render_revision"),
         sa.CheckConstraint(
             "identity_sha256 ~ '^[0-9a-f]{64}$'",
             name="ck_studio_preferred_render_identity",
@@ -474,6 +471,4 @@ def downgrade() -> None:
         "studio_draft_snapshots",
         type_="unique",
     )
-    op.drop_constraint(
-        "uq_durable_jobs_tenant_id", "durable_jobs", type_="unique"
-    )
+    op.drop_constraint("uq_durable_jobs_tenant_id", "durable_jobs", type_="unique")

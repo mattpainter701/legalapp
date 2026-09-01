@@ -1002,9 +1002,9 @@ def test_studio_render_production_topologies_are_bounded_and_activation_is_gated
     tmp_path: Path,
 ) -> None:
     for compose_name in ("docker-compose.yml", "docker-compose.hypervisor.yml"):
-        services = yaml.safe_load(
-            (ROOT / compose_name).read_text(encoding="utf-8")
-        )["services"]
+        services = yaml.safe_load((ROOT / compose_name).read_text(encoding="utf-8"))[
+            "services"
+        ]
         backend = services["backend"]
         worker = services["studio-render-worker"]
         assert worker["profiles"] == ["studio-render"]

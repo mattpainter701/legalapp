@@ -27,6 +27,7 @@ from app.services.studio_worker_isolation import (
     validate_studio_output,
 )
 
+
 def _profile(tmp_path, **updates):
     launcher = tmp_path / "sandbox-launcher.bin"
     executable = tmp_path / "renderer.bin"
@@ -121,9 +122,7 @@ def _actual_process_profile(tmp_path, renderer_source, **updates):
         "os.execv(target[0], target)\n",
         encoding="utf-8",
     )
-    renderer.write_text(
-        f"#!{sys.executable}\n{renderer_source}", encoding="utf-8"
-    )
+    renderer.write_text(f"#!{sys.executable}\n{renderer_source}", encoding="utf-8")
     launcher.chmod(0o700)
     renderer.chmod(0o700)
     return replace(
@@ -136,9 +135,7 @@ def _actual_process_profile(tmp_path, renderer_source, **updates):
 
 def test_registry_fails_closed_without_code_owned_boundary(tmp_path):
     with pytest.raises(StudioIsolationError) as caught:
-        StudioIsolationRegistry(
-            [_profile(tmp_path, boundary_kind="caller_attested")]
-        )
+        StudioIsolationRegistry([_profile(tmp_path, boundary_kind="caller_attested")])
     assert caught.value.code == "isolation_unavailable"
 
 
@@ -190,9 +187,7 @@ def test_registry_owns_immutable_environment_copy(tmp_path):
     registry = StudioIsolationRegistry([profile])
     supplied_environment["PATH"] = "C:/provider-secret"
     supplied_arguments.append("$(signed_url)")
-    resolved = registry.resolve(
-        StudioIsolatedInvocation(profile_id=profile.profile_id)
-    )
+    resolved = registry.resolve(StudioIsolatedInvocation(profile_id=profile.profile_id))
     assert dict(resolved.environment) == {"SAFE_SETTING": "fixed"}
     assert resolved.fixed_arguments == ("--fixed",)
     manifest = registry.manifest(profile.profile_id)
@@ -347,7 +342,9 @@ async def test_no_shell_minimal_environment_and_literal_hostile_arguments(tmp_pa
     with patch("asyncio.create_subprocess_exec", create):
         result = await run_isolated_process(
             registry,
-            StudioIsolatedInvocation(profile_id=profile.profile_id, arguments=(hostile,)),
+            StudioIsolatedInvocation(
+                profile_id=profile.profile_id, arguments=(hostile,)
+            ),
             workspace=tmp_path,
         )
     assert result.stdout == b"ok"
@@ -496,11 +493,10 @@ async def test_repeated_cancellation_kills_real_process_before_workspace_cleanup
 async def test_posix_termination_targets_the_process_group():
     process = _FakeProcess(wait_forever=True)
     process.pid = 424242
-    with patch(
-        "app.services.studio_worker_isolation.os.name", "posix"
-    ), patch(
-        "app.services.studio_worker_isolation.os.killpg", create=True
-    ) as killpg:
+    with (
+        patch("app.services.studio_worker_isolation.os.name", "posix"),
+        patch("app.services.studio_worker_isolation.os.killpg", create=True) as killpg,
+    ):
         killpg.side_effect = lambda _pid, sig: (
             setattr(process, "killed", True) if sig == 9 else None
         )
@@ -538,18 +534,14 @@ def test_kind_specific_output_parsers_fail_closed():
         validate_studio_output(
             _validator_report(b"different"),
             content=b"%PDF-hostile without trailer",
-            content_sha256=hashlib.sha256(
-                b"%PDF-hostile without trailer"
-            ).hexdigest(),
+            content_sha256=hashlib.sha256(b"%PDF-hostile without trailer").hexdigest(),
             artifact_kind="test_render",
             media_type="application/pdf",
             max_pages=10,
         )
     assert malformed.value.code == "validation_failed"
 
-    incomplete_pdf = _validator_report(
-        _pdf_bytes(), pages=[{"page_number": 1}]
-    )
+    incomplete_pdf = _validator_report(_pdf_bytes(), pages=[{"page_number": 1}])
     with pytest.raises(StudioIsolationError) as missing_pdf_geometry:
         validate_studio_output(
             incomplete_pdf,
@@ -620,9 +612,7 @@ def test_preview_report_geometry_must_match_png_bytes():
     from PIL import Image
 
     stream = io.BytesIO()
-    Image.new("RGB", (20, 30), "white").save(
-        stream, format="PNG", dpi=(150, 150)
-    )
+    Image.new("RGB", (20, 30), "white").save(stream, format="PNG", dpi=(150, 150))
     content = stream.getvalue()
     report = _validator_report(
         content,
@@ -655,9 +645,7 @@ def test_png_decode_dimensions_dpi_and_mapping_are_authoritative():
     from PIL import Image
 
     stream = io.BytesIO()
-    Image.new("RGB", (20, 30), "white").save(
-        stream, format="PNG", dpi=(150, 150)
-    )
+    Image.new("RGB", (20, 30), "white").save(stream, format="PNG", dpi=(150, 150))
     validated = validate_studio_output(
         _validator_report(
             stream.getvalue(),

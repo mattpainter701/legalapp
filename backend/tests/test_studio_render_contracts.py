@@ -165,14 +165,10 @@ def test_kind_specific_options_and_binding_are_bounded():
     )
     assert StudioRenderRequest.model_validate(preview).render_options.page_number == 2
     with pytest.raises(ValidationError, match="require page_number"):
-        StudioRenderRequest.model_validate(
-            _request_payload(kind="studio_page_preview")
-        )
+        StudioRenderRequest.model_validate(_request_payload(kind="studio_page_preview"))
     with pytest.raises(ValidationError, match="only for test renders"):
         StudioRenderRequest.model_validate(
-            _request_payload(
-                kind="studio_template_ocr", input_binding_id=uuid.uuid4()
-            )
+            _request_payload(kind="studio_template_ocr", input_binding_id=uuid.uuid4())
         )
     with pytest.raises(ValidationError, match="cannot exceed max_pages"):
         StudioRenderOptions(page_number=3, max_pages=2)
@@ -479,9 +475,10 @@ def test_failed_status_requires_sanitized_shape():
 def test_phase_two_etag_contract_is_full_and_exact():
     draft_id = uuid.uuid4()
     value = f'"studio:{draft_id}:12:{"a" * 64}"'
-    assert StudioRenderErrorDetails(
-        current_revision=12, current_etag=value
-    ).current_etag == value
+    assert (
+        StudioRenderErrorDetails(current_revision=12, current_etag=value).current_etag
+        == value
+    )
     with pytest.raises(ValidationError):
         StudioRenderErrorDetails(
             current_revision=12,

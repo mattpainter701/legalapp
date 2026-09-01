@@ -152,12 +152,7 @@ def test_hash_size_and_corrupted_cache_fail_closed(tmp_path):
     assert oversized.value.code == "object_too_large"
 
     ref = store.put(tenant_id, b"verified", media_type="application/pdf")
-    target = (
-        tmp_path
-        / str(tenant_id)
-        / "studio-objects"
-        / ref.object_key
-    )
+    target = tmp_path / str(tenant_id) / "studio-objects" / ref.object_key
     target.write_bytes(b"tampered")
     with pytest.raises(StudioStorageError) as corrupted:
         store.read(ref)
@@ -223,11 +218,14 @@ def test_pre_adoption_stage_is_durable_and_acknowledged_after_commit(tmp_path):
     )
     assert pending == [stage]
     assert restarted.acknowledge_stage(stage) is True
-    assert restarted.list_staged(
-        tenant_id,
-        reconcile_before=now + timedelta(seconds=1),
-        limit=10,
-    ) == []
+    assert (
+        restarted.list_staged(
+            tenant_id,
+            reconcile_before=now + timedelta(seconds=1),
+            limit=10,
+        )
+        == []
+    )
 
 
 def test_oversized_stage_is_rejected_before_receipt_creation(tmp_path):

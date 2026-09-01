@@ -40,9 +40,7 @@ class _Worker:
 
 
 def _item(kind):
-    return StudioRenderWorkItem(
-        tenant_id=uuid.uuid4(), job_id=uuid.uuid4(), kind=kind
-    )
+    return StudioRenderWorkItem(tenant_id=uuid.uuid4(), job_id=uuid.uuid4(), kind=kind)
 
 
 @pytest.mark.asyncio

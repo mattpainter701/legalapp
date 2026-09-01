@@ -31,9 +31,7 @@ async def test_maintenance_accepts_the_configured_tenant_scan_bound():
     )
     assert maintenance.tenant_batch_size == 500
     with pytest.raises(ValueError, match="tenant batch"):
-        StudioRenderMaintenance(
-            object(), object_store=object(), tenant_batch_size=501
-        )
+        StudioRenderMaintenance(object(), object_store=object(), tenant_batch_size=501)
 
 
 def _candidate(now, **updates):
@@ -88,30 +86,39 @@ async def test_metadata_expiry_respects_exact_evidence_and_legal_hold():
         metadata_expires_at=now - timedelta(seconds=1),
     )
     assert metadata_is_retained(expired, now=now) is False
-    assert metadata_is_retained(
-        _candidate(
-            now,
-            metadata_expires_at=now - timedelta(seconds=1),
-            live_evidence_reference=True,
-        ),
-        now=now,
-    ) is True
-    assert metadata_is_retained(
-        _candidate(
-            now,
-            metadata_expires_at=now - timedelta(seconds=1),
-            legal_hold_at=now,
-        ),
-        now=now,
-    ) is True
-    assert metadata_is_retained(
-        _candidate(
-            now,
-            metadata_expires_at=now - timedelta(seconds=1),
-            live_evidence_reference=None,
-        ),
-        now=now,
-    ) is True
+    assert (
+        metadata_is_retained(
+            _candidate(
+                now,
+                metadata_expires_at=now - timedelta(seconds=1),
+                live_evidence_reference=True,
+            ),
+            now=now,
+        )
+        is True
+    )
+    assert (
+        metadata_is_retained(
+            _candidate(
+                now,
+                metadata_expires_at=now - timedelta(seconds=1),
+                legal_hold_at=now,
+            ),
+            now=now,
+        )
+        is True
+    )
+    assert (
+        metadata_is_retained(
+            _candidate(
+                now,
+                metadata_expires_at=now - timedelta(seconds=1),
+                live_evidence_reference=None,
+            ),
+            now=now,
+        )
+        is True
+    )
 
 
 async def test_authoritative_hold_check_fails_closed():
@@ -123,9 +130,7 @@ async def test_authoritative_hold_check_fails_closed():
     async def unavailable(_candidate):
         raise RuntimeError("provider details must not escape")
 
-    hold = await cleanup_decision(
-        _candidate(now), now=now, legal_hold_check=held
-    )
+    hold = await cleanup_decision(_candidate(now), now=now, legal_hold_check=held)
     failed = await cleanup_decision(
         _candidate(now), now=now, legal_hold_check=unavailable
     )
@@ -248,11 +253,14 @@ async def test_staged_reconciliation_is_bounded_and_deletes_only_last_orphan(tmp
     assert [(item.stage_id, item.action) for item in decisions] == [
         (stage.stage_id, "deleted")
     ]
-    assert store.list_staged(
-        tenant_id,
-        reconcile_before=now + timedelta(seconds=1),
-        limit=10,
-    ) == []
+    assert (
+        store.list_staged(
+            tenant_id,
+            reconcile_before=now + timedelta(seconds=1),
+            limit=10,
+        )
+        == []
+    )
 
 
 async def test_staged_reconciliation_advances_past_a_permanent_failed_receipt(

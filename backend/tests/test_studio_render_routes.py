@@ -193,9 +193,9 @@ def _intent():
             media_type="text/markdown",
             format="markdown",
         ).model_dump(mode="json"),
-        "render_options": StudioRenderOptions(
-            page_number=2, max_pages=3
-        ).model_dump(mode="json"),
+        "render_options": StudioRenderOptions(page_number=2, max_pages=3).model_dump(
+            mode="json"
+        ),
     }
 
 
@@ -257,9 +257,7 @@ async def test_routes_reject_client_actor_and_serve_hash_verified_geometry_conte
     assert geometry.json()["geometry_manifest_sha256"] == service.geometry.sha256
     assert content.content == b"verified-output"
     assert content.headers["etag"].startswith('"sha256:')
-    assert content.headers["content-location"].startswith(
-        "https://configured.example/"
-    )
+    assert content.headers["content-location"].startswith("https://configured.example/")
 
 
 @pytest.mark.asyncio
@@ -296,9 +294,7 @@ async def test_stale_worker_blocks_admission_but_not_existing_resources():
             json=_intent(),
         )
         status = await client.get(f"/api/template-studio/render-jobs/{job_id}")
-        cancel = await client.post(
-            f"/api/template-studio/render-jobs/{job_id}/cancel"
-        )
+        cancel = await client.post(f"/api/template-studio/render-jobs/{job_id}/cancel")
         content = await client.get(
             f"/api/template-studio/render-artifacts/{artifact_id}/content"
         )

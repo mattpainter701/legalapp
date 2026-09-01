@@ -54,6 +54,7 @@ def _manifest():
         return StudioRendererComponent(
             name=name, version="1.0.0", content_sha256=digest * 64
         )
+
     return StudioRendererManifest(
         isolation_policy_id="studio-test-v1",
         launcher_sha256="1" * 64,
@@ -162,9 +163,7 @@ def _lease():
 def test_same_owner_cannot_cross_attempt_fence():
     row, lease = _lease()
     assert StudioRenderWorkerService._owns(row, lease)
-    assert not StudioRenderWorkerService._owns(
-        row, replace(lease, token=uuid.uuid4())
-    )
+    assert not StudioRenderWorkerService._owns(row, replace(lease, token=uuid.uuid4()))
     assert not StudioRenderWorkerService._owns(row, replace(lease, attempt=1))
     row.payload = {**row.payload, "lease_token": str(uuid.uuid4())}
     assert not StudioRenderWorkerService._owns(row, lease)
@@ -307,9 +306,7 @@ async def test_other_actor_cannot_probe_or_mutate_corrupt_same_tenant_job(operat
         tenant_id=lease.tenant_id,
         actor_user_id=uuid.uuid4(),
     )
-    with patch(
-        "app.services.studio_render_jobs.set_tenant_context", AsyncMock()
-    ):
+    with patch("app.services.studio_render_jobs.set_tenant_context", AsyncMock()):
         with pytest.raises(StudioRenderServiceError) as caught:
             await getattr(store, operation)(row.id)
     assert caught.value.status_code == 404
@@ -338,7 +335,9 @@ def test_artifact_model_uses_available_tenant_composite_references():
         if constraint.name == "ck_studio_render_artifact_temporary_expiry"
     )
     retention_sql = str(retention.sqltext)
-    assert "retention_class = 'evidence' AND content_expires_at IS NULL" in retention_sql
+    assert (
+        "retention_class = 'evidence' AND content_expires_at IS NULL" in retention_sql
+    )
     assert "metadata_expires_at IS NULL" in retention_sql
     assert "retention_class IN ('ephemeral', 'review')" in retention_sql
     assert "metadata_expires_at > content_expires_at" in retention_sql
@@ -396,9 +395,7 @@ def test_retained_evidence_quota_configuration_is_bounded():
             object(), tenant_id=uuid.uuid4(), retained_artifact_limit=0
         )
     with pytest.raises(ValueError, match="retained_byte_limit"):
-        _StudioRenderJobStore(
-            object(), tenant_id=uuid.uuid4(), retained_byte_limit=0
-        )
+        _StudioRenderJobStore(object(), tenant_id=uuid.uuid4(), retained_byte_limit=0)
 
 
 def _studio_path_settings(tmp_path: Path, **overrides):
@@ -413,9 +410,7 @@ def _studio_path_settings(tmp_path: Path, **overrides):
 
 def test_studio_render_paths_are_canonical_and_disjoint(tmp_path):
     settings = _studio_path_settings(tmp_path)
-    storage, workspace = validate_studio_render_paths(
-        settings, require_workspace=True
-    )
+    storage, workspace = validate_studio_render_paths(settings, require_workspace=True)
     assert storage == (tmp_path / "cas").resolve()
     assert workspace == (tmp_path / "workspace").resolve()
 

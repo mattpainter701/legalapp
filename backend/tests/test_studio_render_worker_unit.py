@@ -42,9 +42,7 @@ def _registry(tmp_path):
         executable=executable.absolute(),
         executable_sha256=hashlib.sha256(executable.read_bytes()).hexdigest(),
         runtime_bundle_manifest=runtime_bundle.absolute(),
-        runtime_bundle_sha256=hashlib.sha256(
-            runtime_bundle.read_bytes()
-        ).hexdigest(),
+        runtime_bundle_sha256=hashlib.sha256(runtime_bundle.read_bytes()).hexdigest(),
         font_pack=font_pack.absolute(),
         font_pack_sha256=hashlib.sha256(font_pack.read_bytes()).hexdigest(),
         renderer_version="1.0.0",
