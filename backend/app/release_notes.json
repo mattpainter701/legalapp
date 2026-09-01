@@ -11,6 +11,28 @@
         {"title": "Open with one-time authorization", "description": "Each action uses a short-lived, single-use request bound to the tenant, user, source file, assigned agent, revision, and requested action."},
         {"title": "Keep network paths local", "description": "The browser and launch link carry no UNC, file, or SMB path; the local agent resolves the opaque source identity only after redemption."},
         {"title": "Honor current Windows access", "description": "Windows rechecks reachability and the signed-in user's SMB/NTFS access; moved, expired, offline, and denied requests fail closed with a copy-path fallback."}
+      "id": "2026.09.01.1",
+      "version": "2026.09.01.1",
+      "title": "Consent-aware SMS with review and opt-out controls",
+      "published_at": "2026-09-01",
+      "summary": "Firms can configure provider-backed SMS that stays reviewable, consent-bound, tenant-scoped, and honest about provider acceptance and delivery.",
+      "highlights": [
+        {
+          "title": "Send only with current consent",
+          "description": "Each outbound message rechecks verified phone ownership, consent provenance, approved message category, quiet hours, matter access, and provider configuration."
+        },
+        {
+          "title": "Honor replies and opt-outs safely",
+          "description": "Signed inbound messages require an active owned sender, handle STOP, START, and HELP, deduplicate retries, and route ambiguous matches to staff review."
+        },
+        {
+          "title": "Keep provider truth distinct",
+          "description": "Exact-generation callbacks and reconciliation update authorized timeline evidence without regressing known truth; provider acceptance remains distinct from confirmed delivery."
+        },
+        {
+          "title": "Review assistant proposals first",
+          "description": "Workspace SMS proposals require current matter access and an explicit retry key, stay inside LawHand instead of email or third-party calendars, and cannot dispatch autonomously."
+        }
       ]
     },
     {
@@ -20,18 +42,22 @@
       "published_at": "2026-08-31",
       "summary": "Template Studio now has a tenant-isolated durable job and artifact foundation for reliable preview and test-render processing.",
       "highlights": [
-        {"title": "Resume interrupted work", "description": "Preview and test-render requests use durable queued jobs with bounded retries, cancellation, lease recovery, and tenant-safe status resources."},
-        {"title": "Keep evidence exact", "description": "Completed output is hash-verified and can become current evidence only when the immutable snapshot, draft revision, and identity still match."},
-        {"title": "Protect private document data", "description": "Job metadata excludes document values, bytes, storage paths, provider identifiers, signed URLs, and raw exception text."},
-        {"title": "Keep activation review-gated", "description": "The production worker remains disabled until encrypted CAS backup and restore rehearsal are added to the release gate."}
-      "title": "Consent-aware SMS with review and opt-out controls",
-      "published_at": "2026-08-31",
-      "summary": "Firms can configure provider-backed SMS that stays reviewable, consent-bound, tenant-scoped, and honest about provider acceptance and delivery.",
-      "highlights": [
-        {"title": "Send only with current consent", "description": "Each outbound message rechecks verified phone ownership, consent provenance, approved message category, quiet hours, matter access, and provider configuration."},
-        {"title": "Honor replies and opt-outs safely", "description": "Signed inbound messages require an active owned sender, handle STOP, START, and HELP, deduplicate retries, and route ambiguous matches to staff review."},
-        {"title": "Keep provider truth distinct", "description": "Exact-generation callbacks and reconciliation update authorized timeline evidence without regressing known truth; provider acceptance remains distinct from confirmed delivery."},
-        {"title": "Review assistant proposals first", "description": "Workspace SMS proposals require current matter access and an explicit retry key, stay inside LawHand instead of email or third-party calendars, and cannot dispatch autonomously."}
+        {
+          "title": "Resume interrupted work",
+          "description": "Preview and test-render requests use durable queued jobs with bounded retries, cancellation, lease recovery, and tenant-safe status resources."
+        },
+        {
+          "title": "Keep evidence exact",
+          "description": "Completed output is hash-verified and can become current evidence only when the immutable snapshot, draft revision, and identity still match."
+        },
+        {
+          "title": "Protect private document data",
+          "description": "Job metadata excludes document values, bytes, storage paths, provider identifiers, signed URLs, and raw exception text."
+        },
+        {
+          "title": "Keep activation review-gated",
+          "description": "The production worker remains disabled until encrypted CAS backup and restore rehearsal are added to the release gate."
+        }
       ]
     },
     {
@@ -41,9 +67,18 @@
       "published_at": "2026-08-31",
       "summary": "Public-authority alerts and coverage claims now remain bound to the exact reviewed evidence lineage and source state that supported them.",
       "highlights": [
-        {"title": "Stop revoked evidence from sending", "description": "Queued authority alerts recheck the stored history or citation fact and both public source lineages before recording a successful delivery."},
-        {"title": "Keep coverage claims audit-bound", "description": "Changes to coverage scope, source identity, publisher, URLs, cadence, caveats, or other customer-visible source facts suppress claims until fresh audits pass."},
-        {"title": "Reject mismatched citation identities", "description": "Citation facts must link each opinion to the same reviewed source as its authority, preventing unrelated public opinions from laundering revoked or private evidence."}
+        {
+          "title": "Stop revoked evidence from sending",
+          "description": "Queued authority alerts recheck the stored history or citation fact and both public source lineages before recording a successful delivery."
+        },
+        {
+          "title": "Keep coverage claims audit-bound",
+          "description": "Changes to coverage scope, source identity, publisher, URLs, cadence, caveats, or other customer-visible source facts suppress claims until fresh audits pass."
+        },
+        {
+          "title": "Reject mismatched citation identities",
+          "description": "Citation facts must link each opinion to the same reviewed source as its authority, preventing unrelated public opinions from laundering revoked or private evidence."
+        }
       ]
     },
     {
@@ -53,9 +88,18 @@
       "published_at": "2026-08-31",
       "summary": "Public legal research now serves and describes only reviewed official, open, or licensed sources that are explicitly admitted to the promoted authority release.",
       "highlights": [
-        {"title": "Require explicit public admission", "description": "A source key or caller-supplied metadata cannot make legal documents or case law public; the reviewed catalog, admission, and promoted manifest must agree."},
-        {"title": "Suppress revoked or mismatched sources", "description": "Source-rights, review, storage, schema, implementation, namespace, or manifest changes immediately suppress public results, status, coverage, and claims."},
-        {"title": "Keep private firm data out", "description": "Tenant, firm, private, custom, and unknown records cannot enter the public-authority corpus, telemetry, counts, audits, or customer coverage projection."}
+        {
+          "title": "Require explicit public admission",
+          "description": "A source key or caller-supplied metadata cannot make legal documents or case law public; the reviewed catalog, admission, and promoted manifest must agree."
+        },
+        {
+          "title": "Suppress revoked or mismatched sources",
+          "description": "Source-rights, review, storage, schema, implementation, namespace, or manifest changes immediately suppress public results, status, coverage, and claims."
+        },
+        {
+          "title": "Keep private firm data out",
+          "description": "Tenant, firm, private, custom, and unknown records cannot enter the public-authority corpus, telemetry, counts, audits, or customer coverage projection."
+        }
       ]
     },
     {
@@ -65,8 +109,14 @@
       "published_at": "2026-08-31",
       "summary": "The LawHand file-share agent now uses Windows-managed certificate trust when connecting to LawHand, improving enrollment reliability on firms' inspected HTTPS networks.",
       "highlights": [
-        {"title": "Enroll without weakening TLS", "description": "The agent recognizes approved enterprise certificate authorities deployed by the firm's Windows administrators while continuing to validate the LawHand hostname and certificate."},
-        {"title": "Keep the same secure connection", "description": "No inbound network access or certificate-validation bypass is required; the agent continues to use outbound HTTPS for its assigned file-share work."}
+        {
+          "title": "Enroll without weakening TLS",
+          "description": "The agent recognizes approved enterprise certificate authorities deployed by the firm's Windows administrators while continuing to validate the LawHand hostname and certificate."
+        },
+        {
+          "title": "Keep the same secure connection",
+          "description": "No inbound network access or certificate-validation bypass is required; the agent continues to use outbound HTTPS for its assigned file-share work."
+        }
       ]
     },
     {
@@ -76,10 +126,22 @@
       "published_at": "2026-08-31",
       "summary": "Firms can define bounded matter data and apply approved stage and checklist templates through previewed, auditable workflow runs.",
       "highlights": [
-        {"title": "Model firm-specific matter data", "description": "Administrators can define typed matter fields with stable keys, required and sensitive handling, bounded options, and safe retirement controls in the matter workflow surface."},
-        {"title": "Preview before applying a workflow", "description": "Approved matter templates show the exact initial stage, required data, assignee gaps, checklist tasks, and snapshot hash before any matter or task changes occur."},
-        {"title": "Apply once with durable evidence", "description": "Approved runs create deterministic relative tasks in one transaction, reject stale previews, deduplicate retries, and retain immutable run and step evidence."},
-        {"title": "Compensate without erasing history", "description": "Rollback cancels only unchanged workflow-created tasks, restores the prior matter stage, reports blockers for manual review, and keeps authoring separate from legal approval."}
+        {
+          "title": "Model firm-specific matter data",
+          "description": "Administrators can define typed matter fields with stable keys, required and sensitive handling, bounded options, and safe retirement controls in the matter workflow surface."
+        },
+        {
+          "title": "Preview before applying a workflow",
+          "description": "Approved matter templates show the exact initial stage, required data, assignee gaps, checklist tasks, and snapshot hash before any matter or task changes occur."
+        },
+        {
+          "title": "Apply once with durable evidence",
+          "description": "Approved runs create deterministic relative tasks in one transaction, reject stale previews, deduplicate retries, and retain immutable run and step evidence."
+        },
+        {
+          "title": "Compensate without erasing history",
+          "description": "Rollback cancels only unchanged workflow-created tasks, restores the prior matter stage, reports blockers for manual review, and keeps authoring separate from legal approval."
+        }
       ]
     },
     {
@@ -89,10 +151,22 @@
       "published_at": "2026-08-31",
       "summary": "Document templates now have a first-class Studio home, persistent workspaces, and clearer paths from source preparation to generation.",
       "highlights": [
-        {"title": "Resume template setup", "description": "Studio home groups loaded templates into continue setup, needs attention, ready to generate, and recent views using the existing library status."},
-        {"title": "Open a persistent workspace", "description": "Every template links to a stable workspace for reviewing its source, fields, readiness, preview, and generation actions."},
-        {"title": "Keep source preparation intact", "description": "New and imported templates continue through the reviewed Word, PDF, and image preparation flow before opening their workspace."},
-        {"title": "See current limits clearly", "description": "Reserved test, version, activity, draft, proposal, and snapshot routes say when server-backed records are not yet available instead of showing fake controls."}
+        {
+          "title": "Resume template setup",
+          "description": "Studio home groups loaded templates into continue setup, needs attention, ready to generate, and recent views using the existing library status."
+        },
+        {
+          "title": "Open a persistent workspace",
+          "description": "Every template links to a stable workspace for reviewing its source, fields, readiness, preview, and generation actions."
+        },
+        {
+          "title": "Keep source preparation intact",
+          "description": "New and imported templates continue through the reviewed Word, PDF, and image preparation flow before opening their workspace."
+        },
+        {
+          "title": "See current limits clearly",
+          "description": "Reserved test, version, activity, draft, proposal, and snapshot routes say when server-backed records are not yet available instead of showing fake controls."
+        }
       ]
     },
     {
@@ -102,10 +176,22 @@
       "published_at": "2026-08-30",
       "summary": "Matter teams can now preserve a shared research trail without turning machine notes into source evidence.",
       "highlights": [
-        {"title": "Keep the team trail together", "description": "Create matter-scoped workspaces for saved issues, searches, authorities, highlights, annotations, exclusions, outlines, and memo notes with explicit member roles."},
-        {"title": "Carry evidence labels forward", "description": "Every saved item and frozen export keeps its cited, verify, or model label alongside exact source links, source version, pinpoints, and stored treatment/currentness state."},
-        {"title": "Freeze a review package", "description": "Immutable, hash-identified snapshots create an exportable record of the workspace as reviewed. Bluebook formatting and citation correctness still require attorney verification."},
-        {"title": "Revoke safely", "description": "Workspace access is tenant-and-matter scoped, role checked, auditable, and revocable; archived workspaces and records are retained rather than silently erased."}
+        {
+          "title": "Keep the team trail together",
+          "description": "Create matter-scoped workspaces for saved issues, searches, authorities, highlights, annotations, exclusions, outlines, and memo notes with explicit member roles."
+        },
+        {
+          "title": "Carry evidence labels forward",
+          "description": "Every saved item and frozen export keeps its cited, verify, or model label alongside exact source links, source version, pinpoints, and stored treatment/currentness state."
+        },
+        {
+          "title": "Freeze a review package",
+          "description": "Immutable, hash-identified snapshots create an exportable record of the workspace as reviewed. Bluebook formatting and citation correctness still require attorney verification."
+        },
+        {
+          "title": "Revoke safely",
+          "description": "Workspace access is tenant-and-matter scoped, role checked, auditable, and revocable; archived workspaces and records are retained rather than silently erased."
+        }
       ]
     },
     {
@@ -115,10 +201,22 @@
       "published_at": "2026-08-30",
       "summary": "Research now separates linked source facts from provisional treatment interpretation and makes citator limits visible before attorney review.",
       "highlights": [
-        {"title": "Inspect the evidence state", "description": "Citator results show the promoted source, version, as-of date, history or citation evidence, and currentness limitations separately from any machine interpretation."},
-        {"title": "Keep treatment reviewable", "description": "Machine labels may abstain and remain provisional until an attorney accepts, rejects, requests more evidence, or records an override in the append-only review trail."},
-        {"title": "Watch changes safely", "description": "Saved authority watches are consented, tenant-and-matter scoped, deduplicated, revocable, and ready for quiet-hour and failure-aware delivery. This release sends no alerts."},
-        {"title": "No unsupported status claim", "description": "LawHand does not call an authority good law from a missing negative record. Complete citator coverage still requires a permitted licensed or attorney-reviewed benchmark."}
+        {
+          "title": "Inspect the evidence state",
+          "description": "Citator results show the promoted source, version, as-of date, history or citation evidence, and currentness limitations separately from any machine interpretation."
+        },
+        {
+          "title": "Keep treatment reviewable",
+          "description": "Machine labels may abstain and remain provisional until an attorney accepts, rejects, requests more evidence, or records an override in the append-only review trail."
+        },
+        {
+          "title": "Watch changes safely",
+          "description": "Saved authority watches are consented, tenant-and-matter scoped, deduplicated, revocable, and ready for quiet-hour and failure-aware delivery. This release sends no alerts."
+        },
+        {
+          "title": "No unsupported status claim",
+          "description": "LawHand does not call an authority good law from a missing negative record. Complete citator coverage still requires a permitted licensed or attorney-reviewed benchmark."
+        }
       ]
     },
     {
@@ -128,10 +226,22 @@
       "published_at": "2026-08-30",
       "summary": "Licensed mediation work now appears inside the client's existing matter portal while documents and proposals stay private until attorney review and deliberate release.",
       "highlights": [
-        {"title": "Keep each submission private", "description": "A party's document or proposal is visible to that party and the firm until the legal team explicitly releases it to selected recipients."},
-        {"title": "Review before delivery", "description": "Attorneys can approve, return, or reject proposals before choosing who receives an approved version; released content is preserved as immutable evidence."},
-        {"title": "Negotiate with traceable counters", "description": "Counteroffers can reference only an active proposal released to that party, and the prior offer is superseded only when the reviewed counter is actually released."},
-        {"title": "Use mediation in My Matters", "description": "Eligible clients see a read-only Mediation tab in their native matter portal, with scoped assets, proposals, and integrity-checked document downloads when the add-on is active."}
+        {
+          "title": "Keep each submission private",
+          "description": "A party's document or proposal is visible to that party and the firm until the legal team explicitly releases it to selected recipients."
+        },
+        {
+          "title": "Review before delivery",
+          "description": "Attorneys can approve, return, or reject proposals before choosing who receives an approved version; released content is preserved as immutable evidence."
+        },
+        {
+          "title": "Negotiate with traceable counters",
+          "description": "Counteroffers can reference only an active proposal released to that party, and the prior offer is superseded only when the reviewed counter is actually released."
+        },
+        {
+          "title": "Use mediation in My Matters",
+          "description": "Eligible clients see a read-only Mediation tab in their native matter portal, with scoped assets, proposals, and integrity-checked document downloads when the add-on is active."
+        }
       ]
     },
     {
@@ -141,10 +251,22 @@
       "published_at": "2026-08-30",
       "summary": "Research now separates linked source facts from provisional treatment interpretation and makes citator limits visible before attorney review.",
       "highlights": [
-        {"title": "Keep verified findings", "description": "When a response mixes cited and unsupported material, cited findings remain visible while unsupported claims are omitted."},
-        {"title": "Explain missing authority", "description": "Research gaps now say whether the authority service or fallback was unavailable, or whether no usable match was found."},
-        {"title": "Open the cited source", "description": "CourtListener and official public-source URLs remain attached to the cited source so reviewers can open the retrieved authority."},
-        {"title": "Avoid uncited legal summaries", "description": "Jurisdiction-specific questions without authority no longer receive a general-knowledge answer presented as completed research."}
+        {
+          "title": "Keep verified findings",
+          "description": "When a response mixes cited and unsupported material, cited findings remain visible while unsupported claims are omitted."
+        },
+        {
+          "title": "Explain missing authority",
+          "description": "Research gaps now say whether the authority service or fallback was unavailable, or whether no usable match was found."
+        },
+        {
+          "title": "Open the cited source",
+          "description": "CourtListener and official public-source URLs remain attached to the cited source so reviewers can open the retrieved authority."
+        },
+        {
+          "title": "Avoid uncited legal summaries",
+          "description": "Jurisdiction-specific questions without authority no longer receive a general-knowledge answer presented as completed research."
+        }
       ]
     },
     {
@@ -154,9 +276,18 @@
       "published_at": "2026-08-30",
       "summary": "Public legal research now exposes reviewed source scope, corpus release evidence, currentness limits, and honest retrieval fallbacks.",
       "highlights": [
-        {"title": "See reviewed source scope", "description": "Rights decisions, authority tiers, content types, jurisdictions, temporal scope, cadence, caveats, and provenance are carried with source health."},
-        {"title": "Track corpus releases honestly", "description": "Promoted versions, rollback metadata, harvest checkpoints, quarantine states, and sampled audits prevent unsupported complete/current claims."},
-        {"title": "Preserve retrieval boundaries", "description": "Exact embedding compatibility is required; outages or mismatches fall back to keyword/source search while private firm documents remain outside public telemetry."}
+        {
+          "title": "See reviewed source scope",
+          "description": "Rights decisions, authority tiers, content types, jurisdictions, temporal scope, cadence, caveats, and provenance are carried with source health."
+        },
+        {
+          "title": "Track corpus releases honestly",
+          "description": "Promoted versions, rollback metadata, harvest checkpoints, quarantine states, and sampled audits prevent unsupported complete/current claims."
+        },
+        {
+          "title": "Preserve retrieval boundaries",
+          "description": "Exact embedding compatibility is required; outages or mismatches fall back to keyword/source search while private firm documents remain outside public telemetry."
+        }
       ]
     },
     {
@@ -166,9 +297,18 @@
       "published_at": "2026-08-30",
       "summary": "Administrators can approve an unchanged import report before promoting the conservative client and matter subset, with durable links and rollback review markers.",
       "highlights": [
-        {"title": "Approve the exact reconciliation", "description": "Promotion requires an explicit confirmation and report hash, so changed or stale staging cannot be promoted silently."},
-        {"title": "Reconcile existing records", "description": "Client identifiers and email addresses are matched within the tenant before a new client is created; every promoted row receives an external provenance link."},
-        {"title": "Keep rollback reviewable", "description": "Operators can mark a promoted run for non-destructive rollback review while audit receipts preserve what happened."}
+        {
+          "title": "Approve the exact reconciliation",
+          "description": "Promotion requires an explicit confirmation and report hash, so changed or stale staging cannot be promoted silently."
+        },
+        {
+          "title": "Reconcile existing records",
+          "description": "Client identifiers and email addresses are matched within the tenant before a new client is created; every promoted row receives an external provenance link."
+        },
+        {
+          "title": "Keep rollback reviewable",
+          "description": "Operators can mark a promoted run for non-destructive rollback review while audit receipts preserve what happened."
+        }
       ]
     },
     {
@@ -178,10 +318,22 @@
       "published_at": "2026-08-30",
       "summary": "A bounded local file-search control surface connects an approved file-share agent to the portal, Chat, and Workspace MCP while keeping the firm's query and documents on the firm's network.",
       "highlights": [
-        {"title": "Search inside supported local files", "description": "Matter-scoped searches can return ranked snippets and page hints from the agent's local SQLite control index without embeddings."},
-        {"title": "Use the same search from three surfaces", "description": "The portal, Chat assistant, and user-authorized Workspace MCP now share one bounded search contract with visible partial and index status."},
-        {"title": "Open results safely", "description": "Results use an authenticated portal link that rechecks access and offers Copy UNC instead of exposing a raw browser file link."},
-        {"title": "Measure the pilot honestly", "description": "Correlation IDs, counts, latency, and indexed or pending status support local validation; this remains a small control-index PoC, not a 4 TB production search promise."}
+        {
+          "title": "Search inside supported local files",
+          "description": "Matter-scoped searches can return ranked snippets and page hints from the agent's local SQLite control index without embeddings."
+        },
+        {
+          "title": "Use the same search from three surfaces",
+          "description": "The portal, Chat assistant, and user-authorized Workspace MCP now share one bounded search contract with visible partial and index status."
+        },
+        {
+          "title": "Open results safely",
+          "description": "Results use an authenticated portal link that rechecks access and offers Copy UNC instead of exposing a raw browser file link."
+        },
+        {
+          "title": "Measure the pilot honestly",
+          "description": "Correlation IDs, counts, latency, and indexed or pending status support local validation; this remains a small control-index PoC, not a 4 TB production search promise."
+        }
       ]
     },
     {
@@ -191,9 +343,18 @@
       "published_at": "2026-08-30",
       "summary": "Research can ingest reviewed federal rules, constitutional analysis, and Tax Court reports while keeping jurisdiction and known extraction limits explicit.",
       "highlights": [
-        {"title": "Search more reviewed federal authority", "description": "Federal rules, Constitution Annotated, and bounded Tax Court Reports now have scheduled, failure-isolated ingestion paths."},
-        {"title": "Keep unsafe text out", "description": "A known unreadable appellate-rules extraction stays auditable but cannot enter searchable text until its parser is replaced."},
-        {"title": "Scope Ohio and federal research correctly", "description": "Explicit Ohio and federal questions now apply matching filters to case law and other public authorities."}
+        {
+          "title": "Search more reviewed federal authority",
+          "description": "Federal rules, Constitution Annotated, and bounded Tax Court Reports now have scheduled, failure-isolated ingestion paths."
+        },
+        {
+          "title": "Keep unsafe text out",
+          "description": "A known unreadable appellate-rules extraction stays auditable but cannot enter searchable text until its parser is replaced."
+        },
+        {
+          "title": "Scope Ohio and federal research correctly",
+          "description": "Explicit Ohio and federal questions now apply matching filters to case law and other public authorities."
+        }
       ]
     },
     {
@@ -203,9 +364,18 @@
       "published_at": "2026-08-30",
       "summary": "Firms can review brief citations, quotations, pin cites, opposing-brief differences, and bounded authority candidates with linked evidence before exporting work product.",
       "highlights": [
-        {"title": "Inspect evidence before relying on a brief", "description": "DOCX/PDF checks preserve source identity, location, confidence, ambiguity, retrieval evidence, and explicit unknown or unavailable states."},
-        {"title": "Keep attorney decisions auditable", "description": "Reviewers can accept, reject, or follow up on findings; decisions are tenant-scoped and recorded in an immutable audit trail."},
-        {"title": "Export linked review work product", "description": "Download a review report and table-of-authorities draft while bounded recall and currentness limitations remain visible."}
+        {
+          "title": "Inspect evidence before relying on a brief",
+          "description": "DOCX/PDF checks preserve source identity, location, confidence, ambiguity, retrieval evidence, and explicit unknown or unavailable states."
+        },
+        {
+          "title": "Keep attorney decisions auditable",
+          "description": "Reviewers can accept, reject, or follow up on findings; decisions are tenant-scoped and recorded in an immutable audit trail."
+        },
+        {
+          "title": "Export linked review work product",
+          "description": "Download a review report and table-of-authorities draft while bounded recall and currentness limitations remain visible."
+        }
       ]
     },
     {
@@ -215,9 +385,18 @@
       "published_at": "2026-08-29",
       "summary": "Customers and operators can use one versioned contract for support, incidents, lifecycle receipts, offboarding proof, providers, and security review without unsupported SLA or certification claims.",
       "highlights": [
-        {"title": "Use defined support and status workflows", "description": "Published business hours, S1-S4 severity objectives, audited escalation, and sanitized append-only incident updates make the operating process reviewable without creating an SLA."},
-        {"title": "Carry acceptance evidence through the lifecycle", "description": "Onboarding, BK28 migration, and export receipts reconcile scope and counts; offboarding blocks on holds and needs two operators before proof."},
-        {"title": "Export an honest security packet", "description": "The content-addressed packet names providers and boundaries while marking penetration testing and certifications as not attained."}
+        {
+          "title": "Use defined support and status workflows",
+          "description": "Published business hours, S1-S4 severity objectives, audited escalation, and sanitized append-only incident updates make the operating process reviewable without creating an SLA."
+        },
+        {
+          "title": "Carry acceptance evidence through the lifecycle",
+          "description": "Onboarding, BK28 migration, and export receipts reconcile scope and counts; offboarding blocks on holds and needs two operators before proof."
+        },
+        {
+          "title": "Export an honest security packet",
+          "description": "The content-addressed packet names providers and boundaries while marking penetration testing and certifications as not attained."
+        }
       ]
     },
     {
@@ -227,9 +406,18 @@
       "published_at": "2026-08-28",
       "summary": "Firms can capture attributed public inquiries, triage conflicts, book consultations, and follow up with explicit consent while keeping the conversion trail auditable.",
       "highlights": [
-        {"title": "Capture inquiries safely", "description": "Conditional forms accept only validated answers, resist simple spam, preserve source attribution, and deduplicate retries."},
-        {"title": "Review before conversion", "description": "Public leads require an explicit conflict decision before they can become matters; appointment booking and reminder state remain durable."},
-        {"title": "Respect communication choices", "description": "Authored email follow-up checks current consent and reports provider failure truthfully; SMS remains unavailable until its compliance controls are ready."}
+        {
+          "title": "Capture inquiries safely",
+          "description": "Conditional forms accept only validated answers, resist simple spam, preserve source attribution, and deduplicate retries."
+        },
+        {
+          "title": "Review before conversion",
+          "description": "Public leads require an explicit conflict decision before they can become matters; appointment booking and reminder state remain durable."
+        },
+        {
+          "title": "Respect communication choices",
+          "description": "Authored email follow-up checks current consent and reports provider failure truthfully; SMS remains unavailable until its compliance controls are ready."
+        }
       ]
     },
     {
@@ -420,7 +608,7 @@
           "description": "Independent scans and tenant background work can progress within bounded capacity instead of waiting behind one unrelated long-running job."
         },
         {
-          "title": "Save the reviewed PDF—not a surprise",
+          "title": "Save the reviewed PDF\u0393\u00c7\u00f6not a surprise",
           "description": "Final PDF saves recheck the exact reviewed output and clean up or quarantine staged files when storage and database results cannot be proven consistent."
         }
       ]
@@ -592,7 +780,8 @@
           "description": "Validation, confidence cues, and manual placement let you correct unfamiliar forms before creating the reusable template."
         }
       ]
-    },    {
+    },
+    {
       "id": "2026.08.26.4",
       "version": "2026.08.26.4",
       "title": "Customer cloud storage is explicit and fail-closed",
@@ -668,7 +857,7 @@
         },
         {
           "title": "Connected assistants are yours to review",
-          "description": "The guide explains the Workspace MCP list in your profile — what each connection holds, when it was last used, and how revoking one takes effect immediately."
+          "description": "The guide explains the Workspace MCP list in your profile \u0393\u00c7\u00f6 what each connection holds, when it was last used, and how revoking one takes effect immediately."
         },
         {
           "title": "Administrators can see who may connect",
@@ -679,13 +868,13 @@
     {
       "id": "2026.08.25.1",
       "version": "2026.08.25.1",
-      "title": "Workspace MCP connections respect your firm’s access settings",
+      "title": "Workspace MCP connections respect your firm\u0393\u00c7\u00d6s access settings",
       "published_at": "2026-08-25",
       "summary": "Claude, ChatGPT, Codex, and other compatible assistants can connect when your firm administrator enables Workspace MCP for your account and Privacy Mode is off.",
       "highlights": [
         {
           "title": "Firm access settings take effect directly",
-          "description": "Admin → Users now separates firm permission, effective availability, and active OAuth connections, with a drawer to review or revoke each client."
+          "description": "Admin \u0393\u00e5\u00c6 Users now separates firm permission, effective availability, and active OAuth connections, with a drawer to review or revoke each client."
         },
         {
           "title": "Your privacy choice remains independent",

@@ -207,22 +207,22 @@ def test_rehearsal_accepts_148_and_descendant_repository_heads() -> None:
         ancestry_by_head={"148_configurable_workflows": {"148_configurable_workflows"}},
     ) == ("148_configurable_workflows",)
     assert validate_revision_contract(
-        deployed_heads=("149_sms_lifecycle",),
-        repository_heads=("149_sms_lifecycle",),
+        deployed_heads=("153_sms_lifecycle",),
+        repository_heads=("153_sms_lifecycle",),
         ancestry_by_head={
-            "149_sms_lifecycle": {
+            "153_sms_lifecycle": {
                 "148_configurable_workflows",
-                "149_sms_lifecycle",
+                "153_sms_lifecycle",
             }
         },
-    ) == ("149_sms_lifecycle",)
+    ) == ("153_sms_lifecycle",)
     assert validate_revision_contract(
         deployed_heads=("150_future",),
         repository_heads=("150_future",),
         ancestry_by_head={
             "150_future": {
                 "148_configurable_workflows",
-                "149_sms_lifecycle",
+                "153_sms_lifecycle",
                 "150_future",
             }
         },
@@ -239,11 +239,11 @@ def test_rehearsal_rejects_missing_required_stale_and_partial_multi_heads() -> N
     with pytest.raises(AssertionError, match="expected deployed Alembic heads"):
         validate_revision_contract(
             deployed_heads=("148_configurable_workflows",),
-            repository_heads=("149_sms_lifecycle",),
+            repository_heads=("153_sms_lifecycle",),
             ancestry_by_head={
-                "149_sms_lifecycle": {
+                "153_sms_lifecycle": {
                     "148_configurable_workflows",
-                    "149_sms_lifecycle",
+                    "153_sms_lifecycle",
                 }
             },
         )

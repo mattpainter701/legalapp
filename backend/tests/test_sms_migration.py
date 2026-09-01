@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-MIGRATION = ROOT / "backend/migrations/versions/149_sms_lifecycle.py"
+MIGRATION = ROOT / "backend/migrations/versions/153_sms_lifecycle.py"
 OLD_MIGRATION = ROOT / "backend/migrations/versions/148_sms_lifecycle.py"
 CI = ROOT / ".github/workflows/ci.yml"
 
@@ -12,8 +12,8 @@ def test_sms_is_the_single_migration_after_configurable_workflows():
 
     assert MIGRATION.exists()
     assert not OLD_MIGRATION.exists()
-    assert 'revision = "149_sms_lifecycle"' in source
-    assert 'down_revision = "148_configurable_workflows"' in source
+    assert 'revision = "153_sms_lifecycle"' in source
+    assert 'down_revision = "150_studio_render_jobs"' in source
     assert '"sms_revoked_at"' in source
     for immutable_snapshot_field in (
         '"phone_verified"',
@@ -166,9 +166,9 @@ def test_ci_rehearses_sms_from_148_with_149_as_the_canonical_head():
 
     assert "sms-lifecycle-rehearsal:" in source
     assert "alembic upgrade 148_configurable_workflows" in source
-    assert "alembic upgrade 149_sms_lifecycle" in source
+    assert "alembic upgrade 153_sms_lifecycle" in source
     assert "rehearse_demo_purge_schema_guard.py --expected all" in source
-    assert "149_sms_lifecycle" in (ROOT / "backend/tests/test_migrations.py").read_text(
+    assert "153_sms_lifecycle" in (ROOT / "backend/tests/test_migrations.py").read_text(
         encoding="utf-8"
     )
     assert "test_sms_lifecycle_db.py" in source
@@ -178,10 +178,10 @@ def test_ci_rehearses_sms_from_148_with_149_as_the_canonical_head():
     assert "legacy_fk_count <> 1" in source
     assert "composite_fk_count <> 0" in source
     assert "v2_column_count <> 0" in source
-    migration = job.index("alembic upgrade 149_sms_lifecycle")
+    migration = job.index("alembic upgrade 153_sms_lifecycle")
     purge_guard = job.index("rehearse_demo_purge_schema_guard.py --expected all")
     downgrade = job.index("alembic downgrade 148_configurable_workflows")
-    reupgrade = job.index("alembic upgrade 149_sms_lifecycle", downgrade)
+    reupgrade = job.index("alembic upgrade 153_sms_lifecycle", downgrade)
     runtime_role = job.index("Provision a production-shaped SMS runtime role")
     pytest_rehearsal = job.index("python -m pytest -vv")
     assert (

@@ -14,6 +14,16 @@ When a firm explicitly enables the Windows helper, authorized Firm Memory result
 - **Open with one-time authorization.** Each action uses a short-lived, single-use request bound to the tenant, user, source file, assigned agent, revision, and requested action.
 - **Keep network paths local.** The browser and launch link carry no UNC, file, or SMB path; the local agent resolves the opaque source identity only after redemption.
 - **Honor current Windows access.** Windows rechecks reachability and the signed-in user's SMB/NTFS access; moved, expired, offline, and denied requests fail closed with a copy-path fallback.
+## 2026.09.01.1 — Consent-aware SMS with review and opt-out controls
+
+Released September 1, 2026.
+
+Firms can configure provider-backed SMS that stays reviewable, consent-bound, tenant-scoped, and honest about provider acceptance and delivery.
+
+- **Send only with current consent.** Each outbound message rechecks verified phone ownership, consent provenance, approved message category, quiet hours, matter access, and provider configuration.
+- **Honor replies and opt-outs safely.** Signed inbound messages require an active owned sender, handle STOP, START, and HELP, deduplicate retries, and route ambiguous matches to staff review.
+- **Keep provider truth distinct.** Exact-generation callbacks and reconciliation update authorized timeline evidence without regressing known truth; provider acceptance remains distinct from confirmed delivery.
+- **Review assistant proposals first.** Workspace SMS proposals require current matter access and an explicit retry key, stay inside LawHand instead of email or third-party calendars, and cannot dispatch autonomously.
 
 ## 2026.08.31.6 — Durable Template Studio preview processing
 
@@ -25,16 +35,6 @@ Template Studio now has a tenant-isolated durable job and artifact foundation fo
 - **Keep evidence exact.** Completed output is hash-verified and can become current evidence only when the immutable snapshot, draft revision, and identity still match.
 - **Protect private document data.** Job metadata excludes document values, bytes, storage paths, provider identifiers, signed URLs, and raw exception text.
 - **Keep activation review-gated.** The production worker remains disabled until encrypted CAS backup and restore rehearsal are added to the release gate.
-## 2026.08.31.6 — Consent-aware SMS with review and opt-out controls
-
-Released August 31, 2026.
-
-Firms can configure provider-backed SMS that stays reviewable, consent-bound, tenant-scoped, and honest about provider acceptance and delivery.
-
-- **Send only with current consent.** Each outbound message rechecks verified phone ownership, consent provenance, approved message category, quiet hours, matter access, and provider configuration.
-- **Honor replies and opt-outs safely.** Signed inbound messages require an active owned sender, handle STOP, START, and HELP, deduplicate retries, and route ambiguous matches to staff review.
-- **Keep provider truth distinct.** Exact-generation callbacks and reconciliation update authorized timeline evidence without regressing known truth; provider acceptance remains distinct from confirmed delivery.
-- **Review assistant proposals first.** Workspace SMS proposals require current matter access and an explicit retry key, stay inside LawHand instead of email or third-party calendars, and cannot dispatch autonomously.
 
 ## 2026.08.31.5 — Revalidate authority evidence before alerts
 
@@ -291,7 +291,7 @@ Firms can navigate larger template libraries, see readiness at a glance, and kee
 - **Find the right template faster.** Search titles and descriptions, filter by status or category, and move through a paged library without loading every template at once.
 - **See what needs attention.** Library health cards distinguish ready templates, drafts, and binary templates whose original source must be restored before use.
 - **Keep concurrent work moving.** Independent scans and tenant background work can progress within bounded capacity instead of waiting behind one unrelated long-running job.
-- **Save the reviewed PDF—not a surprise.** Final PDF saves recheck the exact reviewed output and clean up or quarantine staged files when storage and database results cannot be proven consistent.
+- **Save the reviewed PDFΓÇönot a surprise.** Final PDF saves recheck the exact reviewed output and clean up or quarantine staged files when storage and database results cannot be proven consistent.
 
 ## 2026.08.27.8 — Connected assistants can prepare complete matter work for review
 
@@ -410,16 +410,16 @@ Released August 26, 2026.
 The in-product guides explain how matter email reaches a file and how to review or revoke an external assistant connected to your workspace.
 
 - **Matter email is documented end to end.** The user guide covers the Correspondence tab: capture rules and Scan now, forwarding addresses for a matter, and the queue where you file or reject a message.
-- **Connected assistants are yours to review.** The guide explains the Workspace MCP list in your profile — what each connection holds, when it was last used, and how revoking one takes effect immediately.
+- **Connected assistants are yours to review.** The guide explains the Workspace MCP list in your profile ΓÇö what each connection holds, when it was last used, and how revoking one takes effect immediately.
 - **Administrators can see who may connect.** The administrative guide covers the per-user Workspace MCP control, the default for new accounts, and how consent-based access differs from a scoped product key.
 
-## 2026.08.25.1 — Workspace MCP connections respect your firm’s access settings
+## 2026.08.25.1 — Workspace MCP connections respect your firmΓÇÖs access settings
 
 Released August 25, 2026.
 
 Claude, ChatGPT, Codex, and other compatible assistants can connect when your firm administrator enables Workspace MCP for your account and Privacy Mode is off.
 
-- **Firm access settings take effect directly.** Admin → Users now separates firm permission, effective availability, and active OAuth connections, with a drawer to review or revoke each client.
+- **Firm access settings take effect directly.** Admin ΓåÆ Users now separates firm permission, effective availability, and active OAuth connections, with a drawer to review or revoke each client.
 - **Your privacy choice remains independent.** Privacy Mode continues to pause external assistants, and turning it off allows a new explicit OAuth connection when firm access is enabled.
 - **Security boundaries remain enforced.** Active account, license, consent scope, role capability, token revocation, and tenant isolation checks still apply to every request.
 

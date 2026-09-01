@@ -366,8 +366,8 @@ jobs:
       - name: Upgrade to the sole SMS head and verify rerun safety
         working-directory: backend
         run: |
-          alembic upgrade 149_sms_lifecycle
-          alembic upgrade 149_sms_lifecycle
+          alembic upgrade 153_sms_lifecycle
+          alembic upgrade 153_sms_lifecycle
       - name: Verify current purge sees the complete SMS schema family
         run: python backend/scripts/rehearse_demo_purge_schema_guard.py --expected all
       - name: Rehearse SMS expand-contract downgrade compatibility
@@ -403,7 +403,7 @@ jobs:
             END IF;
           END $$;
           SQL
-          alembic upgrade 149_sms_lifecycle
+          alembic upgrade 153_sms_lifecycle
       - name: Provision a production-shaped SMS runtime role
         env:
           PGPASSWORD: test
