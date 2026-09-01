@@ -24,7 +24,10 @@ describe('UnifiedFirmMemoryPage', () => {
     vi.clearAllMocks()
     window.history.replaceState({}, '', '/firm-memory')
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn().mockResolvedValue(undefined) } })
-    getMattersV2.mockResolvedValue({ items: [{ id: 'matter-1', name: 'Acme v. Northstar' }] })
+    getMattersV2.mockResolvedValue({ items: [
+      { id: 'matter-1', name: 'Acme v. Northstar' },
+      { id: 'matter-2', name: 'Rivera Estate' },
+    ] })
     listAuthorizedDocumentSources.mockResolvedValue([
       { id: 'source-local', label: 'Legacy archive', kind: 'on_prem', share: 'Cases', shareId: 'share-1', provider: '', providerId: '' },
       { id: 'source-cloud', label: 'SharePoint', kind: 'cloud', share: '', shareId: '', provider: 'Microsoft 365', providerId: 'm365' },
@@ -81,6 +84,30 @@ describe('UnifiedFirmMemoryPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /search firm memory/i }))
     expect(await screen.findByRole('heading', { name: 'No matches in available sources' })).toBeInTheDocument()
     expect(screen.getByText('Archive agent is offline.')).toBeInTheDocument()
+  })
+
+  it('clears source-dependent filters when the matter changes', async () => {
+    listAuthorizedDocumentSources.mockImplementation((matterIds) => Promise.resolve(
+      matterIds[0] === 'matter-2'
+        ? [{ id: 'source-rivera', label: 'Rivera archive', kind: 'on_prem', share: 'Rivera', shareId: 'share-2', provider: '', providerId: '' }]
+        : [
+          { id: 'source-local', label: 'Legacy archive', kind: 'on_prem', share: 'Cases', shareId: 'share-1', provider: '', providerId: '' },
+          { id: 'source-cloud', label: 'SharePoint', kind: 'cloud', share: '', shareId: '', provider: 'Microsoft 365', providerId: 'm365' },
+        ],
+    ))
+    render(<UnifiedFirmMemoryPage />)
+    await screen.findByRole('option', { name: 'Legacy archive' })
+    fireEvent.change(screen.getByLabelText('Source filter'), { target: { value: 'source-local' } })
+    fireEvent.change(screen.getByLabelText('File share filter'), { target: { value: 'share-1' } })
+    fireEvent.change(screen.getByLabelText('Cloud provider filter'), { target: { value: 'm365' } })
+
+    fireEvent.change(screen.getByLabelText('Matter filter'), { target: { value: 'matter-2' } })
+
+    expect(screen.getByLabelText('Source filter')).toHaveValue('')
+    expect(screen.getByLabelText('File share filter')).toHaveValue('')
+    expect(screen.getByLabelText('Cloud provider filter')).toHaveValue('')
+    await waitFor(() => expect(listAuthorizedDocumentSources).toHaveBeenLastCalledWith(['matter-2']))
+    expect(await screen.findByRole('option', { name: 'Rivera archive' })).toBeInTheDocument()
   })
 
   it('shows unsupported coverage without collapsing it to a generic ready state', async () => {

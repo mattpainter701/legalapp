@@ -79,6 +79,23 @@ describe('document search client contract', () => {
     expect(unauthorized.coverage.state).toBe('unauthorized')
   })
 
+  it('fails closed when complete coverage is empty or was not searched', () => {
+    expect(normalizeDocumentSearchResponse({ complete: true, partial: false, coverage: [] }).coverage).toMatchObject({
+      state: 'partial',
+      complete: false,
+    })
+    expect(normalizeDocumentSearchResponse({
+      complete: true,
+      partial: false,
+      coverage: [{ source_id: 'source-1', state: 'ready', searched: false }],
+    }).coverage).toMatchObject({ state: 'partial', complete: false })
+    expect(normalizeDocumentSearchResponse({
+      complete: true,
+      partial: false,
+      coverage: [{ source_id: 'source-1', state: 'ready', searched: true }],
+    }).coverage).toMatchObject({ state: 'ready', complete: true })
+  })
+
   it('posts only the normalized request to the foundation endpoint', async () => {
     api.post.mockResolvedValue({ data: { coverage: { state: 'ready', complete: true }, results: [] } })
     await searchAuthorizedDocuments({ query: 'indemnity', scope: 'all' })

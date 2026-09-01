@@ -32,8 +32,11 @@ function normalizeCoverage(raw = [], response = {}) {
     }
   })
   const states = sources.map((source) => source.state)
-  const complete = response.complete === true && response.partial !== true
-  const state = complete && states.every((value) => value === 'ready')
+  const complete = response.complete === true
+    && response.partial !== true
+    && sources.length > 0
+    && sources.every((source) => source.state === 'ready' && source.searched)
+  const state = complete
     ? 'ready'
     : (['unauthorized', 'unsupported', 'offline', 'indexing', 'stale'].find((value) => states.includes(value)) || 'partial')
   return {

@@ -181,6 +181,12 @@ export default function UnifiedFirmMemoryPage() {
     return () => { active = false }
   }, [matterId])
 
+  useEffect(() => {
+    setSourceId((current) => current && sources.some((source) => source.id === current) ? current : '')
+    setShareId((current) => current && sources.some((source) => source.shareId === current) ? current : '')
+    setProviderId((current) => current && sources.some((source) => source.providerId === current) ? current : '')
+  }, [sources])
+
   const shares = useMemo(() => sources.filter((source) => source.kind === 'on_prem' && source.shareId), [sources])
   const providers = useMemo(() => {
     const unique = new Map()
@@ -191,6 +197,13 @@ export default function UnifiedFirmMemoryPage() {
   const toggleFileType = (fileType) => setFileTypes((current) => (
     current.includes(fileType) ? current.filter((item) => item !== fileType) : [...current, fileType]
   ))
+
+  const changeMatter = (value) => {
+    setMatterId(value)
+    setSourceId('')
+    setShareId('')
+    setProviderId('')
+  }
 
   const runSearch = useCallback(async (event) => {
     event?.preventDefault()
@@ -270,7 +283,7 @@ export default function UnifiedFirmMemoryPage() {
               </select>
             </label>
             <label className="text-sm font-medium text-brand-ink">Matter <span className="font-normal text-brand-muted">(optional)</span>
-              <select aria-label="Matter filter" value={matterId} onChange={(event) => setMatterId(event.target.value)} className="mt-2 h-11 w-full rounded-xl border border-brand-line-2 bg-white px-3 text-sm">
+              <select aria-label="Matter filter" value={matterId} onChange={(event) => changeMatter(event.target.value)} className="mt-2 h-11 w-full rounded-xl border border-brand-line-2 bg-white px-3 text-sm">
                 <option value="">All matters and unlinked documents</option>
                 {matters.map((matter) => <option key={matter.id} value={matter.id}>{matterName(matter)}</option>)}
               </select>

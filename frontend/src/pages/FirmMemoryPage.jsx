@@ -194,5 +194,7 @@ export function MatterFirmMemoryPage() {
 }
 
 export default function FirmMemoryPage({ unifiedEnabled = false }) {
-  return unifiedEnabled ? <UnifiedFirmMemoryPage /> : <MatterFirmMemoryPage />
+  const search = new URLSearchParams(window.location.search)
+  const hasLegacyDeepLink = Boolean(search.get('matter') && search.get('file'))
+  return unifiedEnabled && !hasLegacyDeepLink ? <UnifiedFirmMemoryPage /> : <MatterFirmMemoryPage />
 }
