@@ -2038,7 +2038,7 @@ class _StudioRenderJobStore:
         object_store: StudioObjectStore,
         max_bytes: int,
     ) -> StudioRenderArtifactContent:
-        """Read verified output while the completed artifact row remains locked."""
+        """Read verified output with post-I/O reauthorization and expiry fencing."""
 
         if (
             isinstance(max_bytes, bool)
@@ -2104,9 +2104,13 @@ class _StudioRenderJobStore:
                 STUDIO_PUBLIC_FAILURES["storage_integrity_failed"],
                 durable_state_changed=True,
             ) from exc
+        fresh_status = await self.artifact_result(artifact_id)
+        if fresh_status.artifact_availability == "expired":
+            raise StudioRenderServiceError(
+                410, "artifact_expired", "The Studio artifact has expired."
+            )
         if (
-            (fresh_status := await self.artifact_result(artifact_id)).output_sha256
-            != status.output_sha256
+            fresh_status.output_sha256 != status.output_sha256
             or fresh_status.output_media_type != status.output_media_type
             or fresh_status.output_byte_size != status.output_byte_size
         ):
