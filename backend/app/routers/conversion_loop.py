@@ -436,6 +436,7 @@ async def update_consent(
             Contact.id == lead.contact_id,
             Contact.tenant_id == current_user.tenant_id,
         )
+        .execution_options(populate_existing=True)
         .with_for_update()
     )
     if body.sms_allowed:

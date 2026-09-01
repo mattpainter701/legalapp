@@ -159,6 +159,7 @@ async def _seed_lifecycle(
     phone: str = "+15551234567",
     auth_token: str | None = None,
     categories: list[str] | None = None,
+    reuse_provider_config: bool = False,
 ):
     await set_tenant_context(db, str(tenant.id))
     # Production tenant creation always seeds and assigns canonical RBAC roles.
@@ -217,23 +218,35 @@ async def _seed_lifecycle(
         role="client",
         is_primary=True,
     )
-    provider_token = auth_token or f"auth-token-{suffix}"
-    config = SmsProviderConfig(
-        tenant_id=tenant.id,
-        provider="twilio",
-        account_sid=f"AC{suffix}",
-        encrypted_auth_token=encrypt_token(provider_token),
-        messaging_service_sid=f"MG{suffix}",
-        sender_ready=True,
-        is_active=True,
-        compliance_snapshot={
-            "ownership_model": "firm-owned",
-            "consent_policy": "documented-opt-in",
-            "quiet_hours_policy": "recipient-timezone",
-        },
-        updated_by_user_id=user.id,
-    )
-    db.add_all([consent, party, config])
+    db.add_all([consent, party])
+    if reuse_provider_config:
+        config = await db.scalar(
+            select(SmsProviderConfig).where(
+                SmsProviderConfig.tenant_id == tenant.id,
+                SmsProviderConfig.provider == "twilio",
+            )
+        )
+        if config is None:
+            raise AssertionError("provider config must exist before reuse")
+        provider_token = sms_service.provider_auth_token(config)
+    else:
+        provider_token = auth_token or f"auth-token-{suffix}"
+        config = SmsProviderConfig(
+            tenant_id=tenant.id,
+            provider="twilio",
+            account_sid=f"AC{suffix}",
+            encrypted_auth_token=encrypt_token(provider_token),
+            messaging_service_sid=f"MG{suffix}",
+            sender_ready=True,
+            is_active=True,
+            compliance_snapshot={
+                "ownership_model": "firm-owned",
+                "consent_policy": "documented-opt-in",
+                "quiet_hours_policy": "recipient-timezone",
+            },
+            updated_by_user_id=user.id,
+        )
+        db.add(config)
     await db.flush()
     await sms_service.ensure_provider_config_credential(db, config=config)
     await db.commit()
@@ -1729,7 +1742,11 @@ async def test_stop_and_staff_regrant_serialize_in_both_orders(
         user=test_user,
         suffix="stop-regrant-grant-first",
         phone="+15551234582",
+        reuse_provider_config=True,
     )
+    regrant_tenant_id = test_tenant.id
+    regrant_consent_id = regrant_first.consent.id
+    regrant_phone = regrant_first.contact.phone
     audit_reached = asyncio.Event()
     release_regrant = asyncio.Event()
     original_audit = conversion_router.record_operator_audit
@@ -1775,19 +1792,112 @@ async def test_stop_and_staff_regrant_serialize_in_both_orders(
     stopped = await asyncio.wait_for(stop_task, timeout=5)
     assert stopped["applied"] is True
 
-    await set_tenant_context(db_session, str(test_tenant.id))
+    await set_tenant_context(db_session, str(regrant_tenant_id))
     db_session.expire_all()
-    final_consent = await db_session.get(LeadChannelConsent, regrant_first.consent.id)
+    final_consent = await db_session.get(LeadChannelConsent, regrant_consent_id)
     final_suppression = await db_session.scalar(
         select(SmsNumberSuppression).where(
-            SmsNumberSuppression.tenant_id == test_tenant.id,
-            SmsNumberSuppression.mobile_e164 == regrant_first.contact.phone,
+            SmsNumberSuppression.tenant_id == regrant_tenant_id,
+            SmsNumberSuppression.mobile_e164 == regrant_phone,
         )
     )
     assert final_consent.sms_allowed is False
     assert final_consent.sms_status == "opted_out"
     assert final_consent.sms_revoked_at is not None
     assert final_suppression.is_suppressed is True
+
+
+@pytest.mark.asyncio
+async def test_staff_consent_refreshes_contact_after_concurrent_phone_change(
+    db_session, test_engine, client, test_tenant, test_user, monkeypatch
+):
+    seeded = await _seed_lifecycle(
+        db_session,
+        tenant=test_tenant,
+        user=test_user,
+        suffix="consent-phone-refresh",
+        phone="+15551234601",
+    )
+    seeded.contact.sms_opt_in = False
+    seeded.contact.sms_opt_in_at = None
+    seeded.consent.sms_allowed = False
+    seeded.consent.sms_status = "unknown"
+    seeded.consent.phone_verified = False
+    seeded.consent.mobile_e164 = None
+    seeded.consent.consented_at = None
+    seeded.consent.sms_revoked_at = datetime.now(timezone.utc)
+    seeded.consent.disclosure_version = "sms-prior-v1"
+    await db_session.commit()
+    tenant_id = test_tenant.id
+    consent_id = seeded.consent.id
+    original_phone = seeded.contact.phone
+    fence_entered = asyncio.Event()
+    release_fence = asyncio.Event()
+    original_number_lock = conversion_router.lock_sms_number_suppression
+
+    async def pause_after_number_lock(*args, **kwargs):
+        suppression = await original_number_lock(*args, **kwargs)
+        fence_entered.set()
+        await release_fence.wait()
+        return suppression
+
+    monkeypatch.setattr(
+        conversion_router,
+        "lock_sms_number_suppression",
+        pause_after_number_lock,
+    )
+    payload = {
+        "email_allowed": True,
+        "sms_allowed": True,
+        "phone_verified": True,
+        "mobile_e164": original_phone,
+        "disclosure_version": "sms-racing-grant-v2",
+        "consent_source": "signed_fee_agreement",
+        "consent_language": "en",
+        "consent_timezone": "America/Chicago",
+        "quiet_hours_start": "21:00",
+        "quiet_hours_end": "07:00",
+        "allowed_categories": ["appointment"],
+        "consent_expires_at": (
+            datetime.now(timezone.utc) + timedelta(days=180)
+        ).isoformat(),
+    }
+    update_task = asyncio.create_task(
+        client.post(
+            f"/api/intake/leads/{seeded.lead.id}/consent",
+            json=payload,
+        )
+    )
+    await asyncio.wait_for(fence_entered.wait(), timeout=5)
+
+    maker = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with maker() as mutation_db:
+        await set_tenant_context(mutation_db, str(test_tenant.id))
+        contact = await mutation_db.scalar(
+            select(Contact).where(
+                Contact.id == seeded.contact.id,
+                Contact.tenant_id == test_tenant.id,
+            )
+        )
+        contact.phone = "+15551234602"
+        await mutation_db.commit()
+
+    assert seeded.contact.phone == original_phone
+    release_fence.set()
+    response = await asyncio.wait_for(update_task, timeout=5)
+    assert response.status_code == 409
+    assert "mobile changed" in str(response.json()["detail"])
+    await db_session.rollback()
+    await set_tenant_context(db_session, str(tenant_id))
+    db_session.expire_all()
+    consent = await db_session.get(LeadChannelConsent, consent_id)
+    assert consent.sms_allowed is False
+    assert consent.sms_status == "unknown"
+    assert consent.phone_verified is False
+    assert consent.mobile_e164 is None
+    assert consent.consented_at is None
+    assert consent.sms_revoked_at is not None
+    assert consent.disclosure_version == "sms-prior-v1"
 
 
 @pytest.mark.asyncio
@@ -1924,6 +2034,7 @@ async def test_matter_party_authorization_serializes_with_dispatch_in_both_order
         user=test_user,
         suffix="party-send-first",
         phone="+15551234568",
+        reuse_provider_config=True,
     )
     send_first.matter.client_contact_id = None
     await db_session.commit()
@@ -7444,6 +7555,189 @@ async def test_insert_race_winner_reauthorizes_before_replay_truth(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mutation", ["contact_deactivate", "contact_phone", "consent", "matter"]
+)
+async def test_target_change_committed_before_final_fence_refreshes_retained_rows(
+    mutation,
+    db_session,
+    test_engine,
+    test_tenant,
+    test_user,
+    monkeypatch,
+):
+    seeded = await _seed_lifecycle(
+        db_session,
+        tenant=test_tenant,
+        user=test_user,
+        suffix=f"target-before-{mutation}",
+        phone={
+            "contact_deactivate": "+15551234595",
+            "contact_phone": "+15551234599",
+            "consent": "+15551234596",
+            "matter": "+15551234597",
+        }[mutation],
+    )
+    replacement_contact = None
+    if mutation == "matter":
+        replacement_contact = Contact(
+            tenant_id=test_tenant.id,
+            first_name="Replacement",
+            last_name="Client",
+            email="replacement-client@example.invalid",
+            phone="+15551234598",
+            created_by_user_id=test_user.id,
+        )
+        db_session.add(replacement_contact)
+        await db_session.commit()
+
+    fence_entered = asyncio.Event()
+    release_fence = asyncio.Event()
+    original_number_lock = sms_service.lock_sms_number_suppression
+
+    async def pause_after_reservation(*args, **kwargs):
+        suppression = await original_number_lock(*args, **kwargs)
+        fence_entered.set()
+        await release_fence.wait()
+        return suppression
+
+    monkeypatch.setattr(
+        sms_service,
+        "lock_sms_number_suppression",
+        pause_after_reservation,
+    )
+
+    async def accepted(**_kwargs):
+        return _Response(
+            201,
+            {
+                "sid": f"SM-TARGET-BEFORE-{mutation}",
+                "status": "queued",
+                "from": "+15550001111",
+            },
+        )
+
+    provider = _Provider(accepted)
+    _install_provider(monkeypatch, provider)
+    maker = async_sessionmaker(test_engine, expire_on_commit=False)
+    retained_rows = {}
+
+    async def dispatch():
+        async with maker() as send_db:
+            await set_tenant_context(send_db, str(test_tenant.id))
+            retained_rows["contact"] = await send_db.scalar(
+                select(Contact).where(
+                    Contact.id == seeded.contact.id,
+                    Contact.tenant_id == test_tenant.id,
+                )
+            )
+            retained_rows["consent"] = await send_db.scalar(
+                select(LeadChannelConsent).where(
+                    LeadChannelConsent.id == seeded.consent.id,
+                    LeadChannelConsent.tenant_id == test_tenant.id,
+                )
+            )
+            retained_rows["matter"] = await send_db.scalar(
+                select(Matter).where(
+                    Matter.id == seeded.matter.id,
+                    Matter.tenant_id == test_tenant.id,
+                )
+            )
+            return await send_sms(
+                send_db,
+                tenant_id=test_tenant.id,
+                user_id=test_user.id,
+                contact_id=seeded.contact.id,
+                matter_id=seeded.matter.id,
+                body=f"Target mutation before final fence {mutation}",
+                category="appointment",
+                idempotency_key=f"target-before-final-{mutation}",
+            )
+
+    sending = asyncio.create_task(dispatch())
+    await asyncio.wait_for(fence_entered.wait(), timeout=5)
+    async with maker() as mutation_db:
+        await set_tenant_context(mutation_db, str(test_tenant.id))
+        if mutation == "contact_deactivate":
+            row = await mutation_db.scalar(
+                select(Contact).where(
+                    Contact.id == seeded.contact.id,
+                    Contact.tenant_id == test_tenant.id,
+                )
+            )
+            row.is_active = False
+        elif mutation == "contact_phone":
+            row = await mutation_db.scalar(
+                select(Contact).where(
+                    Contact.id == seeded.contact.id,
+                    Contact.tenant_id == test_tenant.id,
+                )
+            )
+            row.phone = "+15551234600"
+        elif mutation == "consent":
+            row = await mutation_db.scalar(
+                select(LeadChannelConsent).where(
+                    LeadChannelConsent.id == seeded.consent.id,
+                    LeadChannelConsent.tenant_id == test_tenant.id,
+                )
+            )
+            row.sms_allowed = False
+            row.sms_status = "unknown"
+            row.phone_verified = False
+            row.mobile_e164 = None
+            row.consented_at = None
+            row.sms_revoked_at = datetime.now(timezone.utc)
+        else:
+            row = await mutation_db.scalar(
+                select(Matter).where(
+                    Matter.id == seeded.matter.id,
+                    Matter.tenant_id == test_tenant.id,
+                )
+            )
+            row.client_contact_id = replacement_contact.id
+            await mutation_db.execute(
+                delete(MatterParty).where(
+                    MatterParty.id == seeded.party.id,
+                    MatterParty.tenant_id == test_tenant.id,
+                )
+            )
+        await mutation_db.commit()
+
+    if mutation == "contact_deactivate":
+        assert retained_rows["contact"].is_active is True
+    elif mutation == "contact_phone":
+        assert retained_rows["contact"].phone == seeded.consent.mobile_e164
+    elif mutation == "consent":
+        assert retained_rows["consent"].sms_allowed is True
+        assert retained_rows["consent"].sms_revoked_at is None
+    else:
+        assert retained_rows["matter"].client_contact_id == seeded.contact.id
+    release_fence.set()
+    with pytest.raises(SmsError) as blocked:
+        await asyncio.wait_for(sending, timeout=5)
+    expected_code = (
+        "sms_matter_authorization_changed"
+        if mutation == "matter"
+        else "sms_consent_changed"
+    )
+    assert blocked.value.code == expected_code
+    assert provider.calls == []
+    await set_tenant_context(db_session, str(test_tenant.id))
+    db_session.expire_all()
+    message = await db_session.scalar(
+        select(SmsMessage).where(
+            SmsMessage.idempotency_key == f"target-before-final-{mutation}"
+        )
+    )
+    assert message.status == (
+        "blocked_matter_authorization_changed"
+        if mutation == "matter"
+        else "blocked_consent_changed"
+    )
+    assert message.delivery_certainty == "not_attempted"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("mutation", ["deactivate", "revoke"])
 async def test_actor_change_committed_before_final_fence_blocks_provider_dispatch(
     mutation,
@@ -7496,10 +7790,25 @@ async def test_actor_change_committed_before_final_fence_blocks_provider_dispatc
     provider = _Provider(accepted)
     _install_provider(monkeypatch, provider)
     maker = async_sessionmaker(test_engine, expire_on_commit=False)
+    retained_rows = {}
 
     async def dispatch():
         async with maker() as send_db:
             await set_tenant_context(send_db, str(test_tenant.id))
+            # Mirror an authenticated request session that already owns live
+            # ORM identities and retains them across the reservation commit.
+            retained_rows["actor"] = await send_db.scalar(
+                select(User).where(
+                    User.id == test_user.id,
+                    User.tenant_id == test_tenant.id,
+                )
+            )
+            retained_rows["role"] = await send_db.scalar(
+                select(Role).where(
+                    Role.id == role_id,
+                    Role.tenant_id == test_tenant.id,
+                )
+            )
             return await send_sms(
                 send_db,
                 tenant_id=test_tenant.id,
@@ -7520,6 +7829,10 @@ async def test_actor_change_committed_before_final_fence_blocks_provider_dispatc
         role_id=role_id,
         mutation=mutation,
     )
+    if mutation == "deactivate":
+        assert retained_rows["actor"].is_active is True
+    else:
+        assert "manage_matters" in retained_rows["role"].capabilities
     release_fence.set()
     with pytest.raises(SmsError) as blocked:
         await asyncio.wait_for(sending, timeout=5)

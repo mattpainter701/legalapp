@@ -281,6 +281,7 @@ async def _lock_sms_actor(
     user = await db.scalar(
         select(User)
         .where(User.id == user_id, User.tenant_id == tenant_id)
+        .execution_options(populate_existing=True)
         .with_for_update()
     )
     if user is None or not user.is_active:
@@ -298,6 +299,7 @@ async def _lock_sms_actor(
                 Role.tenant_id == tenant_id,
             )
             .order_by(Role.id, UserRole.id)
+            .execution_options(populate_existing=True)
             .with_for_update(of=(UserRole, Role))
         )
     ).all()
@@ -321,6 +323,7 @@ async def _lock_sms_matter_access(
     matter = await db.scalar(
         select(Matter)
         .where(Matter.id == matter_id, Matter.tenant_id == tenant_id)
+        .execution_options(populate_existing=True)
         .with_for_update(of=Matter)
     )
     if matter is None:
@@ -874,7 +877,9 @@ async def load_sms_consents(
         .order_by(LeadChannelConsent.id)
     )
     if lock:
-        statement = statement.with_for_update(of=LeadChannelConsent)
+        statement = statement.execution_options(populate_existing=True).with_for_update(
+            of=LeadChannelConsent
+        )
     return list((await db.scalars(statement)).all())
 
 
@@ -912,6 +917,7 @@ async def lock_sms_number_suppression(
             SmsNumberSuppression.tenant_id == tenant_id,
             SmsNumberSuppression.mobile_e164 == normalized,
         )
+        .execution_options(populate_existing=True)
         .with_for_update()
     )
     if row is None:
@@ -991,6 +997,7 @@ async def apply_compliance_keyword(
                         Contact.id.in_(matched_contact_ids),
                     )
                     .order_by(Contact.id)
+                    .execution_options(populate_existing=True)
                     .with_for_update()
                 )
             ).all()
@@ -1014,6 +1021,7 @@ async def apply_compliance_keyword(
                 Lead.contact_id.in_(contact_ids),
             )
             .order_by(LeadChannelConsent.id)
+            .execution_options(populate_existing=True)
             .with_for_update(of=LeadChannelConsent)
         )
         consents = list((await db.scalars(statement)).all())
@@ -1763,6 +1771,7 @@ async def send_sms(
     locked_contact = await db.scalar(
         select(Contact)
         .where(Contact.id == contact_id, Contact.tenant_id == tenant_id)
+        .execution_options(populate_existing=True)
         .with_for_update()
     )
     locked_consent = (
