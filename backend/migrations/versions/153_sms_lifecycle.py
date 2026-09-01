@@ -4,8 +4,8 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
-revision = "149_sms_lifecycle"
-down_revision = "148_configurable_workflows"
+revision = "153_sms_lifecycle"
+down_revision = "150_studio_render_jobs"
 branch_labels = None
 depends_on = None
 
