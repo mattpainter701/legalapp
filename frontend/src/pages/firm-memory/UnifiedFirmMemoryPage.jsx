@@ -54,6 +54,11 @@ function sourceKind(source) {
   return source?.kind === 'on_prem' || source?.kind === 'local' ? 'on_prem' : 'cloud'
 }
 
+function sourceMatchesScope(source, scope) {
+  if (scope === DOCUMENT_SEARCH_SCOPES.ALL) return true
+  return sourceKind(source) === scope
+}
+
 function sameOriginHref(value) {
   if (!value) return ''
   try {
@@ -188,6 +193,7 @@ export default function UnifiedFirmMemoryPage() {
   }, [sources])
 
   const shares = useMemo(() => sources.filter((source) => source.kind === 'on_prem' && source.shareId), [sources])
+  const scopedSources = useMemo(() => sources.filter((source) => sourceMatchesScope(source, scope)), [scope, sources])
   const providers = useMemo(() => {
     const unique = new Map()
     sources.filter((source) => source.kind === 'cloud' && source.providerId).forEach((source) => unique.set(source.providerId, source.provider || source.label))
@@ -203,6 +209,13 @@ export default function UnifiedFirmMemoryPage() {
     setSourceId('')
     setShareId('')
     setProviderId('')
+  }
+
+  const changeScope = (value) => {
+    setScope(value)
+    setSourceId((current) => current && sources.some((source) => source.id === current && sourceMatchesScope(source, value)) ? current : '')
+    if (value === DOCUMENT_SEARCH_SCOPES.CLOUD) setShareId('')
+    if (value === DOCUMENT_SEARCH_SCOPES.ON_PREM) setProviderId('')
   }
 
   const runSearch = useCallback(async (event) => {
@@ -276,7 +289,7 @@ export default function UnifiedFirmMemoryPage() {
 
           <div className="mt-4 grid gap-4 md:grid-cols-3">
             <label className="text-sm font-medium text-brand-ink">Search scope
-              <select aria-label="Search scope" value={scope} onChange={(event) => setScope(event.target.value)} className="mt-2 h-11 w-full rounded-xl border border-brand-line-2 bg-white px-3 text-sm">
+              <select aria-label="Search scope" value={scope} onChange={(event) => changeScope(event.target.value)} className="mt-2 h-11 w-full rounded-xl border border-brand-line-2 bg-white px-3 text-sm">
                 <option value={DOCUMENT_SEARCH_SCOPES.ALL}>All authorized sources</option>
                 <option value={DOCUMENT_SEARCH_SCOPES.ON_PREM}>On-prem file shares</option>
                 <option value={DOCUMENT_SEARCH_SCOPES.CLOUD}>Cloud sources</option>
@@ -291,7 +304,7 @@ export default function UnifiedFirmMemoryPage() {
             <label className="text-sm font-medium text-brand-ink">Source <span className="font-normal text-brand-muted">(optional)</span>
               <select aria-label="Source filter" value={sourceId} onChange={(event) => setSourceId(event.target.value)} className="mt-2 h-11 w-full rounded-xl border border-brand-line-2 bg-white px-3 text-sm">
                 <option value="">All authorized sources</option>
-                {sources.map((source) => <option key={source.id} value={source.id}>{source.label}</option>)}
+                {scopedSources.map((source) => <option key={source.id} value={source.id}>{source.label}</option>)}
               </select>
             </label>
             <label className="text-sm font-medium text-brand-ink">File share <span className="font-normal text-brand-muted">(optional)</span>

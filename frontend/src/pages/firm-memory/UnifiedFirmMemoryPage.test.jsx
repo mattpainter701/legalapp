@@ -110,6 +110,24 @@ describe('UnifiedFirmMemoryPage', () => {
     expect(await screen.findByRole('option', { name: 'Rivera archive' })).toBeInTheDocument()
   })
 
+  it('cannot submit a selected source that contradicts the displayed scope', async () => {
+    searchAuthorizedDocuments.mockResolvedValue({ results: [], coverage: { state: 'partial', complete: false, sources: [] }, durationMs: 1 })
+    render(<UnifiedFirmMemoryPage />)
+    await screen.findByRole('option', { name: 'Legacy archive' })
+    fireEvent.change(screen.getByLabelText('Source filter'), { target: { value: 'source-local' } })
+    fireEvent.change(screen.getByLabelText('Search scope'), { target: { value: 'cloud' } })
+
+    expect(screen.getByLabelText('Source filter')).toHaveValue('')
+    expect(screen.queryByRole('option', { name: 'Legacy archive' })).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Research query'), { target: { value: 'cloud advice' } })
+    fireEvent.click(screen.getByRole('button', { name: /search firm memory/i }))
+
+    await waitFor(() => expect(searchAuthorizedDocuments).toHaveBeenCalledWith(expect.objectContaining({
+      scope: 'cloud',
+      filters: expect.objectContaining({ sourceIds: [] }),
+    })))
+  })
+
   it('shows unsupported coverage without collapsing it to a generic ready state', async () => {
     searchAuthorizedDocuments.mockResolvedValue({
       results: [],
