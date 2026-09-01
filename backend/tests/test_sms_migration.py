@@ -13,7 +13,7 @@ def test_sms_is_the_single_migration_after_configurable_workflows():
     assert MIGRATION.exists()
     assert not OLD_MIGRATION.exists()
     assert 'revision = "153_sms_lifecycle"' in source
-    assert 'down_revision = "150_studio_render_jobs"' in source
+    assert 'down_revision = "152_file_open_intents"' in source
     assert '"sms_revoked_at"' in source
     for immutable_snapshot_field in (
         '"phone_verified"',

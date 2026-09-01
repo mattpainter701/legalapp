@@ -41,8 +41,7 @@ from sqlalchemy.engine import make_url
 register_uuid()
 
 
-EXPECTED_HEAD = "152_file_open_intents"
-EXPECTED_HEAD = "150_studio_render_jobs"
+EXPECTED_HEAD = "153_sms_lifecycle"
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
 REQUIRED_REVISION = "148_configurable_workflows"

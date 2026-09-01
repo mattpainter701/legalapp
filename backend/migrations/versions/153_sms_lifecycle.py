@@ -5,7 +5,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 revision = "153_sms_lifecycle"
-down_revision = "150_studio_render_jobs"
+down_revision = "152_file_open_intents"
 branch_labels = None
 depends_on = None
 
