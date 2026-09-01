@@ -2287,20 +2287,23 @@ async def test_provider_failures_are_durable_without_fake_delivery(
         )
     assert replay.value.status_code == 409
     assert len(uncertain_provider.calls) == 1
-    api_replay = await client.post(
-        "/api/sms/send",
-        json={
-            "contact_id": str(contact_id),
-            "matter_id": str(matter_id),
-            "body": "Provider outcome unknown",
-            "category": "appointment",
-            "idempotency_key": "provider-unknown",
-        },
+    api_replay = await asyncio.wait_for(
+        client.post(
+            "/api/sms/send",
+            json={
+                "contact_id": str(contact_id),
+                "matter_id": str(matter_id),
+                "body": "Provider outcome unknown",
+                "category": "appointment",
+                "idempotency_key": "provider-unknown",
+            },
+        ),
+        timeout=5,
     )
     assert api_replay.status_code == 409
     assert api_replay.json()["detail"] == {
         "code": "sms_error",
-        "message": "Provider outcome is unknown; reconcile this SMS before retrying",
+        "message": "The original SMS outcome must be reconciled before retrying",
         "delivery_certainty": "outcome_unknown",
         "sms_message_id": str(unknown_row_id),
         "reconciliation_required": True,

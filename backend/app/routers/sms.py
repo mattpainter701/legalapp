@@ -224,6 +224,13 @@ async def send_sms_message(
                 },
             )
             await db.commit()
+        else:
+            # Replay and reconciliation-required failures can retain the
+            # service's FOR UPDATE authorization/message locks. Release that
+            # read-only error transaction before the access-log middleware
+            # writes through its independent session; otherwise the request
+            # can wait on its own still-open FK locks indefinitely.
+            await db.rollback()
         raise HTTPException(exc.status_code, exc.api_detail()) from exc
     return row
 
