@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from typing import get_args
 from uuid import uuid4
 
 import pytest
@@ -24,7 +25,7 @@ from app.schemas.chat_action import (
     SourceDocumentBinding,
 )
 from app.schemas.conversion_loop import ConsentUpdate, IntakeSubmissionCreate
-from app.schemas.sms import SmsProviderConfigUpdate
+from app.schemas.sms import SmsProviderConfigUpdate, SmsReconciliationResolution
 from app.services.automation_capabilities import capability_catalog
 from app.services.sms import (
     consent_authorizes_sms,
@@ -95,6 +96,15 @@ def test_task_delivery_certainty_dual_writes_and_reads_legacy_alias():
     legacy._delivery_certainty_legacy = "failed_after_acceptance"
     legacy._delivery_certainty_v2 = None
     assert legacy.delivery_certainty == "provider_failed_after_acceptance"
+
+
+def test_sms_reconciliation_resolution_storage_fits_every_schema_value():
+    column_length = SmsMessage.__table__.c.reconciliation_resolution.type.length
+
+    assert column_length is not None
+    assert column_length >= max(
+        len(resolution) for resolution in get_args(SmsReconciliationResolution)
+    )
 
 
 @pytest.mark.asyncio

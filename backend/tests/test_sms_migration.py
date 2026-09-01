@@ -131,6 +131,7 @@ def test_sms_migration_enforces_rls_and_tenant_composite_references():
     assert '"task_automation_runs"' in source
     assert '"delivery_certainty"' in source
     assert 'sa.Column("delivery_certainty_v2", sa.String(50), nullable=True)' in source
+    assert 'sa.Column("reconciliation_resolution", sa.String(64))' in source
     assert "sync_task_automation_delivery_certainty" in source
     assert "task_automation_delivery_certainty_sync" in source
     assert "postgresql_not_valid=True" in source

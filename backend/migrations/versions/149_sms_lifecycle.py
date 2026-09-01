@@ -568,7 +568,7 @@ def upgrade() -> None:
         sa.Column("provider_created_at", sa.DateTime(timezone=True)),
         sa.Column("reconciliation_required_at", sa.DateTime(timezone=True)),
         sa.Column("reconciliation_resolved_at", sa.DateTime(timezone=True)),
-        sa.Column("reconciliation_resolution", sa.String(40)),
+        sa.Column("reconciliation_resolution", sa.String(64)),
         sa.Column(
             "reconciliation_resolved_by_user_id",
             UUID(as_uuid=True),

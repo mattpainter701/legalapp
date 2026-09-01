@@ -541,7 +541,7 @@ class SmsMessage(Base):
         DateTime(timezone=True), nullable=True
     )
     reconciliation_resolution: Mapped[str | None] = mapped_column(
-        String(40), nullable=True
+        String(64), nullable=True
     )
     reconciliation_resolved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
