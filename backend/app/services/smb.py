@@ -1673,7 +1673,7 @@ class SmbService:
         """Run one local search while holding a short per-user Redis lease."""
         if redis is None:
             raise RuntimeError("SMB relay is temporarily unavailable")
-        correlation_id = correlation_id or secrets.token_urlsafe(12)
+        correlation_id = correlation_id or secrets.token_hex(12)
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", correlation_id):
             raise ValueError("Invalid correlation id")
         try:
@@ -1756,7 +1756,7 @@ class SmbService:
         matter_uuid = _uuid(matter_id)
         if not tenant_uuid or not matter_uuid:
             raise ValueError("Invalid tenant or matter")
-        correlation_id = correlation_id or secrets.token_urlsafe(12)
+        correlation_id = correlation_id or secrets.token_hex(12)
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", correlation_id):
             raise ValueError("Invalid correlation id")
         try:
