@@ -46,7 +46,9 @@ COPY demo/cybersafeadvisor-corporate-pack/ /app/demo/cybersafeadvisor-corporate-
 RUN groupadd --system --gid 10001 appuser \
     && useradd --system --uid 10001 --gid 10001 --no-create-home appuser \
     && mkdir -p /app/uploads \
-    && chown -R 10001:10001 /app
+        /var/lib/lawhand/studio-render-cas \
+        /run/lawhand/studio-render-workspace \
+    && chown -R 10001:10001 /app /var/lib/lawhand /run/lawhand
 
 EXPOSE 8000
 

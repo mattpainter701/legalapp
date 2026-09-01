@@ -1282,9 +1282,11 @@ async def test_current_and_stale_adoption_flush_exact_artifact_ids(
     assert outcome == "current_evidence"
     current_row = await db_session.get(DurableJob, current_job.job_id)
     current_artifact = await db_session.get(StudioRenderArtifact, artifact_id)
-    preferred = await db_session.get(
-        StudioPreferredRenderEvidence,
-        (test_tenant.id, foundation["draft_id"]),
+    preferred = await db_session.scalar(
+        select(StudioPreferredRenderEvidence).where(
+            StudioPreferredRenderEvidence.tenant_id == test_tenant.id,
+            StudioPreferredRenderEvidence.draft_id == foundation["draft_id"],
+        )
     )
     current_draft = await db_session.get(StudioDraft, foundation["draft_id"])
     assert current_artifact.id == artifact_id

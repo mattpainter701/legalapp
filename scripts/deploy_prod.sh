@@ -92,6 +92,12 @@ for compose_file in "${compose_file_list[@]}"; do
   compose+=( -f "$compose_file" )
   compose_guard_files+=" -f $compose_file"
 done
+studio_render_enabled="$(get_env TEMPLATE_STUDIO_RENDER_ENABLED)"
+release_services=(backend scheduler migrator frontend office-addin nginx litellm)
+if [[ "$studio_render_enabled" == "true" ]]; then
+  compose+=( --profile studio-render )
+  release_services+=(studio-render-worker)
+fi
 
 echo "==> Deploying $APP_VERSION with the hardened production topology"
 ENV_FILE="$ENV_FILE" COMPOSE_FILES="$COMPOSE_FILES" bash scripts/prod_env_preflight.sh
@@ -214,7 +220,7 @@ mkdir -p "$release_state_dir"
 chmod 700 "$release_state_dir"
 rollback_manifest="$release_state_dir/$release_tag.images.tsv"
 printf 'release\tphase\tservice\timage_id\timage_tag\n' > "$rollback_manifest"
-for service in backend scheduler migrator frontend office-addin nginx litellm; do
+for service in "${release_services[@]}"; do
   previous_id="$("${compose[@]}" images -q "$service" 2>/dev/null | head -n 1 || true)"
   [[ -n "$previous_id" ]] || continue
   previous_tag="clarity-legal/$service:rollback-before-$release_tag"
@@ -289,14 +295,19 @@ for _ in $(seq 1 90); do
   backend_id="$("${compose[@]}" ps -q backend 2>/dev/null || true)"
   scheduler_id="$("${compose[@]}" ps -q scheduler 2>/dev/null || true)"
   nginx_id="$("${compose[@]}" ps -q nginx 2>/dev/null || true)"
+  studio_worker_health="healthy"
+  if [[ "$studio_render_enabled" == "true" ]]; then
+    studio_worker_id="$("${compose[@]}" ps -q studio-render-worker 2>/dev/null || true)"
+    studio_worker_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$studio_worker_id" 2>/dev/null || true)"
+  fi
   backend_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$backend_id" 2>/dev/null || true)"
   scheduler_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$scheduler_id" 2>/dev/null || true)"
   nginx_state="$(docker inspect --format '{{.State.Status}}' "$nginx_id" 2>/dev/null || true)"
-  [[ "$backend_health" == healthy && "$scheduler_health" == healthy && "$nginx_state" == running ]] && break
+  [[ "$backend_health" == healthy && "$scheduler_health" == healthy && "$studio_worker_health" == healthy && "$nginx_state" == running ]] && break
   sleep 2
 done
-if [[ "$backend_health" != healthy || "$scheduler_health" != healthy || "$nginx_state" != running ]]; then
-  "${compose[@]}" logs --tail=150 postgres litellm-postgres litellm-migrator litellm-schema-migrator litellm migrator backend scheduler frontend nginx
+if [[ "$backend_health" != healthy || "$scheduler_health" != healthy || "$studio_worker_health" != healthy || "$nginx_state" != running ]]; then
+  "${compose[@]}" logs --tail=150 postgres litellm-postgres litellm-migrator litellm-schema-migrator litellm migrator backend scheduler studio-render-worker frontend nginx
   exit 6
 fi
 
@@ -361,7 +372,7 @@ fi
 
 # Keep the immediately previous release images available for an operator-led
 # rollback. Image retention/pruning is a separate, deliberate maintenance task.
-for service in backend scheduler migrator frontend office-addin nginx litellm; do
+for service in "${release_services[@]}"; do
   current_id="$("${compose[@]}" images -q "$service" 2>/dev/null | head -n 1 || true)"
   [[ -n "$current_id" ]] || continue
   current_tag="clarity-legal/$service:release-$release_tag"

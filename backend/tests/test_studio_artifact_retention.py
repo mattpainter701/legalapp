@@ -243,6 +243,69 @@ async def test_staged_reconciliation_is_bounded_and_deletes_only_last_orphan(tmp
     ) == []
 
 
+async def test_staged_reconciliation_advances_past_a_permanent_failed_receipt(
+    tmp_path,
+):
+    tenant_id = uuid.uuid4()
+    now = datetime.now(timezone.utc)
+    store = LocalStudioObjectStore(tmp_path, max_object_bytes=1024)
+    for index in range(4):
+        content = f"orphaned-render-{index}".encode()
+        store.stage(
+            tenant_id,
+            content,
+            job_id=uuid.uuid4(),
+            lease_token=uuid.uuid4(),
+            reconcile_after=now,
+            media_type="application/pdf",
+            expected_sha256=hashlib.sha256(content).hexdigest(),
+        )
+    first = LocalStudioObjectStore(tmp_path, max_object_bytes=1024).list_staged(
+        tenant_id,
+        reconcile_before=now + timedelta(seconds=1),
+        limit=1,
+    )[0]
+    reconciler_store = LocalStudioObjectStore(tmp_path, max_object_bytes=1024)
+
+    @asynccontextmanager
+    async def object_lock(_ref):
+        yield
+
+    async def active_check(stage):
+        if stage.stage_id == first.stage_id:
+            raise RuntimeError("permanent dependency failure")
+        return False
+
+    async def unreferenced(_ref):
+        return False
+
+    failed = await reconcile_staged_batch(
+        reconciler_store,
+        tenant_id=tenant_id,
+        now=now + timedelta(seconds=1),
+        limit=1,
+        stage_active_check=active_check,
+        object_reference_check=unreferenced,
+        object_lock=object_lock,
+    )
+    progressed = await reconcile_staged_batch(
+        reconciler_store,
+        tenant_id=tenant_id,
+        now=now + timedelta(seconds=2),
+        limit=1,
+        stage_active_check=active_check,
+        object_reference_check=unreferenced,
+        object_lock=object_lock,
+    )
+
+    assert [(item.stage_id, item.reason) for item in failed] == [
+        (first.stage_id, "check_failed")
+    ]
+    assert len(progressed) == 1
+    assert progressed[0].stage_id != first.stage_id
+    assert progressed[0].action == "deleted"
+
+
 async def test_durable_job_cleanup_requires_no_artifact_or_stage():
     now = datetime.now(timezone.utc)
     base = {

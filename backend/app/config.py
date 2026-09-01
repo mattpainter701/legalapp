@@ -179,10 +179,16 @@ class Settings(BaseSettings):
     TEMPLATE_STUDIO_RENDER_ENQUEUE_RATE_LIMIT: int = 20
     TEMPLATE_STUDIO_RENDER_ENQUEUE_RATE_WINDOW_SECONDS: int = 60
     TEMPLATE_STUDIO_RENDER_QUEUED_BYTE_LIMIT: int = 500 * 1024 * 1024
+    TEMPLATE_STUDIO_RENDER_RETAINED_ARTIFACT_LIMIT: int = 500
+    TEMPLATE_STUDIO_RENDER_RETAINED_BYTE_LIMIT: int = 10 * 1024**3
+    TEMPLATE_STUDIO_RENDER_LIVE_ARTIFACT_LIMIT: int = 1_000
+    TEMPLATE_STUDIO_RENDER_LIVE_BYTE_LIMIT: int = 20 * 1024**3
     TEMPLATE_STUDIO_RENDER_BATCH_SIZE: int = 8
+    TEMPLATE_STUDIO_RENDER_TENANT_SCAN_BATCH: int = 25
     TEMPLATE_STUDIO_RENDER_CONCURRENCY: int = 2
     TEMPLATE_STUDIO_RENDER_IDLE_SECONDS: float = 1.0
     TEMPLATE_STUDIO_RENDER_MAINTENANCE_INTERVAL_SECONDS: int = 300
+    TEMPLATE_STUDIO_RENDER_HEALTH_MAX_AGE_SECONDS: int = 60
     TEMPLATE_STUDIO_RENDER_LEASE_SECONDS: int = 900
     TEMPLATE_STUDIO_RENDER_HEARTBEAT_SECONDS: int = 60
     TEMPLATE_STUDIO_RENDER_PROCESSOR_TIMEOUT_SECONDS: int = 300
@@ -1238,6 +1244,58 @@ def validate_template_ocr_settings(settings: Settings) -> None:
         )
 
 
+def _studio_paths_overlap(first: Path, second: Path) -> bool:
+    return (
+        first == second
+        or first in second.parents
+        or second in first.parents
+    )
+
+
+def _canonical_studio_path(raw: str, *, field: str) -> Path:
+    candidate = Path(raw)
+    if not raw.strip() or not candidate.is_absolute():
+        raise ValueError(f"{field} must be absolute")
+    resolved = candidate.resolve(strict=False)
+    if resolved.parent == resolved:
+        raise ValueError(f"{field} must not be a filesystem root")
+    return resolved
+
+
+def validate_studio_render_paths(
+    settings: Settings, *, require_workspace: bool
+) -> tuple[Path, Path | None]:
+    """Canonicalize and reject destructive Studio storage relationships."""
+
+    storage = _canonical_studio_path(
+        settings.TEMPLATE_STUDIO_RENDER_STORAGE_DIR,
+        field="TEMPLATE_STUDIO_RENDER_STORAGE_DIR",
+    )
+    workspace = (
+        _canonical_studio_path(
+            settings.TEMPLATE_STUDIO_RENDER_WORKSPACE_DIR,
+            field="TEMPLATE_STUDIO_RENDER_WORKSPACE_DIR",
+        )
+        if require_workspace
+        else None
+    )
+    upload = _canonical_studio_path(settings.UPLOAD_DIR, field="UPLOAD_DIR")
+    app_root = Path(__file__).resolve().parents[1]
+    candidates = [("TEMPLATE_STUDIO_RENDER_STORAGE_DIR", storage)]
+    if workspace is not None:
+        candidates.append(("TEMPLATE_STUDIO_RENDER_WORKSPACE_DIR", workspace))
+    for field, candidate in candidates:
+        for protected_name, protected in (
+            ("application root", app_root),
+            ("UPLOAD_DIR", upload),
+        ):
+            if _studio_paths_overlap(candidate, protected):
+                raise ValueError(f"{field} overlaps the {protected_name}")
+    if workspace is not None and _studio_paths_overlap(storage, workspace):
+        raise ValueError("Studio render storage and workspace paths must be disjoint")
+    return storage, workspace
+
+
 def validate_template_studio_settings(settings: Settings) -> None:
     if not 1 <= settings.TEMPLATE_STUDIO_ACTIVE_DRAFT_QUOTA <= 1000:
         raise ValueError(
@@ -1287,8 +1345,25 @@ def validate_template_studio_settings(settings: Settings) -> None:
         raise ValueError("TEMPLATE_STUDIO_RENDER_ENQUEUE_RATE_WINDOW_SECONDS is invalid")
     if not 1 <= settings.TEMPLATE_STUDIO_RENDER_QUEUED_BYTE_LIMIT <= 100 * 1024**3:
         raise ValueError("TEMPLATE_STUDIO_RENDER_QUEUED_BYTE_LIMIT is invalid")
+    if not 1 <= settings.TEMPLATE_STUDIO_RENDER_RETAINED_ARTIFACT_LIMIT <= 100_000:
+        raise ValueError("TEMPLATE_STUDIO_RENDER_RETAINED_ARTIFACT_LIMIT is invalid")
+    if not 1 <= settings.TEMPLATE_STUDIO_RENDER_RETAINED_BYTE_LIMIT <= 10 * 1024**4:
+        raise ValueError("TEMPLATE_STUDIO_RENDER_RETAINED_BYTE_LIMIT is invalid")
+    if not 1 <= settings.TEMPLATE_STUDIO_RENDER_LIVE_ARTIFACT_LIMIT <= 100_000:
+        raise ValueError("TEMPLATE_STUDIO_RENDER_LIVE_ARTIFACT_LIMIT is invalid")
+    if not 1 <= settings.TEMPLATE_STUDIO_RENDER_LIVE_BYTE_LIMIT <= 10 * 1024**4:
+        raise ValueError("TEMPLATE_STUDIO_RENDER_LIVE_BYTE_LIMIT is invalid")
+    if (
+        settings.TEMPLATE_STUDIO_RENDER_RETAINED_ARTIFACT_LIMIT
+        > settings.TEMPLATE_STUDIO_RENDER_LIVE_ARTIFACT_LIMIT
+        or settings.TEMPLATE_STUDIO_RENDER_RETAINED_BYTE_LIMIT
+        > settings.TEMPLATE_STUDIO_RENDER_LIVE_BYTE_LIMIT
+    ):
+        raise ValueError("Studio retained limits must fit within live storage limits")
     if not 1 <= settings.TEMPLATE_STUDIO_RENDER_BATCH_SIZE <= 100:
         raise ValueError("TEMPLATE_STUDIO_RENDER_BATCH_SIZE is invalid")
+    if not 1 <= settings.TEMPLATE_STUDIO_RENDER_TENANT_SCAN_BATCH <= 500:
+        raise ValueError("TEMPLATE_STUDIO_RENDER_TENANT_SCAN_BATCH is invalid")
     if not 1 <= settings.TEMPLATE_STUDIO_RENDER_CONCURRENCY <= min(
         settings.TEMPLATE_STUDIO_RENDER_BATCH_SIZE, 16
     ):
@@ -1297,6 +1372,8 @@ def validate_template_studio_settings(settings: Settings) -> None:
         raise ValueError("TEMPLATE_STUDIO_RENDER_IDLE_SECONDS is invalid")
     if not 10 <= settings.TEMPLATE_STUDIO_RENDER_MAINTENANCE_INTERVAL_SECONDS <= 86_400:
         raise ValueError("TEMPLATE_STUDIO_RENDER_MAINTENANCE_INTERVAL_SECONDS is invalid")
+    if not 20 <= settings.TEMPLATE_STUDIO_RENDER_HEALTH_MAX_AGE_SECONDS <= 600:
+        raise ValueError("TEMPLATE_STUDIO_RENDER_HEALTH_MAX_AGE_SECONDS is invalid")
     if not 30 <= settings.TEMPLATE_STUDIO_RENDER_LEASE_SECONDS <= 3_600:
         raise ValueError("TEMPLATE_STUDIO_RENDER_LEASE_SECONDS is invalid")
     if not (
@@ -1332,9 +1409,10 @@ def validate_template_studio_settings(settings: Settings) -> None:
         or parsed_backend.password
     ):
         raise ValueError("Studio rendering requires BACKEND_URL to be an HTTPS origin")
-    storage_dir = Path(settings.TEMPLATE_STUDIO_RENDER_STORAGE_DIR)
-    if not settings.TEMPLATE_STUDIO_RENDER_STORAGE_DIR.strip() or not storage_dir.is_absolute():
-        raise ValueError("TEMPLATE_STUDIO_RENDER_STORAGE_DIR must be absolute")
+    validate_studio_render_paths(
+        settings,
+        require_workspace=settings.TEMPLATE_STUDIO_RENDER_WORKER_ENABLED,
+    )
     if settings.TEMPLATE_STUDIO_RENDER_STORAGE_TOPOLOGY != "single_host_local":
         raise ValueError(
             "Studio Local CAS requires explicit single_host_local topology"
@@ -1349,12 +1427,6 @@ def validate_template_studio_settings(settings: Settings) -> None:
     except Exception as exc:
         raise ValueError("TEMPLATE_STUDIO_RENDER_MANIFESTS_JSON is invalid") from exc
     if settings.TEMPLATE_STUDIO_RENDER_WORKER_ENABLED:
-        workspace_dir = Path(settings.TEMPLATE_STUDIO_RENDER_WORKSPACE_DIR)
-        if (
-            not settings.TEMPLATE_STUDIO_RENDER_WORKSPACE_DIR.strip()
-            or not workspace_dir.is_absolute()
-        ):
-            raise ValueError("TEMPLATE_STUDIO_RENDER_WORKSPACE_DIR must be absolute")
         try:
             profiles = json.loads(settings.TEMPLATE_STUDIO_RENDER_PROFILES_JSON)
         except (TypeError, ValueError) as exc:

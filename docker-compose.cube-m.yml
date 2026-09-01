@@ -80,6 +80,15 @@ services:
           memory: 768M
           cpus: "0.35"
 
+  # Activation is rejected by prod_env_preflight.sh on this 16-GB topology.
+  # Retain a hard ceiling as defense if an operator bypasses that gate.
+  studio-render-worker:
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+          cpus: "0.25"
+
   frontend:
     deploy:
       resources:

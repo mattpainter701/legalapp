@@ -289,8 +289,6 @@ async def _purge_demo_tenant_locked(
     await db.commit()
 
     try:
-        _remove_tenant_files(tenant_id)
-        _remove_studio_render_files(tenant_id)
         tables = _purge_tables()
         await set_tenant_context(db, str(tenant_id))
         deleted = await _purge_immutable_research_history(
@@ -377,6 +375,12 @@ async def _purge_demo_tenant_locked(
                 },
             )
         )
+        # Delete persisted files only after every tenant row has been removed
+        # successfully. The purge advisory lock remains held across this whole
+        # block, so a Studio worker that finishes late cannot stage new CAS
+        # bytes between the database purge and the final filesystem deletion.
+        _remove_tenant_files(tenant_id)
+        _remove_studio_render_files(tenant_id)
         await db.commit()
         return deleted
     except Exception as exc:

@@ -12,7 +12,7 @@ from app.models.studio_render import (
 
 
 ROOT = Path(__file__).resolve().parents[2]
-MIGRATION = ROOT / "backend/migrations/versions/149_studio_render_jobs.py"
+MIGRATION = ROOT / "backend/migrations/versions/150_studio_render_jobs.py"
 
 
 def test_studio_render_revision_is_the_single_next_head():
@@ -20,10 +20,10 @@ def test_studio_render_revision_is_the_single_next_head():
     config = Config(str(backend / "alembic.ini"))
     config.set_main_option("script_location", str(backend / "migrations"))
     script = ScriptDirectory.from_config(config)
-    revision = script.get_revision("149_studio_render_jobs")
+    revision = script.get_revision("150_studio_render_jobs")
 
-    assert script.get_heads() == ["149_studio_render_jobs"]
-    assert revision.down_revision == "148_configurable_workflows"
+    assert script.get_heads() == ["150_studio_render_jobs"]
+    assert revision.down_revision == "149_firm_memory_source_auth"
 
 
 def test_studio_render_migration_enforces_tenant_and_evidence_fences():
@@ -42,7 +42,8 @@ def test_studio_render_migration_enforces_tenant_and_evidence_fences():
     assert "uq_durable_jobs_tenant_id" in source
     assert "uq_studio_snapshots_tenant_id" in source
     assert "fk_studio_render_artifact_job_tenant" in source
-    assert "fk_studio_render_artifact_snapshot_tenant" in source
+    assert "fk_studio_render_artifact_snapshot_contract" in source
+    assert "uq_studio_snapshot_render_contract" in source
     assert "fk_studio_preferred_render_exact_evidence" in source
     assert "guard_studio_render_artifact_evidence" in source
     assert "studio_render_artifact_evidence_immutable" in source

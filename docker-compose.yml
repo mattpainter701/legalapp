@@ -114,6 +114,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    image: legalapp-backend:${APP_COMMIT:-dev}
     depends_on:
       postgres:
         condition: service_healthy
@@ -141,12 +142,17 @@ services:
       MCP_OPERATOR_ASSERTION_SECRET: ${MCP_OPERATOR_ASSERTION_SECRET:-}
       MCP_CITATOR_SCOPE_ASSERTION_SECRET: ${MCP_CITATOR_SCOPE_ASSERTION_SECRET:-}
       TEMPLATE_STUDIO_RENDER_ENABLED: ${TEMPLATE_STUDIO_RENDER_ENABLED:-false}
-      TEMPLATE_STUDIO_RENDER_STORAGE_DIR: /app/studio-render-cas
+      TEMPLATE_STUDIO_RENDER_STORAGE_DIR: /var/lib/lawhand/studio-render-cas
       TEMPLATE_STUDIO_RENDER_STORAGE_TOPOLOGY: single_host_local
       TEMPLATE_STUDIO_RENDER_MANIFESTS_JSON: ${TEMPLATE_STUDIO_RENDER_MANIFESTS_JSON:-}
+      TEMPLATE_STUDIO_RENDER_TENANT_SCAN_BATCH: ${TEMPLATE_STUDIO_RENDER_TENANT_SCAN_BATCH:-25}
+      TEMPLATE_STUDIO_RENDER_RETAINED_ARTIFACT_LIMIT: ${TEMPLATE_STUDIO_RENDER_RETAINED_ARTIFACT_LIMIT:-500}
+      TEMPLATE_STUDIO_RENDER_RETAINED_BYTE_LIMIT: ${TEMPLATE_STUDIO_RENDER_RETAINED_BYTE_LIMIT:-10737418240}
+      TEMPLATE_STUDIO_RENDER_LIVE_ARTIFACT_LIMIT: ${TEMPLATE_STUDIO_RENDER_LIVE_ARTIFACT_LIMIT:-1000}
+      TEMPLATE_STUDIO_RENDER_LIVE_BYTE_LIMIT: ${TEMPLATE_STUDIO_RENDER_LIVE_BYTE_LIMIT:-21474836480}
     volumes:
       - ${UPLOADS_HOST_DIR:-./uploads}:/app/uploads
-      - studio_render_cas:/app/studio-render-cas
+      - studio_render_cas:/var/lib/lawhand/studio-render-cas
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8000/health || exit 1"]
@@ -157,9 +163,7 @@ services:
 
   studio-render-worker:
     profiles: ["studio-render"]
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
+    image: legalapp-backend:${APP_COMMIT:-dev}
     depends_on:
       postgres:
         condition: service_healthy
@@ -170,17 +174,29 @@ services:
       DATABASE_URL: ${APP_DATABASE_URL:-${DATABASE_URL}}
       TEMPLATE_STUDIO_RENDER_ENABLED: "true"
       TEMPLATE_STUDIO_RENDER_WORKER_ENABLED: "true"
-      TEMPLATE_STUDIO_RENDER_STORAGE_DIR: /app/studio-render-cas
+      TEMPLATE_STUDIO_RENDER_STORAGE_DIR: /var/lib/lawhand/studio-render-cas
       TEMPLATE_STUDIO_RENDER_STORAGE_TOPOLOGY: single_host_local
-      TEMPLATE_STUDIO_RENDER_WORKSPACE_DIR: /app/studio-render-workspace
+      TEMPLATE_STUDIO_RENDER_WORKSPACE_DIR: /run/lawhand/studio-render-workspace
       TEMPLATE_STUDIO_RENDER_MANIFESTS_JSON: ${TEMPLATE_STUDIO_RENDER_MANIFESTS_JSON:-}
       TEMPLATE_STUDIO_RENDER_PROFILES_JSON: ${TEMPLATE_STUDIO_RENDER_PROFILES_JSON:-}
+      TEMPLATE_STUDIO_RENDER_TENANT_SCAN_BATCH: ${TEMPLATE_STUDIO_RENDER_TENANT_SCAN_BATCH:-25}
+      TEMPLATE_STUDIO_RENDER_RETAINED_ARTIFACT_LIMIT: ${TEMPLATE_STUDIO_RENDER_RETAINED_ARTIFACT_LIMIT:-500}
+      TEMPLATE_STUDIO_RENDER_RETAINED_BYTE_LIMIT: ${TEMPLATE_STUDIO_RENDER_RETAINED_BYTE_LIMIT:-10737418240}
+      TEMPLATE_STUDIO_RENDER_LIVE_ARTIFACT_LIMIT: ${TEMPLATE_STUDIO_RENDER_LIVE_ARTIFACT_LIMIT:-1000}
+      TEMPLATE_STUDIO_RENDER_LIVE_BYTE_LIMIT: ${TEMPLATE_STUDIO_RENDER_LIVE_BYTE_LIMIT:-21474836480}
     volumes:
-      - studio_render_cas:/app/studio-render-cas
-      - studio_render_workspace:/app/studio-render-workspace
+      - studio_render_cas:/var/lib/lawhand/studio-render-cas
       - ${STUDIO_RENDER_RUNTIME_HOST_DIR:-./studio-render-runtime}:/app/studio-render-runtime:ro
+    tmpfs:
+      - /run/lawhand/studio-render-workspace:size=1g,mode=0700,uid=10001,gid=10001,nosuid,nodev,noexec
     command: python -m app.studio_render_worker_main
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "from app.config import get_settings; from app.services.studio_render_runtime import build_studio_render_api_runtime; s=get_settings(); r=build_studio_render_api_runtime(s); raise SystemExit(0 if r.object_store.worker_heartbeat_fresh(max_age_seconds=s.TEMPLATE_STUDIO_RENDER_HEALTH_MAX_AGE_SECONDS) else 1)"]
+      interval: 15s
+      timeout: 10s
+      retries: 4
+      start_period: 30s
     deploy:
       resources:
         limits:
@@ -226,4 +242,3 @@ volumes:
   redis_data:
   litellm_postgres_data:
   studio_render_cas:
-  studio_render_workspace:

@@ -7,6 +7,7 @@ import pytest
 
 from app.schemas.studio_render import STUDIO_RENDER_JOB_KINDS
 from app.services.studio_render_worker_loop import (
+    PostgresStudioRenderWorkSource,
     StudioRenderWorkerLoop,
     StudioRenderWorkItem,
 )
@@ -99,6 +100,50 @@ async def test_stop_cancels_and_drains_an_active_processor_batch():
 
 
 @pytest.mark.asyncio
+async def test_runtime_heartbeat_continues_during_long_processor_batch():
+    processor_started = asyncio.Event()
+    processor_cancelled = asyncio.Event()
+    second_heartbeat = asyncio.Event()
+    heartbeat_calls = 0
+
+    class BlockingWorker:
+        async def process(self, _job_id, _tenant_id):
+            processor_started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                processor_cancelled.set()
+
+    async def heartbeat(healthy):
+        nonlocal heartbeat_calls
+        assert healthy is True
+        heartbeat_calls += 1
+        if heartbeat_calls >= 2:
+            second_heartbeat.set()
+
+    async def immediate_sleep(_seconds):
+        await asyncio.sleep(0)
+
+    stop = asyncio.Event()
+    loop = StudioRenderWorkerLoop(
+        source=_Source([_item("studio_test_render")]),
+        worker=BlockingWorker(),
+        batch_size=1,
+        concurrency=1,
+        runtime_heartbeat=heartbeat,
+        runtime_heartbeat_interval_seconds=5,
+        sleep=immediate_sleep,
+    )
+    task = asyncio.create_task(loop.run_forever(stop))
+    await asyncio.wait_for(processor_started.wait(), timeout=1)
+    await asyncio.wait_for(second_heartbeat.wait(), timeout=1)
+    assert heartbeat_calls >= 2
+    stop.set()
+    await asyncio.wait_for(task, timeout=1)
+    assert processor_cancelled.is_set()
+
+
+@pytest.mark.asyncio
 async def test_runner_cancellation_cancels_and_drains_batch_and_stop_wait():
     processor_started = asyncio.Event()
     processor_cancelled = asyncio.Event()
@@ -179,3 +224,58 @@ async def test_maintenance_uses_monotonic_interval_not_each_idle_poll():
     )
     await loop.run_forever(stop)
     assert maintenance.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_work_source_bounds_idle_tenant_scan_and_wraps_fairly():
+    tenants = tuple(uuid.UUID(int=value) for value in range(1, 11))
+
+    class BoundedSource(PostgresStudioRenderWorkSource):
+        def __init__(self):
+            super().__init__(None, tenant_scan_batch=3)  # type: ignore[arg-type]
+            self.page_calls = []
+            self.job_calls = []
+
+        async def _tenant_page(self, *, after, through, limit):
+            self.page_calls.append((after, through, limit))
+            eligible = [
+                tenant_id
+                for tenant_id in tenants
+                if (after is None or tenant_id > after)
+                and (through is None or tenant_id <= through)
+            ]
+            return tuple(eligible[:limit])
+
+        async def _jobs_for_tenant(self, tenant_id, *, limit):
+            self.job_calls.append(tenant_id)
+            return ()
+
+    source = BoundedSource()
+    per_poll = []
+    for _ in range(4):
+        before = len(source.job_calls)
+        assert await source.next_batch(limit=8) == ()
+        per_poll.append(len(source.job_calls) - before)
+    assert per_poll == [3, 3, 3, 3]
+    assert set(source.job_calls[:10]) == set(tenants)
+    assert source.job_calls[:10] == list(tenants)
+    assert all(call[2] <= 3 for call in source.page_calls)
+
+
+@pytest.mark.asyncio
+async def test_sustained_maintenance_failure_marks_runtime_heartbeat_unhealthy():
+    states = []
+    stop = asyncio.Event()
+
+    async def heartbeat(healthy):
+        states.append(healthy)
+        stop.set()
+
+    loop = StudioRenderWorkerLoop(
+        source=_Source([]),
+        worker=_Worker(),
+        runtime_heartbeat=heartbeat,
+    )
+    loop._consecutive_maintenance_failures = 3
+    await loop._publish_runtime_heartbeat(stop)
+    assert states == [False]

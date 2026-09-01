@@ -274,6 +274,7 @@ def _production_env(**overrides: str) -> str:
         "VITE_PUBLIC_SIGNUP_ENABLED": "false",
         "SECRET_KEY": "ops-secret-key-0123456789-abcdefghijklmnopqrstuvwxyz",
         "MCP_PRODUCT_ENABLED": "false",
+        "TEMPLATE_STUDIO_RENDER_ENABLED": "false",
         "PLATFORM_LEGACY_BOOTSTRAP_ENABLED": "false",
         "WORKSPACE_MCP_ENABLED": "false",
         "POSTGRES_PASSWORD": "owner-password-0123456789",
@@ -995,6 +996,52 @@ def test_production_preflight_selects_only_known_capacity_profiles(
     )
     assert reversed_vps.returncode != 0
     assert "COMPOSE_FILES must be exactly" in reversed_vps.stderr
+
+
+def test_studio_render_production_topologies_are_bounded_and_activation_is_gated(
+    tmp_path: Path,
+) -> None:
+    for compose_name in ("docker-compose.yml", "docker-compose.hypervisor.yml"):
+        services = yaml.safe_load(
+            (ROOT / compose_name).read_text(encoding="utf-8")
+        )["services"]
+        backend = services["backend"]
+        worker = services["studio-render-worker"]
+        assert worker["profiles"] == ["studio-render"]
+        assert worker["image"] == backend["image"]
+        assert worker["command"] == "python -m app.studio_render_worker_main"
+        assert worker["healthcheck"]["retries"] == 4
+        assert "worker_heartbeat_fresh" in " ".join(worker["healthcheck"]["test"])
+        assert worker["environment"]["TEMPLATE_STUDIO_RENDER_STORAGE_DIR"] == (
+            "/var/lib/lawhand/studio-render-cas"
+        )
+        assert worker["environment"]["TEMPLATE_STUDIO_RENDER_WORKSPACE_DIR"] == (
+            "/run/lawhand/studio-render-workspace"
+        )
+        assert worker["tmpfs"] == [
+            "/run/lawhand/studio-render-workspace:size=1g,mode=0700,uid=10001,gid=10001,nosuid,nodev,noexec"
+        ]
+
+    dockerfile = (ROOT / "backend" / "Dockerfile").read_text(encoding="utf-8")
+    assert "/var/lib/lawhand/studio-render-cas" in dockerfile
+    assert "/run/lawhand/studio-render-workspace" in dockerfile
+    assert "chown -R 10001:10001 /app /var/lib/lawhand /run/lawhand" in dockerfile
+
+    if os.name == "nt":
+        assert "CAS backup and restore rehearsal" in PREFLIGHT.read_text(
+            encoding="utf-8"
+        )
+    else:
+        gated = _run_preflight(
+            tmp_path,
+            _production_env(TEMPLATE_STUDIO_RENDER_ENABLED="true"),
+        )
+        assert gated.returncode != 0
+        assert "CAS backup and restore rehearsal" in gated.stdout + gated.stderr
+    for script_name in ("deploy_skynet_runner.sh", "production_check.sh"):
+        assert "CAS backup and restore rehearsal" in (
+            ROOT / "scripts" / script_name
+        ).read_text(encoding="utf-8")
 
 
 def test_capacity_gate_checks_all_resolved_bind_and_docker_filesystems() -> None:
@@ -1823,7 +1870,11 @@ def test_upload_bind_scheduler_and_launch_capability_contracts() -> None:
     prod = yaml.safe_load(
         (ROOT / "docker-compose.prod.yml").read_text(encoding="utf-8")
     )["services"]
-    assert base["backend"]["volumes"] == ["${UPLOADS_HOST_DIR:-./uploads}:/app/uploads"]
+    assert "${UPLOADS_HOST_DIR:-./uploads}:/app/uploads" in base["backend"]["volumes"]
+    assert (
+        "studio_render_cas:/var/lib/lawhand/studio-render-cas"
+        in base["backend"]["volumes"]
+    )
     for services in (hypervisor, prod):
         for service in ("backend", "scheduler"):
             assert any(

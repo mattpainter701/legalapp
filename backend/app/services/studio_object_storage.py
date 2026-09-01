@@ -14,6 +14,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -145,6 +146,10 @@ class StudioStagedObject:
 
 
 class StudioObjectStore(Protocol):
+    def touch_worker_heartbeat(self, *, healthy: bool = True) -> None: ...
+
+    def worker_heartbeat_fresh(self, *, max_age_seconds: int) -> bool: ...
+
     def put(
         self,
         tenant_id: uuid.UUID,
@@ -171,6 +176,10 @@ class StudioObjectStore(Protocol):
     ) -> StudioStagedObject: ...
 
     def acknowledge_stage(self, stage: StudioStagedObject) -> bool: ...
+
+    def defer_stage(
+        self, stage: StudioStagedObject, *, reconcile_after: datetime
+    ) -> bool: ...
 
     def has_stages(self, ref: StudioObjectRef) -> bool: ...
 
@@ -215,6 +224,44 @@ class LocalStudioObjectStore:
         self.root = supplied_root
         self.max_object_bytes = int(max_object_bytes)
         self._lock = threading.RLock()
+        self._stage_scan_cursors: dict[uuid.UUID, str] = {}
+
+    def touch_worker_heartbeat(self, *, healthy: bool = True) -> None:
+        """Atomically publish liveness on the API/worker shared CAS."""
+
+        with self._lock:
+            self._ensure_safe_directory(self.root)
+            target = self.root / ".studio-render-worker-heartbeat"
+            if target.exists() and _is_link(target):
+                raise StudioStorageError(
+                    "unsafe_storage_root", "Studio worker heartbeat is unsafe"
+                )
+            descriptor, temporary = tempfile.mkstemp(
+                prefix=".studio-heartbeat-", dir=self.root
+            )
+            try:
+                with os.fdopen(descriptor, "wb") as handle:
+                    state = "ok" if healthy else "maintenance_failed"
+                    handle.write(f"{state}:{time.time_ns()}".encode("ascii"))
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, target)
+            finally:
+                if os.path.exists(temporary):
+                    os.unlink(temporary)
+
+    def worker_heartbeat_fresh(self, *, max_age_seconds: int) -> bool:
+        if not 20 <= max_age_seconds <= 600:
+            raise ValueError("Studio worker heartbeat age is invalid")
+        target = self.root / ".studio-render-worker-heartbeat"
+        try:
+            if not target.is_file() or _is_link(target) or target.stat().st_size > 64:
+                return False
+            state = target.read_bytes()
+            age = time.time() - target.stat().st_mtime
+            return state.startswith(b"ok:") and -5 <= age <= max_age_seconds
+        except OSError:
+            return False
 
     @staticmethod
     def object_key(sha256: str) -> str:
@@ -622,6 +669,38 @@ class LocalStudioObjectStore:
             self._sync_directory(target.parent)
             return True
 
+    def defer_stage(
+        self, stage: StudioStagedObject, *, reconcile_after: datetime
+    ) -> bool:
+        """Durably move a retained receipt out of the next reconciliation batch."""
+
+        if reconcile_after.tzinfo is None:
+            raise ValueError("reconcile_after must be timezone-aware")
+        if reconcile_after <= stage.reconcile_after:
+            raise ValueError("deferred reconciliation must move forward")
+        target = self._stage_path(
+            stage.object_ref.tenant_id,
+            stage.object_ref.sha256,
+            stage.stage_id,
+        )
+        with self._lock:
+            if not target.exists():
+                return False
+            persisted = self._read_stage(target)
+            if persisted != stage:
+                return False
+            self._write_stage(
+                StudioStagedObject(
+                    stage_id=stage.stage_id,
+                    job_id=stage.job_id,
+                    lease_token=stage.lease_token,
+                    object_ref=stage.object_ref,
+                    reconcile_after=reconcile_after,
+                    state=stage.state,
+                )
+            )
+            return True
+
     def list_staged(
         self,
         tenant_id: uuid.UUID,
@@ -644,6 +723,8 @@ class LocalStudioObjectStore:
                 )
             found: list[StudioStagedObject] = []
             scanned = 0
+            scan_budget = max(5_000, limit * 100)
+            cursor = self._stage_scan_cursors.get(tenant)
             for directory, directories, files in os.walk(stage_root, followlinks=False):
                 base = Path(directory)
                 if _is_link(base):
@@ -661,12 +742,11 @@ class LocalStudioObjectStore:
                 for name in sorted(files):
                     if not name.endswith(".json"):
                         continue
+                    relative_name = (base / name).relative_to(stage_root).as_posix()
+                    if cursor is not None and relative_name <= cursor:
+                        continue
                     scanned += 1
-                    if scanned > max(5_000, limit * 100):
-                        raise StudioStorageError(
-                            "stage_scan_limit",
-                            "Studio staging receipts exceed their scan limit",
-                        )
+                    self._stage_scan_cursors[tenant] = relative_name
                     stage = self._read_stage(base / name)
                     if stage.object_ref.tenant_id != tenant:
                         raise StudioStorageError(
@@ -674,10 +754,12 @@ class LocalStudioObjectStore:
                         )
                     if stage.reconcile_after <= reconcile_before:
                         found.append(stage)
-            return sorted(
-                found,
-                key=lambda item: (item.reconcile_after, str(item.stage_id)),
-            )[:limit]
+                        if len(found) >= limit:
+                            return found
+                    if scanned >= scan_budget:
+                        return found
+            self._stage_scan_cursors.pop(tenant, None)
+            return found
 
     def has_other_stages(self, stage: StudioStagedObject) -> bool:
         directory = self._stage_path(

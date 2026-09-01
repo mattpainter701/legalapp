@@ -11,7 +11,7 @@ from functools import partial
 from itertools import islice
 from typing import AsyncContextManager, Awaitable, Callable, Iterable
 
-from sqlalchemy import delete, func, or_, select, text
+from sqlalchemy import and_, delete, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.database import set_tenant_context
@@ -224,6 +224,14 @@ async def reconcile_staged_batch(
                     timeout=check_timeout_seconds,
                 )
             except Exception:
+                try:
+                    await asyncio.to_thread(
+                        object_store.defer_stage,
+                        stage,
+                        reconcile_after=now + timedelta(minutes=5),
+                    )
+                except Exception:
+                    pass
                 decisions.append(
                     StudioStagedReconciliationDecision(
                         stage.stage_id, "kept", "check_failed"
@@ -231,6 +239,14 @@ async def reconcile_staged_batch(
                 )
                 continue
             if active:
+                try:
+                    await asyncio.to_thread(
+                        object_store.defer_stage,
+                        stage,
+                        reconcile_after=now + timedelta(minutes=1),
+                    )
+                except Exception:
+                    pass
                 decisions.append(
                     StudioStagedReconciliationDecision(
                         stage.stage_id, "kept", "lease_active"
@@ -258,6 +274,14 @@ async def reconcile_staged_batch(
                     partial(object_store.delete_staged, stage)
                 )
             except Exception:
+                try:
+                    await asyncio.to_thread(
+                        object_store.defer_stage,
+                        stage,
+                        reconcile_after=now + timedelta(minutes=5),
+                    )
+                except Exception:
+                    pass
                 decisions.append(
                     StudioStagedReconciliationDecision(
                         stage.stage_id, "kept", "delete_failed"
@@ -563,7 +587,7 @@ class StudioArtifactRetentionService:
             except Exception:
                 await self.db.rollback()
                 return StudioCleanupDecision(
-                    artifact.id, False, "storage_delete_pending"
+                    artifact_id, False, "storage_delete_pending"
                 )
             await self._clock_now()
             artifact.storage_state = "active"
@@ -594,7 +618,7 @@ class StudioArtifactRetentionService:
             # safely retry without ever exposing a late background unlink.
             await self.db.rollback()
             return StudioCleanupDecision(
-                artifact.id, False, "storage_delete_pending"
+                artifact_id, False, "storage_delete_pending"
             )
         deleted_at = await self._clock_now()
         artifact.storage_state = "deleted"
@@ -642,7 +666,7 @@ class StudioArtifactRetentionService:
             # the same object lock and rechecks holds, storage, and references.
             await self.db.rollback()
             return await self._finalize_pending_delete(
-                artifact.id,
+                artifact_id,
                 object_key=object_key,
             )
         candidate = await self._candidate(artifact)
@@ -666,7 +690,7 @@ class StudioArtifactRetentionService:
             # object. Phase B reacquires and rechecks the object lock.
             await self.db.commit()
             return await self._finalize_pending_delete(
-                artifact.id,
+                artifact_id,
                 object_key=object_key,
             )
         artifact.storage_state = "deleted"
@@ -692,7 +716,20 @@ class StudioArtifactRetentionService:
                         ),
                         or_(
                             StudioRenderArtifact.storage_state == "delete_pending",
-                            StudioRenderArtifact.content_expires_at <= now,
+                            and_(
+                                StudioRenderArtifact.storage_state == "active",
+                                StudioRenderArtifact.content_expires_at <= now,
+                                StudioRenderArtifact.legal_hold_at.is_(None),
+                                StudioRenderArtifact.retention_class != "evidence",
+                                ~select(StudioPreferredRenderEvidence.artifact_id)
+                                .where(
+                                    StudioPreferredRenderEvidence.tenant_id
+                                    == self.tenant_id,
+                                    StudioPreferredRenderEvidence.artifact_id
+                                    == StudioRenderArtifact.id,
+                                )
+                                .exists(),
+                            ),
                         ),
                     )
                     .order_by(StudioRenderArtifact.created_at, StudioRenderArtifact.id)
@@ -725,6 +762,14 @@ class StudioArtifactRetentionService:
                         StudioRenderArtifact.storage_state == "deleted",
                         StudioRenderArtifact.metadata_expires_at <= now,
                         StudioRenderArtifact.legal_hold_at.is_(None),
+                        ~select(StudioPreferredRenderEvidence.artifact_id)
+                        .where(
+                            StudioPreferredRenderEvidence.tenant_id
+                            == self.tenant_id,
+                            StudioPreferredRenderEvidence.artifact_id
+                            == StudioRenderArtifact.id,
+                        )
+                        .exists(),
                     )
                     .order_by(StudioRenderArtifact.created_at, StudioRenderArtifact.id)
                     .limit(limit)
@@ -793,8 +838,8 @@ class StudioArtifactRetentionService:
         now = await self._clock_now()
         jobs = tuple(
             (
-                await self.db.scalars(
-                    select(DurableJob)
+                await self.db.execute(
+                    select(DurableJob.id, DurableJob.completed_at)
                     .where(
                         DurableJob.tenant_id == self.tenant_id,
                         DurableJob.kind.in_(
@@ -807,6 +852,12 @@ class StudioArtifactRetentionService:
                         ),
                         DurableJob.status.in_({"completed", "failed", "cancelled"}),
                         DurableJob.completed_at <= now - retain_for,
+                        ~select(StudioRenderArtifact.id)
+                        .where(
+                            StudioRenderArtifact.tenant_id == self.tenant_id,
+                            StudioRenderArtifact.job_id == DurableJob.id,
+                        )
+                        .exists(),
                     )
                     .order_by(DurableJob.completed_at, DurableJob.id)
                     .limit(limit)
@@ -825,23 +876,23 @@ class StudioArtifactRetentionService:
             stages = None
         staged_jobs = {stage.job_id for stage in stages or ()}
         decisions: list[StudioDurableJobCleanupDecision] = []
-        for candidate in jobs:
+        for job_id, completed_at in jobs:
             await self._bind_tenant_context()
             artifact_exists = await self.db.scalar(
                 select(StudioRenderArtifact.id).where(
                     StudioRenderArtifact.tenant_id == self.tenant_id,
-                    StudioRenderArtifact.job_id == candidate.id,
+                    StudioRenderArtifact.job_id == job_id,
                 )
             )
             decision = durable_job_cleanup_decision(
                 StudioDurableJobCleanupCandidate(
-                    job_id=candidate.id,
+                    job_id=job_id,
                     terminal=True,
-                    completed_at=candidate.completed_at,
-                    retain_until=(candidate.completed_at or now) + retain_for,
+                    completed_at=completed_at,
+                    retain_until=(completed_at or now) + retain_for,
                     has_artifact=artifact_exists is not None,
                     has_staged_object=(
-                        stages is None or candidate.id in staged_jobs
+                        stages is None or job_id in staged_jobs
                     ),
                 ),
                 now=now,
@@ -852,7 +903,7 @@ class StudioArtifactRetentionService:
                 continue
             result = await self.db.execute(
                 delete(DurableJob).where(
-                    DurableJob.id == candidate.id,
+                    DurableJob.id == job_id,
                     DurableJob.tenant_id == self.tenant_id,
                     DurableJob.status.in_({"completed", "failed", "cancelled"}),
                     DurableJob.completed_at <= now - retain_for,
@@ -865,7 +916,7 @@ class StudioArtifactRetentionService:
                 await self.db.rollback()
                 decisions.append(
                     StudioDurableJobCleanupDecision(
-                        candidate.id, False, "job_changed"
+                        job_id, False, "job_changed"
                     )
                 )
         return decisions
@@ -881,20 +932,32 @@ class StudioRenderMaintenance:
         object_store: StudioObjectStore,
         tenant_batch_size: int = 10,
         item_batch_size: int = 25,
+        artifact_ttl_seconds: int = 86_400,
+        metadata_ttl_seconds: int = 2_592_000,
     ) -> None:
         if not 1 <= tenant_batch_size <= 100:
             raise ValueError("maintenance tenant batch is invalid")
         if not 1 <= item_batch_size <= 100:
             raise ValueError("maintenance item batch is invalid")
+        if not 300 <= artifact_ttl_seconds <= 604_800:
+            raise ValueError("maintenance artifact TTL is invalid")
+        if not 86_400 <= metadata_ttl_seconds <= 31_536_000:
+            raise ValueError("maintenance metadata TTL is invalid")
+        if metadata_ttl_seconds <= artifact_ttl_seconds:
+            raise ValueError("maintenance metadata TTL must outlive artifact bytes")
         self.session_factory = session_factory
         self.object_store = object_store
         self.tenant_batch_size = tenant_batch_size
         self.item_batch_size = item_batch_size
+        self.artifact_ttl_seconds = artifact_ttl_seconds
+        self.metadata_ttl_seconds = metadata_ttl_seconds
         self._tenant_cursor: uuid.UUID | None = None
 
     async def _tenant_ids(self) -> tuple[uuid.UUID, ...]:
         async with self.session_factory() as db:
-            query = select(Tenant.id).where(Tenant.is_active.is_(True))
+            # Offboarding cannot strand render bytes/jobs merely because the
+            # tenant was deactivated before its retention windows elapsed.
+            query = select(Tenant.id)
             if self._tenant_cursor is not None:
                 query = query.where(Tenant.id > self._tenant_cursor)
             ids = tuple(
@@ -909,7 +972,6 @@ class StudioRenderMaintenance:
                     (
                         await db.scalars(
                             select(Tenant.id)
-                            .where(Tenant.is_active.is_(True))
                             .order_by(Tenant.id)
                             .limit(self.tenant_batch_size)
                         )
@@ -927,18 +989,47 @@ class StudioRenderMaintenance:
                     (
                         await db.scalars(
                             select(StudioPreferredRenderEvidence)
+                            .outerjoin(
+                                StudioDraft,
+                                (
+                                    StudioDraft.tenant_id
+                                    == StudioPreferredRenderEvidence.tenant_id
+                                )
+                                & (
+                                    StudioDraft.id
+                                    == StudioPreferredRenderEvidence.draft_id
+                                ),
+                            )
                             .where(
-                                StudioPreferredRenderEvidence.tenant_id == tenant_id
+                                StudioPreferredRenderEvidence.tenant_id == tenant_id,
+                                or_(
+                                    StudioDraft.id.is_(None),
+                                    StudioDraft.lifecycle_state != "active",
+                                    StudioDraft.cancellation_requested_at.is_not(None),
+                                    StudioDraft.revision
+                                    != StudioPreferredRenderEvidence.revision,
+                                    StudioDraft.identity_sha256
+                                    != StudioPreferredRenderEvidence.identity_sha256,
+                                    StudioDraft.evidence_revision.is_(None),
+                                    StudioDraft.evidence_revision
+                                    != StudioPreferredRenderEvidence.revision,
+                                ),
                             )
                             .order_by(
                                 StudioPreferredRenderEvidence.updated_at,
                                 StudioPreferredRenderEvidence.draft_id,
                             )
-                            .with_for_update(skip_locked=True)
+                            .with_for_update(
+                                of=StudioPreferredRenderEvidence,
+                                skip_locked=True,
+                            )
                             .limit(self.item_batch_size)
                         )
                     ).all()
                 )
+                action_now = await db.scalar(select(func.clock_timestamp()))
+                if not isinstance(action_now, datetime):
+                    raise RuntimeError("Studio maintenance clock is unavailable")
                 for preferred in preferred_rows:
                     draft = await db.scalar(
                         select(StudioDraft).where(
@@ -954,6 +1045,26 @@ class StudioRenderMaintenance:
                         and draft.identity_sha256 == preferred.identity_sha256
                         and draft.evidence_revision == preferred.revision
                     ):
+                        artifact = await db.scalar(
+                            select(StudioRenderArtifact)
+                            .where(
+                                StudioRenderArtifact.tenant_id == tenant_id,
+                                StudioRenderArtifact.id == preferred.artifact_id,
+                            )
+                            .with_for_update()
+                        )
+                        if (
+                            artifact is not None
+                            and artifact.retention_class == "evidence"
+                            and artifact.storage_state != "deleted"
+                        ):
+                            artifact.retention_class = "review"
+                            artifact.content_expires_at = action_now + timedelta(
+                                seconds=self.artifact_ttl_seconds
+                            )
+                            artifact.metadata_expires_at = action_now + timedelta(
+                                seconds=self.metadata_ttl_seconds
+                            )
                         await db.delete(preferred)
                         changed += 1
                 await db.commit()

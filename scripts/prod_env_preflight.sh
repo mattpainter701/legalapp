@@ -29,6 +29,7 @@ required=(
   POSTGRES_PASSWORD CLARITY_APP_PASSWORD REDIS_PASSWORD REDIS_URL
   MIGRATOR_DATABASE_URL APP_DATABASE_URL LITELLM_API_KEY LITELLM_SALT_KEY LITELLM_DB_PASSWORD WORKSPACE_MCP_ENABLED
   LITELLM_DATABASE_URL UPLOADS_HOST_DIR HOST_STATUS_HOST_DIR HOST_DISK_STATUS_FILE HEALTH_HOST_DISK_MAX_AGE_SECONDS BACKUP_STATUS_FILE HEALTH_BACKUP_MAX_AGE_SECONDS OFFSITE_BACKUP_REQUIRED
+  TEMPLATE_STUDIO_RENDER_ENABLED
   EMAIL_ENABLED EMAIL_FROM ORIGIN_TLS_SERVER_NAME ORIGIN_TLS_CA_FILE CLOUDFLARED_CONFIG_FILE CLOUDFLARED_BIN
   QBO_CLIENT_ID QBO_CLIENT_SECRET QBO_REDIRECT_URI QBO_ENVIRONMENT
 )
@@ -105,12 +106,15 @@ fi
 public_signup_enabled="$(get_env PUBLIC_SIGNUP_ENABLED)"
 vite_public_signup_enabled="$(get_env VITE_PUBLIC_SIGNUP_ENABLED)"
 mcp_product_enabled="$(get_env MCP_PRODUCT_ENABLED)"
+studio_render_enabled="$(get_env TEMPLATE_STUDIO_RENDER_ENABLED)"
 
 [[ "$(get_env DEV_MODE)" == "false" ]] || errors+=("DEV_MODE must be false")
 [[ "$public_signup_enabled" == "false" ]] || errors+=("PUBLIC_SIGNUP_ENABLED must remain false until paid conversion and expiry enforcement are proven")
 [[ "$vite_public_signup_enabled" == "false" ]] || errors+=("VITE_PUBLIC_SIGNUP_ENABLED must remain false until public signup is enabled end to end")
 [[ "$public_signup_enabled" == "$vite_public_signup_enabled" ]] || errors+=("PUBLIC_SIGNUP_ENABLED and VITE_PUBLIC_SIGNUP_ENABLED must match")
 [[ "$mcp_product_enabled" == "true" || "$mcp_product_enabled" == "false" ]] || errors+=("MCP_PRODUCT_ENABLED must be explicitly true or false")
+[[ "$studio_render_enabled" == "true" || "$studio_render_enabled" == "false" ]] || errors+=("TEMPLATE_STUDIO_RENDER_ENABLED must be explicitly true or false")
+[[ "$studio_render_enabled" != "true" ]] || errors+=("Studio rendering must remain production-disabled until CAS backup and restore rehearsal are release-gated")
 [[ "$(get_env PLATFORM_LEGACY_BOOTSTRAP_ENABLED)" == "false" ]] || errors+=("PLATFORM_LEGACY_BOOTSTRAP_ENABLED must be explicitly false for production")
 [[ "$(get_env OFFSITE_BACKUP_REQUIRED)" == "true" ]] || errors+=("OFFSITE_BACKUP_REQUIRED must be true for production deploys")
 email_enabled="$(get_env EMAIL_ENABLED)"
@@ -542,6 +546,16 @@ elif (( ${#compose_file_paths[@]} == 2 )) \
 else
   errors+=("COMPOSE_FILES must be exactly docker-compose.hypervisor.yml, docker-compose.hypervisor.yml followed by docker-compose.cube-m.yml, or docker-compose.yml followed by docker-compose.prod.yml; extra, reversed, mixed, and unknown overrides are prohibited")
 fi
+if [[ "$studio_render_enabled" == "true" ]]; then
+  if [[ "$capacity_profile" == "cube-m" ]]; then
+    errors+=("Template Studio rendering is not approved on the Cube M topology")
+  fi
+  studio_runtime_dir="$(get_env STUDIO_RENDER_RUNTIME_HOST_DIR)"
+  [[ "$studio_runtime_dir" == /* && "$studio_runtime_dir" != "/" ]] || errors+=("STUDIO_RENDER_RUNTIME_HOST_DIR must be an absolute non-root path when Studio rendering is enabled")
+  [[ -d "$studio_runtime_dir" && ! -L "$studio_runtime_dir" ]] || errors+=("STUDIO_RENDER_RUNTIME_HOST_DIR must be an existing non-symlink directory when Studio rendering is enabled")
+  [[ -n "$(get_env TEMPLATE_STUDIO_RENDER_MANIFESTS_JSON)" ]] || errors+=("TEMPLATE_STUDIO_RENDER_MANIFESTS_JSON is required when Studio rendering is enabled")
+  [[ -n "$(get_env TEMPLATE_STUDIO_RENDER_PROFILES_JSON)" ]] || errors+=("TEMPLATE_STUDIO_RENDER_PROFILES_JSON is required when Studio rendering is enabled")
+fi
 for key in "${!guarded_compose_vars[@]}"; do
   case "$key" in
     APP_COMMIT|APP_VERSION|APP_BUILD_TIME) continue ;;
@@ -559,6 +573,9 @@ fi
 
 for warning in "${warnings[@]}"; do echo "WARN: $warning"; done
 compose=(docker compose --env-file "$ENV_FILE")
+if [[ "$studio_render_enabled" == "true" ]]; then
+  compose+=( --profile studio-render )
+fi
 for compose_file in "${compose_file_list[@]}"; do
   compose+=( -f "$compose_file" )
 done

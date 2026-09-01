@@ -3,10 +3,14 @@
 import uuid
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
+import app.config as config_module
+from app.config import validate_studio_render_paths
 from app.models.durable_job import DurableJob
 from app.models.studio_render import (
     StudioPreferredRenderEvidence,
@@ -28,6 +32,7 @@ from app.services.studio_render_jobs import (
     StudioRenderJobService,
     StudioRenderWorkerService,
     _geometry_matches_request,
+    _can_become_preferred_evidence,
     _evidence_basis_sha256,
     StudioRenderServiceError,
     _StudioRenderJobStore,
@@ -37,6 +42,10 @@ from app.services.studio_render_jobs import (
     _render_cache_key,
     _transition,
     sanitized_failure,
+)
+from app.services.studio_render_runtime import (
+    StudioRenderRuntimeError,
+    _prepare_workspace,
 )
 
 
@@ -348,10 +357,11 @@ def test_artifact_model_uses_available_tenant_composite_references():
         "fk_studio_preferred_render_draft_tenant",
         "fk_studio_preferred_render_exact_evidence",
         "uq_studio_preferred_render_artifact",
+        "ck_studio_preferred_render_basis",
     }.issubset(preferred_names)
 
 
-def test_preferred_evidence_basis_separates_roles_pages_and_options():
+def test_preferred_evidence_basis_is_server_owned_and_bounded():
     first = _lease()[1].payload
     preview = first.model_copy(
         update={
@@ -362,8 +372,155 @@ def test_preferred_evidence_basis_separates_roles_pages_and_options():
     second_page = preview.model_copy(
         update={"render_options": StudioRenderOptions(page_number=2)}
     )
+    quota_variant = first.model_copy(
+        update={
+            "render_options": first.render_options.model_copy(
+                update={
+                    "max_output_bytes": first.render_options.max_output_bytes + 1,
+                    "max_pages": first.render_options.max_pages + 1,
+                    "purpose": "preview",
+                }
+            )
+        }
+    )
     assert _evidence_basis_sha256(first) != _evidence_basis_sha256(preview)
     assert _evidence_basis_sha256(preview) != _evidence_basis_sha256(second_page)
+    assert _evidence_basis_sha256(first) == _evidence_basis_sha256(quota_variant)
+    assert _can_become_preferred_evidence(first)
+    assert not _can_become_preferred_evidence(preview)
+
+
+def test_retained_evidence_quota_configuration_is_bounded():
+    with pytest.raises(ValueError, match="retained_artifact_limit"):
+        _StudioRenderJobStore(
+            object(), tenant_id=uuid.uuid4(), retained_artifact_limit=0
+        )
+    with pytest.raises(ValueError, match="retained_byte_limit"):
+        _StudioRenderJobStore(
+            object(), tenant_id=uuid.uuid4(), retained_byte_limit=0
+        )
+
+
+def _studio_path_settings(tmp_path: Path, **overrides):
+    values = {
+        "TEMPLATE_STUDIO_RENDER_STORAGE_DIR": str(tmp_path / "cas"),
+        "TEMPLATE_STUDIO_RENDER_WORKSPACE_DIR": str(tmp_path / "workspace"),
+        "UPLOAD_DIR": str(tmp_path / "uploads"),
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def test_studio_render_paths_are_canonical_and_disjoint(tmp_path):
+    settings = _studio_path_settings(tmp_path)
+    storage, workspace = validate_studio_render_paths(
+        settings, require_workspace=True
+    )
+    assert storage == (tmp_path / "cas").resolve()
+    assert workspace == (tmp_path / "workspace").resolve()
+
+
+@pytest.mark.parametrize(
+    ("storage_suffix", "workspace_suffix"),
+    [
+        ("same", "same"),
+        ("nested", "nested/child"),
+        ("nested/child", "nested"),
+    ],
+)
+def test_studio_render_paths_reject_equality_and_nesting(
+    tmp_path, storage_suffix, workspace_suffix
+):
+    settings = _studio_path_settings(
+        tmp_path,
+        TEMPLATE_STUDIO_RENDER_STORAGE_DIR=str(tmp_path / storage_suffix),
+        TEMPLATE_STUDIO_RENDER_WORKSPACE_DIR=str(tmp_path / workspace_suffix),
+    )
+    with pytest.raises(ValueError, match="must be disjoint"):
+        validate_studio_render_paths(settings, require_workspace=True)
+
+
+def test_studio_render_paths_reject_root_upload_and_application_paths(tmp_path):
+    root = Path(tmp_path.anchor)
+    with pytest.raises(ValueError, match="filesystem root"):
+        validate_studio_render_paths(
+            _studio_path_settings(
+                tmp_path, TEMPLATE_STUDIO_RENDER_WORKSPACE_DIR=str(root)
+            ),
+            require_workspace=True,
+        )
+    with pytest.raises(ValueError, match="UPLOAD_DIR"):
+        validate_studio_render_paths(
+            _studio_path_settings(
+                tmp_path,
+                TEMPLATE_STUDIO_RENDER_WORKSPACE_DIR=str(tmp_path / "uploads" / "tmp"),
+            ),
+            require_workspace=True,
+        )
+    app_root = Path(config_module.__file__).resolve().parents[1]
+    with pytest.raises(ValueError, match="application root"):
+        validate_studio_render_paths(
+            _studio_path_settings(
+                tmp_path,
+                TEMPLATE_STUDIO_RENDER_WORKSPACE_DIR=str(app_root / "app"),
+            ),
+            require_workspace=True,
+        )
+
+
+def test_prepare_workspace_cleans_only_a_safe_dedicated_root(tmp_path):
+    settings = _studio_path_settings(tmp_path)
+    workspace = tmp_path / "workspace"
+    nested = workspace / "old-job"
+    nested.mkdir(parents=True)
+    (nested / "result.bin").write_bytes(b"old")
+
+    prepared = _prepare_workspace(settings)
+
+    assert prepared == workspace.resolve()
+    assert list(prepared.iterdir()) == []
+
+
+def test_prepare_workspace_rechecks_relationship_before_cleanup(tmp_path):
+    settings = _studio_path_settings(
+        tmp_path,
+        TEMPLATE_STUDIO_RENDER_WORKSPACE_DIR=str(tmp_path / "uploads"),
+    )
+    protected = tmp_path / "uploads" / "keep.bin"
+    protected.parent.mkdir(parents=True)
+    protected.write_bytes(b"keep")
+
+    with pytest.raises(StudioRenderRuntimeError):
+        _prepare_workspace(settings)
+    assert protected.read_bytes() == b"keep"
+
+
+def test_durable_job_studio_partial_indexes_match_migration_contract():
+    indexes = {index.name: index for index in DurableJob.__table__.indexes}
+    idempotency = indexes["uq_durable_jobs_studio_idempotency"]
+    claim = indexes["ix_durable_jobs_studio_claim"]
+    assert idempotency.unique is True
+    assert [column.name for column in idempotency.columns] == [
+        "tenant_id",
+        "idempotency_key",
+    ]
+    assert [column.name for column in claim.columns] == [
+        "tenant_id",
+        "status",
+        "available_at",
+        "created_at",
+    ]
+    idempotency_where = str(idempotency.dialect_options["postgresql"]["where"])
+    claim_where = str(claim.dialect_options["postgresql"]["where"])
+    for kind in (
+        "studio_template_analysis",
+        "studio_template_ocr",
+        "studio_page_preview",
+        "studio_test_render",
+    ):
+        assert kind in idempotency_where
+        assert kind in claim_where
+    assert "cancel_requested" in claim_where
 
 
 @pytest.mark.asyncio

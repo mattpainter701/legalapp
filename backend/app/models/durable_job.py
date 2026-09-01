@@ -12,6 +12,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -27,6 +28,28 @@ class DurableJob(Base):
             "tenant_id", "kind", "idempotency_key", name="uq_durable_job_idempotency"
         ),
         Index("ix_durable_jobs_claim", "status", "available_at", "created_at"),
+        Index(
+            "uq_durable_jobs_studio_idempotency",
+            "tenant_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text(
+                "kind IN ('studio_template_analysis', 'studio_template_ocr', "
+                "'studio_page_preview', 'studio_test_render')"
+            ),
+        ),
+        Index(
+            "ix_durable_jobs_studio_claim",
+            "tenant_id",
+            "status",
+            "available_at",
+            "created_at",
+            postgresql_where=text(
+                "kind IN ('studio_template_analysis', 'studio_template_ocr', "
+                "'studio_page_preview', 'studio_test_render') AND "
+                "status IN ('pending', 'running', 'cancel_requested')"
+            ),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

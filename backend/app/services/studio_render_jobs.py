@@ -28,6 +28,7 @@ from app.models.studio_render import (
     StudioPreferredRenderEvidence,
     StudioRenderArtifact,
 )
+from app.models.tenant import Tenant
 from app.schemas.studio_render import (
     STUDIO_RENDER_JOB_KINDS,
     STUDIO_PUBLIC_ERROR_DETAIL_KEYS,
@@ -88,6 +89,7 @@ _MEDIA_TYPES_BY_ARTIFACT_KIND = {
     ),
 }
 _RETENTION_CLASSES = frozenset({"ephemeral", "review", "evidence"})
+_PREFERRED_EVIDENCE_JOB_KINDS = frozenset({"studio_test_render"})
 _CANONICAL_STATUS_BASE = "/api/template-studio/render-jobs"
 _STORAGE_STAGE_TIMEOUT_SECONDS = 30.0
 _STORAGE_READ_TIMEOUT_SECONDS = 30.0
@@ -446,10 +448,11 @@ class _PersistedResult(StrictModel):
             "cancelled_output",
         }:
             raise ValueError("invalid adoption outcome")
-        if self.adoption_outcome is not None and self.preferred_evidence_at_completion != (
-            self.adoption_outcome == "current_evidence"
+        if (
+            self.preferred_evidence_at_completion
+            and self.adoption_outcome != "current_evidence"
         ):
-            raise ValueError("current-evidence completion flag is invalid")
+            raise ValueError("only current output can be preferred evidence")
         if self.retention_class is not None and self.retention_class not in _RETENTION_CLASSES:
             raise ValueError("invalid retention class")
         if (
@@ -615,15 +618,29 @@ def _render_cache_key(
     )
 
 
+def _evidence_slot(queued: _QueuedPayload) -> str:
+    """Return a bounded server-owned semantic role, never client quota knobs."""
+
+    if queued.kind == "studio_page_preview":
+        return f"page_preview:page:{queued.render_options.page_number}"
+    return {
+        "studio_template_analysis": "analysis:canonical",
+        "studio_template_ocr": "ocr:canonical",
+        "studio_test_render": "test_render:canonical",
+    }[queued.kind]
+
+
 def _evidence_basis_sha256(queued: _QueuedPayload) -> str:
     return canonical_json_sha256(
         {
-            "contract_version": 1,
-            "kind": queued.kind,
-            "source_format": queued.source.format,
-            "render_options": queued.render_options.model_dump(mode="json"),
+            "contract_version": 2,
+            "server_owned_evidence_slot": _evidence_slot(queued),
         }
     )
+
+
+def _can_become_preferred_evidence(queued: _QueuedPayload) -> bool:
+    return queued.kind in _PREFERRED_EVIDENCE_JOB_KINDS
 
 
 def _transition(row: DurableJob, target: str, *, now: datetime) -> None:
@@ -705,6 +722,10 @@ class _StudioRenderJobStore:
         enqueue_rate_window: timedelta = timedelta(minutes=1),
         queued_byte_limit: int = 500 * 1024 * 1024,
         max_input_binding_bytes: int = 25 * 1024 * 1024,
+        retained_artifact_limit: int = 500,
+        retained_byte_limit: int = 10 * 1024**3,
+        live_artifact_limit: int = 1_000,
+        live_byte_limit: int = 20 * 1024**3,
     ):
         if not 1 <= active_job_limit <= 32:
             raise ValueError("active_job_limit must be between 1 and 32")
@@ -718,6 +739,14 @@ class _StudioRenderJobStore:
             raise ValueError("queued_byte_limit is invalid")
         if not 1 <= max_input_binding_bytes <= 100 * 1024 * 1024:
             raise ValueError("max_input_binding_bytes is invalid")
+        if not 1 <= retained_artifact_limit <= 100_000:
+            raise ValueError("retained_artifact_limit is invalid")
+        if not 1 <= retained_byte_limit <= 10 * 1024**4:
+            raise ValueError("retained_byte_limit is invalid")
+        if not retained_artifact_limit <= live_artifact_limit <= 100_000:
+            raise ValueError("live_artifact_limit is invalid")
+        if not retained_byte_limit <= live_byte_limit <= 10 * 1024**4:
+            raise ValueError("live_byte_limit is invalid")
         self.db = db
         self.tenant_id = uuid.UUID(str(tenant_id))
         self.actor_user_id = (
@@ -752,11 +781,27 @@ class _StudioRenderJobStore:
         self.enqueue_rate_window = enqueue_rate_window
         self.queued_byte_limit = queued_byte_limit
         self.max_input_binding_bytes = max_input_binding_bytes
+        self.retained_artifact_limit = retained_artifact_limit
+        self.retained_byte_limit = retained_byte_limit
+        self.live_artifact_limit = live_artifact_limit
+        self.live_byte_limit = live_byte_limit
 
     async def _bind_tenant_context(self) -> None:
         """Rebind transaction-local RLS state at every persistence boundary."""
 
         await set_tenant_context(self.db, str(self.tenant_id))
+
+    async def _acquire_tenant_purge_fence(self) -> bool:
+        """Serialize worker writes with demo purge and verify tenant liveness."""
+
+        await self.db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
+            {"scope": f"lawhand:demo-purge:v1:{self.tenant_id}"},
+        )
+        active = await self.db.scalar(
+            select(Tenant.is_active).where(Tenant.id == self.tenant_id)
+        )
+        return active is True
 
     async def _clock_now(self) -> datetime:
         """Read wall-clock database time even inside an older transaction."""
@@ -1163,15 +1208,44 @@ class _StudioRenderJobStore:
             ).all()
         )
         queued_bytes = 0
+        reserved_output_bytes = 0
         for active in active_rows:
             active_payload = _parse_queued(active, now=now)
             if active_payload is not None:
                 queued_bytes += active_payload.admission_bytes
+                reserved_output_bytes += active_payload.render_options.max_output_bytes
         if queued_bytes + admission_bytes > self.queued_byte_limit:
             raise StudioRenderServiceError(
                 429,
                 "studio_queued_bytes",
                 "The tenant Studio queued-byte limit is reached.",
+            )
+        live_usage = (
+            await self.db.execute(
+                select(
+                    func.count(StudioRenderArtifact.id),
+                    func.coalesce(func.sum(StudioRenderArtifact.byte_size), 0),
+                ).where(
+                    StudioRenderArtifact.tenant_id == self.tenant_id,
+                    StudioRenderArtifact.storage_state.in_(
+                        {"active", "delete_pending"}
+                    ),
+                )
+            )
+        ).one()
+        live_count = int(live_usage[0] or 0)
+        live_bytes = int(live_usage[1] or 0)
+        if (
+            live_count + len(active_rows) + 1 > self.live_artifact_limit
+            or live_bytes
+            + reserved_output_bytes
+            + request.render_options.max_output_bytes
+            > self.live_byte_limit
+        ):
+            raise StudioRenderServiceError(
+                429,
+                "studio_artifact_storage",
+                "The tenant Studio artifact storage limit is reached.",
             )
         source = request.source
         options_sha256 = request.render_options.sha256
@@ -1285,7 +1359,11 @@ class _StudioRenderJobStore:
 
         if adoption_outcome is None:
             return None
-        if adoption_outcome != "current_evidence" or artifact_id is None:
+        if (
+            adoption_outcome != "current_evidence"
+            or artifact_id is None
+            or not _can_become_preferred_evidence(queued)
+        ):
             return False
         draft = await self.db.scalar(
             select(StudioDraft).where(
@@ -1314,6 +1392,86 @@ class _StudioRenderJobStore:
             and preferred.revision == queued.rendered_revision
             and preferred.identity_sha256 == queued.identity_sha256
         )
+
+    async def _prepare_preferred_evidence_replacement(
+        self,
+        *,
+        queued: _QueuedPayload,
+        output_byte_size: int,
+        now: datetime,
+        artifact_ttl_seconds: int,
+        metadata_ttl_seconds: int,
+    ) -> None:
+        """Serialize quota admission and retire the prior artifact in this slot."""
+
+        if not _can_become_preferred_evidence(queued):
+            raise RuntimeError("unsupported Studio preferred-evidence kind")
+        await self.db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
+            {"scope": f"{self.tenant_id}:studio-retained-evidence"},
+        )
+        basis = _evidence_basis_sha256(queued)
+        preferred = await self.db.scalar(
+            select(StudioPreferredRenderEvidence)
+            .where(
+                StudioPreferredRenderEvidence.tenant_id == self.tenant_id,
+                StudioPreferredRenderEvidence.draft_id == queued.draft_id,
+                StudioPreferredRenderEvidence.evidence_basis_sha256 == basis,
+            )
+            .with_for_update()
+        )
+        previous = None
+        if preferred is not None:
+            previous = await self.db.scalar(
+                select(StudioRenderArtifact)
+                .where(
+                    StudioRenderArtifact.tenant_id == self.tenant_id,
+                    StudioRenderArtifact.id == preferred.artifact_id,
+                )
+                .with_for_update()
+            )
+        usage = (
+            await self.db.execute(
+                select(
+                    func.count(StudioRenderArtifact.id),
+                    func.coalesce(func.sum(StudioRenderArtifact.byte_size), 0),
+                ).where(
+                    StudioRenderArtifact.tenant_id == self.tenant_id,
+                    StudioRenderArtifact.retention_class == "evidence",
+                    StudioRenderArtifact.storage_state != "deleted",
+                )
+            )
+        ).one()
+        retained_count = int(usage[0] or 0)
+        retained_bytes = int(usage[1] or 0)
+        replacing = bool(
+            previous is not None
+            and previous.retention_class == "evidence"
+            and previous.storage_state != "deleted"
+        )
+        next_count = retained_count - int(replacing) + 1
+        next_bytes = (
+            retained_bytes
+            - (int(previous.byte_size) if replacing and previous is not None else 0)
+            + output_byte_size
+        )
+        if (
+            next_count > self.retained_artifact_limit
+            or next_bytes > self.retained_byte_limit
+        ):
+            raise StudioRenderServiceError(
+                429,
+                "studio_retained_artifacts",
+                "The tenant Studio retained-artifact limit is reached.",
+            )
+        if previous is not None and previous.storage_state != "deleted":
+            previous.retention_class = "review"
+            previous.content_expires_at = now + timedelta(
+                seconds=artifact_ttl_seconds
+            )
+            previous.metadata_expires_at = now + timedelta(
+                seconds=metadata_ttl_seconds
+            )
 
     async def _stage_preferred_evidence(
         self,
@@ -1357,7 +1515,7 @@ class _StudioRenderJobStore:
         row: DurableJob,
         queued: _QueuedPayload,
         result: _PersistedResult,
-    ) -> tuple[str, str] | None:
+    ) -> tuple[str, str, str, datetime | None, datetime | None] | None:
         """Verify immutable evidence and classify only legitimate expiry."""
 
         if result.artifact_id is None:
@@ -1376,7 +1534,13 @@ class _StudioRenderJobStore:
                 result.metadata_expires_at is not None
                 and result.metadata_expires_at <= now
             ):
-                return "expired", "expired"
+                return (
+                    "expired",
+                    "expired",
+                    result.retention_class or "review",
+                    result.content_expires_at,
+                    result.metadata_expires_at,
+                )
             return None
         # Artifact acquisition can block behind retention. Re-fence expiry
         # with wall-clock database time while both evidence rows are locked.
@@ -1454,9 +1618,6 @@ class _StudioRenderJobStore:
                 requested_page_number=artifact.requested_page_number,
             )
             and artifact.adoption_outcome == result.adoption_outcome
-            and artifact.retention_class == result.retention_class
-            and artifact.content_expires_at == result.content_expires_at
-            and artifact.metadata_expires_at == result.metadata_expires_at
         )
         if not exact:
             return None
@@ -1500,7 +1661,13 @@ class _StudioRenderJobStore:
             "expired" if content_expired or not active else "available"
         )
         metadata_availability = "expired" if metadata_expired else "available"
-        return content_availability, metadata_availability
+        return (
+            content_availability,
+            metadata_availability,
+            artifact.retention_class,
+            artifact.content_expires_at,
+            artifact.metadata_expires_at,
+        )
 
     async def status(self, job_id: uuid.UUID) -> StudioRenderJobStatus:
         if self.actor_user_id is None:
@@ -1602,12 +1769,25 @@ class _StudioRenderJobStore:
             )
         artifact_availability = None
         artifact_metadata_availability = None
+        current_retention_class = result.retention_class if state == "completed" else None
+        current_content_expires_at = (
+            result.content_expires_at if state == "completed" else None
+        )
+        current_metadata_expires_at = (
+            result.metadata_expires_at if state == "completed" else None
+        )
         if state == "completed":
             availability = await self._completed_artifact_availability(
                 row, queued, result
             )
             if availability is not None:
-                artifact_availability, artifact_metadata_availability = availability
+                (
+                    artifact_availability,
+                    artifact_metadata_availability,
+                    current_retention_class,
+                    current_content_expires_at,
+                    current_metadata_expires_at,
+                ) = availability
         if state == "completed" and artifact_metadata_availability is None:
             _terminalize_poison(row, now=now)
             await self.db.flush()
@@ -1709,7 +1889,7 @@ class _StudioRenderJobStore:
                 if state == "completed" and expose_metadata
                 else None
             ),
-            retention_class=result.retention_class if state == "completed" else None,
+            retention_class=current_retention_class,
             error_code=error_code,
             error_message=error_message,
             error_retryable=(
@@ -1718,12 +1898,8 @@ class _StudioRenderJobStore:
                 else None
             ),
             job_expires_at=queued.expires_at,
-            content_expires_at=(
-                result.content_expires_at if state == "completed" else None
-            ),
-            metadata_expires_at=(
-                result.metadata_expires_at if state == "completed" else None
-            ),
+            content_expires_at=current_content_expires_at,
+            metadata_expires_at=current_metadata_expires_at,
         )
         await self.db.flush()
         return response
@@ -1887,6 +2063,12 @@ class _StudioRenderJobStore:
                 "job_data_unavailable",
                 STUDIO_PUBLIC_FAILURES["job_data_unavailable"],
             )
+        if status.output_byte_size > max_bytes:
+            raise StudioRenderServiceError(
+                413,
+                "download_limit_exceeded",
+                "The Studio artifact exceeds the download limit.",
+            )
         ref = StudioObjectRef(
             tenant_id=self.tenant_id,
             object_key=(
@@ -1905,7 +2087,7 @@ class _StudioRenderJobStore:
                 partial(
                     object_store.read,
                     ref,
-                    max_bytes=min(max_bytes, status.output_byte_size),
+                    max_bytes=status.output_byte_size,
                 ),
                 timeout_seconds=_STORAGE_READ_TIMEOUT_SECONDS,
             )
@@ -2003,6 +2185,9 @@ class _StudioRenderJobStore:
         ):
             raise ValueError("lease_seconds must be between 30 and 3600")
         await self._bind_tenant_context()
+        if not await self._acquire_tenant_purge_fence():
+            await self.db.rollback()
+            return None
         row = await self.db.scalar(
             select(DurableJob)
             .where(
@@ -2119,6 +2304,9 @@ class _StudioRenderJobStore:
 
     async def renew_lease(self, lease: StudioJobLease) -> bool:
         await self._bind_tenant_context()
+        if not await self._acquire_tenant_purge_fence():
+            await self.db.rollback()
+            return False
         row = await self.db.scalar(
             select(DurableJob)
             .where(
@@ -2132,13 +2320,22 @@ class _StudioRenderJobStore:
             await self.db.rollback()
             return False
         queued = _QueuedPayload.model_validate(row.payload)
-        draft_cancelled = await self.db.scalar(
-            select(StudioDraft.cancellation_requested_at).where(
-                StudioDraft.id == queued.draft_id,
-                StudioDraft.tenant_id == self.tenant_id,
+        draft_state = (
+            await self.db.execute(
+                select(
+                    StudioDraft.lifecycle_state,
+                    StudioDraft.cancellation_requested_at,
+                ).where(
+                    StudioDraft.id == queued.draft_id,
+                    StudioDraft.tenant_id == self.tenant_id,
+                )
             )
-        )
-        if draft_cancelled is not None:
+        ).one_or_none()
+        if (
+            draft_state is None
+            or draft_state.lifecycle_state != "active"
+            or draft_state.cancellation_requested_at is not None
+        ):
             _transition(row, "cancel_requested", now=now)
             await self.db.commit()
             return False
@@ -2305,6 +2502,7 @@ class _StudioRenderJobStore:
         geometry_manifest: StudioGeometryManifest,
         geometry_manifest_sha256: str,
         now: datetime,
+        preferred_evidence_at_completion: bool = False,
     ) -> StudioRenderArtifact:
         artifact = self._new_artifact(
             row=row,
@@ -2328,7 +2526,7 @@ class _StudioRenderJobStore:
         row.result = {
             "artifact_id": str(artifact.id),
             "adoption_outcome": adoption_outcome,
-            "preferred_evidence_at_completion": adoption_outcome == "current_evidence",
+            "preferred_evidence_at_completion": preferred_evidence_at_completion,
             "content_expires_at": (
                 content_expires_at.isoformat() if content_expires_at is not None else None
             ),
@@ -2372,6 +2570,12 @@ class _StudioRenderJobStore:
             raise StudioRenderServiceError(
                 409, "storage_integrity_failed", "Studio output tenant is invalid."
             )
+        if not await self._acquire_tenant_purge_fence():
+            raise StudioRenderServiceError(
+                409,
+                "cancelled",
+                "Studio processing was cancelled.",
+            )
         if not 300 <= artifact_ttl_seconds <= 604_800:
             raise StudioRenderServiceError(
                 409, "validation_failed", "Studio artifact TTL is invalid."
@@ -2383,6 +2587,13 @@ class _StudioRenderJobStore:
                     f"{self.tenant_id}:studio-object:{output.object_key}"
                 )
             },
+        )
+        # Admission reserves one max-sized output while the job is active.
+        # Hold the same tenant lock while atomically exchanging that
+        # reservation for the materialized artifact row.
+        await self.db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
+            {"scope": f"{self.tenant_id}:studio-render-admission"},
         )
         try:
             verified = await asyncio.wait_for(
@@ -2489,10 +2700,21 @@ class _StudioRenderJobStore:
             raise StudioRenderServiceError(
                 409, "lease_lost", "Studio job lease is no longer owned."
             )
-        if retention_class == "evidence" and (
-            row.status == "cancel_requested"
-            or input_state.disposition in {"stale", "cancelled"}
-        ):
+        preferred_evidence = bool(
+            _can_become_preferred_evidence(queued)
+            and row.status != "cancel_requested"
+            and input_state.disposition == "current"
+        )
+        if preferred_evidence:
+            await self._prepare_preferred_evidence_replacement(
+                queued=queued,
+                output_byte_size=output.byte_size,
+                now=now,
+                artifact_ttl_seconds=artifact_ttl_seconds,
+                metadata_ttl_seconds=metadata_ttl_seconds,
+            )
+            retention_class = "evidence"
+        elif retention_class == "evidence":
             retention_class = "review"
         content_expires_at = (
             None
@@ -2564,8 +2786,12 @@ class _StudioRenderJobStore:
             geometry_manifest=geometry_manifest,
             geometry_manifest_sha256=geometry_manifest_sha256,
             now=now,
+            preferred_evidence_at_completion=preferred_evidence,
         )
         artifact_id = artifact.id
+        if not preferred_evidence:
+            await self.db.commit()
+            return artifact_id, "current_evidence"
         await self._stage_preferred_evidence(
             queued=queued,
             artifact=artifact,
@@ -2760,6 +2986,12 @@ class _StudioRenderJobStore:
             )
         object_key = f"studio-content/v1/{content_sha256[:2]}/{content_sha256}"
         try:
+            if not await self._acquire_tenant_purge_fence():
+                raise StudioRenderServiceError(
+                    409,
+                    "cancelled",
+                    "Studio processing was cancelled.",
+                )
             await self.db.execute(
                 text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
                 {"scope": f"{self.tenant_id}:studio-object:{object_key}"},
@@ -2982,6 +3214,10 @@ class StudioRenderJobService:
         enqueue_rate_window: timedelta = timedelta(minutes=1),
         queued_byte_limit: int = 500 * 1024 * 1024,
         max_input_binding_bytes: int = 25 * 1024 * 1024,
+        retained_artifact_limit: int = 500,
+        retained_byte_limit: int = 10 * 1024**3,
+        live_artifact_limit: int = 1_000,
+        live_byte_limit: int = 20 * 1024**3,
     ):
         self._store = _StudioRenderJobStore(
             db,
@@ -2996,6 +3232,10 @@ class StudioRenderJobService:
             enqueue_rate_window=enqueue_rate_window,
             queued_byte_limit=queued_byte_limit,
             max_input_binding_bytes=max_input_binding_bytes,
+            retained_artifact_limit=retained_artifact_limit,
+            retained_byte_limit=retained_byte_limit,
+            live_artifact_limit=live_artifact_limit,
+            live_byte_limit=live_byte_limit,
         )
 
     async def enqueue(
@@ -3092,11 +3332,19 @@ class StudioRenderWorkerService:
         *,
         tenant_id: uuid.UUID,
         input_binding_resolver: StudioInputBindingResolver | None = None,
+        retained_artifact_limit: int = 500,
+        retained_byte_limit: int = 10 * 1024**3,
+        live_artifact_limit: int = 1_000,
+        live_byte_limit: int = 20 * 1024**3,
     ):
         self._store = _StudioRenderJobStore(
             db,
             tenant_id=tenant_id,
             input_binding_resolver=input_binding_resolver,
+            retained_artifact_limit=retained_artifact_limit,
+            retained_byte_limit=retained_byte_limit,
+            live_artifact_limit=live_artifact_limit,
+            live_byte_limit=live_byte_limit,
         )
 
     @staticmethod

@@ -34,6 +34,7 @@ StudioArtifactAvailability = Literal["available", "expired"]
 StudioArtifactMetadataAvailability = Literal["available", "expired"]
 StudioJobFailureCode = Literal[
     "cancelled",
+    "download_limit_exceeded",
     "expired",
     "hostile_input",
     "input_too_large",
@@ -43,20 +44,26 @@ StudioJobFailureCode = Literal[
     "processor_unavailable",
     "source_integrity_failed",
     "storage_integrity_failed",
+    "studio_artifact_storage",
+    "studio_retained_artifacts",
     "validation_failed",
 ]
 StudioPublicErrorCode = Literal[
+    "access_denied",
     "actor_mismatch",
+    "authentication_required",
     "artifact_expired",
     "artifact_not_found",
     "audit_unavailable",
     "cancelled",
+    "download_limit_exceeded",
     "expired",
     "hostile_input",
     "idempotency_key_expired",
     "idempotency_key_mismatch",
     "input_too_large",
     "invalid_idempotency_key",
+    "invalid_request",
     "invalid_job_kind",
     "invalid_job_transition",
     "invalid_status_resource",
@@ -73,11 +80,14 @@ StudioPublicErrorCode = Literal[
     "studio_job_quota",
     "studio_job_rate",
     "studio_queued_bytes",
+    "studio_artifact_storage",
+    "studio_retained_artifacts",
     "validation_failed",
 ]
 
 STUDIO_PUBLIC_FAILURES = {
     "cancelled": "Studio processing was cancelled.",
+    "download_limit_exceeded": "The Studio artifact exceeds the download limit.",
     "expired": "The Studio processing request expired.",
     "hostile_input": "The source document is not safe to process.",
     "input_too_large": "The source document exceeds a processing limit.",
@@ -87,12 +97,16 @@ STUDIO_PUBLIC_FAILURES = {
     "processor_unavailable": "Studio processing is temporarily unavailable.",
     "source_integrity_failed": "The source document failed its integrity check.",
     "storage_integrity_failed": "The rendered output failed its integrity check.",
+    "studio_artifact_storage": "The tenant Studio artifact storage limit is reached.",
+    "studio_retained_artifacts": "The tenant Studio retained-artifact limit is reached.",
     "validation_failed": "The Studio revision is not valid for processing.",
 }
 
 STUDIO_PUBLIC_ERROR_MESSAGES = {
     **STUDIO_PUBLIC_FAILURES,
+    "access_denied": "Studio access is denied.",
     "actor_mismatch": "Studio actor binding is invalid.",
+    "authentication_required": "Studio authentication is required.",
     "artifact_expired": "The Studio artifact has expired.",
     "artifact_not_found": "Studio artifact not found.",
     "audit_unavailable": "Studio auditing is temporarily unavailable.",
@@ -103,6 +117,7 @@ STUDIO_PUBLIC_ERROR_MESSAGES = {
     "invalid_idempotency_key": (
         "Idempotency-Key must be 8-200 printable characters."
     ),
+    "invalid_request": "The Studio request is invalid.",
     "invalid_job_kind": "The Studio render job kind is invalid.",
     "invalid_job_transition": "Studio job state changed before this operation completed.",
     "invalid_status_resource": "Studio status resource is unavailable.",
@@ -118,17 +133,21 @@ STUDIO_PUBLIC_ERROR_MESSAGES = {
 }
 
 STUDIO_PUBLIC_ERROR_STATUS = {
+    "access_denied": 403,
     "actor_mismatch": 403,
+    "authentication_required": 401,
     "artifact_expired": 410,
     "artifact_not_found": 404,
     "audit_unavailable": 503,
     "cancelled": 409,
+    "download_limit_exceeded": 413,
     "expired": 409,
     "hostile_input": 422,
     "idempotency_key_expired": 409,
     "idempotency_key_mismatch": 409,
     "input_too_large": 413,
     "invalid_idempotency_key": 422,
+    "invalid_request": 422,
     "invalid_job_kind": 422,
     "invalid_job_transition": 409,
     "invalid_status_resource": 500,
@@ -145,6 +164,8 @@ STUDIO_PUBLIC_ERROR_STATUS = {
     "studio_job_quota": 429,
     "studio_job_rate": 429,
     "studio_queued_bytes": 429,
+    "studio_artifact_storage": 429,
+    "studio_retained_artifacts": 429,
     "validation_failed": 409,
 }
 
@@ -750,10 +771,11 @@ class StudioRenderJobStatus(StrictModel):
                 and self.artifact_availability != "expired"
             ):
                 raise ValueError("metadata cannot expire before artifact content")
-            if self.adopted_as_preferred_evidence != (
-                self.adoption_outcome == "current_evidence"
+            if (
+                self.adopted_as_preferred_evidence
+                and self.adoption_outcome != "current_evidence"
             ):
-                raise ValueError("adoption evidence state is inconsistent")
+                raise ValueError("only current output can become preferred evidence")
             if self.adoption_outcome in {"stale_output", "cancelled_output"} and (
                 self.is_preferred_evidence is not False or self.auto_open
             ):

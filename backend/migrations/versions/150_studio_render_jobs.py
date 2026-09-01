@@ -1,7 +1,7 @@
 """Add tenant-isolated durable Template Studio render evidence.
 
-Revision ID: 149_studio_render_jobs
-Revises: 148_configurable_workflows
+Revision ID: 150_studio_render_jobs
+Revises: 149_firm_memory_source_auth
 """
 
 from alembic import op
@@ -9,8 +9,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 
-revision = "149_studio_render_jobs"
-down_revision = "148_configurable_workflows"
+revision = "150_studio_render_jobs"
+down_revision = "149_firm_memory_source_auth"
 branch_labels = None
 depends_on = None
 
@@ -43,6 +43,19 @@ def upgrade() -> None:
         "uq_studio_snapshots_tenant_id",
         "studio_draft_snapshots",
         ["tenant_id", "id"],
+    )
+    op.create_unique_constraint(
+        "uq_studio_snapshot_render_contract",
+        "studio_draft_snapshots",
+        [
+            "tenant_id",
+            "id",
+            "draft_id",
+            "revision",
+            "identity_sha256",
+            "content_sha256",
+            "source_artifact_id",
+        ],
     )
     op.create_index(
         "uq_durable_jobs_studio_idempotency",
@@ -133,10 +146,26 @@ def upgrade() -> None:
             name="fk_studio_render_artifact_draft_tenant",
         ),
         sa.ForeignKeyConstraint(
-            ["tenant_id", "snapshot_id"],
-            ["studio_draft_snapshots.tenant_id", "studio_draft_snapshots.id"],
+            [
+                "tenant_id",
+                "snapshot_id",
+                "draft_id",
+                "revision",
+                "identity_sha256",
+                "snapshot_content_sha256",
+                "source_artifact_id",
+            ],
+            [
+                "studio_draft_snapshots.tenant_id",
+                "studio_draft_snapshots.id",
+                "studio_draft_snapshots.draft_id",
+                "studio_draft_snapshots.revision",
+                "studio_draft_snapshots.identity_sha256",
+                "studio_draft_snapshots.content_sha256",
+                "studio_draft_snapshots.source_artifact_id",
+            ],
             ondelete="RESTRICT",
-            name="fk_studio_render_artifact_snapshot_tenant",
+            name="fk_studio_render_artifact_snapshot_contract",
         ),
         sa.ForeignKeyConstraint(
             [
@@ -435,6 +464,11 @@ def downgrade() -> None:
 
     op.drop_index("ix_durable_jobs_studio_claim", table_name="durable_jobs")
     op.drop_index("uq_durable_jobs_studio_idempotency", table_name="durable_jobs")
+    op.drop_constraint(
+        "uq_studio_snapshot_render_contract",
+        "studio_draft_snapshots",
+        type_="unique",
+    )
     op.drop_constraint(
         "uq_studio_snapshots_tenant_id",
         "studio_draft_snapshots",

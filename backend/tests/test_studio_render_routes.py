@@ -22,10 +22,12 @@ from app.schemas.studio_render import (
     StudioRenderAccepted,
     StudioRenderCapabilities,
     StudioRenderCapability,
+    StudioRenderJobStatus,
     StudioRenderOptions,
     StudioRenderSourceContract,
     StudioRendererComponent,
     StudioRendererManifest,
+    canonical_effective_render_request_hash,
 )
 from app.services.studio_render_jobs import StudioRenderArtifactContent
 
@@ -48,6 +50,7 @@ class _FakeService:
                 )
             ],
         )
+        self.manifest = None
 
     async def enqueue(self, request, *, idempotency_key, audit):
         self.enqueued = request
@@ -67,6 +70,48 @@ class _FakeService:
             geometry_manifest_sha256=self.geometry.sha256,
         )
 
+    async def status(self, job_id):
+        now = datetime.now(timezone.utc)
+        options = StudioRenderOptions(page_number=2, max_pages=3)
+        request_sha256 = "d" * 64
+        return StudioRenderJobStatus(
+            job_id=job_id,
+            status_url=f"/api/template-studio/render-jobs/{job_id}",
+            kind="studio_page_preview",
+            state="pending",
+            progress=0,
+            attempts=0,
+            max_attempts=3,
+            created_at=now,
+            updated_at=now,
+            draft_id=uuid.uuid4(),
+            rendered_revision=3,
+            identity_sha256="b" * 64,
+            snapshot_id=uuid.uuid4(),
+            snapshot_content_sha256="c" * 64,
+            source=StudioRenderSourceContract(
+                artifact_id=uuid.uuid4(),
+                sha256="a" * 64,
+                media_type="text/markdown",
+                format="markdown",
+            ),
+            render_options=options,
+            render_options_sha256=options.sha256,
+            request_sha256=request_sha256,
+            effective_request_sha256=canonical_effective_render_request_hash(
+                request_sha256=request_sha256,
+                input_binding_sha256=None,
+                input_binding_version=None,
+            ),
+            renderer_manifest=self.manifest,
+            runtime_manifest_sha256=self.manifest.sha256,
+            job_expires_at=now + timedelta(hours=1),
+        )
+
+    async def request_cancel(self, job_id, *, audit):
+        await audit("studio_render_cancel_requested", job_id)
+        return await self.status(job_id)
+
     async def artifact_content(self, artifact_id, *, object_store, max_bytes):
         content = b"verified-output"
         return StudioRenderArtifactContent(
@@ -85,7 +130,16 @@ async def _audit(_event, _job_id):
     return None
 
 
-def _context(service, actor_id):
+class _RouteObjectStore:
+    def __init__(self, *, fresh=True):
+        self.fresh = fresh
+
+    def worker_heartbeat_fresh(self, *, max_age_seconds):
+        assert 20 <= max_age_seconds <= 600
+        return self.fresh
+
+
+def _context(service, actor_id, *, worker_fresh=True):
     def component(name, value):
         return StudioRendererComponent(
             name=name, version="1.0.0", content_sha256=value * 64
@@ -104,12 +158,13 @@ def _context(service, actor_id):
         converter=component("converter", "9"),
         validator=component("validator", "a"),
     )
+    service.manifest = manifest
     return StudioRenderRouteContext(
         service=service,
         actor_user_id=actor_id,
         audit=_audit,
         transaction=_transaction,
-        object_store=object(),
+        object_store=_RouteObjectStore(fresh=worker_fresh),
         backend_url="https://configured.example",
         capabilities=StudioRenderCapabilities(
             capabilities=[
@@ -220,6 +275,39 @@ async def test_capability_route_exposes_server_owned_dispatch_combinations():
     assert response.status_code == 200
     assert response.json()["capabilities"][0]["source_format"] == "markdown"
     assert response.json()["capabilities"][0]["output_media_type"] == "image/png"
+
+
+@pytest.mark.asyncio
+async def test_stale_worker_blocks_admission_but_not_existing_resources():
+    service = _FakeService()
+    context = _context(service, uuid.uuid4(), worker_fresh=False)
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_studio_render_route_context] = lambda: context
+    job_id = uuid.uuid4()
+    artifact_id = uuid.uuid4()
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="https://test.invalid"
+    ) as client:
+        capabilities = await client.get("/api/template-studio/render-capabilities")
+        enqueue = await client.post(
+            "/api/template-studio/render-jobs",
+            headers={"Idempotency-Key": "intent-key-123"},
+            json=_intent(),
+        )
+        status = await client.get(f"/api/template-studio/render-jobs/{job_id}")
+        cancel = await client.post(
+            f"/api/template-studio/render-jobs/{job_id}/cancel"
+        )
+        content = await client.get(
+            f"/api/template-studio/render-artifacts/{artifact_id}/content"
+        )
+    assert capabilities.status_code == 503
+    assert enqueue.status_code == 503
+    assert capabilities.json()["detail"]["code"] == "processor_unavailable"
+    assert status.status_code == 200
+    assert cancel.status_code == 200
+    assert content.status_code == 200
 
 
 @pytest.mark.asyncio

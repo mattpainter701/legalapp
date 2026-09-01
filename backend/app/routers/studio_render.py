@@ -11,7 +11,9 @@ from typing import Protocol, TypeVar
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
-from fastapi.responses import Response as FastAPIResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, Response as FastAPIResponse
+from fastapi.routing import APIRoute
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -22,6 +24,7 @@ from app.schemas.studio_render import (
     StudioRenderCapabilities,
     StudioRenderIntent,
     StudioRenderJobStatus,
+    StudioRenderPublicError,
     StudioRenderPublicErrorEnvelope,
 )
 from app.services.studio_object_storage import StudioObjectStore
@@ -29,6 +32,7 @@ from app.services.studio_render_jobs import (
     StudioConsumerAudit,
     StudioRenderArtifactContent,
     StudioRenderJobService,
+    StudioRenderServiceError,
     append_studio_render_audit_event,
     run_studio_consumer_transaction,
     studio_render_public_error,
@@ -131,6 +135,12 @@ async def get_studio_render_route_context(
             max_input_binding_bytes=(
                 settings.TEMPLATE_STUDIO_RENDER_MAX_INPUT_BINDING_BYTES
             ),
+            retained_artifact_limit=(
+                settings.TEMPLATE_STUDIO_RENDER_RETAINED_ARTIFACT_LIMIT
+            ),
+            retained_byte_limit=settings.TEMPLATE_STUDIO_RENDER_RETAINED_BYTE_LIMIT,
+            live_artifact_limit=settings.TEMPLATE_STUDIO_RENDER_LIVE_ARTIFACT_LIMIT,
+            live_byte_limit=settings.TEMPLATE_STUDIO_RENDER_LIVE_BYTE_LIMIT,
         )
         return StudioRenderRouteContext(
             service=service,
@@ -153,11 +163,67 @@ async def get_studio_render_route_context(
         raise _public_http_error(exc) from exc
 
 
-router = APIRouter(prefix="/api/template-studio", tags=["template-studio"])
+async def require_fresh_studio_render_worker(
+    context: StudioRenderRouteContext = Depends(get_studio_render_route_context),
+) -> StudioRenderRouteContext:
+    """Gate only admissions that require a worker to accept new work."""
+
+    settings = get_settings()
+    if not context.object_store.worker_heartbeat_fresh(
+        max_age_seconds=settings.TEMPLATE_STUDIO_RENDER_HEALTH_MAX_AGE_SECONDS
+    ):
+        raise _public_http_error(RuntimeError("Studio rendering is unavailable."))
+    return context
+
+
+class StudioRenderAPIRoute(APIRoute):
+    """Normalize route, dependency, and validation failures into one envelope."""
+
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+
+        async def normalized(request: Request):
+            try:
+                return await handler(request)
+            except RequestValidationError:
+                public = StudioRenderServiceError(
+                    422, "invalid_request", "The Studio request is invalid."
+                ).to_public_error()
+                return JSONResponse(
+                    status_code=422,
+                    content={"detail": public.model_dump(mode="json")},
+                )
+            except HTTPException as exc:
+                try:
+                    public = StudioRenderPublicError.model_validate(exc.detail)
+                    status_code = exc.status_code
+                except Exception:
+                    code = {
+                        401: "authentication_required",
+                        403: "access_denied",
+                        422: "invalid_request",
+                    }.get(exc.status_code, "processor_unavailable")
+                    error = StudioRenderServiceError(exc.status_code, code, "")
+                    public = error.to_public_error()
+                    status_code = error.status_code
+                return JSONResponse(
+                    status_code=status_code,
+                    content={"detail": public.model_dump(mode="json")},
+                    headers=exc.headers,
+                )
+
+        return normalized
+
+
+router = APIRouter(
+    prefix="/api/template-studio",
+    tags=["template-studio"],
+    route_class=StudioRenderAPIRoute,
+)
 
 _OPERATIONAL_ERRORS = {
     status: {"model": StudioRenderPublicErrorEnvelope}
-    for status in (404, 409, 410, 422, 429, 503, 504)
+    for status in (401, 403, 404, 409, 410, 413, 422, 429, 503, 504)
 }
 
 
@@ -193,7 +259,7 @@ def _resource_headers(
     responses=_OPERATIONAL_ERRORS,
 )
 async def read_studio_render_capabilities(
-    context: StudioRenderRouteContext = Depends(get_studio_render_route_context),
+    context: StudioRenderRouteContext = Depends(require_fresh_studio_render_worker),
 ):
     return context.capabilities
 
@@ -208,8 +274,16 @@ async def enqueue_studio_render(
     body: StudioRenderIntent,
     response: Response,
     idempotency_key: str = Header(alias="Idempotency-Key", min_length=8, max_length=200),
-    context: StudioRenderRouteContext = Depends(get_studio_render_route_context),
+    context: StudioRenderRouteContext = Depends(require_fresh_studio_render_worker),
 ):
+    if body.input_binding_id is not None:
+        raise _public_http_error(
+            StudioRenderServiceError(
+                422,
+                "invalid_request",
+                "The Studio request is invalid.",
+            )
+        )
     request = body.bind_actor(context.actor_user_id)
     accepted = await _run(
         context,
@@ -329,5 +403,6 @@ async def download_studio_render_artifact(
 __all__ = [
     "StudioRenderRouteContext",
     "get_studio_render_route_context",
+    "require_fresh_studio_render_worker",
     "router",
 ]

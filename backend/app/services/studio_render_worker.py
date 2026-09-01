@@ -108,6 +108,10 @@ class StudioRenderWorker:
         artifact_ttl_seconds: int = 86_400,
         metadata_ttl_seconds: int = 2_592_000,
         max_input_binding_bytes: int = 25 * 1024 * 1024,
+        retained_artifact_limit: int = 500,
+        retained_byte_limit: int = 10 * 1024**3,
+        live_artifact_limit: int = 1_000,
+        live_byte_limit: int = 20 * 1024**3,
     ):
         if not 30 <= lease_seconds <= 3600:
             raise ValueError("lease_seconds must be between 30 and 3600")
@@ -123,6 +127,14 @@ class StudioRenderWorker:
             raise ValueError("metadata TTL must outlive temporary artifact bytes")
         if not 1 <= max_input_binding_bytes <= 100 * 1024 * 1024:
             raise ValueError("input binding limit is invalid")
+        if not 1 <= retained_artifact_limit <= 100_000:
+            raise ValueError("retained artifact limit is invalid")
+        if not 1 <= retained_byte_limit <= 10 * 1024**4:
+            raise ValueError("retained byte limit is invalid")
+        if not retained_artifact_limit <= live_artifact_limit <= 100_000:
+            raise ValueError("live artifact limit is invalid")
+        if not retained_byte_limit <= live_byte_limit <= 10 * 1024**4:
+            raise ValueError("live byte limit is invalid")
         if any(
             type(processor) is not StudioTrustedProcessorAdapter
             or not str(getattr(processor, "isolation_policy_id", "")).strip()
@@ -153,6 +165,10 @@ class StudioRenderWorker:
         self.artifact_ttl_seconds = artifact_ttl_seconds
         self.metadata_ttl_seconds = metadata_ttl_seconds
         self.max_input_binding_bytes = max_input_binding_bytes
+        self.retained_artifact_limit = retained_artifact_limit
+        self.retained_byte_limit = retained_byte_limit
+        self.live_artifact_limit = live_artifact_limit
+        self.live_byte_limit = live_byte_limit
 
     @property
     def processors(self) -> Mapping[tuple[str, str, int], StudioProcessor]:
@@ -243,10 +259,15 @@ class StudioRenderWorker:
                     StudioDraftSnapshot.tenant_id == lease.tenant_id,
                 )
             )
+            if draft is not None and draft.cancellation_requested_at is not None:
+                raise StudioRenderServiceError(
+                    409,
+                    "cancelled",
+                    "Studio processing was cancelled.",
+                )
             if (
                 draft is None
                 or draft.lifecycle_state != "active"
-                or draft.cancellation_requested_at is not None
                 or draft.revision != queued.rendered_revision
                 or draft.identity_sha256 != queued.identity_sha256
                 or draft.source_artifact_id != queued.source.artifact_id
@@ -287,6 +308,18 @@ class StudioRenderWorker:
                     "source_integrity_failed",
                     "Studio source failed its integrity boundary.",
                 ) from exc
+            cancelled_at = await db.scalar(
+                select(StudioDraft.cancellation_requested_at).where(
+                    StudioDraft.id == queued.draft_id,
+                    StudioDraft.tenant_id == lease.tenant_id,
+                )
+            )
+            if cancelled_at is not None:
+                raise StudioRenderServiceError(
+                    409,
+                    "cancelled",
+                    "Studio processing was cancelled.",
+                )
             snapshot_payload = dict(snapshot.payload)
 
         input_binding = None
@@ -399,6 +432,10 @@ class StudioRenderWorker:
                 db,
                 tenant_id=lease.tenant_id,
                 input_binding_resolver=self.input_bindings,
+                retained_artifact_limit=self.retained_artifact_limit,
+                retained_byte_limit=self.retained_byte_limit,
+                live_artifact_limit=self.live_artifact_limit,
+                live_byte_limit=self.live_byte_limit,
             ).adopt_output(
                 lease,
                 output,
@@ -435,6 +472,10 @@ class StudioRenderWorker:
                 db,
                 tenant_id=lease.tenant_id,
                 input_binding_resolver=self.input_bindings,
+                retained_artifact_limit=self.retained_artifact_limit,
+                retained_byte_limit=self.retained_byte_limit,
+                live_artifact_limit=self.live_artifact_limit,
+                live_byte_limit=self.live_byte_limit,
             ).stage_and_adopt_output(
                 lease,
                 processor_output.content,

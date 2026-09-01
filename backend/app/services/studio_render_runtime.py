@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import shutil
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from app.config import Settings
+from app.config import Settings, validate_studio_render_paths
 from app.database import async_session_maker
 from app.schemas.studio_render import (
     StudioRenderCapabilities,
@@ -81,8 +84,12 @@ def build_studio_render_api_runtime(settings: Settings) -> StudioRenderApiRuntim
     if not settings.TEMPLATE_STUDIO_RENDER_ENABLED:
         raise StudioRenderRuntimeError("Studio rendering is disabled.")
     try:
+        storage_root, _ = validate_studio_render_paths(
+            settings,
+            require_workspace=settings.TEMPLATE_STUDIO_RENDER_WORKER_ENABLED,
+        )
         store = LocalStudioObjectStore(
-            Path(settings.TEMPLATE_STUDIO_RENDER_STORAGE_DIR),
+            storage_root,
             max_object_bytes=settings.TEMPLATE_STUDIO_RENDER_MAX_OBJECT_BYTES,
         )
         manifests, capabilities = load_studio_renderer_manifests(settings)
@@ -126,6 +133,68 @@ def _profile(raw: object) -> StudioIsolationProfile:
         raise StudioRenderRuntimeError("Studio worker profile is invalid.") from exc
 
 
+def _is_reparse_point(path: Path) -> bool:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return False
+    attributes = getattr(metadata, "st_file_attributes", 0)
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    is_junction = getattr(path, "is_junction", None)
+    return (
+        path.is_symlink()
+        or bool(is_junction and is_junction())
+        or bool(reparse_flag and attributes & reparse_flag)
+    )
+
+
+def _assert_plain_ancestor_chain(path: Path) -> None:
+    for ancestor in reversed((path, *path.parents)):
+        if _is_reparse_point(ancestor):
+            raise ValueError("unsafe workspace ancestor")
+
+
+def _prepare_workspace(settings: Settings) -> Path:
+    supplied_root = Path(settings.TEMPLATE_STUDIO_RENDER_WORKSPACE_DIR)
+    try:
+        _assert_plain_ancestor_chain(supplied_root)
+        _, configured_root = validate_studio_render_paths(
+            settings, require_workspace=True
+        )
+        if configured_root is None:
+            raise ValueError("unsafe workspace")
+        root = configured_root
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        _assert_plain_ancestor_chain(supplied_root)
+        _assert_plain_ancestor_chain(root)
+        _, verified_root = validate_studio_render_paths(
+            settings, require_workspace=True
+        )
+        if (
+            verified_root != root
+            or root.resolve(strict=True) != root
+            or not root.is_dir()
+        ):
+            raise ValueError("unsafe workspace")
+        for child in root.iterdir():
+            if child.parent != root:
+                raise ValueError("unsafe workspace child")
+            child_is_junction = getattr(child, "is_junction", None)
+            if bool(child_is_junction and child_is_junction()):
+                child.rmdir()
+            elif _is_reparse_point(child):
+                child.unlink()
+            elif child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+    except Exception as exc:
+        raise StudioRenderRuntimeError(
+            "Studio render workspace is unavailable."
+        ) from exc
+    return root
+
+
 def build_studio_render_worker_loop(settings: Settings) -> StudioRenderWorkerLoop:
     if not (
         settings.TEMPLATE_STUDIO_RENDER_ENABLED
@@ -154,12 +223,13 @@ def build_studio_render_worker_loop(settings: Settings) -> StudioRenderWorkerLoo
             raise StudioRenderRuntimeError("Studio worker profile identity is ambiguous.")
         unique_profiles[profile.profile_id] = profile
     try:
+        workspace_root = _prepare_workspace(settings)
         registry = StudioIsolationRegistry(list(unique_profiles.values()))
         processors = {
             capability.key: StudioTrustedProcessorAdapter(
                 registry,
                 profiles_by_capability[capability.key].profile_id,
-                workspace_root=Path(settings.TEMPLATE_STUDIO_RENDER_WORKSPACE_DIR),
+                workspace_root=workspace_root,
                 artifact_kind=_ARTIFACT_KIND[capability.kind],
                 media_type=capability.output_media_type,
                 retention_class=(
@@ -196,6 +266,12 @@ def build_studio_render_worker_loop(settings: Settings) -> StudioRenderWorkerLoo
             max_input_binding_bytes=(
                 settings.TEMPLATE_STUDIO_RENDER_MAX_INPUT_BINDING_BYTES
             ),
+            retained_artifact_limit=(
+                settings.TEMPLATE_STUDIO_RENDER_RETAINED_ARTIFACT_LIMIT
+            ),
+            retained_byte_limit=settings.TEMPLATE_STUDIO_RENDER_RETAINED_BYTE_LIMIT,
+            live_artifact_limit=settings.TEMPLATE_STUDIO_RENDER_LIVE_ARTIFACT_LIMIT,
+            live_byte_limit=settings.TEMPLATE_STUDIO_RENDER_LIVE_BYTE_LIMIT,
         )
     except StudioRenderRuntimeError:
         raise
@@ -203,8 +279,17 @@ def build_studio_render_worker_loop(settings: Settings) -> StudioRenderWorkerLoo
         raise StudioRenderRuntimeError(
             "Studio render worker is temporarily unavailable."
         ) from exc
+    async def runtime_heartbeat(healthy: bool) -> None:
+        await asyncio.to_thread(
+            api_runtime.object_store.touch_worker_heartbeat,
+            healthy=healthy,
+        )
+
     return StudioRenderWorkerLoop(
-        source=PostgresStudioRenderWorkSource(async_session_maker),
+        source=PostgresStudioRenderWorkSource(
+            async_session_maker,
+            tenant_scan_batch=settings.TEMPLATE_STUDIO_RENDER_TENANT_SCAN_BATCH,
+        ),
         worker=worker,
         batch_size=settings.TEMPLATE_STUDIO_RENDER_BATCH_SIZE,
         concurrency=settings.TEMPLATE_STUDIO_RENDER_CONCURRENCY,
@@ -212,10 +297,17 @@ def build_studio_render_worker_loop(settings: Settings) -> StudioRenderWorkerLoo
         maintenance=StudioRenderMaintenance(
             async_session_maker,
             object_store=api_runtime.object_store,
+            artifact_ttl_seconds=(
+                settings.TEMPLATE_STUDIO_RENDER_ARTIFACT_TTL_SECONDS
+            ),
+            metadata_ttl_seconds=(
+                settings.TEMPLATE_STUDIO_RENDER_METADATA_TTL_SECONDS
+            ),
         ),
         maintenance_interval_seconds=(
             settings.TEMPLATE_STUDIO_RENDER_MAINTENANCE_INTERVAL_SECONDS
         ),
+        runtime_heartbeat=runtime_heartbeat,
     )
 
 

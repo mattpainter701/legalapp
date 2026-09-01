@@ -556,6 +556,13 @@ async def health_readiness(request: Request):
         states["host_disks"] = "unavailable"
     if settings.BACKUP_STATUS_FILE:
         states["backups"] = "unavailable"
+    if settings.TEMPLATE_STUDIO_RENDER_ENABLED:
+        states["studio_render"] = "unavailable"
+        render_store = getattr(request.app.state, "studio_render_object_store", None)
+        if render_store is not None and render_store.worker_heartbeat_fresh(
+            max_age_seconds=settings.TEMPLATE_STUDIO_RENDER_HEALTH_MAX_AGE_SECONDS
+        ):
+            states["studio_render"] = "ok"
 
     try:
         usage = shutil.disk_usage(settings.UPLOAD_DIR)

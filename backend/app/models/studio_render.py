@@ -57,10 +57,26 @@ class StudioRenderArtifact(Base):
             name="fk_studio_render_artifact_draft_tenant",
         ),
         ForeignKeyConstraint(
-            ["tenant_id", "snapshot_id"],
-            ["studio_draft_snapshots.tenant_id", "studio_draft_snapshots.id"],
+            [
+                "tenant_id",
+                "snapshot_id",
+                "draft_id",
+                "revision",
+                "identity_sha256",
+                "snapshot_content_sha256",
+                "source_artifact_id",
+            ],
+            [
+                "studio_draft_snapshots.tenant_id",
+                "studio_draft_snapshots.id",
+                "studio_draft_snapshots.draft_id",
+                "studio_draft_snapshots.revision",
+                "studio_draft_snapshots.identity_sha256",
+                "studio_draft_snapshots.content_sha256",
+                "studio_draft_snapshots.source_artifact_id",
+            ],
             ondelete="RESTRICT",
-            name="fk_studio_render_artifact_snapshot_tenant",
+            name="fk_studio_render_artifact_snapshot_contract",
         ),
         ForeignKeyConstraint(
             [
@@ -278,6 +294,10 @@ class StudioPreferredRenderEvidence(Base):
         CheckConstraint(
             "identity_sha256 ~ '^[0-9a-f]{64}$'",
             name="ck_studio_preferred_render_identity",
+        ),
+        CheckConstraint(
+            "evidence_basis_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_studio_preferred_render_basis",
         ),
         UniqueConstraint(
             "tenant_id", "artifact_id", name="uq_studio_preferred_render_artifact"
