@@ -47,7 +47,12 @@ from app.services.studio_artifact_retention import (
     StudioArtifactRetentionService,
     StudioStagedReceiptReconciler,
 )
-from app.services.studio_drafts import StudioDraftService
+from app.services import studio_render_worker as studio_render_worker_module
+from app.services.studio_drafts import (
+    StudioDraftService,
+    StudioError,
+    StudioSourceRegistry,
+)
 from app.services.studio_object_storage import (
     LocalStudioObjectStore,
     StudioObjectRef,
@@ -58,6 +63,7 @@ from app.services.studio_render_jobs import (
     StudioResolvedInputBinding,
     StudioRenderServiceError,
     StudioRenderWorkerService,
+    _AuthoritativeInputState,
     run_studio_consumer_transaction,
 )
 from app.services.studio_render_worker import StudioRenderWorker
@@ -1199,13 +1205,52 @@ async def test_stale_source_binding_and_expired_status_fail_closed(
         actor_user_id=test_user.id,
         renderer_manifest=_manifest(),
     )
-    wrong_source = StudioRenderSourceContract(
+    missing_source = StudioRenderSourceContract(
         artifact_id=uuid.uuid4(),
         sha256=foundation["source_sha"],
         media_type="text/markdown",
         format="markdown",
     )
     valid = _request(foundation, test_user.id)
+    values = valid.model_dump(exclude={"request_sha256"})
+    values["source"] = missing_source
+    values["render_options"] = valid.render_options
+    missing = StudioRenderRequest(
+        **values,
+        request_sha256=canonical_render_request_hash(**values),
+    )
+    with pytest.raises(StudioRenderServiceError) as missing_error:
+        await service.enqueue_test_render(
+            missing,
+            idempotency_key="missing-source-binding",
+            audit=_noop_audit,
+        )
+    assert missing_error.value.code == "revision_not_found"
+    await db_session.rollback()
+
+    alternate_content = b"# Alternate Studio source\n"
+    alternate_sha = hashlib.sha256(alternate_content).hexdigest()
+    alternate_source_id = uuid.uuid4()
+    db_session.add(
+        StudioSourceArtifact(
+            id=alternate_source_id,
+            tenant_id=test_tenant.id,
+            sha256=alternate_sha,
+            media_type="text/markdown",
+            format="markdown",
+            byte_size=len(alternate_content),
+            resolver_key=f"studio-db:v1:{uuid.uuid4()}",
+            content_bytes=alternate_content,
+            created_by_user_id=test_user.id,
+        )
+    )
+    await db_session.flush()
+    wrong_source = StudioRenderSourceContract(
+        artifact_id=alternate_source_id,
+        sha256=alternate_sha,
+        media_type="text/markdown",
+        format="markdown",
+    )
     values = valid.model_dump(exclude={"request_sha256"})
     values["source"] = wrong_source
     values["render_options"] = valid.render_options
@@ -1228,20 +1273,21 @@ async def test_stale_source_binding_and_expired_status_fail_closed(
     }
     await db_session.rollback()
 
-    snapshot = await db_session.get(StudioDraftSnapshot, foundation["snapshot_id"])
-    snapshot.payload = {**snapshot.payload, "format": "pdf"}
-    await db_session.commit()
+    values = valid.model_dump(exclude={"request_sha256"})
+    values["content_sha256"] = "f" * 64
+    values["render_options"] = valid.render_options
+    mismatched_snapshot = StudioRenderRequest(
+        **values,
+        request_sha256=canonical_render_request_hash(**values),
+    )
     with pytest.raises(StudioRenderServiceError) as snapshot_error:
         await service.enqueue_test_render(
-            valid,
-            idempotency_key="tampered-snapshot-payload",
+            mismatched_snapshot,
+            idempotency_key="mismatched-snapshot-content",
             audit=_noop_audit,
         )
     assert snapshot_error.value.code == "stale_revision"
     await db_session.rollback()
-    snapshot = await db_session.get(StudioDraftSnapshot, foundation["snapshot_id"])
-    snapshot.payload = {**snapshot.payload, "format": "markdown"}
-    await db_session.commit()
 
     service, accepted = await _enqueue(
         db_session, test_tenant, test_user, foundation, "expire-status"
@@ -1810,14 +1856,14 @@ async def test_completed_status_rechecks_expiry_after_artifact_lock_wait(
 
 
 @pytest.mark.parametrize(
-    ("tamper", "expected_code"),
+    ("corruption", "expected_code"),
     [
         ("snapshot_payload", "validation_failed"),
         ("source_content", "source_integrity_failed"),
     ],
 )
-async def test_adoption_rechecks_exact_snapshot_and_source_bindings(
-    db_session, test_tenant, test_user, tmp_path, tamper, expected_code
+async def test_adoption_terminalizes_authoritative_input_corruption(
+    db_session, test_tenant, test_user, tmp_path, corruption, expected_code
 ):
     foundation = await _foundation(db_session, test_tenant, test_user)
     service, accepted = await _enqueue(
@@ -1825,35 +1871,47 @@ async def test_adoption_rechecks_exact_snapshot_and_source_bindings(
         test_tenant,
         test_user,
         foundation,
-        f"adoption-binding-{tamper}",
+        f"adoption-binding-{corruption}",
     )
-    lease = await service.claim(accepted.job_id, owner=f"binding-{tamper}")
+    lease = await service.claim(accepted.job_id, owner=f"binding-{corruption}")
     snapshot = await db_session.get(StudioDraftSnapshot, foundation["snapshot_id"])
-    if tamper == "snapshot_payload":
+    if corruption == "snapshot_payload":
         snapshot.payload = {**snapshot.payload, "format": "pdf"}
     else:
         source = await db_session.get(StudioSourceArtifact, foundation["source_id"])
         source.content_bytes = b"# corrupted source bytes\n"
         source.byte_size = len(source.content_bytes)
-    await db_session.commit()
+    with db_session.no_autoflush:
+        corruption_state = await service.worker._store._authoritative_inputs_state(
+            lease.payload
+        )
+    assert corruption_state == _AuthoritativeInputState("corrupt", expected_code)
+    await db_session.rollback()
 
     object_store = LocalStudioObjectStore(tmp_path, max_object_bytes=4096)
     output = object_store.put(
         test_tenant.id,
-        f"stale-{tamper}".encode(),
+        f"stale-{corruption}".encode(),
         media_type="application/pdf",
     )
-    with pytest.raises(StudioRenderServiceError) as caught:
-        await service.adopt_output(
-            lease,
-            output,
-            object_store=object_store,
-            artifact_kind="test_render",
-            runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
-            artifact_ttl_seconds=300,
-            **_geometry_kwargs(),
-        )
+    authoritative_state = AsyncMock(return_value=corruption_state)
+    with patch.object(
+        service.worker._store,
+        "_authoritative_inputs_state",
+        authoritative_state,
+    ):
+        with pytest.raises(StudioRenderServiceError) as caught:
+            await service.adopt_output(
+                lease,
+                output,
+                object_store=object_store,
+                artifact_kind="test_render",
+                runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
+                artifact_ttl_seconds=300,
+                **_geometry_kwargs(),
+            )
     assert caught.value.code == expected_code
+    authoritative_state.assert_awaited_once()
     artifact = await db_session.scalar(
         select(StudioRenderArtifact).where(
             StudioRenderArtifact.job_id == accepted.job_id
@@ -1876,24 +1934,36 @@ async def test_cancellation_rechecks_immutable_inputs_before_materialization(
     )
     lease = await service.claim(accepted.job_id, owner="cancel-corrupt-worker")
     await service.request_cancel(accepted.job_id, audit=_noop_audit)
+    await db_session.commit()
     snapshot = await db_session.get(StudioDraftSnapshot, foundation["snapshot_id"])
     snapshot.payload = {**snapshot.payload, "identity_sha256": "f" * 64}
-    await db_session.commit()
+    with db_session.no_autoflush:
+        corruption_state = await service.worker._store._authoritative_inputs_state(
+            lease.payload
+        )
+    assert corruption_state == _AuthoritativeInputState("corrupt", "validation_failed")
+    await db_session.rollback()
     object_store = LocalStudioObjectStore(tmp_path, max_object_bytes=4096)
     output = object_store.put(
         test_tenant.id, b"cancel-corrupt-output", media_type="application/pdf"
     )
 
-    with pytest.raises(StudioRenderServiceError) as caught:
-        await service.adopt_output(
-            lease,
-            output,
-            object_store=object_store,
-            artifact_kind="test_render",
-            runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
-            artifact_ttl_seconds=300,
-            **_geometry_kwargs(),
-        )
+    authoritative_state = AsyncMock(return_value=corruption_state)
+    with patch.object(
+        service.worker._store,
+        "_authoritative_inputs_state",
+        authoritative_state,
+    ):
+        with pytest.raises(StudioRenderServiceError) as caught:
+            await service.adopt_output(
+                lease,
+                output,
+                object_store=object_store,
+                artifact_kind="test_render",
+                runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
+                artifact_ttl_seconds=300,
+                **_geometry_kwargs(),
+            )
     assert caught.value.code == "validation_failed"
     assert (
         await db_session.scalar(
@@ -1916,24 +1986,36 @@ async def test_stale_draft_does_not_mask_immutable_corruption(
     draft = await db_session.get(StudioDraft, foundation["draft_id"])
     draft.revision = 2
     draft.identity_sha256 = "d" * 64
+    await db_session.commit()
     snapshot = await db_session.get(StudioDraftSnapshot, foundation["snapshot_id"])
     snapshot.payload = {**snapshot.payload, "format": "pdf"}
-    await db_session.commit()
+    with db_session.no_autoflush:
+        corruption_state = await service.worker._store._authoritative_inputs_state(
+            lease.payload
+        )
+    assert corruption_state == _AuthoritativeInputState("corrupt", "validation_failed")
+    await db_session.rollback()
     object_store = LocalStudioObjectStore(tmp_path, max_object_bytes=4096)
     output = object_store.put(
         test_tenant.id, b"stale-corrupt-output", media_type="application/pdf"
     )
 
-    with pytest.raises(StudioRenderServiceError) as caught:
-        await service.adopt_output(
-            lease,
-            output,
-            object_store=object_store,
-            artifact_kind="test_render",
-            runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
-            artifact_ttl_seconds=300,
-            **_geometry_kwargs(),
-        )
+    authoritative_state = AsyncMock(return_value=corruption_state)
+    with patch.object(
+        service.worker._store,
+        "_authoritative_inputs_state",
+        authoritative_state,
+    ):
+        with pytest.raises(StudioRenderServiceError) as caught:
+            await service.adopt_output(
+                lease,
+                output,
+                object_store=object_store,
+                artifact_kind="test_render",
+                runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
+                artifact_ttl_seconds=300,
+                **_geometry_kwargs(),
+            )
     assert caught.value.code == "validation_failed"
     assert (
         await db_session.scalar(
@@ -2035,7 +2117,7 @@ async def test_adoption_rechecks_server_owned_input_binding_identity(
 
 
 async def test_phase2_rollback_recovery_rechecks_immutable_inputs(
-    db_session, test_engine, test_tenant, test_user, tmp_path
+    db_session, test_tenant, test_user, tmp_path
 ):
     foundation = await _foundation(db_session, test_tenant, test_user)
     service, accepted = await _enqueue(
@@ -2046,22 +2128,28 @@ async def test_phase2_rollback_recovery_rechecks_immutable_inputs(
     output = object_store.put(
         test_tenant.id, b"recovery-corrupt-output", media_type="application/pdf"
     )
-    factory = async_sessionmaker(test_engine, expire_on_commit=False)
 
     async def rollback_then_corrupt(phase2_service, *_args):
         await phase2_service.db.rollback()
-        async with factory() as independent:
-            snapshot = await independent.get(
-                StudioDraftSnapshot, foundation["snapshot_id"]
-            )
-            snapshot.payload = {**snapshot.payload, "format": "pdf"}
-            await independent.commit()
         return False
 
-    with patch.object(
-        StudioDraftService,
-        "mark_render_evidence_if_current",
-        new=rollback_then_corrupt,
+    authoritative_state = AsyncMock(
+        side_effect=[
+            _AuthoritativeInputState("current"),
+            _AuthoritativeInputState("corrupt", "validation_failed"),
+        ]
+    )
+    with (
+        patch.object(
+            StudioDraftService,
+            "mark_render_evidence_if_current",
+            new=rollback_then_corrupt,
+        ),
+        patch.object(
+            service.worker._store,
+            "_authoritative_inputs_state",
+            authoritative_state,
+        ),
     ):
         with pytest.raises(StudioRenderServiceError) as caught:
             await service.adopt_output(
@@ -2082,6 +2170,7 @@ async def test_phase2_rollback_recovery_rechecks_immutable_inputs(
         )
         is None
     )
+    assert authoritative_state.await_count == 2
 
 
 async def test_adoption_uses_fresh_database_clock_after_blocking_storage_io(
@@ -2186,18 +2275,13 @@ async def test_cancelled_output_materializes_without_current_evidence(
     assert draft.evidence_revision is None
 
 
-async def test_worker_missing_or_tampered_source_fails_sanitized(
+async def test_worker_source_registry_failure_is_sanitized(
     db_session, test_engine, test_tenant, test_user, tmp_path
 ):
     foundation = await _foundation(db_session, test_tenant, test_user)
     service, accepted = await _enqueue(
         db_session, test_tenant, test_user, foundation, "worker-missing-source"
     )
-    source = await db_session.get(StudioSourceArtifact, foundation["source_id"])
-    source.content_bytes = b"tampered"
-    source.byte_size = len(source.content_bytes)
-    await db_session.commit()
-
     launcher = tmp_path / "sandbox-launcher.bin"
     executable = tmp_path / "renderer.bin"
     runtime_bundle = tmp_path / "runtime.bundle.manifest"
@@ -2259,11 +2343,33 @@ async def test_worker_missing_or_tampered_source_fails_sanitized(
     process_mock = AsyncMock(
         side_effect=AssertionError("tampered source must fail before processor launch")
     )
-    with patch.object(StudioTrustedProcessorAdapter, "process", process_mock):
+    source_read = AsyncMock(
+        side_effect=StudioError(
+            409,
+            {
+                "code": "source_integrity_failed",
+                "message": "registered source failed integrity validation",
+            },
+        )
+    )
+    with (
+        patch.object(
+            StudioSourceRegistry,
+            "read",
+            source_read,
+        ),
+        patch.object(StudioTrustedProcessorAdapter, "process", process_mock),
+    ):
         assert await worker.process(accepted.job_id, test_tenant.id) is True
     status = await service.status(accepted.job_id)
     assert status.state == "failed"
     assert status.error_code == "source_integrity_failed"
+    source_read.assert_awaited_once_with(
+        foundation["source_id"],
+        expected_sha256=foundation["source_sha"],
+        expected_media_type="text/markdown",
+        expected_format="markdown",
+    )
     process_mock.assert_not_awaited()
 
 
@@ -2276,17 +2382,39 @@ async def test_worker_rehashes_snapshot_payload_before_processor_use(
     )
     lease = await service.claim(accepted.job_id, owner="snapshot-rehash-worker")
     snapshot = await db_session.get(StudioDraftSnapshot, foundation["snapshot_id"])
-    snapshot.payload = {**snapshot.payload, "identity_sha256": "f" * 64}
-    await db_session.commit()
 
     worker = object.__new__(StudioRenderWorker)
     worker.session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
     worker.object_store = LocalStudioObjectStore(tmp_path, max_object_bytes=4096)
     worker.input_bindings = None
     worker.processor_timeout_seconds = 5
-    with pytest.raises(StudioRenderServiceError) as caught:
-        await worker._load_inputs(lease)
-    assert caught.value.code == "validation_failed"
+    original_payload_check = studio_render_worker_module._snapshot_payload_is_exact
+    payload_check_results = []
+
+    def record_payload_check(*args, **kwargs):
+        result = original_payload_check(*args, **kwargs)
+        payload_check_results.append(result)
+        return result
+
+    with patch.object(
+        studio_render_worker_module,
+        "_snapshot_payload_is_exact",
+        side_effect=record_payload_check,
+    ) as payload_check:
+        source_bytes, snapshot_payload, input_binding = await worker._load_inputs(lease)
+
+    assert source_bytes == b"# Studio source\n"
+    assert snapshot_payload == snapshot.payload
+    assert input_binding is None
+    payload_check.assert_called_once_with(
+        snapshot.payload,
+        draft_id=lease.payload.draft_id,
+        revision=lease.payload.rendered_revision,
+        identity_sha256=lease.payload.identity_sha256,
+        content_sha256=lease.payload.snapshot_content_sha256,
+        source=lease.payload.source,
+    )
+    assert payload_check_results == [True]
 
 
 async def test_retention_deletes_shared_cas_only_after_last_reference(
