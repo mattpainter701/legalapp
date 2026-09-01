@@ -8,6 +8,7 @@ import uuid
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 from jose import jwt as jose_jwt
@@ -79,6 +80,15 @@ from app.services.token_vault import encrypt_token
 
 
 _SETTINGS = get_settings()
+
+
+def _nonblocking_quiet_hours() -> tuple[str, str]:
+    """Keep provider-shaped sends deterministic regardless of CI wall-clock time."""
+    local_now = datetime.now(timezone.utc).astimezone(ZoneInfo("America/Chicago"))
+    return (
+        (local_now + timedelta(hours=8)).strftime("%H:%M"),
+        (local_now + timedelta(hours=9)).strftime("%H:%M"),
+    )
 
 
 class _Response:
@@ -163,6 +173,7 @@ async def _seed_lifecycle(
     from_number: str | None = None,
 ):
     await set_tenant_context(db, str(tenant.id))
+    quiet_hours_start, quiet_hours_end = _nonblocking_quiet_hours()
     # Production tenant creation always seeds and assigns canonical RBAC roles.
     # Keep provider-shaped tests faithful to that contract so the final live
     # authorization fence exercises persisted role grants, not legacy labels.
@@ -206,8 +217,8 @@ async def _seed_lifecycle(
         consent_source="public_intake",
         consent_language="en",
         consent_timezone="America/Chicago",
-        quiet_hours_start="23:00",
-        quiet_hours_end="06:00",
+        quiet_hours_start=quiet_hours_start,
+        quiet_hours_end=quiet_hours_end,
         allowed_categories=categories or ["appointment", "lead_follow_up"],
         disclosure_version="sms-v3",
         source="public_intake",
@@ -428,6 +439,58 @@ async def test_concurrent_idempotency_reserves_before_exactly_one_provider_call(
         )
     )
     assert communication.status == "submitted"
+
+
+@pytest.mark.asyncio
+async def test_quiet_hours_block_provider_dispatch_and_persist_audit_truth(
+    db_session, test_tenant, test_user, monkeypatch
+):
+    seeded = await _seed_lifecycle(
+        db_session, tenant=test_tenant, user=test_user, suffix="quiet-hours"
+    )
+    local_now = datetime.now(timezone.utc).astimezone(ZoneInfo("America/Chicago"))
+    seeded.consent.quiet_hours_start = (local_now - timedelta(minutes=30)).strftime(
+        "%H:%M"
+    )
+    seeded.consent.quiet_hours_end = (local_now + timedelta(minutes=30)).strftime(
+        "%H:%M"
+    )
+    await db_session.commit()
+
+    provider = _Provider(lambda **_kwargs: pytest.fail("quiet-hours SMS dispatched"))
+    _install_provider(monkeypatch, provider)
+    with pytest.raises(SmsError, match="recipient's quiet hours") as blocked:
+        await send_sms(
+            db_session,
+            tenant_id=test_tenant.id,
+            user_id=test_user.id,
+            contact_id=seeded.contact.id,
+            matter_id=seeded.matter.id,
+            body="Must wait until quiet hours end",
+            category="appointment",
+            idempotency_key="sms-quiet-hours",
+        )
+
+    assert blocked.value.status_code == 409
+    assert blocked.value.code == "sms_quiet_hours"
+    assert blocked.value.delivery_certainty == "not_attempted"
+    assert provider.calls == []
+    message = await db_session.get(SmsMessage, blocked.value.sms_message_id)
+    assert message is not None
+    assert message.status == "blocked_quiet_hours"
+    assert message.provider_message_id is None
+    communication = await db_session.get(CommunicationLog, message.communication_log_id)
+    assert communication is not None
+    assert communication.status == "failed"
+    audit = await db_session.scalar(
+        select(OperatorAuditLog).where(
+            OperatorAuditLog.action == "sms.dispatch.blocked",
+            OperatorAuditLog.resource_id == str(message.id),
+        )
+    )
+    assert audit is not None
+    assert audit.metadata_json["reason"] == "quiet_hours"
+    assert audit.metadata_json["tenant_id"] == str(test_tenant.id)
 
 
 @pytest.mark.asyncio
