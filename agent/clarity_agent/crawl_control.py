@@ -16,18 +16,21 @@ import uuid
 from collections import Counter
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Protocol
 
 import aiosqlite
 
-from clarity_agent.config import _restrict
 from clarity_agent.schedule import due_for_scan
+from clarity_agent.search_control import require_local_control_path
+from clarity_agent.config import _restrict
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+DEFAULT_MAX_FILE_SIZE = 32 * 1024 * 1024
+MAX_ARTIFACT_REFERENCE_BYTES = 4096
 
 
 class JobKind(StrEnum):
@@ -57,6 +60,7 @@ class SourceRoot:
     max_open_handles: int = 4
     read_bytes_per_second: int = 8 * 1024 * 1024
     max_pending_jobs: int = 10_000
+    max_file_size: int = DEFAULT_MAX_FILE_SIZE
     enabled: bool = True
 
 
@@ -88,6 +92,7 @@ class StableContent:
     file_id: str
     path: str
     content_version: str
+    mutation_generation: int
     fingerprint: str
     content: bytes
     matter_ids: tuple[str, ...] = ()
@@ -96,7 +101,9 @@ class StableContent:
 @dataclass(frozen=True)
 class ExtractedDocument:
     content_version: str
-    payload: dict
+    mutation_generation: int
+    artifact_ref: str
+    artifact_hash: str
 
 
 @dataclass(frozen=True)
@@ -105,7 +112,10 @@ class IndexDocument:
     file_id: str
     path: str
     content_version: str
-    extracted: dict
+    mutation_generation: int
+    artifact_ref: str
+    artifact_hash: str
+    acl_version: str | None
     matter_ids: tuple[str, ...] = ()
 
 
@@ -123,7 +133,9 @@ class SourceAdapter(Protocol):
 
     async def stat(self, source: SourceRoot, path: str) -> FileStat | None: ...
 
-    async def read(self, source: SourceRoot, path: str) -> bytes: ...
+    def read_chunks(
+        self, source: SourceRoot, path: str, chunk_size: int
+    ) -> AsyncIterator[bytes]: ...
 
 
 class ExtractionSink(Protocol):
@@ -134,7 +146,7 @@ class IndexSink(Protocol):
     async def upsert(self, document: IndexDocument) -> None: ...
 
     async def delete(
-        self, source_id: str, file_id: str, content_version: str
+        self, source_id: str, file_id: str, mutation_generation: int
     ) -> None: ...
 
 
@@ -142,7 +154,12 @@ class AclRefreshSink(Protocol):
     """Metadata handoff only; authorization trimming remains out of scope."""
 
     async def refresh(
-        self, source_id: str, file_id: str, path: str, acl_version: str | None
+        self,
+        source_id: str,
+        file_id: str,
+        path: str,
+        acl_version: str | None,
+        mutation_generation: int,
     ) -> None: ...
 
 
@@ -183,28 +200,68 @@ class LeasedJob:
     file_id: str | None
     path: str | None
     content_version: str | None
+    mutation_generation: int | None
     attempts: int
     lease_token: str
-    payload: dict
+    artifact_ref: str | None
+    artifact_hash: str | None
+
+
+class LeaseLost(RuntimeError):
+    """The durable lease was replaced or expired while work was running."""
+
+
+def canonical_relative_path(source: SourceRoot, value: str) -> str:
+    """Return a traversal-free path relative to the configured source root."""
+    if not value or "\x00" in value:
+        raise ValueError("source path is empty or invalid")
+    windows = "\\" in value or "\\" in source.root or PureWindowsPath(value).anchor
+    if windows:
+        candidate = PureWindowsPath(value)
+        root = PureWindowsPath(source.root)
+        if candidate.anchor:
+            if not root.anchor:
+                raise ValueError(
+                    "absolute source path requires an absolute source root"
+                )
+            try:
+                candidate = candidate.relative_to(root)
+            except ValueError as exc:
+                raise ValueError("source path escapes configured root") from exc
+        parts = candidate.parts
+    else:
+        candidate = PurePosixPath(value)
+        root = PurePosixPath(source.root)
+        if candidate.is_absolute():
+            if not root.is_absolute():
+                raise ValueError(
+                    "absolute source path requires an absolute source root"
+                )
+            try:
+                candidate = candidate.relative_to(root)
+            except ValueError as exc:
+                raise ValueError("source path escapes configured root") from exc
+        parts = candidate.parts
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        raise ValueError("source path must identify a descendant file")
+    if any(":" in part for part in parts):
+        raise ValueError("source path contains an unsupported stream or drive segment")
+    return str(PurePosixPath(*parts))
 
 
 class CrawlManifest:
     """SQLite/WAL manifest and idempotent multi-stage queue."""
 
     def __init__(self, path: str) -> None:
-        db_path = Path(path)
-        if not db_path.is_absolute():
-            raise ValueError("crawl manifest path must be absolute")
-        if str(PureWindowsPath(path).anchor).startswith("\\\\"):
-            raise ValueError("crawl manifest must be on a local disk")
+        db_path = require_local_control_path(path)
         if db_path.parent == Path(db_path.anchor):
             raise ValueError("crawl manifest must use a dedicated directory")
-        self.path = db_path.resolve()
+        self.path = db_path
         self._write_lock = asyncio.Lock()
 
     async def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        _restrict(self.path.parent)
+        _restrict(self.path.parent, required=True)
         async with self._connect() as db:
             await db.executescript(
                 """
@@ -223,7 +280,11 @@ class CrawlManifest:
                     paused INTEGER NOT NULL DEFAULT 0,
                     last_reconcile_started REAL,
                     last_reconcile_completed REAL,
-                    last_error TEXT
+                    last_error TEXT,
+                    active_reconcile_token TEXT,
+                    reconcile_lease_until REAL,
+                    reconcile_generation INTEGER NOT NULL DEFAULT 0,
+                    hint_generation INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE TABLE IF NOT EXISTS files (
                     source_id TEXT NOT NULL,
@@ -236,6 +297,7 @@ class CrawlManifest:
                     stat_version TEXT NOT NULL,
                     fingerprint TEXT,
                     content_version TEXT NOT NULL,
+                    mutation_generation INTEGER NOT NULL DEFAULT 1,
                     acl_version TEXT,
                     matter_ids_json TEXT NOT NULL DEFAULT '[]',
                     last_seen_run TEXT,
@@ -252,6 +314,7 @@ class CrawlManifest:
                     file_id TEXT,
                     path TEXT,
                     content_version TEXT,
+                    mutation_generation INTEGER,
                     dedupe_key TEXT NOT NULL UNIQUE,
                     priority INTEGER NOT NULL DEFAULT 0,
                     state TEXT NOT NULL DEFAULT 'ready',
@@ -260,7 +323,8 @@ class CrawlManifest:
                     lease_until REAL,
                     lease_token TEXT,
                     last_error TEXT,
-                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    artifact_ref TEXT,
+                    artifact_hash TEXT,
                     created_at REAL NOT NULL,
                     updated_at REAL NOT NULL,
                     FOREIGN KEY(source_id) REFERENCES sources(source_id)
@@ -271,12 +335,39 @@ class CrawlManifest:
                     ON files(source_id, last_seen_run, tombstoned);
                 """
             )
+            await self._migrate_schema(db)
             await db.execute(
                 "INSERT OR REPLACE INTO metadata(key,value) VALUES('schema_version',?)",
                 (str(SCHEMA_VERSION),),
             )
             await db.commit()
-        _restrict(self.path)
+        _restrict(self.path, required=True)
+
+    async def _migrate_schema(self, db: aiosqlite.Connection) -> None:
+        additions = {
+            "sources": {
+                "active_reconcile_token": "TEXT",
+                "reconcile_lease_until": "REAL",
+                "reconcile_generation": "INTEGER NOT NULL DEFAULT 0",
+                "hint_generation": "INTEGER NOT NULL DEFAULT 0",
+            },
+            "files": {
+                "mutation_generation": "INTEGER NOT NULL DEFAULT 1",
+            },
+            "jobs": {
+                "mutation_generation": "INTEGER",
+                "artifact_ref": "TEXT",
+                "artifact_hash": "TEXT",
+            },
+        }
+        for table, columns in additions.items():
+            rows = await (await db.execute(f"PRAGMA table_info({table})")).fetchall()
+            present = {row[1] for row in rows}
+            for name, definition in columns.items():
+                if name not in present:
+                    await db.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {name} {definition}"
+                    )
 
     @asynccontextmanager
     async def _connect(self):
@@ -289,6 +380,17 @@ class CrawlManifest:
             await db.close()
 
     async def register_source(self, source: SourceRoot) -> None:
+        if (
+            min(
+                source.max_workers,
+                source.max_open_handles,
+                source.read_bytes_per_second,
+                source.max_pending_jobs,
+                source.max_file_size,
+            )
+            < 1
+        ):
+            raise ValueError("source resource limits must be positive")
         config = json.dumps(
             {
                 "schedule": source.schedule,
@@ -297,6 +399,7 @@ class CrawlManifest:
                 "max_open_handles": source.max_open_handles,
                 "read_bytes_per_second": source.read_bytes_per_second,
                 "max_pending_jobs": source.max_pending_jobs,
+                "max_file_size": source.max_file_size,
                 "enabled": source.enabled,
             },
             sort_keys=True,
@@ -310,25 +413,93 @@ class CrawlManifest:
             )
             await db.commit()
 
-    async def begin_reconciliation(self, source_id: str) -> str:
+    async def begin_reconciliation(
+        self, source_id: str, *, lease_seconds: float = 120
+    ) -> str:
         run_id = uuid.uuid4().hex
+        now = time.time()
         async with self._write_lock, self._connect() as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute("BEGIN IMMEDIATE")
+            state = await (
+                await db.execute(
+                    "SELECT active_reconcile_token,reconcile_lease_until FROM sources WHERE source_id=?",
+                    (source_id,),
+                )
+            ).fetchone()
+            if state is None:
+                await db.rollback()
+                raise KeyError(source_id)
+            if (
+                state["active_reconcile_token"]
+                and float(state["reconcile_lease_until"] or 0) >= now
+            ):
+                await db.rollback()
+                raise RuntimeError("source reconciliation is already leased")
             await db.execute(
-                "UPDATE sources SET last_reconcile_started=?, last_error=NULL WHERE source_id=?",
-                (time.time(), source_id),
+                """UPDATE sources SET last_reconcile_started=?, last_error=NULL,
+                   active_reconcile_token=?, reconcile_lease_until=?,
+                   reconcile_generation=reconcile_generation+1 WHERE source_id=?""",
+                (now, run_id, now + max(1, lease_seconds), source_id),
             )
             await db.commit()
         return run_id
+
+    async def renew_reconciliation(
+        self, source_id: str, run_id: str, *, lease_seconds: float = 120
+    ) -> bool:
+        now = time.time()
+        async with self._write_lock, self._connect() as db:
+            cursor = await db.execute(
+                """UPDATE sources SET reconcile_lease_until=?
+                   WHERE source_id=? AND active_reconcile_token=?
+                     AND reconcile_lease_until>=?""",
+                (now + max(1, lease_seconds), source_id, run_id, now),
+            )
+            await db.commit()
+            return cursor.rowcount == 1
 
     async def observe(
         self, source: SourceRoot, stat: FileStat, run_id: str | None
     ) -> tuple[str, str, bool]:
         """Upsert identity/path state and return (file_id, version, changed)."""
+        stat = replace(stat, path=canonical_relative_path(source, stat.path))
+        if (
+            stat.size < 0
+            or stat.modified_ns < 0
+            or (stat.created_ns is not None and stat.created_ns < 0)
+        ):
+            raise ValueError("source stat contains negative values")
         file_id = stat.identity
         now = time.time()
         async with self._write_lock, self._connect() as db:
             db.row_factory = aiosqlite.Row
             await db.execute("BEGIN IMMEDIATE")
+            source_lease = await (
+                await db.execute(
+                    """SELECT active_reconcile_token,reconcile_lease_until
+                       FROM sources WHERE source_id=?""",
+                    (source.source_id,),
+                )
+            ).fetchone()
+            if source_lease is None:
+                await db.rollback()
+                raise KeyError(source.source_id)
+            seen_run = run_id
+            if run_id is not None:
+                if (
+                    source_lease["active_reconcile_token"] != run_id
+                    or float(source_lease["reconcile_lease_until"] or 0) < now
+                ):
+                    await db.rollback()
+                    raise LeaseLost("reconciliation lease was replaced or expired")
+            elif (
+                source_lease["active_reconcile_token"]
+                and float(source_lease["reconcile_lease_until"] or 0) >= now
+            ):
+                # A targeted stat proves current existence and must not be
+                # tombstoned by the authoritative walk running concurrently.
+                seen_run = str(source_lease["active_reconcile_token"])
             current = await (
                 await db.execute(
                     "SELECT * FROM files WHERE source_id=? AND file_id=?",
@@ -355,19 +526,24 @@ class CrawlManifest:
                 or current["path"] != stat.path
                 or current["matter_ids_json"] != matter_ids_json
                 or bool(current["tombstoned"])
+                or current["acl_version"] != stat.acl_version
             )
             version = uuid.uuid4().hex if changed else str(current["content_version"])
+            generation = 1 if current is None else int(current["mutation_generation"])
+            if current is not None and changed:
+                generation += 1
             await db.execute(
                 """INSERT INTO files(
                        source_id,file_id,path,stable_id,size,modified_ns,created_ns,
-                       stat_version,content_version,acl_version,matter_ids_json,
+                       stat_version,content_version,mutation_generation,acl_version,matter_ids_json,
                        last_seen_run,tombstoned,updated_at)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,0,?)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)
                    ON CONFLICT(source_id,file_id) DO UPDATE SET
                        path=excluded.path, stable_id=excluded.stable_id,
                        size=excluded.size, modified_ns=excluded.modified_ns,
                        created_ns=excluded.created_ns, stat_version=excluded.stat_version,
                        content_version=excluded.content_version,
+                       mutation_generation=excluded.mutation_generation,
                        acl_version=excluded.acl_version,
                        matter_ids_json=excluded.matter_ids_json,
                        last_seen_run=excluded.last_seen_run, tombstoned=0,
@@ -382,17 +558,26 @@ class CrawlManifest:
                     stat.created_ns,
                     stat.stat_version,
                     version,
+                    generation,
                     stat.acl_version,
                     matter_ids_json,
-                    run_id,
+                    seen_run,
                     now,
                 ),
             )
             if changed:
                 await self._enqueue_tx(
-                    db, JobKind.EXTRACT, source.source_id, file_id, stat.path, version
+                    db,
+                    JobKind.EXTRACT,
+                    source.source_id,
+                    file_id,
+                    stat.path,
+                    version,
+                    generation,
                 )
-            if current and current["acl_version"] != stat.acl_version:
+            if (current is None and stat.acl_version is not None) or (
+                current is not None and current["acl_version"] != stat.acl_version
+            ):
                 await self._enqueue_tx(
                     db,
                     JobKind.ACL_REFRESH,
@@ -400,6 +585,7 @@ class CrawlManifest:
                     file_id,
                     stat.path,
                     version,
+                    generation,
                 )
             await db.commit()
         return file_id, version, changed
@@ -412,16 +598,18 @@ class CrawlManifest:
             await db.execute("BEGIN IMMEDIATE")
             rows = await (
                 await db.execute(
-                    """SELECT file_id,path,content_version FROM files
+                    """SELECT file_id,path,content_version,mutation_generation FROM files
                        WHERE source_id=? AND tombstoned=0
                          AND (last_seen_run IS NULL OR last_seen_run<>?)""",
                     (source_id, run_id),
                 )
             ).fetchall()
             for row in rows:
+                generation = int(row["mutation_generation"]) + 1
                 await db.execute(
-                    "UPDATE files SET tombstoned=1,updated_at=? WHERE source_id=? AND file_id=?",
-                    (now, source_id, row["file_id"]),
+                    """UPDATE files SET tombstoned=1,mutation_generation=?,updated_at=?
+                       WHERE source_id=? AND file_id=?""",
+                    (generation, now, source_id, row["file_id"]),
                 )
                 await self._enqueue_tx(
                     db,
@@ -430,20 +618,31 @@ class CrawlManifest:
                     row["file_id"],
                     row["path"],
                     row["content_version"],
+                    generation,
                 )
-            await db.execute(
+            cursor = await db.execute(
                 """UPDATE sources SET reconciliation_required=0,
-                   last_reconcile_completed=?,last_error=NULL WHERE source_id=?""",
-                (now, source_id),
+                   last_reconcile_completed=?,last_error=NULL,
+                   active_reconcile_token=NULL,reconcile_lease_until=NULL
+                   WHERE source_id=? AND active_reconcile_token=?
+                     AND reconcile_lease_until>=?""",
+                (now, source_id, run_id, now),
             )
+            if cursor.rowcount != 1:
+                await db.rollback()
+                raise LeaseLost("reconciliation lease was replaced or expired")
             await db.commit()
         return len(rows)
 
-    async def fail_reconciliation(self, source_id: str, error: BaseException) -> None:
+    async def fail_reconciliation(
+        self, source_id: str, run_id: str, error: BaseException
+    ) -> None:
         async with self._write_lock, self._connect() as db:
             await db.execute(
-                "UPDATE sources SET reconciliation_required=1,last_error=? WHERE source_id=?",
-                (f"{type(error).__name__}: {error}"[:1000], source_id),
+                """UPDATE sources SET reconciliation_required=1,last_error=?,
+                   active_reconcile_token=NULL,reconcile_lease_until=NULL
+                   WHERE source_id=? AND active_reconcile_token=?""",
+                (f"{type(error).__name__}: {error}"[:1000], source_id, run_id),
             )
             await db.commit()
 
@@ -455,9 +654,12 @@ class CrawlManifest:
         file_id: str | None = None,
         path: str | None = None,
         content_version: str | None = None,
+        mutation_generation: int | None = None,
         priority: int = 0,
-        payload: dict | None = None,
+        artifact_ref: str | None = None,
+        artifact_hash: str | None = None,
         dedupe_suffix: str = "",
+        rearm_done: bool = False,
     ) -> None:
         async with self._write_lock, self._connect() as db:
             await self._enqueue_tx(
@@ -467,9 +669,12 @@ class CrawlManifest:
                 file_id,
                 path,
                 content_version,
+                mutation_generation,
                 priority=priority,
-                payload=payload,
+                artifact_ref=artifact_ref,
+                artifact_hash=artifact_hash,
                 dedupe_suffix=dedupe_suffix,
+                rearm_done=rearm_done,
             )
             await db.commit()
 
@@ -481,10 +686,13 @@ class CrawlManifest:
         file_id: str | None,
         path: str | None,
         content_version: str | None,
+        mutation_generation: int | None,
         *,
         priority: int = 0,
-        payload: dict | None = None,
+        artifact_ref: str | None = None,
+        artifact_hash: str | None = None,
         dedupe_suffix: str = "",
+        rearm_done: bool = False,
     ) -> None:
         dedupe = "|".join(
             [
@@ -492,6 +700,7 @@ class CrawlManifest:
                 source_id,
                 file_id or "",
                 content_version or "",
+                str(mutation_generation or ""),
                 path or "",
                 dedupe_suffix,
             ]
@@ -499,11 +708,17 @@ class CrawlManifest:
         now = time.time()
         await db.execute(
             """INSERT INTO jobs(kind,source_id,file_id,path,content_version,
-                   dedupe_key,priority,state,available_at,payload_json,created_at,updated_at)
-               VALUES(?,?,?,?,?,?,?,'ready',0,?,?,?)
+                   mutation_generation,dedupe_key,priority,state,available_at,
+                   artifact_ref,artifact_hash,created_at,updated_at)
+               VALUES(?,?,?,?,?,?,?,?,'ready',0,?,?,?,?)
                ON CONFLICT(dedupe_key) DO UPDATE SET
                    priority=max(priority,excluded.priority),
-                   state=CASE WHEN jobs.state='done' THEN jobs.state ELSE 'ready' END,
+                   state=CASE WHEN jobs.state='done' AND ? THEN 'ready'
+                              ELSE jobs.state END,
+                   attempts=CASE WHEN jobs.state='done' AND ? THEN 0
+                                 ELSE jobs.attempts END,
+                   available_at=CASE WHEN jobs.state='done' AND ? THEN 0
+                                     ELSE jobs.available_at END,
                    updated_at=excluded.updated_at""",
             (
                 kind.value,
@@ -511,11 +726,16 @@ class CrawlManifest:
                 file_id,
                 path,
                 content_version,
+                mutation_generation,
                 dedupe,
                 priority,
-                json.dumps(payload or {}, sort_keys=True),
+                artifact_ref,
+                artifact_hash,
                 now,
                 now,
+                int(rearm_done),
+                int(rearm_done),
+                int(rearm_done),
             ),
         )
 
@@ -553,9 +773,11 @@ class CrawlManifest:
             file_id=row["file_id"],
             path=row["path"],
             content_version=row["content_version"],
+            mutation_generation=row["mutation_generation"],
             attempts=attempts,
             lease_token=token,
-            payload=json.loads(row["payload_json"]),
+            artifact_ref=row["artifact_ref"],
+            artifact_hash=row["artifact_hash"],
         )
 
     async def complete(self, job: LeasedJob) -> bool:
@@ -586,6 +808,18 @@ class CrawlManifest:
             )
             await db.commit()
             return cursor.rowcount == 1
+
+    async def lease_active(self, job: LeasedJob) -> bool:
+        now = time.time()
+        async with self._connect() as db:
+            row = await (
+                await db.execute(
+                    """SELECT 1 FROM jobs WHERE job_id=? AND state='leased'
+                       AND lease_token=? AND lease_until>=?""",
+                    (job.job_id, job.lease_token, now),
+                )
+            ).fetchone()
+            return row is not None
 
     async def retry(
         self, job: LeasedJob, error: BaseException, *, max_attempts: int = 5
@@ -638,13 +872,28 @@ class CrawlManifest:
             return dict(row) if row else None
 
     async def set_fingerprint(
-        self, source_id: str, file_id: str, content_version: str, fingerprint: str
+        self,
+        source_id: str,
+        file_id: str,
+        content_version: str,
+        mutation_generation: int,
+        stat_version: str,
+        fingerprint: str,
     ) -> bool:
         async with self._write_lock, self._connect() as db:
             cursor = await db.execute(
                 """UPDATE files SET fingerprint=?,updated_at=? WHERE source_id=?
-                   AND file_id=? AND content_version=? AND tombstoned=0""",
-                (fingerprint, time.time(), source_id, file_id, content_version),
+                   AND file_id=? AND content_version=? AND mutation_generation=?
+                   AND stat_version=? AND tombstoned=0""",
+                (
+                    fingerprint,
+                    time.time(),
+                    source_id,
+                    file_id,
+                    content_version,
+                    mutation_generation,
+                    stat_version,
+                ),
             )
             await db.commit()
             return cursor.rowcount == 1
@@ -657,6 +906,46 @@ class CrawlManifest:
                 """UPDATE sources SET cursor=?,reconciliation_required=max(
                    reconciliation_required,?) WHERE source_id=?""",
                 (cursor, int(require_reconcile), source_id),
+            )
+            await db.commit()
+
+    async def record_hint(
+        self,
+        source_id: str,
+        path: str,
+        cursor: str | None,
+        *,
+        priority: int = 50,
+    ) -> None:
+        """Atomically persist a provider cursor and its STAT work."""
+        async with self._write_lock, self._connect() as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute("BEGIN IMMEDIATE")
+            row = await (
+                await db.execute(
+                    "SELECT hint_generation FROM sources WHERE source_id=?",
+                    (source_id,),
+                )
+            ).fetchone()
+            if row is None:
+                await db.rollback()
+                raise KeyError(source_id)
+            generation = int(row["hint_generation"]) + 1
+            await db.execute(
+                "UPDATE sources SET cursor=?,hint_generation=? WHERE source_id=?",
+                (cursor, generation, source_id),
+            )
+            suffix = f"cursor:{cursor}" if cursor is not None else f"hint:{generation}"
+            await self._enqueue_tx(
+                db,
+                JobKind.STAT,
+                source_id,
+                None,
+                path,
+                None,
+                None,
+                priority=priority,
+                dedupe_suffix=suffix,
             )
             await db.commit()
 
@@ -703,7 +992,6 @@ class CrawlManifest:
             row = await (
                 await db.execute(
                     """SELECT count(*) FROM jobs WHERE source_id=?
-                       AND kind<>'discover'
                        AND state IN ('ready','retry','leased')""",
                     (source_id,),
                 )
@@ -763,6 +1051,8 @@ class CrawlPipeline:
         acl_sink: AclRefreshSink | None = None,
         enabled: bool = False,
         max_attempts: int = 5,
+        lease_seconds: float = 60,
+        reconciliation_lease_seconds: float = 120,
     ) -> None:
         self.manifest = manifest
         self.source_adapter = source_adapter
@@ -771,6 +1061,8 @@ class CrawlPipeline:
         self.acl_sink = acl_sink
         self.enabled = enabled
         self.max_attempts = max_attempts
+        self.lease_seconds = max(0.15, lease_seconds)
+        self.reconciliation_lease_seconds = max(0.15, reconciliation_lease_seconds)
         self.sources: dict[str, SourceRoot] = {}
         self.budgets: dict[str, ReadBudget] = {}
         self._reconcile_locks: dict[str, asyncio.Lock] = {}
@@ -791,50 +1083,70 @@ class CrawlPipeline:
         source = self.sources[source_id]
         if not source.enabled:
             raise RuntimeError("source root is disabled")
-        async with self._reconcile_locks[source_id]:
-            return await self._reconcile_locked(source)
+        async with self.budgets[source_id].worker_slots:
+            async with self._reconcile_locks[source_id]:
+                return await self._reconcile_locked(source)
 
     async def _reconcile_locked(self, source: SourceRoot) -> int:
         source_id = source.source_id
-        run_id = await self.manifest.begin_reconciliation(source_id)
+        run_id = await self.manifest.begin_reconciliation(
+            source_id, lease_seconds=self.reconciliation_lease_seconds
+        )
         observed = 0
-        try:
-            async for stat in self.source_adapter.discover(source):
-                if (
-                    await self.manifest.pending_jobs(source_id)
-                    >= source.max_pending_jobs
-                ):
-                    self.metrics.increment("reconciliations_backpressured")
-                    raise RuntimeError("source queue backpressure limit reached")
-                await self.manifest.observe(source, stat, run_id)
-                observed += 1
+
+        async def walk() -> int:
+            nonlocal observed
+            await self.budgets[source_id].paused.wait()
+            async with self.budgets[source_id].handles:
+                async for stat in self.source_adapter.discover(source):
+                    await self.budgets[source_id].paused.wait()
+                    if (
+                        await self.manifest.pending_jobs(source_id)
+                        >= source.max_pending_jobs
+                    ):
+                        self.metrics.increment("reconciliations_backpressured")
+                        raise RuntimeError("source queue backpressure limit reached")
+                    await self.manifest.observe(source, stat, run_id)
+                    observed += 1
             deleted = await self.manifest.finish_reconciliation(source_id, run_id)
             self.metrics.increment("reconciliations_completed")
             self.metrics.increment("files_observed", observed)
             self.metrics.increment("tombstones_created", deleted)
             return observed
+
+        try:
+            return await self._run_with_renewal(
+                walk(),
+                lambda: self.manifest.renew_reconciliation(
+                    source_id,
+                    run_id,
+                    lease_seconds=self.reconciliation_lease_seconds,
+                ),
+                self.reconciliation_lease_seconds,
+            )
         except BaseException as exc:
-            await self.manifest.fail_reconciliation(source_id, exc)
+            await self.manifest.fail_reconciliation(source_id, run_id, exc)
             self.metrics.increment("reconciliations_failed")
             raise
 
     async def apply_hint(self, hint: ChangeHint) -> None:
         self._require_enabled()
+        source = self.sources[hint.source_id]
+        if not source.enabled:
+            raise RuntimeError("source root is disabled")
         if hint.overflow or hint.disconnected:
             await self.manifest.save_cursor(
                 hint.source_id, hint.cursor, require_reconcile=True
             )
             self.metrics.increment("hint_reconciliation_required")
             return
-        await self.manifest.save_cursor(hint.source_id, hint.cursor)
         if hint.path:
-            await self.manifest.enqueue(
-                JobKind.STAT,
-                hint.source_id,
-                path=hint.path,
-                priority=50,
-                dedupe_suffix=hint.cursor or "hint",
+            path = canonical_relative_path(source, hint.path)
+            await self.manifest.record_hint(
+                hint.source_id, path, hint.cursor, priority=50
             )
+        else:
+            await self.manifest.save_cursor(hint.source_id, hint.cursor)
         self.metrics.increment("hints_applied")
 
     async def pump_hints(self, source_id: str, adapter: ChangeHintAdapter) -> None:
@@ -851,42 +1163,26 @@ class CrawlPipeline:
 
     async def process_one(self, kind: JobKind) -> bool:
         self._require_enabled()
-        job = await self.manifest.claim(kind)
+        job = await self.manifest.claim(kind, lease_seconds=self.lease_seconds)
         if job is None:
             return False
-        if (await self.manifest.source_state(job.source_id))["paused"]:
+        source = self.sources[job.source_id]
+        if (
+            not source.enabled
+            or (await self.manifest.source_state(job.source_id))["paused"]
+        ):
             await self.manifest.defer(job)
             self.metrics.increment(f"jobs.{kind.value}.paused")
             return True
         try:
-            if kind == JobKind.STAT:
-                await self._stat(job)
-            elif kind == JobKind.DISCOVER:
-                await self.reconcile(job.source_id)
-            elif kind == JobKind.EXTRACT:
-                await self._extract(job)
-            elif kind == JobKind.INDEX:
-                await self._index(job)
-            elif kind == JobKind.DELETE:
-                await self.index_sink.delete(
-                    job.source_id, str(job.file_id), str(job.content_version)
+            async with self.budgets[job.source_id].worker_slots:
+                await self._run_with_renewal(
+                    self._dispatch(job),
+                    lambda: self.manifest.renew(job, lease_seconds=self.lease_seconds),
+                    self.lease_seconds,
                 )
-            elif kind == JobKind.ACL_REFRESH:
-                if self.acl_sink is None:
-                    raise RuntimeError("ACL refresh sink is unavailable")
-                row = await self.manifest.file(job.source_id, str(job.file_id))
-                if row is None or row["tombstoned"]:
-                    raise RuntimeError("stale ACL refresh generation")
-                await self.acl_sink.refresh(
-                    job.source_id,
-                    str(job.file_id),
-                    str(row["path"]),
-                    row["acl_version"],
-                )
-            else:
-                raise ValueError(f"unsupported worker job: {kind}")
             if not await self.manifest.complete(job):
-                raise RuntimeError("job lease expired before completion")
+                raise LeaseLost("job lease expired before completion")
             self.metrics.increment(f"jobs.{kind.value}.completed")
         except SupersededJob:
             if not await self.manifest.complete(job):
@@ -898,9 +1194,78 @@ class CrawlPipeline:
             raise
         return True
 
+    async def _run_with_renewal(self, work, renew, lease_seconds: float):
+        task = asyncio.create_task(work)
+        interval = max(0.05, lease_seconds / 3)
+        try:
+            while True:
+                done, _ = await asyncio.wait({task}, timeout=interval)
+                if task in done:
+                    return await task
+                if not await renew():
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                    raise LeaseLost("durable lease was replaced or expired")
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    async def _require_job_lease(self, job: LeasedJob) -> None:
+        if not await self.manifest.lease_active(job):
+            raise LeaseLost("job lease was replaced or expired")
+
+    async def _dispatch(self, job: LeasedJob) -> None:
+        if job.kind == JobKind.STAT:
+            await self._stat(job)
+        elif job.kind == JobKind.DISCOVER:
+            async with self._reconcile_locks[job.source_id]:
+                await self._reconcile_locked(self.sources[job.source_id])
+        elif job.kind == JobKind.EXTRACT:
+            await self._extract(job)
+        elif job.kind == JobKind.INDEX:
+            await self._index(job)
+        elif job.kind == JobKind.DELETE:
+            row = await self.manifest.file(job.source_id, str(job.file_id))
+            if (
+                row is None
+                or not row["tombstoned"]
+                or int(row["mutation_generation"]) != int(job.mutation_generation or 0)
+            ):
+                raise SupersededJob("stale delete generation")
+            await self._require_job_lease(job)
+            await self.index_sink.delete(
+                job.source_id,
+                str(job.file_id),
+                int(job.mutation_generation or 0),
+            )
+        elif job.kind == JobKind.ACL_REFRESH:
+            if self.acl_sink is None:
+                raise RuntimeError("ACL refresh sink is unavailable")
+            row = await self.manifest.file(job.source_id, str(job.file_id))
+            if (
+                row is None
+                or row["tombstoned"]
+                or int(row["mutation_generation"]) != int(job.mutation_generation or 0)
+            ):
+                raise SupersededJob("stale ACL refresh generation")
+            await self._require_job_lease(job)
+            await self.acl_sink.refresh(
+                job.source_id,
+                str(job.file_id),
+                str(row["path"]),
+                row["acl_version"],
+                int(row["mutation_generation"]),
+            )
+        else:
+            raise ValueError(f"unsupported worker job: {job.kind}")
+
     async def _stat(self, job: LeasedJob) -> None:
         source = self.sources[job.source_id]
-        stat = await self.source_adapter.stat(source, str(job.path))
+        await self.budgets[job.source_id].paused.wait()
+        path = canonical_relative_path(source, str(job.path))
+        async with self.budgets[job.source_id].handles:
+            stat = await self.source_adapter.stat(source, path)
         if stat is None:
             # Hints cannot prove deletion. They force a complete reconciliation.
             await self.manifest.save_cursor(job.source_id, None, require_reconcile=True)
@@ -911,13 +1276,44 @@ class CrawlPipeline:
         source = self.sources[job.source_id]
         budget = self.budgets[job.source_id]
         await budget.paused.wait()
-        async with budget.worker_slots, budget.handles:
-            before = await self.source_adapter.stat(source, str(job.path))
-            if before is None or before.identity != job.file_id:
+        path = canonical_relative_path(source, str(job.path))
+        row = await self.manifest.file(job.source_id, str(job.file_id))
+        async with budget.handles:
+            before = await self.source_adapter.stat(source, path)
+            if before is None:
                 raise SupersededJob("source identity changed before read")
+            before = replace(before, path=canonical_relative_path(source, before.path))
+            if before.identity != job.file_id:
+                raise SupersededJob("source identity changed before read")
+            if (
+                row is None
+                or row["tombstoned"]
+                or row["content_version"] != job.content_version
+                or int(row["mutation_generation"]) != int(job.mutation_generation or 0)
+                or row["stat_version"] != before.stat_version
+            ):
+                await self.manifest.observe(source, before, None)
+                raise SupersededJob("source changed before extraction began")
+            if before.size > source.max_file_size:
+                raise ValueError("source file exceeds configured extraction limit")
             await budget.throttle(before.size)
-            content = await self.source_adapter.read(source, str(job.path))
-            after = await self.source_adapter.stat(source, str(job.path))
+            chunks: list[bytes] = []
+            total = 0
+            async for chunk in self.source_adapter.read_chunks(
+                source, path, 1024 * 1024
+            ):
+                if not isinstance(chunk, bytes):
+                    raise TypeError("source adapter yielded a non-bytes chunk")
+                total += len(chunk)
+                if total > source.max_file_size:
+                    raise ValueError("source file exceeds configured extraction limit")
+                chunks.append(chunk)
+            content = b"".join(chunks)
+            if total != before.size:
+                raise SupersededJob("source byte count did not match stable stat")
+            after = await self.source_adapter.stat(source, path)
+            if after is not None:
+                after = replace(after, path=canonical_relative_path(source, after.path))
         if (
             after is None
             or before.stat_version != after.stat_version
@@ -928,29 +1324,49 @@ class CrawlPipeline:
             raise SupersededJob("source changed while being read")
         fingerprint = hashlib.sha256(content).hexdigest()
         if not await self.manifest.set_fingerprint(
-            job.source_id, str(job.file_id), str(job.content_version), fingerprint
+            job.source_id,
+            str(job.file_id),
+            str(job.content_version),
+            int(job.mutation_generation or 0),
+            before.stat_version,
+            fingerprint,
         ):
             raise SupersededJob("stale extraction generation")
+        await self._require_job_lease(job)
         extracted = await self.extractor.extract(
             StableContent(
                 source_id=job.source_id,
                 file_id=str(job.file_id),
                 path=str(job.path),
                 content_version=str(job.content_version),
+                mutation_generation=int(job.mutation_generation or 0),
                 fingerprint=fingerprint,
                 content=content,
                 matter_ids=source.matter_ids,
             )
         )
-        if extracted.content_version != job.content_version:
-            raise RuntimeError("extractor returned a mismatched content version")
+        if (
+            extracted.content_version != job.content_version
+            or extracted.mutation_generation != job.mutation_generation
+        ):
+            raise RuntimeError("extractor returned a mismatched document generation")
+        if (
+            not extracted.artifact_ref
+            or not extracted.artifact_hash
+            or len(extracted.artifact_ref.encode()) > MAX_ARTIFACT_REFERENCE_BYTES
+            or len(extracted.artifact_hash.encode()) > 256
+        ):
+            raise ValueError("extractor returned an invalid artifact reference")
+        await self._require_job_lease(job)
         await self.manifest.enqueue(
             JobKind.INDEX,
             job.source_id,
             file_id=job.file_id,
             path=job.path,
             content_version=job.content_version,
-            payload={"extracted": extracted.payload},
+            mutation_generation=job.mutation_generation,
+            artifact_ref=extracted.artifact_ref,
+            artifact_hash=extracted.artifact_hash,
         )
 
     async def _index(self, job: LeasedJob) -> None:
@@ -959,16 +1375,23 @@ class CrawlPipeline:
             row is None
             or row["tombstoned"]
             or row["content_version"] != job.content_version
+            or int(row["mutation_generation"]) != int(job.mutation_generation or 0)
+            or not job.artifact_ref
+            or not job.artifact_hash
         ):
             raise SupersededJob("stale index generation")
         source = self.sources[job.source_id]
+        await self._require_job_lease(job)
         await self.index_sink.upsert(
             IndexDocument(
                 source_id=job.source_id,
                 file_id=str(job.file_id),
                 path=str(row["path"]),
                 content_version=str(job.content_version),
-                extracted=job.payload.get("extracted"),
+                mutation_generation=int(job.mutation_generation or 0),
+                artifact_ref=str(job.artifact_ref),
+                artifact_hash=str(job.artifact_hash),
+                acl_version=row["acl_version"],
                 matter_ids=source.matter_ids,
             )
         )
@@ -1001,6 +1424,11 @@ class CrawlPipeline:
             state = await self.manifest.source_state(source_id)
             if state["paused"]:
                 continue
+            if (
+                state["active_reconcile_token"]
+                and float(state["reconcile_lease_until"] or 0) >= time.time()
+            ):
+                continue
             timestamp = state["last_reconcile_completed"]
             last_run = None
             if timestamp is not None:
@@ -1018,13 +1446,13 @@ class CrawlPipeline:
     async def enqueue_due_reconciliations(self, now) -> list[str]:
         """Persist scheduled discovery so process restarts cannot lose work."""
         due = await self.due_sources(now)
-        suffix = now.replace(second=0, microsecond=0).isoformat()
         for source_id in due:
             await self.manifest.enqueue(
                 JobKind.DISCOVER,
                 source_id,
                 priority=10,
-                dedupe_suffix=suffix,
+                dedupe_suffix="scheduled",
+                rearm_done=True,
             )
         return due
 

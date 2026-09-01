@@ -8,7 +8,8 @@ without copying it to the cloud.
 
 An experimental source-root crawl/freshness control plane is available behind
 an explicit default-off composition flag. It persists leased ingestion queues
-locally while leaving extraction and index engines behind adapters. See
+locally without storing document bodies; extraction artifacts and index engines
+remain behind explicit local adapters. See
 `docs/operations/source-crawl-control-plane.md` for boundaries and recovery.
 
 What leaves the network on a schedule is metadata plus a short snippet per file
