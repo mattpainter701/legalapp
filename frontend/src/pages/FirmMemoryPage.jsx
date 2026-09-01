@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, Check, Clipboard, FileText, Search, SlidersHorizontal, Sparkles } from 'lucide-react'
-import { getFirmMemoryFile, getMattersV2, searchFirmMemory } from '../api'
-import UnifiedFirmMemoryPage from './firm-memory/UnifiedFirmMemoryPage'
 import { AlertTriangle, Check, Clipboard, ExternalLink, FileText, FolderOpen, Search, SlidersHorizontal, Sparkles } from 'lucide-react'
 import { createFirmMemoryOpenIntent, getFirmMemoryFile, getMattersV2, searchFirmMemory } from '../api'
+import UnifiedFirmMemoryPage from './firm-memory/UnifiedFirmMemoryPage'
 
 const EXTENSIONS = ['All files', 'PDF', 'DOCX', 'DOC', 'TXT']
 const FILE_OPENER_ENABLED = import.meta.env.VITE_ENABLE_FILE_OPENER === 'true'

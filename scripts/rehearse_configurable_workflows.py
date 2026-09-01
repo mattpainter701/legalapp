@@ -34,8 +34,7 @@ from sqlalchemy.engine import make_url
 register_uuid()
 
 
-EXPECTED_HEAD = "150_studio_render_jobs"
-EXPECTED_HEAD = "149_file_open_intents"
+EXPECTED_HEAD = "152_file_open_intents"
 TABLES = (
     "custom_field_definitions",
     "matter_custom_field_values",

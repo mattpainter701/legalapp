@@ -96,7 +96,7 @@ _INT_FIELDS = (
     "acl_max_age_seconds",
 )
 
-_BOOL_FIELDS = ("local_index_enabled", "search_node_enabled")
+_BOOL_FIELDS = ("local_index_enabled", "search_node_enabled", "file_opener_enabled")
 
 
 def _restrict(path: Path, *, required: bool = False) -> None:
