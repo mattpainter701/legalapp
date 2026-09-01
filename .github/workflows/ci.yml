@@ -370,6 +370,40 @@ jobs:
           alembic upgrade 149_sms_lifecycle
       - name: Verify current purge sees the complete SMS schema family
         run: python backend/scripts/rehearse_demo_purge_schema_guard.py --expected all
+      - name: Rehearse SMS expand-contract downgrade compatibility
+        working-directory: backend
+        env:
+          PGPASSWORD: test
+        run: |
+          alembic downgrade 148_configurable_workflows
+          psql -h 127.0.0.1 -U test -d sms_lifecycle_rehearsal -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          DECLARE
+            legacy_fk_count integer;
+            composite_fk_count integer;
+            v2_column_count integer;
+          BEGIN
+            SELECT count(*) INTO legacy_fk_count
+              FROM pg_constraint
+             WHERE conrelid = 'task_automation_runs'::regclass
+               AND conname = 'task_automation_runs_task_id_fkey';
+            SELECT count(*) INTO composite_fk_count
+              FROM pg_constraint
+             WHERE conrelid = 'task_automation_runs'::regclass
+               AND conname = 'fk_task_automation_runs_tenant_task';
+            SELECT count(*) INTO v2_column_count
+              FROM information_schema.columns
+             WHERE table_schema = 'public'
+               AND table_name = 'task_automation_runs'
+               AND column_name = 'delivery_certainty_v2';
+            IF legacy_fk_count <> 1 OR composite_fk_count <> 0 OR v2_column_count <> 0 THEN
+              RAISE EXCEPTION
+                'SMS downgrade contract failed: legacy_fk=%, composite_fk=%, v2_column=%',
+                legacy_fk_count, composite_fk_count, v2_column_count;
+            END IF;
+          END $$;
+          SQL
+          alembic upgrade 149_sms_lifecycle
       - name: Provision a production-shaped SMS runtime role
         env:
           PGPASSWORD: test
@@ -384,7 +418,7 @@ jobs:
           SQL
       - name: Rehearse provider, consent, webhook, tenant, purge, and replay controls
         run: >-
-          python -m pytest -q
+          python -m pytest -vv --maxfail=1 -o faulthandler_timeout=120
           backend/tests/test_sms_migration.py
           backend/tests/test_sms_unit.py
           backend/tests/test_sms_lifecycle_db.py

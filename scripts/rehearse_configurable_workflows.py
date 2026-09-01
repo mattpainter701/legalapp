@@ -11,6 +11,10 @@ Alembic path and never targets a persistent environment.
 
 The feature under rehearsal remains migration ``148_configurable_workflows``;
 the head assertion advances as later migrations are appended.
+CI proves the 147→148 upgrade separately, then advances the disposable database
+to the repository's current Alembic head before invoking this script. The
+rehearsal requires 148 in every deployed head's ancestry and exercises the
+catalog with a real NOSUPERUSER/NOBYPASSRLS role; it never targets persistence.
 """
 
 from __future__ import annotations
@@ -23,9 +27,12 @@ import threading
 import time
 import uuid
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import psycopg2
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from psycopg2 import sql
 from psycopg2.extras import register_uuid
 from sqlalchemy.engine import make_url
@@ -35,6 +42,10 @@ register_uuid()
 
 
 EXPECTED_HEAD = "152_file_open_intents"
+EXPECTED_HEAD = "150_studio_render_jobs"
+ROOT = Path(__file__).resolve().parents[1]
+BACKEND = ROOT / "backend"
+REQUIRED_REVISION = "148_configurable_workflows"
 TABLES = (
     "custom_field_definitions",
     "matter_custom_field_values",
@@ -52,6 +63,55 @@ HASH_A = "a" * 64
 HASH_B = "b" * 64
 HASH_C = "c" * 64
 HASH_D = "d" * 64
+
+
+def validate_revision_contract(
+    *,
+    deployed_heads: tuple[str, ...],
+    repository_heads: tuple[str, ...],
+    ancestry_by_head: dict[str, set[str]],
+    required_revision: str = REQUIRED_REVISION,
+) -> tuple[str, ...]:
+    """Require the exact repo heads and COMP-09 ancestry without pinning 148."""
+    deployed = tuple(sorted(set(deployed_heads)))
+    repository = tuple(sorted(set(repository_heads)))
+    if not deployed:
+        raise AssertionError("database has no deployed Alembic revision")
+    if deployed != repository:
+        raise AssertionError(
+            f"expected deployed Alembic heads {repository}, got {deployed}"
+        )
+    missing = [
+        head
+        for head in deployed
+        if required_revision not in ancestry_by_head.get(head, set())
+    ]
+    if missing:
+        raise AssertionError(
+            f"required revision {required_revision} is not an ancestor of {missing}"
+        )
+    return deployed
+
+
+def validate_deployed_revision_graph(
+    deployed_heads: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Load the absolute repository graph and validate deployed head lineage."""
+    config = Config(str(BACKEND / "alembic.ini"))
+    config.set_main_option("script_location", str(BACKEND / "migrations"))
+    scripts = ScriptDirectory.from_config(config)
+    repository_heads = tuple(scripts.get_heads())
+    ancestry_by_head = {
+        head: {
+            revision.revision for revision in scripts.iterate_revisions(head, "base")
+        }
+        for head in repository_heads
+    }
+    return validate_revision_contract(
+        deployed_heads=deployed_heads,
+        repository_heads=repository_heads,
+        ancestry_by_head=ancestry_by_head,
+    )
 
 
 def connect(value: str):
@@ -2863,11 +2923,11 @@ def main() -> int:
 
     with connect(owner_url) as owner:
         with owner.cursor() as cursor:
-            cursor.execute("SELECT version_num FROM alembic_version")
-            head = cursor.fetchone()[0]
-        if head != EXPECTED_HEAD:
-            raise AssertionError(
-                f"expected migrated revision {EXPECTED_HEAD}, got {head}"
+            cursor.execute(
+                "SELECT version_num FROM alembic_version ORDER BY version_num"
+            )
+            deployed_heads = validate_deployed_revision_graph(
+                tuple(row[0] for row in cursor.fetchall())
             )
         assert_catalog(owner, runtime_role)
         fixture = seed_fixture(owner)
@@ -2894,7 +2954,11 @@ def main() -> int:
     print(
         json.dumps(
             {
-                "alembic_version": EXPECTED_HEAD,
+                "alembic_version": (
+                    deployed_heads[0] if len(deployed_heads) == 1 else None
+                ),
+                "alembic_heads": list(deployed_heads),
+                "required_revision": REQUIRED_REVISION,
                 "catalog_tables": list(TABLES),
                 "runtime_role": {"superuser": False, "bypassrls": False},
                 "visible_rows_by_tenant": visible,

@@ -30,11 +30,9 @@ def upgrade() -> None:
         "communication_logs",
         ["tenant_id", "id"],
     )
-    op.drop_constraint(
-        "task_automation_runs_task_id_fkey",
-        "task_automation_runs",
-        type_="foreignkey",
-    )
+    # Keep the deployed single-column FK during the expand release. The new
+    # composite FK adds tenant binding without removing a constraint that an
+    # older application revision still expects during a rolling deployment.
     op.create_foreign_key(
         "fk_task_automation_runs_tenant_task",
         "task_automation_runs",
@@ -42,13 +40,67 @@ def upgrade() -> None:
         ["tenant_id", "task_id"],
         ["tenant_id", "id"],
         ondelete="CASCADE",
+        postgresql_not_valid=True,
     )
-    op.alter_column(
+    op.execute(
+        "ALTER TABLE task_automation_runs "
+        "VALIDATE CONSTRAINT fk_task_automation_runs_tenant_task"
+    )
+    # Expand delivery certainty instead of widening the deployed column in
+    # place. The trigger keeps old and new application revisions interoperable:
+    # legacy writers populate v2, while new writers retain an abbreviated value
+    # in the 30-character column for rollback compatibility.
+    op.add_column(
         "task_automation_runs",
-        "delivery_certainty",
-        existing_type=sa.String(30),
-        type_=sa.String(50),
-        existing_nullable=True,
+        sa.Column("delivery_certainty_v2", sa.String(50), nullable=True),
+    )
+    op.execute(
+        """CREATE FUNCTION sync_task_automation_delivery_certainty()
+        RETURNS trigger AS $$
+        DECLARE
+          normalized_legacy text;
+        BEGIN
+          normalized_legacy := CASE
+            WHEN NEW.delivery_certainty_v2 = 'provider_failed_after_acceptance'
+              THEN 'failed_after_acceptance'
+            ELSE NEW.delivery_certainty_v2
+          END;
+          IF char_length(normalized_legacy) > 30 THEN
+            RAISE EXCEPTION 'task automation delivery certainty lacks a legacy-safe representation';
+          END IF;
+
+          IF TG_OP = 'INSERT' THEN
+            IF NEW.delivery_certainty_v2 IS NULL THEN
+              NEW.delivery_certainty_v2 := CASE
+                WHEN NEW.delivery_certainty = 'failed_after_acceptance'
+                  THEN 'provider_failed_after_acceptance'
+                ELSE NEW.delivery_certainty
+              END;
+            ELSE
+              NEW.delivery_certainty := normalized_legacy;
+            END IF;
+          ELSIF NEW.delivery_certainty IS DISTINCT FROM OLD.delivery_certainty
+              AND NEW.delivery_certainty_v2 IS NOT DISTINCT FROM OLD.delivery_certainty_v2 THEN
+            NEW.delivery_certainty_v2 := CASE
+              WHEN NEW.delivery_certainty = 'failed_after_acceptance'
+                THEN 'provider_failed_after_acceptance'
+              ELSE NEW.delivery_certainty
+            END;
+          ELSE
+            -- A v2-aware writer supplies canonical truth. Keep the legacy
+            -- alias synchronized even if both columns arrived in the update.
+            NEW.delivery_certainty := normalized_legacy;
+          END IF;
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql
+        SET search_path = pg_catalog, public"""
+    )
+    op.execute(
+        """CREATE TRIGGER task_automation_delivery_certainty_sync
+        BEFORE INSERT OR UPDATE OF delivery_certainty, delivery_certainty_v2
+        ON task_automation_runs
+        FOR EACH ROW EXECUTE FUNCTION sync_task_automation_delivery_certainty()"""
     )
     op.create_unique_constraint("uq_leads_tenant_id", "leads", ["tenant_id", "id"])
     op.create_unique_constraint(
@@ -917,14 +969,6 @@ def downgrade() -> None:
         "task_automation_runs",
         type_="foreignkey",
     )
-    op.create_foreign_key(
-        "task_automation_runs_task_id_fkey",
-        "task_automation_runs",
-        "tasks",
-        ["task_id"],
-        ["id"],
-        ondelete="CASCADE",
-    )
     op.drop_constraint(
         "fk_task_automation_runs_tenant_sms_message",
         "task_automation_runs",
@@ -933,17 +977,11 @@ def downgrade() -> None:
     op.drop_column("task_automation_runs", "reconciliation_required")
     op.drop_column("task_automation_runs", "sms_message_id")
     op.execute(
-        "UPDATE task_automation_runs "
-        "SET delivery_certainty = 'failed_after_acceptance' "
-        "WHERE delivery_certainty = 'provider_failed_after_acceptance'"
+        "DROP TRIGGER IF EXISTS task_automation_delivery_certainty_sync "
+        "ON task_automation_runs"
     )
-    op.alter_column(
-        "task_automation_runs",
-        "delivery_certainty",
-        existing_type=sa.String(50),
-        type_=sa.String(30),
-        existing_nullable=True,
-    )
+    op.execute("DROP FUNCTION IF EXISTS sync_task_automation_delivery_certainty()")
+    op.drop_column("task_automation_runs", "delivery_certainty_v2")
     for table in (
         "sms_review_items",
         "sms_messages",

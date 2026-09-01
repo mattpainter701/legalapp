@@ -3,8 +3,9 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.dialects import postgresql
 
-from app.services import google_calendar, microsoft_calendar
+from app.services import google_calendar, microsoft_calendar, task_automation
 from app.models.conversion_loop import LeadChannelConsent, SmsConsentEvent
 from app.models.sms import (
     SmsMessage,
@@ -14,7 +15,7 @@ from app.models.sms import (
     SmsProviderCredential,
     SmsReviewItem,
 )
-from app.models.task import TaskAutomationRun
+from app.models.task import Task, TaskAutomationRun
 from app.schemas.chat_action import (
     ProposeClientSmsArgs,
     ResolvedSmsRecipientBinding,
@@ -71,6 +72,97 @@ def test_sms_destination_rejects_ambiguous_or_invalid_numbers():
             pass
         else:
             raise AssertionError(f"accepted invalid destination: {value!r}")
+
+
+def test_task_delivery_certainty_dual_writes_and_reads_legacy_alias():
+    run = TaskAutomationRun(
+        tenant_id=uuid4(),
+        task_id=uuid4(),
+        action_type="sms_client",
+        idempotency_key="certainty-v2",
+        delivery_certainty="provider_failed_after_acceptance",
+    )
+    assert run.delivery_certainty == "provider_failed_after_acceptance"
+    assert run._delivery_certainty_v2 == "provider_failed_after_acceptance"
+    assert run._delivery_certainty_legacy == "failed_after_acceptance"
+
+    legacy = TaskAutomationRun(
+        tenant_id=uuid4(),
+        task_id=uuid4(),
+        action_type="email_client",
+        idempotency_key="certainty-legacy",
+    )
+    legacy._delivery_certainty_legacy = "failed_after_acceptance"
+    legacy._delivery_certainty_v2 = None
+    assert legacy.delivery_certainty == "provider_failed_after_acceptance"
+
+
+@pytest.mark.asyncio
+async def test_task_delivery_certainty_bulk_paths_compile_against_physical_columns(
+    monkeypatch,
+):
+    class StatementRecorder:
+        def __init__(self):
+            self.statements = []
+
+        async def execute(self, statement):
+            self.statements.append(statement)
+
+        async def scalar(self, statement):
+            self.statements.append(statement)
+            return None
+
+        async def commit(self):
+            return None
+
+    async def allow_approval(_db, _actor_user_id):
+        return True
+
+    monkeypatch.setattr(
+        task_automation, "_actor_can_approve_legal_work", allow_approval
+    )
+    recorder = StatementRecorder()
+    tenant_id, task_id, actor_id = uuid4(), uuid4(), uuid4()
+    task = Task(
+        id=task_id,
+        tenant_id=tenant_id,
+        created_by_user_id=actor_id,
+        title="Compile expand-contract automation statements",
+        status="in_progress",
+        pending_action={"type": "email_client", "to": ["client@example.test"]},
+    )
+
+    await task_automation.enqueue_automation_run(
+        recorder,
+        task,
+        from_status="review",
+        actor_user_id=actor_id,
+        idempotency_key="enqueue-certainty",
+    )
+    await task_automation._claim_run(
+        recorder,
+        task,
+        action_type="email_client",
+        idempotency_key="claim-certainty",
+        actor_user_id=actor_id,
+    )
+    await task_automation._record_terminal_no_send(
+        recorder,
+        task,
+        action_type="email_client",
+        idempotency_key="terminal-certainty",
+        actor_user_id=actor_id,
+        detail="Provider dispatch is intentionally blocked",
+    )
+
+    assert len(recorder.statements) == 3
+    compiled = [
+        str(statement.compile(dialect=postgresql.dialect()))
+        for statement in recorder.statements
+    ]
+    assert all("delivery_certainty" in statement for statement in compiled)
+    assert all("delivery_certainty_v2" in statement for statement in compiled)
+    assert all("_delivery_certainty" not in statement for statement in compiled)
 
 
 @pytest.mark.asyncio
@@ -395,7 +487,8 @@ def test_sms_evidence_models_expose_database_coherence_guards():
         "uq_sms_provider_configs_active_account_service",
         "uq_sms_provider_configs_active_account_number",
     } <= provider_indexes
-    assert TaskAutomationRun.__table__.c.delivery_certainty.type.length == 50
+    assert TaskAutomationRun.__table__.c.delivery_certainty.type.length == 30
+    assert TaskAutomationRun.__table__.c.delivery_certainty_v2.type.length == 50
 
 
 def test_sms_request_digest_is_stable_and_request_bound():
@@ -455,7 +548,9 @@ def test_provider_status_replay_and_out_of_order_events_cannot_regress_truth():
     assert provider_status_transition_allowed(current="queued", incoming="sent")
     assert provider_status_transition_allowed(current="sent", incoming="delivered")
     assert provider_status_transition_allowed(current="delivered", incoming="read")
-    assert provider_status_transition_allowed(current="delivered", incoming="delivered")
+    assert not provider_status_transition_allowed(
+        current="delivered", incoming="delivered"
+    )
     assert not provider_status_transition_allowed(current="delivered", incoming="sent")
     assert not provider_status_transition_allowed(
         current="delivered", incoming="failed"

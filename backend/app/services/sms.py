@@ -107,6 +107,10 @@ def normalize_e164(value: str | None) -> str:
 
 def twilio_signature(*, auth_token: str, url: str, params: dict[str, str]) -> str:
     canonical = url + "".join(f"{key}{params[key]}" for key in sorted(params))
+    # Twilio's X-Twilio-Signature protocol mandates HMAC-SHA1. This is message
+    # authentication with a high-entropy provider secret, not password hashing;
+    # changing the digest would reject every authentic provider callback.
+    # codeql[py/weak-sensitive-data-hashing]
     digest = hmac.new(auth_token.encode(), canonical.encode(), hashlib.sha1).digest()
     return base64.b64encode(digest).decode()
 
@@ -199,10 +203,10 @@ def provider_status_transition_allowed(
     normalized_incoming = (incoming or "").lower()
     if normalized_incoming not in _KNOWN_PROVIDER_STATUSES:
         return False
+    if normalized_incoming == normalized_current:
+        return False
     if normalized_current in _TERMINAL_PROVIDER_STATUSES:
-        return normalized_incoming == normalized_current or (
-            normalized_current == "delivered" and normalized_incoming == "read"
-        )
+        return normalized_current == "delivered" and normalized_incoming == "read"
     return _provider_status_rank(normalized_incoming) >= _provider_status_rank(
         normalized_current
     )
@@ -333,7 +337,7 @@ async def _lock_sms_matter_access(
                 MatterAssignment.matter_id == matter_id,
                 MatterAssignment.user_id == user.id,
             )
-            .with_for_update()
+            .with_for_update(of=MatterAssignment)
         )
         if assignment is not None:
             actor_binding = "assignment"
@@ -387,7 +391,7 @@ async def _lock_sms_matter_authorization(
         )
         .order_by(MatterParty.id)
         .limit(1)
-        .with_for_update()
+        .with_for_update(of=MatterParty)
     )
     if party is None:
         return None
@@ -1979,7 +1983,7 @@ async def apply_inbound(
                         MatterParty.contact_id.in_(candidate_ids),
                     )
                     .order_by(MatterParty.matter_id, MatterParty.id)
-                    .with_for_update()
+                    .with_for_update(of=MatterParty)
                 )
             ).all()
             final_matter_ids = {

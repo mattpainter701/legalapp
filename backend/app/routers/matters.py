@@ -1407,7 +1407,7 @@ async def remove_assignment(
             MatterAssignment.matter_id == matter.id,
             MatterAssignment.tenant_id == user.tenant_id,
         )
-        .with_for_update()
+        .with_for_update(of=MatterAssignment)
     )
     assignment = result.scalar_one_or_none()
     if not assignment:

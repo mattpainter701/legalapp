@@ -53,7 +53,10 @@ task runs are rebound for reconciliation instead of being reported as sent.
 
 Migration 149 follows the merged configurable-workflow migration 148 and adds
 tenant-composite constraints, immutable consent evidence, RLS, reconciliation
-state, and rolling-upgrade-safe demo-purge coverage. The intake and task
+state, and rolling-upgrade-safe demo-purge coverage. Its task-audit certainty
+width uses a synchronized expand column instead of rewriting the deployed
+column, while the original task FK remains alongside the validated tenant-bound
+FK for rolling deploy and rollback compatibility. The intake and task
 interfaces expose restricted review and informed SMS approval workflows;
 provider credentials and unresolved message content remain out of unauthorized
 responses and audit metadata; unauthorized SMS tasks are omitted from generic
@@ -69,10 +72,10 @@ close COMP-02 or COMP-03 and does not deploy or configure a production provider.
 
 ## Validation
 
-- Ruff lint/format and Python compilation passed; 86 database-independent
+- Ruff lint/format and Python compilation passed; 120 database-independent
   backend, migration, demo-purge, Workspace MCP, CI-contract, and release-note
   tests passed.
-- The complete SMS CI target collects 85 tests, including 68 PostgreSQL/provider-
+- The complete SMS CI target collects 87 tests, including 69 PostgreSQL/provider-
   shaped rehearsals covering
   concurrent idempotency, tenant constraints/RLS, consent provenance and
   conflicts, quiet hours/categories, signed webhook replay/order, STOP/START/HELP,
@@ -87,8 +90,9 @@ close COMP-02 or COMP-03 and does not deploy or configure a production provider.
   gating, export-copy classification, and credential non-leakage.
 - The full frontend suite passed (92 files, 514 tests), along with frontend lint
   and the production build; the focused SMS queue subset passed 6 tests.
-  Alembic reports migration 149 as the sole head and renders its offline SQL
-  from migration 148 successfully. The release catalog is sequenced at
+  Alembic reports migration 149 as the sole head and renders both upgrade and
+  downgrade offline SQL successfully; hosted CI additionally rehearses the
+  expand-contract rollback and re-upgrade. The release catalog is sequenced at
   `2026.08.31.6`, generated notes are current, and CI YAML parses successfully.
 - This Windows host has no usable PostgreSQL listener, and its Docker Desktop
   engine fails before startup on an inaccessible local runtime socket. The

@@ -579,7 +579,7 @@ async def _require_live_matter_access(
         Matter.tenant_id == context.tenant_id,
     )
     if lock:
-        matter_stmt = matter_stmt.with_for_update(read=True)
+        matter_stmt = matter_stmt.with_for_update(of=Matter, read=True)
     matter = await context.db.scalar(matter_stmt)
     if matter is None:
         raise ChatToolError("matter_not_found", "Matter not found")

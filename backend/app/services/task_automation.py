@@ -252,7 +252,8 @@ async def enqueue_automation_run(
             action_snapshot=action_snapshot,
             action_sha256=action_sha256,
             status="queued",
-            delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+            _delivery_certainty_legacy=DELIVERY_NOT_ATTEMPTED,
+            _delivery_certainty_v2=DELIVERY_NOT_ATTEMPTED,
             triggered_by_user_id=actor_user_id,
         )
         # An existing row already covers this approval — including one still
@@ -293,7 +294,8 @@ async def _claim_run(
             action_snapshot=action_snapshot,
             action_sha256=action_payload_sha256(action_snapshot),
             status="sending",
-            delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+            _delivery_certainty_legacy=DELIVERY_NOT_ATTEMPTED,
+            _delivery_certainty_v2=DELIVERY_NOT_ATTEMPTED,
             triggered_by_user_id=actor_user_id,
         )
         .on_conflict_do_update(
@@ -303,7 +305,8 @@ async def _claim_run(
                 "error_message": None,
                 "triggered_by_user_id": actor_user_id,
                 "completed_at": None,
-                "delivery_certainty": DELIVERY_NOT_ATTEMPTED,
+                TaskAutomationRun.__table__.c.delivery_certainty: DELIVERY_NOT_ATTEMPTED,
+                TaskAutomationRun.__table__.c.delivery_certainty_v2: DELIVERY_NOT_ATTEMPTED,
             },
             # Failed delivery is terminal until an attorney explicitly edits and
             # re-approves a changed payload. Automatically retrying an ambiguous
@@ -348,7 +351,8 @@ async def _record_terminal_no_send(
             status="failed",
             error_message=detail[:500],
             delivery_detail=detail[:500],
-            delivery_certainty=DELIVERY_NOT_ATTEMPTED,
+            _delivery_certainty_legacy=DELIVERY_NOT_ATTEMPTED,
+            _delivery_certainty_v2=DELIVERY_NOT_ATTEMPTED,
             triggered_by_user_id=actor_user_id,
             completed_at=now,
         )
@@ -358,7 +362,8 @@ async def _record_terminal_no_send(
                 "status": "failed",
                 "error_message": detail[:500],
                 "delivery_detail": detail[:500],
-                "delivery_certainty": DELIVERY_NOT_ATTEMPTED,
+                TaskAutomationRun.__table__.c.delivery_certainty: DELIVERY_NOT_ATTEMPTED,
+                TaskAutomationRun.__table__.c.delivery_certainty_v2: DELIVERY_NOT_ATTEMPTED,
                 "completed_at": now,
             },
             where=TaskAutomationRun.status == "queued",

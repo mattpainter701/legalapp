@@ -384,6 +384,7 @@ class TaskAutomationRun(Base):
     )
     task_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
+        ForeignKey("tasks.id", ondelete="CASCADE"),
         nullable=False,
     )
     # Matches ``pending_action["type"]``, kept denormalized so an operator can
@@ -406,9 +407,39 @@ class TaskAutomationRun(Base):
     provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
     provider_message_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
     delivery_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Distinguishes no provider attempt from an ambiguous or accepted outcome.
-    # SMS operator observations never become a safe-to-retry certainty.
-    delivery_certainty: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # Migration 149 expands this audit value without an in-place type rewrite.
+    # The legacy column remains mapped for rolling deploy/rollback compatibility;
+    # a database trigger synchronizes it with the exact v2 vocabulary.
+    _delivery_certainty_legacy: Mapped[str | None] = mapped_column(
+        "delivery_certainty", String(30), nullable=True
+    )
+    _delivery_certainty_v2: Mapped[str | None] = mapped_column(
+        "delivery_certainty_v2", String(50), nullable=True
+    )
+
+    @property
+    def delivery_certainty(self) -> str | None:
+        """Return exact v2 truth, falling back to a pre-149 legacy row."""
+        value = self._delivery_certainty_v2 or self._delivery_certainty_legacy
+        if value == "failed_after_acceptance":
+            return "provider_failed_after_acceptance"
+        return value
+
+    @delivery_certainty.setter
+    def delivery_certainty(self, value: str | None) -> None:
+        """Dual-write the expand-phase columns with a legacy-safe alias."""
+        canonical = (
+            "provider_failed_after_acceptance"
+            if value == "failed_after_acceptance"
+            else value
+        )
+        self._delivery_certainty_v2 = canonical
+        self._delivery_certainty_legacy = (
+            "failed_after_acceptance"
+            if canonical == "provider_failed_after_acceptance"
+            else canonical
+        )
+
     sms_message_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), nullable=True
     )

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -356,12 +357,18 @@ async def test_concurrent_idempotency_reserves_before_exactly_one_provider_call(
 
     first = asyncio.create_task(attempt())
     await asyncio.wait_for(entered.wait(), timeout=5)
-    with pytest.raises(SmsError) as concurrent:
-        await attempt()
-    assert concurrent.value.status_code == 409
+    second = asyncio.create_task(attempt())
+    completed_while_first_held_fence, _pending = await asyncio.wait(
+        {second}, timeout=0.25
+    )
     release.set()
-    submitted = await first
+    submitted, concurrent_replay = await asyncio.wait_for(
+        asyncio.gather(first, second), timeout=5
+    )
+    assert completed_while_first_held_fence == set()
     assert submitted.status == "submitted"
+    assert concurrent_replay.id == submitted.id
+    assert concurrent_replay.status == submitted.status
     assert len(provider.calls) == 1
     assert provider.calls[0] == {
         "url": "https://api.twilio.com/2010-04-01/Accounts/ACconcurrency/Messages.json",
@@ -476,18 +483,111 @@ async def test_signed_status_webhook_is_tenant_bound_and_never_regresses_truth(
     delivered = await callback("delivered")
     assert delivered.status_code == 200
     assert delivered.json()["status"] == "delivered"
+
+    await db_session.refresh(message)
+    await db_session.refresh(run)
+    communication = await db_session.get(CommunicationLog, message.communication_log_id)
+    assert communication is not None
+    await db_session.refresh(communication)
+
+    def message_snapshot():
+        return (
+            message.status,
+            message.provider_status,
+            message.delivery_certainty,
+            message.provider_error_code,
+            message.segment_count,
+            message.cost,
+            deepcopy(message.raw_provider_event),
+            message.reconciliation_required_at,
+            message.reconciliation_resolved_at,
+            message.reconciliation_resolution,
+            message.reconciliation_resolved_by_user_id,
+            message.operator_observed_absent_at,
+            message.operator_observed_absent_by_user_id,
+            message.last_event_at,
+            message.updated_at,
+        )
+
+    async def signed_callback_audit_counts() -> tuple[int, int]:
+        metadata = list(
+            (
+                await db_session.scalars(
+                    select(OperatorAuditLog.metadata_json).where(
+                        OperatorAuditLog.action
+                        == "sms.dispatch.signed_status_callback",
+                        OperatorAuditLog.resource_id == str(message.id),
+                    )
+                )
+            ).all()
+        )
+        return (
+            len(metadata),
+            sum(
+                1
+                for item in metadata
+                if (item or {}).get("provider_status") == "delivered"
+            ),
+        )
+
+    message_truth = message_snapshot()
+    communication_truth = (
+        communication.status,
+        communication.occurred_at,
+        communication.updated_at,
+    )
+    automation_truth = (
+        run.status,
+        run.delivery_certainty,
+        run._delivery_certainty_legacy,
+        run._delivery_certainty_v2,
+        run.sms_message_id,
+        run.reconciliation_required,
+        run.provider,
+        run.provider_message_id,
+        run.error_message,
+        run.delivery_detail,
+        run.completed_at,
+    )
+    signed_callback_audit_truth = await signed_callback_audit_counts()
+    assert signed_callback_audit_truth == (2, 1)
+
+    async def assert_persisted_truth_unchanged() -> None:
+        await db_session.refresh(message)
+        await db_session.refresh(communication)
+        await db_session.refresh(run)
+        assert message_snapshot() == message_truth
+        assert (
+            communication.status,
+            communication.occurred_at,
+            communication.updated_at,
+        ) == communication_truth
+        assert (
+            run.status,
+            run.delivery_certainty,
+            run._delivery_certainty_legacy,
+            run._delivery_certainty_v2,
+            run.sms_message_id,
+            run.reconciliation_required,
+            run.provider,
+            run.provider_message_id,
+            run.error_message,
+            run.delivery_detail,
+            run.completed_at,
+        ) == automation_truth
+        assert await signed_callback_audit_counts() == signed_callback_audit_truth
+
     for regressive in ("sent", "failed", "queued"):
         replay = await callback(regressive)
         assert replay.json()["provider_status"] == "delivered"
         assert replay.json()["status"] == "delivered"
+        await assert_persisted_truth_unchanged()
     assert (await callback("delivered")).json() == delivered.json()
+    await assert_persisted_truth_unchanged()
 
-    await db_session.refresh(run)
     assert run.status == "sent"
     assert run.delivery_certainty == "confirmed_sent"
     assert run.sms_message_id == message.id
-    await db_session.refresh(message)
-    communication = await db_session.get(CommunicationLog, message.communication_log_id)
     assert communication.status == "delivered"
 
     # Deactivation stops new inbound conversations but must not discard signed
@@ -558,6 +658,8 @@ async def test_rotation_preserves_exact_historical_callback_and_reconciliation_c
     old_account_sid = seeded.config.account_sid
     old_service_sid = seeded.config.messaging_service_sid
     old_auth_token = seeded.auth_token
+    tenant_id = test_tenant.id
+    user_id = test_user.id
     contact_id = seeded.contact.id
     contact_phone = seeded.contact.phone
     matter_id = seeded.matter.id
@@ -581,19 +683,20 @@ async def test_rotation_preserves_exact_historical_callback_and_reconciliation_c
     _install_provider(monkeypatch, old_provider)
     historical = await send_sms(
         db_session,
-        tenant_id=test_tenant.id,
-        user_id=test_user.id,
+        tenant_id=tenant_id,
+        user_id=user_id,
         contact_id=contact_id,
         matter_id=matter_id,
         body="Historical callback",
         category="appointment",
         idempotency_key="historical-callback-generation",
     )
+    old_credential_id = historical.provider_credential_id
     with pytest.raises(SmsError) as uncertain:
         await send_sms(
             db_session,
-            tenant_id=test_tenant.id,
-            user_id=test_user.id,
+            tenant_id=tenant_id,
+            user_id=user_id,
             contact_id=contact_id,
             matter_id=matter_id,
             body="Historical reconciliation",
@@ -603,13 +706,12 @@ async def test_rotation_preserves_exact_historical_callback_and_reconciliation_c
     assert uncertain.value.reconciliation_required is True
     unknown = await db_session.scalar(
         select(SmsMessage).where(
-            SmsMessage.tenant_id == test_tenant.id,
+            SmsMessage.tenant_id == tenant_id,
             SmsMessage.idempotency_key == "historical-reconcile-generation",
         )
     )
     assert unknown.status == "provider_unknown"
-    assert historical.provider_credential_id == unknown.provider_credential_id
-    old_credential_id = historical.provider_credential_id
+    assert old_credential_id == unknown.provider_credential_id
     unknown_id = unknown.id
     unknown_created_at = unknown.provider_submission_started_at.isoformat()
 
@@ -634,7 +736,7 @@ async def test_rotation_preserves_exact_historical_callback_and_reconciliation_c
     assert old_auth_token not in rotated.text
     assert rotated_auth_token not in rotated.text
 
-    status_path = f"/api/sms/webhooks/{test_tenant.id}/status"
+    status_path = f"/api/sms/webhooks/{tenant_id}/status"
     status_params = {
         "MessageSid": "SM-OLD-CALLBACK",
         "MessageStatus": "delivered",
@@ -707,12 +809,12 @@ async def test_rotation_preserves_exact_historical_callback_and_reconciliation_c
     assert reconciled.json()["status"] == "delivered"
     assert len(rotated_provider.lookup_calls) == 1
 
-    await set_tenant_context(db_session, str(test_tenant.id))
+    await set_tenant_context(db_session, str(tenant_id))
     db_session.expire_all()
     current = await send_sms(
         db_session,
-        tenant_id=test_tenant.id,
-        user_id=test_user.id,
+        tenant_id=tenant_id,
+        user_id=user_id,
         contact_id=contact_id,
         matter_id=matter_id,
         body="Current generation",
@@ -726,7 +828,7 @@ async def test_rotation_preserves_exact_historical_callback_and_reconciliation_c
         (
             await db_session.scalars(
                 select(SmsProviderCredential)
-                .where(SmsProviderCredential.tenant_id == test_tenant.id)
+                .where(SmsProviderCredential.tenant_id == tenant_id)
                 .order_by(SmsProviderCredential.generation)
             )
         ).all()
@@ -737,7 +839,8 @@ async def test_rotation_preserves_exact_historical_callback_and_reconciliation_c
         (
             await db_session.scalars(
                 select(OperatorAuditLog).where(
-                    OperatorAuditLog.tenant_id == test_tenant.id
+                    OperatorAuditLog.metadata_json["tenant_id"].as_string()
+                    == str(tenant_id)
                 )
             )
         ).all()
@@ -1879,37 +1982,44 @@ async def test_provider_failures_are_durable_without_fake_delivery(
     seeded = await _seed_lifecycle(
         db_session, tenant=test_tenant, user=test_user, suffix="failure"
     )
+    tenant_id = test_tenant.id
+    user_id = test_user.id
+    contact_id = seeded.contact.id
+    matter_id = seeded.matter.id
+    provider_config = seeded.config
 
     unrelated = Matter(
-        tenant_id=test_tenant.id,
-        user_id=test_user.id,
+        tenant_id=tenant_id,
+        user_id=user_id,
         slug=f"unrelated-{uuid.uuid4().hex[:8]}",
         matter_name="Unrelated matter",
     )
     db_session.add(unrelated)
+    await db_session.flush()
+    unrelated_id = unrelated.id
     await db_session.commit()
     with pytest.raises(SmsError) as misbound:
         await send_sms(
             db_session,
-            tenant_id=test_tenant.id,
-            user_id=test_user.id,
-            contact_id=seeded.contact.id,
-            matter_id=unrelated.id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            contact_id=contact_id,
+            matter_id=unrelated_id,
             body="Must not attach to the wrong matter",
             category="appointment",
             idempotency_key="wrong-matter-binding",
         )
     assert misbound.value.status_code == 404
 
-    seeded.config.is_active = False
+    provider_config.is_active = False
     await db_session.commit()
     with pytest.raises(SmsError) as unconfigured:
         await send_sms(
             db_session,
-            tenant_id=test_tenant.id,
-            user_id=test_user.id,
-            contact_id=seeded.contact.id,
-            matter_id=seeded.matter.id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            contact_id=contact_id,
+            matter_id=matter_id,
             body="No configured provider",
             category="appointment",
             idempotency_key="provider-not-configured",
@@ -1923,7 +2033,7 @@ async def test_provider_failures_are_durable_without_fake_delivery(
         )
         == 0
     )
-    seeded.config.is_active = True
+    provider_config.is_active = True
     await db_session.commit()
 
     async def rejected(**_kwargs):
@@ -1934,10 +2044,10 @@ async def test_provider_failures_are_durable_without_fake_delivery(
     with pytest.raises(SmsError) as failure:
         await send_sms(
             db_session,
-            tenant_id=test_tenant.id,
-            user_id=test_user.id,
-            contact_id=seeded.contact.id,
-            matter_id=seeded.matter.id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            contact_id=contact_id,
+            matter_id=matter_id,
             body="Provider rejects",
             category="appointment",
             idempotency_key="provider-rejected",
@@ -1954,10 +2064,10 @@ async def test_provider_failures_are_durable_without_fake_delivery(
     with pytest.raises(SmsError) as rejected_replay:
         await send_sms(
             db_session,
-            tenant_id=test_tenant.id,
-            user_id=test_user.id,
-            contact_id=seeded.contact.id,
-            matter_id=seeded.matter.id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            contact_id=contact_id,
+            matter_id=matter_id,
             body="Provider rejects",
             category="appointment",
             idempotency_key="provider-rejected",
@@ -1981,10 +2091,10 @@ async def test_provider_failures_are_durable_without_fake_delivery(
     with pytest.raises(SmsError) as accepted_failure:
         await send_sms(
             db_session,
-            tenant_id=test_tenant.id,
-            user_id=test_user.id,
-            contact_id=seeded.contact.id,
-            matter_id=seeded.matter.id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            contact_id=contact_id,
+            matter_id=matter_id,
             body="Accepted before delivery failure",
             category="appointment",
             idempotency_key="provider-failed-after-acceptance",
@@ -2002,10 +2112,10 @@ async def test_provider_failures_are_durable_without_fake_delivery(
     with pytest.raises(SmsError) as accepted_failure_replay:
         await send_sms(
             db_session,
-            tenant_id=test_tenant.id,
-            user_id=test_user.id,
-            contact_id=seeded.contact.id,
-            matter_id=seeded.matter.id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            contact_id=contact_id,
+            matter_id=matter_id,
             body="Accepted before delivery failure",
             category="appointment",
             idempotency_key="provider-failed-after-acceptance",
@@ -2024,10 +2134,10 @@ async def test_provider_failures_are_durable_without_fake_delivery(
     with pytest.raises(SmsError) as unknown:
         await send_sms(
             db_session,
-            tenant_id=test_tenant.id,
-            user_id=test_user.id,
-            contact_id=seeded.contact.id,
-            matter_id=seeded.matter.id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            contact_id=contact_id,
+            matter_id=matter_id,
             body="Provider outcome unknown",
             category="appointment",
             idempotency_key="provider-unknown",
@@ -2041,6 +2151,7 @@ async def test_provider_failures_are_durable_without_fake_delivery(
     assert unknown_row.status == "provider_unknown"
     assert unknown.value.sms_message_id == unknown_row.id
     assert unknown_row.reconciliation_required_at is not None
+    unknown_row_id = unknown_row.id
     unknown_log = await db_session.get(
         CommunicationLog, unknown_row.communication_log_id
     )
@@ -2048,10 +2159,10 @@ async def test_provider_failures_are_durable_without_fake_delivery(
     with pytest.raises(SmsError) as replay:
         await send_sms(
             db_session,
-            tenant_id=test_tenant.id,
-            user_id=test_user.id,
-            contact_id=seeded.contact.id,
-            matter_id=seeded.matter.id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            contact_id=contact_id,
+            matter_id=matter_id,
             body="Provider outcome unknown",
             category="appointment",
             idempotency_key="provider-unknown",
@@ -2061,8 +2172,8 @@ async def test_provider_failures_are_durable_without_fake_delivery(
     api_replay = await client.post(
         "/api/sms/send",
         json={
-            "contact_id": str(seeded.contact.id),
-            "matter_id": str(seeded.matter.id),
+            "contact_id": str(contact_id),
+            "matter_id": str(matter_id),
             "body": "Provider outcome unknown",
             "category": "appointment",
             "idempotency_key": "provider-unknown",
@@ -2073,13 +2184,13 @@ async def test_provider_failures_are_durable_without_fake_delivery(
         "code": "sms_error",
         "message": "Provider outcome is unknown; reconcile this SMS before retrying",
         "delivery_certainty": "outcome_unknown",
-        "sms_message_id": str(unknown_row.id),
+        "sms_message_id": str(unknown_row_id),
         "reconciliation_required": True,
     }
     assert len(uncertain_provider.calls) == 1
 
     attested = await client.post(
-        f"/api/sms/messages/{unknown_row.id}/reconcile",
+        f"/api/sms/messages/{unknown_row_id}/reconcile",
         json={"resolution": "operator_attested_unknown"},
     )
     assert attested.status_code == 200
@@ -2092,10 +2203,10 @@ async def test_provider_failures_are_durable_without_fake_delivery(
     with pytest.raises(SmsError) as attested_replay:
         await send_sms(
             db_session,
-            tenant_id=test_tenant.id,
-            user_id=test_user.id,
-            contact_id=seeded.contact.id,
-            matter_id=seeded.matter.id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            contact_id=contact_id,
+            matter_id=matter_id,
             body="Provider outcome unknown",
             category="appointment",
             idempotency_key="provider-unknown",
@@ -2106,10 +2217,10 @@ async def test_provider_failures_are_durable_without_fake_delivery(
     audit = await db_session.scalar(
         select(OperatorAuditLog).where(
             OperatorAuditLog.action == "sms.dispatch.operator_attested",
-            OperatorAuditLog.resource_id == str(unknown_row.id),
+            OperatorAuditLog.resource_id == str(unknown_row_id),
         )
     )
-    assert audit.metadata_json["tenant_id"] == str(test_tenant.id)
+    assert audit.metadata_json["tenant_id"] == str(tenant_id)
 
 
 @pytest.mark.asyncio
@@ -2330,8 +2441,14 @@ async def test_reconciliation_requires_exact_provider_truth_and_is_audited(
     seeded = await _seed_lifecycle(
         db_session, tenant=test_tenant, user=test_user, suffix="reconcile-truth"
     )
-    seeded.config.messaging_service_sid = None
-    seeded.config.from_number = "+15550001111"
+    tenant_id = test_tenant.id
+    user_id = test_user.id
+    contact_id = seeded.contact.id
+    contact_phone = seeded.contact.phone
+    matter_id = seeded.matter.id
+    provider_config = seeded.config
+    provider_config.messaging_service_sid = None
+    provider_config.from_number = "+15550001111"
     await db_session.commit()
 
     async def timeout(**_kwargs):
@@ -2342,33 +2459,35 @@ async def test_reconciliation_requires_exact_provider_truth_and_is_audited(
     with pytest.raises(SmsError) as unknown:
         await send_sms(
             db_session,
-            tenant_id=test_tenant.id,
-            user_id=test_user.id,
-            contact_id=seeded.contact.id,
-            matter_id=seeded.matter.id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            contact_id=contact_id,
+            matter_id=matter_id,
             body="Reconcile exact provider truth",
             category="appointment",
             idempotency_key="reconcile-provider-truth",
         )
     message_id = unknown.value.sms_message_id
     message = await db_session.get(SmsMessage, message_id)
+    provider_submission_started_at = message.provider_submission_started_at
+    created_at = provider_submission_started_at.isoformat()
     stranded_task = Task(
-        tenant_id=test_tenant.id,
+        tenant_id=tenant_id,
         title="Reconcile stranded SMS automation",
-        matter_id=seeded.matter.id,
-        contact_id=seeded.contact.id,
+        matter_id=matter_id,
+        contact_id=contact_id,
         status="in_progress",
         source="assistant",
         pending_action={
             "type": "sms_client",
             "idempotency_key": "reconcile-provider-truth",
         },
-        created_by_user_id=test_user.id,
+        created_by_user_id=user_id,
     )
     db_session.add(stranded_task)
     await db_session.flush()
     stranded_run = TaskAutomationRun(
-        tenant_id=test_tenant.id,
+        tenant_id=tenant_id,
         task_id=stranded_task.id,
         action_type="sms_client",
         idempotency_key="stranded-reconcile-run",
@@ -2378,16 +2497,16 @@ async def test_reconciliation_requires_exact_provider_truth_and_is_audited(
         delivery_certainty="outcome_unknown",
         reconciliation_required=False,
         sms_message_id=None,
-        triggered_by_user_id=test_user.id,
+        triggered_by_user_id=user_id,
     )
     db_session.add(stranded_run)
-    await db_session.commit()
+    await db_session.flush()
     stranded_run_id = stranded_run.id
-    created_at = message.provider_submission_started_at.isoformat()
+    await db_session.commit()
     exact = {
         "sid": "SM-RECOVERED",
         "account_sid": "ACreconcile-truth",
-        "to": seeded.contact.phone,
+        "to": contact_phone,
         "from": "+15550001111",
         "body": "Reconcile exact provider truth",
         "messaging_service_sid": None,
@@ -2401,7 +2520,7 @@ async def test_reconciliation_requires_exact_provider_truth_and_is_audited(
         {
             "sid": "SM-FOREIGN",
             "account_sid": "AC-FOREIGN",
-            "to": seeded.contact.phone,
+            "to": contact_phone,
             "from": "+15550001111",
             "body": "Reconcile exact provider truth",
             "direction": "outbound-api",
@@ -2416,7 +2535,7 @@ async def test_reconciliation_requires_exact_provider_truth_and_is_audited(
         {
             **exact,
             "date_created": (
-                message.provider_submission_started_at - timedelta(hours=1)
+                provider_submission_started_at - timedelta(hours=1)
             ).isoformat(),
         },
         exact,
@@ -2506,7 +2625,7 @@ async def test_reconciliation_requires_exact_provider_truth_and_is_audited(
             OperatorAuditLog.resource_id == str(message_id),
         )
     )
-    assert rejected_audit.metadata_json["tenant_id"] == str(test_tenant.id)
+    assert rejected_audit.metadata_json["tenant_id"] == str(tenant_id)
     assert rejected_audit.metadata_json["code"] in {
         "sms_provider_identity_mismatch",
         "sms_reconciliation_not_required",
@@ -3560,6 +3679,118 @@ async def test_duplicate_phone_review_includes_resolvable_matter_candidates(
     communication = await db_session.get(CommunicationLog, message.communication_log_id)
     assert communication.contact_id == duplicate.id
     assert communication.matter_id == duplicate_matter.id
+
+
+@pytest.mark.asyncio
+async def test_task_automation_certainty_expand_contract_syncs_old_and_new_writers(
+    db_session, test_tenant, test_user
+):
+    constraints = set(
+        (
+            await db_session.execute(
+                text(
+                    "SELECT conname FROM pg_constraint "
+                    "WHERE conrelid = 'task_automation_runs'::regclass "
+                    "AND contype = 'f'"
+                )
+            )
+        ).scalars()
+    )
+    assert "task_automation_runs_task_id_fkey" in constraints
+    assert "fk_task_automation_runs_tenant_task" in constraints
+    widths = dict(
+        (
+            await db_session.execute(
+                text(
+                    "SELECT column_name, character_maximum_length "
+                    "FROM information_schema.columns "
+                    "WHERE table_schema = 'public' "
+                    "AND table_name = 'task_automation_runs' "
+                    "AND column_name IN ('delivery_certainty', 'delivery_certainty_v2')"
+                )
+            )
+        ).all()
+    )
+    assert widths == {"delivery_certainty": 30, "delivery_certainty_v2": 50}
+
+    task = Task(
+        tenant_id=test_tenant.id,
+        title="Certainty expand-contract evidence",
+        status="in_progress",
+        created_by_user_id=test_user.id,
+    )
+    db_session.add(task)
+    await db_session.flush()
+    legacy_run_id = (
+        await db_session.execute(
+            text(
+                "INSERT INTO task_automation_runs "
+                "(tenant_id, task_id, action_type, idempotency_key, status, delivery_certainty) "
+                "VALUES (:tenant_id, :task_id, 'sms_client', 'legacy-writer', "
+                "'failed', 'failed_after_acceptance') RETURNING id"
+            ),
+            {"tenant_id": test_tenant.id, "task_id": task.id},
+        )
+    ).scalar_one()
+    legacy_columns = (
+        await db_session.execute(
+            text(
+                "SELECT delivery_certainty, delivery_certainty_v2 "
+                "FROM task_automation_runs WHERE id=:run_id"
+            ),
+            {"run_id": legacy_run_id},
+        )
+    ).one()
+    assert legacy_columns == (
+        "failed_after_acceptance",
+        "provider_failed_after_acceptance",
+    )
+    db_session.expire_all()
+    legacy_run = await db_session.get(TaskAutomationRun, legacy_run_id)
+    assert legacy_run.delivery_certainty == "provider_failed_after_acceptance"
+
+    current_run = TaskAutomationRun(
+        tenant_id=test_tenant.id,
+        task_id=task.id,
+        action_type="sms_client",
+        idempotency_key="current-writer",
+        status="failed",
+        delivery_certainty="provider_failed_after_acceptance",
+        triggered_by_user_id=test_user.id,
+    )
+    db_session.add(current_run)
+    await db_session.flush()
+    current_columns = (
+        await db_session.execute(
+            text(
+                "SELECT delivery_certainty, delivery_certainty_v2 "
+                "FROM task_automation_runs WHERE id=:run_id"
+            ),
+            {"run_id": current_run.id},
+        )
+    ).one()
+    assert current_columns == (
+        "failed_after_acceptance",
+        "provider_failed_after_acceptance",
+    )
+
+    await db_session.execute(
+        text(
+            "UPDATE task_automation_runs SET delivery_certainty='provider_accepted' "
+            "WHERE id=:run_id"
+        ),
+        {"run_id": legacy_run_id},
+    )
+    old_writer_update = (
+        await db_session.execute(
+            text(
+                "SELECT delivery_certainty, delivery_certainty_v2 "
+                "FROM task_automation_runs WHERE id=:run_id"
+            ),
+            {"run_id": legacy_run_id},
+        )
+    ).one()
+    assert old_writer_update == ("provider_accepted", "provider_accepted")
 
 
 @pytest.mark.asyncio

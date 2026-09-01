@@ -31,6 +31,7 @@ def test_sms_is_the_single_migration_after_configurable_workflows():
 
 def test_sms_migration_enforces_rls_and_tenant_composite_references():
     source = MIGRATION.read_text(encoding="utf-8")
+    upgrade = source.split("def downgrade() -> None:", 1)[0]
 
     for table in (
         "sms_consent_events",
@@ -129,7 +130,20 @@ def test_sms_migration_enforces_rls_and_tenant_composite_references():
         assert check_name in source
     assert '"task_automation_runs"' in source
     assert '"delivery_certainty"' in source
-    assert "type_=sa.String(50)" in source
+    assert 'sa.Column("delivery_certainty_v2", sa.String(50), nullable=True)' in source
+    assert "sync_task_automation_delivery_certainty" in source
+    assert "task_automation_delivery_certainty_sync" in source
+    assert "postgresql_not_valid=True" in source
+    assert "VALIDATE CONSTRAINT fk_task_automation_runs_tenant_task" in source
+    assert "WHEN NEW.delivery_certainty = 'failed_after_acceptance'" in source
+    assert "THEN 'provider_failed_after_acceptance'" in source
+    assert "op.alter_column" not in upgrade
+    assert (
+        'op.drop_constraint(\n        "task_automation_runs_task_id_fkey"'
+        not in upgrade
+    )
+    assert "task_automation_runs_task_id_fkey" not in source
+    assert "SET delivery_certainty_v2 = delivery_certainty" not in upgrade
     assert "AND delivery_certainty = 'confirmed_received')" in source
     for provider_truth_field in (
         '"provider_messaging_service_sid"',
@@ -145,6 +159,9 @@ def test_sms_migration_enforces_rls_and_tenant_composite_references():
 
 def test_ci_rehearses_sms_from_148_with_149_as_the_canonical_head():
     source = CI.read_text(encoding="utf-8")
+    start = source.index("sms-lifecycle-rehearsal:")
+    end = source.index("# ─── Backend: Tests", start)
+    job = source[start:end]
 
     assert "sms-lifecycle-rehearsal:" in source
     assert "alembic upgrade 148_configurable_workflows" in source
@@ -154,6 +171,26 @@ def test_ci_rehearses_sms_from_148_with_149_as_the_canonical_head():
         encoding="utf-8"
     )
     assert "test_sms_lifecycle_db.py" in source
+    assert "python -m pytest -vv --maxfail=1" in job
+    assert "Rehearse SMS expand-contract downgrade compatibility" in source
+    assert "alembic downgrade 148_configurable_workflows" in source
+    assert "legacy_fk_count <> 1" in source
+    assert "composite_fk_count <> 0" in source
+    assert "v2_column_count <> 0" in source
+    migration = job.index("alembic upgrade 149_sms_lifecycle")
+    purge_guard = job.index("rehearse_demo_purge_schema_guard.py --expected all")
+    downgrade = job.index("alembic downgrade 148_configurable_workflows")
+    reupgrade = job.index("alembic upgrade 149_sms_lifecycle", downgrade)
+    runtime_role = job.index("Provision a production-shaped SMS runtime role")
+    pytest_rehearsal = job.index("python -m pytest -vv")
+    assert (
+        migration
+        < purge_guard
+        < downgrade
+        < reupgrade
+        < runtime_role
+        < pytest_rehearsal
+    )
     assert "sms-dispatch-reconciliation" in (
         ROOT / "backend/app/services/scheduler.py"
     ).read_text(encoding="utf-8")

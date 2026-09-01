@@ -1,10 +1,20 @@
+import importlib.util
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
 MIGRATION = ROOT / "backend/migrations/versions/148_configurable_workflows.py"
 REHEARSAL = ROOT / "scripts/rehearse_configurable_workflows.py"
 CI_WORKFLOW = ROOT / ".github/workflows/ci.yml"
+REHEARSAL_SPEC = importlib.util.spec_from_file_location(
+    "rehearse_configurable_workflows", REHEARSAL
+)
+assert REHEARSAL_SPEC and REHEARSAL_SPEC.loader
+rehearsal_module = importlib.util.module_from_spec(REHEARSAL_SPEC)
+REHEARSAL_SPEC.loader.exec_module(rehearsal_module)
+validate_revision_contract = rehearsal_module.validate_revision_contract
 
 TABLES = {
     "custom_field_definitions",
@@ -128,6 +138,10 @@ def test_rehearsal_requires_runtime_role_and_reports_evidence() -> None:
     assert "MIGRATOR_DATABASE_URL" in source and "RLS_TEST_DATABASE_URL" in source
     assert "rolsuper, rolbypassrls" in source
     assert "148_configurable_workflows" in source
+    assert "REQUIRED_REVISION" in source
+    assert "ScriptDirectory.from_config" in source
+    assert 'config.set_main_option("script_location"' in source
+    assert "alembic_heads" in source
     assert "visible_rows_by_tenant" in source
     assert "database_rejections" in source
     assert "concurrent_claim_rowcounts" in source
@@ -184,6 +198,75 @@ def test_rehearsal_requires_runtime_role_and_reports_evidence() -> None:
     assert "existing system Administrator roles lack manage_workflows" in source
     assert "successful_rollback" in source
     assert "autoflush=False" in source
+
+
+def test_rehearsal_accepts_148_and_descendant_repository_heads() -> None:
+    assert validate_revision_contract(
+        deployed_heads=("148_configurable_workflows",),
+        repository_heads=("148_configurable_workflows",),
+        ancestry_by_head={"148_configurable_workflows": {"148_configurable_workflows"}},
+    ) == ("148_configurable_workflows",)
+    assert validate_revision_contract(
+        deployed_heads=("149_sms_lifecycle",),
+        repository_heads=("149_sms_lifecycle",),
+        ancestry_by_head={
+            "149_sms_lifecycle": {
+                "148_configurable_workflows",
+                "149_sms_lifecycle",
+            }
+        },
+    ) == ("149_sms_lifecycle",)
+    assert validate_revision_contract(
+        deployed_heads=("150_future",),
+        repository_heads=("150_future",),
+        ancestry_by_head={
+            "150_future": {
+                "148_configurable_workflows",
+                "149_sms_lifecycle",
+                "150_future",
+            }
+        },
+    ) == ("150_future",)
+
+
+def test_rehearsal_rejects_missing_required_stale_and_partial_multi_heads() -> None:
+    with pytest.raises(AssertionError, match="not an ancestor"):
+        validate_revision_contract(
+            deployed_heads=("149_unrelated",),
+            repository_heads=("149_unrelated",),
+            ancestry_by_head={"149_unrelated": {"149_unrelated"}},
+        )
+    with pytest.raises(AssertionError, match="expected deployed Alembic heads"):
+        validate_revision_contract(
+            deployed_heads=("148_configurable_workflows",),
+            repository_heads=("149_sms_lifecycle",),
+            ancestry_by_head={
+                "149_sms_lifecycle": {
+                    "148_configurable_workflows",
+                    "149_sms_lifecycle",
+                }
+            },
+        )
+    with pytest.raises(AssertionError, match="not an ancestor"):
+        validate_revision_contract(
+            deployed_heads=("150_a", "150_b"),
+            repository_heads=("150_b", "150_a"),
+            ancestry_by_head={
+                "150_a": {"148_configurable_workflows", "150_a"},
+                "150_b": {"150_b"},
+            },
+        )
+
+
+def test_rehearsal_accepts_multiple_heads_when_each_descends_from_148() -> None:
+    assert validate_revision_contract(
+        deployed_heads=("150_b", "150_a"),
+        repository_heads=("150_a", "150_b"),
+        ancestry_by_head={
+            "150_a": {"148_configurable_workflows", "150_a"},
+            "150_b": {"148_configurable_workflows", "150_b"},
+        },
+    ) == ("150_a", "150_b")
 
 
 def test_ci_preserves_148_rerun_proof_then_advances_before_current_app_rehearsal():

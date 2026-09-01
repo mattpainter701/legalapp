@@ -1999,6 +1999,14 @@ async def test_retry_of_interrupted_sending_run_is_terminal_and_not_resent(
         idempotency_key=approval_key,
     )
     await db_session.commit()
+    queued = await db_session.scalar(
+        select(TaskAutomationRun).where(
+            TaskAutomationRun.task_id == task.id,
+            TaskAutomationRun.idempotency_key == approval_key,
+        )
+    )
+    assert queued._delivery_certainty_legacy == "not_attempted"
+    assert queued._delivery_certainty_v2 == "not_attempted"
     claimed = await task_automation._claim_run(
         db_session,
         task,
@@ -2007,6 +2015,9 @@ async def test_retry_of_interrupted_sending_run_is_terminal_and_not_resent(
         actor_user_id=test_user.id,
     )
     assert claimed is not None and claimed.status == "sending"
+    assert claimed.delivery_certainty == "not_attempted"
+    assert claimed._delivery_certainty_legacy == "not_attempted"
+    assert claimed._delivery_certainty_v2 == "not_attempted"
 
     class _RetriedJob:
         tenant_id = test_tenant.id
@@ -2080,6 +2091,9 @@ async def test_a_run_in_flight_is_never_claimed_twice(
         actor_user_id=test_user.id,
     )
     assert first is not None and first.status == "sending"
+    assert first.delivery_certainty == "not_attempted"
+    assert first._delivery_certainty_legacy == "not_attempted"
+    assert first._delivery_certainty_v2 == "not_attempted"
 
     second = await task_automation._claim_run(
         db_session,
