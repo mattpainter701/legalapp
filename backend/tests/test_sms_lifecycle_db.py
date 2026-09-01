@@ -1385,13 +1385,12 @@ async def test_stop_serializes_with_send_in_both_orders(
     )
 
     await set_tenant_context(db_session, str(test_tenant.id))
-    consent = await db_session.get(LeadChannelConsent, seeded.consent.id)
-    consent.sms_allowed = True
-    consent.sms_status = "active"
-    consent.sms_revoked_at = None
-    consent.revoked_at = None
-    consent.consented_at = datetime.now(timezone.utc)
-    seeded.contact.sms_opt_in = True
+    # STOP committed in another session. Refresh both identity-map rows before
+    # invoking the real START transition; expire_on_commit=False otherwise
+    # retains their stale pre-STOP values and hides the durable opt-out truth.
+    await db_session.refresh(seeded.contact)
+    await db_session.refresh(seeded.consent)
+    consent = seeded.consent
     restarted = await apply_compliance_keyword(
         db_session,
         tenant_id=test_tenant.id,
@@ -1400,7 +1399,15 @@ async def test_stop_serializes_with_send_in_both_orders(
         provider_message_id="SM-RESTART-BETWEEN-RACES",
     )
     assert restarted["applied"] is True
+    assert restarted["number_suppressed"] is False
     await db_session.commit()
+    await set_tenant_context(db_session, str(test_tenant.id))
+    await db_session.refresh(consent)
+    await db_session.refresh(seeded.contact)
+    assert consent.sms_allowed is True
+    assert consent.sms_status == "active"
+    assert consent.sms_revoked_at is None
+    assert seeded.contact.sms_opt_in is True
 
     async def winning_send():
         async with maker() as send_db:
@@ -3420,6 +3427,204 @@ async def test_expired_dispatch_replay_creates_one_unknown_timeline_and_audit(
         )
         == 1
     )
+
+
+@pytest.mark.asyncio
+async def test_stop_waits_for_expired_replay_unknown_evidence_without_deadlock(
+    db_session, test_engine, test_tenant, test_user, monkeypatch
+):
+    seeded = await _seed_lifecycle(
+        db_session,
+        tenant=test_tenant,
+        user=test_user,
+        suffix="stale-replay-stop-order",
+    )
+    body = "Expired replay owns timeline targets"
+    message = SmsMessage(
+        tenant_id=test_tenant.id,
+        contact_id=seeded.contact.id,
+        matter_id=seeded.matter.id,
+        idempotency_key="stale-replay-stop-order",
+        request_digest=sms_service._request_digest(
+            contact_id=seeded.contact.id,
+            matter_id=seeded.matter.id,
+            to_number=seeded.contact.phone,
+            body=body,
+            category="appointment",
+        ),
+        direction="outbound",
+        status="dispatching",
+        dispatch_attempt_id=uuid.uuid4(),
+        dispatch_started_at=datetime.now(timezone.utc) - timedelta(minutes=3),
+        to_number=seeded.contact.phone,
+        body=body,
+        category="appointment",
+        created_by_user_id=test_user.id,
+    )
+    db_session.add(message)
+    await db_session.commit()
+    tenant_id = test_tenant.id
+    user_id = test_user.id
+    contact_id = seeded.contact.id
+    matter_id = seeded.matter.id
+    phone = seeded.contact.phone
+    evidence_entered = asyncio.Event()
+    release_evidence = asyncio.Event()
+    original_evidence = sms_service._ensure_unknown_delivery_evidence
+
+    async def pause_missing_evidence(*args, **kwargs):
+        evidence_entered.set()
+        await release_evidence.wait()
+        return await original_evidence(*args, **kwargs)
+
+    monkeypatch.setattr(
+        sms_service,
+        "_ensure_unknown_delivery_evidence",
+        pause_missing_evidence,
+    )
+    _install_provider(
+        monkeypatch,
+        _Provider(lambda **_kwargs: pytest.fail("replay must not call provider")),
+    )
+    maker = async_sessionmaker(test_engine, expire_on_commit=False)
+
+    async def replay():
+        async with maker() as replay_db:
+            await set_tenant_context(replay_db, str(tenant_id))
+            with pytest.raises(SmsError) as error:
+                await send_sms(
+                    replay_db,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    contact_id=contact_id,
+                    matter_id=matter_id,
+                    body=body,
+                    category="appointment",
+                    idempotency_key="stale-replay-stop-order",
+                )
+            return error.value
+
+    async def stop():
+        async with maker() as stop_db:
+            await set_tenant_context(stop_db, str(tenant_id))
+            return await sms_service.apply_inbound(
+                stop_db,
+                tenant_id=tenant_id,
+                provider_message_id="SM-STALE-REPLAY-STOP",
+                params={
+                    "MessageSid": "SM-STALE-REPLAY-STOP",
+                    "From": phone,
+                    "To": "+15550001111",
+                    "Body": "STOP",
+                },
+            )
+
+    replay_task = asyncio.create_task(replay())
+    await asyncio.wait_for(evidence_entered.wait(), timeout=5)
+    stop_task = asyncio.create_task(stop())
+    await asyncio.sleep(0.1)
+    assert not stop_task.done()
+    release_evidence.set()
+    replay_error = await asyncio.wait_for(replay_task, timeout=5)
+    stopped = await asyncio.wait_for(stop_task, timeout=5)
+    assert replay_error.delivery_certainty == "outcome_unknown"
+    assert stopped.raw_provider_event["compliance"]["applied"] is True
+    await set_tenant_context(db_session, str(tenant_id))
+    await db_session.refresh(message)
+    assert message.status == "provider_unknown"
+    assert message.communication_log_id is not None
+
+
+@pytest.mark.asyncio
+async def test_expired_replay_waits_for_scheduler_message_claim_without_deadlock(
+    db_session, test_engine, test_tenant, test_user, monkeypatch
+):
+    seeded = await _seed_lifecycle(
+        db_session,
+        tenant=test_tenant,
+        user=test_user,
+        suffix="stale-replay-scheduler-order",
+    )
+    body = "Scheduler owns the outbound row first"
+    message = SmsMessage(
+        tenant_id=test_tenant.id,
+        contact_id=seeded.contact.id,
+        matter_id=seeded.matter.id,
+        idempotency_key="stale-replay-scheduler-order",
+        request_digest=sms_service._request_digest(
+            contact_id=seeded.contact.id,
+            matter_id=seeded.matter.id,
+            to_number=seeded.contact.phone,
+            body=body,
+            category="appointment",
+        ),
+        direction="outbound",
+        status="dispatching",
+        dispatch_attempt_id=uuid.uuid4(),
+        dispatch_started_at=datetime.now(timezone.utc) - timedelta(minutes=3),
+        to_number=seeded.contact.phone,
+        body=body,
+        category="appointment",
+        created_by_user_id=test_user.id,
+    )
+    db_session.add(message)
+    await db_session.commit()
+    message_id = message.id
+    tenant_id = test_tenant.id
+    user_id = test_user.id
+    contact_id = seeded.contact.id
+    matter_id = seeded.matter.id
+    scheduler_claimed = asyncio.Event()
+    release_scheduler = asyncio.Event()
+    original_target_lock = sms_service._lock_sms_timeline_targets
+
+    async def pause_scheduler_target_lock(*args, **kwargs):
+        locked_message = kwargs["message"]
+        if locked_message.id == message_id and kwargs["include_matter"]:
+            scheduler_claimed.set()
+            await release_scheduler.wait()
+        return await original_target_lock(*args, **kwargs)
+
+    monkeypatch.setattr(
+        sms_service,
+        "_lock_sms_timeline_targets",
+        pause_scheduler_target_lock,
+    )
+    provider = _Provider(
+        lambda **_kwargs: pytest.fail("expired replay must not call provider")
+    )
+    _install_provider(monkeypatch, provider)
+
+    scheduler_task = asyncio.create_task(mark_stale_sms_dispatches_for_reconciliation())
+    await asyncio.wait_for(scheduler_claimed.wait(), timeout=5)
+
+    async def replay():
+        async with async_sessionmaker(
+            test_engine, expire_on_commit=False
+        )() as replay_db:
+            await set_tenant_context(replay_db, str(tenant_id))
+            with pytest.raises(SmsError) as error:
+                await send_sms(
+                    replay_db,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    contact_id=contact_id,
+                    matter_id=matter_id,
+                    body=body,
+                    category="appointment",
+                    idempotency_key="stale-replay-scheduler-order",
+                )
+            return error.value
+
+    replay_task = asyncio.create_task(replay())
+    await asyncio.sleep(0.1)
+    assert not replay_task.done()
+    release_scheduler.set()
+    assert await asyncio.wait_for(scheduler_task, timeout=5) >= 1
+    replay_error = await asyncio.wait_for(replay_task, timeout=5)
+    assert replay_error.delivery_certainty == "outcome_unknown"
+    assert replay_error.reconciliation_required is True
+    assert provider.calls == []
 
 
 @pytest.mark.asyncio
@@ -5818,6 +6023,13 @@ async def test_custom_role_capability_controls_staff_sms_send(
     )
     assert unauthorized_replay.status_code == 404
     assert "provider" not in unauthorized_replay.text.lower()
+    unauthorized_target = await client.post(
+        "/api/sms/send",
+        json={**payload, "contact_id": str(uuid.uuid4()), "body": "Hidden target"},
+        headers=allowed_headers,
+    )
+    assert unauthorized_target.status_code == 404
+    assert unauthorized_target.json()["detail"]["code"] == "sms_target_not_found"
     conversion_replay = await client.post(
         f"/api/intake/leads/{seeded.lead.id}/follow-up",
         json={
@@ -7028,6 +7240,207 @@ async def test_review_resolution_contact_lock_order_avoids_dispatch_deadlock(
     assert await asyncio.wait_for(send_task, timeout=5) == "submitted"
     assert await asyncio.wait_for(resolve_task, timeout=5) == "resolved"
     assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_replay_reauthorizes_after_concurrent_capability_revocation(
+    db_session, test_engine, test_tenant, test_user, monkeypatch
+):
+    seeded = await _seed_lifecycle(
+        db_session,
+        tenant=test_tenant,
+        user=test_user,
+        suffix="replay-revocation",
+        phone="+15551234590",
+    )
+    provider = _Provider(
+        lambda **_kwargs: _Response(
+            201,
+            {
+                "sid": "SM-REPLAY-REVOCATION",
+                "status": "queued",
+                "from": "+15550001111",
+            },
+        )
+    )
+    _install_provider(monkeypatch, provider)
+    body = "Replay must reauthorize"
+    idempotency_key = "replay-revocation"
+    await send_sms(
+        db_session,
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        contact_id=seeded.contact.id,
+        matter_id=seeded.matter.id,
+        body=body,
+        category="appointment",
+        idempotency_key=idempotency_key,
+    )
+    assignment = await db_session.scalar(
+        select(UserRole).where(
+            UserRole.tenant_id == test_tenant.id,
+            UserRole.user_id == test_user.id,
+        )
+    )
+    role_id = assignment.role_id
+    tenant_id = test_tenant.id
+    user_id = test_user.id
+    contact_id = seeded.contact.id
+    matter_id = seeded.matter.id
+    preflight_entered = asyncio.Event()
+    release_preflight = asyncio.Event()
+    original_preflight = sms_service._sms_matter_authorization_preflight
+
+    async def pause_after_preflight(*args, **kwargs):
+        authorized = await original_preflight(*args, **kwargs)
+        preflight_entered.set()
+        await release_preflight.wait()
+        return authorized
+
+    monkeypatch.setattr(
+        sms_service,
+        "_sms_matter_authorization_preflight",
+        pause_after_preflight,
+    )
+    maker = async_sessionmaker(test_engine, expire_on_commit=False)
+
+    async def replay():
+        async with maker() as replay_db:
+            await set_tenant_context(replay_db, str(tenant_id))
+            return await send_sms(
+                replay_db,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                contact_id=contact_id,
+                matter_id=matter_id,
+                body=body,
+                category="appointment",
+                idempotency_key=idempotency_key,
+            )
+
+    replay_task = asyncio.create_task(replay())
+    await asyncio.wait_for(preflight_entered.wait(), timeout=5)
+    await _mutate_sms_actor(
+        maker,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        role_id=role_id,
+        mutation="revoke",
+    )
+    release_preflight.set()
+    with pytest.raises(SmsError) as blocked:
+        await asyncio.wait_for(replay_task, timeout=5)
+    assert blocked.value.status_code == 404
+    assert blocked.value.code == "sms_target_not_found"
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_insert_race_winner_reauthorizes_before_replay_truth(
+    db_session, test_engine, test_tenant, test_user, monkeypatch
+):
+    seeded = await _seed_lifecycle(
+        db_session,
+        tenant=test_tenant,
+        user=test_user,
+        suffix="insert-race-revocation",
+        phone="+15551234589",
+    )
+    assignment = await db_session.scalar(
+        select(UserRole).where(
+            UserRole.tenant_id == test_tenant.id,
+            UserRole.user_id == test_user.id,
+        )
+    )
+    role_id = assignment.role_id
+    tenant_id = test_tenant.id
+    user_id = test_user.id
+    contact_id = seeded.contact.id
+    matter_id = seeded.matter.id
+    phone = seeded.contact.phone
+    body = "Unique winner must reauthorize"
+    idempotency_key = "insert-race-revocation"
+    request_digest = sms_service._request_digest(
+        contact_id=contact_id,
+        matter_id=matter_id,
+        to_number=phone,
+        body=body,
+        category="appointment",
+    )
+    config_entered = asyncio.Event()
+    release_config = asyncio.Event()
+    original_config = sms_service._config
+
+    async def pause_after_replay_miss(
+        db, current_tenant_id, *, lock_for_provider_io=False
+    ):
+        config = await original_config(
+            db,
+            current_tenant_id,
+            lock_for_provider_io=lock_for_provider_io,
+        )
+        if not lock_for_provider_io:
+            config_entered.set()
+            await release_config.wait()
+        return config
+
+    monkeypatch.setattr(sms_service, "_config", pause_after_replay_miss)
+    provider = _Provider(
+        lambda **_kwargs: pytest.fail("unauthorized race loser called provider")
+    )
+    _install_provider(monkeypatch, provider)
+    maker = async_sessionmaker(test_engine, expire_on_commit=False)
+
+    async def losing_send():
+        async with maker() as send_db:
+            await set_tenant_context(send_db, str(tenant_id))
+            return await send_sms(
+                send_db,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                contact_id=contact_id,
+                matter_id=matter_id,
+                body=body,
+                category="appointment",
+                idempotency_key=idempotency_key,
+            )
+
+    send_task = asyncio.create_task(losing_send())
+    await asyncio.wait_for(config_entered.wait(), timeout=5)
+    async with maker() as winner_db:
+        await set_tenant_context(winner_db, str(tenant_id))
+        winner_db.add(
+            SmsMessage(
+                tenant_id=tenant_id,
+                contact_id=contact_id,
+                matter_id=matter_id,
+                idempotency_key=idempotency_key,
+                request_digest=request_digest,
+                provider_message_id="SM-INSERT-RACE-WINNER",
+                direction="outbound",
+                status="submitted",
+                delivery_certainty="provider_accepted",
+                to_number=phone,
+                body=body,
+                category="appointment",
+                provider_status="queued",
+                created_by_user_id=user_id,
+            )
+        )
+        await winner_db.commit()
+    await _mutate_sms_actor(
+        maker,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        role_id=role_id,
+        mutation="revoke",
+    )
+    release_config.set()
+    with pytest.raises(SmsError) as blocked:
+        await asyncio.wait_for(send_task, timeout=5)
+    assert blocked.value.status_code == 404
+    assert blocked.value.code == "sms_target_not_found"
+    assert provider.calls == []
 
 
 @pytest.mark.asyncio

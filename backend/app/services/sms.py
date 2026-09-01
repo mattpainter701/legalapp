@@ -402,6 +402,122 @@ async def _lock_sms_matter_authorization(
     }
 
 
+async def _sms_matter_authorization_preflight(
+    db: AsyncSession,
+    *,
+    tenant_id,
+    user_id,
+    matter_id,
+    contact_id,
+    required_capabilities: frozenset[str],
+) -> bool:
+    """Check replay eligibility without locking inbound-routing rows.
+
+    This privacy-preserving check runs before idempotency replay lookup so an
+    unauthorized caller cannot enumerate prior sends. It is intentionally
+    non-locking: a new reservation may wait for an in-flight STOP's Contact FK
+    without holding Matter. The locking fence is repeated after reservation
+    and before provider I/O, so concurrent revocation still fails closed.
+    """
+
+    user = await db.scalar(
+        select(User).where(
+            User.id == user_id,
+            User.tenant_id == tenant_id,
+            User.is_active.is_(True),
+        )
+    )
+    if user is None:
+        return False
+    capabilities = await get_user_capabilities(db, user.id)
+    if not required_capabilities.issubset(capabilities):
+        return False
+    if not await can_access_matter(
+        db,
+        tenant_id=tenant_id,
+        user_id=user.id,
+        is_admin=user.role == "admin",
+        matter_id=matter_id,
+    ):
+        return False
+    matter = await db.scalar(
+        select(Matter).where(Matter.id == matter_id, Matter.tenant_id == tenant_id)
+    )
+    if matter is None:
+        return False
+    if matter.client_contact_id == contact_id:
+        return True
+    return (
+        await db.scalar(
+            select(MatterParty.id)
+            .where(
+                MatterParty.tenant_id == tenant_id,
+                MatterParty.matter_id == matter_id,
+                MatterParty.contact_id == contact_id,
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
+async def _lock_sms_replay(
+    db: AsyncSession,
+    *,
+    tenant_id,
+    user_id,
+    matter_id,
+    contact_id,
+    idempotency_key: str,
+    required_capabilities: frozenset[str],
+) -> SmsMessage | None:
+    """Lock and authorize replay truth in the global message/target order."""
+
+    replay = await db.scalar(
+        select(SmsMessage)
+        .where(
+            SmsMessage.tenant_id == tenant_id,
+            SmsMessage.idempotency_key == idempotency_key,
+        )
+        .with_for_update()
+    )
+    if replay is None:
+        return None
+
+    contact = await db.scalar(
+        select(Contact)
+        .where(Contact.id == contact_id, Contact.tenant_id == tenant_id)
+        .with_for_update()
+    )
+    if contact is None:
+        raise SmsError(
+            "SMS target was not found",
+            404,
+            code="sms_target_not_found",
+        )
+    # STOP locks every consent associated with the Contact before Matter.
+    # Replay does not require current consent, but it must share that ordering
+    # before rechecking the actor/Matter/party authorization fence.
+    await load_sms_consents(db, tenant_id, contact_id, lock=True)
+    if (
+        await _lock_sms_matter_authorization(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            matter_id=matter_id,
+            contact_id=contact_id,
+            required_capabilities=required_capabilities,
+        )
+        is None
+    ):
+        raise SmsError(
+            "SMS target was not found",
+            404,
+            code="sms_target_not_found",
+        )
+    return replay
+
+
 def _provider_lookup_matches_reserved_dispatch(
     *,
     message: SmsMessage,
@@ -1129,6 +1245,37 @@ async def _lock_sms_automation_run(
     )
 
 
+async def _lock_sms_timeline_targets(
+    db: AsyncSession,
+    *,
+    tenant_id,
+    message: SmsMessage,
+    include_matter: bool,
+) -> bool:
+    """Fence timeline foreign-key targets in Contact-before-Matter order."""
+
+    if message.contact_id is not None:
+        contact_id = await db.scalar(
+            select(Contact.id)
+            .where(
+                Contact.id == message.contact_id,
+                Contact.tenant_id == tenant_id,
+            )
+            .with_for_update()
+        )
+        if contact_id is None:
+            return False
+    if include_matter and message.matter_id is not None:
+        matter_id = await db.scalar(
+            select(Matter.id)
+            .where(Matter.id == message.matter_id, Matter.tenant_id == tenant_id)
+            .with_for_update(of=Matter)
+        )
+        if matter_id is None:
+            return False
+    return True
+
+
 async def _ensure_unknown_delivery_evidence(
     db: AsyncSession,
     *,
@@ -1138,7 +1285,13 @@ async def _ensure_unknown_delivery_evidence(
     reason: str,
     audit_actor_type: str | None = None,
 ) -> None:
-    """Atomically retain one timeline row and one audit marker per unknown cause."""
+    """Atomically retain one timeline row and one audit marker per unknown cause.
+
+    Callers must already fence the message's Contact before Matter. A missing
+    CommunicationLog insert checks both foreign keys, and relying on database
+    constraint order can otherwise invert inbound STOP's Contact -> Matter
+    routing order.
+    """
     communication = None
     if message.communication_log_id:
         communication = await db.scalar(
@@ -1248,46 +1401,30 @@ async def _resolve_replay(
         if lease_started and lease_started.tzinfo is None:
             lease_started = lease_started.replace(tzinfo=timezone.utc)
         if lease_started and lease_started <= now - _DISPATCH_LEASE:
-            locked_replay = await db.scalar(
-                select(SmsMessage)
-                .where(
-                    SmsMessage.id == replay.id,
-                    SmsMessage.tenant_id == tenant_id,
-                )
-                .with_for_update()
+            # Every caller owns this SmsMessage row before Contact/Matter, so
+            # do not reacquire it here and invert recovery/scheduler ordering.
+            replay.status = "provider_unknown"
+            replay.delivery_certainty = "outcome_unknown"
+            replay.reconciliation_required_at = now
+            replay.raw_provider_event = {
+                **(replay.raw_provider_event or {}),
+                "reconciliation_reason": "dispatch_lease_expired",
+            }
+            await _ensure_unknown_delivery_evidence(
+                db,
+                tenant_id=tenant_id,
+                message=replay,
+                actor_user_id=actor_user_id,
+                reason="dispatch_lease_expired_replay",
             )
-            if locked_replay.status == "dispatching":
-                locked_replay.status = "provider_unknown"
-                locked_replay.delivery_certainty = "outcome_unknown"
-                locked_replay.reconciliation_required_at = now
-                locked_replay.raw_provider_event = {
-                    **(locked_replay.raw_provider_event or {}),
-                    "reconciliation_reason": "dispatch_lease_expired",
-                }
-                await _ensure_unknown_delivery_evidence(
-                    db,
-                    tenant_id=tenant_id,
-                    message=locked_replay,
-                    actor_user_id=actor_user_id,
-                    reason="dispatch_lease_expired_replay",
-                )
-                await db.commit()
-                raise SmsError(
-                    "The original SMS dispatch lease expired with an unknown outcome",
-                    409,
-                    delivery_certainty="outcome_unknown",
-                    sms_message_id=locked_replay.id,
-                    reconciliation_required=True,
-                )
-            if locked_replay.status == "provider_unknown":
-                raise SmsError(
-                    "The original SMS outcome must be reconciled before retrying",
-                    409,
-                    delivery_certainty="outcome_unknown",
-                    sms_message_id=locked_replay.id,
-                    reconciliation_required=True,
-                )
-            return _terminal_replay(locked_replay)
+            await db.commit()
+            raise SmsError(
+                "The original SMS dispatch lease expired with an unknown outcome",
+                409,
+                delivery_certainty="outcome_unknown",
+                sms_message_id=replay.id,
+                reconciliation_required=True,
+            )
         raise SmsError(
             "The original SMS is already being dispatched",
             409,
@@ -1339,6 +1476,18 @@ async def _persist_unknown_dispatch(
             .with_for_update()
         )
         if message and message.status == "dispatching":
+            if not await _lock_sms_timeline_targets(
+                db,
+                tenant_id=tenant_id,
+                message=message,
+                include_matter=True,
+            ):
+                raise SmsError(
+                    "SMS timeline target is unavailable",
+                    409,
+                    sms_message_id=message.id,
+                    code="sms_timeline_target_unavailable",
+                )
             message.status = "provider_unknown"
             message.delivery_certainty = "outcome_unknown"
             message.provider_account_sid = provider_account_sid
@@ -1401,29 +1550,48 @@ async def send_sms(
     # Authorize before even interpreting a matching idempotency reservation.
     # A caller who lost capability, matter assignment, or party binding must
     # not learn whether a prior provider request exists or how it resolved.
-    if (
-        await _lock_sms_matter_authorization(
-            db,
-            tenant_id=tenant_id,
-            user_id=user_id,
-            matter_id=matter_id,
-            contact_id=contact_id,
-            required_capabilities=required_capabilities,
-        )
-        is None
+    # This first pass must remain non-locking: inbound STOP takes Contact before
+    # Matter, and a new reservation's Contact FK may wait behind that STOP.
+    if not await _sms_matter_authorization_preflight(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        matter_id=matter_id,
+        contact_id=contact_id,
+        required_capabilities=required_capabilities,
     ):
         raise SmsError(
             "SMS target was not found",
             404,
             code="sms_target_not_found",
         )
-    replay = await db.scalar(
-        select(SmsMessage).where(
+    replay_id = await db.scalar(
+        select(SmsMessage.id).where(
             SmsMessage.tenant_id == tenant_id,
             SmsMessage.idempotency_key == idempotency_key,
         )
     )
-    if replay:
+    if replay_id:
+        # The non-locking preflight protects secrecy but cannot authorize a
+        # replay across a concurrent deactivation, role revocation, assignment
+        # removal, or party unlink. Lock the outbound row first to match every
+        # recovery/reconciliation path, then Contact/consent before actor and
+        # Matter. No replay field is interpreted until that fence succeeds.
+        replay = await _lock_sms_replay(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            matter_id=matter_id,
+            contact_id=contact_id,
+            idempotency_key=idempotency_key,
+            required_capabilities=required_capabilities,
+        )
+        if replay is None:
+            raise SmsError(
+                "SMS idempotency reservation is unavailable",
+                409,
+                code="sms_idempotency_reservation_unavailable",
+            )
         replay_digest = _request_digest(
             contact_id=contact_id,
             matter_id=matter_id,
@@ -1515,11 +1683,16 @@ async def send_sms(
     except IntegrityError:
         await db.rollback()
         await set_tenant_context(db, str(tenant_id))
-        replay = await db.scalar(
-            select(SmsMessage).where(
-                SmsMessage.tenant_id == tenant_id,
-                SmsMessage.idempotency_key == idempotency_key,
-            )
+        # The unique-key winner is replay truth too. Lock it first, then repeat
+        # the same authorization fence before inspecting digest, status, or id.
+        replay = await _lock_sms_replay(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            matter_id=matter_id,
+            contact_id=contact_id,
+            idempotency_key=idempotency_key,
+            required_capabilities=required_capabilities,
         )
         if replay and replay.request_digest == request_digest:
             if replay.status == "dispatching" or (
@@ -2296,10 +2469,17 @@ async def reconcile_sms_message(
             sms_message_id=message.id,
             code="sms_reconciliation_not_required",
         )
+    if message.contact_id is None or message.matter_id is None:
+        raise SmsError("Outbound SMS was not found", 404, code="sms_message_not_found")
+    if not await _lock_sms_timeline_targets(
+        db,
+        tenant_id=tenant_id,
+        message=message,
+        include_matter=False,
+    ):
+        raise SmsError("Outbound SMS was not found", 404, code="sms_message_not_found")
     if (
-        message.contact_id is None
-        or message.matter_id is None
-        or await _lock_sms_matter_authorization(
+        await _lock_sms_matter_authorization(
             db,
             tenant_id=tenant_id,
             user_id=operator_user_id,
@@ -2630,35 +2810,50 @@ async def mark_stale_sms_dispatches_for_reconciliation() -> int:
         tenant_ids = list((await catalog_db.scalars(select(Tenant.id))).all())
     changed = 0
     for tenant_id in tenant_ids:
-        async with async_session_maker() as db:
-            await set_tenant_context(db, str(tenant_id))
-            rows = list(
+        stale_predicate = or_(
+            (
+                (SmsMessage.status == "dispatching")
+                & (SmsMessage.dispatch_started_at <= dispatch_cutoff)
+            ),
+            (
+                (SmsMessage.status == "submitted")
+                & (SmsMessage.created_at <= submitted_cutoff)
+                & SmsMessage.reconciliation_required_at.is_(None)
+            ),
+        )
+        # Discovery is lock-free. Claim rows one at a time in deterministic id
+        # order so no transaction holds an unordered SmsMessage batch while it
+        # accumulates Contact/Matter locks for timeline evidence.
+        async with async_session_maker() as discovery_db:
+            await set_tenant_context(discovery_db, str(tenant_id))
+            candidate_ids = list(
                 (
-                    await db.scalars(
-                        select(SmsMessage)
+                    await discovery_db.scalars(
+                        select(SmsMessage.id)
                         .where(
                             SmsMessage.tenant_id == tenant_id,
                             SmsMessage.direction == "outbound",
-                            or_(
-                                (
-                                    (SmsMessage.status == "dispatching")
-                                    & (
-                                        SmsMessage.dispatch_started_at
-                                        <= dispatch_cutoff
-                                    )
-                                ),
-                                (
-                                    (SmsMessage.status == "submitted")
-                                    & (SmsMessage.created_at <= submitted_cutoff)
-                                    & SmsMessage.reconciliation_required_at.is_(None)
-                                ),
-                            ),
+                            stale_predicate,
                         )
-                        .with_for_update(skip_locked=True)
+                        .order_by(SmsMessage.id)
                     )
                 ).all()
             )
-            for row in rows:
+        for candidate_id in candidate_ids:
+            async with async_session_maker() as db:
+                await set_tenant_context(db, str(tenant_id))
+                row = await db.scalar(
+                    select(SmsMessage)
+                    .where(
+                        SmsMessage.id == candidate_id,
+                        SmsMessage.tenant_id == tenant_id,
+                        SmsMessage.direction == "outbound",
+                        stale_predicate,
+                    )
+                    .with_for_update(skip_locked=True)
+                )
+                if row is None:
+                    continue
                 reason = (
                     "dispatch_lease_expired"
                     if row.status == "dispatching"
@@ -2673,6 +2868,18 @@ async def mark_stale_sms_dispatches_for_reconciliation() -> int:
                     "reconciliation_reason": reason,
                 }
                 if row.status == "provider_unknown":
+                    if not await _lock_sms_timeline_targets(
+                        db,
+                        tenant_id=tenant_id,
+                        message=row,
+                        include_matter=True,
+                    ):
+                        raise SmsError(
+                            "SMS timeline target is unavailable",
+                            409,
+                            sms_message_id=row.id,
+                            code="sms_timeline_target_unavailable",
+                        )
                     await _ensure_unknown_delivery_evidence(
                         db,
                         tenant_id=tenant_id,
@@ -2681,9 +2888,8 @@ async def mark_stale_sms_dispatches_for_reconciliation() -> int:
                         reason=f"scheduler:{reason}",
                         audit_actor_type="system",
                     )
-            if rows:
                 await db.commit()
-                changed += len(rows)
+                changed += 1
     return changed
 
 
