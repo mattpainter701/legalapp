@@ -41,16 +41,18 @@ from app.services.access_control import require_capability
 
 
 _Result = TypeVar("_Result")
-StudioTransaction = Callable[
-    [Callable[[], Awaitable[_Result]]], Awaitable[_Result]
-]
+StudioTransaction = Callable[[Callable[[], Awaitable[_Result]]], Awaitable[_Result]]
 
 
 class StudioRenderRouteService(Protocol):
     async def enqueue(self, request, *, idempotency_key, audit): ...
     async def status(self, job_id: uuid.UUID) -> StudioRenderJobStatus: ...
-    async def artifact_result(self, artifact_id: uuid.UUID) -> StudioRenderJobStatus: ...
-    async def artifact_geometry(self, artifact_id: uuid.UUID) -> StudioArtifactGeometry: ...
+    async def artifact_result(
+        self, artifact_id: uuid.UUID
+    ) -> StudioRenderJobStatus: ...
+    async def artifact_geometry(
+        self, artifact_id: uuid.UUID
+    ) -> StudioArtifactGeometry: ...
     async def artifact_content(
         self,
         artifact_id: uuid.UUID,
@@ -86,7 +88,9 @@ class StudioRenderRouteContext:
             or parsed.username
             or parsed.password
         ):
-            raise ValueError("Studio routes require a configured HTTPS BACKEND_URL origin")
+            raise ValueError(
+                "Studio routes require a configured HTTPS BACKEND_URL origin"
+            )
         if not 1 <= self.max_download_bytes <= 100 * 1024 * 1024:
             raise ValueError("Studio route download bound is invalid")
 
@@ -123,9 +127,7 @@ async def get_studio_render_route_context(
             tenant_id=current_user.tenant_id,
             actor_user_id=current_user.id,
             active_job_limit=settings.TEMPLATE_STUDIO_RENDER_ACTIVE_JOB_LIMIT,
-            job_ttl=timedelta(
-                seconds=settings.TEMPLATE_STUDIO_RENDER_JOB_TTL_SECONDS
-            ),
+            job_ttl=timedelta(seconds=settings.TEMPLATE_STUDIO_RENDER_JOB_TTL_SECONDS),
             renderer_manifests=manifests,
             enqueue_rate_limit=settings.TEMPLATE_STUDIO_RENDER_ENQUEUE_RATE_LIMIT,
             enqueue_rate_window=timedelta(
@@ -274,7 +276,9 @@ async def read_studio_render_capabilities(
 async def enqueue_studio_render(
     body: StudioRenderIntent,
     response: Response,
-    idempotency_key: str = Header(alias="Idempotency-Key", min_length=8, max_length=200),
+    idempotency_key: str = Header(
+        alias="Idempotency-Key", min_length=8, max_length=200
+    ),
     context: StudioRenderRouteContext = Depends(require_fresh_studio_render_worker),
 ):
     if body.input_binding_id is not None:
@@ -342,9 +346,7 @@ async def read_studio_render_artifact(
     response: Response,
     context: StudioRenderRouteContext = Depends(get_studio_render_route_context),
 ):
-    status = await _run(
-        context, lambda: context.service.artifact_result(artifact_id)
-    )
+    status = await _run(context, lambda: context.service.artifact_result(artifact_id))
     if status.result_url is None:
         raise _public_http_error(RuntimeError("missing artifact resource"))
     _resource_headers(response, context, status.result_url)

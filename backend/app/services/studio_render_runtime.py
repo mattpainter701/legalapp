@@ -48,11 +48,15 @@ _ARTIFACT_KIND = {
     "studio_page_preview": "page_preview",
     "studio_test_render": "test_render",
 }
+
+
 def _json_object(raw: str, *, name: str) -> dict[str, Any]:
     try:
         value = json.loads(raw)
     except (TypeError, ValueError) as exc:
-        raise StudioRenderRuntimeError(f"Studio {name} configuration is invalid.") from exc
+        raise StudioRenderRuntimeError(
+            f"Studio {name} configuration is invalid."
+        ) from exc
     if not isinstance(value, dict):
         raise StudioRenderRuntimeError(f"Studio {name} configuration is invalid.")
     return value
@@ -210,7 +214,9 @@ def build_studio_render_worker_loop(settings: Settings) -> StudioRenderWorkerLoo
         for capability in api_runtime.capabilities.capabilities
     }
     if set(profile_document) != set(capability_by_configuration_key):
-        raise StudioRenderRuntimeError("Studio worker profile configuration is incomplete.")
+        raise StudioRenderRuntimeError(
+            "Studio worker profile configuration is incomplete."
+        )
 
     profiles_by_capability = {
         capability.key: _profile(profile_document[configuration_key])
@@ -220,7 +226,9 @@ def build_studio_render_worker_loop(settings: Settings) -> StudioRenderWorkerLoo
     for profile in profiles_by_capability.values():
         existing = unique_profiles.get(profile.profile_id)
         if existing is not None and existing != profile:
-            raise StudioRenderRuntimeError("Studio worker profile identity is ambiguous.")
+            raise StudioRenderRuntimeError(
+                "Studio worker profile identity is ambiguous."
+            )
         unique_profiles[profile.profile_id] = profile
     try:
         workspace_root = _prepare_workspace(settings)
@@ -233,9 +241,7 @@ def build_studio_render_worker_loop(settings: Settings) -> StudioRenderWorkerLoo
                 artifact_kind=_ARTIFACT_KIND[capability.kind],
                 media_type=capability.output_media_type,
                 retention_class=(
-                    "review"
-                    if capability.kind == "studio_test_render"
-                    else "ephemeral"
+                    "review" if capability.kind == "studio_test_render" else "ephemeral"
                 ),
                 max_source_bytes=settings.TEMPLATE_STUDIO_RENDER_MAX_OBJECT_BYTES,
                 max_binding_bytes=settings.TEMPLATE_STUDIO_RENDER_MAX_OBJECT_BYTES,
@@ -260,9 +266,7 @@ def build_studio_render_worker_loop(settings: Settings) -> StudioRenderWorkerLoo
                 settings.TEMPLATE_STUDIO_RENDER_PROCESSOR_TIMEOUT_SECONDS
             ),
             artifact_ttl_seconds=settings.TEMPLATE_STUDIO_RENDER_ARTIFACT_TTL_SECONDS,
-            metadata_ttl_seconds=(
-                settings.TEMPLATE_STUDIO_RENDER_METADATA_TTL_SECONDS
-            ),
+            metadata_ttl_seconds=(settings.TEMPLATE_STUDIO_RENDER_METADATA_TTL_SECONDS),
             max_input_binding_bytes=(
                 settings.TEMPLATE_STUDIO_RENDER_MAX_INPUT_BINDING_BYTES
             ),
@@ -279,6 +283,7 @@ def build_studio_render_worker_loop(settings: Settings) -> StudioRenderWorkerLoo
         raise StudioRenderRuntimeError(
             "Studio render worker is temporarily unavailable."
         ) from exc
+
     async def runtime_heartbeat(healthy: bool) -> None:
         await asyncio.to_thread(
             api_runtime.object_store.touch_worker_heartbeat,
@@ -298,12 +303,8 @@ def build_studio_render_worker_loop(settings: Settings) -> StudioRenderWorkerLoo
             async_session_maker,
             object_store=api_runtime.object_store,
             tenant_batch_size=settings.TEMPLATE_STUDIO_RENDER_TENANT_SCAN_BATCH,
-            artifact_ttl_seconds=(
-                settings.TEMPLATE_STUDIO_RENDER_ARTIFACT_TTL_SECONDS
-            ),
-            metadata_ttl_seconds=(
-                settings.TEMPLATE_STUDIO_RENDER_METADATA_TTL_SECONDS
-            ),
+            artifact_ttl_seconds=(settings.TEMPLATE_STUDIO_RENDER_ARTIFACT_TTL_SECONDS),
+            metadata_ttl_seconds=(settings.TEMPLATE_STUDIO_RENDER_METADATA_TTL_SECONDS),
         ),
         maintenance_interval_seconds=(
             settings.TEMPLATE_STUDIO_RENDER_MAINTENANCE_INTERVAL_SECONDS

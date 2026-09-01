@@ -80,11 +80,7 @@ class PostgresStudioRenderWorkSource:
             if through is not None:
                 query = query.where(Tenant.id <= through)
             return tuple(
-                (
-                    await db.scalars(
-                        query.order_by(Tenant.id).limit(limit)
-                    )
-                ).all()
+                (await db.scalars(query.order_by(Tenant.id).limit(limit))).all()
             )
 
     async def _tenant_ids(self) -> tuple[uuid.UUID, ...]:
@@ -145,9 +141,7 @@ class PostgresStudioRenderWorkSource:
         items: list[StudioRenderWorkItem] = []
         tenant_ids = await self._tenant_ids()
         for tenant_id in tenant_ids:
-            rows = await self._jobs_for_tenant(
-                tenant_id, limit=limit - len(items)
-            )
+            rows = await self._jobs_for_tenant(tenant_id, limit=limit - len(items))
             items.extend(
                 StudioRenderWorkItem(
                     tenant_id=tenant_id,

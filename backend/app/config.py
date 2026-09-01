@@ -1245,11 +1245,7 @@ def validate_template_ocr_settings(settings: Settings) -> None:
 
 
 def _studio_paths_overlap(first: Path, second: Path) -> bool:
-    return (
-        first == second
-        or first in second.parents
-        or second in first.parents
-    )
+    return first == second or first in second.parents or second in first.parents
 
 
 def _canonical_studio_path(raw: str, *, field: str) -> Path:
@@ -1342,7 +1338,9 @@ def validate_template_studio_settings(settings: Settings) -> None:
     if not 1 <= settings.TEMPLATE_STUDIO_RENDER_ENQUEUE_RATE_LIMIT <= 10_000:
         raise ValueError("TEMPLATE_STUDIO_RENDER_ENQUEUE_RATE_LIMIT is invalid")
     if not 1 <= settings.TEMPLATE_STUDIO_RENDER_ENQUEUE_RATE_WINDOW_SECONDS <= 3_600:
-        raise ValueError("TEMPLATE_STUDIO_RENDER_ENQUEUE_RATE_WINDOW_SECONDS is invalid")
+        raise ValueError(
+            "TEMPLATE_STUDIO_RENDER_ENQUEUE_RATE_WINDOW_SECONDS is invalid"
+        )
     if not 1 <= settings.TEMPLATE_STUDIO_RENDER_QUEUED_BYTE_LIMIT <= 100 * 1024**3:
         raise ValueError("TEMPLATE_STUDIO_RENDER_QUEUED_BYTE_LIMIT is invalid")
     if not 1 <= settings.TEMPLATE_STUDIO_RENDER_RETAINED_ARTIFACT_LIMIT <= 100_000:
@@ -1364,14 +1362,18 @@ def validate_template_studio_settings(settings: Settings) -> None:
         raise ValueError("TEMPLATE_STUDIO_RENDER_BATCH_SIZE is invalid")
     if not 1 <= settings.TEMPLATE_STUDIO_RENDER_TENANT_SCAN_BATCH <= 500:
         raise ValueError("TEMPLATE_STUDIO_RENDER_TENANT_SCAN_BATCH is invalid")
-    if not 1 <= settings.TEMPLATE_STUDIO_RENDER_CONCURRENCY <= min(
-        settings.TEMPLATE_STUDIO_RENDER_BATCH_SIZE, 16
+    if (
+        not 1
+        <= settings.TEMPLATE_STUDIO_RENDER_CONCURRENCY
+        <= min(settings.TEMPLATE_STUDIO_RENDER_BATCH_SIZE, 16)
     ):
         raise ValueError("TEMPLATE_STUDIO_RENDER_CONCURRENCY is invalid")
     if not 0.01 <= settings.TEMPLATE_STUDIO_RENDER_IDLE_SECONDS <= 60:
         raise ValueError("TEMPLATE_STUDIO_RENDER_IDLE_SECONDS is invalid")
     if not 10 <= settings.TEMPLATE_STUDIO_RENDER_MAINTENANCE_INTERVAL_SECONDS <= 86_400:
-        raise ValueError("TEMPLATE_STUDIO_RENDER_MAINTENANCE_INTERVAL_SECONDS is invalid")
+        raise ValueError(
+            "TEMPLATE_STUDIO_RENDER_MAINTENANCE_INTERVAL_SECONDS is invalid"
+        )
     if not 20 <= settings.TEMPLATE_STUDIO_RENDER_HEALTH_MAX_AGE_SECONDS <= 600:
         raise ValueError("TEMPLATE_STUDIO_RENDER_HEALTH_MAX_AGE_SECONDS is invalid")
     if not 30 <= settings.TEMPLATE_STUDIO_RENDER_LEASE_SECONDS <= 3_600:

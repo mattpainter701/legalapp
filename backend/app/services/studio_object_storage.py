@@ -25,8 +25,7 @@ from typing import Callable, Protocol, TypeVar
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _OBJECT_KEY = re.compile(r"^studio-content/v1/[0-9a-f]{2}/[0-9a-f]{64}$")
 _MEDIA_TYPE = re.compile(
-    r"^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,29}/"
-    r"[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,89}$"
+    r"^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,29}/" r"[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,89}$"
 )
 _StorageMutationResult = TypeVar("_StorageMutationResult")
 
@@ -59,9 +58,7 @@ async def run_storage_operation_to_completion(
     try:
         if timeout_seconds is None:
             return await asyncio.shield(task)
-        return await asyncio.wait_for(
-            asyncio.shield(task), timeout=timeout_seconds
-        )
+        return await asyncio.wait_for(asyncio.shield(task), timeout=timeout_seconds)
     except TimeoutError:
         if task.done():
             return task.result()
@@ -406,19 +403,23 @@ class LocalStudioObjectStore:
             if len(raw) > 4096:
                 raise ValueError("stage receipt too large")
             payload = json.loads(raw.decode("utf-8"))
-            if set(payload) != {
-                "contract_version",
-                "stage_id",
-                "job_id",
-                "lease_token",
-                "tenant_id",
-                "object_key",
-                "sha256",
-                "byte_size",
-                "media_type",
-                "reconcile_after",
-                "state",
-            } or payload["contract_version"] != 1:
+            if (
+                set(payload)
+                != {
+                    "contract_version",
+                    "stage_id",
+                    "job_id",
+                    "lease_token",
+                    "tenant_id",
+                    "object_key",
+                    "sha256",
+                    "byte_size",
+                    "media_type",
+                    "reconcile_after",
+                    "state",
+                }
+                or payload["contract_version"] != 1
+            ):
                 raise ValueError("invalid stage receipt")
             ref = StudioObjectRef(
                 tenant_id=payload["tenant_id"],
@@ -452,11 +453,15 @@ class LocalStudioObjectStore:
         if limit < 1:
             raise StudioStorageError("invalid_read_limit", "invalid Studio read limit")
         if _is_link(path):
-            raise StudioStorageError("unsafe_object_path", "Studio object path is not safe")
+            raise StudioStorageError(
+                "unsafe_object_path", "Studio object path is not safe"
+            )
         try:
             size = path.stat().st_size
         except FileNotFoundError as exc:
-            raise StudioStorageError("object_missing", "Studio output is unavailable") from exc
+            raise StudioStorageError(
+                "object_missing", "Studio output is unavailable"
+            ) from exc
         if size > limit:
             raise StudioStorageError(
                 "object_too_large", "Studio output exceeds its size limit"
@@ -580,7 +585,9 @@ class LocalStudioObjectStore:
                 or not isinstance(max_bytes, int)
                 or max_bytes < 1
             ):
-                raise StudioStorageError("invalid_read_limit", "invalid Studio read limit")
+                raise StudioStorageError(
+                    "invalid_read_limit", "invalid Studio read limit"
+                )
             limit = min(limit, max_bytes)
         target = self._path(ref.tenant_id, ref.object_key)
         with self._lock:
@@ -781,11 +788,14 @@ class LocalStudioObjectStore:
         directory: Path | None = None,
         exclude_stage_id: uuid.UUID | None = None,
     ) -> bool:
-        directory = directory or self._stage_path(
-            ref.tenant_id,
-            ref.sha256,
-            uuid.UUID(int=0),
-        ).parent
+        directory = (
+            directory
+            or self._stage_path(
+                ref.tenant_id,
+                ref.sha256,
+                uuid.UUID(int=0),
+            ).parent
+        )
         if not directory.exists():
             return False
         if not directory.is_dir() or _is_link(directory):

@@ -171,9 +171,7 @@ def validate_studio_output(
             raise ValueError("validator evidence mismatch")
         required_page_keys = {"page_number"}
         if artifact_kind == "page_preview":
-            required_page_keys.update(
-                {"width_px", "height_px", "dpi_x", "dpi_y"}
-            )
+            required_page_keys.update({"width_px", "height_px", "dpi_x", "dpi_y"})
         elif media_type in {
             "application/pdf",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -338,10 +336,7 @@ class StudioIsolationRegistry:
                 validator=Path(profile.validator),
                 fixed_arguments=tuple(profile.fixed_arguments),
                 environment=MappingProxyType(
-                    {
-                        str(key): str(value)
-                        for key, value in profile.environment.items()
-                    }
+                    {str(key): str(value) for key, value in profile.environment.items()}
                 ),
             )
         self._profiles = MappingProxyType(registered)
@@ -373,8 +368,7 @@ class StudioIsolationRegistry:
             or not _safe_runtime_file(runtime_root, launcher)
             or not _safe_runtime_file(runtime_root, executable)
             or not all(
-                _safe_runtime_file(runtime_root, path)
-                for path in component_paths
+                _safe_runtime_file(runtime_root, path) for path in component_paths
             )
         ):
             raise StudioIsolationError(
@@ -507,18 +501,13 @@ class StudioIsolationRegistry:
                     Path(profile.runtime_root), Path(profile.validator)
                 )
                 and _file_sha256(Path(profile.launcher)) == profile.launcher_sha256
-                and _file_sha256(Path(profile.executable))
-                == profile.executable_sha256
+                and _file_sha256(Path(profile.executable)) == profile.executable_sha256
                 and _file_sha256(Path(profile.runtime_bundle_manifest))
                 == profile.runtime_bundle_sha256
-                and _file_sha256(Path(profile.font_pack))
-                == profile.font_pack_sha256
-                and _file_sha256(Path(profile.rasterizer))
-                == profile.rasterizer_sha256
-                and _file_sha256(Path(profile.converter))
-                == profile.converter_sha256
-                and _file_sha256(Path(profile.validator))
-                == profile.validator_sha256
+                and _file_sha256(Path(profile.font_pack)) == profile.font_pack_sha256
+                and _file_sha256(Path(profile.rasterizer)) == profile.rasterizer_sha256
+                and _file_sha256(Path(profile.converter)) == profile.converter_sha256
+                and _file_sha256(Path(profile.validator)) == profile.validator_sha256
             )
         except OSError:
             attested = False
@@ -549,9 +538,7 @@ class StudioIsolationRegistry:
                     "process_tree": "kill",
                 }
             ),
-            fixed_arguments_sha256=canonical_json_sha256(
-                list(profile.fixed_arguments)
-            ),
+            fixed_arguments_sha256=canonical_json_sha256(list(profile.fixed_arguments)),
             environment_sha256=canonical_json_sha256(dict(profile.environment)),
             runtime_bundle_sha256=profile.runtime_bundle_sha256,
             font_pack_sha256=profile.font_pack_sha256,
@@ -595,6 +582,7 @@ class StudioTrustedProcessorAdapter:
         "max_binding_bytes",
         "max_metadata_bytes",
     )
+
     def __setattr__(self, name: str, value: object) -> None:
         if getattr(self, "_sealed", False):
             raise AttributeError("Studio processor adapters are immutable")
@@ -738,7 +726,10 @@ class StudioTrustedProcessorAdapter:
         options: dict,
         input_binding: bytes | None,
     ) -> StudioIsolatedProcessorOutput:
-        if not isinstance(source, bytes) or not 1 <= len(source) <= self.max_source_bytes:
+        if (
+            not isinstance(source, bytes)
+            or not 1 <= len(source) <= self.max_source_bytes
+        ):
             raise StudioIsolationError(
                 "input_too_large", "Studio source exceeds its processing limit."
             )
@@ -845,7 +836,9 @@ class StudioTrustedProcessorAdapter:
         return None
 
 
-def _minimal_environment(profile: StudioIsolationProfile, workspace: Path) -> dict[str, str]:
+def _minimal_environment(
+    profile: StudioIsolationProfile, workspace: Path
+) -> dict[str, str]:
     environment = {
         "STUDIO_ISOLATED": "1",
         "TEMP": str(workspace),
@@ -853,13 +846,13 @@ def _minimal_environment(profile: StudioIsolationProfile, workspace: Path) -> di
     }
     if os.name == "nt" and os.environ.get("SYSTEMROOT"):
         environment["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
-    environment.update({str(key): str(value) for key, value in profile.environment.items()})
+    environment.update(
+        {str(key): str(value) for key, value in profile.environment.items()}
+    )
     return environment
 
 
-async def _read_bounded(
-    stream: asyncio.StreamReader | None, *, limit: int
-) -> bytes:
+async def _read_bounded(stream: asyncio.StreamReader | None, *, limit: int) -> bytes:
     if stream is None:
         return b""
     output = bytearray()

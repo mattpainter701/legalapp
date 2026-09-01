@@ -63,10 +63,7 @@ def metadata_is_retained(candidate: StudioCleanupCandidate, *, now: datetime) ->
         or candidate.retention_class == "evidence"
     ):
         return True
-    return (
-        candidate.metadata_expires_at is None
-        or candidate.metadata_expires_at > now
-    )
+    return candidate.metadata_expires_at is None or candidate.metadata_expires_at > now
 
 
 async def cleanup_decision(
@@ -151,13 +148,21 @@ def durable_job_cleanup_decision(
     now: datetime,
 ) -> StudioDurableJobCleanupDecision:
     if not candidate.terminal or candidate.completed_at is None:
-        return StudioDurableJobCleanupDecision(candidate.job_id, False, "job_not_terminal")
+        return StudioDurableJobCleanupDecision(
+            candidate.job_id, False, "job_not_terminal"
+        )
     if candidate.retain_until > now:
-        return StudioDurableJobCleanupDecision(candidate.job_id, False, "job_not_expired")
+        return StudioDurableJobCleanupDecision(
+            candidate.job_id, False, "job_not_expired"
+        )
     if candidate.has_artifact:
-        return StudioDurableJobCleanupDecision(candidate.job_id, False, "artifact_retained")
+        return StudioDurableJobCleanupDecision(
+            candidate.job_id, False, "artifact_retained"
+        )
     if candidate.has_staged_object:
-        return StudioDurableJobCleanupDecision(candidate.job_id, False, "stage_retained")
+        return StudioDurableJobCleanupDecision(
+            candidate.job_id, False, "stage_retained"
+        )
     return StudioDurableJobCleanupDecision(candidate.job_id, True, "expired")
 
 
@@ -184,9 +189,7 @@ class StudioStagedReconciliationDecision:
 
 StageActiveCheck = Callable[[StudioStagedObject], Awaitable[bool]]
 ObjectReferenceCheck = Callable[[StudioObjectRef], Awaitable[bool]]
-ObjectReconciliationLock = Callable[
-    [StudioObjectRef], AsyncContextManager[None]
-]
+ObjectReconciliationLock = Callable[[StudioObjectRef], AsyncContextManager[None]]
 
 
 async def reconcile_staged_batch(
@@ -371,13 +374,15 @@ class StudioStagedReceiptReconciler:
         rows = list(
             (
                 await self.db.scalars(
-                    select(StudioRenderArtifact).where(
+                    select(StudioRenderArtifact)
+                    .where(
                         StudioRenderArtifact.tenant_id == self.tenant_id,
                         StudioRenderArtifact.object_key == ref.object_key,
                         StudioRenderArtifact.content_sha256 == ref.sha256,
                         StudioRenderArtifact.byte_size == ref.byte_size,
                         StudioRenderArtifact.media_type == ref.media_type,
-                    ).with_for_update()
+                    )
+                    .with_for_update()
                 )
             ).all()
         )
@@ -527,9 +532,7 @@ class StudioArtifactRetentionService:
     async def _delete_to_completion(self, ref: StudioObjectRef) -> None:
         """Do not release the object lock while a synchronous delete is live."""
 
-        await run_storage_mutation_to_completion(
-            partial(self.object_store.delete, ref)
-        )
+        await run_storage_mutation_to_completion(partial(self.object_store.delete, ref))
 
     async def _finalize_pending_delete(
         self,
@@ -617,18 +620,14 @@ class StudioArtifactRetentionService:
             # Phase A already committed delete_pending. A later reconciler can
             # safely retry without ever exposing a late background unlink.
             await self.db.rollback()
-            return StudioCleanupDecision(
-                artifact_id, False, "storage_delete_pending"
-            )
+            return StudioCleanupDecision(artifact_id, False, "storage_delete_pending")
         deleted_at = await self._clock_now()
         artifact.storage_state = "deleted"
         artifact.deleted_at = deleted_at
         await self.db.commit()
         return decision
 
-    async def delete_if_eligible(
-        self, artifact_id: uuid.UUID
-    ) -> StudioCleanupDecision:
+    async def delete_if_eligible(self, artifact_id: uuid.UUID) -> StudioCleanupDecision:
         await self._bind_tenant_context()
         # First discover the immutable object key without retaining a row lock;
         # adoption always acquires the object advisory lock before job/artifact
@@ -743,7 +742,6 @@ class StudioArtifactRetentionService:
             decisions.append(await self.delete_if_eligible(artifact_id))
         return decisions
 
-
     async def cleanup_metadata_batch(
         self, *, limit: int
     ) -> list[StudioCleanupDecision]:
@@ -764,8 +762,7 @@ class StudioArtifactRetentionService:
                         StudioRenderArtifact.legal_hold_at.is_(None),
                         ~select(StudioPreferredRenderEvidence.artifact_id)
                         .where(
-                            StudioPreferredRenderEvidence.tenant_id
-                            == self.tenant_id,
+                            StudioPreferredRenderEvidence.tenant_id == self.tenant_id,
                             StudioPreferredRenderEvidence.artifact_id
                             == StudioRenderArtifact.id,
                         )
@@ -790,9 +787,7 @@ class StudioArtifactRetentionService:
             )
             if artifact is None:
                 await self.db.rollback()
-                decisions.append(
-                    StudioCleanupDecision(artifact_id, False, "not_found")
-                )
+                decisions.append(StudioCleanupDecision(artifact_id, False, "not_found"))
                 continue
             candidate = await self._candidate(artifact)
             action_now = await self._clock_now()
@@ -891,9 +886,7 @@ class StudioArtifactRetentionService:
                     completed_at=completed_at,
                     retain_until=(completed_at or now) + retain_for,
                     has_artifact=artifact_exists is not None,
-                    has_staged_object=(
-                        stages is None or job_id in staged_jobs
-                    ),
+                    has_staged_object=(stages is None or job_id in staged_jobs),
                 ),
                 now=now,
             )
@@ -915,9 +908,7 @@ class StudioArtifactRetentionService:
             else:
                 await self.db.rollback()
                 decisions.append(
-                    StudioDurableJobCleanupDecision(
-                        job_id, False, "job_changed"
-                    )
+                    StudioDurableJobCleanupDecision(job_id, False, "job_changed")
                 )
         return decisions
 
@@ -1084,8 +1075,7 @@ class StudioRenderMaintenance:
                                 == StudioPreferredRenderEvidence.tenant_id
                             )
                             & (
-                                StudioDraft.id
-                                == StudioPreferredRenderEvidence.draft_id
+                                StudioDraft.id == StudioPreferredRenderEvidence.draft_id
                             ),
                         )
                         .where(

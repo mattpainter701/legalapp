@@ -27,9 +27,7 @@ StudioJobState = Literal[
     "completed",
     "failed",
 ]
-StudioAdoptionOutcome = Literal[
-    "current_evidence", "stale_output", "cancelled_output"
-]
+StudioAdoptionOutcome = Literal["current_evidence", "stale_output", "cancelled_output"]
 StudioArtifactAvailability = Literal["available", "expired"]
 StudioArtifactMetadataAvailability = Literal["available", "expired"]
 StudioJobFailureCode = Literal[
@@ -113,9 +111,7 @@ STUDIO_PUBLIC_ERROR_MESSAGES = {
     "idempotency_key_mismatch": (
         "Idempotency-Key was already used for another render request."
     ),
-    "invalid_idempotency_key": (
-        "Idempotency-Key must be 8-200 printable characters."
-    ),
+    "invalid_idempotency_key": ("Idempotency-Key must be 8-200 printable characters."),
     "invalid_request": "The Studio request is invalid.",
     "invalid_job_kind": "The Studio render job kind is invalid.",
     "invalid_job_transition": "Studio job state changed before this operation completed.",
@@ -248,7 +244,10 @@ class StudioRenderOptions(StrictModel):
         if self.page_number is not None and self.page_number > self.max_pages:
             raise ValueError("page_number cannot exceed max_pages")
         values = self.model_dump(mode="json")
-        if any(isinstance(value, float) and not math.isfinite(value) for value in values.values()):
+        if any(
+            isinstance(value, float) and not math.isfinite(value)
+            for value in values.values()
+        ):
             raise ValueError("render options must be finite")
         if len(json.dumps(values, separators=(",", ":"), allow_nan=False)) > 2048:
             raise ValueError("render options exceed their bounded contract")
@@ -447,8 +446,7 @@ def canonical_effective_render_request_hash(
         not isinstance(input_binding_sha256, str)
         or len(input_binding_sha256) != 64
         or any(
-            character not in "0123456789abcdef"
-            for character in input_binding_sha256
+            character not in "0123456789abcdef" for character in input_binding_sha256
         )
     ):
         raise ValueError("invalid input binding hash")
@@ -485,9 +483,15 @@ class StudioRenderRequest(StrictModel):
 
     @model_validator(mode="after")
     def validate_request(self):
-        if self.kind == "studio_page_preview" and self.render_options.page_number is None:
+        if (
+            self.kind == "studio_page_preview"
+            and self.render_options.page_number is None
+        ):
             raise ValueError("page preview jobs require page_number")
-        if self.kind != "studio_page_preview" and self.render_options.page_number is not None:
+        if (
+            self.kind != "studio_page_preview"
+            and self.render_options.page_number is not None
+        ):
             raise ValueError("page_number is valid only for page preview jobs")
         if self.input_binding_id is not None and self.kind != "studio_test_render":
             raise ValueError("input bindings are valid only for test renders")
@@ -639,9 +643,7 @@ class StudioRenderJobStatus(StrictModel):
     effective_request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     renderer_manifest: StudioRendererManifest
     runtime_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    input_binding_sha256: str | None = Field(
-        default=None, pattern=r"^[0-9a-f]{64}$"
-    )
+    input_binding_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     input_binding_version: int | None = Field(default=None, ge=1)
     artifact_id: uuid.UUID | None = None
     artifact_availability: StudioArtifactAvailability | None = None
@@ -693,9 +695,7 @@ class StudioRenderJobStatus(StrictModel):
             raise ValueError("effective request hash mismatch")
         if self.renderer_manifest.sha256 != self.runtime_manifest_sha256:
             raise ValueError("renderer manifest hash mismatch")
-        if (self.input_binding_sha256 is None) != (
-            self.input_binding_version is None
-        ):
+        if (self.input_binding_sha256 is None) != (self.input_binding_version is None):
             raise ValueError("input binding identity is incomplete")
         if self.attempts > self.max_attempts:
             raise ValueError("attempt count exceeds the retry limit")
@@ -716,7 +716,9 @@ class StudioRenderJobStatus(StrictModel):
         materialized = self.artifact_id is not None or self.adoption_outcome is not None
         if self.state == "completed":
             if self.artifact_id is None or self.adoption_outcome is None:
-                raise ValueError("completed jobs require materialized artifact evidence")
+                raise ValueError(
+                    "completed jobs require materialized artifact evidence"
+                )
             required_metadata = (
                 self.artifact_availability,
                 self.artifact_metadata_availability,
@@ -726,21 +728,15 @@ class StudioRenderJobStatus(StrictModel):
             )
             if any(value is None for value in required_metadata):
                 raise ValueError("completed jobs require artifact metadata")
-            if (
-                self.retention_class in {"ephemeral", "review"}
-                and (
-                    self.content_expires_at is None
-                    or self.metadata_expires_at is None
-                    or self.metadata_expires_at <= self.content_expires_at
-                )
+            if self.retention_class in {"ephemeral", "review"} and (
+                self.content_expires_at is None
+                or self.metadata_expires_at is None
+                or self.metadata_expires_at <= self.content_expires_at
             ):
                 raise ValueError("temporary artifacts require ordered retention expiry")
-            if (
-                self.retention_class == "evidence"
-                and (
-                    self.content_expires_at is not None
-                    or self.metadata_expires_at is not None
-                )
+            if self.retention_class == "evidence" and (
+                self.content_expires_at is not None
+                or self.metadata_expires_at is not None
             ):
                 raise ValueError("evidence artifacts do not expire")
             if self.kind == "studio_page_preview" and self.artifact_page_count != 1:
@@ -793,8 +789,12 @@ class StudioRenderJobStatus(StrictModel):
         elif self.artifact_availability is not None:
             raise ValueError("artifact availability exists only after materialization")
         elif self.artifact_metadata_availability is not None:
-            raise ValueError("artifact metadata availability exists only after materialization")
-        elif self.content_expires_at is not None or self.metadata_expires_at is not None:
+            raise ValueError(
+                "artifact metadata availability exists only after materialization"
+            )
+        elif (
+            self.content_expires_at is not None or self.metadata_expires_at is not None
+        ):
             raise ValueError("artifact expiry exists only after materialization")
         elif any(
             value is not None

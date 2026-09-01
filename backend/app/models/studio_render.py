@@ -202,9 +202,7 @@ class StudioRenderArtifact(Base):
         UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
     )
     job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    draft_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), nullable=False
-    )
+    draft_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     snapshot_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     source_artifact_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), nullable=False
@@ -248,9 +246,13 @@ class StudioRenderArtifact(Base):
         String(20), nullable=False, default="active", server_default="active"
     )
     content_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    metadata_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    metadata_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     legal_hold_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    delete_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    delete_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now, server_default="now()"
@@ -310,9 +312,7 @@ class StudioPreferredRenderEvidence(Base):
         primary_key=True,
     )
     draft_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
-    evidence_basis_sha256: Mapped[str] = mapped_column(
-        String(64), primary_key=True
-    )
+    evidence_basis_sha256: Mapped[str] = mapped_column(String(64), primary_key=True)
     artifact_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     revision: Mapped[int] = mapped_column(Integer, nullable=False)

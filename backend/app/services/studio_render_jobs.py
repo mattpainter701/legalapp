@@ -132,9 +132,7 @@ class StudioRenderServiceError(RuntimeError):
             normalized = "processor_unavailable"
         allowed = STUDIO_PUBLIC_ERROR_DETAIL_KEYS.get(normalized, frozenset())
         candidate_details = {
-            key: value
-            for key, value in dict(details or {}).items()
-            if key in allowed
+            key: value for key, value in dict(details or {}).items() if key in allowed
         }
         try:
             public_details = (
@@ -291,9 +289,7 @@ class _QueuedPayload(StrictModel):
     effective_request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     requested_by: uuid.UUID
     input_binding_id: uuid.UUID | None = None
-    input_binding_sha256: str | None = Field(
-        default=None, pattern=r"^[0-9a-f]{64}$"
-    )
+    input_binding_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     input_binding_version: int | None = Field(default=None, ge=1)
     renderer_manifest: StudioRendererManifest
     runtime_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -378,10 +374,10 @@ class _PersistedResult(StrictModel):
     byte_size: int | None = Field(default=None, ge=1, le=100 * 1024 * 1024)
     artifact_page_count: int | None = Field(default=None, ge=1, le=1_000)
     document_page_count: int | None = Field(default=None, ge=1, le=10_000)
-    geometry_manifest_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-    input_binding_sha256: str | None = Field(
+    geometry_manifest_sha256: str | None = Field(
         default=None, pattern=r"^[0-9a-f]{64}$"
     )
+    input_binding_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     input_binding_version: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
@@ -438,9 +434,7 @@ class _PersistedResult(StrictModel):
             )
         ):
             raise ValueError("artifact metadata has no artifact")
-        if (self.input_binding_sha256 is None) != (
-            self.input_binding_version is None
-        ):
+        if (self.input_binding_sha256 is None) != (self.input_binding_version is None):
             raise ValueError("input binding identity is incomplete")
         if self.adoption_outcome is not None and self.adoption_outcome not in {
             "current_evidence",
@@ -453,15 +447,15 @@ class _PersistedResult(StrictModel):
             and self.adoption_outcome != "current_evidence"
         ):
             raise ValueError("only current output can be preferred evidence")
-        if self.retention_class is not None and self.retention_class not in _RETENTION_CLASSES:
-            raise ValueError("invalid retention class")
         if (
-            self.retention_class in {"ephemeral", "review"}
-            and (
-                self.content_expires_at is None
-                or self.metadata_expires_at is None
-                or self.metadata_expires_at <= self.content_expires_at
-            )
+            self.retention_class is not None
+            and self.retention_class not in _RETENTION_CLASSES
+        ):
+            raise ValueError("invalid retention class")
+        if self.retention_class in {"ephemeral", "review"} and (
+            self.content_expires_at is None
+            or self.metadata_expires_at is None
+            or self.metadata_expires_at <= self.content_expires_at
         ):
             raise ValueError("temporary artifact retention expiry is required")
         if self.retention_class == "evidence" and (
@@ -735,7 +729,9 @@ class _StudioRenderJobStore:
         if not 1 <= enqueue_rate_limit <= 10_000:
             raise ValueError("enqueue_rate_limit must be between 1 and 10000")
         if not timedelta(seconds=1) <= enqueue_rate_window <= timedelta(hours=1):
-            raise ValueError("enqueue_rate_window must be between one second and one hour")
+            raise ValueError(
+                "enqueue_rate_window must be between one second and one hour"
+            )
         if not 1 <= queued_byte_limit <= 100 * 1024**3:
             raise ValueError("queued_byte_limit is invalid")
         if not 1 <= max_input_binding_bytes <= 100 * 1024 * 1024:
@@ -947,8 +943,7 @@ class _StudioRenderJobStore:
             and source.format == queued.source.format
             and isinstance(source.content_bytes, bytes)
             and source.byte_size == len(source.content_bytes)
-            and hashlib.sha256(source.content_bytes).hexdigest()
-            == queued.source.sha256
+            and hashlib.sha256(source.content_bytes).hexdigest() == queued.source.sha256
         )
         if not immutable_source_current:
             return _AuthoritativeInputState("corrupt", "source_integrity_failed")
@@ -967,8 +962,7 @@ class _StudioRenderJobStore:
             try:
                 binding_current = bool(
                     resolved.object_ref.tenant_id == self.tenant_id
-                    and resolved.object_ref.sha256
-                    == queued.input_binding_sha256
+                    and resolved.object_ref.sha256 == queued.input_binding_sha256
                     and resolved.version == queued.input_binding_version
                 )
             except Exception:
@@ -987,9 +981,7 @@ class _StudioRenderJobStore:
             and draft.source_media_type == queued.source.media_type
             and draft.format == queued.source.format
         )
-        return _AuthoritativeInputState(
-            "current" if draft_head_current else "stale"
-        )
+        return _AuthoritativeInputState("current" if draft_head_current else "stale")
 
     async def _fail_corrupt_adoption(
         self,
@@ -1166,9 +1158,7 @@ class _StudioRenderJobStore:
         await self._expire_active_jobs()
         now = await self._clock_now()
         admission_bytes = (
-            source_bytes
-            + binding_bytes
-            + request.render_options.max_output_bytes
+            source_bytes + binding_bytes + request.render_options.max_output_bytes
         )
         if admission_bytes > 200 * 1024 * 1024:
             raise StudioRenderServiceError(
@@ -1476,12 +1466,8 @@ class _StudioRenderJobStore:
             )
         if previous is not None and previous.storage_state != "deleted":
             previous.retention_class = "review"
-            previous.content_expires_at = now + timedelta(
-                seconds=artifact_ttl_seconds
-            )
-            previous.metadata_expires_at = now + timedelta(
-                seconds=metadata_ttl_seconds
-            )
+            previous.content_expires_at = now + timedelta(seconds=artifact_ttl_seconds)
+            previous.metadata_expires_at = now + timedelta(seconds=metadata_ttl_seconds)
 
     async def _stage_preferred_evidence(
         self,
@@ -1570,9 +1556,7 @@ class _StudioRenderJobStore:
             )
         ):
             return None
-        expected_object_key = (
-            f"studio-content/v1/{content_sha256[:2]}/{content_sha256}"
-        )
+        expected_object_key = f"studio-content/v1/{content_sha256[:2]}/{content_sha256}"
         try:
             geometry_manifest = StudioGeometryManifest.model_validate(
                 artifact.geometry_manifest
@@ -1588,8 +1572,7 @@ class _StudioRenderJobStore:
             and artifact.revision == queued.rendered_revision
             and artifact.identity_sha256 == queued.identity_sha256
             and artifact.evidence_basis_sha256 == _evidence_basis_sha256(queued)
-            and artifact.snapshot_content_sha256
-            == queued.snapshot_content_sha256
+            and artifact.snapshot_content_sha256 == queued.snapshot_content_sha256
             and artifact.source_sha256 == queued.source.sha256
             and artifact.source_media_type == queued.source.media_type
             and artifact.source_format == queued.source.format
@@ -1610,8 +1593,7 @@ class _StudioRenderJobStore:
             and artifact.byte_size == result.byte_size
             and artifact.runtime_manifest
             == queued.renderer_manifest.model_dump(mode="json")
-            and artifact.runtime_manifest_sha256
-            == queued.runtime_manifest_sha256
+            and artifact.runtime_manifest_sha256 == queued.runtime_manifest_sha256
             and artifact.input_binding_sha256
             == queued.input_binding_sha256
             == result.input_binding_sha256
@@ -1695,7 +1677,9 @@ class _StudioRenderJobStore:
             .with_for_update()
         )
         if row is None:
-            raise StudioRenderServiceError(404, "job_not_found", "Studio job not found.")
+            raise StudioRenderServiceError(
+                404, "job_not_found", "Studio job not found."
+            )
         if _peek_requested_by(row) != self.actor_user_id:
             raise StudioRenderServiceError(
                 404, "job_not_found", "Studio job not found."
@@ -1729,43 +1713,47 @@ class _StudioRenderJobStore:
                 durable_state_changed=True,
             )
         invalid_shape = (
-            row.kind != queued.kind
-        ) or (
-            not all(
-                _is_aware_database_time(value)
-                for value in (row.available_at, row.created_at, row.updated_at)
+            (row.kind != queued.kind)
+            or (
+                not all(
+                    _is_aware_database_time(value)
+                    for value in (row.available_at, row.created_at, row.updated_at)
+                )
             )
-        ) or (
-            row.leased_at is not None
-            and not _is_aware_database_time(row.leased_at)
-        ) or (
-            row.completed_at is not None
-            and not _is_aware_database_time(row.completed_at)
-        ) or (
-            state == "completed" and result.artifact_id is None
-        ) or (
-            state == "failed" and result.error_code is None
-        ) or (
-            state not in {"completed", "failed"}
-            and (result.artifact_id is not None or result.error_code is not None)
-        ) or (
-            state == "completed"
-            and (
-                result.input_binding_sha256 != queued.input_binding_sha256
-                or result.input_binding_version != queued.input_binding_version
+            or (
+                row.leased_at is not None and not _is_aware_database_time(row.leased_at)
             )
-        ) or (
-            (state in _TERMINAL_STATES) != (row.completed_at is not None)
-        ) or (
-            (state in _TERMINAL_STATES)
-            != (max(0, min(100, int(row.progress or 0))) == 100)
-        ) or (
-            (row.leased_at is not None)
-            != (state in {"running", "cancel_requested"})
-        ) or (
-            not (
-                1 <= int(row.max_attempts or 0) <= 100
-                and 0 <= int(row.attempts or 0) <= int(row.max_attempts or 0)
+            or (
+                row.completed_at is not None
+                and not _is_aware_database_time(row.completed_at)
+            )
+            or (state == "completed" and result.artifact_id is None)
+            or (state == "failed" and result.error_code is None)
+            or (
+                state not in {"completed", "failed"}
+                and (result.artifact_id is not None or result.error_code is not None)
+            )
+            or (
+                state == "completed"
+                and (
+                    result.input_binding_sha256 != queued.input_binding_sha256
+                    or result.input_binding_version != queued.input_binding_version
+                )
+            )
+            or ((state in _TERMINAL_STATES) != (row.completed_at is not None))
+            or (
+                (state in _TERMINAL_STATES)
+                != (max(0, min(100, int(row.progress or 0))) == 100)
+            )
+            or (
+                (row.leased_at is not None)
+                != (state in {"running", "cancel_requested"})
+            )
+            or (
+                not (
+                    1 <= int(row.max_attempts or 0) <= 100
+                    and 0 <= int(row.attempts or 0) <= int(row.max_attempts or 0)
+                )
             )
         )
         if invalid_shape:
@@ -1779,7 +1767,9 @@ class _StudioRenderJobStore:
             )
         artifact_availability = None
         artifact_metadata_availability = None
-        current_retention_class = result.retention_class if state == "completed" else None
+        current_retention_class = (
+            result.retention_class if state == "completed" else None
+        )
         current_content_expires_at = (
             result.content_expires_at if state == "completed" else None
         )
@@ -1876,7 +1866,9 @@ class _StudioRenderJobStore:
                 and expose_metadata
             ),
             output_sha256=(
-                result.output_sha256 if state == "completed" and expose_metadata else None
+                result.output_sha256
+                if state == "completed" and expose_metadata
+                else None
             ),
             output_media_type=(
                 result.media_type if state == "completed" and expose_metadata else None
@@ -1914,9 +1906,7 @@ class _StudioRenderJobStore:
         await self.db.flush()
         return response
 
-    async def artifact_result(
-        self, artifact_id: uuid.UUID
-    ) -> StudioRenderJobStatus:
+    async def artifact_result(self, artifact_id: uuid.UUID) -> StudioRenderJobStatus:
         """Return available result metadata without exposing artifact ORM rows."""
 
         await self._bind_tenant_context()
@@ -1948,9 +1938,7 @@ class _StudioRenderJobStore:
             )
         return status
 
-    async def artifact_geometry(
-        self, artifact_id: uuid.UUID
-    ) -> StudioArtifactGeometry:
+    async def artifact_geometry(self, artifact_id: uuid.UUID) -> StudioArtifactGeometry:
         """Return authenticated geometry even after content bytes expire."""
 
         status = await self.artifact_result(artifact_id)
@@ -2155,7 +2143,9 @@ class _StudioRenderJobStore:
             .with_for_update()
         )
         if row is None:
-            raise StudioRenderServiceError(404, "job_not_found", "Studio job not found.")
+            raise StudioRenderServiceError(
+                404, "job_not_found", "Studio job not found."
+            )
         if _peek_requested_by(row) != self.actor_user_id:
             raise StudioRenderServiceError(
                 404, "job_not_found", "Studio job not found."
@@ -2238,9 +2228,7 @@ class _StudioRenderJobStore:
             _transition(row, "failed", now=now)
             await self.db.commit()
             return None
-        stale_lease = (
-            queued.lease_expires_at is None or queued.lease_expires_at <= now
-        )
+        stale_lease = queued.lease_expires_at is None or queued.lease_expires_at <= now
         if row.status == "pending":
             if row.available_at > now:
                 await self.db.rollback()
@@ -2359,9 +2347,7 @@ class _StudioRenderJobStore:
         if queued.lease_duration_seconds is None:
             await self.db.rollback()
             return False
-        queued.lease_expires_at = now + timedelta(
-            seconds=queued.lease_duration_seconds
-        )
+        queued.lease_expires_at = now + timedelta(seconds=queued.lease_duration_seconds)
         row.payload = queued.model_dump(mode="json")
         row.leased_at = now
         row.updated_at = now
@@ -2538,7 +2524,9 @@ class _StudioRenderJobStore:
             "adoption_outcome": adoption_outcome,
             "preferred_evidence_at_completion": preferred_evidence_at_completion,
             "content_expires_at": (
-                content_expires_at.isoformat() if content_expires_at is not None else None
+                content_expires_at.isoformat()
+                if content_expires_at is not None
+                else None
             ),
             "metadata_expires_at": (
                 metadata_expires_at.isoformat()
@@ -2592,11 +2580,7 @@ class _StudioRenderJobStore:
             )
         await self.db.execute(
             text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
-            {
-                "scope": (
-                    f"{self.tenant_id}:studio-object:{output.object_key}"
-                )
-            },
+            {"scope": (f"{self.tenant_id}:studio-object:{output.object_key}")},
         )
         # Admission reserves one max-sized output while the job is active.
         # Hold the same tenant lock while atomically exchanging that
@@ -2671,14 +2655,14 @@ class _StudioRenderJobStore:
             raise StudioRenderServiceError(
                 409, "validation_failed", "Studio metadata TTL is invalid."
             )
-        if retention_class != "evidence" and metadata_ttl_seconds <= artifact_ttl_seconds:
+        if (
+            retention_class != "evidence"
+            and metadata_ttl_seconds <= artifact_ttl_seconds
+        ):
             raise StudioRenderServiceError(
                 409, "validation_failed", "Studio retention windows are invalid."
             )
-        if (
-            runtime_manifest_sha256
-            != lease.payload.runtime_manifest_sha256
-        ):
+        if runtime_manifest_sha256 != lease.payload.runtime_manifest_sha256:
             raise StudioRenderServiceError(
                 409, "validation_failed", "Studio processor attestation is invalid."
             )
@@ -2822,11 +2806,7 @@ class _StudioRenderJobStore:
         await set_tenant_context(self.db, str(self.tenant_id))
         await self.db.execute(
             text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
-            {
-                "scope": (
-                    f"{self.tenant_id}:studio-object:{output.object_key}"
-                )
-            },
+            {"scope": (f"{self.tenant_id}:studio-object:{output.object_key}")},
         )
         try:
             await asyncio.wait_for(
@@ -3093,17 +3073,12 @@ class _StudioRenderJobStore:
             await self.db.rollback()
             return None
         content_sha256 = str(artifact.content_sha256 or "")
-        expected_object_key = (
-            f"studio-content/v1/{content_sha256[:2]}/{content_sha256}"
-        )
+        expected_object_key = f"studio-content/v1/{content_sha256[:2]}/{content_sha256}"
         if (
             artifact.artifact_page_count is None
             or artifact.document_page_count is None
             or artifact.artifact_kind not in _MEDIA_TYPES_BY_ARTIFACT_KIND
-            or re.fullmatch(
-                r"[0-9a-f]{64}", content_sha256
-            )
-            is None
+            or re.fullmatch(r"[0-9a-f]{64}", content_sha256) is None
             or artifact.object_key != expected_object_key
             or not isinstance(artifact.byte_size, int)
             or artifact.byte_size < 1
@@ -3114,10 +3089,7 @@ class _StudioRenderJobStore:
                 r"[0-9a-f]{64}", str(artifact.runtime_manifest_sha256 or "")
             )
             is None
-            or re.fullmatch(
-                r"[0-9a-f]{64}", str(artifact.request_sha256 or "")
-            )
-            is None
+            or re.fullmatch(r"[0-9a-f]{64}", str(artifact.request_sha256 or "")) is None
             or (artifact.input_binding_sha256 is None)
             != (artifact.input_binding_version is None)
         ):
@@ -3189,12 +3161,10 @@ class _StudioRenderJobStore:
             or artifact.byte_size != cached.object_ref.byte_size
             or artifact.media_type != cached.object_ref.media_type
             or artifact.artifact_kind != cached.artifact_kind
-            or artifact.runtime_manifest_sha256
-            != cached.runtime_manifest_sha256
+            or artifact.runtime_manifest_sha256 != cached.runtime_manifest_sha256
             or artifact.artifact_page_count != cached.artifact_page_count
             or artifact.document_page_count != cached.document_page_count
-            or artifact.geometry_manifest_sha256
-            != cached.geometry_manifest_sha256
+            or artifact.geometry_manifest_sha256 != cached.geometry_manifest_sha256
         ):
             await self.db.rollback()
             return None
@@ -3295,14 +3265,10 @@ class StudioRenderJobService:
     async def status(self, job_id: uuid.UUID) -> StudioRenderJobStatus:
         return await self._store.status(job_id)
 
-    async def artifact_result(
-        self, artifact_id: uuid.UUID
-    ) -> StudioRenderJobStatus:
+    async def artifact_result(self, artifact_id: uuid.UUID) -> StudioRenderJobStatus:
         return await self._store.artifact_result(artifact_id)
 
-    async def artifact_geometry(
-        self, artifact_id: uuid.UUID
-    ) -> StudioArtifactGeometry:
+    async def artifact_geometry(self, artifact_id: uuid.UUID) -> StudioArtifactGeometry:
         return await self._store.artifact_geometry(artifact_id)
 
     async def artifact_content(
@@ -3379,9 +3345,7 @@ class StudioRenderWorkerService:
         owner: str,
         lease_seconds: int = 900,
     ) -> StudioJobLease | None:
-        return await self._store.claim(
-            job_id, owner=owner, lease_seconds=lease_seconds
-        )
+        return await self._store.claim(job_id, owner=owner, lease_seconds=lease_seconds)
 
     async def renew_lease(self, lease: StudioJobLease) -> bool:
         return await self._store.renew_lease(lease)
@@ -3393,9 +3357,7 @@ class StudioRenderWorkerService:
         self, lease: StudioJobLease, code: str, *, retryable: bool
     ) -> bool:
         await self._store._bind_tenant_context()
-        return await self._store.fail_owned_job(
-            lease, code, retryable=retryable
-        )
+        return await self._store.fail_owned_job(lease, code, retryable=retryable)
 
     async def adopt_output(
         self,

@@ -392,8 +392,7 @@ class StudioRenderWorker:
                 "studio_page_preview": "page_preview",
                 "studio_test_render": "test_render",
             }[queued.kind]
-            or cached.runtime_manifest_sha256
-            != queued.runtime_manifest_sha256
+            or cached.runtime_manifest_sha256 != queued.runtime_manifest_sha256
         ):
             return None
         try:
@@ -414,9 +413,7 @@ class StudioRenderWorker:
         lease: StudioJobLease,
         output: StudioObjectRef,
         processor_output: (
-            StudioProcessorOutput
-            | StudioIsolatedProcessorOutput
-            | StudioCachedOutput
+            StudioProcessorOutput | StudioIsolatedProcessorOutput | StudioCachedOutput
         ),
     ) -> None:
         queued = lease.payload
@@ -441,9 +438,7 @@ class StudioRenderWorker:
                 output,
                 object_store=self.object_store,
                 artifact_kind=artifact_kind,
-                runtime_manifest_sha256=(
-                    processor_output.runtime_manifest_sha256
-                ),
+                runtime_manifest_sha256=(processor_output.runtime_manifest_sha256),
                 retention_class=(
                     getattr(processor_output, "retention_class", "review")
                 ),
@@ -483,9 +478,7 @@ class StudioRenderWorker:
                 media_type=processor_output.media_type,
                 content_sha256=processor_output.content_sha256,
                 artifact_kind=artifact_kind,
-                runtime_manifest_sha256=(
-                    processor_output.runtime_manifest_sha256
-                ),
+                runtime_manifest_sha256=(processor_output.runtime_manifest_sha256),
                 retention_class=processor_output.retention_class,
                 artifact_ttl_seconds=self.artifact_ttl_seconds,
                 artifact_page_count=processor_output.artifact_page_count,
@@ -496,9 +489,7 @@ class StudioRenderWorker:
             )
             return staged
 
-    async def _fail(
-        self, lease: StudioJobLease, code: str, *, retryable: bool
-    ) -> None:
+    async def _fail(self, lease: StudioJobLease, code: str, *, retryable: bool) -> None:
         async with self.session_factory() as db:
             await set_tenant_context(db, str(lease.tenant_id))
             await StudioRenderWorkerService(
@@ -527,9 +518,7 @@ class StudioRenderWorker:
         tenant_id = uuid.UUID(str(tenant_id))
         async with self.session_factory() as db:
             await set_tenant_context(db, str(tenant_id))
-            lease = await StudioRenderWorkerService(
-                db, tenant_id=tenant_id
-            ).claim(
+            lease = await StudioRenderWorkerService(db, tenant_id=tenant_id).claim(
                 job_id,
                 owner=self.owner,
                 lease_seconds=self.lease_seconds,
@@ -619,8 +608,7 @@ class StudioRenderWorker:
                     "Studio processor artifact kind is invalid.",
                 )
             if (
-                result.runtime_manifest_sha256
-                != lease.payload.runtime_manifest_sha256
+                result.runtime_manifest_sha256 != lease.payload.runtime_manifest_sha256
                 or result.renderer_manifest.sha256
                 != lease.payload.runtime_manifest_sha256
             ):
@@ -629,13 +617,21 @@ class StudioRenderWorker:
                     "validation_failed",
                     "Studio processor attestation is invalid.",
                 )
-            if not 1 <= result.artifact_page_count <= lease.payload.render_options.max_pages:
+            if (
+                not 1
+                <= result.artifact_page_count
+                <= lease.payload.render_options.max_pages
+            ):
                 raise StudioRenderServiceError(
                     409,
                     "validation_failed",
                     "Studio processor page metadata is invalid.",
                 )
-            if not 1 <= result.document_page_count <= lease.payload.render_options.max_pages:
+            if (
+                not 1
+                <= result.document_page_count
+                <= lease.payload.render_options.max_pages
+            ):
                 raise StudioRenderServiceError(
                     409,
                     "validation_failed",
@@ -646,8 +642,7 @@ class StudioRenderWorker:
                 != result.artifact_page_count
                 or result.geometry_manifest.document_page_count
                 != result.document_page_count
-                or result.geometry_manifest.sha256
-                != result.geometry_manifest_sha256
+                or result.geometry_manifest.sha256 != result.geometry_manifest_sha256
             ):
                 raise StudioRenderServiceError(
                     409,
@@ -671,9 +666,7 @@ class StudioRenderWorker:
                 )
             staged = await self._stage_and_adopt(lease, result)
             try:
-                await asyncio.to_thread(
-                    self.object_store.acknowledge_stage, staged
-                )
+                await asyncio.to_thread(self.object_store.acknowledge_stage, staged)
             except Exception:
                 # The adopted artifact is authoritative. Its durable receipt is
                 # intentionally left for the bounded reconciler to acknowledge.
