@@ -3319,7 +3319,11 @@ async def test_consumer_transaction_persists_sanitized_poison_terminalization(
         db_session, test_tenant, test_user, foundation, "poison-terminalization"
     )
     row = await db_session.get(DurableJob, accepted.job_id)
-    row.payload = {"contract_version": 1, "raw_exception": "C:/private/source"}
+    row.payload = {
+        "contract_version": 1,
+        "raw_exception": "C:/private/source",
+        "requested_by": str(test_user.id),
+    }
     await db_session.commit()
 
     with pytest.raises(StudioRenderServiceError) as caught:
