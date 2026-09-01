@@ -25,7 +25,7 @@ coverage; this PR does not claim NTFS ACL trimming.
 - `python -m ruff check` on all new/changed Firm Memory backend and migration
   files: passed.
 - Focused capability, migration, legacy Firm Memory contract, authorization,
-  adapter-coverage, schema, and router tests: 82 passed.
+  adapter-coverage, schema, and router tests: 85 passed.
 - Alembic graph: `149_firm_memory_source_auth` is the sole head.
 - Offline SQL rendering for
   `148_configurable_workflows:149_firm_memory_source_auth`: passed.

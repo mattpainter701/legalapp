@@ -559,7 +559,35 @@ async def test_matter_bound_smb_reports_preflight_failures(
 
 
 @pytest.mark.asyncio
-async def test_unavailable_smb_adapter_keeps_search_incomplete(monkeypatch):
+@pytest.mark.parametrize(
+    (
+        "configured_state",
+        "adapter_state",
+        "adapter_reason",
+        "expected_state",
+        "expected_searched",
+    ),
+    [
+        (
+            "ready",
+            "offline",
+            "smb_share_unavailable",
+            "offline",
+            False,
+        ),
+        ("partial", None, None, "partial", True),
+        ("indexing", None, None, "indexing", True),
+        ("stale", None, None, "stale", True),
+    ],
+)
+async def test_smb_adapter_keeps_search_coverage_truthful(
+    monkeypatch,
+    configured_state,
+    adapter_state,
+    adapter_reason,
+    expected_state,
+    expected_searched,
+):
     from app.services import firm_memory as service_module
 
     user = _user()
@@ -572,7 +600,7 @@ async def test_unavailable_smb_adapter_keeps_search_incomplete(monkeypatch):
         source_kind="smb",
         authorization_mode="matter",
         legacy_smb_share_id=uuid.uuid4(),
-        coverage_state="ready",
+        coverage_state=configured_state,
         is_enabled=True,
     )
 
@@ -601,9 +629,9 @@ async def test_unavailable_smb_adapter_keeps_search_incomplete(monkeypatch):
     async def collections(*_args, **_kwargs):
         return {}
 
-    async def unavailable(*_args, **_kwargs):
+    async def adapter_search(*_args, **_kwargs):
         return _MatterBoundSmbSearchResult(
-            hits=[], state="offline", reason="smb_share_unavailable"
+            hits=[], state=adapter_state, reason=adapter_reason
         )
 
     service = FirmMemorySearchService()
@@ -614,7 +642,7 @@ async def test_unavailable_smb_adapter_keeps_search_incomplete(monkeypatch):
     monkeypatch.setattr(firm_memory_authorization, "authorize_source", allow)
     monkeypatch.setattr(service, "_resolve_sources", sources)
     monkeypatch.setattr(service, "_collection_map", collections)
-    monkeypatch.setattr(service, "_search_matter_bound_smb", unavailable)
+    monkeypatch.setattr(service, "_search_matter_bound_smb", adapter_search)
 
     response = await service.search(
         object(),
@@ -630,9 +658,9 @@ async def test_unavailable_smb_adapter_keeps_search_incomplete(monkeypatch):
     assert response.results == []
     assert response.complete is False
     assert response.partial is True
-    assert response.coverage[0].searched is False
-    assert response.coverage[0].state == "offline"
-    assert response.coverage[0].reason == "smb_share_unavailable"
+    assert response.coverage[0].searched is expected_searched
+    assert response.coverage[0].state == expected_state
+    assert response.coverage[0].reason == adapter_reason
 
 
 def test_result_actions_are_server_issued_and_optional():

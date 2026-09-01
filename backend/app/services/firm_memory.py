@@ -48,12 +48,12 @@ settings = get_settings()
 @dataclass(frozen=True, slots=True)
 class _MatterBoundSmbSearchResult:
     hits: list[FirmMemoryDocumentSearchHit]
-    state: Literal["ready", "offline", "unsupported"] = "ready"
+    state: Literal["offline", "unsupported"] | None = None
     reason: str | None = None
 
     @property
     def searched(self) -> bool:
-        return self.reason is None
+        return self.state is None and self.reason is None
 
 
 def _uuid(value: str) -> uuid.UUID | None:
@@ -166,9 +166,12 @@ class FirmMemorySearchService:
                     request=request,
                     collection_ids=collection_map.get(source.id, []),
                 )
-                source_coverage.state = adapter_result.state
+                if adapter_result.state is not None:
+                    source_coverage.state = adapter_result.state
                 source_coverage.searched = adapter_result.searched
-                source_coverage.partial = not adapter_result.searched
+                source_coverage.partial = (
+                    source_coverage.partial or not adapter_result.searched
+                )
                 source_coverage.reason = adapter_result.reason
                 source_coverage.result_count = len(adapter_result.hits)
                 results.extend(adapter_result.hits)
