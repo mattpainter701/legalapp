@@ -143,7 +143,8 @@ try {
     Set-ServiceLogonRight $sid
 
     & $wix build (Join-Path $PSScriptRoot "lawhand-agent.wxs") -arch x64 `
-        -d "AgentExe=$exe" -d "ProductVersion=0.14.0" -ext WixToolset.Util.wixext -o $oldMsi | Out-Host
+        -d "AgentExe=$exe" -d "OpenerExe=$exe" -d "ProductVersion=0.14.0" `
+        -ext WixToolset.Util.wixext -o $oldMsi | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "Could not build predecessor MSI." }
 
     Invoke-Msi -Operation "Predecessor install" -LogPath $oldLog -Arguments @(

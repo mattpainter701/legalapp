@@ -182,9 +182,9 @@ def test_windows_update_uses_detached_status_wrapper(monkeypatch, tmp_path):
         lambda command, **kwargs: launched.append((command, kwargs)) or Process(),
     )
     info = updater.UpdateInfo(
-        "0.15.5",
+        "0.16.1",
         "lawhand-agent-x64.msi",
-        updater.RELEASE_ASSET_BASE + "0.15.5/lawhand-agent-x64.msi",
+        updater.RELEASE_ASSET_BASE + "0.16.1/lawhand-agent-x64.msi",
         "a" * 64,
         updater.RELEASE_MANIFEST_URL,
     )
@@ -261,9 +261,9 @@ def test_windows_portal_update_refuses_custom_service_account_before_download(
         lambda _info: pytest.fail("custom-account update must not download an MSI"),
     )
     info = updater.UpdateInfo(
-        "0.15.5",
+        "0.16.1",
         "lawhand-agent-x64.msi",
-        updater.RELEASE_ASSET_BASE + "0.15.5/lawhand-agent-x64.msi",
+        updater.RELEASE_ASSET_BASE + "0.16.1/lawhand-agent-x64.msi",
         "a" * 64,
         updater.RELEASE_MANIFEST_URL,
     )

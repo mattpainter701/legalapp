@@ -4,8 +4,13 @@
 CI seeds a disposable database at ``148_configurable_workflows`` and then upgrades
 it to the current migration head before invoking this script. The rehearsal
 then exercises the deployed catalog with a real
+CI migrates a disposable database through the current repository head before invoking
+this script. The rehearsal then exercises the deployed catalog with a real
 NOSUPERUSER/NOBYPASSRLS role; it does not substitute ORM ``create_all`` for the
 Alembic path and never targets a persistent environment.
+
+The feature under rehearsal remains migration ``148_configurable_workflows``;
+the head assertion advances as later migrations are appended.
 """
 
 from __future__ import annotations
@@ -29,7 +34,7 @@ from sqlalchemy.engine import make_url
 register_uuid()
 
 
-EXPECTED_HEAD = "150_studio_render_jobs"
+EXPECTED_HEAD = "152_file_open_intents"
 TABLES = (
     "custom_field_definitions",
     "matter_custom_field_values",

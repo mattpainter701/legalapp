@@ -10,6 +10,7 @@ Four task kinds arrive on the same poll:
 * ``scan_now`` — run an immediate scan instead of waiting for the schedule.
 * ``agent_update`` — check/apply the fixed official release (never a task URL).
 * ``local_search`` — search the agent-local private lexical index.
+* ``authorize_file`` — revalidate native ACLs before a name/preview/open release.
 """
 
 from __future__ import annotations
@@ -25,6 +26,11 @@ from clarity_agent.api_client import SaaSClient
 from clarity_agent.config import AgentConfig
 from clarity_agent.smb_auth import ShareCredential, connect, session_kwargs
 from clarity_agent.smb_reader import SmbReader
+from clarity_agent.search_identity import (
+    IdentityTicketError,
+    ReplayCache,
+    verify_search_identity_ticket,
+)
 from clarity_agent.utils import normalize_unc_path, parse_smb_path
 
 logger = logging.getLogger("clarity_agent.tasks")
@@ -63,6 +69,44 @@ class TaskWorker:
         # Search remains fail-closed when the optional private index is absent
         # or failed to initialize.
         self.local_search_index = local_search_index
+        self._ticket_replays = ReplayCache()
+
+    def _authorization_for_task(self, task: dict, source_ids: set[str]):
+        ticket = str(task.get("identity_ticket") or "")
+        if not getattr(self.config, "native_authz_enabled", False) and not ticket:
+            return None
+        public_key = getattr(self.config, "search_identity_public_key", "")
+        if not public_key:
+            raise IdentityTicketError("native authorization key is unavailable")
+        authorization = verify_search_identity_ticket(
+            ticket,
+            public_key=public_key,
+            audience=str(self.config.agent_id),
+            tenant_id=str(task.get("tenant_id") or ""),
+            required_source_ids=source_ids,
+            replay_cache=self._ticket_replays,
+        )
+        expected_filters = {
+            key: task[key]
+            for key in ("matter_id", "file_id")
+            if task.get(key) is not None
+        }
+        if task.get("kind") == "local_search":
+            expected_filters["file_extensions"] = sorted(
+                {
+                    str(value).lower().lstrip(".")
+                    for value in task.get("file_extensions") or []
+                }
+            )
+        for key, expected in expected_filters.items():
+            actual = authorization.filters.get(key)
+            if key == "file_extensions":
+                actual = sorted(
+                    {str(value).lower().lstrip(".") for value in actual or []}
+                )
+            if actual != expected:
+                raise IdentityTicketError("identity ticket filter scope mismatch")
+        return authorization
 
     async def poll_and_execute(self) -> int:
         try:
@@ -96,6 +140,8 @@ class TaskWorker:
             await self._update_agent(task)
         elif kind == "local_search":
             await self._local_search(task)
+        elif kind == "authorize_file":
+            await self._authorize_file(task)
         else:
             await self.client.submit_task_result(
                 task["task_id"], ok=False, error=f"Unsupported task kind: {kind}"
@@ -167,6 +213,11 @@ class TaskWorker:
             assigned_ids = {str(share.get("share_id")) for share in assigned}
             if any(str(scope["share_id"]) not in assigned_ids for scope in scopes):
                 reject("search scope is not assigned to this agent")
+            source_ids = {str(scope["share_id"]) for scope in scopes}
+            try:
+                authorization = self._authorization_for_task(task, source_ids)
+            except IdentityTicketError as exc:
+                reject(str(exc))
 
             started = time.perf_counter()
             index = self.local_search_index
@@ -183,7 +234,22 @@ class TaskWorker:
                     "Local search unavailable correlation_id=%s", correlation_id
                 )
                 return
-            result = await index.search(query, scopes, assigned, extensions, limit)
+            if authorization is None:
+                # Preserve the pre-gate index contract for deployments and
+                # test doubles while rollout remains explicitly disabled.
+                result = await index.search(query, scopes, assigned, extensions, limit)
+            else:
+                result = await index.search(
+                    query,
+                    scopes,
+                    assigned,
+                    extensions,
+                    limit,
+                    authorization=authorization,
+                    acl_max_age_seconds=getattr(
+                        self.config, "acl_max_age_seconds", 3600
+                    ),
+                )
             allowed = {
                 "relative_path",
                 "filename",
@@ -275,6 +341,39 @@ class TaskWorker:
 
     # ── content fetch ───────────────────────────────────────────────────────
 
+    async def _authorize_file(self, task: dict) -> None:
+        """Return only an authorization decision; never file metadata/content."""
+        task_id = task.get("task_id")
+        try:
+            file_path = str(task.get("file_path") or "").strip()
+            share_id = str(task.get("share_id") or "")
+            share = await self._share_for_path(file_path, share_id)
+            if share is None or self.local_search_index is None:
+                raise ValueError("native ACL state is unavailable")
+            authorization = self._authorization_for_task(task, {share_id})
+            if authorization is None:
+                raise ValueError("native authorization is disabled")
+            decision = await self.local_search_index.authorize_path(
+                file_path,
+                authorization,
+                acl_max_age_seconds=getattr(self.config, "acl_max_age_seconds", 3600),
+            )
+            await self.client.submit_task_result(
+                task_id,
+                ok=decision.allowed,
+                error=None if decision.allowed else "Native authorization denied",
+                detail={"authorized": decision.allowed, "reason": decision.reason},
+            )
+        except Exception as exc:
+            logger.warning(
+                "Native file authorization failed task_id=%s error_type=%s",
+                task_id or "?",
+                type(exc).__name__,
+            )
+            await self.client.submit_task_result(
+                task_id, ok=False, error="Native authorization denied"
+            )
+
     async def _fetch_content(self, task: dict) -> None:
         task_id = task["task_id"]
         file_path = (task.get("file_path") or "").strip()
@@ -289,6 +388,21 @@ class TaskWorker:
             share = await self._share_for_path(file_path, task.get("share_id"))
             if share is None:
                 raise ValueError("File path is not under an assigned share")
+            authorization = self._authorization_for_task(
+                task, {str(task.get("share_id") or "")}
+            )
+            if authorization is not None:
+                if self.local_search_index is None:
+                    raise ValueError("native ACL state is unavailable")
+                decision = await self.local_search_index.authorize_path(
+                    file_path,
+                    authorization,
+                    acl_max_age_seconds=getattr(
+                        self.config, "acl_max_age_seconds", 3600
+                    ),
+                )
+                if not decision.allowed:
+                    raise ValueError("native authorization denied")
             credential = ShareCredential.from_share(share, self.config)
             server, _, _ = parse_smb_path(file_path)
             connection_cache: dict = {}
@@ -314,8 +428,17 @@ class TaskWorker:
                     task_id, content=result.content, truncated=result.truncated
                 )
         except Exception as exc:
-            logger.error("Content fetch for %s failed: %s", file_path, exc)
-            await self.client.submit_task_result(task_id, error=str(exc))
+            logger.error(
+                "Content fetch failed task_id=%s error_type=%s",
+                task_id,
+                type(exc).__name__,
+            )
+            error = (
+                "Content fetch denied"
+                if getattr(self.config, "native_authz_enabled", False)
+                else str(exc)
+            )
+            await self.client.submit_task_result(task_id, error=error)
         finally:
             if "connection_cache" in locals():
                 await asyncio.to_thread(
