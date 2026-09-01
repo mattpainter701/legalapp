@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.models.firm_memory import FirmMemorySource
+from app.models.smb_share import SmbShare
 from app.schemas.firm_memory import (
     FirmMemoryDocumentSearchRequest,
     FirmMemoryDocumentSearchResponse,
@@ -23,6 +24,7 @@ from app.services.firm_memory_authorization import (
 )
 from app.services.firm_memory import (
     FirmMemorySearchService,
+    _MatterBoundSmbSearchResult,
     _normalize_windows,
     _path_is_within,
     _uuid,
@@ -73,6 +75,18 @@ class _SequenceExecuteDb:
 
     async def execute(self, _statement):
         return self.results.pop(0)
+
+
+class _ScalarExecuteDb:
+    def __init__(self, scalar_value, *execute_results):
+        self.scalar_value = scalar_value
+        self.execute_results = list(execute_results)
+
+    async def scalar(self, _statement):
+        return self.scalar_value
+
+    async def execute(self, _statement):
+        return self.execute_results.pop(0)
 
 
 def _user(tenant_id=None):
@@ -486,6 +500,139 @@ async def test_matterless_search_reports_default_off_coverage(monkeypatch):
     assert response.complete is False
     assert response.partial is True
     assert response.coverage[0].reason == "generalized_search_rollout_disabled"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("share", "execute_result", "expected_state", "expected_reason"),
+    [
+        (None, None, "offline", "smb_share_unavailable"),
+        (
+            SmbShare(
+                id=uuid.uuid4(),
+                agent_id=uuid.uuid4(),
+                tenant_id=uuid.uuid4(),
+                share_path=r"\\server\matters",
+                is_enabled=True,
+            ),
+            _ScalarRows([]),
+            "unsupported",
+            "matter_smb_binding_unavailable",
+        ),
+    ],
+)
+async def test_matter_bound_smb_reports_preflight_failures(
+    share, execute_result, expected_state, expected_reason
+):
+    tenant_id = share.tenant_id if share is not None else uuid.uuid4()
+    share_id = share.id if share is not None else uuid.uuid4()
+    source = FirmMemorySource(
+        id=uuid.uuid4(),
+        tenant_id=tenant_id,
+        source_key="matter-files",
+        display_name="Matter files",
+        source_kind="smb",
+        authorization_mode="matter",
+        legacy_smb_share_id=share_id,
+        coverage_state="ready",
+        is_enabled=True,
+    )
+    db = _ScalarExecuteDb(
+        share,
+        *([] if execute_result is None else [execute_result]),
+    )
+
+    result = await FirmMemorySearchService()._search_matter_bound_smb(
+        db,
+        tenant_id=tenant_id,
+        requesting_user_id=uuid.uuid4(),
+        source=source,
+        matter_ids=(uuid.uuid4(),),
+        request=FirmMemoryDocumentSearchRequest(query="privilege"),
+        collection_ids=[],
+    )
+
+    assert result.hits == []
+    assert result.searched is False
+    assert result.state == expected_state
+    assert result.reason == expected_reason
+
+
+@pytest.mark.asyncio
+async def test_unavailable_smb_adapter_keeps_search_incomplete(monkeypatch):
+    from app.services import firm_memory as service_module
+
+    user = _user()
+    matter_id = uuid.uuid4()
+    source = FirmMemorySource(
+        id=uuid.uuid4(),
+        tenant_id=user.tenant_id,
+        source_key="matter-files",
+        display_name="Matter files",
+        source_kind="smb",
+        authorization_mode="matter",
+        legacy_smb_share_id=uuid.uuid4(),
+        coverage_state="ready",
+        is_enabled=True,
+    )
+
+    async def no_tenant_context(*_args):
+        return None
+
+    async def capabilities(*_args):
+        return {"search_firm_memory"}
+
+    async def actor(*_args, **_kwargs):
+        return None
+
+    async def matters(*_args, **_kwargs):
+        return {
+            matter_id: AuthorizationDecision(
+                AuthorizationState.ALLOW, "matter_allowed"
+            )
+        }
+
+    async def allow(*_args, **_kwargs):
+        return AuthorizationDecision(AuthorizationState.ALLOW, "matter_allowed")
+
+    async def sources(*_args, **_kwargs):
+        return [source], {source.id}
+
+    async def collections(*_args, **_kwargs):
+        return {}
+
+    async def unavailable(*_args, **_kwargs):
+        return _MatterBoundSmbSearchResult(
+            hits=[], state="offline", reason="smb_share_unavailable"
+        )
+
+    service = FirmMemorySearchService()
+    monkeypatch.setattr(service_module, "set_tenant_context", no_tenant_context)
+    monkeypatch.setattr(service_module, "get_user_capabilities", capabilities)
+    monkeypatch.setattr(firm_memory_authorization, "require_actor", actor)
+    monkeypatch.setattr(firm_memory_authorization, "authorize_matters", matters)
+    monkeypatch.setattr(firm_memory_authorization, "authorize_source", allow)
+    monkeypatch.setattr(service, "_resolve_sources", sources)
+    monkeypatch.setattr(service, "_collection_map", collections)
+    monkeypatch.setattr(service, "_search_matter_bound_smb", unavailable)
+
+    response = await service.search(
+        object(),
+        user=user,
+        request=FirmMemoryDocumentSearchRequest(
+            query="privilege",
+            source_scope="selected",
+            source_ids=[str(source.id)],
+            matter_ids=[str(matter_id)],
+        ),
+    )
+
+    assert response.results == []
+    assert response.complete is False
+    assert response.partial is True
+    assert response.coverage[0].searched is False
+    assert response.coverage[0].state == "offline"
+    assert response.coverage[0].reason == "smb_share_unavailable"
 
 
 def test_result_actions_are_server_issued_and_optional():

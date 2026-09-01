@@ -7,6 +7,8 @@ import hmac
 import logging
 import secrets
 import uuid
+from dataclasses import dataclass
+from typing import Literal
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,6 +43,17 @@ from app.services.rbac_service import get_user_capabilities
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+
+@dataclass(frozen=True, slots=True)
+class _MatterBoundSmbSearchResult:
+    hits: list[FirmMemoryDocumentSearchHit]
+    state: Literal["ready", "offline", "unsupported"] = "ready"
+    reason: str | None = None
+
+    @property
+    def searched(self) -> bool:
+        return self.reason is None
 
 
 def _uuid(value: str) -> uuid.UUID | None:
@@ -144,7 +157,7 @@ class FirmMemorySearchService:
                 and source.legacy_smb_share_id
                 and matter_ids
             ):
-                hits = await self._search_matter_bound_smb(
+                adapter_result = await self._search_matter_bound_smb(
                     db,
                     tenant_id=tenant_id,
                     requesting_user_id=user.id,
@@ -153,9 +166,12 @@ class FirmMemorySearchService:
                     request=request,
                     collection_ids=collection_map.get(source.id, []),
                 )
-                source_coverage.searched = True
-                source_coverage.result_count = len(hits)
-                results.extend(hits)
+                source_coverage.state = adapter_result.state
+                source_coverage.searched = adapter_result.searched
+                source_coverage.partial = not adapter_result.searched
+                source_coverage.reason = adapter_result.reason
+                source_coverage.result_count = len(adapter_result.hits)
+                results.extend(adapter_result.hits)
             else:
                 # A source-level allow is not document-level ACL trimming.
                 # Until a connector contributes an authorized result adapter,
@@ -353,7 +369,7 @@ class FirmMemorySearchService:
         matter_ids: tuple[uuid.UUID, ...],
         request: FirmMemoryDocumentSearchRequest,
         collection_ids: list[str],
-    ) -> list[FirmMemoryDocumentSearchHit]:
+    ) -> _MatterBoundSmbSearchResult:
         share = await db.scalar(
             select(SmbShare).where(
                 SmbShare.id == source.legacy_smb_share_id,
@@ -362,7 +378,11 @@ class FirmMemorySearchService:
             )
         )
         if share is None:
-            return []
+            return _MatterBoundSmbSearchResult(
+                hits=[],
+                state="offline",
+                reason="smb_share_unavailable",
+            )
         bindings = list(
             (
                 await db.execute(
@@ -375,7 +395,11 @@ class FirmMemorySearchService:
             ).scalars()
         )
         if not bindings:
-            return []
+            return _MatterBoundSmbSearchResult(
+                hits=[],
+                state="unsupported",
+                reason="matter_smb_binding_unavailable",
+            )
 
         scope_filters = []
         binding_roots: list[tuple[uuid.UUID, str]] = []
@@ -466,7 +490,7 @@ class FirmMemorySearchService:
                     ),
                 )
             )
-        return hits
+        return _MatterBoundSmbSearchResult(hits=hits)
 
     @staticmethod
     async def _document_associations(

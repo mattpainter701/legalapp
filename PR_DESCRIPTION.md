@@ -25,15 +25,16 @@ coverage; this PR does not claim NTFS ACL trimming.
 - `python -m ruff check` on all new/changed Firm Memory backend and migration
   files: passed.
 - Focused capability, migration, legacy Firm Memory contract, authorization,
-  schema, and router tests: 51 passed.
+  adapter-coverage, schema, and router tests: 82 passed.
 - Alembic graph: `149_firm_memory_source_auth` is the sole head.
 - Offline SQL rendering for
   `148_configurable_workflows:149_firm_memory_source_auth`: passed.
 - OpenAPI generation exposes `/api/v1/firm-memory/capabilities`, `/sources`,
   and `/search`; only `query` is required by the search request.
 - `git diff --check`: passed (Windows line-ending notices only).
-- A live PostgreSQL upgrade/API fixture was not run locally because this host
-  has no PostgreSQL listener; CI remains required before merge.
+- This host has no local PostgreSQL listener. GitHub CI runs the live migration,
+  least-privilege RLS, and PostgreSQL rehearsal gates for each pushed head; all
+  required checks must be green on the exact merge head.
 
 ## Merge policy attestations
 
