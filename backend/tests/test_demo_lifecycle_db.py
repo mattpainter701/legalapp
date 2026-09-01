@@ -28,6 +28,7 @@ from app.models.configurable_workflow import (
 )
 from app.models.operator_audit import OperatorAuditLog
 from app.models.demo_session import DemoSession
+from app.models.durable_job import DurableJob
 from app.models.llm_routing_profile import LLMRoutingProfile
 from app.models.document import Chunk, Document
 from app.models.plugin import Matter
@@ -49,13 +50,35 @@ from app.models.studio_draft import (
     StudioDraftSnapshot,
     StudioSourceArtifact,
 )
+from app.models.studio_render import (
+    StudioPreferredRenderEvidence,
+    StudioRenderArtifact,
+)
 from app.models.tenant import Tenant, TenantSettings
 from app.models.user import User
+from app.schemas.studio_render import (
+    StudioGeometryManifest,
+    StudioPageGeometry,
+    StudioRendererComponent,
+    StudioRendererManifest,
+    StudioRenderOptions,
+    StudioRenderSourceContract,
+    canonical_effective_render_request_hash,
+    canonical_json_sha256,
+    canonical_render_request_hash,
+)
 from app.services.demo_clone import clone_demo_fixture
 from app.services.demo_purge import (
     DemoPurgeRefused,
     purge_demo_tenant,
     terminate_demo_tenant,
+)
+from app.services.studio_object_storage import LocalStudioObjectStore
+from app.services.studio_render_jobs import (
+    _PersistedResult,
+    _QueuedPayload,
+    _evidence_basis_sha256,
+    _render_cache_key,
 )
 from app.services.demo_quota import (
     DemoQuotaExceeded,
@@ -438,7 +461,12 @@ async def test_verified_purge_deletes_demo_and_preserves_fixture(
         uuid.uuid4(),
         uuid.uuid4(),
     )
-    monkeypatch.setattr(demo_purge.get_settings(), "UPLOAD_DIR", str(tmp_path))
+    settings = demo_purge.get_settings()
+    studio_storage_dir = tmp_path / "studio-render-cas"
+    monkeypatch.setattr(settings, "UPLOAD_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        settings, "TEMPLATE_STUDIO_RENDER_STORAGE_DIR", str(studio_storage_dir)
+    )
     db_session.add_all(
         [
             _tenant(tenant_id=fixture_id, domain="purge-fixture.invalid"),
@@ -545,13 +573,135 @@ async def test_verified_purge_deletes_demo_and_preserves_fixture(
             ),
         ]
     )
-    source_id, draft_id, field_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    source_id, draft_id, field_id, snapshot_id, render_job_id, render_artifact_id = (
+        uuid.uuid4(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+    )
     source_content = b"Disposable demo Studio source"
+    source_sha256 = hashlib.sha256(source_content).hexdigest()
+    source_contract = StudioRenderSourceContract(
+        artifact_id=source_id,
+        sha256=source_sha256,
+        media_type="text/markdown",
+        format="markdown",
+    )
+    snapshot_payload = {
+        "contract_version": 1,
+        "draft_id": str(draft_id),
+        "revision": 1,
+        "identity_sha256": "c" * 64,
+        "format": "markdown",
+        "lifecycle_state": "active",
+        "source": source_contract.model_dump(mode="json"),
+        "fields": [],
+        "placements": [],
+    }
+    snapshot_sha256 = canonical_json_sha256(snapshot_payload)
+    render_ref = LocalStudioObjectStore(studio_storage_dir, max_object_bytes=1024).put(
+        tenant_id, b"rendered", media_type="application/pdf"
+    )
+    render_tenant_dir = studio_storage_dir / str(tenant_id)
+    assert render_tenant_dir.is_dir()
+
+    def component(name, digest):
+        return StudioRendererComponent(
+            name=name,
+            version="1.0.0",
+            content_sha256=digest * 64,
+        )
+
+    renderer_manifest = StudioRendererManifest(
+        isolation_policy_id="studio-demo-purge-v1",
+        launcher_sha256="1" * 64,
+        sandbox_policy_sha256="2" * 64,
+        fixed_arguments_sha256="3" * 64,
+        environment_sha256="4" * 64,
+        runtime_bundle_sha256="5" * 64,
+        font_pack_sha256="6" * 64,
+        renderer=component("renderer", "7"),
+        rasterizer=component("rasterizer", "8"),
+        converter=component("converter", "9"),
+        validator=component("validator", "a"),
+    )
+    render_options = StudioRenderOptions()
+    request_sha256 = canonical_render_request_hash(
+        kind="studio_test_render",
+        draft_id=draft_id,
+        expected_revision=1,
+        identity_sha256="c" * 64,
+        snapshot_id=snapshot_id,
+        content_sha256=snapshot_sha256,
+        source=source_contract,
+        render_options=render_options,
+        requested_by=user_id,
+        input_binding_id=None,
+    )
+    effective_request_sha256 = canonical_effective_render_request_hash(
+        request_sha256=request_sha256,
+        input_binding_sha256=None,
+        input_binding_version=None,
+    )
+    cache_key = _render_cache_key(
+        kind="studio_test_render",
+        draft_id=draft_id,
+        rendered_revision=1,
+        identity_sha256="c" * 64,
+        snapshot_id=snapshot_id,
+        snapshot_content_sha256=snapshot_sha256,
+        source=source_contract,
+        render_options_sha256=render_options.sha256,
+        effective_request_sha256=effective_request_sha256,
+        input_binding_id=None,
+        input_binding_sha256=None,
+        input_binding_version=None,
+        runtime_manifest_sha256=renderer_manifest.sha256,
+    )
+    queued_payload = _QueuedPayload(
+        kind="studio_test_render",
+        draft_id=draft_id,
+        rendered_revision=1,
+        identity_sha256="c" * 64,
+        snapshot_id=snapshot_id,
+        snapshot_content_sha256=snapshot_sha256,
+        source=source_contract,
+        render_options=render_options,
+        render_options_sha256=render_options.sha256,
+        request_sha256=request_sha256,
+        effective_request_sha256=effective_request_sha256,
+        requested_by=user_id,
+        renderer_manifest=renderer_manifest,
+        runtime_manifest_sha256=renderer_manifest.sha256,
+        cache_key=cache_key,
+        admission_bytes=render_options.max_output_bytes + len(source_content),
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    geometry_manifest = StudioGeometryManifest(
+        artifact_page_count=1,
+        document_page_count=1,
+        pages=[StudioPageGeometry(page_number=1, coordinate_space="none")],
+    )
+    persisted_result = _PersistedResult(
+        artifact_id=render_artifact_id,
+        adoption_outcome="current_evidence",
+        preferred_evidence_at_completion=True,
+        retention_class="evidence",
+        output_sha256=render_ref.sha256,
+        media_type=render_ref.media_type,
+        byte_size=render_ref.byte_size,
+        artifact_page_count=1,
+        document_page_count=1,
+        geometry_manifest_sha256=geometry_manifest.sha256,
+    )
+    evidence_basis_sha256 = _evidence_basis_sha256(queued_payload)
     db_session.add(
         StudioSourceArtifact(
             id=source_id,
             tenant_id=tenant_id,
-            sha256=hashlib.sha256(source_content).hexdigest(),
+            sha256=source_sha256,
             media_type="text/markdown",
             format="markdown",
             byte_size=len(source_content),
@@ -566,7 +716,7 @@ async def test_verified_purge_deletes_demo_and_preserves_fixture(
             id=draft_id,
             tenant_id=tenant_id,
             source_artifact_id=source_id,
-            source_sha256=hashlib.sha256(source_content).hexdigest(),
+            source_sha256=source_sha256,
             source_media_type="text/markdown",
             title="Disposable Studio draft",
             format="markdown",
@@ -598,13 +748,14 @@ async def test_verified_purge_deletes_demo_and_preserves_fixture(
                 anchor={"token": "client_name"},
             ),
             StudioDraftSnapshot(
+                id=snapshot_id,
                 tenant_id=tenant_id,
                 draft_id=draft_id,
                 source_artifact_id=source_id,
                 revision=1,
                 identity_sha256="c" * 64,
-                content_sha256="d" * 64,
-                payload={},
+                content_sha256=snapshot_sha256,
+                payload=snapshot_payload,
                 created_by_user_id=user_id,
             ),
             StudioDraftIdempotency(
@@ -624,6 +775,70 @@ async def test_verified_purge_deletes_demo_and_preserves_fixture(
                 detail={},
             ),
         ]
+    )
+    await db_session.flush()
+    db_session.add(
+        DurableJob(
+            id=render_job_id,
+            tenant_id=tenant_id,
+            kind=queued_payload.kind,
+            idempotency_key=f"studio-render:{'b' * 64}",
+            payload=queued_payload.model_dump(mode="json", exclude_none=True),
+            status="completed",
+            progress=100,
+            attempts=1,
+            result=persisted_result.model_dump(mode="json", exclude_none=True),
+            completed_at=datetime.now(timezone.utc),
+        )
+    )
+    await db_session.flush()
+    db_session.add(
+        StudioRenderArtifact(
+            id=render_artifact_id,
+            tenant_id=tenant_id,
+            job_id=render_job_id,
+            draft_id=draft_id,
+            snapshot_id=snapshot_id,
+            source_artifact_id=source_id,
+            requested_by_user_id=user_id,
+            revision=1,
+            identity_sha256="c" * 64,
+            evidence_basis_sha256=evidence_basis_sha256,
+            snapshot_content_sha256=snapshot_sha256,
+            source_sha256=source_sha256,
+            source_media_type="text/markdown",
+            source_format="markdown",
+            request_sha256=queued_payload.request_sha256,
+            effective_request_sha256=queued_payload.effective_request_sha256,
+            render_options=render_options.model_dump(mode="json"),
+            render_options_sha256=render_options.sha256,
+            cache_key=queued_payload.cache_key,
+            artifact_kind="test_render",
+            content_sha256=render_ref.sha256,
+            byte_size=render_ref.byte_size,
+            media_type=render_ref.media_type,
+            object_key=render_ref.object_key,
+            runtime_manifest=renderer_manifest.model_dump(mode="json"),
+            runtime_manifest_sha256=renderer_manifest.sha256,
+            artifact_page_count=1,
+            document_page_count=1,
+            geometry_manifest=geometry_manifest.model_dump(mode="json"),
+            geometry_manifest_sha256=geometry_manifest.sha256,
+            adoption_outcome="current_evidence",
+            retention_class="evidence",
+        )
+    )
+    await db_session.flush()
+    db_session.add(
+        StudioPreferredRenderEvidence(
+            tenant_id=tenant_id,
+            draft_id=draft_id,
+            evidence_basis_sha256=evidence_basis_sha256,
+            artifact_id=render_artifact_id,
+            job_id=render_job_id,
+            revision=1,
+            identity_sha256="c" * 64,
+        )
     )
     contact_id = uuid.uuid4()
     matter_field_id, contact_field_id = uuid.uuid4(), uuid.uuid4()
@@ -849,6 +1064,7 @@ async def test_verified_purge_deletes_demo_and_preserves_fixture(
     assert deleted["research_workspace_members"] == 1
     for studio_table in demo_purge._STUDIO_PURGE_ORDER:
         assert deleted[studio_table] == 1
+    assert deleted["durable_jobs"] == 1
     expected_workflow_counts = {
         "custom_field_definitions": 2,
         "matter_custom_field_values": 1,
@@ -870,6 +1086,7 @@ async def test_verified_purge_deletes_demo_and_preserves_fixture(
         )
     )
     assert not target_file.exists()
+    assert not render_tenant_dir.exists()
 
 
 @pytest.mark.asyncio
@@ -1234,6 +1451,42 @@ async def test_purge_records_failure_when_file_removal_is_refused(
         select(DemoSession.status).where(DemoSession.tenant_id == tenant_id)
     )
     assert status == "failed"
+
+
+def test_remove_studio_render_files_refuses_containment_failure(monkeypatch):
+    from app.services import demo_purge
+
+    tenant_id = uuid.uuid4()
+    storage_dir = "/tmp/studio-render-storage"
+    monkeypatch.setattr(
+        demo_purge.get_settings(),
+        "TEMPLATE_STUDIO_RENDER_STORAGE_DIR",
+        storage_dir,
+    )
+
+    class _FakePath:
+        def __init__(self, path):
+            self._path = str(path)
+
+        def strip(self):
+            return self._path.strip()
+
+        def resolve(self):
+            return _FakePath(self._path)
+
+        def __truediv__(self, other):
+            return _FakePath(self._path + "/" + str(other))
+
+        def is_relative_to(self, other):
+            return False
+
+        def exists(self):
+            return False
+
+    monkeypatch.setattr(demo_purge, "Path", _FakePath)
+
+    with pytest.raises(DemoPurgeRefused, match="render storage path failed"):
+        demo_purge._remove_studio_render_files(tenant_id)
 
 
 def test_claim_timestamps_are_normalised_to_utc():

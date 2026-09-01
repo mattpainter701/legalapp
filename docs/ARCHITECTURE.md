@@ -57,12 +57,14 @@ Linux VPS, including AWS Lightsail, uses `docker-compose.yml` plus
 the same nginx-only public boundary.
 
 The `deploy.resources.limits` entries in `docker-compose.prod.yml` are runtime
-ceilings, not reservations. Their configured totals are 17.5 GiB of memory and
-9 vCPU, but services without limits, transient builds/migrations, Docker, and
-the host OS sit outside those sums. CPU may be time-shared, so the supported
-single-customer host has 8 vCPU; memory cannot safely be overcommitted onto a
-16 GB host. `prod_env_preflight.sh` runs `check_host_capacity.sh` before a
-deployment can reach the data guard or build. It requires 8 online CPUs and
+ceilings, not reservations. The default fail-closed active set totals 17.5 GiB
+of memory and 9 vCPU; enabling the optional `studio-render` profile raises the
+configured ceiling totals to 19.5 GiB and 10 vCPU. Services without limits,
+transient builds/migrations, Docker, and the host OS sit outside those sums. CPU
+may be time-shared, so the supported single-customer host has 8 vCPU; memory
+cannot safely be overcommitted onto a 16 GB host. `prod_env_preflight.sh` runs
+`check_host_capacity.sh` before a deployment can reach the data guard or
+build. It requires 8 online CPUs and
 24 GiB guest-visible RAM. Every distinct filesystem backing `UPLOADS_HOST_DIR`,
 the checkout/release backups, Docker's root, the application and LiteLLM
 database binds, or any other bind in the exact resolved Compose model must have

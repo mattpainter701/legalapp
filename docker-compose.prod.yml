@@ -176,6 +176,14 @@ services:
           memory: 1G
           cpus: '1.0'
 
+  studio-render-worker:
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+
   litellm:
     restart: unless-stopped
     environment:

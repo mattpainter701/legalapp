@@ -86,6 +86,7 @@ FRONTEND_URL=https://rehearsal.invalid
 VITE_PUBLIC_SITE_URL=https://rehearsal.invalid
 VITE_CONTACT_URL=mailto:support@getlawhand.com
 UPLOAD_DIR=/app/uploads
+TEMPLATE_STUDIO_RENDER_ENABLED=false
 UPLOADS_HOST_DIR=$APP_DIR/uploads
 HOST_STATUS_HOST_DIR=$APP_DIR/host-status
 HOST_DISK_STATUS_FILE=/run/legalapp-host-status/disk-status.json

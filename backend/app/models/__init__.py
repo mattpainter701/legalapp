@@ -78,6 +78,10 @@ from app.models.task import Task, TaskAutomationRun, TaskEvent
 from app.models.scheduled_event import ScheduledEvent
 from app.models.communication_log import CommunicationLog
 from app.models.document_template import DocumentTemplate
+from app.models.studio_render import (
+    StudioPreferredRenderEvidence,
+    StudioRenderArtifact,
+)
 from app.models.document_template_preview import DocumentTemplatePreview
 from app.models.studio_draft import (
     StudioDraft,
@@ -289,6 +293,8 @@ __all__ = [
     "StudioDraftIdempotency",
     "StudioDraftAuditEvent",
     "StudioSourceArtifact",
+    "StudioRenderArtifact",
+    "StudioPreferredRenderEvidence",
     "PromptOverride",
     "CloudMetadata",
     "SmbAgent",

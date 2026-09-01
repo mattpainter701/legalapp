@@ -34,6 +34,8 @@ _RESEARCH_IMMUTABLE_TABLES = (
 _RESEARCH_PURGE_TENANT_GUC = "app.research_workspace_demo_purge_tenant_id"
 _RESEARCH_PURGE_SESSION_GUC = "app.research_workspace_demo_purge_session_id"
 _STUDIO_PURGE_ORDER = (
+    "studio_preferred_render_evidence",
+    "studio_render_artifacts",
     "studio_draft_placements",
     "studio_draft_fields",
     "studio_draft_snapshots",
@@ -228,6 +230,18 @@ def _remove_tenant_files(tenant_id: uuid.UUID) -> None:
         shutil.rmtree(target)
 
 
+def _remove_studio_render_files(tenant_id: uuid.UUID) -> None:
+    configured = get_settings().TEMPLATE_STUDIO_RENDER_STORAGE_DIR.strip()
+    if not configured:
+        return
+    storage_root = Path(configured).resolve()
+    target = (storage_root / str(tenant_id)).resolve()
+    if not target.is_relative_to(storage_root) or target == storage_root:
+        raise DemoPurgeRefused("Demo render storage path failed its containment guard")
+    if target.exists():
+        shutil.rmtree(target)
+
+
 async def _purge_demo_tenant_locked(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -275,7 +289,6 @@ async def _purge_demo_tenant_locked(
     await db.commit()
 
     try:
-        _remove_tenant_files(tenant_id)
         tables = _purge_tables()
         await set_tenant_context(db, str(tenant_id))
         deleted = await _purge_immutable_research_history(
@@ -362,6 +375,12 @@ async def _purge_demo_tenant_locked(
                 },
             )
         )
+        # Delete persisted files only after every tenant row has been removed
+        # successfully. The purge advisory lock remains held across this whole
+        # block, so a Studio worker that finishes late cannot stage new CAS
+        # bytes between the database purge and the final filesystem deletion.
+        _remove_tenant_files(tenant_id)
+        _remove_studio_render_files(tenant_id)
         await db.commit()
         return deleted
     except Exception as exc:

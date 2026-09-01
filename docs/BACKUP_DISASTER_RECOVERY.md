@@ -1,5 +1,16 @@
 # Production backup and disaster recovery
 
+## Template Studio CAS activation gate
+
+Template Studio Phase 3 stores verified render artifacts in a tenant-scoped
+content-addressed volume. Database backups alone are not sufficient because
+preferred-evidence rows can be non-expiring and must remain bound to their exact
+bytes. Production preflight, deployment, and production verification therefore
+reject `TEMPLATE_STUDIO_RENDER_ENABLED=true` until the encrypted Restic backup
+inventory includes a quiesced or snapshot-consistent CAS archive with checksums
+and the restore rehearsal proves database-to-byte integrity. The API and worker
+remain disabled in production until that follow-up gate lands.
+
 Every production deployment creates a new encrypted Restic snapshot before any
 service build, replacement, or migration. The GitHub runner is noninteractive:
 if Restic, its password file, integrity check, or fresh snapshot proof fails,

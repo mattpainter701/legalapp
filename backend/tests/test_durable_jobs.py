@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.database import set_tenant_context
 from app.services.durable_jobs import claim_job, enqueue_job, fail_job, serialize_job
-from app.services.durable_job_worker import _run_bounded
+from app.services.durable_job_worker import _run_bounded, process_pending_jobs
 
 
 @pytest.mark.asyncio
@@ -113,3 +113,22 @@ async def test_bounded_worker_parallelizes_without_exceeding_limit():
     await _run_bounded(range(6), handle, concurrency=2)
     assert peak == 2
     assert active == 0
+
+
+@pytest.mark.asyncio
+async def test_process_pending_jobs_excludes_voice_and_studio_render_kinds(monkeypatch):
+    from app.services.durable_job_worker import VOICE_JOB_KINDS
+    from app.schemas.studio_render import STUDIO_RENDER_JOB_KINDS
+
+    captured = {}
+
+    async def _process_pending_jobs(*, exclude_kinds=None, **kwargs):
+        captured["exclude_kinds"] = exclude_kinds
+
+    monkeypatch.setattr(
+        "app.services.durable_job_worker._process_pending_jobs", _process_pending_jobs
+    )
+
+    await process_pending_jobs()
+
+    assert captured["exclude_kinds"] == VOICE_JOB_KINDS | set(STUDIO_RENDER_JOB_KINDS)

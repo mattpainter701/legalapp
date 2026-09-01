@@ -5,6 +5,17 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.31.6 — Durable Template Studio preview processing
+
+Released August 31, 2026.
+
+Template Studio now has a tenant-isolated durable job and artifact foundation for reliable preview and test-render processing.
+
+- **Resume interrupted work.** Preview and test-render requests use durable queued jobs with bounded retries, cancellation, lease recovery, and tenant-safe status resources.
+- **Keep evidence exact.** Completed output is hash-verified and can become current evidence only when the immutable snapshot, draft revision, and identity still match.
+- **Protect private document data.** Job metadata excludes document values, bytes, storage paths, provider identifiers, signed URLs, and raw exception text.
+- **Keep activation review-gated.** The production worker remains disabled until encrypted CAS backup and restore rehearsal are added to the release gate.
+
 ## 2026.08.31.5 — Revalidate authority evidence before alerts
 
 Released August 31, 2026.

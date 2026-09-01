@@ -81,6 +81,7 @@ if [[ -n "${EMAIL_ENABLED+x}" && "$EMAIL_ENABLED" != "$email_enabled_from_file" 
   exit 1
 fi
 EMAIL_ENABLED="$email_enabled_from_file"
+TEMPLATE_STUDIO_RENDER_ENABLED="$(get_env TEMPLATE_STUDIO_RENDER_ENABLED)"
 
 : "${DOMAIN:?DOMAIN is required}"
 : "${POSTGRES_USER:=legalapp}"
@@ -121,6 +122,8 @@ done
 [[ "$WORKSPACE_MCP_ENABLED" == "true" || "$WORKSPACE_MCP_ENABLED" == "false" ]] || { echo "FAIL: WORKSPACE_MCP_ENABLED must be true or false" >&2; exit 1; }
 [[ "$PLATFORM_LEGACY_BOOTSTRAP_ENABLED" == "false" ]] || { echo "FAIL: PLATFORM_LEGACY_BOOTSTRAP_ENABLED must be explicitly false" >&2; exit 1; }
 [[ "$EMAIL_ENABLED" == "true" || "$EMAIL_ENABLED" == "false" ]] || { echo "FAIL: EMAIL_ENABLED must be true or false" >&2; exit 1; }
+[[ "$TEMPLATE_STUDIO_RENDER_ENABLED" == "true" || "$TEMPLATE_STUDIO_RENDER_ENABLED" == "false" ]] || { echo "FAIL: TEMPLATE_STUDIO_RENDER_ENABLED must be true or false" >&2; exit 1; }
+[[ "$TEMPLATE_STUDIO_RENDER_ENABLED" != "true" ]] || { echo "FAIL: Studio rendering must remain production-disabled until CAS backup and restore rehearsal are release-gated" >&2; exit 1; }
 if [[ "$ZOOM_REQUIRED" == true ]]; then
   [[ "$ZOOM_REQUIRED_TENANT_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]] || {
     echo "FAIL: ZOOM_REQUIRED_TENANT_ID must be the sold tenant UUID" >&2
@@ -135,6 +138,9 @@ for compose_file in "${compose_file_list[@]}"; do
   [[ -f "$compose_file" ]] || { echo "FAIL: production Compose file not found: $compose_file" >&2; exit 1; }
   compose+=( -f "$compose_file" )
 done
+if [[ "$TEMPLATE_STUDIO_RENDER_ENABLED" == "true" ]]; then
+  compose+=( --profile studio-render )
+fi
 failures=()
 
 fail() { failures+=("$1"); }
@@ -306,7 +312,11 @@ if command -v systemctl >/dev/null 2>&1; then
     || fail "host disk timer is not active; inspect systemctl --user status legalapp-host-disk.timer"
 fi
 
-for service in postgres redis litellm-postgres litellm backend scheduler frontend nginx; do
+checked_services=(postgres redis litellm-postgres litellm backend scheduler frontend nginx)
+if [[ "$TEMPLATE_STUDIO_RENDER_ENABLED" == "true" ]]; then
+  checked_services+=(studio-render-worker)
+fi
+for service in "${checked_services[@]}"; do
   container_id="$("${compose[@]}" ps -q "$service" 2>/dev/null || true)"
   if [[ -z "$container_id" ]]; then
     fail "$service container is missing"

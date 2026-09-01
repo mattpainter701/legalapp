@@ -3,6 +3,7 @@ from functools import lru_cache
 import json
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -155,8 +156,7 @@ class Settings(BaseSettings):
     TEMPLATE_OCR_AZURE_TIMEOUT_SECONDS: float = 30.0
     TEMPLATE_OCR_AZURE_MAX_POLL_SECONDS: float = 75.0
     TEMPLATE_OCR_AZURE_MAX_POLL_INTERVAL_SECONDS: float = 10.0
-    # Template Studio stays conservative until Phase 3 job cleanup and tenant
-    # administration expose explicit retention controls.
+    # Template Studio quotas and the fail-closed Phase 3 render runtime.
     TEMPLATE_STUDIO_ACTIVE_DRAFT_QUOTA: int = 100
     TEMPLATE_STUDIO_SNAPSHOT_QUOTA: int = 100
     TEMPLATE_STUDIO_SOURCE_ARTIFACT_QUOTA: int = 100
@@ -164,6 +164,36 @@ class Settings(BaseSettings):
     TEMPLATE_STUDIO_SOURCE_ORPHAN_TTL_HOURS: int = 24
     TEMPLATE_STUDIO_DRAFT_TTL_DAYS: int = 30
     TEMPLATE_STUDIO_IDEMPOTENCY_TTL_HOURS: int = 24
+    TEMPLATE_STUDIO_RENDER_ENABLED: bool = False
+    TEMPLATE_STUDIO_RENDER_WORKER_ENABLED: bool = False
+    TEMPLATE_STUDIO_RENDER_STORAGE_DIR: str = ""
+    TEMPLATE_STUDIO_RENDER_STORAGE_TOPOLOGY: str = ""
+    TEMPLATE_STUDIO_RENDER_WORKSPACE_DIR: str = ""
+    TEMPLATE_STUDIO_RENDER_MANIFESTS_JSON: str = ""
+    TEMPLATE_STUDIO_RENDER_PROFILES_JSON: str = ""
+    TEMPLATE_STUDIO_RENDER_MAX_OBJECT_BYTES: int = 100 * 1024 * 1024
+    TEMPLATE_STUDIO_RENDER_MAX_INPUT_BINDING_BYTES: int = 25 * 1024 * 1024
+    TEMPLATE_STUDIO_RENDER_MAX_DOWNLOAD_BYTES: int = 25 * 1024 * 1024
+    TEMPLATE_STUDIO_RENDER_ACTIVE_JOB_LIMIT: int = 4
+    TEMPLATE_STUDIO_RENDER_JOB_TTL_SECONDS: int = 24 * 60 * 60
+    TEMPLATE_STUDIO_RENDER_ENQUEUE_RATE_LIMIT: int = 20
+    TEMPLATE_STUDIO_RENDER_ENQUEUE_RATE_WINDOW_SECONDS: int = 60
+    TEMPLATE_STUDIO_RENDER_QUEUED_BYTE_LIMIT: int = 500 * 1024 * 1024
+    TEMPLATE_STUDIO_RENDER_RETAINED_ARTIFACT_LIMIT: int = 500
+    TEMPLATE_STUDIO_RENDER_RETAINED_BYTE_LIMIT: int = 10 * 1024**3
+    TEMPLATE_STUDIO_RENDER_LIVE_ARTIFACT_LIMIT: int = 1_000
+    TEMPLATE_STUDIO_RENDER_LIVE_BYTE_LIMIT: int = 20 * 1024**3
+    TEMPLATE_STUDIO_RENDER_BATCH_SIZE: int = 8
+    TEMPLATE_STUDIO_RENDER_TENANT_SCAN_BATCH: int = 25
+    TEMPLATE_STUDIO_RENDER_CONCURRENCY: int = 2
+    TEMPLATE_STUDIO_RENDER_IDLE_SECONDS: float = 1.0
+    TEMPLATE_STUDIO_RENDER_MAINTENANCE_INTERVAL_SECONDS: int = 300
+    TEMPLATE_STUDIO_RENDER_HEALTH_MAX_AGE_SECONDS: int = 60
+    TEMPLATE_STUDIO_RENDER_LEASE_SECONDS: int = 900
+    TEMPLATE_STUDIO_RENDER_HEARTBEAT_SECONDS: int = 60
+    TEMPLATE_STUDIO_RENDER_PROCESSOR_TIMEOUT_SECONDS: int = 300
+    TEMPLATE_STUDIO_RENDER_ARTIFACT_TTL_SECONDS: int = 24 * 60 * 60
+    TEMPLATE_STUDIO_RENDER_METADATA_TTL_SECONDS: int = 30 * 24 * 60 * 60
 
     # OpenRouter — free model access (OpenAI-compatible)
     OPENROUTER_API_KEY: str = ""
@@ -1214,6 +1244,54 @@ def validate_template_ocr_settings(settings: Settings) -> None:
         )
 
 
+def _studio_paths_overlap(first: Path, second: Path) -> bool:
+    return first == second or first in second.parents or second in first.parents
+
+
+def _canonical_studio_path(raw: str, *, field: str) -> Path:
+    candidate = Path(raw)
+    if not raw.strip() or not candidate.is_absolute():
+        raise ValueError(f"{field} must be absolute")
+    resolved = candidate.resolve(strict=False)
+    if resolved.parent == resolved:
+        raise ValueError(f"{field} must not be a filesystem root")
+    return resolved
+
+
+def validate_studio_render_paths(
+    settings: Settings, *, require_workspace: bool
+) -> tuple[Path, Path | None]:
+    """Canonicalize and reject destructive Studio storage relationships."""
+
+    storage = _canonical_studio_path(
+        settings.TEMPLATE_STUDIO_RENDER_STORAGE_DIR,
+        field="TEMPLATE_STUDIO_RENDER_STORAGE_DIR",
+    )
+    workspace = (
+        _canonical_studio_path(
+            settings.TEMPLATE_STUDIO_RENDER_WORKSPACE_DIR,
+            field="TEMPLATE_STUDIO_RENDER_WORKSPACE_DIR",
+        )
+        if require_workspace
+        else None
+    )
+    upload = _canonical_studio_path(settings.UPLOAD_DIR, field="UPLOAD_DIR")
+    app_root = Path(__file__).resolve().parents[1]
+    candidates = [("TEMPLATE_STUDIO_RENDER_STORAGE_DIR", storage)]
+    if workspace is not None:
+        candidates.append(("TEMPLATE_STUDIO_RENDER_WORKSPACE_DIR", workspace))
+    for field, candidate in candidates:
+        for protected_name, protected in (
+            ("application root", app_root),
+            ("UPLOAD_DIR", upload),
+        ):
+            if _studio_paths_overlap(candidate, protected):
+                raise ValueError(f"{field} overlaps the {protected_name}")
+    if workspace is not None and _studio_paths_overlap(storage, workspace):
+        raise ValueError("Studio render storage and workspace paths must be disjoint")
+    return storage, workspace
+
+
 def validate_template_studio_settings(settings: Settings) -> None:
     if not 1 <= settings.TEMPLATE_STUDIO_ACTIVE_DRAFT_QUOTA <= 1000:
         raise ValueError(
@@ -1239,6 +1317,127 @@ def validate_template_studio_settings(settings: Settings) -> None:
         raise ValueError(
             "TEMPLATE_STUDIO_IDEMPOTENCY_TTL_HOURS must be between 1 and 168"
         )
+    if not 1 <= settings.TEMPLATE_STUDIO_RENDER_MAX_OBJECT_BYTES <= 100 * 1024 * 1024:
+        raise ValueError("TEMPLATE_STUDIO_RENDER_MAX_OBJECT_BYTES is invalid")
+    if not (
+        1
+        <= settings.TEMPLATE_STUDIO_RENDER_MAX_INPUT_BINDING_BYTES
+        <= settings.TEMPLATE_STUDIO_RENDER_MAX_OBJECT_BYTES
+    ):
+        raise ValueError("TEMPLATE_STUDIO_RENDER_MAX_INPUT_BINDING_BYTES is invalid")
+    if not (
+        1
+        <= settings.TEMPLATE_STUDIO_RENDER_MAX_DOWNLOAD_BYTES
+        <= min(settings.TEMPLATE_STUDIO_RENDER_MAX_OBJECT_BYTES, 25 * 1024 * 1024)
+    ):
+        raise ValueError("TEMPLATE_STUDIO_RENDER_MAX_DOWNLOAD_BYTES is invalid")
+    if not 1 <= settings.TEMPLATE_STUDIO_RENDER_ACTIVE_JOB_LIMIT <= 32:
+        raise ValueError("TEMPLATE_STUDIO_RENDER_ACTIVE_JOB_LIMIT is invalid")
+    if not 300 <= settings.TEMPLATE_STUDIO_RENDER_JOB_TTL_SECONDS <= 604_800:
+        raise ValueError("TEMPLATE_STUDIO_RENDER_JOB_TTL_SECONDS is invalid")
+    if not 1 <= settings.TEMPLATE_STUDIO_RENDER_ENQUEUE_RATE_LIMIT <= 10_000:
+        raise ValueError("TEMPLATE_STUDIO_RENDER_ENQUEUE_RATE_LIMIT is invalid")
+    if not 1 <= settings.TEMPLATE_STUDIO_RENDER_ENQUEUE_RATE_WINDOW_SECONDS <= 3_600:
+        raise ValueError(
+            "TEMPLATE_STUDIO_RENDER_ENQUEUE_RATE_WINDOW_SECONDS is invalid"
+        )
+    if not 1 <= settings.TEMPLATE_STUDIO_RENDER_QUEUED_BYTE_LIMIT <= 100 * 1024**3:
+        raise ValueError("TEMPLATE_STUDIO_RENDER_QUEUED_BYTE_LIMIT is invalid")
+    if not 1 <= settings.TEMPLATE_STUDIO_RENDER_RETAINED_ARTIFACT_LIMIT <= 100_000:
+        raise ValueError("TEMPLATE_STUDIO_RENDER_RETAINED_ARTIFACT_LIMIT is invalid")
+    if not 1 <= settings.TEMPLATE_STUDIO_RENDER_RETAINED_BYTE_LIMIT <= 10 * 1024**4:
+        raise ValueError("TEMPLATE_STUDIO_RENDER_RETAINED_BYTE_LIMIT is invalid")
+    if not 1 <= settings.TEMPLATE_STUDIO_RENDER_LIVE_ARTIFACT_LIMIT <= 100_000:
+        raise ValueError("TEMPLATE_STUDIO_RENDER_LIVE_ARTIFACT_LIMIT is invalid")
+    if not 1 <= settings.TEMPLATE_STUDIO_RENDER_LIVE_BYTE_LIMIT <= 10 * 1024**4:
+        raise ValueError("TEMPLATE_STUDIO_RENDER_LIVE_BYTE_LIMIT is invalid")
+    if (
+        settings.TEMPLATE_STUDIO_RENDER_RETAINED_ARTIFACT_LIMIT
+        > settings.TEMPLATE_STUDIO_RENDER_LIVE_ARTIFACT_LIMIT
+        or settings.TEMPLATE_STUDIO_RENDER_RETAINED_BYTE_LIMIT
+        > settings.TEMPLATE_STUDIO_RENDER_LIVE_BYTE_LIMIT
+    ):
+        raise ValueError("Studio retained limits must fit within live storage limits")
+    if not 1 <= settings.TEMPLATE_STUDIO_RENDER_BATCH_SIZE <= 100:
+        raise ValueError("TEMPLATE_STUDIO_RENDER_BATCH_SIZE is invalid")
+    if not 1 <= settings.TEMPLATE_STUDIO_RENDER_TENANT_SCAN_BATCH <= 500:
+        raise ValueError("TEMPLATE_STUDIO_RENDER_TENANT_SCAN_BATCH is invalid")
+    if (
+        not 1
+        <= settings.TEMPLATE_STUDIO_RENDER_CONCURRENCY
+        <= min(settings.TEMPLATE_STUDIO_RENDER_BATCH_SIZE, 16)
+    ):
+        raise ValueError("TEMPLATE_STUDIO_RENDER_CONCURRENCY is invalid")
+    if not 0.01 <= settings.TEMPLATE_STUDIO_RENDER_IDLE_SECONDS <= 60:
+        raise ValueError("TEMPLATE_STUDIO_RENDER_IDLE_SECONDS is invalid")
+    if not 10 <= settings.TEMPLATE_STUDIO_RENDER_MAINTENANCE_INTERVAL_SECONDS <= 86_400:
+        raise ValueError(
+            "TEMPLATE_STUDIO_RENDER_MAINTENANCE_INTERVAL_SECONDS is invalid"
+        )
+    if not 20 <= settings.TEMPLATE_STUDIO_RENDER_HEALTH_MAX_AGE_SECONDS <= 600:
+        raise ValueError("TEMPLATE_STUDIO_RENDER_HEALTH_MAX_AGE_SECONDS is invalid")
+    if not 30 <= settings.TEMPLATE_STUDIO_RENDER_LEASE_SECONDS <= 3_600:
+        raise ValueError("TEMPLATE_STUDIO_RENDER_LEASE_SECONDS is invalid")
+    if not (
+        5
+        <= settings.TEMPLATE_STUDIO_RENDER_HEARTBEAT_SECONDS
+        < settings.TEMPLATE_STUDIO_RENDER_LEASE_SECONDS / 2
+    ):
+        raise ValueError("TEMPLATE_STUDIO_RENDER_HEARTBEAT_SECONDS is invalid")
+    if not 5 <= settings.TEMPLATE_STUDIO_RENDER_PROCESSOR_TIMEOUT_SECONDS <= 1_800:
+        raise ValueError("TEMPLATE_STUDIO_RENDER_PROCESSOR_TIMEOUT_SECONDS is invalid")
+    if not 300 <= settings.TEMPLATE_STUDIO_RENDER_ARTIFACT_TTL_SECONDS <= 604_800:
+        raise ValueError("TEMPLATE_STUDIO_RENDER_ARTIFACT_TTL_SECONDS is invalid")
+    if not 86_400 <= settings.TEMPLATE_STUDIO_RENDER_METADATA_TTL_SECONDS <= 31_536_000:
+        raise ValueError("TEMPLATE_STUDIO_RENDER_METADATA_TTL_SECONDS is invalid")
+    if (
+        settings.TEMPLATE_STUDIO_RENDER_METADATA_TTL_SECONDS
+        <= settings.TEMPLATE_STUDIO_RENDER_ARTIFACT_TTL_SECONDS
+    ):
+        raise ValueError("Studio render metadata TTL must outlive artifact bytes")
+    if not settings.TEMPLATE_STUDIO_RENDER_ENABLED:
+        if settings.TEMPLATE_STUDIO_RENDER_WORKER_ENABLED:
+            raise ValueError("Studio render worker requires rendering to be enabled")
+        return
+
+    parsed_backend = urlsplit(settings.BACKEND_URL)
+    if (
+        parsed_backend.scheme != "https"
+        or not parsed_backend.netloc
+        or parsed_backend.path not in {"", "/"}
+        or parsed_backend.query
+        or parsed_backend.fragment
+        or parsed_backend.username
+        or parsed_backend.password
+    ):
+        raise ValueError("Studio rendering requires BACKEND_URL to be an HTTPS origin")
+    validate_studio_render_paths(
+        settings,
+        require_workspace=settings.TEMPLATE_STUDIO_RENDER_WORKER_ENABLED,
+    )
+    if settings.TEMPLATE_STUDIO_RENDER_STORAGE_TOPOLOGY != "single_host_local":
+        raise ValueError(
+            "Studio Local CAS requires explicit single_host_local topology"
+        )
+    try:
+        manifest_document = json.loads(settings.TEMPLATE_STUDIO_RENDER_MANIFESTS_JSON)
+        from app.schemas.studio_render import (
+            StudioRenderCapabilities,
+        )
+
+        capabilities = StudioRenderCapabilities.model_validate(manifest_document)
+    except Exception as exc:
+        raise ValueError("TEMPLATE_STUDIO_RENDER_MANIFESTS_JSON is invalid") from exc
+    if settings.TEMPLATE_STUDIO_RENDER_WORKER_ENABLED:
+        try:
+            profiles = json.loads(settings.TEMPLATE_STUDIO_RENDER_PROFILES_JSON)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("TEMPLATE_STUDIO_RENDER_PROFILES_JSON is invalid") from exc
+        expected_profile_keys = {
+            capability.configuration_key for capability in capabilities.capabilities
+        }
+        if not isinstance(profiles, dict) or set(profiles) != expected_profile_keys:
+            raise ValueError("TEMPLATE_STUDIO_RENDER_PROFILES_JSON is invalid")
 
 
 def validate_worker_settings(settings: Settings) -> None:

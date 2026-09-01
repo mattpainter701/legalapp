@@ -88,6 +88,18 @@
       "source": "docker-compose.yml"
     },
     {
+      "image": "legalapp-backend:${APP_COMMIT:-dev}",
+      "line": 117,
+      "pinned_by_digest": false,
+      "source": "docker-compose.yml"
+    },
+    {
+      "image": "legalapp-backend:${APP_COMMIT:-dev}",
+      "line": 166,
+      "pinned_by_digest": false,
+      "source": "docker-compose.yml"
+    },
+    {
       "image": "pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb",
       "line": 3,
       "pinned_by_digest": true,
@@ -138,6 +150,18 @@
     {
       "image": "legalapp-litellm:${APP_COMMIT:-dev}",
       "line": 81,
+      "pinned_by_digest": false,
+      "source": "docker-compose.hypervisor.yml"
+    },
+    {
+      "image": "legalapp-backend:${APP_COMMIT:-dev}",
+      "line": 129,
+      "pinned_by_digest": false,
+      "source": "docker-compose.hypervisor.yml"
+    },
+    {
+      "image": "legalapp-backend:${APP_COMMIT:-dev}",
+      "line": 220,
       "pinned_by_digest": false,
       "source": "docker-compose.hypervisor.yml"
     },
