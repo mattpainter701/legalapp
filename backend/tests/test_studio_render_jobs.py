@@ -1562,14 +1562,14 @@ async def test_completed_status_preserves_expired_artifact_result_and_returns_41
     db_session, test_tenant, test_user, tmp_path
 ):
     foundation = await _foundation(db_session, test_tenant, test_user)
-    service, accepted = await _enqueue(
+    service, accepted = await _enqueue_with_stale_request(
         db_session, test_tenant, test_user, foundation, "completed-artifact-expiry"
     )
     lease = await service.claim(accepted.job_id, owner="artifact-expiry-worker")
     object_store = LocalStudioObjectStore(tmp_path, max_object_bytes=4096)
     content = b"expiring-completed-output"
     output = object_store.put(test_tenant.id, content, media_type="application/pdf")
-    artifact_id, _ = await service.adopt_output(
+    artifact_id, outcome = await service.adopt_output(
         lease,
         output,
         object_store=object_store,
@@ -1578,12 +1578,13 @@ async def test_completed_status_preserves_expired_artifact_result_and_returns_41
         artifact_ttl_seconds=300,
         **_geometry_kwargs(),
     )
+    assert outcome == "stale_output"
     available = await run_studio_consumer_transaction(
         db_session, lambda: service.status(accepted.job_id)
     )
     assert available.state == "completed"
     assert available.artifact_availability == "available"
-    assert available.auto_open is True
+    assert available.auto_open is False
     result = await run_studio_consumer_transaction(
         db_session, lambda: service.artifact_result(artifact_id)
     )
@@ -1661,7 +1662,7 @@ async def test_cache_rechecks_expiry_after_blocking_verified_read(
     db_session, test_engine, test_tenant, test_user, tmp_path
 ):
     foundation = await _foundation(db_session, test_tenant, test_user)
-    service, accepted = await _enqueue(
+    service, accepted = await _enqueue_with_stale_request(
         db_session, test_tenant, test_user, foundation, "cache-expiry-fence"
     )
     lease = await service.claim(accepted.job_id, owner="cache-expiry-worker")
@@ -1669,7 +1670,7 @@ async def test_cache_rechecks_expiry_after_blocking_verified_read(
     output = store.put(
         test_tenant.id, b"cache-expiry-output", media_type="application/pdf"
     )
-    artifact_id, _ = await service.adopt_output(
+    artifact_id, outcome = await service.adopt_output(
         lease,
         output,
         object_store=store,
@@ -1678,6 +1679,7 @@ async def test_cache_rechecks_expiry_after_blocking_verified_read(
         artifact_ttl_seconds=300,
         **_geometry_kwargs(),
     )
+    assert outcome == "stale_output"
     artifact = await db_session.get(StudioRenderArtifact, artifact_id)
     artifact.content_expires_at = await db_session.scalar(
         select(func.clock_timestamp())
@@ -1710,7 +1712,7 @@ async def test_content_read_releases_row_lock_and_rechecks_expiry_after_io(
     db_session, test_engine, test_tenant, test_user, tmp_path
 ):
     foundation = await _foundation(db_session, test_tenant, test_user)
-    service, accepted = await _enqueue(
+    service, accepted = await _enqueue_with_stale_request(
         db_session, test_tenant, test_user, foundation, "content-expiry-fence"
     )
     lease = await service.claim(accepted.job_id, owner="content-expiry-worker")
@@ -1718,7 +1720,7 @@ async def test_content_read_releases_row_lock_and_rechecks_expiry_after_io(
     output = store.put(
         test_tenant.id, b"content-expiry-output", media_type="application/pdf"
     )
-    artifact_id, _ = await service.adopt_output(
+    artifact_id, outcome = await service.adopt_output(
         lease,
         output,
         object_store=store,
@@ -1727,6 +1729,7 @@ async def test_content_read_releases_row_lock_and_rechecks_expiry_after_io(
         artifact_ttl_seconds=300,
         **_geometry_kwargs(),
     )
+    assert outcome == "stale_output"
     expires_at = await db_session.scalar(select(func.clock_timestamp())) + timedelta(
         seconds=2
     )
@@ -1784,7 +1787,7 @@ async def test_completed_status_rechecks_expiry_after_artifact_lock_wait(
     db_session, test_engine, test_tenant, test_user, tmp_path
 ):
     foundation = await _foundation(db_session, test_tenant, test_user)
-    service, accepted = await _enqueue(
+    service, accepted = await _enqueue_with_stale_request(
         db_session, test_tenant, test_user, foundation, "status-expiry-lock-fence"
     )
     lease = await service.claim(accepted.job_id, owner="status-expiry-worker")
@@ -1792,7 +1795,7 @@ async def test_completed_status_rechecks_expiry_after_artifact_lock_wait(
     output = store.put(
         test_tenant.id, b"status-expiry-output", media_type="application/pdf"
     )
-    artifact_id, _ = await service.adopt_output(
+    artifact_id, outcome = await service.adopt_output(
         lease,
         output,
         object_store=store,
@@ -1801,6 +1804,7 @@ async def test_completed_status_rechecks_expiry_after_artifact_lock_wait(
         artifact_ttl_seconds=300,
         **_geometry_kwargs(),
     )
+    assert outcome == "stale_output"
     expires_at = await db_session.scalar(select(func.clock_timestamp())) + timedelta(
         seconds=3
     )
