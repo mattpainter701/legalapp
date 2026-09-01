@@ -10,6 +10,10 @@ source, extraction, indexing, and (optionally) ACL-refresh adapters.
 
 - A `SourceRoot` is the crawl authority. Matter IDs are optional enrichment
   metadata and never gate discovery.
+- A registered `source_id` is an immutable namespace: its root, matter metadata,
+  case policy, and resource configuration cannot be replaced in place. Retire
+  the old source through a full reconciliation and use a new ID for a different
+  root or indexing configuration.
 - `SourceAdapter` owns provider I/O. `ExtractionSink`, `IndexSink`, and
   `AclRefreshSink` are handoff contracts; the control plane does not implement
   OpenSearch mappings, Tika/OCR, ACL trimming, or portal behavior.
@@ -17,7 +21,8 @@ source, extraction, indexing, and (optionally) ACL-refresh adapters.
   source root. Discovery adapters may return an absolute descendant, but stat
   and streaming-read calls receive only the canonical relative path.
 - Extraction writes its output to a separately secured local artifact store and
-  returns only a bounded opaque reference and hash. The crawl SQLite database
+  returns only `artifact:<sha256>` plus an exact lowercase SHA-256 digest. The
+  crawl SQLite database
   never stores document text, snippets, parsed fields, or extracted payloads.
 - `CallbackHintAdapter` admits Windows USN or SMB change-notify providers as
   low-latency hints. It does not treat those streams as authoritative.
@@ -39,6 +44,12 @@ cannot acknowledge or renew a newer lease. Long-running adapters can renew
 their exact lease generation. Failures back off and eventually enter the `dead`
 state for operator review.
 
+Only stable error codes are durable; adapter exception messages are never
+written to the database. Schema upgrades reject future versions. The v1-to-v2
+migration securely rebuilds the queue to remove legacy payload JSON, sanitizes
+errors, regenerates generation-qualified extract/delete/ACL work from the file
+manifest, truncates the WAL, and vacuums freed pages.
+
 Each full reconciliation owns a durable, renewable per-source lease. Observe,
 finish, failure, and tombstone mutations are compare-and-swap fenced by its
 token, so an expired process cannot finish over a newer run. Files absent from
@@ -48,7 +59,8 @@ queue backpressure, notification overflow, and cursor failure all retain live
 files and set `reconciliation_required`.
 
 Stable provider file IDs preserve identity across renames. When unavailable, a
-normalized path hash is used and rename detection is conservative. Path reuse
+normalized path hash uses the source's explicit case-sensitivity policy, and
+rename detection is conservative. Path reuse
 keeps the displaced identity until a successful reconciliation can tombstone
 it. Extraction reads are streamed in bounded chunks, capped by `max_file_size`,
 and fenced against the queued manifest stat plus pre/post source stats. Only
@@ -59,6 +71,9 @@ Cursorless notifications receive a durable per-source sequence, so repeated
 changes to the same path re-arm work. Queue coalescing never resets leased,
 backed-off, or dead work; long handlers automatically renew their exact lease
 and are cancelled if renewal ownership is lost.
+ACL version and canonical path participate in the same pre/post-read fence as
+content stats. Deletion observed during a read forces full reconciliation
+instead of reviving the stale pre-read row.
 
 ## Scheduling and resource controls
 
@@ -76,7 +91,10 @@ Every source has its own five-field reconciliation schedule plus these budgets:
 source, and `set_interactive_priority()` yields crawl reads while interactive
 local search is active. One scheduled reconciliation may be outstanding per
 source. Worker budgets cover every queue stage, and handle budgets cover source
-walk/stat/read I/O. Change streams never replace scheduled reconciliation.
+walk/stat/read I/O. Durable operator pause and interactive backpressure are
+tracked independently. Downstream capacity is reserved transactionally for all
+jobs an observation can create, and completed-job metadata is retained only to
+a fixed per-source bound. Change streams never replace scheduled reconciliation.
 
 ## Operator status and response
 

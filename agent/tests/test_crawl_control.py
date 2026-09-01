@@ -62,7 +62,7 @@ class Extractor:
         return ExtractedDocument(
             request.content_version,
             request.mutation_generation,
-            f"artifact://{request.source_id}/{request.file_id}/{request.content_version}",
+            f"artifact:{request.fingerprint}",
             request.fingerprint,
         )
 
@@ -113,7 +113,7 @@ async def test_source_root_crawl_without_matter_and_interface_handoffs(tmp_path)
     assert await pipeline.process_one(JobKind.INDEX)
 
     assert extractor.calls[0].matter_ids == ()
-    assert index.upserts[0].artifact_ref.startswith("artifact://share-a/")
+    assert index.upserts[0].artifact_ref.startswith("artifact:")
     assert index.upserts[0].mutation_generation == 1
     assert (await manifest.status())["jobs"]["extract.done"] == 1
 
@@ -544,3 +544,267 @@ async def test_scheduler_keeps_one_outstanding_reconciliation(tmp_path):
     await pipeline.enqueue_due_reconciliations(now)
     await pipeline.enqueue_due_reconciliations(now)
     assert (await manifest.status())["jobs"]["discover.ready"] == 1
+
+
+@pytest.mark.asyncio
+async def test_errors_and_invalid_artifact_values_never_persist_raw_text(tmp_path):
+    sentinel = "SENSITIVE-SENTINEL-DOCUMENT-TEXT"
+
+    class BadExtractor:
+        async def extract(self, request):
+            return ExtractedDocument(
+                request.content_version,
+                request.mutation_generation,
+                sentinel,
+                request.fingerprint,
+            )
+
+    path = str(tmp_path / "private" / "crawl.db")
+    manifest = CrawlManifest(path)
+    await manifest.initialize()
+    stat = FileStat("secret.txt", len(sentinel), 1, stable_id="secret")
+    adapter = MemorySource({stat.path: (stat, sentinel.encode())})
+    pipeline = CrawlPipeline(
+        manifest, adapter, BadExtractor(), Index(), enabled=True, max_attempts=1
+    )
+    source = SourceRoot("share-a", r"\\server\share")
+    await pipeline.add_source(source)
+    await pipeline.reconcile(source.source_id)
+    with pytest.raises(ValueError, match="artifact reference"):
+        await pipeline.process_one(JobKind.EXTRACT)
+
+    run_id = await manifest.begin_reconciliation(source.source_id)
+    await manifest.fail_reconciliation(
+        source.source_id, run_id, RuntimeError(f"parser leaked {sentinel}")
+    )
+    state = await manifest.source_state(source.source_id)
+    assert state["last_error"] == "internal_error"
+    assert (await manifest.status())["jobs"]["extract.dead"] == 1
+    for db_file in manifest.path.parent.glob("crawl.db*"):
+        assert sentinel.encode() not in db_file.read_bytes()
+
+
+@pytest.mark.asyncio
+async def test_v1_migration_scrubs_payload_and_regenerates_safe_work(tmp_path):
+    db_path = tmp_path / "private" / "crawl.db"
+    db_path.parent.mkdir(parents=True)
+    sentinel = "SENSITIVE-V1-PAYLOAD"
+    with sqlite3.connect(db_path) as db:
+        db.executescript(
+            f"""
+            CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+            INSERT INTO metadata VALUES('schema_version','1');
+            CREATE TABLE sources(
+                source_id TEXT PRIMARY KEY,root TEXT NOT NULL,config_json TEXT NOT NULL,
+                cursor TEXT,reconciliation_required INTEGER NOT NULL DEFAULT 1,
+                paused INTEGER NOT NULL DEFAULT 0,last_reconcile_started REAL,
+                last_reconcile_completed REAL,last_error TEXT
+            );
+            INSERT INTO sources VALUES(
+                'share-a','root','{{"schedule":"*/15 * * * *","matter_ids":[],
+                "max_workers":2,"max_open_handles":4,
+                "read_bytes_per_second":8388608,"max_pending_jobs":10000,
+                "enabled":true}}',NULL,0,0,NULL,NULL,'{sentinel}'
+            );
+            CREATE TABLE files(
+                source_id TEXT NOT NULL,file_id TEXT NOT NULL,path TEXT NOT NULL,
+                stable_id TEXT,size INTEGER NOT NULL,modified_ns INTEGER NOT NULL,
+                created_ns INTEGER,stat_version TEXT NOT NULL,fingerprint TEXT,
+                content_version TEXT NOT NULL,acl_version TEXT,
+                matter_ids_json TEXT NOT NULL DEFAULT '[]',last_seen_run TEXT,
+                tombstoned INTEGER NOT NULL DEFAULT 0,updated_at REAL NOT NULL,
+                PRIMARY KEY(source_id,file_id),UNIQUE(source_id,path)
+            );
+            INSERT INTO files VALUES(
+                'share-a','live','live.txt',NULL,1,1,NULL,'s1',NULL,'v1',NULL,
+                '[]',NULL,0,1
+            );
+            INSERT INTO files VALUES(
+                'share-a','gone','gone.txt',NULL,1,1,NULL,'s2',NULL,'v2',NULL,
+                '[]',NULL,1,1
+            );
+            CREATE TABLE jobs(
+                job_id INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT NOT NULL,
+                source_id TEXT NOT NULL,file_id TEXT,path TEXT,content_version TEXT,
+                dedupe_key TEXT NOT NULL UNIQUE,priority INTEGER NOT NULL DEFAULT 0,
+                state TEXT NOT NULL DEFAULT 'ready',attempts INTEGER NOT NULL DEFAULT 0,
+                available_at REAL NOT NULL DEFAULT 0,lease_until REAL,lease_token TEXT,
+                last_error TEXT,payload_json TEXT NOT NULL DEFAULT '{{}}',
+                created_at REAL NOT NULL,updated_at REAL NOT NULL
+            );
+            INSERT INTO jobs(kind,source_id,file_id,path,content_version,dedupe_key,
+                state,payload_json,created_at,updated_at)
+            VALUES('index','share-a','live','live.txt','v1','old-index','ready',
+                '{{"text":"{sentinel}"}}',1,1);
+            INSERT INTO jobs(kind,source_id,file_id,path,content_version,dedupe_key,
+                state,payload_json,created_at,updated_at)
+            VALUES('delete','share-a','gone','gone.txt','v2','old-delete','ready',
+                '{{}}',1,1);
+            """
+        )
+
+    manifest = CrawlManifest(str(db_path))
+    await manifest.initialize()
+    with sqlite3.connect(db_path) as db:
+        columns = {row[1] for row in db.execute("PRAGMA table_info(jobs)")}
+        version = db.execute(
+            "SELECT value FROM metadata WHERE key='schema_version'"
+        ).fetchone()[0]
+        work = db.execute(
+            "SELECT kind,file_id,mutation_generation FROM jobs ORDER BY kind,file_id"
+        ).fetchall()
+    assert "payload_json" not in columns
+    assert version == "2"
+    assert ("extract", "live", 1) in work
+    assert ("delete", "gone", 2) in work
+    for db_file in db_path.parent.glob("crawl.db*"):
+        assert sentinel.encode() not in db_file.read_bytes()
+
+
+@pytest.mark.asyncio
+async def test_future_manifest_schema_is_rejected(tmp_path):
+    db_path = tmp_path / "private" / "crawl.db"
+    db_path.parent.mkdir(parents=True)
+    with sqlite3.connect(db_path) as db:
+        db.executescript(
+            """CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+            INSERT INTO metadata VALUES('schema_version','999');"""
+        )
+    manifest = CrawlManifest(str(db_path))
+    with pytest.raises(RuntimeError, match="newer"):
+        await manifest.initialize()
+
+
+@pytest.mark.asyncio
+async def test_source_registration_namespace_is_immutable(tmp_path):
+    pipeline, _, _, _, _, _ = await setup(tmp_path, {})
+    with pytest.raises(ValueError, match="immutable"):
+        await pipeline.add_source(SourceRoot("share-a", r"\\server\replacement"))
+    with pytest.raises(ValueError, match="immutable"):
+        await pipeline.add_source(
+            SourceRoot("share-a", r"\\server\share", matter_ids=("matter-2",))
+        )
+
+
+@pytest.mark.asyncio
+async def test_acl_change_before_read_supersedes_old_generation(tmp_path):
+    old = FileStat("acl.txt", 1, 1, stable_id="acl", acl_version="v1")
+    pipeline, manifest, adapter, extractor, _, _ = await setup(
+        tmp_path, {old.path: (old, b"x")}
+    )
+    await pipeline.reconcile("share-a")
+    adapter.files[old.path] = (
+        FileStat(old.path, 1, 1, stable_id="acl", acl_version="v2"),
+        b"x",
+    )
+    assert await pipeline.process_one(JobKind.EXTRACT)
+    assert extractor.calls == []
+    row = await manifest.file("share-a", old.identity)
+    assert row["acl_version"] == "v2"
+    assert row["mutation_generation"] == 2
+
+
+@pytest.mark.asyncio
+async def test_acl_change_during_read_supersedes_old_generation(tmp_path):
+    class AclChangingSource(MemorySource):
+        async def read_chunks(self, source, path, chunk_size):
+            stat, content = self.files[path]
+            yield content
+            self.files[path] = (
+                FileStat(
+                    path,
+                    stat.size,
+                    stat.modified_ns,
+                    stable_id=stat.stable_id,
+                    acl_version="v2",
+                ),
+                content,
+            )
+
+    path = str(tmp_path / "private" / "crawl.db")
+    manifest = CrawlManifest(path)
+    await manifest.initialize()
+    old = FileStat("acl.txt", 1, 1, stable_id="acl", acl_version="v1")
+    adapter = AclChangingSource({old.path: (old, b"x")})
+    extractor = Extractor()
+    pipeline = CrawlPipeline(manifest, adapter, extractor, Index(), enabled=True)
+    source = SourceRoot("share-a", r"\\server\share")
+    await pipeline.add_source(source)
+    await pipeline.reconcile(source.source_id)
+    assert await pipeline.process_one(JobKind.EXTRACT)
+    assert extractor.calls == []
+    assert (await manifest.file(source.source_id, old.identity))["acl_version"] == "v2"
+
+
+@pytest.mark.asyncio
+async def test_case_sensitive_fallback_identities_remain_distinct(tmp_path):
+    manifest = CrawlManifest(str(tmp_path / "private" / "crawl.db"))
+    await manifest.initialize()
+    source = SourceRoot("linux", "/mnt/share", case_sensitive_paths=True)
+    await manifest.register_source(source)
+    upper = FileStat("A.txt", 1, 1)
+    lower = FileStat("a.txt", 1, 1)
+    upper_id, _, _ = await manifest.observe(source, upper, None)
+    lower_id, _, _ = await manifest.observe(source, lower, None)
+    assert upper_id != lower_id
+    assert await manifest.file(source.source_id, upper_id)
+    assert await manifest.file(source.source_id, lower_id)
+
+
+@pytest.mark.asyncio
+async def test_deletion_during_read_requires_reconciliation(tmp_path):
+    class DeletingSource(MemorySource):
+        async def read_chunks(self, source, path, chunk_size):
+            _, content = self.files[path]
+            yield content
+            self.files.pop(path)
+
+    path = str(tmp_path / "private" / "crawl.db")
+    manifest = CrawlManifest(path)
+    await manifest.initialize()
+    stat = FileStat("gone.txt", 1, 1, stable_id="gone")
+    adapter = DeletingSource({stat.path: (stat, b"x")})
+    pipeline = CrawlPipeline(manifest, adapter, Extractor(), Index(), enabled=True)
+    source = SourceRoot("share-a", r"\\server\share")
+    await pipeline.add_source(source)
+    await pipeline.reconcile(source.source_id)
+    assert await pipeline.process_one(JobKind.EXTRACT)
+    state = await manifest.source_state(source.source_id)
+    assert state["reconciliation_required"]
+    assert state["last_error"] == "source_io"
+
+
+@pytest.mark.asyncio
+async def test_durable_and_interactive_pause_are_independent(tmp_path):
+    pipeline, _, _, _, _, _ = await setup(tmp_path, {})
+    budget = pipeline.budgets["share-a"]
+    await pipeline.pause("share-a")
+    await pipeline.set_interactive_priority("share-a", True)
+    await pipeline.set_interactive_priority("share-a", False)
+    assert not budget.paused.is_set()
+    await pipeline.set_interactive_priority("share-a", True)
+    await pipeline.resume("share-a")
+    assert not budget.paused.is_set()
+    await pipeline.set_interactive_priority("share-a", False)
+    assert budget.paused.is_set()
+
+
+@pytest.mark.asyncio
+async def test_scheduled_reconcile_does_not_count_its_own_discover_job(tmp_path):
+    stat = FileStat("only.txt", 1, 1, stable_id="only")
+    pipeline, manifest, _, _, _, _ = await setup(
+        tmp_path, {stat.path: (stat, b"x")}, max_pending_jobs=1
+    )
+    await pipeline.enqueue_due_reconciliations(datetime.now(timezone.utc))
+    assert await pipeline.process_one(JobKind.DISCOVER)
+    assert (await manifest.status())["jobs"]["extract.ready"] == 1
+
+
+@pytest.mark.asyncio
+async def test_completed_job_retention_is_bounded(tmp_path):
+    pipeline, manifest, _, _, _, _ = await setup(tmp_path, {})
+    for _ in range(5):
+        await pipeline.apply_hint(ChangeHint("share-a", path="missing.txt"))
+        assert await pipeline.process_one(JobKind.STAT)
+    assert await manifest.compact_completed("share-a", retain=2) == 3
+    assert (await manifest.status())["jobs"]["stat.done"] == 2

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import time
 import uuid
 from collections import Counter
@@ -30,7 +31,31 @@ from clarity_agent.config import _restrict
 
 SCHEMA_VERSION = 2
 DEFAULT_MAX_FILE_SIZE = 32 * 1024 * 1024
-MAX_ARTIFACT_REFERENCE_BYTES = 4096
+COMPLETED_JOB_RETENTION = 10_000
+ARTIFACT_REFERENCE_RE = re.compile(r"artifact:[0-9a-f]{64}\Z")
+DIGEST_RE = re.compile(r"[0-9a-f]{64}\Z")
+STABLE_ERROR_CODES = frozenset(
+    {
+        "access_denied",
+        "invalid_input",
+        "lease_lost",
+        "source_io",
+        "internal_error",
+        "migrated_error",
+    }
+)
+
+
+def stable_error_code(error: BaseException) -> str:
+    if isinstance(error, LeaseLost):
+        return "lease_lost"
+    if isinstance(error, PermissionError):
+        return "access_denied"
+    if isinstance(error, OSError):
+        return "source_io"
+    if isinstance(error, ValueError):
+        return "invalid_input"
+    return "internal_error"
 
 
 class JobKind(StrEnum):
@@ -61,6 +86,7 @@ class SourceRoot:
     read_bytes_per_second: int = 8 * 1024 * 1024
     max_pending_jobs: int = 10_000
     max_file_size: int = DEFAULT_MAX_FILE_SIZE
+    case_sensitive_paths: bool = False
     enabled: bool = True
 
 
@@ -78,6 +104,14 @@ class FileStat:
         if self.stable_id:
             return f"stable:{self.stable_id}"
         normalized = str(PureWindowsPath(self.path)).casefold()
+        return "path:" + hashlib.sha256(normalized.encode()).hexdigest()
+
+    def identity_for(self, source: SourceRoot) -> str:
+        if self.stable_id:
+            return f"stable:{self.stable_id}"
+        normalized = str(PurePosixPath(self.path))
+        if not source.case_sensitive_paths:
+            normalized = normalized.casefold()
         return "path:" + hashlib.sha256(normalized.encode()).hexdigest()
 
     @property
@@ -262,6 +296,7 @@ class CrawlManifest:
     async def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         _restrict(self.path.parent, required=True)
+        sanitized = False
         async with self._connect() as db:
             await db.executescript(
                 """
@@ -335,15 +370,37 @@ class CrawlManifest:
                     ON files(source_id, last_seen_run, tombstoned);
                 """
             )
-            await self._migrate_schema(db)
+            version_row = await (
+                await db.execute(
+                    "SELECT value FROM metadata WHERE key='schema_version'"
+                )
+            ).fetchone()
+            existing_version = int(version_row[0]) if version_row else 0
+            if existing_version > SCHEMA_VERSION:
+                raise RuntimeError("crawl manifest schema is newer than this agent")
+            sanitized = await self._migrate_schema(db, existing_version)
             await db.execute(
-                "INSERT OR REPLACE INTO metadata(key,value) VALUES('schema_version',?)",
+                """INSERT INTO metadata(key,value) VALUES('schema_version',?)
+                   ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
                 (str(SCHEMA_VERSION),),
             )
             await db.commit()
+        if sanitized:
+            vacuum_db = await aiosqlite.connect(self.path, timeout=30)
+            try:
+                checkpoint = await vacuum_db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                await checkpoint.fetchall()
+                await checkpoint.close()
+                vacuum = await vacuum_db.execute("VACUUM")
+                await vacuum.close()
+            finally:
+                await vacuum_db.close()
         _restrict(self.path, required=True)
 
-    async def _migrate_schema(self, db: aiosqlite.Connection) -> None:
+    async def _migrate_schema(
+        self, db: aiosqlite.Connection, existing_version: int
+    ) -> bool:
+        await db.execute("PRAGMA secure_delete=ON")
         additions = {
             "sources": {
                 "active_reconcile_token": "TEXT",
@@ -368,6 +425,100 @@ class CrawlManifest:
                     await db.execute(
                         f"ALTER TABLE {table} ADD COLUMN {name} {definition}"
                     )
+        job_columns = {
+            row[1]
+            for row in await (await db.execute("PRAGMA table_info(jobs)")).fetchall()
+        }
+        if existing_version >= SCHEMA_VERSION or "payload_json" not in job_columns:
+            return False
+
+        # Version 1 allowed extracted payload JSON in the durable queue. Rebuild
+        # the table instead of copying those rows, then regenerate safe,
+        # generation-qualified work from the authoritative files table.
+        await db.executescript(
+            """
+            BEGIN IMMEDIATE;
+            UPDATE files SET mutation_generation=CASE
+                   WHEN tombstoned=1 THEN max(mutation_generation,2)
+                   ELSE max(mutation_generation,1) END;
+            DROP TABLE IF EXISTS jobs_v2;
+            CREATE TABLE jobs_v2 (
+                job_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                file_id TEXT,
+                path TEXT,
+                content_version TEXT,
+                mutation_generation INTEGER,
+                dedupe_key TEXT NOT NULL UNIQUE,
+                priority INTEGER NOT NULL DEFAULT 0,
+                state TEXT NOT NULL DEFAULT 'ready',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                available_at REAL NOT NULL DEFAULT 0,
+                lease_until REAL,
+                lease_token TEXT,
+                last_error TEXT,
+                artifact_ref TEXT,
+                artifact_hash TEXT,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                FOREIGN KEY(source_id) REFERENCES sources(source_id)
+            );
+            INSERT INTO jobs_v2(
+                kind,source_id,file_id,path,content_version,mutation_generation,
+                dedupe_key,priority,state,attempts,available_at,last_error,
+                created_at,updated_at
+            )
+            SELECT kind,source_id,NULL,path,NULL,NULL,
+                   'migrated-control|' || job_id,priority,
+                   CASE WHEN state='dead' THEN 'dead' ELSE 'ready' END,
+                   attempts,0,
+                   CASE WHEN last_error IS NULL THEN NULL ELSE 'migrated_error' END,
+                   created_at,updated_at
+              FROM jobs
+             WHERE kind IN ('discover','stat') AND state<>'done';
+            INSERT OR IGNORE INTO jobs_v2(
+                kind,source_id,file_id,path,content_version,mutation_generation,
+                dedupe_key,priority,state,available_at,created_at,updated_at
+            )
+            SELECT 'extract',source_id,file_id,path,content_version,
+                   mutation_generation,
+                   'migrated-extract|' || source_id || '|' || file_id || '|' ||
+                       mutation_generation,
+                   0,'ready',0,updated_at,updated_at
+              FROM files WHERE tombstoned=0;
+            INSERT OR IGNORE INTO jobs_v2(
+                kind,source_id,file_id,path,content_version,mutation_generation,
+                dedupe_key,priority,state,available_at,created_at,updated_at
+            )
+            SELECT 'delete',source_id,file_id,path,content_version,
+                   mutation_generation,
+                   'migrated-delete|' || source_id || '|' || file_id || '|' ||
+                       mutation_generation,
+                   0,'ready',0,updated_at,updated_at
+              FROM files WHERE tombstoned=1;
+            INSERT OR IGNORE INTO jobs_v2(
+                kind,source_id,file_id,path,content_version,mutation_generation,
+                dedupe_key,priority,state,available_at,created_at,updated_at
+            )
+            SELECT 'acl_refresh',source_id,file_id,path,content_version,
+                   mutation_generation,
+                   'migrated-acl|' || source_id || '|' || file_id || '|' ||
+                       mutation_generation,
+                   0,'ready',0,updated_at,updated_at
+              FROM files WHERE tombstoned=0 AND acl_version IS NOT NULL;
+            DROP TABLE jobs;
+            ALTER TABLE jobs_v2 RENAME TO jobs;
+            CREATE INDEX idx_jobs_claim
+                ON jobs(state, kind, available_at, priority DESC, job_id);
+            UPDATE sources SET reconciliation_required=1,
+                active_reconcile_token=NULL,reconcile_lease_until=NULL,
+                last_error=CASE WHEN last_error IS NULL THEN NULL
+                                ELSE 'migrated_error' END;
+            COMMIT;
+            """
+        )
+        return True
 
     @asynccontextmanager
     async def _connect(self):
@@ -400,17 +551,40 @@ class CrawlManifest:
                 "read_bytes_per_second": source.read_bytes_per_second,
                 "max_pending_jobs": source.max_pending_jobs,
                 "max_file_size": source.max_file_size,
+                "case_sensitive_paths": source.case_sensitive_paths,
                 "enabled": source.enabled,
             },
             sort_keys=True,
         )
         async with self._write_lock, self._connect() as db:
-            await db.execute(
-                """INSERT INTO sources(source_id,root,config_json)
-                   VALUES(?,?,?) ON CONFLICT(source_id) DO UPDATE SET
-                   root=excluded.root, config_json=excluded.config_json""",
-                (source.source_id, source.root, config),
-            )
+            db.row_factory = aiosqlite.Row
+            await db.execute("BEGIN IMMEDIATE")
+            current = await (
+                await db.execute(
+                    "SELECT root,config_json FROM sources WHERE source_id=?",
+                    (source.source_id,),
+                )
+            ).fetchone()
+            if current is None:
+                await db.execute(
+                    "INSERT INTO sources(source_id,root,config_json) VALUES(?,?,?)",
+                    (source.source_id, source.root, config),
+                )
+            else:
+                current_config = json.loads(current["config_json"])
+                current_config.setdefault("max_file_size", DEFAULT_MAX_FILE_SIZE)
+                current_config.setdefault("case_sensitive_paths", False)
+                if current["root"] != source.root or current_config != json.loads(
+                    config
+                ):
+                    await db.rollback()
+                    raise ValueError(
+                        "source registration is immutable; use a new source_id for changes"
+                    )
+                await db.execute(
+                    "UPDATE sources SET config_json=? WHERE source_id=?",
+                    (config, source.source_id),
+                )
             await db.commit()
 
     async def begin_reconciliation(
@@ -470,7 +644,7 @@ class CrawlManifest:
             or (stat.created_ns is not None and stat.created_ns < 0)
         ):
             raise ValueError("source stat contains negative values")
-        file_id = stat.identity
+        file_id = stat.identity_for(source)
         now = time.time()
         async with self._write_lock, self._connect() as db:
             db.row_factory = aiosqlite.Row
@@ -532,6 +706,20 @@ class CrawlManifest:
             generation = 1 if current is None else int(current["mutation_generation"])
             if current is not None and changed:
                 generation += 1
+            acl_needed = (current is None and stat.acl_version is not None) or (
+                current is not None and current["acl_version"] != stat.acl_version
+            )
+            required_slots = int(changed) + int(acl_needed)
+            pending = await (
+                await db.execute(
+                    """SELECT count(*) FROM jobs WHERE source_id=?
+                       AND kind<>'discover' AND state IN ('ready','retry','leased')""",
+                    (source.source_id,),
+                )
+            ).fetchone()
+            if int(pending[0]) + required_slots > source.max_pending_jobs:
+                await db.rollback()
+                raise RuntimeError("source queue backpressure limit reached")
             await db.execute(
                 """INSERT INTO files(
                        source_id,file_id,path,stable_id,size,modified_ns,created_ns,
@@ -575,9 +763,7 @@ class CrawlManifest:
                     version,
                     generation,
                 )
-            if (current is None and stat.acl_version is not None) or (
-                current is not None and current["acl_version"] != stat.acl_version
-            ):
+            if acl_needed:
                 await self._enqueue_tx(
                     db,
                     JobKind.ACL_REFRESH,
@@ -642,7 +828,7 @@ class CrawlManifest:
                 """UPDATE sources SET reconciliation_required=1,last_error=?,
                    active_reconcile_token=NULL,reconcile_lease_until=NULL
                    WHERE source_id=? AND active_reconcile_token=?""",
-                (f"{type(error).__name__}: {error}"[:1000], source_id, run_id),
+                (stable_error_code(error), source_id, run_id),
             )
             await db.commit()
 
@@ -787,8 +973,33 @@ class CrawlManifest:
                    updated_at=? WHERE job_id=? AND state='leased' AND lease_token=?""",
                 (time.time(), job.job_id, job.lease_token),
             )
+            if cursor.rowcount == 1:
+                await self._compact_completed_tx(
+                    db, job.source_id, retain=COMPLETED_JOB_RETENTION
+                )
             await db.commit()
             return cursor.rowcount == 1
+
+    async def compact_completed(self, source_id: str, *, retain: int = 10_000) -> int:
+        if retain < 0:
+            raise ValueError("completed-job retention cannot be negative")
+        async with self._write_lock, self._connect() as db:
+            deleted = await self._compact_completed_tx(db, source_id, retain=retain)
+            await db.commit()
+            return deleted
+
+    async def _compact_completed_tx(
+        self, db: aiosqlite.Connection, source_id: str, *, retain: int
+    ) -> int:
+        cursor = await db.execute(
+            """DELETE FROM jobs WHERE source_id=? AND state='done'
+               AND job_id NOT IN (
+                   SELECT job_id FROM jobs WHERE source_id=? AND state='done'
+                   ORDER BY job_id DESC LIMIT ?
+               )""",
+            (source_id, source_id, retain),
+        )
+        return cursor.rowcount
 
     async def renew(self, job: LeasedJob, *, lease_seconds: float = 60) -> bool:
         """Extend only the exact lease generation held by ``job``."""
@@ -834,7 +1045,7 @@ class CrawlManifest:
                 (
                     state.value,
                     time.time() + delay,
-                    f"{type(error).__name__}: {error}"[:1000],
+                    stable_error_code(error),
                     time.time(),
                     job.job_id,
                     job.lease_token,
@@ -906,6 +1117,19 @@ class CrawlManifest:
                 """UPDATE sources SET cursor=?,reconciliation_required=max(
                    reconciliation_required,?) WHERE source_id=?""",
                 (cursor, int(require_reconcile), source_id),
+            )
+            await db.commit()
+
+    async def require_reconciliation(
+        self, source_id: str, *, error_code: str | None = None
+    ) -> None:
+        if error_code is not None and error_code not in STABLE_ERROR_CODES:
+            raise ValueError("unsupported stable error code")
+        async with self._write_lock, self._connect() as db:
+            await db.execute(
+                """UPDATE sources SET reconciliation_required=1,
+                   last_error=COALESCE(?,last_error) WHERE source_id=?""",
+                (error_code, source_id),
             )
             await db.commit()
 
@@ -992,7 +1216,7 @@ class CrawlManifest:
             row = await (
                 await db.execute(
                     """SELECT count(*) FROM jobs WHERE source_id=?
-                       AND state IN ('ready','retry','leased')""",
+                       AND kind<>'discover' AND state IN ('ready','retry','leased')""",
                     (source_id,),
                 )
             ).fetchone()
@@ -1020,9 +1244,27 @@ class ReadBudget:
         self.bytes_per_second = max(1, source.read_bytes_per_second)
         self.paused = asyncio.Event()
         self.paused.set()
+        self.durably_paused = False
         self.interactive_waiters = 0
         self._rate_lock = asyncio.Lock()
         self._next_read_at = 0.0
+
+    def set_durable_paused(self, paused: bool) -> None:
+        self.durably_paused = paused
+        self._sync_runnable()
+
+    def set_interactive(self, active: bool) -> None:
+        if active:
+            self.interactive_waiters += 1
+        else:
+            self.interactive_waiters = max(0, self.interactive_waiters - 1)
+        self._sync_runnable()
+
+    def _sync_runnable(self) -> None:
+        if self.durably_paused or self.interactive_waiters:
+            self.paused.clear()
+        else:
+            self.paused.set()
 
     async def throttle(self, byte_count: int) -> None:
         # Serialize reservations, not reads: workers may use multiple handles,
@@ -1074,7 +1316,7 @@ class CrawlPipeline:
         budget = ReadBudget(source)
         state = await self.manifest.source_state(source.source_id)
         if state["paused"]:
-            budget.paused.clear()
+            budget.set_durable_paused(True)
         self.budgets[source.source_id] = budget
         self._reconcile_locks[source.source_id] = asyncio.Lock()
 
@@ -1100,13 +1342,12 @@ class CrawlPipeline:
             async with self.budgets[source_id].handles:
                 async for stat in self.source_adapter.discover(source):
                     await self.budgets[source_id].paused.wait()
-                    if (
-                        await self.manifest.pending_jobs(source_id)
-                        >= source.max_pending_jobs
-                    ):
-                        self.metrics.increment("reconciliations_backpressured")
-                        raise RuntimeError("source queue backpressure limit reached")
-                    await self.manifest.observe(source, stat, run_id)
+                    try:
+                        await self.manifest.observe(source, stat, run_id)
+                    except RuntimeError as exc:
+                        if str(exc) == "source queue backpressure limit reached":
+                            self.metrics.increment("reconciliations_backpressured")
+                        raise
                     observed += 1
             deleted = await self.manifest.finish_reconciliation(source_id, run_id)
             self.metrics.increment("reconciliations_completed")
@@ -1283,7 +1524,7 @@ class CrawlPipeline:
             if before is None:
                 raise SupersededJob("source identity changed before read")
             before = replace(before, path=canonical_relative_path(source, before.path))
-            if before.identity != job.file_id:
+            if before.identity_for(source) != job.file_id:
                 raise SupersededJob("source identity changed before read")
             if (
                 row is None
@@ -1291,6 +1532,8 @@ class CrawlPipeline:
                 or row["content_version"] != job.content_version
                 or int(row["mutation_generation"]) != int(job.mutation_generation or 0)
                 or row["stat_version"] != before.stat_version
+                or row["path"] != before.path
+                or row["acl_version"] != before.acl_version
             ):
                 await self.manifest.observe(source, before, None)
                 raise SupersededJob("source changed before extraction began")
@@ -1317,10 +1560,17 @@ class CrawlPipeline:
         if (
             after is None
             or before.stat_version != after.stat_version
-            or before.identity != after.identity
+            or before.identity_for(source) != after.identity_for(source)
+            or before.path != after.path
+            or before.acl_version != after.acl_version
         ):
             # Pre/post-read stabilization: do not hand a torn read to extraction.
-            await self.manifest.observe(source, after or before, None)
+            if after is None:
+                await self.manifest.require_reconciliation(
+                    job.source_id, error_code="source_io"
+                )
+            else:
+                await self.manifest.observe(source, after, None)
             raise SupersededJob("source changed while being read")
         fingerprint = hashlib.sha256(content).hexdigest()
         if not await self.manifest.set_fingerprint(
@@ -1350,12 +1600,9 @@ class CrawlPipeline:
             or extracted.mutation_generation != job.mutation_generation
         ):
             raise RuntimeError("extractor returned a mismatched document generation")
-        if (
-            not extracted.artifact_ref
-            or not extracted.artifact_hash
-            or len(extracted.artifact_ref.encode()) > MAX_ARTIFACT_REFERENCE_BYTES
-            or len(extracted.artifact_hash.encode()) > 256
-        ):
+        if not ARTIFACT_REFERENCE_RE.fullmatch(
+            extracted.artifact_ref
+        ) or not DIGEST_RE.fullmatch(extracted.artifact_hash):
             raise ValueError("extractor returned an invalid artifact reference")
         await self._require_job_lease(job)
         await self.manifest.enqueue(
@@ -1397,23 +1644,16 @@ class CrawlPipeline:
         )
 
     async def pause(self, source_id: str) -> None:
-        self.budgets[source_id].paused.clear()
+        self.budgets[source_id].set_durable_paused(True)
         await self.manifest.set_paused(source_id, True)
 
     async def resume(self, source_id: str) -> None:
-        self.budgets[source_id].paused.set()
+        self.budgets[source_id].set_durable_paused(False)
         await self.manifest.set_paused(source_id, False)
 
     async def set_interactive_priority(self, source_id: str, active: bool) -> None:
         """Yield crawl reads while latency-sensitive local search is active."""
-        budget = self.budgets[source_id]
-        if active:
-            budget.interactive_waiters += 1
-            budget.paused.clear()
-        else:
-            budget.interactive_waiters = max(0, budget.interactive_waiters - 1)
-            if budget.interactive_waiters == 0:
-                budget.paused.set()
+        self.budgets[source_id].set_interactive(active)
 
     async def due_sources(self, now) -> list[str]:
         """Return enabled source roots whose individual schedule is due."""
