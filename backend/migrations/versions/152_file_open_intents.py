@@ -5,8 +5,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 
 
-revision = "149_file_open_intents"
-down_revision = "148_configurable_workflows"
+revision = "152_file_open_intents"
+down_revision = "150_studio_render_jobs"
 branch_labels = None
 depends_on = None
 
