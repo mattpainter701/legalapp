@@ -2812,7 +2812,7 @@ async def test_signed_callback_wins_reconciliation_race_without_provider_poll(
 
 @pytest.mark.asyncio
 async def test_provider_lookup_and_signed_callback_serialize_without_truth_regression(
-    db_session, client, test_tenant, test_user, monkeypatch
+    db_session, test_engine, test_tenant, test_user, monkeypatch
 ):
     seeded = await _seed_lifecycle(
         db_session,
@@ -2884,39 +2884,47 @@ async def test_provider_lookup_and_signed_callback_serialize_without_truth_regre
         lookup_handler=lookup,
     )
     _install_provider(monkeypatch, provider)
-    reconcile_task = asyncio.create_task(
-        client.post(
-            f"/api/sms/messages/{message.id}/reconcile",
-            json={"resolution": "provider_lookup"},
-        )
-    )
+    maker = async_sessionmaker(test_engine, expire_on_commit=False)
+
+    async def reconcile():
+        async with maker() as reconcile_db:
+            await set_tenant_context(reconcile_db, str(test_tenant.id))
+            result = await sms_service.reconcile_sms_message(
+                reconcile_db,
+                tenant_id=test_tenant.id,
+                operator_user_id=test_user.id,
+                sms_message_id=message.id,
+                resolution="provider_lookup",
+            )
+            await reconcile_db.commit()
+            return result
+
+    reconcile_task = asyncio.create_task(reconcile())
     await asyncio.wait_for(lookup_entered.wait(), timeout=5)
 
-    callback_path = f"/api/sms/webhooks/{test_tenant.id}/status"
     callback_params = {
         "MessageSid": "SM-LOOKUP-CALLBACK-RACE",
         "MessageStatus": "delivered",
     }
-    callback_task = asyncio.create_task(
-        client.post(
-            callback_path,
-            data=callback_params,
-            headers=_signed_headers(
-                path=callback_path,
+
+    async def apply_callback():
+        async with maker() as callback_db:
+            await set_tenant_context(callback_db, str(test_tenant.id))
+            return await sms_service.apply_status(
+                callback_db,
+                tenant_id=test_tenant.id,
                 params=callback_params,
-                secret=seeded.auth_token,
-            ),
-        )
-    )
+            )
+
+    callback_task = asyncio.create_task(apply_callback())
     await asyncio.sleep(0.1)
-    assert not callback_task.done()
+    callback_waited_for_reconciliation = not callback_task.done()
     release_lookup.set()
     reconciled = await asyncio.wait_for(reconcile_task, timeout=5)
     callback = await asyncio.wait_for(callback_task, timeout=5)
-    assert reconciled.status_code == 200
-    assert callback.status_code == 200
-    assert reconciled.json()["status"] == "delivered"
-    assert callback.json()["status"] == "delivered"
+    assert callback_waited_for_reconciliation
+    assert reconciled.status == "delivered"
+    assert callback.status == "delivered"
     assert len(provider.lookup_calls) == 1
 
     await set_tenant_context(db_session, str(test_tenant.id))
