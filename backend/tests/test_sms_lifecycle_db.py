@@ -160,6 +160,7 @@ async def _seed_lifecycle(
     auth_token: str | None = None,
     categories: list[str] | None = None,
     reuse_provider_config: bool = False,
+    from_number: str | None = None,
 ):
     await set_tenant_context(db, str(tenant.id))
     # Production tenant creation always seeds and assigns canonical RBAC roles.
@@ -236,7 +237,8 @@ async def _seed_lifecycle(
             provider="twilio",
             account_sid=f"AC{suffix}",
             encrypted_auth_token=encrypt_token(provider_token),
-            messaging_service_sid=f"MG{suffix}",
+            messaging_service_sid=None if from_number else f"MG{suffix}",
+            from_number=from_number,
             sender_ready=True,
             is_active=True,
             compliance_snapshot={
@@ -2560,17 +2562,17 @@ async def test_reconciliation_requires_exact_provider_truth_and_is_audited(
     db_session, client, test_tenant, test_user, monkeypatch
 ):
     seeded = await _seed_lifecycle(
-        db_session, tenant=test_tenant, user=test_user, suffix="reconcile-truth"
+        db_session,
+        tenant=test_tenant,
+        user=test_user,
+        suffix="reconcile-truth",
+        from_number="+15550001111",
     )
     tenant_id = test_tenant.id
     user_id = test_user.id
     contact_id = seeded.contact.id
     contact_phone = seeded.contact.phone
     matter_id = seeded.matter.id
-    provider_config = seeded.config
-    provider_config.messaging_service_sid = None
-    provider_config.from_number = "+15550001111"
-    await db_session.commit()
 
     async def timeout(**_kwargs):
         raise TimeoutError("submission response lost")
@@ -2817,10 +2819,8 @@ async def test_provider_lookup_and_signed_callback_serialize_without_truth_regre
         tenant=test_tenant,
         user=test_user,
         suffix="lookup-callback-race",
+        from_number="+15550001111",
     )
-    seeded.config.messaging_service_sid = None
-    seeded.config.from_number = "+15550001111"
-    await db_session.commit()
 
     async def accepted(**_kwargs):
         return _Response(
