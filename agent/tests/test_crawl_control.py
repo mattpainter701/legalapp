@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import sqlite3
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
@@ -1046,6 +1047,41 @@ async def test_repeated_path_reuse_uses_collision_safe_retired_paths(tmp_path):
     assert len(set(paths)) == 3
     assert paths[-1] == "same.txt"
     assert all(path.startswith(".crawl-retired/") for path in paths[:-1])
+
+
+@pytest.mark.asyncio
+async def test_real_source_path_cannot_collide_with_retired_identity(tmp_path):
+    _, manifest, _, _, _, source = await setup(tmp_path, {})
+    old = FileStat("same.txt", 1, 1, stable_id="old")
+    await manifest.observe(source, old, None)
+    replacement = FileStat("same.txt", 1, 2, stable_id="replacement")
+    await manifest.observe(source, replacement, None)
+    retired = f".crawl-retired/{hashlib.sha256(old.identity.encode()).hexdigest()}"
+    provider_file = FileStat(retired, 1, 3, stable_id="provider-file")
+    await manifest.observe(source, provider_file, None)
+    assert (await manifest.file("share-a", provider_file.identity))["path"] == retired
+    assert (await manifest.file("share-a", old.identity))["path"] == f"{retired}-1"
+
+
+@pytest.mark.asyncio
+async def test_targeted_observation_backpressure_persists_recovery_signal(tmp_path):
+    old = FileStat("same.txt", 1, 1, stable_id="old")
+    pipeline, manifest, _, _, _, source = await setup(
+        tmp_path, {old.path: (old, b"x")}, max_pending_jobs=1
+    )
+    await pipeline.reconcile("share-a")
+    assert await pipeline.process_one(JobKind.EXTRACT)
+    assert await pipeline.process_one(JobKind.INDEX)
+    assert not (await manifest.source_state("share-a"))["reconciliation_required"]
+    await manifest.enqueue(JobKind.STAT, "share-a", path="filler.txt")
+
+    replacement = FileStat("same.txt", 1, 2, stable_id="replacement")
+    with pytest.raises(RuntimeError, match="backpressure"):
+        await manifest.observe(source, replacement, None)
+    state = await manifest.source_state("share-a")
+    assert state["reconciliation_required"]
+    assert state["reconciliation_signal_generation"] == 1
+    assert await manifest.file("share-a", replacement.identity) is None
 
 
 @pytest.mark.asyncio

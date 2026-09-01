@@ -790,6 +790,9 @@ class CrawlManifest:
                 while True:
                     suffix = "" if ordinal == 0 else f"-{ordinal}"
                     retired_path = f".crawl-retired/{digest}{suffix}"
+                    if retired_path == stat.path:
+                        ordinal += 1
+                        continue
                     collision = await (
                         await db.execute(
                             """SELECT 1 FROM files WHERE source_id=? AND path=?
@@ -839,6 +842,15 @@ class CrawlManifest:
             ).fetchone()
             if int(pending[0]) + required_slots > source.max_pending_jobs:
                 await db.rollback()
+                if run_id is None:
+                    await db.execute(
+                        """UPDATE sources SET reconciliation_required=1,
+                           reconciliation_signal_generation=
+                               reconciliation_signal_generation+1
+                           WHERE source_id=?""",
+                        (source.source_id,),
+                    )
+                    await db.commit()
                 raise RuntimeError("source queue backpressure limit reached")
             await db.execute(
                 """INSERT INTO files(
