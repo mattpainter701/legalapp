@@ -4,9 +4,10 @@ import asyncio
 import hashlib
 import uuid
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
 
 from app.routers.studio_render import (
@@ -120,6 +121,9 @@ class _FakeService:
             sha256=hashlib.sha256(content).hexdigest(),
             media_type="application/pdf",
         )
+
+    async def artifact_result(self, artifact_id):
+        return await self.status(uuid.uuid4())
 
 
 async def _transaction(operation):
@@ -347,3 +351,235 @@ def test_route_context_rejects_request_paths_and_non_https_origins():
             backend_url="http://configured.example",
             capabilities=_context(_FakeService(), uuid.uuid4()).capabilities,
         )
+
+
+def _fake_user():
+    return SimpleNamespace(id=uuid.uuid4(), tenant_id=uuid.uuid4())
+
+
+@pytest.mark.asyncio
+async def test_unavailable_runtime_returns_public_error_after_auth():
+    from app.routers.studio_render import _require_studio_user
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[_require_studio_user] = _fake_user
+    app.state.studio_render_object_store = None
+    app.state.studio_render_manifests = None
+    app.state.studio_render_capabilities = None
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="https://test.invalid"
+    ) as client:
+        response = await client.get("/api/template-studio/render-capabilities")
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "processor_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_route_handler_normalizes_request_validation_error():
+    service = _FakeService()
+    actor_id = uuid.uuid4()
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_studio_render_route_context] = lambda: _context(
+        service, actor_id
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="https://test.invalid"
+    ) as client:
+        response = await client.post(
+            "/api/template-studio/render-jobs",
+            headers={"Idempotency-Key": "intent-key-123"},
+            json={"not_a_studio_intent": True},
+        )
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_route_handler_normalizes_plain_http_exception():
+    service = _FakeService()
+    actor_id = uuid.uuid4()
+
+    async def raise_forbidden(*args, **kwargs):
+        raise HTTPException(status_code=403, detail="raw forbidden detail")
+
+    service.status = raise_forbidden
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_studio_render_route_context] = lambda: _context(
+        service, actor_id
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="https://test.invalid"
+    ) as client:
+        response = await client.get(
+            f"/api/template-studio/render-jobs/{uuid.uuid4()}"
+        )
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "access_denied"
+
+
+@pytest.mark.asyncio
+async def test_run_wraps_service_exceptions_in_public_errors():
+    context = _context(_FakeService(), uuid.uuid4())
+
+    async def broken():
+        raise RuntimeError("secret internal failure")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _run(context, broken)
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail["code"] == "processor_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_artifact_result_route_rejects_missing_result_url():
+    service = _FakeService()
+    actor_id = uuid.uuid4()
+
+    async def missing_result(*args, **kwargs):
+        now = datetime.now(timezone.utc)
+        options = StudioRenderOptions()
+        request_sha256 = "d" * 64
+        return StudioRenderJobStatus(
+            job_id=uuid.uuid4(),
+            status_url="/api/template-studio/render-jobs/missing",
+            kind="studio_test_render",
+            state="completed",
+            progress=100,
+            attempts=1,
+            max_attempts=3,
+            created_at=now,
+            updated_at=now,
+            completed_at=now,
+            draft_id=uuid.uuid4(),
+            rendered_revision=3,
+            identity_sha256="b" * 64,
+            snapshot_id=uuid.uuid4(),
+            snapshot_content_sha256="c" * 64,
+            source=StudioRenderSourceContract(
+                artifact_id=uuid.uuid4(),
+                sha256="a" * 64,
+                media_type="text/markdown",
+                format="markdown",
+            ),
+            render_options=options,
+            render_options_sha256=options.sha256,
+            request_sha256=request_sha256,
+            effective_request_sha256=canonical_effective_render_request_hash(
+                request_sha256=request_sha256,
+                input_binding_sha256=None,
+                input_binding_version=None,
+            ),
+            renderer_manifest=service.manifest,
+            runtime_manifest_sha256=service.manifest.sha256,
+            job_expires_at=now + timedelta(hours=1),
+            artifact_id=uuid.uuid4(),
+            artifact_availability="available",
+            artifact_metadata_availability="available",
+            adoption_outcome="current_evidence",
+            adopted_as_preferred_evidence=False,
+            is_preferred_evidence=False,
+            retention_class="review",
+            content_expires_at=now + timedelta(hours=1),
+            metadata_expires_at=now + timedelta(days=30),
+        )
+
+    service.artifact_result = missing_result
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_studio_render_route_context] = lambda: _context(
+        service, actor_id
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="https://test.invalid"
+    ) as client:
+        response = await client.get(
+            f"/api/template-studio/render-artifacts/{uuid.uuid4()}"
+        )
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "processor_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_enqueue_rejects_client_supplied_input_binding():
+    service = _FakeService()
+    actor_id = uuid.uuid4()
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_studio_render_route_context] = lambda: _context(
+        service, actor_id
+    )
+    intent = _intent()
+    intent["input_binding_id"] = str(uuid.uuid4())
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="https://test.invalid"
+    ) as client:
+        response = await client.post(
+            "/api/template-studio/render-jobs",
+            headers={"Idempotency-Key": "intent-key-123"},
+            json=intent,
+        )
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_request"
+
+
+
+def test_route_context_rejects_invalid_download_bound():
+    manifest = _context(_FakeService(), uuid.uuid4()).capabilities
+    with pytest.raises(ValueError, match="download bound"):
+        StudioRenderRouteContext(
+            service=_FakeService(),
+            actor_user_id=uuid.uuid4(),
+            audit=_audit,
+            transaction=_transaction,
+            object_store=object(),
+            backend_url="https://configured.example",
+            capabilities=manifest,
+            max_download_bytes=0,
+        )
+
+
+@pytest.mark.parametrize(
+    "resource",
+    [
+        "https://example.invalid/api/resource",
+        "/api/template-studio/../private",
+        "/api/template-studio//render-jobs",
+    ],
+)
+def test_route_context_rejects_non_canonical_resource_paths(resource):
+    context = _context(_FakeService(), uuid.uuid4())
+    with pytest.raises(ValueError, match="resource path is invalid"):
+        context.absolute_url(resource)
+
+
+@pytest.mark.asyncio
+async def test_context_creation_failure_returns_public_error(monkeypatch):
+    from app.routers.studio_render import _require_studio_user
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[_require_studio_user] = _fake_user
+    app.state.studio_render_object_store = _RouteObjectStore(fresh=True)
+    app.state.studio_render_manifests = {}
+    app.state.studio_render_capabilities = _context(
+        _FakeService(), uuid.uuid4()
+    ).capabilities
+
+    class _BrokenService:
+        pass
+
+    def _broken_service(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        "app.routers.studio_render.StudioRenderJobService", _broken_service
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="https://test.invalid"
+    ) as client:
+        response = await client.get("/api/template-studio/render-capabilities")
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "processor_unavailable"
