@@ -13,6 +13,7 @@ from app.services.studio_artifact_retention import (
     StudioArtifactRetentionService,
     StudioCleanupCandidate,
     StudioDurableJobCleanupCandidate,
+    StudioRenderMaintenance,
     bounded_durable_job_cleanup,
     bounded_cleanup_candidates,
     cleanup_decision,
@@ -22,6 +23,17 @@ from app.services.studio_artifact_retention import (
 from app.services.studio_object_storage import LocalStudioObjectStore
 
 pytestmark = pytest.mark.asyncio
+
+
+async def test_maintenance_accepts_the_configured_tenant_scan_bound():
+    maintenance = StudioRenderMaintenance(
+        object(), object_store=object(), tenant_batch_size=500
+    )
+    assert maintenance.tenant_batch_size == 500
+    with pytest.raises(ValueError, match="tenant batch"):
+        StudioRenderMaintenance(
+            object(), object_store=object(), tenant_batch_size=501
+        )
 
 
 def _candidate(now, **updates):

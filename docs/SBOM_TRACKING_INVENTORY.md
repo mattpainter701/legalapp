@@ -163,6 +163,8 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |legalapp-litellm:${APP_COMMIT:-dev}|docker-compose.yml|44|no|
 |legalapp-litellm:${APP_COMMIT:-dev}|docker-compose.yml|56|no|
 |legalapp-litellm:${APP_COMMIT:-dev}|docker-compose.yml|72|no|
+|legalapp-backend:${APP_COMMIT:-dev}|docker-compose.yml|117|no|
+|legalapp-backend:${APP_COMMIT:-dev}|docker-compose.yml|166|no|
 |pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb|docker-compose.courtlistener-mcp.yml|3|yes|
 |pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb|docker-compose.local.yml|27|yes|
 |pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb|docker-compose.local.yml|44|yes|
@@ -172,6 +174,8 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |legalapp-litellm:${APP_COMMIT:-dev}|docker-compose.hypervisor.yml|53|no|
 |legalapp-litellm:${APP_COMMIT:-dev}|docker-compose.hypervisor.yml|65|no|
 |legalapp-litellm:${APP_COMMIT:-dev}|docker-compose.hypervisor.yml|81|no|
+|legalapp-backend:${APP_COMMIT:-dev}|docker-compose.hypervisor.yml|129|no|
+|legalapp-backend:${APP_COMMIT:-dev}|docker-compose.hypervisor.yml|220|no|
 |pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb|docker-compose.override.yml|24|yes|
 |pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb|docker-compose.override.yml|33|yes|
 

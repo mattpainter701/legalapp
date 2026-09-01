@@ -1428,7 +1428,8 @@ def test_skynet_deploy_recreates_litellm_and_bounds_litellm_diagnostics() -> Non
     deploy = (ROOT / "scripts" / "deploy_skynet_runner.sh").read_text(encoding="utf-8")
 
     assert "up -d --build --force-recreate" in deploy
-    assert "litellm backend scheduler frontend office-addin nginx" in deploy
+    assert 'litellm backend scheduler "${studio_services[@]}"' in deploy
+    assert "frontend office-addin nginx" in deploy
     assert '"${compose[@]}" ps -q litellm' in deploy
     assert '"$litellm_health" == healthy' in deploy
     assert "logs --tail=120 litellm-migrator litellm-schema-migrator litellm" in deploy
@@ -2007,9 +2008,11 @@ def test_production_guards_cover_litellm_data_and_schema() -> None:
     )
     assert data_guard.count(tenant_registered_agent_filter) == 2
     assert "prisma migrate diff --exit-code" in production_check
-    assert "for service in postgres redis litellm-postgres litellm backend" in (
-        production_check
+    assert (
+        "checked_services=(postgres redis litellm-postgres litellm backend"
+        in production_check
     )
+    assert 'for service in "${checked_services[@]}"' in production_check
     assert "LITELLM_BACKUP_FILE" in backup
     assert "SELECT pg_export_snapshot();" in backup
     assert "SNAPSHOT_EXPORT_TIMEOUT_SECONDS:=30" in backup

@@ -34,7 +34,6 @@ StudioArtifactAvailability = Literal["available", "expired"]
 StudioArtifactMetadataAvailability = Literal["available", "expired"]
 StudioJobFailureCode = Literal[
     "cancelled",
-    "download_limit_exceeded",
     "expired",
     "hostile_input",
     "input_too_large",

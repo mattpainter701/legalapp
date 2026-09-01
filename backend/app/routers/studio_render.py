@@ -135,6 +135,7 @@ async def get_studio_render_route_context(
             max_input_binding_bytes=(
                 settings.TEMPLATE_STUDIO_RENDER_MAX_INPUT_BINDING_BYTES
             ),
+            max_download_bytes=settings.TEMPLATE_STUDIO_RENDER_MAX_DOWNLOAD_BYTES,
             retained_artifact_limit=(
                 settings.TEMPLATE_STUDIO_RENDER_RETAINED_ARTIFACT_LIMIT
             ),

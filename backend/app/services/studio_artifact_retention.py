@@ -935,7 +935,7 @@ class StudioRenderMaintenance:
         artifact_ttl_seconds: int = 86_400,
         metadata_ttl_seconds: int = 2_592_000,
     ) -> None:
-        if not 1 <= tenant_batch_size <= 100:
+        if not 1 <= tenant_batch_size <= 500:
             raise ValueError("maintenance tenant batch is invalid")
         if not 1 <= item_batch_size <= 100:
             raise ValueError("maintenance item batch is invalid")

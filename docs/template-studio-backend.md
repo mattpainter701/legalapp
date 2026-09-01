@@ -3,11 +3,12 @@
 ## Release state and ownership
 
 Revision `147_studio_drafts` implements the server-side draft and snapshot
-foundation. It does not expose a customer-ready Studio experience and does not
-add Workspace MCP tools. `DocumentTemplate` remains the published compatibility
-record used by existing render, generation, and intake routes. Phase 1 owns the
-Studio frontend. Phase 2 owns the canonical draft, field, placement, snapshot,
-revision, identity, and source-reference semantics documented here.
+foundation. Revision `150_studio_render_jobs` adds the Phase 3 durable render
+job, artifact, retention, and isolated-worker foundation. It does not add
+Workspace MCP tools or Phase 5 DOCX rendering fidelity. `DocumentTemplate`
+remains the published compatibility record used by existing render, generation,
+and intake routes. Phase 1 owns the Studio frontend. Phase 2 owns canonical
+draft/source semantics; Phase 3 owns orchestration and artifact contracts.
 
 All Studio routes use the existing `manage_documents` capability and tenant
 context. Every Studio table has `ENABLE ROW LEVEL SECURITY`, `FORCE ROW LEVEL
@@ -17,9 +18,10 @@ rejected. The database permits deletion only for an authoritatively verified,
 expired disposable-demo purge or for the bounded source-orphan cleanup seam.
 The demo trigger verifies the tenant, exact demo session, expiry, inactive and
 purging state, and non-fixture provenance from database rows; caller-set session
-variables alone grant no authority. Generic retention deletion is deferred until
-Phase 3 defines expiry and legal-hold authorization. These rows are append-only
-until an authorized purge, not claimed to be legally permanent. Durable Studio JSON rejects
+variables alone grant no authority. Phase 3 artifact retention uses explicit
+expiry, legal-hold, preferred-evidence, and current-evidence gates. Phase 2
+source and snapshot rows remain append-only until an authorized purge, not
+claimed to be legally permanent. Durable Studio JSON rejects
 raw variable values, document body/text, provider paths or item IDs, and
 signed/download URLs.
 
@@ -80,9 +82,10 @@ preserves historical bytes after source replacement. Cleanup, source attachment,
 and lifecycle admission share tenant transaction locks in the fixed order:
 source admission, active-draft admission when needed, then draft row. Phase 2
 wires no scheduler; Phase 3 owns the caller and long-term object-storage
-architecture. Phase 3 render jobs and Phase 4 proposals must add their own
-durable source references before those artifacts can ever become cleanup
-candidates.
+architecture. Phase 3 render jobs bind the immutable source projection,
+snapshot, revision, identity, and request digest into their private queue
+contract. Phase 4 proposals must add their own durable source references before
+those artifacts can ever become cleanup candidates.
 
 Fields have stable UUIDs independent from their editable automation keys.
 The server generates source, field, and placement UUIDs; request-local bounded
@@ -121,26 +124,80 @@ changes invalidate prior preview/approval evidence. Render output is only a
 candidate until `mark_render_evidence_if_current` re-locks the draft and proves
 that the draft is active, not cancelled, and still has the rendered revision
 and identity hash. A failed adoption rolls back the transaction so it does not
-retain a lock. This Phase 2 seam does not yet bind an actual render job or output
-artifact and is therefore not sufficient by itself to establish production
-evidence; Phase 3 must extend the transaction with those bindings. A stale or cancelled job output must remain an artifact/job
-result, never current approval evidence.
+  retain a lock. Phase 3 extends this seam with the actual tenant-owned render job
+  and artifact bindings in the same transaction. A stale or cancelled job output
+  remains an artifact/job result, never current approval evidence.
 
-Phase 3 owns render jobs, artifact output, cancellation execution, job-status
-polling, and the preview artifact lifecycle. Launches should return the existing
-202/job-status shape used by durable work. Draft archive and cancellation state
-remain owned here; Phase 3 must recheck them before launch and before evidence
-promotion. Other conservative defaults are configurable: 100 active drafts per
+Phase 3 implements render jobs, artifact output, cancellation execution,
+job-status polling, and the preview artifact lifecycle. Launches return HTTP 202
+with an opaque job UUID and tenant-safe status resource; artifact IDs appear only
+after verified materialization. Draft archive, cancellation, revision, identity,
+snapshot, and source state are rechecked before launch, worker input loading,
+lease renewal, and evidence promotion. Other conservative defaults are
+configurable: 100 active drafts per
 tenant, 100 snapshots per draft, a 30-day draft TTL reserved for future cleanup
-policy, and 24-hour idempotency retention. Apart from the caller-owned
-source-orphan seam, no automated deletion is introduced by this phase; Phase 3
-must define safe cleanup, legal-hold handling, and artifact ownership before
-using draft or idempotency TTLs.
+policy, and 24-hour idempotency retention. Render artifact and durable-job
+cleanup are bounded and recheck ownership, terminal state, expiry, legal hold,
+preferred/current evidence, and durable staged-output receipts.
 
-Phase 3 must also version/attest the source-validator contract and move repeated
-large immutable-byte parsing off latency-sensitive request paths where
-appropriate. Phase 2 deliberately revalidates synchronously rather than treating
-an earlier validation result as permanent trust.
+Phase 3 versions and attests its renderer, converter, validator, launcher,
+runtime bundle, font pack, fixed arguments, environment, and sandbox policy.
+The dedicated worker accepts only reviewed server-owned profiles, uses no shell
+or network, a minimal environment, bounded input/output/time/process resources,
+and a private workspace. Phase 2 and the worker continue to revalidate immutable
+source state rather than treating an earlier validation result as permanent
+trust.
+
+### Durable job and artifact lifecycle
+
+The public service boundary is `app.services.studio_render_jobs`; Phase 4 must
+not read `DurableJob`, `StudioRenderArtifact`, or preferred-evidence ORM rows.
+Idempotency is tenant-wide and binds both the caller key and canonical request
+hash. Queue payloads contain only tenant-owned opaque IDs, digests, bounded
+options, immutable source/snapshot identity, requested actor, and reviewed
+runtime attestations. They never contain document/test values, bytes, filesystem
+or provider paths, signed URLs, provider IDs, or exception strings.
+
+Workers claim jobs with attempt-bound lease tokens. Renewal, progress, retry,
+cancellation, staging, and adoption recheck exact ownership. Tenant demo purge
+shares a database advisory fence with claim, renewal, staging, and adoption, so
+database purge completes before the tenant CAS subtree is removed and a late
+worker cannot republish bytes. Output is classified exactly as
+`current_evidence`, `stale_output`, or `cancelled_output`. Only canonical current
+test renders can replace preferred evidence; the replacement transaction demotes
+the prior artifact to expiring review retention and flushes the new artifact ID
+before serializing the durable result.
+
+The local single-host CAS publishes hash-addressed bytes atomically, verifies
+bounded reads, and records durable staging receipts before materialization.
+Reconciliation defers retained/failing receipts and advances a bounded fair scan
+cursor so one permanent failure cannot strand later output. Artifact and job
+cleanup are bounded and require terminal ownership, expiry, no legal hold, no
+live preferred/current evidence, and no staged receipt.
+
+Worker and maintenance tenant scans share the configured batch bound (25 by
+default, at most 500) and use an in-memory keyset cursor with wraparound. A
+restart begins again at the first tenant but does not alter durable receipts or
+retention state. With `N` tenants and maintenance interval `I`, a no-restart
+full sweep completes within `ceil(N / tenant_scan_batch) * I`; operators should
+size the batch and interval so that bound remains below the shortest expiry or
+offboarding objective.
+
+Production API and worker activation is deliberately fail-closed. The Compose
+topologies define an isolated profile, shared CAS, UID-owned tmpfs workspace,
+bounded resources, and independent heartbeat healthcheck, but production
+preflight rejects activation until encrypted CAS backup plus restore rehearsal
+is part of the release gate. Database evidence must never be promoted while its
+exact bytes are absent from disaster recovery.
+
+Two operational seams remain explicit. Retention honors an existing
+`legal_hold_at` value but this phase adds no public or operator mutation endpoint;
+an audited legal-hold administration workflow is follow-up work. Disposable-demo
+purge holds the shared tenant fence and removes uploads and CAS only after all
+tenant delete statements succeed, but immediately before the database commit;
+an unexpected commit failure after filesystem deletion requires operator
+reconciliation. Production Studio activation stays disabled while the broader
+CAS backup/restore and recovery workflow is incomplete.
 
 ## REST and service boundary
 

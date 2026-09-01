@@ -722,6 +722,7 @@ class _StudioRenderJobStore:
         enqueue_rate_window: timedelta = timedelta(minutes=1),
         queued_byte_limit: int = 500 * 1024 * 1024,
         max_input_binding_bytes: int = 25 * 1024 * 1024,
+        max_download_bytes: int = 25 * 1024 * 1024,
         retained_artifact_limit: int = 500,
         retained_byte_limit: int = 10 * 1024**3,
         live_artifact_limit: int = 1_000,
@@ -739,6 +740,8 @@ class _StudioRenderJobStore:
             raise ValueError("queued_byte_limit is invalid")
         if not 1 <= max_input_binding_bytes <= 100 * 1024 * 1024:
             raise ValueError("max_input_binding_bytes is invalid")
+        if not 1 <= max_download_bytes <= 100 * 1024 * 1024:
+            raise ValueError("max_download_bytes is invalid")
         if not 1 <= retained_artifact_limit <= 100_000:
             raise ValueError("retained_artifact_limit is invalid")
         if not 1 <= retained_byte_limit <= 10 * 1024**4:
@@ -781,6 +784,7 @@ class _StudioRenderJobStore:
         self.enqueue_rate_window = enqueue_rate_window
         self.queued_byte_limit = queued_byte_limit
         self.max_input_binding_bytes = max_input_binding_bytes
+        self.max_download_bytes = max_download_bytes
         self.retained_artifact_limit = retained_artifact_limit
         self.retained_byte_limit = retained_byte_limit
         self.live_artifact_limit = live_artifact_limit
@@ -1070,6 +1074,12 @@ class _StudioRenderJobStore:
                 503,
                 "processor_unavailable",
                 "Studio processing is temporarily unavailable.",
+            )
+        if request.render_options.max_output_bytes > self.max_download_bytes:
+            raise StudioRenderServiceError(
+                413,
+                "output_too_large",
+                "Studio output exceeds its size limit.",
             )
         await self._bind_tenant_context()
         scope = _idempotency_scope(idempotency_key)
@@ -3214,6 +3224,7 @@ class StudioRenderJobService:
         enqueue_rate_window: timedelta = timedelta(minutes=1),
         queued_byte_limit: int = 500 * 1024 * 1024,
         max_input_binding_bytes: int = 25 * 1024 * 1024,
+        max_download_bytes: int = 25 * 1024 * 1024,
         retained_artifact_limit: int = 500,
         retained_byte_limit: int = 10 * 1024**3,
         live_artifact_limit: int = 1_000,
@@ -3232,6 +3243,7 @@ class StudioRenderJobService:
             enqueue_rate_window=enqueue_rate_window,
             queued_byte_limit=queued_byte_limit,
             max_input_binding_bytes=max_input_binding_bytes,
+            max_download_bytes=max_download_bytes,
             retained_artifact_limit=retained_artifact_limit,
             retained_byte_limit=retained_byte_limit,
             live_artifact_limit=live_artifact_limit,

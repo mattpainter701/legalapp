@@ -378,7 +378,7 @@ def test_preferred_evidence_basis_is_server_owned_and_bounded():
                 update={
                     "max_output_bytes": first.render_options.max_output_bytes + 1,
                     "max_pages": first.render_options.max_pages + 1,
-                    "purpose": "preview",
+                    "preview_purpose": "editor",
                 }
             )
         }
@@ -552,6 +552,39 @@ async def test_admission_rejects_unsupported_capability_before_database_access()
     with pytest.raises(StudioRenderServiceError) as caught:
         await service.enqueue(request, idempotency_key="unsupported-123", audit=audit)
     assert caught.value.code == "processor_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_admission_rejects_output_that_cannot_be_downloaded():
+    queued = _lease()[1].payload
+    request = StudioRenderRequest(
+        kind=queued.kind,
+        draft_id=queued.draft_id,
+        expected_revision=queued.rendered_revision,
+        identity_sha256=queued.identity_sha256,
+        snapshot_id=queued.snapshot_id,
+        content_sha256=queued.snapshot_content_sha256,
+        source=queued.source,
+        render_options=queued.render_options,
+        requested_by=queued.requested_by,
+        input_binding_id=queued.input_binding_id,
+        request_sha256=queued.request_sha256,
+    )
+    service = StudioRenderJobService(
+        object(),
+        tenant_id=uuid.uuid4(),
+        actor_user_id=queued.requested_by,
+        renderer_manifest=queued.renderer_manifest,
+        max_download_bytes=queued.render_options.max_output_bytes - 1,
+    )
+
+    with pytest.raises(StudioRenderServiceError) as caught:
+        await service.enqueue(
+            request,
+            idempotency_key="undownloadable-output",
+            audit=lambda *_args: None,
+        )
+    assert caught.value.code == "output_too_large"
 
 
 def test_adoption_geometry_coverage_rechecks_preview_and_full_document():

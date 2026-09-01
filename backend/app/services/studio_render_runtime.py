@@ -297,6 +297,7 @@ def build_studio_render_worker_loop(settings: Settings) -> StudioRenderWorkerLoo
         maintenance=StudioRenderMaintenance(
             async_session_maker,
             object_store=api_runtime.object_store,
+            tenant_batch_size=settings.TEMPLATE_STUDIO_RENDER_TENANT_SCAN_BATCH,
             artifact_ttl_seconds=(
                 settings.TEMPLATE_STUDIO_RENDER_ARTIFACT_TTL_SECONDS
             ),

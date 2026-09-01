@@ -16,6 +16,19 @@
   bulk/query operations, atomic alias rebuilds, a local authenticated query
   gateway, durable control-only SQLite state, and exact restore/recovery hooks.
   Document corpus and query execution remain on customer infrastructure.
+- **Template Studio durable render orchestration:** dedicated PostgreSQL durable
+  job kinds now provide tenant-wide request-hash idempotency, admission and
+  storage quotas, fenced leases and heartbeats, cancellation, sanitized retry
+  failures, stale-output preservation, and exact current-evidence adoption.
+  Tenant-scoped content-addressed storage verifies atomic reads/writes and keeps
+  durable staged receipts for crash reconciliation; artifact retention enforces
+  expiry, legal hold, preferred-evidence, and metadata gates. A no-shell,
+  no-network, bounded subprocess worker is independently health-checked and the
+  generic durable worker excludes Studio kinds. Migration 150 adds tenant-safe
+  composite ownership, FORCE RLS, lifecycle constraints, and preferred-evidence
+  bindings. Production activation remains fail-closed until encrypted CAS
+  backup and restore rehearsal join the deployment gate; DOCX fidelity remains
+  Phase 5 work.
 - **Configurable matter data and review-first workflow execution:** tenant
   administrators can define bounded typed matter fields in the matter workflow
   UI, with tenant-safe contact field definitions and values available as an API

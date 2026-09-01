@@ -148,6 +148,12 @@ separate licensed source integration says so.
 
 ## Canonical documentation map
 
+Template Studio's Phase 3 render-job and artifact boundary is implemented but
+does not add an MCP tool. Future Workspace MCP proposal/test-render work must use
+the public Studio render service, never the durable-job or artifact ORM, and must
+preserve the opaque job/status, immutable snapshot, tenant, actor, and sanitized
+artifact contract. See [Template Studio backend contract](../template-studio-backend.md).
+
 | Topic | Repository source | Primary audience | Future wiki destination |
 | --- | --- | --- | --- |
 | Product and automation architecture | [Matter automation and workspace MCP](../matter_automation_workspace_mcp.md) | Product, engineering, security | Overview; matter automation; document lifecycle |

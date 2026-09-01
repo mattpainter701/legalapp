@@ -1318,6 +1318,67 @@ async def test_current_and_stale_adoption_flush_exact_artifact_ids(
     assert cached.document_page_count == 1
     assert cached.geometry_manifest.sha256 == cached.geometry_manifest_sha256
 
+    replacement_request = _request(
+        foundation,
+        test_user.id,
+        options=StudioRenderOptions(preview_purpose="editor"),
+    )
+    replacement_job = await service.enqueue_test_render(
+        replacement_request,
+        idempotency_key="adopt-current-replacement",
+        audit=_noop_audit,
+    )
+    await db_session.commit()
+    replacement_lease = await service.claim(
+        replacement_job.job_id, owner="adopter-replacement"
+    )
+    replacement_output = object_store.put(
+        test_tenant.id,
+        b"replacement-verified-pdf-output",
+        media_type="application/pdf",
+    )
+    replacement_id, replacement_outcome = await service.adopt_output(
+        replacement_lease,
+        replacement_output,
+        object_store=object_store,
+        artifact_kind="test_render",
+        runtime_manifest_sha256=replacement_lease.payload.runtime_manifest_sha256,
+        artifact_ttl_seconds=3600,
+        **_geometry_kwargs(),
+    )
+    assert replacement_outcome == "current_evidence"
+    preferred = await db_session.scalar(
+        select(StudioPreferredRenderEvidence).where(
+            StudioPreferredRenderEvidence.tenant_id == test_tenant.id,
+            StudioPreferredRenderEvidence.draft_id == foundation["draft_id"],
+        )
+    )
+    current_artifact = await db_session.get(StudioRenderArtifact, artifact_id)
+    replacement_artifact = await db_session.get(
+        StudioRenderArtifact, replacement_id
+    )
+    evidence_count = await db_session.scalar(
+        select(func.count())
+        .select_from(StudioRenderArtifact)
+        .where(
+            StudioRenderArtifact.tenant_id == test_tenant.id,
+            StudioRenderArtifact.draft_id == foundation["draft_id"],
+            StudioRenderArtifact.retention_class == "evidence",
+        )
+    )
+    old_status = await service.status(current_job.job_id)
+    assert preferred.artifact_id == replacement_id
+    assert preferred.job_id == replacement_job.job_id
+    assert current_artifact.retention_class == "review"
+    assert current_artifact.content_expires_at is not None
+    assert current_artifact.metadata_expires_at is not None
+    assert replacement_artifact.retention_class == "evidence"
+    assert evidence_count == 1
+    assert old_status.state == "completed"
+    assert old_status.is_preferred_evidence is False
+    assert old_status.retention_class == "review"
+    assert old_status.content_expires_at == current_artifact.content_expires_at
+
     current_draft = await db_session.get(StudioDraft, foundation["draft_id"])
     current_draft.revision = 2
     current_draft.identity_sha256 = "d" * 64
