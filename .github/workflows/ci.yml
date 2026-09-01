@@ -308,11 +308,95 @@ jobs:
       - name: Rehearse tenant isolation, integrity, immutability, and concurrency
         run: python scripts/rehearse_configurable_workflows.py
 
-  # ─── Backend: Tests ─────────────────────────────────────────────────────────
-  test-backend:
-    name: Backend — Tests (pytest)
+  # ─── Backend: Unit tests (no database) ──────────────────────────
+  # Fast feedback, not a gate. A strict subset of the sharded suite below,
+  # selected as the files that touch neither a database fixture nor an engine,
+  # so it needs no service containers and finishes in well under a minute.
+  test-backend-unit:
+    name: Backend — Unit tests (no database)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 10
+
+    env:
+      # Database
+      DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/legalapp_test
+      RLS_TEST_DATABASE_URL: postgresql+asyncpg://clarity_app:clarity-ci-runtime-password@localhost:5432/legalapp_test
+
+      # Redis
+      REDIS_URL: redis://localhost:6379
+      TEST_REDIS_URL: redis://localhost:6379/15
+
+      # Auth
+      SECRET_KEY: ci-test-secret-key-not-for-production-use
+      TOKEN_ENCRYPTION_KEY: KxzLuxmIM2dFDWQmKJL9LVUK5ouA0c3_-4VqCMrn-jY=
+      ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 1440
+
+      # OAuth (fake keys — OAuth flows are mocked in tests)
+      MICROSOFT_CLIENT_ID: fake-ms-client-id
+      MICROSOFT_CLIENT_SECRET: fake-ms-client-secret
+      MICROSOFT_TENANT_ID: common
+      GOOGLE_CLIENT_ID: fake-google-client-id
+      GOOGLE_CLIENT_SECRET: fake-google-client-secret
+
+      # LLM APIs (fake — LLM calls are mocked in tests)
+      OPENAI_API_KEY: sk-test-00000000000000000000000000000000
+      DEEPSEEK_API_KEY: fake-deepseek-key
+      DEEPSEEK_BASE_URL: https://api.deepseek.com/v1
+      ANTHROPIC_API_KEY: sk-ant-test-00000000000000000000000000000000
+
+      # Stripe (fake — Stripe calls are mocked in tests)
+      STRIPE_SECRET_KEY: sk_test_00000000000000000000000000000000
+      STRIPE_WEBHOOK_SECRET: whsec_test_00000000000000000000000000000000
+
+      # App config
+      FRONTEND_URL: http://localhost:3000
+      UPLOAD_DIR: /tmp/legalapp_test_uploads
+      MAX_FILE_SIZE_MB: 50
+      PRIMARY_LLM: deepseek-chat
+      PREMIUM_LLM: claude-opus-4-8
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5.1 (Node.js 24)
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3 (Node.js 24)
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          pip install pytest-cov==7.1.0 diff-cover==10.5.1
+
+      - name: Run the database-free tests
+        working-directory: backend
+        run: |
+          files="$(python scripts/shard_tests.py --database-free)"
+          if [ -z "$files" ]; then
+            echo "no database-free files selected; refusing to run a bare pytest" >&2
+            exit 1
+          fi
+          pytest $files -q --tb=short
+
+  # ─── Backend: Test shards ───────────────────────────────────
+  # Split by file, balanced on collected test count weighted by database use.
+  # These are deliberately NOT the required check: `test-backend` below
+  # aggregates them and keeps the "Backend — Tests (pytest)" context that
+  # branch protection names. Renaming that context would block every merge.
+  test-backend-shard:
+    name: Backend — Tests (shard ${{ matrix.shard }} of 4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
 
     services:
       postgres:
@@ -413,11 +497,92 @@ jobs:
           GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO clarity_app;
           SQL
 
+      - name: Select this shard's test files
+        id: split
+        working-directory: backend
+        run: |
+          files="$(python scripts/shard_tests.py --shards 4 --index ${{ matrix.shard }})"
+          if [ -z "$files" ]; then
+            echo "shard produced no files; refusing to run a bare pytest" >&2
+            exit 1
+          fi
+          echo "files=$files" >> "$GITHUB_OUTPUT"
+          python scripts/shard_tests.py --shards 4 --index ${{ matrix.shard }} --summary
+
       - name: Run tests
         working-directory: backend
+        env:
+          COVERAGE_FILE: .coverage.shard${{ matrix.shard }}
         run: >-
-          pytest tests/ -v --tb=short --maxfail=1
-          --cov=app --cov-report=term --cov-report=xml:coverage.xml
+          pytest ${{ steps.split.outputs.files }} -v --tb=short --maxfail=1
+          --cov=app --cov-report=
+
+      - name: Upload this shard's coverage data
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node.js 24)
+        with:
+          name: backend-coverage-shard-${{ matrix.shard }}
+          path: backend/.coverage.shard${{ matrix.shard }}
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  # ─── Backend: Tests (aggregating gate) ──────────────────────────
+  # Keeps the exact "Backend — Tests (pytest)" name branch protection requires.
+  # Fails closed: any shard result other than `success` fails this job before
+  # coverage is considered, so a skipped or cancelled shard can never be
+  # mistaken for a pass.
+  test-backend:
+    name: Backend — Tests (pytest)
+    if: always()
+    needs: test-backend-shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Require every shard to have passed
+        env:
+          SHARD_RESULT: ${{ needs.test-backend-shard.result }}
+        run: |
+          echo "Shard result: $SHARD_RESULT"
+          if [ "$SHARD_RESULT" != "success" ]; then
+            echo "One or more backend test shards did not pass." >&2
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5.1 (Node.js 24)
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3 (Node.js 24)
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install coverage tooling
+        run: pip install pytest-cov==7.1.0 diff-cover==10.5.1
+
+      - name: Download every shard's coverage data
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1 (Node.js 24)
+        with:
+          pattern: backend-coverage-shard-*
+          path: backend/shard-coverage
+          merge-multiple: true
+
+      - name: Combine shard coverage into one report
+        working-directory: backend
+        run: |
+          mv shard-coverage/.coverage.shard* .
+          count="$(ls -1 .coverage.shard* | wc -l)"
+          if [ "$count" -ne 4 ]; then
+            echo "expected 4 shard coverage files, found $count" >&2
+            exit 1
+          fi
+          coverage combine .coverage.shard*
+          coverage xml -o coverage.xml
 
       - name: Require changed backend lines to remain tested
         working-directory: backend
@@ -791,6 +956,8 @@ jobs:
     needs:
       - tenant-data-safety
       - lint-backend
+      - test-backend-unit
+      - test-backend-shard
       - test-backend
       - search-node-opensearch-contract
       - lint-frontend
