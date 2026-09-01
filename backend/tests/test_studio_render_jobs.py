@@ -2852,7 +2852,7 @@ async def test_cancelled_staged_delete_holds_fence_until_republish_is_durable(
 
 
 async def test_production_stage_reconciler_covers_pre_adoption_and_post_commit_crashes(
-    db_session, test_tenant, test_user, tmp_path
+    db_session, test_tenant, test_user, tmp_path, monkeypatch
 ):
     foundation = await _foundation(db_session, test_tenant, test_user)
     object_store = LocalStudioObjectStore(tmp_path, max_object_bytes=4096)
@@ -2898,6 +2898,17 @@ async def test_production_stage_reconciler_covers_pre_adoption_and_post_commit_c
         ).isoformat(),
     }
     await db_session.commit()
+
+    # The first reconciliation deferred the active stage by one minute.
+    # Advance the reconciler clock past the deferral so the expired lease is
+    # reconsidered and the abandoned stage can be reclaimed.
+    real_now = await reconciler._clock_now()
+
+    async def _future_clock():
+        return real_now + timedelta(minutes=2)
+
+    monkeypatch.setattr(reconciler, "_clock_now", _future_clock)
+
     deleted = await reconciler.reconcile_batch(limit=10)
     assert [(item.action, item.reason) for item in deleted] == [
         ("deleted", "unreferenced")
