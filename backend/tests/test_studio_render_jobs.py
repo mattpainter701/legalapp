@@ -343,6 +343,10 @@ async def _foundation(db, tenant, user):
         )
     )
     await db.commit()
+    if tenant in db:
+        db.expunge(tenant)
+    if user in db:
+        db.expunge(user)
     return {
         "draft_id": draft_id,
         "snapshot_id": snapshot_id,
@@ -782,16 +786,18 @@ async def test_cross_tenant_status_cancel_and_claim_are_not_found(
 ):
     foundation = await _foundation(db_session, test_tenant, test_user)
     _, accepted = await _enqueue(db_session, test_tenant, test_user, foundation)
+    other_tenant_id = uuid.uuid4()
+    other_user_id = uuid.uuid4()
     other_tenant = Tenant(
-        id=uuid.uuid4(),
+        id=other_tenant_id,
         name="Other firm",
         domain="other-studio.test",
         billing_tier="payg",
         is_active=True,
     )
     other_user = User(
-        id=uuid.uuid4(),
-        tenant_id=other_tenant.id,
+        id=other_user_id,
+        tenant_id=other_tenant_id,
         email="studio@other.test",
         full_name="Other Studio User",
         role="admin",
@@ -803,8 +809,8 @@ async def test_cross_tenant_status_cancel_and_claim_are_not_found(
     await db_session.commit()
     other = StudioRenderJobService(
         db_session,
-        tenant_id=other_tenant.id,
-        actor_user_id=other_user.id,
+        tenant_id=other_tenant_id,
+        actor_user_id=other_user_id,
         renderer_manifest=_manifest(),
     )
     with pytest.raises(StudioRenderServiceError) as status_error:
@@ -816,7 +822,7 @@ async def test_cross_tenant_status_cancel_and_claim_are_not_found(
     assert cancel_error.value.status_code == 404
     await db_session.rollback()
     assert await StudioRenderWorkerService(
-        db_session, tenant_id=other_tenant.id
+        db_session, tenant_id=other_tenant_id
     ).claim(accepted.job_id, owner="worker-other") is None
     assert not db_session.in_transaction()
     row = await db_session.get(DurableJob, accepted.job_id)
