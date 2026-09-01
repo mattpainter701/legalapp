@@ -312,6 +312,7 @@ async def _foundation(db, tenant, user):
             created_by_user_id=user.id,
         )
     )
+    await db.flush()
     db.add(
         StudioDraft(
             id=draft_id,
@@ -327,6 +328,7 @@ async def _foundation(db, tenant, user):
             updated_by_user_id=user.id,
         )
     )
+    await db.flush()
     db.add(
         StudioDraftSnapshot(
             id=snapshot_id,
