@@ -488,6 +488,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
           : '',
       )
       setSourcePreviewKind(isImageSample(selectedFile) ? 'image' : selectedFile.type === 'application/pdf' || String(result.format || '').toLowerCase() === 'pdf' ? 'pdf' : '')
+      if (isImageSample(selectedFile)) setSourceReviewReady(true)
       if (shouldUseSuggestedTitle) setTitle(result.title || '')
     } catch (err) {
       if (analysisRequestRef.current !== requestId) return
