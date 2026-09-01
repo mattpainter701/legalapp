@@ -285,8 +285,9 @@ class AgentConfig:
             if val is not None:
                 if field_name in _INT_FIELDS:
                     val = int(val)
-                elif field_name in _BOOL_FIELDS:
-                elif field_name in {"local_index_enabled", "native_authz_enabled"}:
+                elif field_name in _BOOL_FIELDS or field_name in {
+                    "native_authz_enabled"
+                }:
                     val = val.strip().lower() not in {"0", "false", "no", "off"}
                 setattr(cfg, field_name, val)
         return cfg
