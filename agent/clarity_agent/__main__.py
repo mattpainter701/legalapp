@@ -23,6 +23,7 @@ from clarity_agent.local_index import (
     read_index_stats,
 )
 from clarity_agent.schedule import due_for_scan
+from clarity_agent.search_node import SearchNode
 from clarity_agent.smb_auth import ShareCredential, connect, session_kwargs
 from clarity_agent.smb_reader import SmbReader
 from clarity_agent.smb_scanner import SmbScanner
@@ -363,27 +364,73 @@ class ShareCache:
         return self._shares
 
 
+async def _initialize_daemon_resources(config: AgentConfig):
+    ledger = FileLedger(config.ledger_path)
+    local_index = None
+    search_node = None
+    try:
+        await ledger.init()
+        index_path, index_max_bytes, _ = _local_index_settings(config)
+        local_index = (
+            LocalSearchIndex(index_path, max_file_bytes=index_max_bytes)
+            if getattr(config, "local_index_enabled", False)
+            else None
+        )
+        if local_index:
+            await local_index.init()
+        search_node = (
+            SearchNode.from_config(config)
+            if getattr(config, "search_node_enabled", False)
+            else None
+        )
+        if search_node:
+            await search_node.start()
+        return ledger, local_index, search_node
+    except Exception:
+        closers = [ledger.close()]
+        if local_index:
+            closers.append(local_index.close())
+        if search_node:
+            closers.append(search_node.close())
+        await asyncio.gather(*closers, return_exceptions=True)
+        raise
+
+
+async def _close_daemon_resources(ledger, local_index, search_node, client=None):
+    closers = [ledger.close()]
+    if local_index:
+        closers.append(local_index.close())
+    if search_node:
+        closers.append(search_node.close())
+    if client:
+        closers.append(client.close())
+    await asyncio.gather(*closers, return_exceptions=True)
+
+
 async def run_daemon(
     config: AgentConfig, stop_event: asyncio.Event | None = None
 ) -> None:
     setup_logging(config.log_level)
     logger.info("LawHand Agent v%s starting", __version__)
 
-    ledger = FileLedger(config.ledger_path)
-    await ledger.init()
-    index_path, index_max_bytes, index_workers = _local_index_settings(config)
-    local_index = (
-        LocalSearchIndex(index_path, max_file_bytes=index_max_bytes)
-        if getattr(config, "local_index_enabled", False)
-        else None
-    )
-    if local_index:
-        await local_index.init()
+    ledger, local_index, search_node = await _initialize_daemon_resources(config)
+    _, _, index_workers = _local_index_settings(config)
+    if search_node:
+        logger.info(
+            "Production Search Node gateway listening on %s:%s",
+            search_node.gateway.host,
+            search_node.gateway.port,
+        )
 
-    client = SaaSClient(config)
-    smb_scanner = SmbScanner(config, ledger)
-    reader = SmbReader()
-    shares = ShareCache(client)
+    client = None
+    try:
+        client = SaaSClient(config)
+        smb_scanner = SmbScanner(config, ledger)
+        reader = SmbReader()
+        shares = ShareCache(client)
+    except Exception:
+        await _close_daemon_resources(ledger, local_index, search_node, client)
+        raise
     # Scan times are kept in memory: an agent that restarts re-indexes its
     # shares once, which is the same behaviour as a fresh install.
     last_scans: dict[str, datetime] = {}
@@ -436,11 +483,15 @@ async def run_daemon(
             )
 
     if local_index:
-        local_index.start(
-            fetch_for_index,
-            path_validator=validate_index_path,
-            worker_count=index_workers,
-        )
+        try:
+            local_index.start(
+                fetch_for_index,
+                path_validator=validate_index_path,
+                worker_count=index_workers,
+            )
+        except Exception:
+            await _close_daemon_resources(ledger, local_index, search_node, client)
+            raise
 
     async def update_agent(target_version: str, manifest_id: str) -> dict:
         info = await updater.check_async()
@@ -454,17 +505,21 @@ async def run_daemon(
             )
         return await updater.apply_async(info)
 
-    task_worker = TaskWorker(
-        config,
-        client,
-        reader,
-        share_provider=shares.get,
-        scan_callback=scan_one,
-        share_refresher=shares.refresh,
-        update_callback=update_agent,
-        local_search_index=local_index,
-    )
-    heartbeat = HeartbeatService(config, client)
+    try:
+        task_worker = TaskWorker(
+            config,
+            client,
+            reader,
+            share_provider=shares.get,
+            scan_callback=scan_one,
+            share_refresher=shares.refresh,
+            update_callback=update_agent,
+            local_search_index=local_index,
+        )
+        heartbeat = HeartbeatService(config, client)
+    except Exception:
+        await _close_daemon_resources(ledger, local_index, search_node, client)
+        raise
 
     stop_event = stop_event or asyncio.Event()
 
@@ -565,9 +620,7 @@ async def run_daemon(
         await asyncio.gather(*workers, stop_waiter, return_exceptions=True)
         # Keep resource cleanup in finally: an unexpected worker completion or
         # cancellation must not strand the ledger or HTTP connection pool.
-        if local_index:
-            await local_index.close()
-        await asyncio.gather(ledger.close(), client.close(), return_exceptions=True)
+        await _close_daemon_resources(ledger, local_index, search_node, client)
         logger.info("Agent shut down")
 
 

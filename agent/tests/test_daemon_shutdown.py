@@ -152,3 +152,113 @@ async def test_run_daemon_external_cancellation_cleans_workers_and_resources(
         for task in asyncio.all_tasks()
         if not task.done() and task.get_name().startswith("lawhand-")
     ]
+
+
+@pytest.mark.asyncio
+async def test_search_node_startup_failure_closes_initialized_ledger(monkeypatch):
+    _patch_daemon(monkeypatch)
+
+    class _FailingSearchNode:
+        @classmethod
+        def from_config(cls, _config):
+            raise ValueError("invalid search node")
+
+    monkeypatch.setattr(agent_main, "SearchNode", _FailingSearchNode)
+    config = _config()
+    config.search_node_enabled = True
+    config.local_index_enabled = False
+    with pytest.raises(ValueError, match="invalid search node"):
+        await agent_main.run_daemon(config)
+    assert _Ledger.instances[0].closed
+
+
+@pytest.mark.asyncio
+async def test_saas_client_construction_failure_closes_started_resources(monkeypatch):
+    _patch_daemon(monkeypatch)
+
+    class _SearchNodeInstance:
+        def __init__(self):
+            self.closed = False
+            self.gateway = SimpleNamespace(host="127.0.0.1", port=8765)
+
+        async def start(self):
+            pass
+
+        async def close(self):
+            self.closed = True
+
+    search_node = _SearchNodeInstance()
+
+    class _SearchNode:
+        @classmethod
+        def from_config(cls, _config):
+            return search_node
+
+    class _FailingClient:
+        def __init__(self, _config):
+            raise ValueError("invalid SaaS URL")
+
+    monkeypatch.setattr(agent_main, "SearchNode", _SearchNode)
+    monkeypatch.setattr(agent_main, "SaaSClient", _FailingClient)
+    config = _config()
+    config.search_node_enabled = True
+    config.local_index_enabled = False
+    with pytest.raises(ValueError, match="invalid SaaS URL"):
+        await agent_main.run_daemon(config)
+    assert _Ledger.instances[0].closed
+    assert search_node.closed
+
+
+@pytest.mark.asyncio
+async def test_cleanup_attempts_every_resource_when_one_close_fails():
+    calls = []
+
+    class _Resource:
+        def __init__(self, name, fail=False):
+            self.name = name
+            self.fail = fail
+
+        async def close(self):
+            calls.append(self.name)
+            if self.fail:
+                raise RuntimeError(f"{self.name} close failed")
+
+    await agent_main._close_daemon_resources(
+        _Resource("ledger"),
+        _Resource("local", fail=True),
+        _Resource("search"),
+        _Resource("client"),
+    )
+    assert set(calls) == {"ledger", "local", "search", "client"}
+
+
+@pytest.mark.asyncio
+async def test_startup_preserves_original_error_when_cleanup_fails(monkeypatch):
+    _patch_daemon(monkeypatch)
+
+    class _FailingCloseIndex:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def init(self):
+            pass
+
+        async def close(self):
+            raise RuntimeError("cleanup failed")
+
+    class _FailingSearchNode:
+        @classmethod
+        def from_config(cls, _config):
+            raise ValueError("original startup failure")
+
+    monkeypatch.setattr(agent_main, "LocalSearchIndex", _FailingCloseIndex)
+    monkeypatch.setattr(agent_main, "SearchNode", _FailingSearchNode)
+    config = _config()
+    config.search_node_enabled = True
+    config.local_index_enabled = True
+    config.local_index_path = "unused"
+    config.local_index_max_file_mb = 1
+    config.local_index_workers = 1
+    with pytest.raises(ValueError, match="original startup failure"):
+        await agent_main.run_daemon(config)
+    assert _Ledger.instances[0].closed

@@ -80,7 +80,10 @@ def test_release_workflow_requires_and_verifies_windows_signatures():
     assert "WINDOWS_SIGNING_ACCOUNT_NAME" in workflow
     assert "WINDOWS_SIGNING_CERTIFICATE_PROFILE_NAME" in workflow
     assert "WINDOWS_SIGNING_EXPECTED_SUBJECT" in workflow
-    assert "azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82" in workflow
+    assert (
+        "azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82"
+        in workflow
+    )
     assert "azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c" in workflow
     assert "timestamp-rfc3161: http://timestamp.acs.microsoft.com" in workflow
     assert "timestamp-digest: SHA256" in workflow
@@ -102,9 +105,9 @@ def test_release_workflow_requires_and_verifies_windows_signatures():
     assert workflow.index("Build unsigned validation installers") < workflow.index(
         "Smoke-test unsigned validation MSI overtop upgrade"
     )
-    assert workflow.index("Smoke-test unsigned validation MSI overtop upgrade") < workflow.index(
-        "Sign Windows executable"
-    )
+    assert workflow.index(
+        "Smoke-test unsigned validation MSI overtop upgrade"
+    ) < workflow.index("Sign Windows executable")
     assert workflow.index("Sign Windows executable") < workflow.index("-SkipExe")
     assert workflow.index("-SkipExe") < workflow.index("Sign Windows MSI")
     assert workflow.count("timestamp-rfc3161: http://timestamp.acs.microsoft.com") == 2
@@ -145,7 +148,10 @@ def test_windows_upgrade_smoke_is_opt_in_and_runs_after_build():
     assert "if ($currentMsi -and" in script
     assert "ExpectedSignerSubject" in script
     assert "TimeStamperCertificate" in script
-    assert "MSI did not install the expected timestamped Authenticode-signed executable" in script
+    assert (
+        "MSI did not install the expected timestamped Authenticode-signed executable"
+        in script
+    )
     assert "-ExpectedSignerSubject $env:WINDOWS_SIGNING_EXPECTED_SUBJECT" in workflow
     assert "test-upgrade.ps1 -Run" in workflow
     assert workflow.index("Build unsigned validation installers") < workflow.index(
@@ -170,6 +176,48 @@ def test_msi_grants_data_directory_to_service_identity():
         and 'User="LawHandAgent"' in text
     )
     assert '<util:PermissionEx User="[SERVICE_ACCOUNT]"' not in text
+
+
+def test_search_node_samples_ship_in_both_release_artifacts():
+    wxs = WXS.read_text(encoding="utf-8")
+    linux = (LINUX_PACKAGING / "build.sh").read_text(encoding="utf-8")
+    expected = {
+        "config.example.toml",
+        "lawhand.options",
+        "opensearch.yml",
+        "performance-analyzer.properties",
+        "search-node-operations.md",
+    }
+    for name in expected:
+        assert name in wxs
+        assert name in linux
+    assert 'Directory Id="SearchNodeSamplesFolder" Name="search-node"' in wxs
+    assert 'mkdir -p "${STAGE}/search-node"' in linux
+
+
+def test_performance_analyzer_sample_is_loopback_only():
+    sample = (
+        ROOT / "packaging" / "search-node" / "performance-analyzer.properties"
+    ).read_text(encoding="utf-8")
+    assert "webservice-bind-host = 127.0.0.1" in sample
+    assert "webservice-bind-host = 0.0.0.0" not in sample
+
+
+def test_search_node_jvm_overlay_uses_supported_tmp_placeholder():
+    overlay = (ROOT / "packaging" / "search-node" / "lawhand.options").read_text(
+        encoding="utf-8"
+    )
+    assert "${OPENSEARCH_TMPDIR}" in overlay
+    assert "${LAWHAND_OPENSEARCH_TMP}" not in overlay
+    assert not (ROOT / "packaging" / "search-node" / "jvm.options").exists()
+
+
+def test_cross_platform_search_config_has_no_linux_only_ca_default():
+    sample = (ROOT / "packaging" / "search-node" / "config.example.toml").read_text(
+        encoding="utf-8"
+    )
+    assert 'opensearch_ca_path = ""' in sample
+    assert 'opensearch_ca_path = "/etc/' not in sample
 
 
 def test_windows_acl_preserves_service_account_on_secret_files():

@@ -64,6 +64,19 @@ _ENV_MAP = {
     "local_index_enabled": "CLARITY_LOCAL_INDEX_ENABLED",
     "local_index_max_file_mb": "CLARITY_LOCAL_INDEX_MAX_FILE_MB",
     "local_index_workers": "CLARITY_LOCAL_INDEX_WORKERS",
+    "search_node_enabled": "LAWHAND_SEARCH_NODE_ENABLED",
+    "search_control_path": "LAWHAND_SEARCH_CONTROL_PATH",
+    "opensearch_url": "LAWHAND_OPENSEARCH_URL",
+    "opensearch_index_prefix": "LAWHAND_OPENSEARCH_INDEX_PREFIX",
+    "opensearch_ca_path": "LAWHAND_OPENSEARCH_CA_PATH",
+    "opensearch_username": "LAWHAND_OPENSEARCH_USERNAME",
+    "opensearch_password": "LAWHAND_OPENSEARCH_PASSWORD",
+    "search_gateway_host": "LAWHAND_SEARCH_GATEWAY_HOST",
+    "search_gateway_port": "LAWHAND_SEARCH_GATEWAY_PORT",
+    "search_gateway_token": "LAWHAND_SEARCH_GATEWAY_TOKEN",
+    "search_max_results": "LAWHAND_SEARCH_MAX_RESULTS",
+    "search_max_bulk_documents": "LAWHAND_SEARCH_MAX_BULK_DOCUMENTS",
+    "search_max_bulk_mb": "LAWHAND_SEARCH_MAX_BULK_MB",
 }
 
 _INT_FIELDS = (
@@ -72,7 +85,13 @@ _INT_FIELDS = (
     "heartbeat_interval_seconds",
     "local_index_max_file_mb",
     "local_index_workers",
+    "search_gateway_port",
+    "search_max_results",
+    "search_max_bulk_documents",
+    "search_max_bulk_mb",
 )
+
+_BOOL_FIELDS = ("local_index_enabled", "search_node_enabled")
 
 
 def _restrict(path: Path, *, required: bool = False) -> None:
@@ -205,7 +224,24 @@ class AgentConfig:
     # One worker is deliberately conservative for an HDD-backed SMB source.
     # Operators may raise this only after measuring queue and disk contention.
     local_index_workers: int = 1
+    # Production Search Node. Kept independently default-off so an agent
+    # upgrade never starts OpenSearch or creates a derived corpus implicitly.
+    search_node_enabled: bool = False
+    search_control_path: str = ""
+    opensearch_url: str = "http://127.0.0.1:9200"
+    opensearch_index_prefix: str = "lawhand-firm-memory"
+    opensearch_ca_path: str = ""
+    opensearch_username: str = ""
+    opensearch_password: str = ""
+    search_gateway_host: str = "127.0.0.1"
+    search_gateway_port: int = 8765
+    search_gateway_token: str = ""
+    search_max_results: int = 100
+    search_max_bulk_documents: int = 500
+    search_max_bulk_mb: int = 8
     _encrypted_smb_password: str = field(default="", repr=False)
+    _encrypted_opensearch_password: str = field(default="", repr=False)
+    _encrypted_search_gateway_token: str = field(default="", repr=False)
 
     @property
     def config_path(self) -> Path:
@@ -222,12 +258,19 @@ class AgentConfig:
             data = cls._read_config_file()
             if data:
                 for k, v in data.get("agent", {}).items():
-                    if k == "smb_password":
-                        cfg._encrypted_smb_password = v
+                    if k in {
+                        "smb_password",
+                        "opensearch_password",
+                        "search_gateway_token",
+                    }:
+                        setattr(cfg, f"_encrypted_{k}", v)
                         try:
-                            cfg.smb_password = _decrypt(v)
+                            setattr(cfg, k, _decrypt(v))
                         except Exception:
-                            cfg.smb_password = v
+                            # Preserve the legacy SMB fallback for old plaintext
+                            # configs. New Search Node secrets fail closed when
+                            # the machine-local key cannot decrypt them.
+                            setattr(cfg, k, v if k == "smb_password" else "")
                     elif hasattr(cfg, k):
                         setattr(cfg, k, v)
         for field_name, env_var in _ENV_MAP.items():
@@ -235,7 +278,7 @@ class AgentConfig:
             if val is not None:
                 if field_name in _INT_FIELDS:
                     val = int(val)
-                elif field_name == "local_index_enabled":
+                elif field_name in _BOOL_FIELDS:
                     val = val.strip().lower() not in {"0", "false", "no", "off"}
                 setattr(cfg, field_name, val)
         return cfg
@@ -259,6 +302,12 @@ class AgentConfig:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         _restrict(CONFIG_DIR)
         enc_pw = _encrypt(self.smb_password) if self.smb_password else ""
+        enc_opensearch_pw = (
+            _encrypt(self.opensearch_password) if self.opensearch_password else ""
+        )
+        enc_gateway_token = (
+            _encrypt(self.search_gateway_token) if self.search_gateway_token else ""
+        )
         data = {
             "agent": {
                 "saas_url": self.saas_url,
@@ -276,6 +325,19 @@ class AgentConfig:
                 "local_index_enabled": self.local_index_enabled,
                 "local_index_max_file_mb": self.local_index_max_file_mb,
                 "local_index_workers": self.local_index_workers,
+                "search_node_enabled": self.search_node_enabled,
+                "search_control_path": self.search_control_path,
+                "opensearch_url": self.opensearch_url,
+                "opensearch_index_prefix": self.opensearch_index_prefix,
+                "opensearch_ca_path": self.opensearch_ca_path,
+                "opensearch_username": self.opensearch_username,
+                "opensearch_password": enc_opensearch_pw,
+                "search_gateway_host": self.search_gateway_host,
+                "search_gateway_port": self.search_gateway_port,
+                "search_gateway_token": enc_gateway_token,
+                "search_max_results": self.search_max_results,
+                "search_max_bulk_documents": self.search_max_bulk_documents,
+                "search_max_bulk_mb": self.search_max_bulk_mb,
             }
         }
         temp_path = CONFIG_FILE.with_suffix(".tmp")

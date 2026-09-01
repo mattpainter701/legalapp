@@ -10,6 +10,12 @@
   checkboxes remain open until those acceptance gates are demonstrably met.
 
 ### Added
+- **On-premises Search Node core:** added a default-off OpenSearch serving
+  engine with generation-fenced atomic document envelopes and nested chunks,
+  BM25 phrase/Boolean/field search, page provenance, ACL filtering, bounded
+  bulk/query operations, atomic alias rebuilds, a local authenticated query
+  gateway, durable control-only SQLite state, and exact restore/recovery hooks.
+  Document corpus and query execution remain on customer infrastructure.
 - **Configurable matter data and review-first workflow execution:** tenant
   administrators can define bounded typed matter fields in the matter workflow
   UI, with tenant-safe contact field definitions and values available as an API

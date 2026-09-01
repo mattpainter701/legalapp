@@ -1,0 +1,8 @@
+# Install as jvm.options.d/lawhand.options; do not replace the vendor file.
+# Size both values to half of dedicated node RAM, capped at 31 GB. The 4 GB
+# baseline is for evaluation only; production sizing must follow the runbook.
+-Xms4g
+-Xmx4g
+-XX:+UseG1GC
+-XX:+AlwaysPreTouch
+-Djava.io.tmpdir=${OPENSEARCH_TMPDIR}

@@ -66,7 +66,9 @@
 
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="COMPANYFOLDER" Name="LawHand">
-        <Directory Id="INSTALLFOLDER" Name="Agent" />
+        <Directory Id="INSTALLFOLDER" Name="Agent">
+          <Directory Id="SearchNodeSamplesFolder" Name="search-node" />
+        </Directory>
       </Directory>
     </StandardDirectory>
 
@@ -148,6 +150,40 @@
                        Type="string"
                        Value="[DATAFOLDER]"
                        KeyPath="yes" />
+      </Component>
+
+      <!-- Versioned reference assets live under Program Files. Operators copy
+           them into protected service/OpenSearch config locations, so an MSI
+           upgrade never overwrites customer-owned configuration. -->
+      <Component Id="SearchNodeConfigExampleComponent" Directory="SearchNodeSamplesFolder">
+        <File Id="SearchNodeConfigExample"
+              Name="config.example.toml"
+              Source="$(sys.SOURCEFILEDIR)..\search-node\config.example.toml"
+              KeyPath="yes" />
+      </Component>
+      <Component Id="SearchNodeJvmOptionsComponent" Directory="SearchNodeSamplesFolder">
+        <File Id="SearchNodeJvmOptions"
+              Name="lawhand.options"
+              Source="$(sys.SOURCEFILEDIR)..\search-node\lawhand.options"
+              KeyPath="yes" />
+      </Component>
+      <Component Id="SearchNodeOpenSearchConfigComponent" Directory="SearchNodeSamplesFolder">
+        <File Id="SearchNodeOpenSearchConfig"
+              Name="opensearch.yml"
+              Source="$(sys.SOURCEFILEDIR)..\search-node\opensearch.yml"
+              KeyPath="yes" />
+      </Component>
+      <Component Id="SearchNodePerformanceAnalyzerConfigComponent" Directory="SearchNodeSamplesFolder">
+        <File Id="SearchNodePerformanceAnalyzerConfig"
+              Name="performance-analyzer.properties"
+              Source="$(sys.SOURCEFILEDIR)..\search-node\performance-analyzer.properties"
+              KeyPath="yes" />
+      </Component>
+      <Component Id="SearchNodeOperationsRunbookComponent" Directory="SearchNodeSamplesFolder">
+        <File Id="SearchNodeOperationsRunbook"
+              Name="search-node-operations.md"
+              Source="$(sys.SOURCEFILEDIR)..\..\..\docs\search-node-operations.md"
+              KeyPath="yes" />
       </Component>
     </ComponentGroup>
 

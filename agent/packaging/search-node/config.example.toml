@@ -1,0 +1,18 @@
+[agent]
+# An upgrade preserves this false value. Enable only after OpenSearch health,
+# disk, authentication, and snapshot checks in the operator runbook pass.
+search_node_enabled = false
+search_control_path = ""
+opensearch_url = "https://127.0.0.1:9200"
+opensearch_index_prefix = "lawhand-firm-memory"
+# Set an absolute local CA bundle path when the node certificate is not trusted
+# by the operating system (for example C:\ProgramData\... or /etc/...).
+opensearch_ca_path = ""
+opensearch_username = "lawhand_agent"
+# Set passwords and gateway token with LAWHAND_* environment variables or the
+# agent configuration command; saved secrets are encrypted at rest.
+search_gateway_host = "127.0.0.1"
+search_gateway_port = 8765
+search_max_results = 100
+search_max_bulk_documents = 500
+search_max_bulk_mb = 8
