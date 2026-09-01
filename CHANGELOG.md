@@ -29,6 +29,23 @@
   bindings. Production activation remains fail-closed until encrypted CAS
   backup and restore rehearsal join the deployment gate; DOCX fidelity remains
   Phase 5 work.
+- **Default-off Firm Memory identity and native authorization gate:** the SaaS
+  can map a user to an immutable AD/Entra object and SID set, expand versioned
+  effective group SIDs, and mint one-use Ed25519 search tickets bound to tenant,
+  authorizer so inaccessible matter names and association counts are never
+  returned through a second policy path. The rollout remains disabled until
+  identity resolution, signing, and ACL coverage are explicitly healthy.
+- **Secure on-premise file opening (default off):** Firm Memory result actions
+  can mint 90-second, single-use intents bound to tenant, user, opaque local
+  source identity, agent, share, revision, and action. The signed interactive
+  Windows opener sends only the opaque handle
+  over a local-only named pipe to the session-0 agent. The agent pins the peer
+  to the protected installed opener, records its session and hashed Windows
+  SID, redeems once, resolves the source in its local ledger, and revalidates
+  the assigned root and revision. It impersonates the pipe client for a live
+  SMB/NTFS access probe before returning the path over IPC; the interactive
+  process probes again and invokes Explorer/Shell. Browser and launch URLs
+  never contain UNC paths; outcome audit stores no token or path.
 - **Configurable matter data and review-first workflow execution:** tenant
   administrators can define bounded typed matter fields in the matter workflow
   UI, with tenant-safe contact field definitions and values available as an API
@@ -2473,3 +2490,4 @@
 - Document upload with vector embedding
 - Plugin system: Litigation Matters, Commercial Renewals
 - Admin dashboard (tenant users, usage stats)
+

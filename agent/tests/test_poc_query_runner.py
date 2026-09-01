@@ -12,12 +12,13 @@ def _create_index(db_path):
     connection = sqlite3.connect(db_path)
     connection.executescript(
         """
-        PRAGMA user_version=1;
+        PRAGMA user_version=2;
         CREATE TABLE index_files(path TEXT PRIMARY KEY, share_id TEXT, ext TEXT,
             status TEXT,
             size_bytes INTEGER, modified_time TEXT, attempts INTEGER, lease_until REAL,
             next_attempt_at REAL, page_count INTEGER, extraction_error TEXT, indexed_at TEXT,
-            content_hash TEXT);
+            content_hash TEXT, acl_json TEXT, acl_state TEXT,
+            acl_version TEXT, acl_captured_at INTEGER);
         CREATE VIRTUAL TABLE index_fts USING fts5(text, path UNINDEXED, share_id UNINDEXED,
             page_no UNINDEXED, ordinal UNINDEXED, ext UNINDEXED);
         INSERT INTO index_files(path,share_id,ext,status)

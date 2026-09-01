@@ -156,3 +156,41 @@ async def test_change_detection_uses_size_and_mtime_not_only_prefix_hash():
 
     assert changes.changed_files == [current]
     assert changes.unchanged_files == []
+
+
+@pytest.mark.asyncio
+async def test_unchanged_scan_carries_existing_source_identity():
+    class IdentityLedger:
+        async def get_all_paths(self, share_id):
+            return {r"\\FS\Legal\same.txt"}
+
+        async def get_files(self, paths):
+            return {
+                r"\\FS\Legal\same.txt": {
+                    "path": r"\\FS\Legal\same.txt",
+                    "content_hash": "same",
+                    "size_bytes": 10,
+                    "modified_time": "2026-08-28T00:00:00+00:00",
+                    "source_id": "source-1",
+                    "file_revision": "revision-1",
+                    "is_deleted": False,
+                }
+            }
+
+    scanner = SmbScanner(SimpleNamespace(), IdentityLedger())
+    current = {
+        "path": r"\\FS\Legal\same.txt",
+        "content_hash": "same",
+        "size_bytes": 10,
+        "modified_time": "2026-08-28T00:00:00+00:00",
+    }
+
+    changes = await scanner._detect_changes("share-1", [current])
+
+    assert changes.unchanged_files == [
+        {
+            **current,
+            "source_id": "source-1",
+            "file_revision": "revision-1",
+        }
+    ]

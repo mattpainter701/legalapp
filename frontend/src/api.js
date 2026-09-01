@@ -2472,6 +2472,13 @@ export const getFirmMemoryFile = (fileId, matterId) =>
     params: { matter_id: matterId },
   }).then(r => r.data)
 
+export const createFirmMemoryOpenIntent = (fileId, data = {}) =>
+  api.post('/v1/smb/files/open-intents', {
+    file_id: fileId,
+    matter_id: data.matterId || null,
+    action: data.action || 'open',
+  }).then(r => r.data)
+
 // ── Trust Accounting ─────────────────────────────────────────────────────────
 export const createTrustAccount = (body) =>
   api.post('/trust/accounts', body).then(r => r.data)
