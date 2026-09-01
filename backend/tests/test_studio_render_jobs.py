@@ -10,9 +10,9 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import func, insert, select, text
 from sqlalchemy.engine.url import make_url
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
@@ -524,9 +524,7 @@ async def test_independent_sessions_serialize_idempotent_enqueue_and_conflict(
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     same_binding_id = uuid.uuid4()
     same_resolver = _AdmissionGateResolver(test_tenant.id, same_binding_id)
-    same_request = _request(
-        foundation, test_user.id, input_binding_id=same_binding_id
-    )
+    same_request = _request(foundation, test_user.id, input_binding_id=same_binding_id)
     same_barrier = _AsyncBarrier(2)
     same_tasks = [
         asyncio.create_task(
@@ -552,9 +550,7 @@ async def test_independent_sessions_serialize_idempotent_enqueue_and_conflict(
     assert len({item.job_id for item in same_results}) == 1
 
     conflict_binding_id = uuid.uuid4()
-    conflict_resolver = _AdmissionGateResolver(
-        test_tenant.id, conflict_binding_id
-    )
+    conflict_resolver = _AdmissionGateResolver(test_tenant.id, conflict_binding_id)
     first_request = _request(
         foundation,
         test_user.id,
@@ -648,9 +644,7 @@ async def test_independent_sessions_cannot_oversubscribe_tenant_admission(
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     binding_id = uuid.uuid4()
     resolver = _AdmissionGateResolver(test_tenant.id, binding_id)
-    request = _request(
-        foundation, test_user.id, input_binding_id=binding_id
-    )
+    request = _request(foundation, test_user.id, input_binding_id=binding_id)
     gated_options = dict(service_options)
     if expected_code == "studio_queued_bytes":
         gated_options["queued_byte_limit"] = (
@@ -821,9 +815,12 @@ async def test_cross_tenant_status_cancel_and_claim_are_not_found(
         await other.request_cancel(accepted.job_id, audit=_noop_audit)
     assert cancel_error.value.status_code == 404
     await db_session.rollback()
-    assert await StudioRenderWorkerService(
-        db_session, tenant_id=other_tenant_id
-    ).claim(accepted.job_id, owner="worker-other") is None
+    assert (
+        await StudioRenderWorkerService(db_session, tenant_id=other_tenant_id).claim(
+            accepted.job_id, owner="worker-other"
+        )
+        is None
+    )
     assert not db_session.in_transaction()
     row = await db_session.get(DurableJob, accepted.job_id)
     assert row.status == "pending"
@@ -832,6 +829,7 @@ async def test_cross_tenant_status_cancel_and_claim_are_not_found(
 async def test_available_artifact_foreign_keys_reject_cross_tenant_substitution(
     db_session, test_tenant, test_user, tmp_path
 ):
+    tenant_id = test_tenant.id
     foundation = await _foundation(db_session, test_tenant, test_user)
     service, accepted = await _enqueue(
         db_session, test_tenant, test_user, foundation, "artifact-tenant-fks"
@@ -839,7 +837,7 @@ async def test_available_artifact_foreign_keys_reject_cross_tenant_substitution(
     lease = await service.claim(accepted.job_id, owner="artifact-tenant-worker")
     object_store = LocalStudioObjectStore(tmp_path, max_object_bytes=4096)
     output = object_store.put(
-        test_tenant.id, b"tenant-fk-output", media_type="application/pdf"
+        tenant_id, b"tenant-fk-output", media_type="application/pdf"
     )
     artifact_id, _ = await service.adopt_output(
         lease,
@@ -851,16 +849,18 @@ async def test_available_artifact_foreign_keys_reject_cross_tenant_substitution(
         **_geometry_kwargs(),
     )
 
+    other_tenant_id = uuid.uuid4()
+    other_user_id = uuid.uuid4()
     other_tenant = Tenant(
-        id=uuid.uuid4(),
+        id=other_tenant_id,
         name="Artifact FK other tenant",
         domain=f"artifact-fk-{uuid.uuid4()}.invalid",
         billing_tier="payg",
         is_active=True,
     )
     other_user = User(
-        id=uuid.uuid4(),
-        tenant_id=other_tenant.id,
+        id=other_user_id,
+        tenant_id=other_tenant_id,
         email=f"artifact-fk-{uuid.uuid4()}@example.invalid",
         full_name="Artifact FK Other User",
         role="admin",
@@ -874,22 +874,63 @@ async def test_available_artifact_foreign_keys_reject_cross_tenant_substitution(
 
     artifact = await db_session.get(StudioRenderArtifact, artifact_id)
     artifact.draft_id = other["draft_id"]
-    with pytest.raises(IntegrityError):
+    with pytest.raises(DBAPIError, match="Studio render evidence is immutable"):
         await db_session.commit()
     await db_session.rollback()
 
-    artifact = await db_session.get(StudioRenderArtifact, artifact_id)
-    artifact.source_artifact_id = other["source_id"]
-    artifact.source_sha256 = other["source_sha"]
-    with pytest.raises(IntegrityError):
-        await db_session.commit()
-    await db_session.rollback()
+    artifact_row = (
+        (
+            await db_session.execute(
+                select(StudioRenderArtifact.__table__).where(
+                    StudioRenderArtifact.id == artifact_id
+                )
+            )
+        )
+        .mappings()
+        .one()
+    )
+    artifact_values = {
+        key: value
+        for key, value in artifact_row.items()
+        if key not in {"id", "job_id", "created_at"}
+    }
 
-    artifact = await db_session.get(StudioRenderArtifact, artifact_id)
-    artifact.requested_by_user_id = other_user.id
-    with pytest.raises(IntegrityError):
-        await db_session.commit()
-    await db_session.rollback()
+    async def assert_cross_tenant_insert_rejected(
+        expected_constraint_pattern, **overrides
+    ):
+        _, probe_job = await _enqueue(
+            db_session,
+            test_tenant,
+            test_user,
+            foundation,
+            f"artifact-fk-probe-{uuid.uuid4()}",
+        )
+        probe_values = {
+            **artifact_values,
+            "id": uuid.uuid4(),
+            "job_id": probe_job.job_id,
+            **overrides,
+        }
+        with pytest.raises(IntegrityError, match=expected_constraint_pattern):
+            await db_session.execute(
+                insert(StudioRenderArtifact).values(**probe_values)
+            )
+            await db_session.commit()
+        await db_session.rollback()
+
+    await assert_cross_tenant_insert_rejected(
+        r"fk_studio_render_artifact_(draft_tenant|snapshot_contract)",
+        draft_id=other["draft_id"],
+    )
+    await assert_cross_tenant_insert_rejected(
+        r"fk_studio_render_artifact_(source_contract|snapshot_contract)",
+        source_artifact_id=other["source_id"],
+        source_sha256=other["source_sha"],
+    )
+    await assert_cross_tenant_insert_rejected(
+        "fk_studio_render_artifact_requester_tenant",
+        requested_by_user_id=other_user_id,
+    )
 
 
 async def test_claim_rejects_invalid_lease_before_database_access(
@@ -955,9 +996,9 @@ async def test_blocked_lease_mutations_recheck_wall_clock_after_row_lock(
     )
     assert lease is not None
     row = await db_session.get(DurableJob, accepted.job_id)
-    expires_at = await db_session.scalar(
-        select(func.clock_timestamp())
-    ) + timedelta(seconds=2)
+    expires_at = await db_session.scalar(select(func.clock_timestamp())) + timedelta(
+        seconds=2
+    )
     original_leased_at = row.leased_at
     row.payload = {**row.payload, "lease_expires_at": expires_at.isoformat()}
     await db_session.commit()
@@ -965,16 +1006,12 @@ async def test_blocked_lease_mutations_recheck_wall_clock_after_row_lock(
 
     async with factory() as blocker:
         await blocker.scalar(
-            select(DurableJob)
-            .where(DurableJob.id == accepted.job_id)
-            .with_for_update()
+            select(DurableJob).where(DurableJob.id == accepted.job_id).with_for_update()
         )
 
         async def mutate(kind):
             async with factory() as session:
-                worker = StudioRenderWorkerService(
-                    session, tenant_id=test_tenant.id
-                )
+                worker = StudioRenderWorkerService(session, tenant_id=test_tenant.id)
                 if kind == "renew":
                     return await worker.renew_lease(lease)
                 if kind == "progress":
@@ -984,8 +1021,7 @@ async def test_blocked_lease_mutations_recheck_wall_clock_after_row_lock(
                 )
 
         tasks = [
-            asyncio.create_task(mutate(kind))
-            for kind in ("renew", "progress", "fail")
+            asyncio.create_task(mutate(kind)) for kind in ("renew", "progress", "fail")
         ]
         await asyncio.sleep(0.05)
         assert all(not task.done() for task in tasks)
@@ -1014,9 +1050,9 @@ async def test_claim_uses_wall_clock_when_transaction_predates_lease_expiry(
     )
     assert first is not None
     row = await db_session.get(DurableJob, accepted.job_id)
-    expires_at = await db_session.scalar(
-        select(func.clock_timestamp())
-    ) + timedelta(seconds=2)
+    expires_at = await db_session.scalar(select(func.clock_timestamp())) + timedelta(
+        seconds=2
+    )
     row.payload = {**row.payload, "lease_expires_at": expires_at.isoformat()}
     await db_session.commit()
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
@@ -1087,9 +1123,7 @@ async def test_retry_status_remains_reclaimable_without_terminal_result(
     )
     lease = await service.claim(accepted.job_id, owner="retry-worker")
     assert lease is not None
-    assert await service.fail_owned_job(
-        lease, "processor_timeout", retryable=True
-    )
+    assert await service.fail_owned_job(lease, "processor_timeout", retryable=True)
     row = await db_session.get(DurableJob, accepted.job_id)
     assert row.status == "pending"
     assert row.result is None
@@ -1118,9 +1152,7 @@ async def test_inflight_cancellation_failure_reports_cancelled_without_poison(
     )
     lease = await service.claim(accepted.job_id, owner="cancel-failure-worker")
     assert lease is not None
-    requested = await service.request_cancel(
-        accepted.job_id, audit=_noop_audit
-    )
+    requested = await service.request_cancel(accepted.job_id, audit=_noop_audit)
     assert requested.state == "cancel_requested"
     await db_session.commit()
     assert await service.fail_owned_job(lease, "cancelled", retryable=False)
@@ -1196,9 +1228,7 @@ async def test_stale_source_binding_and_expired_status_fail_closed(
     }
     await db_session.rollback()
 
-    snapshot = await db_session.get(
-        StudioDraftSnapshot, foundation["snapshot_id"]
-    )
+    snapshot = await db_session.get(StudioDraftSnapshot, foundation["snapshot_id"])
     snapshot.payload = {**snapshot.payload, "format": "pdf"}
     await db_session.commit()
     with pytest.raises(StudioRenderServiceError) as snapshot_error:
@@ -1209,9 +1239,7 @@ async def test_stale_source_binding_and_expired_status_fail_closed(
         )
     assert snapshot_error.value.code == "stale_revision"
     await db_session.rollback()
-    snapshot = await db_session.get(
-        StudioDraftSnapshot, foundation["snapshot_id"]
-    )
+    snapshot = await db_session.get(StudioDraftSnapshot, foundation["snapshot_id"])
     snapshot.payload = {**snapshot.payload, "format": "markdown"}
     await db_session.commit()
 
@@ -1270,7 +1298,7 @@ async def test_current_and_stale_adoption_flush_exact_artifact_ids(
             artifact_kind="test_render",
             runtime_manifest_sha256=current_lease.payload.runtime_manifest_sha256,
             artifact_ttl_seconds=3600,
-        **_geometry_kwargs(),
+            **_geometry_kwargs(),
         )
     assert tuple_error.value.code == "validation_failed"
     output = object_store.put(
@@ -1362,9 +1390,7 @@ async def test_current_and_stale_adoption_flush_exact_artifact_ids(
         )
     )
     current_artifact = await db_session.get(StudioRenderArtifact, artifact_id)
-    replacement_artifact = await db_session.get(
-        StudioRenderArtifact, replacement_id
-    )
+    replacement_artifact = await db_session.get(StudioRenderArtifact, replacement_id)
     evidence_count = await db_session.scalar(
         select(func.count())
         .select_from(StudioRenderArtifact)
@@ -1416,9 +1442,7 @@ async def test_current_and_stale_adoption_flush_exact_artifact_ids(
     assert stale_row.result["artifact_id"] == str(stale_id)
 
 
-@pytest.mark.parametrize(
-    "poison", ["missing", "ownership", "metadata"]
-)
+@pytest.mark.parametrize("poison", ["missing", "ownership", "metadata"])
 async def test_completed_status_revalidates_owned_live_artifact(
     db_session, test_tenant, test_user, tmp_path, poison
 ):
@@ -1437,7 +1461,7 @@ async def test_completed_status_revalidates_owned_live_artifact(
         f"poison-{poison}".encode(),
         media_type="application/pdf",
     )
-    artifact_id, _ = await service.adopt_output(
+    await service.adopt_output(
         lease,
         output,
         object_store=object_store,
@@ -1447,20 +1471,32 @@ async def test_completed_status_revalidates_owned_live_artifact(
         **_geometry_kwargs(),
     )
     row = await db_session.get(DurableJob, accepted.job_id)
-    artifact = await db_session.get(StudioRenderArtifact, artifact_id)
     if poison == "missing":
         row.result = {**row.result, "artifact_id": str(uuid.uuid4())}
     elif poison == "ownership":
-        _, other_job = await _enqueue(
+        other_service, other_job = await _enqueue(
             db_session,
             test_tenant,
             test_user,
             foundation,
             "completed-artifact-poison-owner",
         )
-        artifact.job_id = other_job.job_id
+        other_lease = await other_service.claim(
+            other_job.job_id, owner="poison-owner-artifact"
+        )
+        other_artifact_id, _ = await other_service.adopt_output(
+            other_lease,
+            output,
+            object_store=object_store,
+            artifact_kind="test_render",
+            runtime_manifest_sha256=other_lease.payload.runtime_manifest_sha256,
+            artifact_ttl_seconds=300,
+            **_geometry_kwargs(),
+        )
+        row = await db_session.get(DurableJob, accepted.job_id)
+        row.result = {**row.result, "artifact_id": str(other_artifact_id)}
     elif poison == "metadata":
-        artifact.artifact_page_count = 2
+        row.result = {**row.result, "artifact_page_count": 2}
     await db_session.commit()
 
     with pytest.raises(StudioRenderServiceError) as caught:
@@ -1484,9 +1520,7 @@ async def test_completed_status_preserves_expired_artifact_result_and_returns_41
     lease = await service.claim(accepted.job_id, owner="artifact-expiry-worker")
     object_store = LocalStudioObjectStore(tmp_path, max_object_bytes=4096)
     content = b"expiring-completed-output"
-    output = object_store.put(
-        test_tenant.id, content, media_type="application/pdf"
-    )
+    output = object_store.put(test_tenant.id, content, media_type="application/pdf")
     artifact_id, _ = await service.adopt_output(
         lease,
         output,
@@ -1645,9 +1679,9 @@ async def test_content_read_releases_row_lock_and_rechecks_expiry_after_io(
         artifact_ttl_seconds=300,
         **_geometry_kwargs(),
     )
-    expires_at = await db_session.scalar(
-        select(func.clock_timestamp())
-    ) + timedelta(seconds=2)
+    expires_at = await db_session.scalar(select(func.clock_timestamp())) + timedelta(
+        seconds=2
+    )
     artifact = await db_session.get(StudioRenderArtifact, artifact_id)
     row = await db_session.get(DurableJob, accepted.job_id)
     artifact.content_expires_at = expires_at
@@ -1719,9 +1753,9 @@ async def test_completed_status_rechecks_expiry_after_artifact_lock_wait(
         artifact_ttl_seconds=300,
         **_geometry_kwargs(),
     )
-    expires_at = await db_session.scalar(
-        select(func.clock_timestamp())
-    ) + timedelta(seconds=3)
+    expires_at = await db_session.scalar(select(func.clock_timestamp())) + timedelta(
+        seconds=3
+    )
     artifact = await db_session.get(StudioRenderArtifact, artifact_id)
     row = await db_session.get(DurableJob, accepted.job_id)
     artifact.content_expires_at = expires_at
@@ -1755,20 +1789,14 @@ async def test_completed_status_rechecks_expiry_after_artifact_lock_wait(
         await asyncio.sleep(0.05)
         assert not poll.done()
         async with factory() as clock_session:
-            started_at = await clock_session.scalar(
-                select(func.clock_timestamp())
-            )
+            started_at = await clock_session.scalar(select(func.clock_timestamp()))
         assert started_at < expires_at
         while True:
             async with factory() as clock_session:
-                current = await clock_session.scalar(
-                    select(func.clock_timestamp())
-                )
+                current = await clock_session.scalar(select(func.clock_timestamp()))
             if current > expires_at:
                 break
-            await asyncio.sleep(
-                min(0.05, (expires_at - current).total_seconds())
-            )
+            await asyncio.sleep(min(0.05, (expires_at - current).total_seconds()))
         await blocker.rollback()
 
     completed = await poll
@@ -1800,15 +1828,11 @@ async def test_adoption_rechecks_exact_snapshot_and_source_bindings(
         f"adoption-binding-{tamper}",
     )
     lease = await service.claim(accepted.job_id, owner=f"binding-{tamper}")
-    snapshot = await db_session.get(
-        StudioDraftSnapshot, foundation["snapshot_id"]
-    )
+    snapshot = await db_session.get(StudioDraftSnapshot, foundation["snapshot_id"])
     if tamper == "snapshot_payload":
         snapshot.payload = {**snapshot.payload, "format": "pdf"}
     else:
-        source = await db_session.get(
-            StudioSourceArtifact, foundation["source_id"]
-        )
+        source = await db_session.get(StudioSourceArtifact, foundation["source_id"])
         source.content_bytes = b"# corrupted source bytes\n"
         source.byte_size = len(source.content_bytes)
     await db_session.commit()
@@ -1827,7 +1851,7 @@ async def test_adoption_rechecks_exact_snapshot_and_source_bindings(
             artifact_kind="test_render",
             runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
             artifact_ttl_seconds=300,
-        **_geometry_kwargs(),
+            **_geometry_kwargs(),
         )
     assert caught.value.code == expected_code
     artifact = await db_session.scalar(
@@ -1852,9 +1876,7 @@ async def test_cancellation_rechecks_immutable_inputs_before_materialization(
     )
     lease = await service.claim(accepted.job_id, owner="cancel-corrupt-worker")
     await service.request_cancel(accepted.job_id, audit=_noop_audit)
-    snapshot = await db_session.get(
-        StudioDraftSnapshot, foundation["snapshot_id"]
-    )
+    snapshot = await db_session.get(StudioDraftSnapshot, foundation["snapshot_id"])
     snapshot.payload = {**snapshot.payload, "identity_sha256": "f" * 64}
     await db_session.commit()
     object_store = LocalStudioObjectStore(tmp_path, max_object_bytes=4096)
@@ -1870,14 +1892,17 @@ async def test_cancellation_rechecks_immutable_inputs_before_materialization(
             artifact_kind="test_render",
             runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
             artifact_ttl_seconds=300,
-        **_geometry_kwargs(),
+            **_geometry_kwargs(),
         )
     assert caught.value.code == "validation_failed"
-    assert await db_session.scalar(
-        select(StudioRenderArtifact).where(
-            StudioRenderArtifact.job_id == accepted.job_id
+    assert (
+        await db_session.scalar(
+            select(StudioRenderArtifact).where(
+                StudioRenderArtifact.job_id == accepted.job_id
+            )
         )
-    ) is None
+        is None
+    )
 
 
 async def test_stale_draft_does_not_mask_immutable_corruption(
@@ -1891,9 +1916,7 @@ async def test_stale_draft_does_not_mask_immutable_corruption(
     draft = await db_session.get(StudioDraft, foundation["draft_id"])
     draft.revision = 2
     draft.identity_sha256 = "d" * 64
-    snapshot = await db_session.get(
-        StudioDraftSnapshot, foundation["snapshot_id"]
-    )
+    snapshot = await db_session.get(StudioDraftSnapshot, foundation["snapshot_id"])
     snapshot.payload = {**snapshot.payload, "format": "pdf"}
     await db_session.commit()
     object_store = LocalStudioObjectStore(tmp_path, max_object_bytes=4096)
@@ -1909,14 +1932,17 @@ async def test_stale_draft_does_not_mask_immutable_corruption(
             artifact_kind="test_render",
             runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
             artifact_ttl_seconds=300,
-        **_geometry_kwargs(),
+            **_geometry_kwargs(),
         )
     assert caught.value.code == "validation_failed"
-    assert await db_session.scalar(
-        select(StudioRenderArtifact).where(
-            StudioRenderArtifact.job_id == accepted.job_id
+    assert (
+        await db_session.scalar(
+            select(StudioRenderArtifact).where(
+                StudioRenderArtifact.job_id == accepted.job_id
+            )
         )
-    ) is None
+        is None
+    )
 
 
 async def test_adoption_rechecks_server_owned_input_binding_identity(
@@ -1980,10 +2006,7 @@ async def test_adoption_rechecks_server_owned_input_binding_identity(
     assert lease.payload.effective_request_sha256 != lease.payload.request_sha256
     admitted = await consumer.status(accepted.job_id)
     assert admitted.request_sha256 == lease.payload.request_sha256
-    assert (
-        admitted.effective_request_sha256
-        == lease.payload.effective_request_sha256
-    )
+    assert admitted.effective_request_sha256 == lease.payload.effective_request_sha256
     resolver.version = 2
     object_store = LocalStudioObjectStore(tmp_path, max_object_bytes=4096)
     output = object_store.put(
@@ -1998,14 +2021,17 @@ async def test_adoption_rechecks_server_owned_input_binding_identity(
             artifact_kind="test_render",
             runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
             artifact_ttl_seconds=300,
-        **_geometry_kwargs(),
+            **_geometry_kwargs(),
         )
     assert caught.value.code == "validation_failed"
-    assert await db_session.scalar(
-        select(StudioRenderArtifact).where(
-            StudioRenderArtifact.job_id == accepted.job_id
+    assert (
+        await db_session.scalar(
+            select(StudioRenderArtifact).where(
+                StudioRenderArtifact.job_id == accepted.job_id
+            )
         )
-    ) is None
+        is None
+    )
 
 
 async def test_phase2_rollback_recovery_rechecks_immutable_inputs(
@@ -2045,14 +2071,17 @@ async def test_phase2_rollback_recovery_rechecks_immutable_inputs(
                 artifact_kind="test_render",
                 runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
                 artifact_ttl_seconds=300,
-        **_geometry_kwargs(),
+                **_geometry_kwargs(),
             )
     assert caught.value.code == "validation_failed"
-    assert await db_session.scalar(
-        select(StudioRenderArtifact).where(
-            StudioRenderArtifact.job_id == accepted.job_id
+    assert (
+        await db_session.scalar(
+            select(StudioRenderArtifact).where(
+                StudioRenderArtifact.job_id == accepted.job_id
+            )
         )
-    ) is None
+        is None
+    )
 
 
 async def test_adoption_uses_fresh_database_clock_after_blocking_storage_io(
@@ -2080,7 +2109,7 @@ async def test_adoption_uses_fresh_database_clock_after_blocking_storage_io(
             artifact_kind="test_render",
             runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
             artifact_ttl_seconds=300,
-        **_geometry_kwargs(),
+            **_geometry_kwargs(),
         )
     )
     assert await asyncio.to_thread(started.wait, 2)
@@ -2107,7 +2136,7 @@ async def test_adoption_uses_fresh_database_clock_after_blocking_storage_io(
     assert artifact is None
 
 
-async def _enqueue_with_stale_request(db, tenant, user, foundation):
+async def _enqueue_with_stale_request(db, tenant, user, foundation, key="adopt-stale"):
     """Queue valid revision 1, then let the caller advance the draft before adoption."""
 
     draft = await db.get(StudioDraft, foundation["draft_id"])
@@ -2115,9 +2144,7 @@ async def _enqueue_with_stale_request(db, tenant, user, foundation):
     draft.identity_sha256 = foundation["identity_sha"]
     draft.evidence_revision = None
     await db.commit()
-    service, accepted = await _enqueue(
-        db, tenant, user, foundation, "adopt-stale"
-    )
+    service, accepted = await _enqueue(db, tenant, user, foundation, key)
     draft = await db.get(StudioDraft, foundation["draft_id"])
     draft.revision = 2
     draft.identity_sha256 = "d" * 64
@@ -2193,9 +2220,7 @@ async def test_worker_missing_or_tampered_source_fails_sanitized(
                 launcher=launcher.absolute(),
                 launcher_sha256=hashlib.sha256(launcher.read_bytes()).hexdigest(),
                 executable=executable.absolute(),
-                executable_sha256=hashlib.sha256(
-                    executable.read_bytes()
-                ).hexdigest(),
+                executable_sha256=hashlib.sha256(executable.read_bytes()).hexdigest(),
                 runtime_bundle_manifest=runtime_bundle.absolute(),
                 runtime_bundle_sha256=hashlib.sha256(
                     runtime_bundle.read_bytes()
@@ -2205,19 +2230,13 @@ async def test_worker_missing_or_tampered_source_fails_sanitized(
                 renderer_version="1.0.0",
                 rasterizer=rasterizer.absolute(),
                 rasterizer_version="1.0.0",
-                rasterizer_sha256=hashlib.sha256(
-                    rasterizer.read_bytes()
-                ).hexdigest(),
+                rasterizer_sha256=hashlib.sha256(rasterizer.read_bytes()).hexdigest(),
                 converter=converter.absolute(),
                 converter_version="1.0.0",
-                converter_sha256=hashlib.sha256(
-                    converter.read_bytes()
-                ).hexdigest(),
+                converter_sha256=hashlib.sha256(converter.read_bytes()).hexdigest(),
                 validator=validator.absolute(),
                 validator_version="1.0.0",
-                validator_sha256=hashlib.sha256(
-                    validator.read_bytes()
-                ).hexdigest(),
+                validator_sha256=hashlib.sha256(validator.read_bytes()).hexdigest(),
             )
         ]
     )
@@ -2256,9 +2275,7 @@ async def test_worker_rehashes_snapshot_payload_before_processor_use(
         db_session, test_tenant, test_user, foundation, "worker-snapshot-rehash"
     )
     lease = await service.claim(accepted.job_id, owner="snapshot-rehash-worker")
-    snapshot = await db_session.get(
-        StudioDraftSnapshot, foundation["snapshot_id"]
-    )
+    snapshot = await db_session.get(StudioDraftSnapshot, foundation["snapshot_id"])
     snapshot.payload = {**snapshot.payload, "identity_sha256": "f" * 64}
     await db_session.commit()
 
@@ -2282,23 +2299,23 @@ async def test_retention_deletes_shared_cas_only_after_last_reference(
     )
     artifact_ids = []
     for key in ("shared-cas-first", "shared-cas-second"):
-        service, accepted = await _enqueue(
+        service, accepted = await _enqueue_with_stale_request(
             db_session, test_tenant, test_user, foundation, key
         )
         lease = await service.claim(accepted.job_id, owner=f"worker-{key}")
-        artifact_id, _ = await service.adopt_output(
+        artifact_id, outcome = await service.adopt_output(
             lease,
             output,
             object_store=object_store,
             artifact_kind="test_render",
             runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
             artifact_ttl_seconds=300,
-        **_geometry_kwargs(),
+            **_geometry_kwargs(),
         )
+        assert outcome == "stale_output"
         artifact_ids.append(artifact_id)
     for artifact_id in artifact_ids:
         artifact = await db_session.get(StudioRenderArtifact, artifact_id)
-        artifact.adoption_outcome = "stale_output"
         artifact.content_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     await db_session.commit()
 
@@ -2328,11 +2345,11 @@ async def test_retention_refreshes_clock_after_hold_and_storage_boundaries(
     output = store.put(
         test_tenant.id, b"retention-clock-output", media_type="application/pdf"
     )
-    service, accepted = await _enqueue(
+    service, accepted = await _enqueue_with_stale_request(
         db_session, test_tenant, test_user, foundation, "retention-clock"
     )
     lease = await service.claim(accepted.job_id, owner="retention-clock-worker")
-    artifact_id, _ = await service.adopt_output(
+    artifact_id, outcome = await service.adopt_output(
         lease,
         output,
         object_store=store,
@@ -2341,8 +2358,8 @@ async def test_retention_refreshes_clock_after_hold_and_storage_boundaries(
         artifact_ttl_seconds=300,
         **_geometry_kwargs(),
     )
+    assert outcome == "stale_output"
     artifact = await db_session.get(StudioRenderArtifact, artifact_id)
-    artifact.adoption_outcome = "stale_output"
     artifact.content_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     await db_session.commit()
 
@@ -2391,11 +2408,11 @@ async def test_retention_recovers_or_preserves_durable_pending_state(
     output = object_store.put(
         test_tenant.id, b"pending-output", media_type="application/pdf"
     )
-    service, accepted = await _enqueue(
+    service, accepted = await _enqueue_with_stale_request(
         db_session, test_tenant, test_user, foundation, "pending-recovery"
     )
     lease = await service.claim(accepted.job_id, owner="pending-worker")
-    artifact_id, _ = await service.adopt_output(
+    artifact_id, outcome = await service.adopt_output(
         lease,
         output,
         object_store=object_store,
@@ -2404,9 +2421,9 @@ async def test_retention_recovers_or_preserves_durable_pending_state(
         artifact_ttl_seconds=300,
         **_geometry_kwargs(),
     )
+    assert outcome == "stale_output"
     now = datetime.now(timezone.utc)
     artifact = await db_session.get(StudioRenderArtifact, artifact_id)
-    artifact.adoption_outcome = "stale_output"
     artifact.content_expires_at = now - timedelta(seconds=1)
     artifact.storage_state = "delete_pending"
     artifact.delete_requested_at = now
@@ -2467,9 +2484,7 @@ async def test_late_stage_keeps_object_fence_until_cross_worker_adoption_is_safe
 
     async def adopt(lease):
         async with factory() as session:
-            worker = StudioRenderWorkerService(
-                session, tenant_id=test_tenant.id
-            )
+            worker = StudioRenderWorkerService(session, tenant_id=test_tenant.id)
             return await worker.stage_and_adopt_output(
                 lease,
                 content,
@@ -2479,7 +2494,7 @@ async def test_late_stage_keeps_object_fence_until_cross_worker_adoption_is_safe
                 artifact_kind="test_render",
                 runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
                 artifact_ttl_seconds=300,
-        **_geometry_kwargs(),
+                **_geometry_kwargs(),
             )
 
     timeout = 0.05 if exit_mode == "timeout" else 30.0
@@ -2518,9 +2533,7 @@ async def test_cancelled_staged_delete_holds_fence_until_republish_is_durable(
     service, accepted = await _enqueue(
         db_session, test_tenant, test_user, foundation, "late-staged-delete"
     )
-    lease = await service.claim(
-        accepted.job_id, owner="late-staged-delete-worker"
-    )
+    lease = await service.claim(accepted.job_id, owner="late-staged-delete-worker")
     assert lease is not None
     content = b"late-staged-delete-output"
     content_sha256 = hashlib.sha256(content).hexdigest()
@@ -2570,7 +2583,7 @@ async def test_cancelled_staged_delete_holds_fence_until_republish_is_durable(
                 artifact_kind="test_render",
                 runtime_manifest_sha256=lease.payload.runtime_manifest_sha256,
                 artifact_ttl_seconds=300,
-        **_geometry_kwargs(),
+                **_geometry_kwargs(),
             )
 
     cleanup = asyncio.create_task(reconcile())
@@ -2630,9 +2643,7 @@ async def test_production_stage_reconciler_covers_pre_adoption_and_post_commit_c
         current_evidence_check=not_current,
     )
     kept = await reconciler.reconcile_batch(limit=10)
-    assert [(item.action, item.reason) for item in kept] == [
-        ("kept", "lease_active")
-    ]
+    assert [(item.action, item.reason) for item in kept] == [("kept", "lease_active")]
 
     abandoned_row = await db_session.get(DurableJob, abandoned_job.job_id)
     abandoned_row.payload = {
@@ -2704,16 +2715,19 @@ async def test_force_rls_rebinds_cache_retention_and_worker_transactions(
         **_geometry_kwargs(),
     )
 
-    _, cleanup_job = await _enqueue(
+    _, worker_job = await _enqueue(
+        db_session, test_tenant, test_user, foundation, "rls-worker"
+    )
+    cleanup_service, cleanup_job = await _enqueue_with_stale_request(
         db_session, test_tenant, test_user, foundation, "rls-cleanup"
     )
-    cleanup_lease = await service.claim(
+    cleanup_lease = await cleanup_service.claim(
         cleanup_job.job_id, owner="rls-cleanup-worker"
     )
     cleanup_ref = object_store.put(
         test_tenant.id, b"rls-cleanup-output", media_type="application/pdf"
     )
-    cleanup_artifact_id, _ = await service.adopt_output(
+    cleanup_artifact_id, cleanup_outcome = await cleanup_service.adopt_output(
         cleanup_lease,
         cleanup_ref,
         object_store=object_store,
@@ -2722,16 +2736,13 @@ async def test_force_rls_rebinds_cache_retention_and_worker_transactions(
         artifact_ttl_seconds=300,
         **_geometry_kwargs(),
     )
-    cleanup_artifact = await db_session.get(
-        StudioRenderArtifact, cleanup_artifact_id
+    assert cleanup_outcome == "stale_output"
+    cleanup_artifact = await db_session.get(StudioRenderArtifact, cleanup_artifact_id)
+    cleanup_artifact.content_expires_at = datetime.now(timezone.utc) - timedelta(
+        seconds=1
     )
-    cleanup_artifact.adoption_outcome = "stale_output"
-    cleanup_artifact.content_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     await db_session.commit()
 
-    _, worker_job = await _enqueue(
-        db_session, test_tenant, test_user, foundation, "rls-worker"
-    )
     other_tenant = Tenant(
         id=uuid.uuid4(),
         name="RLS other tenant",
@@ -2791,9 +2802,7 @@ async def test_force_rls_rebinds_cache_retention_and_worker_transactions(
                 "NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE; END IF; END $$"
             )
         )
-        await conn.execute(
-            text(f"ALTER ROLE {_RLS_ROLE} PASSWORD '{_RLS_PASSWORD}'")
-        )
+        await conn.execute(text(f"ALTER ROLE {_RLS_ROLE} PASSWORD '{_RLS_PASSWORD}'"))
         await conn.execute(text(f"GRANT USAGE ON SCHEMA public TO {_RLS_ROLE}"))
         for table in tables:
             await conn.execute(
@@ -2987,9 +2996,9 @@ async def test_consumer_audit_transaction_is_atomic_and_replay_safe(
     assert rolled_back is None
     await db_session.rollback()
 
-    lease = await StudioRenderWorkerService(
-        db_session, tenant_id=test_tenant.id
-    ).claim(accepted.job_id, owner="consumer-cancel-worker")
+    lease = await StudioRenderWorkerService(db_session, tenant_id=test_tenant.id).claim(
+        accepted.job_id, owner="consumer-cancel-worker"
+    )
     assert lease is not None
     with pytest.raises(TypeError):
         await service.request_cancel(accepted.job_id)
@@ -3020,15 +3029,12 @@ async def test_consumer_audit_transaction_is_atomic_and_replay_safe(
         (
             await db_session.scalars(
                 select(StudioDraftAuditEvent).where(
-                    StudioDraftAuditEvent.event_type
-                    == "studio_render_cancel_requested"
+                    StudioDraftAuditEvent.event_type == "studio_render_cancel_requested"
                 )
             )
         ).all()
     )
-    assert [event.detail["job_id"] for event in cancel_events] == [
-        str(accepted.job_id)
-    ]
+    assert [event.detail["job_id"] for event in cancel_events] == [str(accepted.job_id)]
     await db_session.rollback()
 
     cancel_replay_calls = []
