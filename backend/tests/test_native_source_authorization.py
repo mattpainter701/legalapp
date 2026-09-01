@@ -9,6 +9,9 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 import pytest
 
+from app.models.matter_assignment import MatterAssignment
+from app.models.plugin import Matter
+from app.models.user import User
 from app.services.search_identity_ticket import (
     SearchIdentity,
     SearchIdentityTicketError,
@@ -21,6 +24,7 @@ from app.schemas.smb import NativeIdentityUpdate
 from app.services.native_authorization import (
     NativeAuthorizationError,
     expand_effective_group_sids,
+    require_matter_authorization,
     resolve_native_identity,
 )
 
@@ -363,3 +367,481 @@ async def test_file_authorization_revalidation_success_and_fail_closed(monkeypat
             share_id=share_id,
             redis=SimpleNamespace(),
         )
+
+
+@pytest.mark.asyncio
+async def test_resolve_native_identity_rejects_unhealthy_or_expired_or_orphaned_primary():
+    now = datetime.now(timezone.utc)
+
+    class FakeDb:
+        def __init__(self, row):
+            self.row = row
+
+        async def scalar(self, _statement):
+            return self.row
+
+    base = {
+        "state": "healthy",
+        "expires_at": now + timedelta(hours=1),
+        "resolved_at": now,
+        "primary_sid": "S-1-5-21-100",
+        "effective_sids": ["S-1-5-21-200"],
+        "version": 3,
+        "provider": "ad",
+    }
+    # Line 76: state != "healthy"
+    with pytest.raises(NativeAuthorizationError, match="not healthy"):
+        await resolve_native_identity(
+            FakeDb(SimpleNamespace(**{**base, "state": "error"})),
+            "00000000-0000-0000-0000-000000000001",
+            "00000000-0000-0000-0000-000000000002",
+            now=now,
+        )
+    # Line 76: row is None (no mapping at all)
+    with pytest.raises(NativeAuthorizationError, match="not healthy"):
+        await resolve_native_identity(
+            FakeDb(None),
+            "00000000-0000-0000-0000-000000000001",
+            "00000000-0000-0000-0000-000000000002",
+            now=now,
+        )
+    # Line 78: expires_at is None
+    with pytest.raises(NativeAuthorizationError, match="stale"):
+        await resolve_native_identity(
+            FakeDb(SimpleNamespace(**{**base, "expires_at": None})),
+            "00000000-0000-0000-0000-000000000001",
+            "00000000-0000-0000-0000-000000000002",
+            now=now,
+        )
+    # Line 78: expires_at already in the past
+    with pytest.raises(NativeAuthorizationError, match="stale"):
+        await resolve_native_identity(
+            FakeDb(SimpleNamespace(**{**base, "expires_at": now - timedelta(seconds=1)})),
+            "00000000-0000-0000-0000-000000000001",
+            "00000000-0000-0000-0000-000000000002",
+            now=now,
+        )
+
+
+@pytest.mark.asyncio
+async def test_resolve_native_identity_returns_normalized_scope_for_healthy_user():
+    now = datetime.now(timezone.utc)
+
+    class FakeDb:
+        def __init__(self, row):
+            self.row = row
+
+        async def scalar(self, _statement):
+            return self.row
+
+    row = SimpleNamespace(
+        state="healthy",
+        expires_at=now + timedelta(hours=1),
+        resolved_at=now,
+        primary_sid="s-1-5-21-100",
+        effective_sids=["S-1-5-21-200", "S-1-5-21-200", "s-1-5-21-300"],
+        version=7,
+        provider="entra",
+    )
+    resolved = await resolve_native_identity(
+        FakeDb(row),
+        "00000000-0000-0000-0000-000000000001",
+        "00000000-0000-0000-0000-000000000002",
+        now=now,
+    )
+    # Lines 89-98: normalized scope, version, and provider carried through.
+    assert resolved.principal_sids[0] == "S-1-1-0"
+    assert resolved.principal_sids[-1] == "S-1-5-21-300"
+    assert "S-1-5-21-100" in resolved.principal_sids
+    assert resolved.version == 7
+    assert resolved.provider == "entra"
+    assert resolved.tenant_id == "00000000-0000-0000-0000-000000000001"
+    assert resolved.user_id == "00000000-0000-0000-0000-000000000002"
+
+
+@pytest.mark.asyncio
+async def test_require_matter_authorization_missing_matter_fails_closed(
+    db_session, test_tenant, test_user
+):
+    with pytest.raises(NativeAuthorizationError, match="unavailable"):
+        await require_matter_authorization(
+            db_session,
+            str(test_tenant.id),
+            str(test_user.id),
+            str(uuid.uuid4()),
+        )
+
+
+@pytest.mark.asyncio
+async def test_require_matter_authorization_unrestricted_matter_returns_row(
+    db_session, test_tenant, test_user
+):
+    matter = Matter(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        slug=f"open-matter-{uuid.uuid4().hex[:8]}",
+        matter_name="Open matter",
+        status="open",
+    )
+    db_session.add(matter)
+    await db_session.commit()
+    await db_session.refresh(matter)
+
+    returned = await require_matter_authorization(
+        db_session,
+        str(test_tenant.id),
+        str(test_user.id),
+        str(matter.id),
+    )
+    assert returned.id == matter.id
+
+
+@pytest.mark.asyncio
+async def test_require_matter_authorization_restricted_matter_denies_outsider(
+    db_session, test_tenant, test_user
+):
+    matter = Matter(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        slug=f"restricted-{uuid.uuid4().hex[:8]}",
+        matter_name="Restricted matter",
+        status="open",
+        plugin_workflow_state={
+            "security_policy": {"restricted": True, "allowed_user_ids": []}
+        },
+    )
+    db_session.add(matter)
+    await db_session.commit()
+    await db_session.refresh(matter)
+
+    outsider_id = uuid.uuid4()
+    db_session.add(
+        User(
+            id=outsider_id,
+            tenant_id=test_tenant.id,
+            email=f"outsider-{outsider_id.hex[:6]}@example.com",
+            full_name="Outsider",
+            role="user",
+            is_active=True,
+        )
+    )
+    await db_session.commit()
+
+    with pytest.raises(NativeAuthorizationError, match="unavailable"):
+        await require_matter_authorization(
+            db_session,
+            str(test_tenant.id),
+            str(outsider_id),
+            str(matter.id),
+        )
+
+
+@pytest.mark.asyncio
+async def test_require_matter_authorization_restricted_matter_allows_explicit_user(
+    db_session, test_tenant, test_user
+):
+    outsider_id = uuid.uuid4()
+    db_session.add(
+        User(
+            id=outsider_id,
+            tenant_id=test_tenant.id,
+            email=f"allowed-{outsider_id.hex[:6]}@example.com",
+            full_name="Allowed outsider",
+            role="user",
+            is_active=True,
+        )
+    )
+    matter = Matter(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        slug=f"restricted-allow-{uuid.uuid4().hex[:8]}",
+        matter_name="Restricted allowlist",
+        status="open",
+        plugin_workflow_state={
+            "security_policy": {
+                "restricted": True,
+                "allowed_user_ids": [str(outsider_id)],
+            }
+        },
+    )
+    db_session.add(matter)
+    await db_session.commit()
+    await db_session.refresh(matter)
+
+    returned = await require_matter_authorization(
+        db_session,
+        str(test_tenant.id),
+        str(outsider_id),
+        str(matter.id),
+    )
+    assert returned.id == matter.id
+
+
+@pytest.mark.asyncio
+async def test_require_matter_authorization_restricted_matter_allows_assigned_user(
+    db_session, test_tenant, test_user
+):
+    matter = Matter(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        slug=f"restricted-assign-{uuid.uuid4().hex[:8]}",
+        matter_name="Restricted assigned",
+        status="open",
+        plugin_workflow_state={"security_policy": {"ethical_wall": True}},
+    )
+    associate_id = uuid.uuid4()
+    db_session.add(matter)
+    db_session.add(
+        User(
+            id=associate_id,
+            tenant_id=test_tenant.id,
+            email=f"associate-{associate_id.hex[:6]}@example.com",
+            full_name="Associate",
+            role="user",
+            is_active=True,
+        )
+    )
+    db_session.add(
+        MatterAssignment(
+            id=uuid.uuid4(),
+            tenant_id=test_tenant.id,
+            matter_id=matter.id,
+            user_id=associate_id,
+            role="associate",
+            is_primary=False,
+        )
+    )
+    await db_session.commit()
+    await db_session.refresh(matter)
+
+    returned = await require_matter_authorization(
+        db_session,
+        str(test_tenant.id),
+        str(associate_id),
+        str(matter.id),
+    )
+    assert returned.id == matter.id
+
+
+def test_mint_ticket_rejects_invalid_signing_key_encoding():
+    identity = SearchIdentity(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        source_ids=("share-1",),
+        principal_sids=("S-1-5-21-100",),
+        identity_version=1,
+    )
+    # Lines 29-30: garbage base64 that cannot be decoded at all.
+    with pytest.raises(SearchIdentityTicketError, match="invalid"):
+        mint_search_identity_ticket(
+            identity,
+            private_key="@@@not-base64@@@",
+            audience="agent-1",
+        )
+    # Line 34: well-formed base64 but not 32 raw bytes.
+    with pytest.raises(SearchIdentityTicketError, match="32 bytes"):
+        mint_search_identity_ticket(
+            identity,
+            private_key=base64.urlsafe_b64encode(b"too-short").rstrip(b"=").decode(),
+            audience="agent-1",
+        )
+
+
+def test_mint_ticket_rejects_empty_or_missing_scope():
+    private = Ed25519PrivateKey.generate()
+    raw_private = private.private_bytes(
+        serialization.Encoding.Raw,
+        serialization.PrivateFormat.Raw,
+        serialization.NoEncryption(),
+    )
+    encoded = base64.urlsafe_b64encode(raw_private).rstrip(b"=").decode()
+    base_kwargs = {
+        "private_key": encoded,
+        "audience": "agent-1",
+    }
+    # Line 64: tenant_id blank.
+    with pytest.raises(SearchIdentityTicketError, match="empty"):
+        mint_search_identity_ticket(
+            SearchIdentity(
+                tenant_id="",
+                user_id="user-1",
+                source_ids=("share-1",),
+                principal_sids=("S-1-5-21-100",),
+                identity_version=1,
+            ),
+            **base_kwargs,
+        )
+    # Line 64: source_ids empty.
+    with pytest.raises(SearchIdentityTicketError, match="empty"):
+        mint_search_identity_ticket(
+            SearchIdentity(
+                tenant_id="tenant-1",
+                user_id="user-1",
+                source_ids=(),
+                principal_sids=("S-1-5-21-100",),
+                identity_version=1,
+            ),
+            **base_kwargs,
+        )
+    # Line 64: principal_sids empty.
+    with pytest.raises(SearchIdentityTicketError, match="empty"):
+        mint_search_identity_ticket(
+            SearchIdentity(
+                tenant_id="tenant-1",
+                user_id="user-1",
+                source_ids=("share-1",),
+                principal_sids=(),
+                identity_version=1,
+            ),
+            **base_kwargs,
+        )
+    # Line 64: audience missing.
+    with pytest.raises(SearchIdentityTicketError, match="empty"):
+        mint_search_identity_ticket(
+            SearchIdentity(
+                tenant_id="tenant-1",
+                user_id="user-1",
+                source_ids=("share-1",),
+                principal_sids=("S-1-5-21-100",),
+                identity_version=1,
+            ),
+            private_key=encoded,
+            audience="",
+        )
+
+
+@pytest.mark.asyncio
+async def test_native_identity_update_creates_row_when_no_existing_mapping(monkeypatch):
+    tenant_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    admin = SimpleNamespace(id=uuid.uuid4(), tenant_id=tenant_id)
+    now = datetime.now(timezone.utc)
+    monkeypatch.setattr(smb_router, "set_tenant_context", AsyncMock())
+    monkeypatch.setattr(smb_router, "record_operator_audit", AsyncMock())
+    body = NativeIdentityUpdate(
+        provider="ad",
+        directory_tenant_id="directory-1",
+        object_id="object-1",
+        primary_sid="S-1-5-21-100",
+        effective_sids=["S-1-5-21-200"],
+        group_expansion_complete=True,
+        state="healthy",
+        resolved_at=now,
+        expires_at=now + timedelta(minutes=5),
+    )
+    # First scalar: existing user lookup → user found. Second scalar: existing
+    # NativeIdentityMapping → None, so the router must create a new row.
+    db = _NativeIdentityDb(
+        scalar_rows=(SimpleNamespace(id=user_id), None),
+    )
+    result = await smb_router.update_native_identity(
+        str(user_id), body, SimpleNamespace(), db, admin
+    )
+    assert len(db.added) == 1
+    created = db.added[0]
+    assert created.primary_sid == "S-1-5-21-100"
+    assert created.provider == "ad"
+    assert result.version == 1
+
+
+@pytest.mark.asyncio
+async def test_native_identity_update_rejects_immutable_mismatch(monkeypatch):
+    tenant_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    admin = SimpleNamespace(id=uuid.uuid4(), tenant_id=tenant_id)
+    existing = SimpleNamespace(
+        id=uuid.uuid4(),
+        provider="ad",
+        directory_tenant_id="directory-1",
+        object_id="object-1",
+        primary_sid="S-1-5-21-100",
+        effective_sids=[],
+        state="pending",
+        version=1,
+        resolved_at=None,
+        expires_at=None,
+        error_code=None,
+    )
+    monkeypatch.setattr(smb_router, "set_tenant_context", AsyncMock())
+    monkeypatch.setattr(smb_router, "record_operator_audit", AsyncMock())
+    body = NativeIdentityUpdate(
+        provider="ad",
+        directory_tenant_id="directory-2",
+        object_id="object-1",
+        primary_sid="S-1-5-21-100",
+        effective_sids=[],
+        state="pending",
+    )
+    db = _NativeIdentityDb(scalar_rows=(SimpleNamespace(id=user_id), existing))
+    with pytest.raises(smb_router.HTTPException) as exc:
+        await smb_router.update_native_identity(
+            str(user_id), body, SimpleNamespace(), db, admin
+        )
+    assert exc.value.status_code == 409
+    assert "Immutable" in exc.value.detail
+    assert db.commits == 0
+
+
+@pytest.mark.asyncio
+async def test_native_identity_update_rejects_healthy_without_complete_group(monkeypatch):
+    tenant_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    admin = SimpleNamespace(id=uuid.uuid4(), tenant_id=tenant_id)
+    now = datetime.now(timezone.utc)
+    existing = SimpleNamespace(
+        id=uuid.uuid4(),
+        provider="ad",
+        directory_tenant_id="directory-1",
+        object_id="object-1",
+        primary_sid="S-1-5-21-100",
+        effective_sids=[],
+        state="pending",
+        version=1,
+        resolved_at=now,
+        expires_at=now + timedelta(minutes=5),
+        error_code=None,
+    )
+    monkeypatch.setattr(smb_router, "set_tenant_context", AsyncMock())
+    monkeypatch.setattr(smb_router, "record_operator_audit", AsyncMock())
+    body = NativeIdentityUpdate(
+        provider="ad",
+        directory_tenant_id="directory-1",
+        object_id="object-1",
+        primary_sid="S-1-5-21-100",
+        effective_sids=["S-1-5-21-200"],
+        group_expansion_complete=False,
+        state="healthy",
+        resolved_at=now,
+        expires_at=now + timedelta(minutes=5),
+    )
+    db = _NativeIdentityDb(scalar_rows=(SimpleNamespace(id=user_id), existing))
+    with pytest.raises(smb_router.HTTPException) as exc:
+        await smb_router.update_native_identity(
+            str(user_id), body, SimpleNamespace(), db, admin
+        )
+    assert exc.value.status_code == 422
+    assert "group expansion" in exc.value.detail
+    assert db.commits == 0
+
+    # Stale ``expires_at`` must also block a healthy state.
+    body_bad = NativeIdentityUpdate(
+        provider="ad",
+        directory_tenant_id="directory-1",
+        object_id="object-1",
+        primary_sid="S-1-5-21-100",
+        effective_sids=["S-1-5-21-200"],
+        group_expansion_complete=True,
+        state="healthy",
+        resolved_at=now,
+        expires_at=now - timedelta(seconds=1),
+    )
+    db2 = _NativeIdentityDb(scalar_rows=(SimpleNamespace(id=user_id), existing))
+    with pytest.raises(smb_router.HTTPException) as exc:
+        await smb_router.update_native_identity(
+            str(user_id), body_bad, SimpleNamespace(), db2, admin
+        )
+    assert exc.value.status_code == 422
