@@ -1079,6 +1079,88 @@ async def test_case_insensitive_path_occupancy_retires_prior_identity(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_v4_path_key_migration_reserves_real_retired_looking_paths(tmp_path):
+    db_path = tmp_path / "private" / "crawl.db"
+    db_path.parent.mkdir(parents=True)
+    displaced_id = "stable:new"
+    retired = f".crawl-retired/{hashlib.sha256(displaced_id.encode()).hexdigest()}"
+    config = (
+        '{"schedule":"*/15 * * * *","matter_ids":[],"max_workers":2,'
+        '"max_open_handles":4,"read_bytes_per_second":8388608,'
+        '"max_pending_jobs":10000,"max_file_size":33554432,'
+        '"case_sensitive_paths":false,"enabled":true}'
+    )
+    with sqlite3.connect(db_path) as db:
+        db.executescript(
+            f"""
+            CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+            INSERT INTO metadata VALUES('schema_version','4');
+            CREATE TABLE sources(
+                source_id TEXT PRIMARY KEY,root TEXT NOT NULL,config_json TEXT NOT NULL,
+                cursor TEXT,reconciliation_required INTEGER NOT NULL DEFAULT 1,
+                paused INTEGER NOT NULL DEFAULT 0,last_reconcile_started REAL,
+                last_reconcile_completed REAL,last_error TEXT,
+                active_reconcile_token TEXT,reconcile_lease_until REAL,
+                reconcile_generation INTEGER NOT NULL DEFAULT 0,
+                hint_generation INTEGER NOT NULL DEFAULT 0,
+                reconciliation_signal_generation INTEGER NOT NULL DEFAULT 0,
+                active_reconcile_signal_generation INTEGER
+            );
+            INSERT INTO sources VALUES(
+                'share-a','root','{config}',NULL,0,0,NULL,NULL,NULL,NULL,NULL,0,0,0,NULL
+            );
+            CREATE TABLE files(
+                source_id TEXT NOT NULL,file_id TEXT NOT NULL,path TEXT NOT NULL,
+                stable_id TEXT,size INTEGER NOT NULL,modified_ns INTEGER NOT NULL,
+                created_ns INTEGER,stat_version TEXT NOT NULL,fingerprint TEXT,
+                content_version TEXT NOT NULL,mutation_generation INTEGER NOT NULL,
+                acl_version TEXT,matter_ids_json TEXT NOT NULL DEFAULT '[]',
+                last_seen_run TEXT,tombstoned INTEGER NOT NULL DEFAULT 0,
+                updated_at REAL NOT NULL,PRIMARY KEY(source_id,file_id),
+                UNIQUE(source_id,path)
+            );
+            INSERT INTO files VALUES(
+                'share-a','stable:old','Case.txt','old',1,1,NULL,'s1',NULL,'v1',1,
+                NULL,'[]',NULL,0,3
+            );
+            INSERT INTO files VALUES(
+                'share-a','{displaced_id}','case.txt','new',1,2,NULL,'s2',NULL,'v2',1,
+                NULL,'[]',NULL,0,2
+            );
+            INSERT INTO files VALUES(
+                'share-a','stable:provider','{retired}','provider',1,3,NULL,'s3',NULL,
+                'v3',1,NULL,'[]',NULL,0,1
+            );
+            CREATE TABLE jobs(
+                job_id INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT NOT NULL,
+                source_id TEXT NOT NULL,file_id TEXT,path TEXT,content_version TEXT,
+                mutation_generation INTEGER,dedupe_key TEXT NOT NULL UNIQUE,
+                priority INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL DEFAULT 'ready',
+                attempts INTEGER NOT NULL DEFAULT 0,available_at REAL NOT NULL DEFAULT 0,
+                lease_until REAL,lease_token TEXT,last_error TEXT,artifact_ref TEXT,
+                artifact_hash TEXT,created_at REAL NOT NULL,updated_at REAL NOT NULL
+            );
+            """
+        )
+
+    manifest = CrawlManifest(str(db_path))
+    await manifest.initialize()
+    await CrawlManifest(str(db_path)).initialize()
+    with sqlite3.connect(db_path) as db:
+        rows = db.execute(
+            "SELECT file_id,path,path_key FROM files ORDER BY file_id"
+        ).fetchall()
+        version = db.execute(
+            "SELECT value FROM metadata WHERE key='schema_version'"
+        ).fetchone()[0]
+    by_id = {file_id: (path, path_key) for file_id, path, path_key in rows}
+    assert version == "5"
+    assert by_id["stable:provider"][0] == retired
+    assert by_id[displaced_id][0] == f"{retired}-1"
+    assert len({path_key for _, path_key in by_id.values()}) == 3
+
+
+@pytest.mark.asyncio
 async def test_targeted_observation_backpressure_persists_recovery_signal(tmp_path):
     old = FileStat("same.txt", 1, 1, stable_id="old")
     pipeline, manifest, _, _, _, source = await setup(

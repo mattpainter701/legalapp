@@ -633,6 +633,7 @@ class CrawlManifest:
                     (source_id,),
                 )
             ).fetchall()
+            reserved = {path if case_sensitive else path.casefold() for _, path in rows}
             used: set[str] = set()
             displaced = False
             for file_id, path in rows:
@@ -644,7 +645,7 @@ class CrawlManifest:
                         suffix = "" if ordinal == 0 else f"-{ordinal}"
                         path = f".crawl-retired/{digest}{suffix}"
                         path_key = path if case_sensitive else path.casefold()
-                        if path_key not in used:
+                        if path_key not in used and path_key not in reserved:
                             break
                         ordinal += 1
                     displaced = True
