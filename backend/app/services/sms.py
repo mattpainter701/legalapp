@@ -2815,6 +2815,7 @@ async def reconcile_sms_message(
         db, tenant_id=tenant_id, message=message
     )
     if automation_run:
+        automation_run.sms_message_id = message.id
         automation_run.reconciliation_required = False
         automation_run.provider_message_id = message.provider_message_id
         automation_run.status = resolved_status
