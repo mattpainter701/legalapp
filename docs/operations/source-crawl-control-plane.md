@@ -47,7 +47,7 @@ state for operator review.
 Only stable error codes are durable; adapter exception messages are never
 written to the database. Artifact shape is checked at the adapter, queue,
 schema, claim, and indexing boundaries. Schema upgrades reject future or
-versionless legacy databases before any write. The v1/v2/v3-to-v4 migration
+versionless legacy databases before any write. The v1-v4-to-v5 migration
 securely rebuilds the queue to remove legacy payload JSON or unconstrained
 references, sanitizes errors, and regenerates generation-qualified
 extract/delete/ACL work from the file manifest. A durable `scrub_required`
@@ -66,7 +66,8 @@ files and set `reconciliation_required`.
 
 Stable provider file IDs preserve identity across renames. When unavailable, a
 normalized path hash uses the source's explicit case-sensitivity policy, and
-rename detection is conservative. Path reuse moves displaced identities into a
+the same policy-normalized path key enforces unique occupancy even when stable
+provider IDs exist. Rename detection is conservative. Path reuse moves displaced identities into a
 collision-checked retired namespace until a successful reconciliation can
 tombstone them. Extraction reads are streamed in bounded chunks, capped by
 `max_file_size`, and fenced against the queued manifest stat plus pre/post

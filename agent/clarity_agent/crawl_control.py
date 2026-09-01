@@ -29,7 +29,7 @@ from clarity_agent.search_control import require_local_control_path
 from clarity_agent.config import _restrict
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 DEFAULT_MAX_FILE_SIZE = 32 * 1024 * 1024
 COMPLETED_JOB_RETENTION = 10_000
 ARTIFACT_REFERENCE_RE = re.compile(r"artifact:[0-9a-f]{64}\Z")
@@ -65,6 +65,10 @@ def valid_artifact_fields(reference: str | None, digest: str | None) -> bool:
         and ARTIFACT_REFERENCE_RE.fullmatch(reference)
         and DIGEST_RE.fullmatch(digest)
     )
+
+
+def normalized_path_key(source: SourceRoot, path: str) -> str:
+    return path if source.case_sensitive_paths else path.casefold()
 
 
 class JobKind(StrEnum):
@@ -337,6 +341,7 @@ class CrawlManifest:
                     source_id TEXT NOT NULL,
                     file_id TEXT NOT NULL,
                     path TEXT NOT NULL,
+                    path_key TEXT NOT NULL,
                     stable_id TEXT,
                     size INTEGER NOT NULL,
                     modified_ns INTEGER NOT NULL,
@@ -351,7 +356,7 @@ class CrawlManifest:
                     tombstoned INTEGER NOT NULL DEFAULT 0,
                     updated_at REAL NOT NULL,
                     PRIMARY KEY(source_id, file_id),
-                    UNIQUE(source_id, path),
+                    UNIQUE(source_id, path_key),
                     FOREIGN KEY(source_id) REFERENCES sources(source_id)
                 );
                 CREATE TABLE IF NOT EXISTS jobs (
@@ -495,6 +500,7 @@ class CrawlManifest:
             },
             "files": {
                 "mutation_generation": "INTEGER NOT NULL DEFAULT 1",
+                "path_key": "TEXT",
             },
             "jobs": {
                 "mutation_generation": "INTEGER",
@@ -510,6 +516,8 @@ class CrawlManifest:
                     await db.execute(
                         f"ALTER TABLE {table} ADD COLUMN {name} {definition}"
                     )
+        if 0 < existing_version < SCHEMA_VERSION:
+            await self._migrate_path_keys(db)
         if existing_version >= SCHEMA_VERSION or existing_version == 0:
             return False
 
@@ -610,6 +618,54 @@ class CrawlManifest:
             """
         )
         return True
+
+    async def _migrate_path_keys(self, db: aiosqlite.Connection) -> None:
+        sources = await (
+            await db.execute("SELECT source_id,config_json FROM sources")
+        ).fetchall()
+        for source_id, config_json in sources:
+            config = json.loads(config_json)
+            case_sensitive = bool(config.get("case_sensitive_paths", False))
+            rows = await (
+                await db.execute(
+                    """SELECT file_id,path FROM files WHERE source_id=?
+                       ORDER BY tombstoned ASC,updated_at DESC,file_id""",
+                    (source_id,),
+                )
+            ).fetchall()
+            used: set[str] = set()
+            displaced = False
+            for file_id, path in rows:
+                path_key = path if case_sensitive else path.casefold()
+                if path_key in used:
+                    digest = hashlib.sha256(str(file_id).encode()).hexdigest()
+                    ordinal = 0
+                    while True:
+                        suffix = "" if ordinal == 0 else f"-{ordinal}"
+                        path = f".crawl-retired/{digest}{suffix}"
+                        path_key = path if case_sensitive else path.casefold()
+                        if path_key not in used:
+                            break
+                        ordinal += 1
+                    displaced = True
+                used.add(path_key)
+                await db.execute(
+                    """UPDATE files SET path=?,path_key=?
+                       WHERE source_id=? AND file_id=?""",
+                    (path, path_key, source_id, file_id),
+                )
+            if displaced:
+                await db.execute(
+                    """UPDATE sources SET reconciliation_required=1,
+                       reconciliation_signal_generation=
+                           reconciliation_signal_generation+1
+                       WHERE source_id=?""",
+                    (source_id,),
+                )
+        await db.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS idx_files_path_key
+               ON files(source_id,path_key)"""
+        )
 
     @asynccontextmanager
     async def _connect(self):
@@ -734,6 +790,7 @@ class CrawlManifest:
     ) -> tuple[str, str, bool]:
         """Upsert identity/path state and return (file_id, version, changed)."""
         stat = replace(stat, path=canonical_relative_path(source, stat.path))
+        path_key = normalized_path_key(source, stat.path)
         if (
             stat.size < 0
             or stat.modified_ns < 0
@@ -778,8 +835,9 @@ class CrawlManifest:
             ).fetchone()
             occupant = await (
                 await db.execute(
-                    "SELECT file_id,content_version FROM files WHERE source_id=? AND path=? AND file_id<>?",
-                    (source.source_id, stat.path, file_id),
+                    """SELECT file_id,content_version FROM files
+                       WHERE source_id=? AND path_key=? AND file_id<>?""",
+                    (source.source_id, path_key, file_id),
                 )
             ).fetchone()
             if occupant:
@@ -790,23 +848,34 @@ class CrawlManifest:
                 while True:
                     suffix = "" if ordinal == 0 else f"-{ordinal}"
                     retired_path = f".crawl-retired/{digest}{suffix}"
-                    if retired_path == stat.path:
+                    retired_path_key = normalized_path_key(source, retired_path)
+                    if retired_path_key == path_key:
                         ordinal += 1
                         continue
                     collision = await (
                         await db.execute(
-                            """SELECT 1 FROM files WHERE source_id=? AND path=?
+                            """SELECT 1 FROM files WHERE source_id=? AND path_key=?
                                AND file_id<>?""",
-                            (source.source_id, retired_path, occupant["file_id"]),
+                            (
+                                source.source_id,
+                                retired_path_key,
+                                occupant["file_id"],
+                            ),
                         )
                     ).fetchone()
                     if collision is None:
                         break
                     ordinal += 1
                 await db.execute(
-                    """UPDATE files SET path=?,updated_at=?
+                    """UPDATE files SET path=?,path_key=?,updated_at=?
                        WHERE source_id=? AND file_id=?""",
-                    (retired_path, now, source.source_id, occupant["file_id"]),
+                    (
+                        retired_path,
+                        retired_path_key,
+                        now,
+                        source.source_id,
+                        occupant["file_id"],
+                    ),
                 )
                 if run_id is None:
                     await db.execute(
@@ -854,12 +923,13 @@ class CrawlManifest:
                 raise RuntimeError("source queue backpressure limit reached")
             await db.execute(
                 """INSERT INTO files(
-                       source_id,file_id,path,stable_id,size,modified_ns,created_ns,
+                       source_id,file_id,path,path_key,stable_id,size,modified_ns,created_ns,
                        stat_version,content_version,mutation_generation,acl_version,matter_ids_json,
                        last_seen_run,tombstoned,updated_at)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)
                    ON CONFLICT(source_id,file_id) DO UPDATE SET
-                       path=excluded.path, stable_id=excluded.stable_id,
+                       path=excluded.path,path_key=excluded.path_key,
+                       stable_id=excluded.stable_id,
                        size=excluded.size, modified_ns=excluded.modified_ns,
                        created_ns=excluded.created_ns, stat_version=excluded.stat_version,
                        content_version=excluded.content_version,
@@ -872,6 +942,7 @@ class CrawlManifest:
                     source.source_id,
                     file_id,
                     stat.path,
+                    path_key,
                     stat.stable_id,
                     stat.size,
                     stat.modified_ns,

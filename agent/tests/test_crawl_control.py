@@ -655,7 +655,7 @@ async def test_v1_migration_scrubs_payload_and_regenerates_safe_work(tmp_path):
             "SELECT kind,file_id,mutation_generation FROM jobs ORDER BY kind,file_id"
         ).fetchall()
     assert "payload_json" not in columns
-    assert version == "4"
+    assert version == "5"
     assert ("extract", "live", 1) in work
     assert ("delete", "gone", 2) in work
     for db_file in db_path.parent.glob("crawl.db*"):
@@ -1061,6 +1061,21 @@ async def test_real_source_path_cannot_collide_with_retired_identity(tmp_path):
     await manifest.observe(source, provider_file, None)
     assert (await manifest.file("share-a", provider_file.identity))["path"] == retired
     assert (await manifest.file("share-a", old.identity))["path"] == f"{retired}-1"
+
+
+@pytest.mark.asyncio
+async def test_case_insensitive_path_occupancy_retires_prior_identity(tmp_path):
+    old = FileStat("Case.txt", 1, 1, stable_id="old")
+    pipeline, manifest, _, _, _, source = await setup(tmp_path, {old.path: (old, b"x")})
+    await pipeline.reconcile("share-a")
+    replacement = FileStat("case.txt", 1, 2, stable_id="new")
+    await manifest.observe(source, replacement, None)
+    old_row = await manifest.file("share-a", old.identity)
+    new_row = await manifest.file("share-a", replacement.identity)
+    assert old_row["path"].startswith(".crawl-retired/")
+    assert new_row["path"] == "case.txt"
+    assert old_row["path_key"] != new_row["path_key"]
+    assert (await manifest.source_state("share-a"))["reconciliation_required"]
 
 
 @pytest.mark.asyncio
