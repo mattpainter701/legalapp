@@ -12,7 +12,18 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["149_firm_memory_source_auth"]
+    # Assert the invariant rather than one revision id.  Concurrent feature
+    # branches each used to pin their own id here, so the only thing stopping a
+    # two-head graph from merging was a textual conflict on this line -- and
+    # resolving that conflict by keeping one id hides the split.  A branch that
+    # adds a sibling revision instead of chaining onto the current head fails
+    # here whatever it does to the assertion.
+    assert len(heads) == 1, (
+        "alembic has multiple heads: "
+        f"{heads}. Chain the new revision onto the current head "
+        "(down_revision = the previous revision id) instead of branching "
+        "from a shared parent."
+    )
 
 
 def test_configurable_workflow_migration_is_tenant_safe_and_immutable():

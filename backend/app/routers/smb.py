@@ -373,14 +373,19 @@ async def report_scan_status(
 @router.get("/files/search", response_model=list[SmbSearchResult])
 async def search_files(
     q: str = Query(..., min_length=1),
-    matter_id: str | None = Query(None),
+    matter_id: str = Query(...),
     file_extensions: str | None = Query(None),
     limit: int = Query(20, ge=1, le=100),
     request: Request = None,
     db: AsyncSession = Depends(get_db),
-    user=Depends(get_current_user),
+    user=Depends(require_firm_memory_user),
 ):
-    """Full-text search across indexed SMB files."""
+    """Full-text search across the SMB files indexed for one bound matter.
+
+    ``matter_id`` is required: without it ``search_files`` skips every
+    matter/share binding filter and returns the whole tenant index, which is a
+    wider disclosure than the sibling ``/files/{file_id}/detail`` route allows.
+    """
     tenant_id = str(user.tenant_id)
     ext_list = file_extensions.split(",") if file_extensions else None
 

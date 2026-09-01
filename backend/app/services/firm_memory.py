@@ -415,7 +415,11 @@ class FirmMemorySearchService:
             scope_filters.append(
                 or_(
                     SmbFileIndex.path.ilike(escaped, escape="!"),
-                    SmbFileIndex.path.ilike(escaped + "!\\%", escape="!"),
+                    # A literal separator then the wildcard.  "!" escapes only
+                    # "%", "_" and itself; "!\" is undefined in the SQL standard
+                    # even though Postgres and SQLite both happen to read it as
+                    # a literal backslash.
+                    SmbFileIndex.path.ilike(escaped + "\\%", escape="!"),
                 )
             )
 
