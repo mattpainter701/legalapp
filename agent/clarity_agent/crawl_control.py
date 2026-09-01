@@ -29,7 +29,7 @@ from clarity_agent.search_control import require_local_control_path
 from clarity_agent.config import _restrict
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 DEFAULT_MAX_FILE_SIZE = 32 * 1024 * 1024
 COMPLETED_JOB_RETENTION = 10_000
 ARTIFACT_REFERENCE_RE = re.compile(r"artifact:[0-9a-f]{64}\Z")
@@ -56,6 +56,15 @@ def stable_error_code(error: BaseException) -> str:
     if isinstance(error, ValueError):
         return "invalid_input"
     return "internal_error"
+
+
+def valid_artifact_fields(reference: str | None, digest: str | None) -> bool:
+    return bool(
+        reference
+        and digest
+        and ARTIFACT_REFERENCE_RE.fullmatch(reference)
+        and DIGEST_RE.fullmatch(digest)
+    )
 
 
 class JobKind(StrEnum):
@@ -296,7 +305,8 @@ class CrawlManifest:
     async def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         _restrict(self.path.parent, required=True)
-        sanitized = False
+        await self._preflight_schema_version()
+        scrub_required = False
         async with self._connect() as db:
             await db.executescript(
                 """
@@ -362,6 +372,14 @@ class CrawlManifest:
                     artifact_hash TEXT,
                     created_at REAL NOT NULL,
                     updated_at REAL NOT NULL,
+                    CHECK(artifact_ref IS NULL OR (
+                        length(artifact_ref)=73 AND substr(artifact_ref,1,9)='artifact:'
+                        AND substr(artifact_ref,10) NOT GLOB '*[^0-9a-f]*'
+                    )),
+                    CHECK(artifact_hash IS NULL OR (
+                        length(artifact_hash)=64
+                        AND artifact_hash NOT GLOB '*[^0-9a-f]*'
+                    )),
                     FOREIGN KEY(source_id) REFERENCES sources(source_id)
                 );
                 CREATE INDEX IF NOT EXISTS idx_jobs_claim
@@ -378,24 +396,64 @@ class CrawlManifest:
             existing_version = int(version_row[0]) if version_row else 0
             if existing_version > SCHEMA_VERSION:
                 raise RuntimeError("crawl manifest schema is newer than this agent")
-            sanitized = await self._migrate_schema(db, existing_version)
+            migrated = await self._migrate_schema(db, existing_version)
             await db.execute(
                 """INSERT INTO metadata(key,value) VALUES('schema_version',?)
                    ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
                 (str(SCHEMA_VERSION),),
             )
             await db.commit()
-        if sanitized:
-            vacuum_db = await aiosqlite.connect(self.path, timeout=30)
-            try:
-                checkpoint = await vacuum_db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                await checkpoint.fetchall()
-                await checkpoint.close()
-                vacuum = await vacuum_db.execute("VACUUM")
-                await vacuum.close()
-            finally:
-                await vacuum_db.close()
+            marker = await (
+                await db.execute(
+                    "SELECT value FROM metadata WHERE key='scrub_required'"
+                )
+            ).fetchone()
+            scrub_required = migrated or (marker is not None and marker[0] == "1")
+        if scrub_required:
+            await self._physical_scrub()
+            async with self._connect() as db:
+                await db.execute(
+                    """INSERT INTO metadata(key,value) VALUES('scrub_required','0')
+                       ON CONFLICT(key) DO UPDATE SET value='0'"""
+                )
+                await db.commit()
         _restrict(self.path, required=True)
+
+    async def _preflight_schema_version(self) -> None:
+        if not self.path.exists():
+            return
+        uri = f"{self.path.as_uri()}?mode=ro"
+        db = await aiosqlite.connect(uri, uri=True)
+        try:
+            metadata = await (
+                await db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='metadata'"
+                )
+            ).fetchone()
+            if metadata is None:
+                return
+            row = await (
+                await db.execute(
+                    "SELECT value FROM metadata WHERE key='schema_version'"
+                )
+            ).fetchone()
+            if row is not None and int(row[0]) > SCHEMA_VERSION:
+                raise RuntimeError("crawl manifest schema is newer than this agent")
+        finally:
+            await db.close()
+
+    async def _physical_scrub(self) -> None:
+        vacuum_db = await aiosqlite.connect(self.path, timeout=30)
+        try:
+            checkpoint = await vacuum_db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            rows = await checkpoint.fetchall()
+            await checkpoint.close()
+            if not rows or int(rows[0][0]) != 0 or int(rows[0][1]) != int(rows[0][2]):
+                raise RuntimeError("crawl manifest WAL scrub could not complete")
+            vacuum = await vacuum_db.execute("VACUUM")
+            await vacuum.close()
+        finally:
+            await vacuum_db.close()
 
     async def _migrate_schema(
         self, db: aiosqlite.Connection, existing_version: int
@@ -425,11 +483,7 @@ class CrawlManifest:
                     await db.execute(
                         f"ALTER TABLE {table} ADD COLUMN {name} {definition}"
                     )
-        job_columns = {
-            row[1]
-            for row in await (await db.execute("PRAGMA table_info(jobs)")).fetchall()
-        }
-        if existing_version >= SCHEMA_VERSION or "payload_json" not in job_columns:
+        if existing_version >= SCHEMA_VERSION or existing_version == 0:
             return False
 
         # Version 1 allowed extracted payload JSON in the durable queue. Rebuild
@@ -462,6 +516,14 @@ class CrawlManifest:
                 artifact_hash TEXT,
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL,
+                CHECK(artifact_ref IS NULL OR (
+                    length(artifact_ref)=73 AND substr(artifact_ref,1,9)='artifact:'
+                    AND substr(artifact_ref,10) NOT GLOB '*[^0-9a-f]*'
+                )),
+                CHECK(artifact_hash IS NULL OR (
+                    length(artifact_hash)=64
+                    AND artifact_hash NOT GLOB '*[^0-9a-f]*'
+                )),
                 FOREIGN KEY(source_id) REFERENCES sources(source_id)
             );
             INSERT INTO jobs_v2(
@@ -515,6 +577,8 @@ class CrawlManifest:
                 active_reconcile_token=NULL,reconcile_lease_until=NULL,
                 last_error=CASE WHEN last_error IS NULL THEN NULL
                                 ELSE 'migrated_error' END;
+            INSERT INTO metadata(key,value) VALUES('scrub_required','1')
+                ON CONFLICT(key) DO UPDATE SET value='1';
             COMMIT;
             """
         )
@@ -526,6 +590,7 @@ class CrawlManifest:
         try:
             await db.execute("PRAGMA foreign_keys=ON")
             await db.execute("PRAGMA synchronous=FULL")
+            await db.execute("PRAGMA secure_delete=ON")
             yield db
         finally:
             await db.close()
@@ -613,7 +678,8 @@ class CrawlManifest:
             await db.execute(
                 """UPDATE sources SET last_reconcile_started=?, last_error=NULL,
                    active_reconcile_token=?, reconcile_lease_until=?,
-                   reconcile_generation=reconcile_generation+1 WHERE source_id=?""",
+                   reconcile_generation=reconcile_generation+1,
+                   reconciliation_required=1 WHERE source_id=?""",
                 (now, run_id, now + max(1, lease_seconds), source_id),
             )
             await db.commit()
@@ -693,6 +759,11 @@ class CrawlManifest:
                     "UPDATE files SET path=path || '#reused-' || substr(file_id,1,12), updated_at=? WHERE source_id=? AND file_id=?",
                     (now, source.source_id, occupant["file_id"]),
                 )
+                if run_id is None:
+                    await db.execute(
+                        "UPDATE sources SET reconciliation_required=1 WHERE source_id=?",
+                        (source.source_id,),
+                    )
             matter_ids_json = json.dumps(source.matter_ids)
             changed = (
                 current is None
@@ -782,6 +853,20 @@ class CrawlManifest:
         async with self._write_lock, self._connect() as db:
             db.row_factory = aiosqlite.Row
             await db.execute("BEGIN IMMEDIATE")
+            source_row = await (
+                await db.execute(
+                    """SELECT config_json,active_reconcile_token,
+                       reconcile_lease_until FROM sources WHERE source_id=?""",
+                    (source_id,),
+                )
+            ).fetchone()
+            if (
+                source_row is None
+                or source_row["active_reconcile_token"] != run_id
+                or float(source_row["reconcile_lease_until"] or 0) < now
+            ):
+                await db.rollback()
+                raise LeaseLost("reconciliation lease was replaced or expired")
             rows = await (
                 await db.execute(
                     """SELECT file_id,path,content_version,mutation_generation FROM files
@@ -790,6 +875,17 @@ class CrawlManifest:
                     (source_id, run_id),
                 )
             ).fetchall()
+            pending = await (
+                await db.execute(
+                    """SELECT count(*) FROM jobs WHERE source_id=?
+                       AND kind<>'discover' AND state IN ('ready','retry','leased')""",
+                    (source_id,),
+                )
+            ).fetchone()
+            max_pending = int(json.loads(source_row["config_json"])["max_pending_jobs"])
+            if int(pending[0]) + len(rows) > max_pending:
+                await db.rollback()
+                raise RuntimeError("source queue backpressure limit reached")
             for row in rows:
                 generation = int(row["mutation_generation"]) + 1
                 await db.execute(
@@ -880,6 +976,11 @@ class CrawlManifest:
         dedupe_suffix: str = "",
         rearm_done: bool = False,
     ) -> None:
+        if kind == JobKind.INDEX:
+            if not valid_artifact_fields(artifact_ref, artifact_hash):
+                raise ValueError("index jobs require opaque artifact fields")
+        elif artifact_ref is not None or artifact_hash is not None:
+            raise ValueError("artifact fields are valid only for index jobs")
         dedupe = "|".join(
             [
                 kind.value,
@@ -944,6 +1045,21 @@ class CrawlManifest:
             ).fetchone()
             if row is None:
                 await db.rollback()
+                return None
+            if kind == JobKind.INDEX and not valid_artifact_fields(
+                row["artifact_ref"], row["artifact_hash"]
+            ):
+                await db.execute(
+                    """UPDATE jobs SET state='dead',artifact_ref=NULL,
+                       artifact_hash=NULL,last_error='invalid_input',updated_at=?
+                       WHERE job_id=?""",
+                    (now, row["job_id"]),
+                )
+                await db.execute(
+                    """INSERT INTO metadata(key,value) VALUES('scrub_required','1')
+                       ON CONFLICT(key) DO UPDATE SET value='1'"""
+                )
+                await db.commit()
                 return None
             attempts = int(row["attempts"]) + 1
             await db.execute(
@@ -1147,13 +1263,28 @@ class CrawlManifest:
             await db.execute("BEGIN IMMEDIATE")
             row = await (
                 await db.execute(
-                    "SELECT hint_generation FROM sources WHERE source_id=?",
+                    "SELECT hint_generation,config_json FROM sources WHERE source_id=?",
                     (source_id,),
                 )
             ).fetchone()
             if row is None:
                 await db.rollback()
                 raise KeyError(source_id)
+            pending = await (
+                await db.execute(
+                    """SELECT count(*) FROM jobs WHERE source_id=?
+                       AND kind<>'discover' AND state IN ('ready','retry','leased')""",
+                    (source_id,),
+                )
+            ).fetchone()
+            max_pending = int(json.loads(row["config_json"])["max_pending_jobs"])
+            if int(pending[0]) + 1 > max_pending:
+                await db.execute(
+                    "UPDATE sources SET reconciliation_required=1 WHERE source_id=?",
+                    (source_id,),
+                )
+                await db.commit()
+                raise RuntimeError("source queue backpressure limit reached")
             generation = int(row["hint_generation"]) + 1
             await db.execute(
                 "UPDATE sources SET cursor=?,hint_generation=? WHERE source_id=?",
@@ -1600,9 +1731,7 @@ class CrawlPipeline:
             or extracted.mutation_generation != job.mutation_generation
         ):
             raise RuntimeError("extractor returned a mismatched document generation")
-        if not ARTIFACT_REFERENCE_RE.fullmatch(
-            extracted.artifact_ref
-        ) or not DIGEST_RE.fullmatch(extracted.artifact_hash):
+        if not valid_artifact_fields(extracted.artifact_ref, extracted.artifact_hash):
             raise ValueError("extractor returned an invalid artifact reference")
         await self._require_job_lease(job)
         await self.manifest.enqueue(
@@ -1623,8 +1752,7 @@ class CrawlPipeline:
             or row["tombstoned"]
             or row["content_version"] != job.content_version
             or int(row["mutation_generation"]) != int(job.mutation_generation or 0)
-            or not job.artifact_ref
-            or not job.artifact_hash
+            or not valid_artifact_fields(job.artifact_ref, job.artifact_hash)
         ):
             raise SupersededJob("stale index generation")
         source = self.sources[job.source_id]

@@ -45,10 +45,13 @@ their exact lease generation. Failures back off and eventually enter the `dead`
 state for operator review.
 
 Only stable error codes are durable; adapter exception messages are never
-written to the database. Schema upgrades reject future versions. The v1-to-v2
-migration securely rebuilds the queue to remove legacy payload JSON, sanitizes
-errors, regenerates generation-qualified extract/delete/ACL work from the file
-manifest, truncates the WAL, and vacuums freed pages.
+written to the database. Artifact shape is checked at the adapter, queue,
+schema, claim, and indexing boundaries. Schema upgrades reject future versions
+before any write. The v1/v2-to-v3 migration securely rebuilds the queue to
+remove legacy payload JSON or unconstrained references, sanitizes errors, and
+regenerates generation-qualified extract/delete/ACL work from the file
+manifest. A durable `scrub_required` marker remains set until a checked WAL
+truncate and `VACUUM` succeed; interrupted physical scrubs retry on startup.
 
 Each full reconciliation owns a durable, renewable per-source lease. Observe,
 finish, failure, and tombstone mutations are compare-and-swap fenced by its
@@ -90,11 +93,14 @@ Every source has its own five-field reconciliation schedule plus these budgets:
 `enqueue_due_reconciliations()` persists discovery work. Operators can pause a
 source, and `set_interactive_priority()` yields crawl reads while interactive
 local search is active. One scheduled reconciliation may be outstanding per
-source. Worker budgets cover every queue stage, and handle budgets cover source
-walk/stat/read I/O. Durable operator pause and interactive backpressure are
-tracked independently. Downstream capacity is reserved transactionally for all
-jobs an observation can create, and completed-job metadata is retained only to
-a fixed per-source bound. Change streams never replace scheduled reconciliation.
+source. Starting a run durably marks reconciliation required until its fenced
+successful finish. Worker budgets cover every queue stage, and handle budgets
+cover source walk/stat/read I/O. Durable operator pause and interactive
+backpressure are tracked independently. Downstream capacity is reserved
+transactionally for observations, hints, and complete tombstone batches; an
+authoritative finish rolls back rather than partially deleting when capacity is
+insufficient. Completed-job metadata is retained only to a fixed per-source
+bound. Change streams never replace scheduled reconciliation.
 
 ## Operator status and response
 
