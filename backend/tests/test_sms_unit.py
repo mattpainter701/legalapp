@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.services import google_calendar, microsoft_calendar
 from app.models.conversion_loop import LeadChannelConsent, SmsConsentEvent
 from app.models.sms import (
     SmsMessage,
@@ -70,6 +71,96 @@ def test_sms_destination_rejects_ambiguous_or_invalid_numbers():
             pass
         else:
             raise AssertionError(f"accepted invalid destination: {value!r}")
+
+
+@pytest.mark.asyncio
+async def test_revocation_calendar_cleanup_uses_exact_user_and_verifies_absence(
+    monkeypatch,
+):
+    class SessionContext:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    tenant_fallbacks: list[str] = []
+
+    async def tenant_token(*_args):
+        tenant_fallbacks.append("wrong-principal")
+        return "tenant-token-must-not-be-used"
+
+    async def missing_user_token(*_args):
+        return None
+
+    async def refresh_failure(*_args):
+        raise RuntimeError("refresh failed")
+
+    for calendar, user_token in (
+        (google_calendar, missing_user_token),
+        (microsoft_calendar, refresh_failure),
+    ):
+        monkeypatch.setattr(calendar, "async_session_maker", SessionContext)
+        monkeypatch.setattr(calendar, "get_fresh_user_token", user_token)
+        monkeypatch.setattr(calendar, "get_fresh_token", tenant_token)
+        assert (
+            await calendar._get_token("tenant-id", "revoked-user-id", exact_user=True)
+            is None
+        )
+        with pytest.raises(RuntimeError, match="exact-user token"):
+            await calendar.delete_task_event(
+                "tenant-id",
+                "task-id",
+                "revoked-user-id",
+                require_exact_user=True,
+            )
+    assert tenant_fallbacks == []
+
+    class EmptyResponse:
+        status_code = 200
+
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    class EmptyCalendarClient:
+        def __init__(self, payload):
+            self._payload = payload
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def get(self, *_args, **_kwargs):
+            return EmptyResponse(self._payload)
+
+        async def delete(self, *_args, **_kwargs):
+            raise AssertionError("verified absence must not issue a delete")
+
+    async def exact_user_token(*_args, **kwargs):
+        assert kwargs == {"exact_user": True}
+        return "exact-user-token"
+
+    for calendar, payload in (
+        (google_calendar, {"items": []}),
+        (microsoft_calendar, {"value": []}),
+    ):
+        monkeypatch.setattr(calendar, "_get_token", exact_user_token)
+        monkeypatch.setattr(
+            calendar.httpx,
+            "AsyncClient",
+            lambda payload=payload: EmptyCalendarClient(payload),
+        )
+        assert await calendar.delete_task_event(
+            "tenant-id",
+            "task-id",
+            "revoked-user-id",
+            require_exact_user=True,
+        )
 
 
 def test_twilio_signature_is_exact_and_rejects_tampering():

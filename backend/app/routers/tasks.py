@@ -1444,6 +1444,7 @@ async def transition_task_status(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     await _require_sms_task_access(db, task, current_user)
+    is_sms_task = await _task_contains_sms(db, task)
 
     if (
         task.review_policy == "staff_then_attorney"
@@ -1586,7 +1587,7 @@ async def transition_task_status(
     await db.commit()
     await set_tenant_context(db, tenant_id)
     await db.refresh(task)
-    if changed:
+    if changed and not is_sms_task:
         await notify_task_updated(
             db,
             task,
@@ -2189,6 +2190,7 @@ async def update_task(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     await _require_sms_task_access(db, task, current_user)
+    is_sms_task = await _task_contains_sms(db, task)
     if (
         task.review_policy == "staff_then_attorney"
         and payload.status == "in_progress"
@@ -2268,7 +2270,7 @@ async def update_task(
     await _require_task_references_for_tenant(
         db, uuid.UUID(tenant_id), changed_references
     )
-    if await _task_contains_sms(db, task):
+    if is_sms_task:
         for field in ("assigned_to_user_id", "reviewer_user_id"):
             if field not in payload.model_fields_set:
                 continue
@@ -2470,15 +2472,16 @@ async def update_task(
     await set_tenant_context(db, tenant_id)
     await db.refresh(task)
 
-    await notify_task_updated(
-        db,
-        task,
-        tenant_id,
-        calendar_changed=calendar_changed,
-        assignment_changed=reassigned,
-        previous_calendar_user_id=previous_calendar_user_id,
-        assignment_note=assignment_note,
-    )
+    if not is_sms_task:
+        await notify_task_updated(
+            db,
+            task,
+            tenant_id,
+            calendar_changed=calendar_changed,
+            assignment_changed=reassigned,
+            previous_calendar_user_id=previous_calendar_user_id,
+            assignment_note=assignment_note,
+        )
     # Connected-mail token refresh can commit during assignment notification,
     # which clears SET LOCAL before the delivery-state query below.
     await set_tenant_context(db, tenant_id)

@@ -201,22 +201,33 @@ async def remove_task_from_calendars_now(
     """Synchronously remove calendar copies before revoking task access."""
     results = await asyncio.gather(
         google_calendar.delete_task_event(
-            tenant_id=tenant_id, task_id=task_id, user_id=user_id
+            tenant_id=tenant_id,
+            task_id=task_id,
+            user_id=user_id,
+            require_exact_user=True,
         ),
         microsoft_calendar.delete_task_event(
-            tenant_id=tenant_id, task_id=task_id, user_id=user_id
+            tenant_id=tenant_id,
+            task_id=task_id,
+            user_id=user_id,
+            require_exact_user=True,
         ),
         return_exceptions=True,
     )
     failures: list[Exception] = []
     for provider, result in zip(("google", "microsoft"), results, strict=True):
-        if isinstance(result, Exception):
-            failures.append(result)
+        if isinstance(result, Exception) or result is not True:
+            failure = (
+                result
+                if isinstance(result, Exception)
+                else RuntimeError("Calendar cleanup was not verified")
+            )
+            failures.append(failure)
             logger.warning(
                 "%s calendar cleanup failed for SMS task %s (%s)",
                 provider,
                 task_id,
-                type(result).__name__,
+                type(failure).__name__,
             )
     if failures:
         raise RuntimeError("External calendar cleanup did not complete") from failures[
@@ -339,15 +350,10 @@ async def notify_task_updated(
     if await _demo_notifications_disabled(db, tenant_id):
         return EmailDeliveryResult.NOT_REQUIRED
     if await task_contains_sms(db, task):
-        # Clean any event created by a pre-hardening build, but never upsert or
-        # email SMS proposal content after this boundary.
-        cleanup_user_ids = {
-            value
-            for value in (previous_calendar_user_id, task_calendar_user_id(task))
-            if value
-        }
-        for user_id in sorted(cleanup_user_ids):
-            await remove_task_from_calendars_now(str(task.id), tenant_id, user_id)
+        # New SMS proposals never create calendar copies. Ordinary task updates
+        # must not return a false 500 after their state/run commit because a
+        # legacy provider cleanup failed; access revocation owns the explicit,
+        # fail-closed legacy cleanup boundary.
         return EmailDeliveryResult.NOT_REQUIRED
     if calendar_changed:
         if assignment_changed and previous_calendar_user_id:

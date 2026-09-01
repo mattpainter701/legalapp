@@ -72,12 +72,15 @@
   sanitized audit record, rebinds matching in-flight task runs, and does not
   claim delivery. Unauthorized SMS tasks are omitted from generic task, report,
   calendar, and Workspace MCP reads. SMS proposals are never copied to assignment
-  email or third-party calendars, legacy calendar copies are removed before
-  assignment revocation, and provider timeline rows cannot be fabricated,
+  email or third-party calendars; ordinary approval/update responses do not
+  depend on external calendar cleanup, while assignment revocation requires an
+  exact-user, verified delete-or-absence result for legacy copies. Provider
+  timeline rows cannot be fabricated,
   edited, or deleted through the generic communications API. SMS proposal and
   task-event evidence cannot be hard-deleted. STOP-family replies revoke consent;
-  ambiguous inbound routes require access to every candidate matter and may be
-  resolved only to exact stored candidates. Assistant proposals require live
+  ambiguous inbound routes prove access to every candidate matter before
+  returning status or target errors and may be resolved only to exact stored
+  candidates. Assistant proposals require live
   matter access before creation and idempotent replay, remain human-approved,
   and recheck consent at approval. Demo purge treats pre-SMS and complete-SMS
   schemas coherently, including retired credential history, and refuses a

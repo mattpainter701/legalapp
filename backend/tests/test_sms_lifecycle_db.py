@@ -260,6 +260,10 @@ async def _rotate_provider_generation(
 ) -> int:
     await set_tenant_context(db, str(tenant_id))
     await sms_service.lock_provider_config_admission(db, tenant_id=tenant_id)
+    if ready is not None:
+        ready.set()
+    if release is not None:
+        await release.wait()
     config = await db.scalar(
         select(SmsProviderConfig)
         .where(
@@ -283,10 +287,6 @@ async def _rotate_provider_generation(
     config.updated_by_user_id = actor_user_id
     await db.flush()
     await sms_service.ensure_provider_config_credential(db, config=config)
-    if ready is not None:
-        ready.set()
-    if release is not None:
-        await release.wait()
     generation = config.generation
     await db.commit()
     return generation
@@ -3036,7 +3036,7 @@ async def test_send_admission_precedes_sixth_generation_rotation_and_crash_recov
 
 
 @pytest.mark.asyncio
-async def test_sixth_generation_rotation_precedes_send_reservation(
+async def test_rotation_advisory_precedes_send_actor_lock_and_sixth_generation_flush(
     db_session, test_engine, test_tenant, test_user, monkeypatch
 ):
     seeded = await _seed_lifecycle(
@@ -3100,11 +3100,33 @@ async def test_sixth_generation_rotation_precedes_send_reservation(
 
     rotation_task = asyncio.create_task(rotate_sixth())
     await asyncio.wait_for(rotation_ready.wait(), timeout=5)
+    original_admission_lock = sms_service.lock_provider_config_admission
+    send_waiting_for_admission = asyncio.Event()
+
+    async def observe_send_admission(db, *, tenant_id):
+        send_waiting_for_admission.set()
+        await original_admission_lock(db, tenant_id=tenant_id)
+
+    monkeypatch.setattr(
+        sms_service, "lock_provider_config_admission", observe_send_admission
+    )
     send_task = asyncio.create_task(dispatch())
-    await asyncio.sleep(0.1)
+    await asyncio.wait_for(send_waiting_for_admission.wait(), timeout=5)
     assert not send_task.done()
     async with maker() as probe_db:
         await set_tenant_context(probe_db, str(tenant_id))
+        # Rotation is paused after the advisory lock and before its actor-bound
+        # credential/config FK flush. Send must be waiting on the advisory
+        # without already holding the actor row, or releasing rotation can
+        # produce the inverse-lock deadlock caught by this NOWAIT probe.
+        assert (
+            await probe_db.scalar(
+                select(User.id)
+                .where(User.id == user_id, User.tenant_id == tenant_id)
+                .with_for_update(nowait=True)
+            )
+            == user_id
+        )
         assert (
             await probe_db.scalar(
                 select(func.count())
@@ -4170,7 +4192,7 @@ async def test_sms_draft_edit_resets_staged_review_and_rotates_identity(
 
 @pytest.mark.asyncio
 async def test_sms_approval_requires_exact_action_and_consent_hash_on_both_apis(
-    db_session, client, test_tenant, test_user
+    db_session, client, test_tenant, test_user, monkeypatch
 ):
     seeded = await _seed_lifecycle(
         db_session,
@@ -4187,6 +4209,22 @@ async def test_sms_approval_requires_exact_action_and_consent_hash_on_both_apis(
     matter_id = seeded.matter.id
     recipient_phone = seeded.contact.phone
     consent_evidence = _consent_evidence(seeded)
+    calendar_cleanup_calls: list[dict] = []
+
+    async def unavailable_legacy_cleanup(**kwargs):
+        calendar_cleanup_calls.append(kwargs)
+        raise RuntimeError("calendar provider unavailable")
+
+    monkeypatch.setattr(
+        task_notifications.google_calendar,
+        "delete_task_event",
+        unavailable_legacy_cleanup,
+    )
+    monkeypatch.setattr(
+        task_notifications.microsoft_calendar,
+        "delete_task_event",
+        unavailable_legacy_cleanup,
+    )
 
     async def create_review_task(suffix: str):
         action = SmsClientAction(
@@ -4274,6 +4312,26 @@ async def test_sms_approval_requires_exact_action_and_consent_hash_on_both_apis(
     )
     assert transition_run.status == "queued"
     assert transition_run.action_sha256 == transition_hash
+    duplicate_transition = await client.post(
+        f"/api/tasks/{transition_task.task_id}/transition",
+        json={
+            "to_status": "in_progress",
+            "expected_version": transition_task.version,
+            "sms_acknowledgement": {
+                "action_sha256": transition_hash,
+                "consent_snapshot_sha256": transition_task.consent_sha256,
+            },
+        },
+    )
+    assert duplicate_transition.status_code == 409
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(TaskAutomationRun)
+            .where(TaskAutomationRun.task_id == transition_task.task_id)
+        )
+        == 1
+    )
 
     patch_task = await create_review_task("patch")
     patch_body = (await client.get(f"/api/tasks/{patch_task.task_id}")).json()
@@ -4297,6 +4355,27 @@ async def test_sms_approval_requires_exact_action_and_consent_hash_on_both_apis(
         },
     )
     assert approved_patch.status_code == 200
+    duplicate_patch = await client.patch(
+        f"/api/tasks/{patch_task.task_id}",
+        json={
+            "status": "in_progress",
+            "expected_version": patch_task.version,
+            "sms_acknowledgement": {
+                "action_sha256": patch_body["pending_action_sha256"],
+                "consent_snapshot_sha256": patch_task.consent_sha256,
+            },
+        },
+    )
+    assert duplicate_patch.status_code == 409
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(TaskAutomationRun)
+            .where(TaskAutomationRun.task_id == patch_task.task_id)
+        )
+        == 1
+    )
+    assert calendar_cleanup_calls == []
 
     edited_task = await create_review_task("edited")
     before_edit = (await client.get(f"/api/tasks/{edited_task.task_id}")).json()
@@ -5010,7 +5089,7 @@ async def test_workspace_mcp_sms_idempotency_is_race_safe_across_sessions(
 
 @pytest.mark.asyncio
 async def test_custom_role_capability_controls_staff_sms_send(
-    db_session, client, test_tenant, test_user, monkeypatch
+    db_session, test_engine, client, test_tenant, test_user, monkeypatch
 ):
     seeded = await _seed_lifecycle(
         db_session, tenant=test_tenant, user=test_user, suffix="rbac"
@@ -5161,6 +5240,47 @@ async def test_custom_role_capability_controls_staff_sms_send(
     )
     db_session.add(review_item)
     await db_session.commit()
+    maker = async_sessionmaker(test_engine, expire_on_commit=False)
+
+    async def assert_hidden_review_rows_are_unlocked():
+        async with maker() as probe_db:
+            await set_tenant_context(probe_db, str(test_tenant.id))
+            for model, row_id in (
+                (SmsReviewItem, review_item.id),
+                (SmsMessage, inbound_message.id),
+                (Contact, hidden_contact.id),
+                (Matter, hidden_matter.id),
+            ):
+                assert (
+                    await probe_db.scalar(
+                        select(model.id)
+                        .where(model.id == row_id, model.tenant_id == test_tenant.id)
+                        .with_for_update(nowait=True)
+                    )
+                    == row_id
+                )
+            await probe_db.rollback()
+
+    def hidden_review_attempts(noncandidate_contact_id, noncandidate_matter_id):
+        return (
+            {
+                "decision": "resolve",
+                "contact_id": str(seeded.contact.id),
+                "matter_id": str(seeded.matter.id),
+            },
+            {"decision": "reject"},
+            {
+                "decision": "resolve",
+                "contact_id": str(noncandidate_contact_id),
+                "matter_id": str(noncandidate_matter_id),
+            },
+            {
+                "decision": "resolve",
+                "contact_id": str(hidden_contact.id),
+                "matter_id": str(hidden_matter.id),
+            },
+        )
+
     denied_headers = {"Authorization": f"Bearer {_user_token(denied)}"}
     explicit_sms = await client.get(
         "/api/communications?channel=sms", headers=denied_headers
@@ -5198,6 +5318,15 @@ async def test_custom_role_capability_controls_staff_sms_send(
     )
     assert unassigned_review.status_code == 200
     assert all(row["id"] != str(review_item.id) for row in unassigned_review.json())
+    for attempt in hidden_review_attempts(uuid.uuid4(), uuid.uuid4()):
+        zero_access = await client.post(
+            f"/api/sms/review/{review_item.id}",
+            json=attempt,
+            headers=unassigned_headers,
+        )
+        assert zero_access.status_code == 404
+        assert zero_access.json()["detail"] == "SMS review item was not found"
+    await assert_hidden_review_rows_are_unlocked()
     unassigned_reconciliation = await client.get(
         "/api/sms/reconciliation",
         headers=unassigned_headers,
@@ -5226,20 +5355,22 @@ async def test_custom_role_capability_controls_staff_sms_send(
     assert seeded.contact.phone not in allowed_review.text
     assert str(hidden_contact.id) not in allowed_review.text
     assert str(hidden_matter.id) not in allowed_review.text
-    reject_hidden_candidates = await client.post(
-        f"/api/sms/review/{review_item.id}",
-        json={"decision": "reject"},
-        headers=allowed_headers,
-    )
-    assert reject_hidden_candidates.status_code == 404
-    db_session.add(
-        MatterAssignment(
-            tenant_id=test_tenant.id,
-            matter_id=hidden_matter.id,
-            user_id=allowed.id,
-            role="associate",
+    for attempt in hidden_review_attempts(uuid.uuid4(), uuid.uuid4()):
+        partial_access = await client.post(
+            f"/api/sms/review/{review_item.id}",
+            json=attempt,
+            headers=allowed_headers,
         )
+        assert partial_access.status_code == 404
+        assert partial_access.json()["detail"] == "SMS review item was not found"
+    await assert_hidden_review_rows_are_unlocked()
+    hidden_assignment = MatterAssignment(
+        tenant_id=test_tenant.id,
+        matter_id=hidden_matter.id,
+        user_id=allowed.id,
+        role="associate",
     )
+    db_session.add(hidden_assignment)
     await db_session.commit()
     all_candidate_review = await client.get("/api/sms/review", headers=allowed_headers)
     visible_review = next(
@@ -5281,6 +5412,17 @@ async def test_custom_role_capability_controls_staff_sms_send(
         )
     )
     await db_session.commit()
+    wrong_phone_candidate = await client.post(
+        f"/api/sms/review/{review_item.id}",
+        json={
+            "decision": "resolve",
+            "contact_id": str(hidden_contact.id),
+            "matter_id": str(hidden_matter.id),
+        },
+        headers=allowed_headers,
+    )
+    assert wrong_phone_candidate.status_code == 409
+    assert "does not match the inbound phone" in wrong_phone_candidate.text
     for contact_id, matter_id in (
         (noncandidate_contact.id, seeded.matter.id),
         (seeded.contact.id, noncandidate_matter.id),
@@ -5296,6 +5438,29 @@ async def test_custom_role_capability_controls_staff_sms_send(
         )
         assert noncandidate.status_code == 409
         assert "stored route candidate" in noncandidate.text
+
+    await db_session.delete(hidden_assignment)
+    await db_session.commit()
+    for attempt in hidden_review_attempts(
+        noncandidate_contact.id, noncandidate_matter.id
+    ):
+        former_access = await client.post(
+            f"/api/sms/review/{review_item.id}",
+            json=attempt,
+            headers=allowed_headers,
+        )
+        assert former_access.status_code == 404
+        assert former_access.json()["detail"] == "SMS review item was not found"
+    await assert_hidden_review_rows_are_unlocked()
+    db_session.add(
+        MatterAssignment(
+            tenant_id=test_tenant.id,
+            matter_id=hidden_matter.id,
+            user_id=allowed.id,
+            role="associate",
+        )
+    )
+    await db_session.commit()
     resolved_visible_candidate = await client.post(
         f"/api/sms/review/{review_item.id}",
         json={
@@ -5938,14 +6103,14 @@ async def test_sms_assignment_revocation_never_discloses_and_cleans_legacy_calen
     await asyncio.wait_for(notification_task, timeout=5)
     assert disclosures == []
 
-    async def failed_google_cleanup(**kwargs):
-        cleanup.append(("google-failed", kwargs))
-        raise RuntimeError("provider unavailable")
+    async def unverified_google_cleanup(**kwargs):
+        cleanup.append(("google-unverified", kwargs))
+        return False
 
     monkeypatch.setattr(
         task_notifications.google_calendar,
         "delete_task_event",
-        failed_google_cleanup,
+        unverified_google_cleanup,
     )
     failed_removal = await client.delete(
         f"/api/matters/{matter_id}/assignments/{assignment_id}"
@@ -5953,10 +6118,31 @@ async def test_sms_assignment_revocation_never_discloses_and_cleans_legacy_calen
     assert failed_removal.status_code == 503
     assert "assignment was not removed" in failed_removal.text
     assert await db_session.get(MatterAssignment, assignment_id) is not None
+    assert cleanup[0][1]["require_exact_user"] is True
+
+    async def unverified_microsoft_cleanup(**kwargs):
+        cleanup.append(("microsoft-unverified", kwargs))
+        return False
 
     cleanup.clear()
     monkeypatch.setattr(
         task_notifications.google_calendar, "delete_task_event", cleaned_google
+    )
+    monkeypatch.setattr(
+        task_notifications.microsoft_calendar,
+        "delete_task_event",
+        unverified_microsoft_cleanup,
+    )
+    wrong_principal_removal = await client.delete(
+        f"/api/matters/{matter_id}/assignments/{assignment_id}"
+    )
+    assert wrong_principal_removal.status_code == 503
+    assert await db_session.get(MatterAssignment, assignment_id) is not None
+    assert cleanup[-1][1]["require_exact_user"] is True
+
+    cleanup.clear()
+    monkeypatch.setattr(
+        task_notifications.microsoft_calendar, "delete_task_event", cleaned_microsoft
     )
     removed = await client.delete(
         f"/api/matters/{matter_id}/assignments/{assignment_id}"
@@ -5968,6 +6154,7 @@ async def test_sms_assignment_revocation_never_discloses_and_cleans_legacy_calen
             "tenant_id": str(tenant_id),
             "task_id": str(task_id),
             "user_id": str(assignee_id),
+            "require_exact_user": True,
         }
     assert contact_phone not in repr(cleanup)
     assert "Sensitive proposed SMS body" not in repr(cleanup)

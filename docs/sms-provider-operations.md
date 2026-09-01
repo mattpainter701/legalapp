@@ -34,6 +34,9 @@ Authorized staff must select an exact contact and matter or reject the item;
 the selected rows must be exact candidates captured on that review item, so an
 otherwise accessible same-phone contact or matter cannot be substituted. Both
 decisions are audited without copying message content into operator metadata.
+Before status, target, or phone-specific errors are returned—or hidden rows are
+locked—the resolver proves current access to every candidate matter. Zero,
+partial, and former access all receive the same not-found result.
 
 ## Provider configuration
 
@@ -82,10 +85,14 @@ request identities are idempotent and cannot be reused for changed proposal
 content. Creation and replay require the actor's current matter ownership or
 assignment before recipient, source, consent, or idempotency details are read.
 SMS proposal content stays in LawHand: it is not copied into assignment email or
-third-party calendar events. Assignment revocation synchronously removes any
-legacy calendar copy and fails closed if a connected provider cannot complete
-that cleanup. No model action sends SMS autonomously, and provider outages or
-uncertain outcomes remain visible for operator review.
+third-party calendar events. Ordinary SMS task approvals and updates therefore
+do not call calendar providers after committing task/run state. Assignment
+revocation synchronously queries and removes any legacy copy through the exact
+revoked-user principal; a verified no-event result is safe, while a missing or
+unrefreshable exact-user credential, wrong-principal fallback, failed query, or
+failed delete blocks revocation for operator retry. No model action sends SMS
+autonomously, and provider outages or uncertain outcomes remain visible for
+operator review.
 
 ## Retention, export, and legal hold
 

@@ -40,7 +40,9 @@ from app.models.sms import (
 from app.models.task import TaskAutomationRun
 from app.models.tenant import Tenant
 from app.models.user import User
+from app.services.matter_access import can_access_matter
 from app.services.operator_audit import sanitize_operator_metadata
+from app.services.rbac_service import get_user_capabilities
 from app.services.token_vault import decrypt_token
 
 
@@ -1387,6 +1389,11 @@ async def send_sms(
             422,
             code="sms_matter_required",
         )
+    # Provider configuration updates take this fence before they write actor
+    # foreign keys. Send must therefore take it before every actor/role/Matter
+    # lock too, including replay, or rotation and send can form an
+    # advisory-lock <-> actor-row deadlock.
+    await lock_provider_config_admission(db, tenant_id=tenant_id)
     # Authorize before even interpreting a matching idempotency reservation.
     # A caller who lost capability, matter assignment, or party binding must
     # not learn whether a prior provider request exists or how it resolved.
@@ -1443,10 +1450,6 @@ async def send_sms(
         consent=consent, to_number=to_number, category=category, now=now
     ):
         raise SmsError("SMS follow-up is not currently consented", 403)
-    # Hold the same transaction advisory fence as config rotation until the
-    # dispatching reservation commits. A sixth-generation rotation must see
-    # this row before deciding whether its credential can be retired.
-    await lock_provider_config_admission(db, tenant_id=tenant_id)
     initial_config = await _config(db, tenant_id)
     provider_auth_token(initial_config)
     initial_credential = await ensure_provider_config_credential(
@@ -2051,6 +2054,56 @@ async def apply_inbound(
     return message
 
 
+def _review_candidate_ids(
+    item: SmsReviewItem,
+) -> tuple[set[uuid.UUID], list[uuid.UUID]] | None:
+    try:
+        contact_ids = {
+            uuid.UUID(str(value)) for value in (item.candidate_contact_ids or [])
+        }
+        matter_ids = sorted(
+            {uuid.UUID(str(value)) for value in (item.candidate_matter_ids or [])},
+            key=str,
+        )
+    except (TypeError, ValueError, AttributeError):
+        return None
+    return contact_ids, matter_ids
+
+
+async def _can_review_all_candidates(
+    db: AsyncSession,
+    *,
+    tenant_id,
+    reviewer_user_id,
+    candidate_matter_ids: list[uuid.UUID],
+) -> bool:
+    """Perform a nonlocking, all-candidate visibility preflight."""
+    reviewer = await db.scalar(
+        select(User).where(
+            User.id == reviewer_user_id,
+            User.tenant_id == tenant_id,
+            User.is_active.is_(True),
+        )
+    )
+    if reviewer is None:
+        return False
+    capabilities = await get_user_capabilities(db, reviewer.id)
+    if "manage_matters" not in capabilities:
+        return False
+    if not candidate_matter_ids:
+        return reviewer.role == "admin"
+    for candidate_matter_id in candidate_matter_ids:
+        if not await can_access_matter(
+            db,
+            tenant_id=tenant_id,
+            user_id=reviewer.id,
+            is_admin=reviewer.role == "admin",
+            matter_id=candidate_matter_id,
+        ):
+            return False
+    return True
+
+
 async def resolve_review_item(
     db: AsyncSession,
     *,
@@ -2062,6 +2115,36 @@ async def resolve_review_item(
     matter_id=None,
 ) -> SmsReviewItem:
     """Resolve an ambiguous inbound without exposing it on the matter timeline early."""
+    # Read only enough immutable routing evidence to prove all-candidate access.
+    # No hidden review, message, contact, actor, or matter row is locked until
+    # this non-enumerating preflight succeeds.
+    preflight = (
+        await db.execute(
+            select(SmsReviewItem, SmsMessage)
+            .join(
+                SmsMessage,
+                (SmsMessage.tenant_id == SmsReviewItem.tenant_id)
+                & (SmsMessage.id == SmsReviewItem.sms_message_id),
+            )
+            .where(
+                SmsReviewItem.id == review_item_id,
+                SmsReviewItem.tenant_id == tenant_id,
+            )
+        )
+    ).one_or_none()
+    if preflight is None or preflight[1].direction != "inbound":
+        raise SmsError("SMS review item was not found", 404)
+    preflight_candidates = _review_candidate_ids(preflight[0])
+    if preflight_candidates is None:
+        raise SmsError("SMS review item was not found", 404)
+    if not await _can_review_all_candidates(
+        db,
+        tenant_id=tenant_id,
+        reviewer_user_id=reviewer_user_id,
+        candidate_matter_ids=preflight_candidates[1],
+    ):
+        raise SmsError("SMS review item was not found", 404)
+
     item = await db.scalar(
         select(SmsReviewItem)
         .where(
@@ -2072,8 +2155,6 @@ async def resolve_review_item(
     )
     if item is None:
         raise SmsError("SMS review item was not found", 404)
-    if item.status != "pending":
-        raise SmsError("SMS review item was already resolved", 409)
     message = await db.scalar(
         select(SmsMessage)
         .where(
@@ -2084,14 +2165,13 @@ async def resolve_review_item(
     )
     if message is None or message.direction != "inbound":
         raise SmsError("Inbound SMS evidence was not found", 404)
+    locked_candidates = _review_candidate_ids(item)
+    if locked_candidates is None or locked_candidates != preflight_candidates:
+        raise SmsError("SMS review item was not found", 404)
+    if item.status != "pending":
+        raise SmsError("SMS review item was already resolved", 409)
     now = datetime.now(timezone.utc)
-    candidate_contact_ids = {
-        uuid.UUID(str(value)) for value in (item.candidate_contact_ids or [])
-    }
-    candidate_matter_ids = sorted(
-        {uuid.UUID(str(value)) for value in (item.candidate_matter_ids or [])},
-        key=str,
-    )
+    candidate_contact_ids, candidate_matter_ids = locked_candidates
     if decision not in {"resolve", "reject"}:
         raise SmsError("Unsupported SMS review decision", 422)
     contact = None

@@ -62,21 +62,23 @@ timeline rows cannot be fabricated through generic communication creation and
 remain API-immutable, while delivery state changes remain confined to the signed
 callback/reconciliation service. SMS proposals stay inside LawHand instead of
 assignment email or third-party calendars; assignment revocation synchronously
-removes legacy calendar copies or fails closed, and SMS task/event evidence
-cannot be hard-deleted. This PR does not
+removes legacy calendar copies through the exact revoked-user principal or fails
+closed, while ordinary SMS approvals never return a false provider-cleanup error
+after committing a run. SMS task/event evidence cannot be hard-deleted. This PR does not
 close COMP-02 or COMP-03 and does not deploy or configure a production provider.
 
 ## Validation
 
-- Ruff lint/format and Python compilation passed; 85 database-independent
+- Ruff lint/format and Python compilation passed; 86 database-independent
   backend, migration, demo-purge, Workspace MCP, CI-contract, and release-note
   tests passed.
-- The complete SMS CI target collects 84 tests, including 68 PostgreSQL/provider-
+- The complete SMS CI target collects 85 tests, including 68 PostgreSQL/provider-
   shaped rehearsals covering
   concurrent idempotency, tenant constraints/RLS, consent provenance and
   conflicts, quiet hours/categories, signed webhook replay/order, STOP/START/HELP,
   durable unmatched-number suppression, exact account/destination ownership,
-  exact-candidate review routing and lock order, exact-provider reconciliation,
+  non-enumerating exact-candidate review routing and lock order,
+  exact-user verified calendar cleanup, exact-provider reconciliation,
   actor, assignment, and config revocation ordering, credential-rotation admission,
   callback-before-worker-finalization truth, unknown-outcome
   timeline/audit evidence, crash recovery for unbound task runs,
