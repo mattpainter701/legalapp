@@ -2,6 +2,18 @@
   "recent_release_days": 30,
   "releases": [
     {
+      "id": "2026.08.31.7",
+      "version": "2026.08.31.7",
+      "title": "Secure opening for on-premise Firm Memory files",
+      "published_at": "2026-08-31",
+      "summary": "When a firm explicitly enables the Windows helper, authorized Firm Memory results can open through the signed-in user's Windows session without placing a network path in a browser link.",
+      "highlights": [
+        {"title": "Open with one-time authorization", "description": "Each action uses a short-lived, single-use request bound to the tenant, user, source file, assigned agent, revision, and requested action."},
+        {"title": "Keep network paths local", "description": "The browser and launch link carry no UNC, file, or SMB path; the local agent resolves the opaque source identity only after redemption."},
+        {"title": "Honor current Windows access", "description": "Windows rechecks reachability and the signed-in user's SMB/NTFS access; moved, expired, offline, and denied requests fail closed with a copy-path fallback."}
+      ]
+    },
+    {
       "id": "2026.08.31.6",
       "version": "2026.08.31.6",
       "title": "Durable Template Studio preview processing",

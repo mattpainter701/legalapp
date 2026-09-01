@@ -62,6 +62,7 @@ python -m pip install --upgrade pyinstaller pywin32 | Out-Null
 python -m pip install "$AgentRoot" | Out-Null
 
 $ExePath = Join-Path $DistDir "lawhand-agent.exe"
+$OpenerExePath = Join-Path $DistDir "lawhand-file-opener.exe"
 if (-not $SkipExe) {
     # ── Build the exe ────────────────────────────────────────────────────────
     Push-Location $AgentRoot
@@ -82,8 +83,14 @@ if (-not $SkipExe) {
         & signtool sign /sha1 $SignToolCertThumbprint /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $ExePath
         if ($LASTEXITCODE -ne 0) { throw "signtool failed with exit code $LASTEXITCODE" }
     }
+    # The protocol handler is a separate interactive process/image even though
+    # it shares the hardened Python entry point. Copy after signing so both
+    # installed executables carry the same Authenticode signature.
+    Copy-Item -LiteralPath $ExePath -Destination $OpenerExePath -Force
 } elseif (-not (Test-Path $ExePath)) {
     throw "-SkipExe requires an existing signed executable at $ExePath"
+} elseif (-not (Test-Path $OpenerExePath)) {
+    throw "-SkipExe requires an existing signed opener at $OpenerExePath"
 }
 
 if ($SkipMsi) {
@@ -119,6 +126,7 @@ $MsiPath = Join-Path $DistDir "lawhand-agent-$Version-x64.msi"
 wix build (Join-Path $PackagingDir "lawhand-agent.wxs") `
     -arch x64 `
     -d "AgentExe=$ExePath" `
+    -d "OpenerExe=$OpenerExePath" `
     -d "ProductVersion=$MsiVersion" `
     -ext WixToolset.Util.wixext `
     -o $MsiPath

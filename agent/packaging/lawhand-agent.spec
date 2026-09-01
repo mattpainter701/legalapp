@@ -37,6 +37,15 @@ if sys.platform == "win32":
         "win32service",
         "win32event",
         "win32timezone",
+        "win32api",
+        "win32con",
+        "win32file",
+        "win32pipe",
+        "win32process",
+        "win32security",
+        "win32ts",
+        "ntsecuritycon",
+        "pywintypes",
     ]
 
 a = Analysis(

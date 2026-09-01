@@ -17,6 +17,11 @@ class _Ledger:
     async def upsert_files(self, files):
         self.upserts.extend(files)
 
+    async def assign_source_identity(self, file):
+        file["source_id"] = file.get("source_id") or f"source:{file['path']}"
+        file["file_revision"] = file.get("file_revision") or "revision"
+        return file
+
     async def mark_deleted_paths(self, paths):
         self.deleted.extend(paths)
 
@@ -168,6 +173,33 @@ async def test_optional_index_failure_does_not_block_saas_sync(monkeypatch):
 
     assert [item["path"] for item in ledger.upserts] == [r"\\FS\Legal\ok.txt"]
     assert outcome["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_unchanged_legacy_row_backfills_source_identity(monkeypatch):
+    monkeypatch.setattr(agent_main, "SYNC_BATCH_SIZE", 100)
+    ledger = _Ledger()
+    legacy = _file(r"\\FS\Legal\legacy.txt")
+    result = SimpleNamespace(
+        new_files=[],
+        changed_files=[],
+        deleted_files=[],
+        unchanged_files=[legacy],
+        errors=[],
+    )
+    client = _Client(response={"synced": 1, "deleted": 0, "errors": []})
+
+    outcome = await agent_main._scan_share(
+        {"share_id": "share-1", "server": "FS", "share": "Legal"},
+        ledger,
+        client,
+        _Scanner(result),
+    )
+
+    assert ledger.upserts[0]["source_id"].startswith("source:")
+    assert ledger.upserts[0]["file_revision"] == "revision"
+    assert outcome["file_count"] == 1
+    assert outcome["synced"] == 1
 
 
 def test_safe_request_error_summarizes_pydantic_detail_without_input():

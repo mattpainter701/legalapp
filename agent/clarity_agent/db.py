@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import aiosqlite
 from pathlib import Path
+import hashlib
+import uuid
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS file_ledger (
@@ -18,7 +20,9 @@ CREATE TABLE IF NOT EXISTS file_ledger (
     content_hash TEXT,
     dir_mtime TEXT,
     synced_at TEXT,
-    is_deleted INTEGER DEFAULT 0
+    is_deleted INTEGER DEFAULT 0,
+    source_id TEXT,
+    file_revision TEXT
 )
 """
 
@@ -42,6 +46,22 @@ class FileLedger:
         await self._db.execute(_CREATE_TABLE)
         await self._db.execute(_CREATE_IDX_SHARE)
         await self._db.execute(_CREATE_IDX_SYNCED)
+        columns = {
+            str(row[1])
+            for row in await (
+                await self._db.execute("PRAGMA table_info(file_ledger)")
+            ).fetchall()
+        }
+        if "source_id" not in columns:
+            await self._db.execute("ALTER TABLE file_ledger ADD COLUMN source_id TEXT")
+        if "file_revision" not in columns:
+            await self._db.execute(
+                "ALTER TABLE file_ledger ADD COLUMN file_revision TEXT"
+            )
+        await self._db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_source_id "
+            "ON file_ledger(source_id) WHERE source_id IS NOT NULL"
+        )
         await self._db.commit()
 
     async def close(self) -> None:
@@ -117,6 +137,8 @@ class FileLedger:
             "dir_mtime",
             "synced_at",
             "is_deleted",
+            "source_id",
+            "file_revision",
         ]
         values = [[file.get(k) for k in keys] for file in files]
         placeholders = ", ".join("?" for _ in keys)
@@ -125,6 +147,33 @@ class FileLedger:
         sql = f"INSERT INTO file_ledger ({cols}) VALUES ({placeholders}) ON CONFLICT(path) DO UPDATE SET {updates}"
         await self._db.executemany(sql, values)
         await self._db.commit()
+
+    async def assign_source_identity(self, file: dict) -> dict:
+        """Attach a locally-owned opaque identity and revision to a scan row.
+
+        The SaaS can bind an open intent to these values without learning a
+        path.  Identity is stable while a ledger row remains at the same path;
+        revision changes whenever the scanner's bounded metadata changes.
+        """
+        existing = await self.get_file(str(file["path"]))
+        source_id = (existing or {}).get("source_id") or str(uuid.uuid4())
+        revision_input = "\0".join(
+            str(file.get(key) or "")
+            for key in ("content_hash", "size_bytes", "modified_time")
+        )
+        file["source_id"] = source_id
+        file["file_revision"] = hashlib.sha256(revision_input.encode()).hexdigest()
+        return file
+
+    async def resolve_source(self, source_id: str) -> dict | None:
+        """Resolve an opaque source id locally; deleted rows fail closed."""
+        assert self._db
+        cursor = await self._db.execute(
+            "SELECT * FROM file_ledger WHERE source_id = ? AND is_deleted = 0",
+            (source_id,),
+        )
+        row = await cursor.fetchone()
+        return self._row_to_dict(row) if row else None
 
     async def mark_deleted(self, path: str) -> None:
         assert self._db

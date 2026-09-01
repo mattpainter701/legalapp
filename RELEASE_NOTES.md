@@ -5,6 +5,16 @@ security, and migration details, see the [technical changelog](CHANGELOG.md).
 
 <!-- Generated from backend/app/release_notes.json. Do not edit by hand. -->
 
+## 2026.08.31.7 — Secure opening for on-premise Firm Memory files
+
+Released August 31, 2026.
+
+When a firm explicitly enables the Windows helper, authorized Firm Memory results can open through the signed-in user's Windows session without placing a network path in a browser link.
+
+- **Open with one-time authorization.** Each action uses a short-lived, single-use request bound to the tenant, user, source file, assigned agent, revision, and requested action.
+- **Keep network paths local.** The browser and launch link carry no UNC, file, or SMB path; the local agent resolves the opaque source identity only after redemption.
+- **Honor current Windows access.** Windows rechecks reachability and the signed-in user's SMB/NTFS access; moved, expired, offline, and denied requests fail closed with a copy-path fallback.
+
 ## 2026.08.31.6 — Durable Template Studio preview processing
 
 Released August 31, 2026.

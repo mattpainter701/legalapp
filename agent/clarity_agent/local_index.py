@@ -8,7 +8,9 @@ into the outbound task relay.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import io
+import json
 import logging
 import re
 import time
@@ -20,6 +22,7 @@ from docx import Document
 from pypdf import PdfReader
 
 from clarity_agent.config import _restrict
+from clarity_agent.native_acl import authorize_acl, capture_windows_acl
 
 
 logger = logging.getLogger("clarity_agent.local_index")
@@ -38,7 +41,11 @@ CREATE TABLE IF NOT EXISTS index_files (
     next_attempt_at REAL,
     page_count INTEGER,
     extraction_error TEXT,
-    indexed_at TEXT
+    indexed_at TEXT,
+    acl_json TEXT,
+    acl_state TEXT NOT NULL DEFAULT 'unknown',
+    acl_version TEXT,
+    acl_captured_at INTEGER
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS index_fts USING fts5(
     text,
@@ -64,7 +71,7 @@ CHUNK_OVERLAP_CHARS = 256
 DEFAULT_MAX_TEXT_CHARS = 5_000_000
 MAX_ATTEMPTS = 3
 MAX_WORKERS = 4
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 REQUIRED_FILE_COLUMNS = {
     "path",
@@ -80,6 +87,10 @@ REQUIRED_FILE_COLUMNS = {
     "page_count",
     "extraction_error",
     "indexed_at",
+    "acl_json",
+    "acl_state",
+    "acl_version",
+    "acl_captured_at",
 }
 
 
@@ -343,6 +354,13 @@ async def _initialize_schema(db: aiosqlite.Connection) -> None:
         await db.execute(
             "ALTER TABLE index_files ADD COLUMN ext TEXT NOT NULL DEFAULT ''"
         )
+    if "acl_json" not in columns:
+        await db.execute("ALTER TABLE index_files ADD COLUMN acl_json TEXT")
+        await db.execute(
+            "ALTER TABLE index_files ADD COLUMN acl_state TEXT NOT NULL DEFAULT 'unknown'"
+        )
+        await db.execute("ALTER TABLE index_files ADD COLUMN acl_version TEXT")
+        await db.execute("ALTER TABLE index_files ADD COLUMN acl_captured_at INTEGER")
     cursor = await db.execute("SELECT path FROM index_files WHERE ext='' ORDER BY path")
     while rows := await cursor.fetchmany(500):
         await db.executemany(
@@ -360,7 +378,7 @@ async def _initialize_schema(db: aiosqlite.Connection) -> None:
     await _validate_schema(db)
 
 
-async def _aggregate_stats(db: aiosqlite.Connection) -> tuple[dict, dict, int]:
+async def _aggregate_stats(db: aiosqlite.Connection) -> tuple[dict, dict, int, dict]:
     cursor = await db.execute(
         """SELECT status, count(*) AS files,
                   coalesce(sum(size_bytes), 0) AS source_bytes
@@ -378,6 +396,10 @@ async def _aggregate_stats(db: aiosqlite.Connection) -> tuple[dict, dict, int]:
     extension_rows = await extension_cursor.fetchall()
     fts_cursor = await db.execute("SELECT count(*) FROM index_fts")
     fts_row = await fts_cursor.fetchone()
+    acl_cursor = await db.execute(
+        "SELECT acl_state, count(*) AS files FROM index_files GROUP BY acl_state"
+    )
+    acl_rows = await acl_cursor.fetchall()
     statuses = {
         str(row["status"]): {
             "files": int(row["files"] or 0),
@@ -391,7 +413,10 @@ async def _aggregate_stats(db: aiosqlite.Connection) -> tuple[dict, dict, int]:
             "files": int(row["files"] or 0),
             "source_bytes": int(row["source_bytes"] or 0),
         }
-    return statuses, by_extension, int((fts_row[0] if fts_row else 0) or 0)
+    acl_states = {
+        str(row["acl_state"] or "unknown"): int(row["files"] or 0) for row in acl_rows
+    }
+    return statuses, by_extension, int((fts_row[0] if fts_row else 0) or 0), acl_states
 
 
 async def read_index_stats(db_path: str) -> dict:
@@ -404,6 +429,7 @@ async def read_index_stats(db_path: str) -> dict:
             "fts_rows": 0,
             "statuses": {},
             "by_extension": {},
+            "acl_states": {},
         }
     try:
         uri = db_file.resolve().as_uri() + "?mode=ro"
@@ -411,7 +437,7 @@ async def read_index_stats(db_path: str) -> dict:
             db.row_factory = aiosqlite.Row
             await db.execute("PRAGMA query_only=ON")
             await _validate_schema(db)
-            statuses, by_extension, fts_rows = await _aggregate_stats(db)
+            statuses, by_extension, fts_rows, acl_states = await _aggregate_stats(db)
     except Exception:
         return {
             "available": False,
@@ -419,6 +445,7 @@ async def read_index_stats(db_path: str) -> dict:
             "fts_rows": 0,
             "statuses": {},
             "by_extension": {},
+            "acl_states": {},
         }
     return {
         "available": True,
@@ -426,6 +453,7 @@ async def read_index_stats(db_path: str) -> dict:
         "fts_rows": fts_rows,
         "statuses": statuses,
         "by_extension": by_extension,
+        "acl_states": acl_states,
     }
 
 
@@ -437,14 +465,17 @@ class LocalSearchIndex:
         db_path: str,
         max_file_bytes: int = 25 * 1024 * 1024,
         max_text_chars: int = DEFAULT_MAX_TEXT_CHARS,
+        acl_refresh_seconds: int = 3600,
     ):
         self.db_path = db_path
         self.max_file_bytes = max_file_bytes
         self.max_text_chars = max(1, min(int(max_text_chars), DEFAULT_MAX_TEXT_CHARS))
+        self.acl_refresh_seconds = max(60, int(acl_refresh_seconds))
         self._db: aiosqlite.Connection | None = None
         self._workers: list[asyncio.Task] = []
         self._fetcher: Callable[[dict], Awaitable[bytes]] | None = None
         self._path_validator: Callable[[dict], Awaitable[bool]] | None = None
+        self._acl_loader: Callable = lambda job: capture_windows_acl(job["path"])
         self._db_lock = asyncio.Lock()
         self.available = False
         self._wake = asyncio.Event()
@@ -539,11 +570,14 @@ class LocalSearchIndex:
         fetcher: Callable[[dict], Awaitable[bytes]],
         *,
         path_validator: Callable[[dict], Awaitable[bool]],
+        acl_loader: Callable | None = None,
         worker_count: int = 1,
     ) -> None:
         self._require_writable()
         self._fetcher = fetcher
         self._path_validator = path_validator
+        if acl_loader is not None:
+            self._acl_loader = acl_loader
         if self.available and not self._workers:
             count = max(1, min(int(worker_count or 1), MAX_WORKERS))
             self._workers = [
@@ -618,9 +652,25 @@ class LocalSearchIndex:
                                    next_attempt_at=NULL,
                                    page_count=NULL,
                                    extraction_error=excluded.extraction_error,
-                                   indexed_at=NULL""",
+                                   indexed_at=NULL,
+                                   acl_json=NULL,
+                                   acl_state='pending',
+                                   acl_version=NULL,
+                                   acl_captured_at=NULL""",
                             values,
                         )
+                # An unchanged file can still have a changed DACL.  Queue a
+                # bounded refresh without deleting its old text; searches deny
+                # the stale ACL until the refreshed record commits atomically.
+                cutoff = int(time.time()) - self.acl_refresh_seconds
+                await self._db.execute(
+                    """UPDATE index_files
+                       SET status='pending', acl_state='pending', attempts=0,
+                           lease_until=NULL, next_attempt_at=NULL
+                       WHERE status='ready' AND
+                             (acl_captured_at IS NULL OR acl_captured_at<?)""",
+                    (cutoff,),
+                )
                 await self._db.commit()
             except Exception:
                 await self._db.rollback()
@@ -733,6 +783,9 @@ class LocalSearchIndex:
                     raise RuntimeError("local index fetcher is unavailable")
                 if self._path_validator is None or not await self._path_validator(job):
                     raise PermanentIndexError("path_outside_assigned_share")
+                acl_record = self._acl_loader(job)
+                if inspect.isawaitable(acl_record):
+                    acl_record = await acl_record
                 content = await self._fetcher(job)
                 if len(content) > self.max_file_bytes:
                     raise PermanentIndexError("file_too_large")
@@ -778,10 +831,20 @@ class LocalSearchIndex:
                             """UPDATE index_files
                                SET status='ready', page_count=?, extraction_error=NULL,
                                    lease_until=NULL, next_attempt_at=NULL,
-                                   indexed_at=datetime('now')
+                                   indexed_at=datetime('now'), acl_json=?, acl_state=?,
+                                   acl_version=?, acl_captured_at=?
                                WHERE """
                             + CLAIMED_JOB_PREDICATE,
-                            (page_count, *_claimed_job_params(job)),
+                            (
+                                page_count,
+                                json.dumps(
+                                    acl_record, sort_keys=True, separators=(",", ":")
+                                ),
+                                str(acl_record.get("state") or "unknown")[:40],
+                                str(acl_record.get("version") or "")[:128] or None,
+                                int(acl_record.get("captured_at") or 0) or None,
+                                *_claimed_job_params(job),
+                            ),
                         )
                         if completed.rowcount != 1:
                             raise RuntimeError(
@@ -852,13 +915,16 @@ class LocalSearchIndex:
                 "by_extension": {},
             }
         async with self._db_lock:
-            statuses, by_extension, fts_rows = await _aggregate_stats(self._db)
+            statuses, by_extension, fts_rows, acl_states = await _aggregate_stats(
+                self._db
+            )
         return {
             "available": True,
             "database_bytes": _database_bytes(self.db_path),
             "fts_rows": fts_rows,
             "statuses": statuses,
             "by_extension": by_extension,
+            "acl_states": acl_states,
         }
 
     async def search(
@@ -868,6 +934,8 @@ class LocalSearchIndex:
         assigned_shares: list[dict],
         extensions: list[str] | None,
         limit: int,
+        authorization=None,
+        acl_max_age_seconds: int = 3600,
     ) -> dict:
         if not self.available or not self._db:
             return {
@@ -926,9 +994,10 @@ class LocalSearchIndex:
                 extension_params.extend(normalized)
 
         sql = (
-            "SELECT index_fts.*, bm25(index_fts) AS rank, "
+            "SELECT index_fts.*, index_files.acl_json AS acl_json, bm25(index_fts) AS rank, "
             "snippet(index_fts,0,'','', '…',48) AS match_snippet "
-            "FROM index_fts WHERE index_fts MATCH ? AND ("
+            "FROM index_fts JOIN index_files ON index_files.path=index_fts.path "
+            "WHERE index_fts MATCH ? AND ("
             + " OR ".join(scope_clauses)
             + ")"
             + extension_clause
@@ -976,6 +1045,18 @@ class LocalSearchIndex:
             )
             if relative is None or full_path.casefold() in seen_paths:
                 continue
+            if authorization is not None:
+                try:
+                    acl_record = json.loads(row["acl_json"] or "null")
+                except (TypeError, json.JSONDecodeError):
+                    acl_record = None
+                decision = authorize_acl(
+                    acl_record,
+                    authorization.principal_sids,
+                    max_age_seconds=max(60, int(acl_max_age_seconds)),
+                )
+                if not decision.allowed:
+                    continue
             seen_paths.add(full_path.casefold())
             snippet = str(row["match_snippet"] or "").strip()[:MAX_SNIPPET_CHARS]
             hits.append(
@@ -1014,3 +1095,31 @@ class LocalSearchIndex:
             "indexed_files": ready,
             "pending_files": pending,
         }
+
+    async def authorize_path(
+        self, path: str, authorization, *, acl_max_age_seconds: int = 3600
+    ):
+        """Revalidate the current indexed ACL before preview/open content release."""
+        if not self.available or not self._db:
+            return authorize_acl(
+                None, authorization.principal_sids, max_age_seconds=acl_max_age_seconds
+            )
+        async with self._db_lock:
+            cursor = await self._db.execute(
+                "SELECT share_id, acl_json FROM index_files WHERE path=? AND status='ready'",
+                (path,),
+            )
+            row = await cursor.fetchone()
+        if row is None or str(row["share_id"]) not in authorization.source_ids:
+            return authorize_acl(
+                None, authorization.principal_sids, max_age_seconds=acl_max_age_seconds
+            )
+        try:
+            record = json.loads(row["acl_json"] or "null")
+        except (TypeError, json.JSONDecodeError):
+            record = None
+        return authorize_acl(
+            record,
+            authorization.principal_sids,
+            max_age_seconds=max(60, int(acl_max_age_seconds)),
+        )

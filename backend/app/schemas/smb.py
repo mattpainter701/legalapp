@@ -264,6 +264,8 @@ class ShareScanStatus(BaseModel):
 
 
 class FileSyncEntry(BaseModel):
+    source_id: uuid.UUID | None = None
+    file_revision: str | None = Field(None, max_length=200)
     path: str = Field(..., min_length=5, max_length=32768)
     filename: str = Field(..., max_length=500)
     ext: str | None = Field(None, max_length=20)
@@ -324,6 +326,9 @@ class ContentFetchTask(BaseModel):
     correlation_id: str | None = Field(
         None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
     )
+    # Minted by the SaaS after authentication and directory resolution.  No
+    # browser-provided scope is ever copied into this field.
+    identity_ticket: str | None = Field(None, min_length=32, max_length=262_144)
 
 
 class ContentFetchResult(BaseModel):
@@ -428,6 +433,8 @@ class FirmMemorySearchHit(UuidStringModel):
     score: float | None
     owner: str | None
     size_bytes: int | None
+    source_id: str | None = None
+    file_revision: str | None = None
     modified_time: datetime | None
     created_time: datetime | None
     share_id: str
@@ -450,6 +457,60 @@ class FirmMemorySearchResponse(BaseModel):
     partial: bool = False
     degraded: bool = False
     errors: list[str] = Field(default_factory=list, max_length=20)
+
+
+class NativeIdentityUpdate(BaseModel):
+    provider: Literal["ad", "entra", "hybrid"]
+    directory_tenant_id: str = Field(..., min_length=1, max_length=64)
+    object_id: str = Field(..., min_length=1, max_length=64)
+    primary_sid: str = Field(..., pattern=r"^S-\d+(?:-\d+)+$", max_length=184)
+    effective_sids: list[str] = Field(default_factory=list, max_length=4096)
+    group_expansion_complete: bool = False
+    state: Literal["pending", "healthy", "stale", "error", "revoked"]
+    resolved_at: datetime | None = None
+    expires_at: datetime | None = None
+    error_code: str | None = Field(None, max_length=80)
+
+    @field_validator("effective_sids")
+    @classmethod
+    def _valid_sids(cls, values):
+        normalized = []
+        for value in values:
+            value = str(value).upper()
+            if not __import__("re").fullmatch(r"S-\d+(?:-\d+)+", value):
+                raise ValueError("effective_sids contains an invalid SID")
+            if value not in normalized:
+                normalized.append(value)
+        return normalized
+
+    @field_validator("resolved_at", "expires_at")
+    @classmethod
+    def _timezone_aware_resolution_times(cls, value):
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("native identity timestamps must include a timezone")
+        return value
+
+
+class NativeIdentityDiagnostic(UuidStringModel):
+    id: str
+    user_id: str
+    provider: str
+    state: str
+    version: int
+    principal_count: int
+    resolved_at: datetime | None
+    expires_at: datetime | None
+    error_code: str | None
+
+
+class NativeAuthorizationStatus(BaseModel):
+    enabled: bool
+    signing_configured: bool
+    acl_coverage_confirmed: bool
+    active_users: int
+    healthy_identities: int
+    unhealthy_identities: int
+    rollout_ready: bool
 
 
 class SmbSearchResult(UuidStringModel):
