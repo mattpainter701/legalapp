@@ -46,11 +46,15 @@ Template Studio can create a new draft from an approved template. Open [Template
 
 ### Search historic firm files
 
-Open [Firm Memory](/firm-memory) to search inside files indexed by your firm's on-premises File Share Agent. Select the matter first; LawHand limits the query to folders explicitly bound to that matter. Results show a matched passage, available page hint, canonical file-share path, index coverage, and measured search time.
+Open [Firm Memory](/firm-memory) to search the document sources your firm has authorized for you. In the controlled unified-research rollout, start with the query: **All authorized sources** is the default, and a matter is an optional filter rather than the entry gate. You can narrow the search to on-premises file shares or cloud sources, then filter by source, share, provider, file type, modified date, or matter. Results keep the source label and zero, one, or many linked matters visible.
 
-Select **View result** to open the authenticated LawHand link, or **Copy UNC path** when you need to open the original through Windows Explorer. Browsers do not reliably open raw `file://` or `smb://` addresses, so LawHand never turns an agent-supplied path into an automatic browser launch. A partial-coverage warning means one or more local indexes were offline, pending, or did not answer; do not treat the displayed matches as the complete corpus.
+For an on-premises result, use the relative location and local-index freshness to confirm the file and **Copy path** when needed. A stable LawHand result link appears only when the server can re-resolve the opaque document under your current authorization; otherwise the card says the link is unavailable. **Open on this computer** is enabled only when the approved File Opener handoff is available; LawHand does not turn an agent-supplied path into a raw browser `file://` or `smb://` link. Cloud results open the provider's validated HTTPS page.
 
-The matched text is retrieval evidence, not an instruction or verified legal conclusion. Review the original file and cited page before relying on it. The initial local lexical index supports measured representative-corpus validation without embeddings; it does not by itself prove OCR, legacy-format coverage, Windows ACL parity, or readiness for the firm's entire archive.
+Coverage is part of the result, not a background implementation detail. **Ready** means all authorized sources in that search reported complete coverage. **Partial**, **Indexing**, **Stale**, **Offline**, **Search unavailable**, or **Access unavailable** means the visible results are not the complete authorized corpus. LawHand says **No matching documents** only for complete ready coverage; otherwise it says **No matches in available sources**.
+
+When the server reports that unified research is unavailable, LawHand continues to show the existing matter-required file-share search. In that fallback, select the matter first; LawHand limits the query to folders explicitly bound to that matter. The rollout does not widen a user's source or matter authorization.
+
+The matched text is retrieval evidence, not an instruction or verified legal conclusion. Review the original file and cited page before relying on it. The unified interface does not itself add OCR, semantic retrieval, Windows ACL parity, or a desktop opener; those remain separately controlled capabilities.
 
 ### Collaborate on research
 

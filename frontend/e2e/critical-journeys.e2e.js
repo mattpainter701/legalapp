@@ -124,3 +124,64 @@ test('chat remains usable after a deterministic stream failure', async ({ page }
   await expect(page.getByText('The retry completed safely.')).toBeVisible()
   expect(streamAttempts).toBe(2)
 })
+
+test('Firm Memory capability enables firm-wide query-first research with honest coverage', async ({ page }) => {
+  let searchPayload = null
+
+  await page.route('**/api/**', async (route) => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    const json = (body, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
+
+    if (path === '/api/version' && request.method() === 'GET') {
+      return json({ version: 'firm-memory-e2e', latest_release: null, release_notes: [] })
+    }
+    if (path === '/api/auth/me' && request.method() === 'GET') {
+      const response = await route.fetch()
+      const currentUser = await response.json()
+      return json({
+        ...currentUser,
+        default_route: '/intake/dashboard',
+        enabled_modules: [...new Set([...(currentUser.enabled_modules || []), 'intake-dashboard', 'matters'])],
+      }, response.status())
+    }
+    if (path === '/api/matters' && request.method() === 'GET') {
+      return json({ items: [{ id: 'matter-1', name: 'Acme v. Northstar' }] })
+    }
+    if (path === '/api/v1/firm-memory/sources' && request.method() === 'GET') {
+      return json({ sources: [{ id: 'source-1', display_name: 'Legacy archive', source_kind: 'smb', coverage_state: 'offline' }] })
+    }
+    if (path === '/api/v1/firm-memory/capabilities' && request.method() === 'GET') {
+      return json({ search_entitled: true, generalized_search_enabled: true, unified_research_available: true, contract_versions: [1], source_scopes: ['all', 'on_prem', 'cloud', 'selected'] })
+    }
+    if (path === '/api/v1/firm-memory/search' && request.method() === 'POST') {
+      searchPayload = request.postDataJSON()
+      return json({
+        schema_version: 1,
+        audit_correlation_id: 'e2e-search-1',
+        results: [],
+        coverage: [{ source_id: 'source-1', source_name: 'Legacy archive', source_kind: 'smb', state: 'offline', authorization: 'allowed', searched: false, partial: true, result_count: 0, reason: 'source_offline' }],
+        partial: true,
+        complete: false,
+        generalized_search_enabled: true,
+      })
+    }
+    return route.continue()
+  })
+
+  await signIn(page)
+  await page.goto('/firm-memory')
+  await expect(page.getByRole('heading', { name: 'Research across your firm’s authorized knowledge.' })).toBeVisible()
+  await expect(page.getByLabel('Matter filter')).toHaveValue('')
+  await page.getByLabel('Research query').fill('prior indemnification advice')
+  await page.getByRole('button', { name: 'Search firm memory' }).click()
+
+  await expect(page.getByRole('heading', { name: 'No matches in available sources' })).toBeVisible()
+  await expect(page.getByText('Source offline')).toBeVisible()
+  expect(searchPayload).toMatchObject({
+    schema_version: 1,
+    query: 'prior indemnification advice',
+    source_scope: 'all',
+    matter_ids: [],
+  })
+})

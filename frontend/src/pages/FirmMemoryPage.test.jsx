@@ -61,7 +61,7 @@ describe('FirmMemoryPage', () => {
     })
     window.history.replaceState({}, '', '/firm-memory?matter=matter-1&file=opaque-1')
 
-    render(<FirmMemoryPage />)
+    render(<FirmMemoryPage unifiedEnabled />)
 
     expect(await screen.findByText('Linked Order.pdf')).toBeInTheDocument()
     expect(getFirmMemoryFile).toHaveBeenCalledWith('opaque-1', 'matter-1')

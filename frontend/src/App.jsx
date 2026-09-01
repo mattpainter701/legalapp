@@ -220,6 +220,28 @@ function LegacyBillingRedirect() {
   return <Navigate to={`/admin?tab=billing${success ? '&success=1' : ''}`} replace />
 }
 
+function FirmMemoryRoute() {
+  const [unifiedEnabled, setUnifiedEnabled] = useState(null)
+
+  useEffect(() => {
+    let active = true
+    import('./documentSearchApi')
+      .then(({ getFirmMemoryCapabilities }) => getFirmMemoryCapabilities())
+      .then((capabilities) => {
+        if (active) setUnifiedEnabled(capabilities.unifiedResearchAvailable === true)
+      })
+      .catch(() => {
+        if (active) setUnifiedEnabled(false)
+      })
+    return () => { active = false }
+  }, [])
+
+  if (unifiedEnabled === null) {
+    return <div role="status" className="flex min-h-64 items-center justify-center text-sm text-brand-muted">Loading Firm Memory…</div>
+  }
+  return <FirmMemoryPage unifiedEnabled={unifiedEnabled} />
+}
+
 // ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
@@ -265,7 +287,7 @@ export default function App() {
         />
         <Route
           path="/firm-memory"
-          element={<ShellRoute title="Firm Memory" module="matters"><FirmMemoryPage /></ShellRoute>}
+          element={<ShellRoute title="Firm Memory" module="matters"><FirmMemoryRoute /></ShellRoute>}
         />
         <Route
           path="/matters"
