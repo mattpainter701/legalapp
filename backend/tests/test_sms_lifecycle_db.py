@@ -2928,8 +2928,9 @@ async def test_provider_lookup_and_signed_callback_serialize_without_truth_regre
     assert len(provider.lookup_calls) == 1
 
     await set_tenant_context(db_session, str(test_tenant.id))
+    message_id = message.id
     db_session.expire_all()
-    final = await db_session.get(SmsMessage, message.id)
+    final = await db_session.get(SmsMessage, message_id)
     final_communication = await db_session.get(
         CommunicationLog,
         final.communication_log_id,
