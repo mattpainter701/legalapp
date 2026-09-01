@@ -1602,7 +1602,8 @@ async def test_completed_status_preserves_expired_artifact_result_and_returns_41
 
     artifact = await db_session.get(StudioRenderArtifact, artifact_id)
     row = await db_session.get(DurableJob, accepted.job_id)
-    artifact.content_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    database_now = await db_session.scalar(select(func.clock_timestamp()))
+    artifact.content_expires_at = database_now - timedelta(seconds=1)
     row.result = {
         **row.result,
         "content_expires_at": artifact.content_expires_at.isoformat(),
@@ -2555,9 +2556,11 @@ async def test_retention_deletes_shared_cas_only_after_last_reference(
         )
         assert outcome == "stale_output"
         artifact_ids.append(artifact_id)
+    database_now = await db_session.scalar(select(func.clock_timestamp()))
+    expired_at = database_now - timedelta(seconds=1)
     for artifact_id in artifact_ids:
         artifact = await db_session.get(StudioRenderArtifact, artifact_id)
-        artifact.content_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        artifact.content_expires_at = expired_at
     await db_session.commit()
 
     async def not_held(_candidate):
@@ -2601,7 +2604,8 @@ async def test_retention_refreshes_clock_after_hold_and_storage_boundaries(
     )
     assert outcome == "stale_output"
     artifact = await db_session.get(StudioRenderArtifact, artifact_id)
-    artifact.content_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    database_now = await db_session.scalar(select(func.clock_timestamp()))
+    artifact.content_expires_at = database_now - timedelta(seconds=1)
     await db_session.commit()
 
     hold_started = asyncio.Event()
@@ -2663,7 +2667,7 @@ async def test_retention_recovers_or_preserves_durable_pending_state(
         **_geometry_kwargs(),
     )
     assert outcome == "stale_output"
-    now = datetime.now(timezone.utc)
+    now = await db_session.scalar(select(func.clock_timestamp()))
     artifact = await db_session.get(StudioRenderArtifact, artifact_id)
     artifact.content_expires_at = now - timedelta(seconds=1)
     artifact.storage_state = "delete_pending"
@@ -2979,9 +2983,8 @@ async def test_force_rls_rebinds_cache_retention_and_worker_transactions(
     )
     assert cleanup_outcome == "stale_output"
     cleanup_artifact = await db_session.get(StudioRenderArtifact, cleanup_artifact_id)
-    cleanup_artifact.content_expires_at = datetime.now(timezone.utc) - timedelta(
-        seconds=1
-    )
+    database_now = await db_session.scalar(select(func.clock_timestamp()))
+    cleanup_artifact.content_expires_at = database_now - timedelta(seconds=1)
     await db_session.commit()
 
     other_tenant = Tenant(
