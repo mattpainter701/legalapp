@@ -22,6 +22,7 @@ from clarity_agent.local_index import (
     PermanentIndexError,
     read_index_stats,
 )
+from clarity_agent.native_acl import capture_smb_acl
 from clarity_agent.schedule import due_for_scan
 from clarity_agent.search_node import SearchNode
 from clarity_agent.smb_auth import ShareCredential, connect, session_kwargs
@@ -372,7 +373,11 @@ async def _initialize_daemon_resources(config: AgentConfig):
         await ledger.init()
         index_path, index_max_bytes, _ = _local_index_settings(config)
         local_index = (
-            LocalSearchIndex(index_path, max_file_bytes=index_max_bytes)
+            LocalSearchIndex(
+                index_path,
+                max_file_bytes=index_max_bytes,
+                acl_refresh_seconds=getattr(config, "acl_max_age_seconds", 3600),
+            )
             if getattr(config, "local_index_enabled", False)
             else None
         )
@@ -482,11 +487,31 @@ async def run_daemon(
                 fail_on_error=False,
             )
 
+    async def acl_for_index(job: dict) -> dict:
+        assigned = await assigned_for_index(job)
+        if not assigned:
+            return {"state": "unavailable", "allow": [], "deny": []}
+        credential = ShareCredential.from_share(assigned, config)
+        cache: dict = {}
+        try:
+            return await asyncio.to_thread(
+                capture_smb_acl,
+                job["path"],
+                {**session_kwargs(credential), "connection_cache": cache},
+            )
+        finally:
+            await asyncio.to_thread(
+                smbclient.reset_connection_cache,
+                connection_cache=cache,
+                fail_on_error=False,
+            )
+
     if local_index:
         try:
             local_index.start(
                 fetch_for_index,
                 path_validator=validate_index_path,
+                acl_loader=acl_for_index,
                 worker_count=index_workers,
             )
         except Exception:
@@ -724,7 +749,11 @@ def cmd_scan(args) -> None:
         await ledger.init()
         index_path, index_max_bytes, index_workers = _local_index_settings(config)
         local_index = (
-            LocalSearchIndex(index_path, max_file_bytes=index_max_bytes)
+            LocalSearchIndex(
+                index_path,
+                max_file_bytes=index_max_bytes,
+                acl_refresh_seconds=getattr(config, "acl_max_age_seconds", 3600),
+            )
             if getattr(config, "local_index_enabled", False)
             else None
         )
@@ -788,10 +817,30 @@ def cmd_scan(args) -> None:
                     fail_on_error=False,
                 )
 
+        async def acl_for_index(job: dict) -> dict:
+            assigned = await assigned_for_index(job)
+            if not assigned:
+                return {"state": "unavailable", "allow": [], "deny": []}
+            credential = ShareCredential.from_share(assigned, config)
+            cache: dict = {}
+            try:
+                return await asyncio.to_thread(
+                    capture_smb_acl,
+                    job["path"],
+                    {**session_kwargs(credential), "connection_cache": cache},
+                )
+            finally:
+                await asyncio.to_thread(
+                    smbclient.reset_connection_cache,
+                    connection_cache=cache,
+                    fail_on_error=False,
+                )
+
         if local_index:
             local_index.start(
                 fetch_for_index,
                 path_validator=validate_index_path,
+                acl_loader=acl_for_index,
                 worker_count=index_workers,
             )
         try:
@@ -853,6 +902,14 @@ def cmd_status(args) -> None:
             )
             print(f"Index files:   {counts}")
             print(f"Index rows:    {stats.get('fts_rows', 0)}")
+            acl_counts = (
+                ", ".join(
+                    f"{state}={count}"
+                    for state, count in sorted(stats.get("acl_states", {}).items())
+                )
+                or "unknown"
+            )
+            print(f"Native ACLs:   {acl_counts}")
             print(f"Index bytes:   {stats['database_bytes']}")
         else:
             print("Index state:   not built or unreadable")

@@ -74,13 +74,53 @@ it is not an end-user authorization surface and must not be exposed as one.
   invalidate search eligibility and pending fetches.
 - Database RLS is defense in depth, not a substitute for application checks.
 
-### Native Windows ACL limitation
+### Native identity and Windows ACL release gate
 
-The configured SMB service account, not the LawHand user, normally determines
-what the agent can read. Native per-user Windows ACLs are not mirrored by the
-first slice. Firms must use separate least-privilege shares/accounts for
-different security boundaries or explicitly accept the broader visibility.
-Do not describe this mode as native ACL preservation.
+Native trimming is now implemented behind two independent, default-off gates:
+`FIRM_MEMORY_NATIVE_AUTHZ_ENABLED` and
+`FIRM_MEMORY_ACL_COVERAGE_HEALTHY`. Enabling only one does not authorize a
+release. A tenant administrator must first establish a healthy immutable
+AD/Entra mapping for every active user; each mapping records the directory
+tenant/object identity, primary SID, complete nested effective group SID set,
+resolution version, expiry, and an explicit `pending`, `healthy`, `stale`,
+`error`, or `revoked` state. Partial group expansion is an error, because an
+omitted deny group is unsafe.
+
+For each search the SaaS resolves—not the browser—the allowed source ids and
+optional filters, then signs an Ed25519 ticket bound to tenant, user, customer
+node, sources, identity version, nonce, issue time, and an expiry of at most
+five minutes. The agent rejects forged, expired, replayed, cross-tenant,
+cross-node, and cross-source tickets. Tickets and principal SIDs are relay-only
+authorization material and are not application logged.
+
+The customer node stores normalized read-relevant allow/deny SIDs, inheritance
+markers, capture time, and a descriptor version beside the local derived index.
+Old index rows begin `unknown`; unchanged files whose ACL snapshot ages out are
+queued for refresh. Unknown, pending, unavailable, error, and stale ACLs are
+deny-all. A matching explicit deny wins over every allow, including inherited
+allows. Filenames and snippets are emitted only after that local decision, and
+deep-link/detail and content tasks request a new one-use ticket and a new local
+ACL decision before release.
+
+Operators use `GET /api/v1/smb/native-authz/status`, the privacy-safe identity
+diagnostic list, and `lawhand-agent status` (`Native ACLs`) to establish
+coverage. The private signing key belongs only in the SaaS secret store; the
+agent receives only the public key in
+`CLARITY_SEARCH_IDENTITY_PUBLIC_KEY`. Revoking an identity blocks new tickets;
+already minted tickets expire within the configured short TTL, while consumed
+nonces remain in the agent's negative replay cache through expiry.
+
+The local OpenSearch SearchNode lifecycle and its mandatory bounded
+`acl_tokens` query filter are delivered by FM-03. After FM-03 lands, the
+verified SID set from this ticket is the input to those local tokens; an empty
+token set remains deny-all. Neither native descriptors, ACL tokens, nor corpus
+content are sent to the SaaS.
+
+Cloud-source provider/matter/ethical-wall trimming is supplied by FM-01's
+`NativeSourceAuthorizer` and remains a prerequisite for enabling this gate.
+FM-06 deliberately does not create a competing provider policy path; after
+FM-01 lands, every cloud adapter must invoke that authorizer before fetching or
+returning content, metadata, matter names, or association counts.
 
 ## Untrusted content and parser safety
 

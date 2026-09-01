@@ -202,6 +202,14 @@ key in the agent's config directory.
 
 ## Configuration
 
+Native authorization is a broad-release gate and is disabled by default. Set
+`CLARITY_NATIVE_AUTHZ_ENABLED=true` only after the SaaS admin diagnostic is
+ready, then install the SaaS Ed25519 public key as
+`CLARITY_SEARCH_IDENTITY_PUBLIC_KEY`. `CLARITY_ACL_MAX_AGE_SECONDS` controls how
+long a captured descriptor remains usable (default 3600). `lawhand-agent
+status` reports aggregate ACL states without filenames, paths, SIDs, or query
+text. Any unknown/stale ACL or missing key fails closed.
+
 Config lives in `config.toml` in the agent data directory, which is
 `%ProgramData%\LawHand\Agent` on Windows, `/etc/lawhand-agent` on Linux (or
 `~/.clarity-agent` for an existing per-user install). Override the location with

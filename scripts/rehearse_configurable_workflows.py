@@ -29,7 +29,7 @@ from sqlalchemy.engine import make_url
 register_uuid()
 
 
-EXPECTED_HEAD = "150_studio_render_jobs"
+EXPECTED_HEAD = "151_fm_native_authz"
 TABLES = (
     "custom_field_definitions",
     "matter_custom_field_values",

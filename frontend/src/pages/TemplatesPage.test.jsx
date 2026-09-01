@@ -1086,8 +1086,8 @@ describe('document template workflow', () => {
 
     expect(await screen.findByTitle('Source image preview: filled-form.webp')).toHaveAttribute('src', 'blob:handwritten-source')
     expect(screen.getByText(/Review handwriting carefully/)).toBeInTheDocument()
-    expect(screen.getByRole('checkbox', { name: 'Confirm source comparison' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Confirm review below to save' })).toBeDisabled()
+    expect(await screen.findByRole('checkbox', { name: 'Confirm source comparison' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Confirm review below to save' })).toBeDisabled()
     await user.click(screen.getByRole('button', { name: 'Select Case number' }))
     await user.click(screen.getByRole('checkbox', { name: 'Include in template' }))
     await user.click(screen.getByRole('checkbox', { name: 'Confirm source comparison' }))
