@@ -1,15 +1,15 @@
 """Firm Memory native identity and authorization state.
 
-Revision ID: 149_fm_native_authz
-Revises: 148_configurable_workflows
+Revision ID: 151_fm_native_authz
+Revises: 150_studio_render_jobs
 """
 
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
-revision = "149_fm_native_authz"
-down_revision = "148_configurable_workflows"
+revision = "151_fm_native_authz"
+down_revision = "150_studio_render_jobs"
 branch_labels = None
 depends_on = None
 
