@@ -22,6 +22,7 @@ from app.database import Base
 class SmbShare(Base):
     __tablename__ = "smb_shares"
     __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_smb_shares_tenant_id"),
         UniqueConstraint("agent_id", "share_path", name="uq_smb_shares_agent_path"),
         Index("ix_smb_shares_tenant_id", "tenant_id"),
     )

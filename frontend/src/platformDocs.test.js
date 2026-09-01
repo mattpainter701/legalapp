@@ -4,12 +4,12 @@ import { ADMINISTRATIVE_GUIDE, USER_GUIDE, parseGuideChapter, slugifyHeading } f
 describe('platform guides', () => {
   it('loads and orders both guide audiences', () => {
     expect(USER_GUIDE).toHaveLength(16)
-    expect(ADMINISTRATIVE_GUIDE).toHaveLength(16)
+    expect(ADMINISTRATIVE_GUIDE).toHaveLength(17)
     expect(USER_GUIDE.map((chapter) => chapter.order)).toEqual(
       Array.from({ length: 16 }, (_, index) => (index + 1) * 10),
     )
     expect(ADMINISTRATIVE_GUIDE.map((chapter) => chapter.order)).toEqual(
-      Array.from({ length: 16 }, (_, index) => (index + 1) * 10),
+      Array.from({ length: 17 }, (_, index) => (index + 1) * 10),
     )
     expect(ADMINISTRATIVE_GUIDE.every((chapter) => chapter.audience === 'admin')).toBe(true)
   })

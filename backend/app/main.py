@@ -95,6 +95,7 @@ from app.routers.plugins import plugin_cache_manager
 from app.routers.prompt_admin import router as prompt_admin_router
 from app.routers.cloud_admin import router as cloud_admin_router
 from app.routers.smb import router as smb_router
+from app.routers.firm_memory import router as firm_memory_router
 from app.routers.portfolio import router as portfolio_router
 from app.routers.users import router as users_router
 from app.routers.platform_llm import router as platform_llm_router
@@ -465,6 +466,7 @@ app.include_router(operating_contract_router)
 app.include_router(operating_trust_router)
 app.include_router(licensing_router)
 app.include_router(smb_router)
+app.include_router(firm_memory_router)
 app.include_router(portfolio_router)
 app.include_router(users_router)
 app.include_router(external_imports_router)

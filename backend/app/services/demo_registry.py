@@ -101,6 +101,17 @@ _PURGE_ONLY_TABLES = {
     "external_raw_rows",
     "external_record_links",
     "external_system_connections",
+    # Firm Memory policy, associations, and source configuration are
+    # tenant-specific authorization state. Purge them with an expired demo,
+    # but never copy them into a different tenant.
+    "firm_memory_collection_sources",
+    "firm_memory_collections",
+    "firm_memory_document_matters",
+    "firm_memory_document_workspaces",
+    "firm_memory_matter_grants",
+    "firm_memory_matter_policies",
+    "firm_memory_source_grants",
+    "firm_memory_sources",
     "generated_artifact_revisions",
     "generated_artifacts",
     "inbound_email_aliases",

@@ -1,63 +1,59 @@
 ## Summary
 
-Completes the fail-closed public-authority lineage boundary for the versioned
-authority coverage control plane. A legal or caselaw source is public only when
-its current reviewed catalog record, rights and storage decision, explicit
-public admission, schema and implementation metadata, and manifest digest all
-match the exact staged or promoted corpus version. Caller metadata, source-key
-prefixes, and record volume cannot grant public status.
+Adds the first default-off Firm Memory backend foundation for generalized firm
+research. Sources and collections are tenant-scoped configuration, matters are
+optional filters, and documents can be associated with zero, one, or many
+matters and research workspaces without changing existing SMB matter bindings.
 
-The same canonical database lineage contract now gates ingestion, embedding,
-search, case detail and full opinion, citation and network, similar cases,
-court/docket, citator treatment, source health, corpus status, coverage,
-operator audits, and promotion. Disabling, revoking, prohibiting, or changing
-any lineage dimension suppresses content, identifiers, metadata, aggregates,
-telemetry, and claims. Tenant, firm, private, custom, and unknown records remain
-outside the public-authority corpus and Firm Memory boundaries are unchanged.
+The new policy composes active tenant membership, the explicit
+`search_firm_memory` RBAC entitlement, assigned/restricted/ethical-wall matter
+rules, explicit user/role source policy, and pluggable native authorization.
+Unknown or unavailable authorization fails closed. `source_scope=all` returns
+only sources authorized for the current actor and never exposes the tenant's
+raw source catalog.
 
-This is a metadata and release-control implementation with fixture-scale
-rehearsal only. It performs no production harvest or deployment and makes no
-claim of comprehensive coverage, current law, good-law status, or production
-dataset readiness. Brief Check promoted-version/currentness integration remains
-separate COMP-05 work.
+The version 1 API provides effective rollout capabilities, an authorized source
+list, and normalized multi-source search with opaque document IDs, provenance,
+optional matter/workspace context, bounded filters, server-issued action
+metadata, audit correlation, and truthful per-source coverage. The only active
+search adapter reuses the existing PostgreSQL SMB metadata FTS inside authorized
+matter/share/folder scopes. Generalized SMB/native paths return unsupported
+coverage; this PR does not claim NTFS ACL trimming.
 
 ## Validation
 
-- Full local MCP suite: 183 passed, 8 skipped. The skips are the disposable
-  PostgreSQL rehearsals because this Windows host has no local PostgreSQL
-  listener; all non-DB authority, citator, ingest, adapter, control-plane,
-  embedding-safety, and contract tests ran.
-- Mandatory PostgreSQL authority rehearsal is wired into CI and Merge Gate. It
-  exercises the production schema and version lifecycle plus a healthy baseline
-  and independent mutations of source enabled state, rights, storage policy,
-  reviewer fields, source/admission namespace, admission active state, catalog
-  schema, implementation metadata, manifest reference/digest, and private or
-  unknown caselaw. Every public retrieval, detail, citation/network,
-  court/docket, treatment, status, coverage, audit, promotion, and claim surface
-  must fail closed for each mutation.
-- Release catalog tests: 3 passed. `python scripts/generate_release_notes.py
-  --check`, Python compileall for MCP code/tests, and `git diff --check` passed.
-- Exact-head hosted PostgreSQL rehearsal, full backend pytest, frontend build,
-  browser E2E, CodeQL, tenant safety, policy, release, security, dependency, and
-  Merge Gate checks remain mandatory before merge.
+- `python -m ruff check` on all new/changed Firm Memory backend and migration
+  files: passed.
+- Focused capability, migration, legacy Firm Memory contract, authorization,
+  adapter-coverage, schema, and router tests: 85 passed.
+- Alembic graph: `149_firm_memory_source_auth` is the sole head.
+- Offline SQL rendering for
+  `148_configurable_workflows:149_firm_memory_source_auth`: passed.
+- OpenAPI generation exposes `/api/v1/firm-memory/capabilities`, `/sources`,
+  and `/search`; only `query` is required by the search request.
+- `git diff --check`: passed (Windows line-ending notices only).
+- This host has no local PostgreSQL listener. GitHub CI runs the live migration,
+  least-privilege RLS, and PostgreSQL rehearsal gates for each pushed head; all
+  required checks must be green on the exact merge head.
 
 ## Merge policy attestations
 
 - [x] Documentation updated
 - [ ] No documentation impact
-- [x] Customer release notes updated
-- [ ] No customer-facing release note
+- [ ] Customer release notes updated
+- [x] No customer-facing release note
 - [x] Security and privacy impact reviewed
+
+The rollout is default-off and does not change an enabled customer surface, so
+no customer release entry is added in this foundation PR. Admin and developer
+documentation describe the policy, contract, coverage semantics, and the lack
+of native ACL trimming.
 
 ## MCP documentation handoff
 
-- [x] MCP documentation updated
-- [ ] MCP documentation not needed
-- MCP area: Research MCP authority ingestion, retrieval, provenance, coverage, operator audit, promotion, and public/private isolation
-- Wiki handoff note: Update the Research MCP authority-coverage guide from
-  `docs/AUTHORITY_COVERAGE_CONTROL_PLANE.md` and `docs/mcp/README.md`. Public
-  eligibility is the exact version-bound reviewed lineage contract; private or
-  mismatched rows are suppressed from content and metadata projections. The
-  release is fixture-rehearsed and does not imply a production harvest,
-  deployment, comprehensive currentness, good-law status, or Brief Check
-  currentness integration.
+- [ ] MCP documentation updated
+- [x] MCP documentation not needed
+- MCP area: Workspace MCP Firm Memory search authorization boundary
+- Wiki handoff note: This PR does not change an MCP endpoint, tool, scope, or
+  protocol. A future Workspace MCP integration must consume the normalized API
+  and retain the same source/matter/native authorization boundary.

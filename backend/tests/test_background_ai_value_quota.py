@@ -667,8 +667,9 @@ async def test_unresolvable_reservations_age_out_but_keep_holding_their_estimate
 
     async with factory() as db:
         snapshot = await background_quota_snapshot(db)
-        # Spend is retained...
-        assert snapshot["value"]["monthly"]["spent_usd"] == 0.60
+        # Spend is retained in an active quota window even when backdating the
+        # reservation crosses a UTC month boundary.
+        assert snapshot["value"]["five_hour"]["spent_usd"] == 0.60
         # ...and remains visible after retries stop, rather than disappearing
         # from the operator's accounting view.
         assert snapshot["value"]["unreconciled"]["requests"] == 1

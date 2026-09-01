@@ -65,6 +65,23 @@ def test_configurable_workflow_data_is_purge_only_legal_work_product():
     assert all(not DEMO_TABLE_REGISTRY[table].clone for table in workflow_tables)
 
 
+def test_firm_memory_authorization_state_is_purge_only():
+    firm_memory_tables = {
+        "firm_memory_collection_sources",
+        "firm_memory_collections",
+        "firm_memory_document_matters",
+        "firm_memory_document_workspaces",
+        "firm_memory_matter_grants",
+        "firm_memory_matter_policies",
+        "firm_memory_source_grants",
+        "firm_memory_sources",
+    }
+
+    assert firm_memory_tables <= set(DEMO_TABLE_REGISTRY)
+    assert all(DEMO_TABLE_REGISTRY[table].purge for table in firm_memory_tables)
+    assert all(not DEMO_TABLE_REGISTRY[table].clone for table in firm_memory_tables)
+
+
 def test_mediation_release_grants_clone_with_portal_business_content():
     release_grant_tables = {
         "mediation_document_recipients",

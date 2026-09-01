@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """PostgreSQL 16 runtime rehearsal for COMP-09.
 
-CI migrates a disposable database to ``148_configurable_workflows`` before invoking
-this script. The rehearsal then exercises the deployed catalog with a real
+CI seeds a disposable database at ``148_configurable_workflows`` and then upgrades
+it to the current migration head before invoking this script. The rehearsal
+then exercises the deployed catalog with a real
 NOSUPERUSER/NOBYPASSRLS role; it does not substitute ORM ``create_all`` for the
 Alembic path and never targets a persistent environment.
 """
@@ -28,7 +29,7 @@ from sqlalchemy.engine import make_url
 register_uuid()
 
 
-EXPECTED_HEAD = "148_configurable_workflows"
+EXPECTED_HEAD = "149_firm_memory_source_auth"
 TABLES = (
     "custom_field_definitions",
     "matter_custom_field_values",

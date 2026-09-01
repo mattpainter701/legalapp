@@ -436,6 +436,10 @@ class Settings(BaseSettings):
 
     # ── SMB File Share Relay Agent ──────────────────────────────────────────
     SMB_ENABLED: bool = False  # Master feature flag
+    # Generalized Firm Memory is a separate rollout from the existing,
+    # matter-bound SMB search.  Keep it fail-closed until source policies and
+    # native authorization providers have been configured for a tenant.
+    FIRM_MEMORY_GENERAL_SEARCH_ENABLED: bool = False
     SMB_PAIRING_CODE_TTL_MIN: int = 10  # Pairing code expiry in minutes
     # Metadata-only rows are small; 500 made ordinary legal shares silently
     # partial. Keep a configurable safety ceiling high enough for real firms.
