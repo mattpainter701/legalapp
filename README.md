@@ -165,8 +165,10 @@ documented in [the conflict and invoice workflow architecture](docs/conflict-sea
 
 Yes, as a **single-host first-customer deployment** on an x86-64 Linux VPS with
 Docker Engine, Compose v2, Python 3, persistent SSD storage, a static public
-address, DNS, and inbound TCP 80/443 only. The configured Compose memory **limits** sum to
-17.5 GiB and the configured CPU limits sum to 9 vCPU. These are per-container
+address, DNS, and inbound TCP 80/443 only. The default fail-closed active set of
+configured Compose memory **limits** sums to 17.5 GiB and its configured CPU
+limits sum to 9 vCPU. Enabling the optional `studio-render` profile raises those
+configured ceiling totals to 19.5 GiB and 10 vCPU. These are per-container
 ceilings, not reservations or a promise that the stack fits that sum; nginx,
 builds, migration helpers, Docker, and the host OS also need capacity. The
 supported Lightsail starting point is AWS's general-purpose

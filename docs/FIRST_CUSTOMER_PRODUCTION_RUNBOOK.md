@@ -73,10 +73,12 @@ Set these non-secret relationships in `.env`:
 For a general single-host VPS, provision at least 8 vCPU and 32 GB advertised memory.
 The supported Lightsail starting size is the general-purpose
 [2Xlarge-32GB Linux bundle](https://docs.aws.amazon.com/lightsail/latest/userguide/amazon-lightsail-bundles.html)
-with 640 GB SSD; a 16 GB plan is not safe for this topology. Compose currently
-defines 17.5 GiB of memory limits and 9 vCPU limits. Limits are ceilings, not
-reservations: uncapped services, builds, migrations, Docker, and Linux consume
-additional memory and disk, while CPU is time-shared. Preflight therefore
+with 640 GB SSD; a 16 GB plan is not safe for this topology. The default
+fail-closed active set defines 17.5 GiB of memory limits and 9 vCPU limits;
+enabling the optional `studio-render` profile raises the configured ceiling
+totals to 19.5 GiB and 10 vCPU. Limits are ceilings, not reservations: uncapped
+services, builds, migrations, Docker, and Linux consume additional memory and
+disk, while CPU is time-shared. Preflight therefore
 requires 8 online CPUs and 24 GiB guest-visible RAM. Every distinct filesystem
 used by `UPLOADS_HOST_DIR`, the checkout/release backups, Docker's root, the
 application/LiteLLM database binds, or any other bind in the exact resolved

@@ -1177,8 +1177,8 @@ def test_documented_compose_limits_are_ceilings_not_reservations() -> None:
         if "cpus" in limits:
             cpu_limit += float(limits["cpus"])
 
-    assert memory_gib == 17.5
-    assert cpu_limit == 9.0
+    assert memory_gib == 19.5
+    assert cpu_limit == 10.0
 
 
 def test_host_capacity_override_requires_reason_and_cannot_be_persisted(

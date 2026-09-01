@@ -2,11 +2,12 @@
 # Fail closed when a production host cannot safely run the single-host stack.
 set -euo pipefail
 
-# The production override defines 17.5 GiB of memory ceilings across the
-# services that have a memory limit. Those ceilings are not reservations, and
-# several build/init processes remain uncapped. Keep a meaningful host/daemon
-# margin above that configured sum while allowing advertised 32 GB hosts to
-# report less than 32 GiB to the guest OS.
+# The production override defines 17.5 GiB/9 vCPU of ceilings for the default
+# fail-closed active set. Enabling the optional studio-render profile raises
+# the configured ceiling totals to 19.5 GiB/10 vCPU. Those ceilings are not
+# reservations, and several build/init processes remain uncapped. Keep a
+# meaningful host/daemon margin above the optional-profile sum while allowing
+# advertised 32 GB hosts to report less than 32 GiB to the guest OS.
 readonly STANDARD_MIN_HOST_CPUS=8
 readonly STANDARD_MIN_HOST_MEMORY_KIB=$((24 * 1024 * 1024))
 readonly CUBE_M_MIN_HOST_CPUS=4
