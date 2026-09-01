@@ -11,8 +11,29 @@ user-bound Workspace MCP `search_firm_memory` tool. Results contain opaque file
 IDs and a same-origin portal deep link; the portal rechecks matter scope and
 offers **Copy UNC** for the canonical path.
 
+An additional default-off Windows helper can open an authorized result without
+putting its UNC path in a browser or protocol URL. The SaaS issues a 90-second,
+single-use intent bound to the tenant, user, opaque agent-owned source identity,
+agent, file revision, and action. The interactive `lawhand-file://` handler
+passes only that opaque handle to the session-0 service over a local-only named
+pipe. The service redeems it once, resolves the source in its local ledger, and
+rechecks the assigned root and revision. Before returning a path, the service
+pins the pipe peer to the protected installed opener executable, impersonates
+that interactive pipe client, and probes the file with the client's current
+SMB/NTFS token. The interactive process repeats that probe and opens the file
+through Windows Shell. Thus the one-time handle selects a source but never
+replaces Windows authorization, and a denied local user does not receive the
+UNC path over IPC. Matter is optional UI context, never the identity or
+authorization grant. Enable all three rollout controls deliberately:
+
+```text
+FILE_OPEN_ENABLED=true
+LAWHAND_FILE_OPENER_ENABLED=true
+VITE_ENABLE_FILE_OPENER=true
+```
+
 This is intentionally a control-index PoC, not a 4 TB service. It does not
-ship Tika, OCR, OpenSearch, native Windows per-user ACL trimming, semantic
+ship Tika, OCR, OpenSearch, crawl-time Windows ACL indexing/trimming, semantic
 embeddings, or a browser `file://`/`smb://` opener. The scale design below is
 the acceptance target for a representative-corpus customer PoC and remains
 separate from the small SQLite implementation.

@@ -188,6 +188,7 @@ _PURGE_ONLY_TABLES = {
     "support_requests",
     "signature_requests",
     "signature_signers",
+    "file_open_intents",
     "smb_access_log",
     "smb_agents",
     "smb_credentials",

@@ -69,7 +69,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node.js 24)
         with:
           name: lawhand-agent-windows-unsigned
-          path: agent/dist/lawhand-agent.exe
+          path: |
+            agent/dist/lawhand-agent.exe
+            agent/dist/lawhand-file-opener.exe
           compression-level: 0
           retention-days: 14
           if-no-files-found: error
@@ -125,27 +127,30 @@ jobs:
           tenant-id: ${{ vars.WINDOWS_SIGNING_AZURE_TENANT_ID }}
           subscription-id: ${{ vars.WINDOWS_SIGNING_AZURE_SUBSCRIPTION_ID }}
 
-      - name: Sign Windows executable with Artifact Signing
+      - name: Sign Windows executables with Artifact Signing
         uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
         with:
           endpoint: ${{ vars.WINDOWS_SIGNING_ENDPOINT }}
           signing-account-name: ${{ vars.WINDOWS_SIGNING_ACCOUNT_NAME }}
           certificate-profile-name: ${{ vars.WINDOWS_SIGNING_CERTIFICATE_PROFILE_NAME }}
-          files: ${{ github.workspace }}\agent\dist\lawhand-agent.exe
+          files-folder: ${{ github.workspace }}\agent\dist
+          files-folder-filter: exe
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
 
-      - name: Verify signed executable and build MSI
+      - name: Verify signed executables and build MSI
         env:
           WINDOWS_SIGNING_EXPECTED_SUBJECT: ${{ vars.WINDOWS_SIGNING_EXPECTED_SUBJECT }}
         shell: pwsh
         run: |
-          $exe = Join-Path $PWD 'agent/dist/lawhand-agent.exe'
-          $signature = Get-AuthenticodeSignature -LiteralPath $exe
-          if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or -not $signature.TimeStamperCertificate -or $signature.SignerCertificate.Subject -ne $env:WINDOWS_SIGNING_EXPECTED_SUBJECT) { throw 'Authenticode verification failed for signed executable.' }
-          & signtool verify /pa /all /tw $exe
-          if ($LASTEXITCODE -ne 0) { throw 'signtool verification failed for signed executable.' }
+          $executables = @('lawhand-agent.exe', 'lawhand-file-opener.exe') | ForEach-Object { Join-Path $PWD "agent/dist/$_" }
+          foreach ($exe in $executables) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $exe
+            if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or -not $signature.TimeStamperCertificate -or $signature.SignerCertificate.Subject -ne $env:WINDOWS_SIGNING_EXPECTED_SUBJECT) { throw "Authenticode verification failed for signed executable $exe." }
+            & signtool verify /pa /all /tw $exe
+            if ($LASTEXITCODE -ne 0) { throw "signtool verification failed for signed executable $exe." }
+          }
           ./agent/packaging/windows/build.ps1 -SkipExe
 
       - name: Sign Windows MSI with Artifact Signing
@@ -165,7 +170,7 @@ jobs:
           WINDOWS_SIGNING_EXPECTED_SUBJECT: ${{ vars.WINDOWS_SIGNING_EXPECTED_SUBJECT }}
         shell: pwsh
         run: |
-          $artifacts = @((Join-Path $PWD 'agent/dist/lawhand-agent.exe'), (Get-ChildItem -LiteralPath (Join-Path $PWD 'agent/dist') -Filter '*.msi' -File | Select-Object -ExpandProperty FullName))
+          $artifacts = @((Get-ChildItem -LiteralPath (Join-Path $PWD 'agent/dist') -Filter '*.exe' -File | Select-Object -ExpandProperty FullName), (Get-ChildItem -LiteralPath (Join-Path $PWD 'agent/dist') -Filter '*.msi' -File | Select-Object -ExpandProperty FullName))
           foreach ($artifact in $artifacts) {
             $signature = Get-AuthenticodeSignature -LiteralPath $artifact
             if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or -not $signature.TimeStamperCertificate -or $signature.SignerCertificate.Subject -ne $env:WINDOWS_SIGNING_EXPECTED_SUBJECT) { throw "Unexpected or invalid Windows signer for $artifact." }
@@ -185,6 +190,7 @@ jobs:
           name: lawhand-agent-windows
           path: |
             agent/dist/lawhand-agent.exe
+            agent/dist/lawhand-file-opener.exe
             agent/dist/*.msi
           compression-level: 0
           retention-days: 14

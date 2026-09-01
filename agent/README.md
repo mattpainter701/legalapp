@@ -41,6 +41,13 @@ msiexec /i lawhand-agent-<version>-x64.msi /qn `
 The MSI installs `lawhand-agent.exe` into `C:\Program Files\LawHand\Agent`,
 registers the **LawHand File Share Agent** service (auto-start, restart on
 failure), and creates `C:\ProgramData\LawHand\Agent` for config/key/ledger.
+It also installs the separately invoked, Authenticode-signed
+`lawhand-file-opener.exe` protocol handler. The handler runs only in the
+interactive user's session; it does not host the Windows service. The service
+accepts only that protected installed executable on its local pipe and
+impersonates the peer only for the live SMB/NTFS access probe before releasing
+the resolved path. File opening remains inactive until the SaaS, service, and
+portal feature flags are all enabled. Uninstall removes the protocol registration.
 Pairing is a separate command so the one-time code is never exposed to Windows
 Installer command lines or MSI event logs. Installing a newer MSI directly over
 the existing product preserves the enrollment and service configuration.
@@ -288,7 +295,7 @@ Both drive the shared PyInstaller spec at `packaging/lawhand-agent.spec`, so the
 two platforms ship the same code with the same entry point.
 
 To publish, merge the tested change to `main`, then tag the exact version from
-`clarity_agent/__init__.py` (currently `agent-v0.15.4`) and push that tag. The
+`clarity_agent/__init__.py` (currently `agent-v0.16.0`) and push that tag. The
 workflow rejects a mismatched tag and does not publish either platform unless
 both builds finish successfully.
 

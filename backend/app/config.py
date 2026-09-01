@@ -470,6 +470,7 @@ class Settings(BaseSettings):
     # matter-bound SMB search.  Keep it fail-closed until source policies and
     # native authorization providers have been configured for a tenant.
     FIRM_MEMORY_GENERAL_SEARCH_ENABLED: bool = False
+    FILE_OPEN_ENABLED: bool = False  # One-time file-open intents
     SMB_PAIRING_CODE_TTL_MIN: int = 10  # Pairing code expiry in minutes
     # Metadata-only rows are small; 500 made ordinary legal shares silently
     # partial. Keep a configurable safety ceiling high enough for real firms.

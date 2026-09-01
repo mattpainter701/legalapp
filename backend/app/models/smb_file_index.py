@@ -23,6 +23,9 @@ class SmbFileIndex(Base):
     __tablename__ = "smb_file_index"
     __table_args__ = (
         UniqueConstraint("tenant_id", "path", name="uq_smb_file_tenant_path"),
+        UniqueConstraint(
+            "tenant_id", "agent_id", "source_id", name="uq_smb_file_tenant_agent_source"
+        ),
         Index("ix_smb_file_index_tenant_share", "tenant_id", "share_id"),
         Index("ix_smb_file_index_tenant_ext", "tenant_id", "ext"),
         Index(
@@ -50,6 +53,10 @@ class SmbFileIndex(Base):
         ForeignKey("smb_agents.id", ondelete="SET NULL"),
         nullable=True,
     )
+    source_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    file_revision: Mapped[str | None] = mapped_column(String(200), nullable=True)
     path: Mapped[str] = mapped_column(Text, nullable=False)
     filename: Mapped[str] = mapped_column(String(500), nullable=False)
     ext: Mapped[str | None] = mapped_column(String(20), nullable=True)

@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["151_fm_native_authz"]
+    assert heads == ["152_file_open_intents"]
 
 
 def test_configurable_workflow_migration_is_tenant_safe_and_immutable():

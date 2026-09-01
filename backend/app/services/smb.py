@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import math
+import ntpath
 import secrets
 import time
 import uuid
@@ -437,6 +438,18 @@ def _path_is_within_binding(
     if folder:
         root += "\\" + folder.replace("/", "\\").casefold()
     return bool(root) and (candidate == root or candidate.startswith(root + "\\"))
+
+
+def path_is_within_root(candidate: str, root: str) -> bool:
+    """Compare Windows paths canonically without sibling-prefix widening."""
+    candidate_path = ntpath.normcase(ntpath.normpath(candidate.replace("/", "\\")))
+    root_path = ntpath.normcase(ntpath.normpath(root.replace("/", "\\")))
+    if not candidate_path.startswith("\\\\") or not root_path.startswith("\\\\"):
+        return False
+    try:
+        return ntpath.commonpath([candidate_path, root_path]) == root_path
+    except ValueError:
+        return False
 
 
 def _escape_like(value: str, escape: str = "!") -> str:
@@ -910,6 +923,8 @@ class SmbService:
                     tenant_id=tenant_uuid,
                     share_id=share_uuid,
                     agent_id=agent_uuid,
+                    source_id=entry.source_id,
+                    file_revision=entry.file_revision,
                     path=entry.path,
                     filename=entry.filename,
                     ext=entry.ext,
@@ -939,6 +954,15 @@ class SmbService:
                         "search_vector": stmt.excluded.search_vector,
                         "share_id": stmt.excluded.share_id,
                         "agent_id": stmt.excluded.agent_id,
+                        # Older agents do not send source identity fields. Do
+                        # not let a rolling upgrade erase an identity already
+                        # issued by a newer agent.
+                        "source_id": func.coalesce(
+                            stmt.excluded.source_id, SmbFileIndex.source_id
+                        ),
+                        "file_revision": func.coalesce(
+                            stmt.excluded.file_revision, SmbFileIndex.file_revision
+                        ),
                     },
                 )
                 await db.execute(stmt)
@@ -1528,10 +1552,7 @@ class SmbService:
             folder = _normalize_folder_path(binding.folder_path)
             allowed_root = share_root + (f"\\{folder}" if folder else "")
             candidate = str(file_entry.path or "").replace("/", "\\").rstrip("\\")
-            if (
-                candidate.casefold() != allowed_root.casefold()
-                and not candidate.casefold().startswith(allowed_root.casefold() + "\\")
-            ):
+            if not path_is_within_root(candidate, allowed_root):
                 continue
             if settings.FIRM_MEMORY_NATIVE_AUTHZ_ENABLED:
                 await self._revalidate_file_authorization(
@@ -1561,6 +1582,8 @@ class SmbService:
                 modified_time=file_entry.modified_time,
                 created_time=file_entry.created_time,
                 share_id=str(file_entry.share_id),
+                source_id=str(file_entry.source_id) if file_entry.source_id else None,
+                file_revision=file_entry.file_revision,
             )
         raise ValueError("Matter file not found")
 
@@ -2034,6 +2057,10 @@ class SmbService:
                     modified_time=file_entry.modified_time,
                     created_time=file_entry.created_time,
                     share_id=str(file_entry.share_id),
+                    source_id=str(file_entry.source_id)
+                    if file_entry.source_id
+                    else None,
+                    file_revision=file_entry.file_revision,
                 )
                 previous = hits_by_id.get(str(file_entry.id))
                 if previous is None or (hit.score or 0) > (previous.score or 0):
