@@ -2932,6 +2932,9 @@ async def test_force_rls_rebinds_cache_retention_and_worker_transactions(
         )
         await conn.execute(text(f"ALTER ROLE {_RLS_ROLE} PASSWORD '{_RLS_PASSWORD}'"))
         await conn.execute(text(f"GRANT USAGE ON SCHEMA public TO {_RLS_ROLE}"))
+        await conn.execute(
+            text(f"GRANT SELECT ON tenants, studio_drafts TO {_RLS_ROLE}")
+        )
         for table in tables:
             await conn.execute(
                 text(f"GRANT SELECT, INSERT, UPDATE, DELETE ON {table} TO {_RLS_ROLE}")
