@@ -65,11 +65,13 @@ _SMS_IMMUTABLE_TABLES = (
     "sms_number_suppression_events",
     "sms_consent_events",
 )
-_SMS_CREDENTIAL_PURGE_ORDER = (
+_SMS_PURGE_ORDER = (
+    "sms_review_items",
+    "sms_messages",
     "sms_provider_credentials",
     "sms_provider_configs",
 )
-_SMS_CREDENTIAL_TABLES = frozenset(_SMS_CREDENTIAL_PURGE_ORDER)
+_SMS_PURGE_TABLES = frozenset(_SMS_PURGE_ORDER)
 _SMS_TABLES = frozenset(
     {
         "sms_provider_configs",
@@ -409,7 +411,7 @@ async def _purge_demo_tenant_locked(
                 or name in _STUDIO_TABLES
                 or name in _CONFIG_WORKFLOW_TABLES
                 or name in _SMS_IMMUTABLE_TABLES
-                or name in _SMS_CREDENTIAL_TABLES
+                or name in _SMS_PURGE_TABLES
             ):
                 continue
             values = {}
@@ -424,11 +426,14 @@ async def _purge_demo_tenant_locked(
                 )
 
         if sms_schema_present:
-            # Generic FK clearing has detached nullable message references, but
-            # must never null retired_by_user_id: retirement evidence requires
-            # its actor. Delete bounded credential history, then live config,
-            # before the generic plan can remove users.
-            for name in _SMS_CREDENTIAL_PURGE_ORDER:
+            # Detach and remove SMS children before their provider parents. A
+            # message holds a provider_credential_id back-reference and review
+            # items hold a non-nullable message id, so both must be gone before
+            # the bounded credential history is deleted. Credential history must
+            # never null retired_by_user_id: retirement evidence requires its
+            # actor, so credentials (then live config) are removed here before
+            # the generic plan can remove users.
+            for name in _SMS_PURGE_ORDER:
                 table = tables[name]
                 result = await db.execute(
                     delete(table).where(table.c.tenant_id == tenant_id)
@@ -441,7 +446,7 @@ async def _purge_demo_tenant_locked(
                 or name in _STUDIO_TABLES
                 or name in _CONFIG_WORKFLOW_TABLES
                 or name in _SMS_IMMUTABLE_TABLES
-                or name in _SMS_CREDENTIAL_TABLES
+                or name in _SMS_PURGE_TABLES
             ):
                 continue
             table = tables[name]
