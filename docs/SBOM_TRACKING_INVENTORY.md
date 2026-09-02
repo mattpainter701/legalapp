@@ -127,7 +127,7 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |pypi|pgvector|==0.3.6|runtime/dev|mcp-server/requirements.txt|
 |pypi|psycopg2-binary|==2.9.10|runtime/dev|mcp-server/requirements.txt|
 |pypi|pydantic|==2.10.3|runtime/dev|mcp-server/requirements.txt|
-|pypi|pypdf|==6.15.0|runtime/dev|mcp-server/requirements.txt|
+|pypi|pypdf|==6.16.1|runtime/dev|mcp-server/requirements.txt|
 |pypi|python-dotenv|==1.2.2|runtime/dev|mcp-server/requirements.txt|
 |pypi|starlette|==1.3.1|runtime/dev|mcp-server/requirements.txt|
 |pypi|uvicorn[standard]|==0.51.0|runtime/dev|mcp-server/requirements.txt|
