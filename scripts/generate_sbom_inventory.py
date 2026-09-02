@@ -33,6 +33,7 @@ MANIFEST_PATHS = [
     "office-addin/package.json",
     "word-addin/package.json",
     "agent/pyproject.toml",
+    "search-node/pyproject.toml",
 ]
 DOCKERFILE_PATHS = [
     "backend/Dockerfile",
