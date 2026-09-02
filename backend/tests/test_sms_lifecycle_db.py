@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 import uuid
 from copy import deepcopy
@@ -108,15 +109,28 @@ class _Provider:
         self.calls: list[dict] = []
         self.lookup_calls: list[dict] = []
 
+    @staticmethod
+    async def _resolve(result):
+        """Accept both async handlers and plain ones that return a response.
+
+        Most handlers here are `async def`, but the shorthand
+        `lambda **_: _Response(...)` is used too, and awaiting its return value
+        raises "object _Response can't be used in 'await' expression" the
+        moment such a handler is actually reached. That read as a provider
+        failure and surfaced as "SMS provider outcome is uncertain", which
+        looks like a product bug rather than a harness one.
+        """
+        return await result if inspect.isawaitable(result) else result
+
     async def post(self, url, *, data, auth):
         self.calls.append({"url": url, "data": dict(data), "auth": auth})
-        return await self.handler(url=url, data=data, auth=auth)
+        return await self._resolve(self.handler(url=url, data=data, auth=auth))
 
     async def get(self, url, *, auth):
         self.lookup_calls.append({"url": url, "auth": auth})
         if self.lookup_handler is None:
             raise AssertionError("provider lookup was not expected")
-        return await self.lookup_handler(url=url, auth=auth)
+        return await self._resolve(self.lookup_handler(url=url, auth=auth))
 
 
 def _install_provider(monkeypatch, provider: _Provider) -> None:
