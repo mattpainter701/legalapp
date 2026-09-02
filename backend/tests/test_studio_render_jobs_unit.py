@@ -27,6 +27,7 @@ from app.schemas.studio_render import (
     canonical_effective_render_request_hash,
     canonical_render_request_hash,
 )
+from app.services.studio_object_storage import StudioStorageError
 from app.services.studio_render_jobs import (
     StudioJobLease,
     StudioRenderJobService,
@@ -36,7 +37,9 @@ from app.services.studio_render_jobs import (
     _evidence_basis_sha256,
     StudioRenderServiceError,
     _StudioRenderJobStore,
+    _PersistedResult,
     _QueuedPayload,
+    _proves_storage_corruption,
     _parse_queued,
     _parse_result,
     _render_cache_key,
@@ -625,3 +628,37 @@ def test_adoption_geometry_coverage_rechecks_preview_and_full_document():
         artifact_kind="analysis",
         requested_page_number=1,
     )
+
+
+def test_availability_uses_none_for_a_result_without_an_artifact():
+    """The caller tuple-unpacks anything that is not None, so False would 500."""
+
+    store = _StudioRenderJobStore(object(), tenant_id=uuid.uuid4())
+    coroutine = store._completed_artifact_availability(
+        object(), object(), _PersistedResult()
+    )
+    try:
+        coroutine.send(None)
+    except StopIteration as finished:
+        assert finished.value is None
+    else:  # pragma: no cover - the guard returns before awaiting anything
+        raise AssertionError("availability probe awaited the database")
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (StudioStorageError("object_missing", "gone"), True),
+        (StudioStorageError("hash_mismatch", "corrupt"), True),
+        (StudioStorageError("object_too_large", "grew"), True),
+        (StudioStorageError("unsafe_object_path", "tampered"), False),
+        (StudioStorageError("invalid_read_limit", "bad bound"), False),
+        (OSError(24, "Too many open files"), False),
+        (PermissionError(13, "locked"), False),
+        (RuntimeError("unknown"), False),
+    ],
+)
+def test_only_proven_loss_or_mismatch_authorizes_destructive_quarantine(
+    error, expected
+):
+    assert _proves_storage_corruption(error) is expected
