@@ -1136,6 +1136,14 @@ async def run_task_automation(
                 await db.commit()
                 return
 
+            # SMS cancellation truthfulness is gated on the already-claimed run
+            # row (require_sms_cancellation_is_truthful), not on this task lock.
+            # Release the task lock before the provider call so a concurrent
+            # cancellation can reach that gate instead of blocking on this lock
+            # and deadlocking against the worker's in-flight provider request.
+            if action_type == "sms_client":
+                await db.commit()
+
             # `_claim_run` commits, so the earlier feature-flag read is no
             # longer authoritative. Lock and recheck the tenant setting at the
             # irreversible side-effect boundary; an admin disable either wins

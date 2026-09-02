@@ -1485,6 +1485,13 @@ async def transition_task_status(
         try:
             await require_sms_cancellation_is_truthful(db, task)
         except ActionApprovalConflict as exc:
+            # Release the task/run FOR UPDATE locks before returning the
+            # conflict. Otherwise a worker that is still finalizing the claimed
+            # run blocks on those locks until this request's session is torn
+            # down. The commit is read-only here: cancellation is rejected
+            # before any task mutation.
+            await db.commit()
+            await set_tenant_context(db, tenant_id)
             current_response = await _task_response_with_delivery(
                 db, task, current_user
             )
@@ -2338,6 +2345,13 @@ async def update_task(
             try:
                 await require_sms_cancellation_is_truthful(db, task)
             except ActionApprovalConflict as exc:
+                # Release the task/run FOR UPDATE locks before returning the
+                # conflict. Otherwise a worker that is still finalizing the
+                # claimed run blocks on those locks until this request's
+                # session is torn down. The commit is read-only here:
+                # cancellation is rejected before any task mutation.
+                await db.commit()
+                await set_tenant_context(db, tenant_id)
                 current_response = await _task_response_with_delivery(
                     db, task, current_user
                 )
