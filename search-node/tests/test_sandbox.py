@@ -39,6 +39,15 @@ def _pid_alive(pid: int) -> bool:
             check=False,
         )
         return str(pid) in completed.stdout
+    # A killed grandchild is reparented to PID 1, which in a container may never
+    # reap it. os.kill(pid, 0) still succeeds for a zombie, so read the state
+    # directly and treat Z as dead: it has been terminated, only not collected.
+    status = Path(f"/proc/{pid}/stat")
+    if status.exists():
+        try:
+            return status.read_text().rsplit(") ", 1)[1].split()[0] != "Z"
+        except (OSError, IndexError):
+            return False
     try:
         os.kill(pid, 0)
     except (ProcessLookupError, OSError):
@@ -96,6 +105,12 @@ def test_posix_limits_relax_address_space_for_a_jvm(tmp_path: Path):
 
     # A JVM also needs headroom the pure-Python parser never does.
     assert with_jvm[resource.RLIMIT_NOFILE] > without_jvm[resource.RLIMIT_NOFILE]
+    # RLIMIT_NPROC is counted per UID, not per tree. Setting it made the parser
+    # die with EAGAIN on any host whose service account owns other processes,
+    # which is every real one. Process count is bounded by the job object on
+    # Windows and by the operator's cgroup on Linux instead.
+    assert not hasattr(resource, "RLIMIT_NPROC") or resource.RLIMIT_NPROC not in with_jvm
+    assert not hasattr(resource, "RLIMIT_NPROC") or resource.RLIMIT_NPROC not in without_jvm
     # Both keep the CPU and file-size ceilings.
     for plan in (with_jvm, without_jvm):
         assert plan[resource.RLIMIT_CPU] == (
@@ -123,7 +138,13 @@ def test_grandchild_dies_with_the_container(tmp_path: Path):
             [sys.executable, "-c",
              "import pathlib, time;"
              "pathlib.Path({marker_arg!r}).write_text('x');"
-             "time.sleep(120)"]
+             "time.sleep(120)"],
+            # The grandchild must not inherit our stdout, or it holds the pipe
+            # open and communicate() would wait out its sleep instead of
+            # observing containment.
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
         print(grandchild.pid, flush=True)
         time.sleep(120)

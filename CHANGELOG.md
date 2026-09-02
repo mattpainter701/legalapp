@@ -154,7 +154,12 @@
   a Tika jar is configured, because a JVM reserves more address space than any
   bound worth setting and would otherwise fail to start at all. The
   `search-node` distribution had no CI job of any kind; it now lints and tests
-  on both Linux and Windows as a required merge gate.
+  on both Linux and Windows as a required merge gate — which immediately
+  surfaced that `RLIMIT_NPROC` is counted per real UID rather than per
+  descendant tree, so on any host whose service account owns other processes
+  the parser died with EAGAIN on a fork it was entitled to make. Process
+  count is now bounded where it can be scoped to the tree: the job object on
+  Windows, and the operator's cgroup `pids.max` on Linux.
 - **Search Node preflight says why it rejected a node:** an unhealthy engine
   stops the whole agent, so the failure now names each cause — cluster status,
   a missing active index, drifted disk watermarks, a write block, or a rebuild
