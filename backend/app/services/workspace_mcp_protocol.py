@@ -403,7 +403,10 @@ async def execute_workspace_capability(
                 db=db,
                 user=user,
                 channel="workspace_mcp",
-                request_id=request.headers.get("X-Request-ID"),
+                request_id=(
+                    request.headers.get("X-Request-ID")
+                    or request.headers.get("X-Idempotency-Key")
+                ),
                 idempotency_key=_workspace_idempotency_key(
                     request,
                     require_explicit=spec.name == "propose_client_sms",
