@@ -417,11 +417,24 @@ async def run_broker(
         except FileOpenError as exc:
             outcome = exc.outcome
             if handle is not None:
-                await asyncio.to_thread(
-                    _write_message,
-                    handle,
-                    {"status": "error", "outcome": exc.outcome, "message": str(exc)},
-                )
+                # The peer is routinely gone by now — it is the peer's malformed
+                # or truncated request that raised. An exception here is not
+                # caught by the sibling handler below, so leaving this bare ends
+                # run_broker's loop and stops the broker for the service's whole
+                # lifetime. Shutdown takes this exact path: wake_broker sends an
+                # unknown action and closes the pipe.
+                try:
+                    await asyncio.to_thread(
+                        _write_message,
+                        handle,
+                        {
+                            "status": "error",
+                            "outcome": exc.outcome,
+                            "message": str(exc),
+                        },
+                    )
+                except Exception:
+                    pass
         except Exception as exc:
             logger.warning(
                 "File opener request failed error_type=%s", type(exc).__name__
@@ -447,7 +460,12 @@ async def run_broker(
                 except Exception:
                     logger.warning("Could not report file opener outcome")
             if handle is not None:
-                await asyncio.to_thread(win32file.CloseHandle, handle)
+                # Also inside the loop's finally: a raise here would escape the
+                # while and stop the broker, so a doomed handle is not fatal.
+                try:
+                    await asyncio.to_thread(win32file.CloseHandle, handle)
+                except Exception:
+                    logger.warning("Could not close the file opener pipe handle")
 
 
 def run_protocol_handler(uri: str) -> None:
