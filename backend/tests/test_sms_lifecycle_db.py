@@ -4143,18 +4143,21 @@ async def test_task_automation_certainty_expand_contract_syncs_old_and_new_write
         "failed_after_acceptance",
         "provider_failed_after_acceptance",
     )
+    tenant_id = test_tenant.id
+    task_id = task.id
+    user_id = test_user.id
     db_session.expire_all()
     legacy_run = await db_session.get(TaskAutomationRun, legacy_run_id)
     assert legacy_run.delivery_certainty == "provider_failed_after_acceptance"
 
     current_run = TaskAutomationRun(
-        tenant_id=test_tenant.id,
-        task_id=task.id,
+        tenant_id=tenant_id,
+        task_id=task_id,
         action_type="sms_client",
         idempotency_key="current-writer",
         status="failed",
         delivery_certainty="provider_failed_after_acceptance",
-        triggered_by_user_id=test_user.id,
+        triggered_by_user_id=user_id,
     )
     db_session.add(current_run)
     await db_session.flush()
