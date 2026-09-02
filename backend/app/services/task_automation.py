@@ -323,7 +323,15 @@ async def _claim_run(
     # tables are FORCE-RLS in production, so rebind before the follow-up SELECT.
     await set_tenant_context(db, str(task.tenant_id))
     return await db.scalar(
-        select(TaskAutomationRun).where(TaskAutomationRun.id == run_id)
+        select(TaskAutomationRun)
+        .where(TaskAutomationRun.id == run_id)
+        # populate_existing: the claim above is a bare UPDATE, so a caller that
+        # already loaded this run holds an instance the ORM will hand straight
+        # back from its identity map -- still reading "queued" for a row this
+        # function just moved to "sending". A session configured with
+        # expire_on_commit hides that; one without it returns the stale claim
+        # state to the caller that is about to act on it.
+        .execution_options(populate_existing=True)
     )
 
 
