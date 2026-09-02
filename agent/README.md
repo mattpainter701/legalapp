@@ -6,6 +6,12 @@ put a large on-premise share — the one that is too big, too old, or too
 sensitive to migrate — behind matter context, search, and research prompts
 without copying it to the cloud.
 
+An experimental source-root crawl/freshness control plane is available behind
+an explicit default-off composition flag. It persists leased ingestion queues
+locally without storing document bodies; extraction artifacts and index engines
+remain behind explicit local adapters. See
+`docs/operations/source-crawl-control-plane.md` for boundaries and recovery.
+
 What leaves the network on a schedule is metadata plus a short snippet per file
 (path, name, size, timestamps, first ~500 characters). Full document text is
 read only when someone in the product asks for that specific document, and each
