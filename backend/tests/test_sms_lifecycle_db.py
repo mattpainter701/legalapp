@@ -1508,13 +1508,15 @@ async def test_stop_serializes_with_send_in_both_orders(
         return await inbound_stop("SM-STOP-SECOND")
 
     stop_task = asyncio.create_task(waiting_stop())
-    await asyncio.sleep(0.1)
-    assert not stop_task.done()
+    # The send commits its suppression/consent fence before the provider call,
+    # so a STOP that lands mid-flight applies immediately instead of waiting
+    # behind the in-flight provider request. The already-authorized send still
+    # records provider-accepted truth.
+    second_stop = await asyncio.wait_for(stop_task, timeout=5)
+    assert second_stop.raw_provider_event["compliance"]["applied"] is True
     provider_release.set()
     submitted = await asyncio.wait_for(send_task, timeout=5)
     assert submitted.status == "submitted"
-    second_stop = await asyncio.wait_for(stop_task, timeout=5)
-    assert second_stop.raw_provider_event["compliance"]["applied"] is True
     assert len(provider.calls) == 1
     await db_session.refresh(consent)
     assert consent.sms_allowed is False
@@ -2149,11 +2151,12 @@ async def test_matter_party_authorization_serializes_with_dispatch_in_both_order
     send_task = asyncio.create_task(dispatch_first())
     await asyncio.wait_for(provider_entered.wait(), timeout=5)
     removal_task = asyncio.create_task(remove_after_dispatch_lock())
-    await asyncio.sleep(0.1)
-    assert not removal_task.done()
+    # The send commits its matter-party authorization fence before the provider
+    # call, so a party removal that lands mid-flight applies immediately instead
+    # of waiting behind the in-flight provider request.
+    await asyncio.wait_for(removal_task, timeout=5)
     provider_release.set()
     sent = await asyncio.wait_for(send_task, timeout=5)
-    await asyncio.wait_for(removal_task, timeout=5)
     assert sent.status == "submitted"
     assert len(provider.calls) == 1
 
@@ -3147,7 +3150,7 @@ async def test_provider_config_deactivation_before_final_fence_blocks_dispatch(
 
 
 @pytest.mark.asyncio
-async def test_provider_config_update_waits_for_exact_generation_dispatch_truth(
+async def test_provider_config_update_after_fence_commit_preserves_exact_generation_dispatch_truth(
     db_session, test_engine, test_tenant, test_user, monkeypatch
 ):
     seeded = await _seed_lifecycle(
@@ -3198,11 +3201,12 @@ async def test_provider_config_update_waits_for_exact_generation_dispatch_truth(
             return config.generation
 
     rotate_task = asyncio.create_task(rotate_generation())
-    await asyncio.sleep(0.1)
-    assert not rotate_task.done()
+    # The send commits its exact credential-generation binding before the
+    # provider call, so a rotation that lands mid-flight applies immediately
+    # without waiting behind the in-flight provider request.
+    assert await asyncio.wait_for(rotate_task, timeout=5) == 2
     provider_release.set()
     submitted = await asyncio.wait_for(send_task, timeout=5)
-    assert await asyncio.wait_for(rotate_task, timeout=5) == 2
     assert submitted.status == "submitted"
     assert submitted.provider_config_generation == 1
     assert submitted.provider_account_sid == "ACconfig-parallel"
@@ -7940,7 +7944,7 @@ async def test_actor_change_committed_before_final_fence_blocks_provider_dispatc
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mutation", ["deactivate", "revoke"])
-async def test_actor_change_waits_when_final_fence_already_owns_provider_attempt(
+async def test_actor_change_after_fence_commit_does_not_block_provider_attempt(
     mutation,
     db_session,
     test_engine,
@@ -8006,12 +8010,13 @@ async def test_actor_change_waits_when_final_fence_already_owns_provider_attempt
             mutation=mutation,
         )
     )
-    await asyncio.sleep(0.1)
-    assert not mutation_task.done()
+    # The send commits its actor/role authorization fence before the provider
+    # call, so a deactivation/revocation that lands mid-flight applies
+    # immediately instead of waiting behind the in-flight provider request.
+    await asyncio.wait_for(mutation_task, timeout=5)
     assert len(provider.calls) == 1
     release_provider.set()
     sent = await asyncio.wait_for(sending, timeout=5)
-    await asyncio.wait_for(mutation_task, timeout=5)
     assert sent.status == "submitted"
     assert sent.provider_message_id == f"SM-ACTOR-AFTER-{mutation}"
     assert len(provider.calls) == 1

@@ -360,11 +360,13 @@ async def _lock_sms_matter_authorization(
 ) -> dict[str, str] | None:
     """Fence live actor capability, matter access, and recipient binding.
 
-    The user, that user's role assignments, and the assigned roles are locked
-    across provider I/O.  A deactivation or capability revocation therefore
-    either commits before this fence and blocks the operation, or waits until
-    the already-authorized provider attempt has durably recorded its outcome.
-    Locks are actor-local; unrelated tenant users remain concurrent.
+    The user, that user's role assignments, the assigned roles, and the matter
+    binding are locked long enough to prove current authorization, then the
+    caller commits and releases them before provider I/O. A deactivation or
+    capability revocation that commits before this fence blocks the operation;
+    one that lands after the fence applies without retroactively cancelling the
+    already-authorized dispatch. Locks are actor-local; unrelated tenant users
+    remain concurrent.
     """
     user = await _lock_sms_actor(
         db,
@@ -1908,14 +1910,24 @@ async def send_sms(
         **(message.raw_provider_event or {}),
         "authorization": final_authorization,
     }
+    data = {"To": to_number, "Body": body}
+    if messaging_service_sid:
+        data["MessagingServiceSid"] = messaging_service_sid
+    else:
+        data["From"] = from_number or ""
+    provider_submission_started_at = datetime.now(timezone.utc)
+    message.provider_submission_started_at = provider_submission_started_at
+    # The actor/role/matter/party authorization fence, the recipient/consent
+    # fence, and the provider-generation share lock are all taken in this
+    # transaction. Commit them before the provider call so no row lock is held
+    # across the external HTTP request: a concurrent cancellation (auth, tenant
+    # binding, or the access-log user FK) keys the same users row and would
+    # otherwise block behind this transaction for the whole provider timeout.
+    # The fence decision is durable from here; only immutable reservation
+    # identity is re-verified before recording the outcome.
+    await db.commit()
+    await set_tenant_context(db, str(tenant_id))
     try:
-        data = {"To": to_number, "Body": body}
-        if messaging_service_sid:
-            data["MessagingServiceSid"] = messaging_service_sid
-        else:
-            data["From"] = from_number or ""
-        provider_submission_started_at = datetime.now(timezone.utc)
-        message.provider_submission_started_at = provider_submission_started_at
         async with httpx.AsyncClient(timeout=15) as http:
             response = await http.post(
                 f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json",
@@ -1923,6 +1935,28 @@ async def send_sms(
                 auth=(account_sid, auth_token),
             )
         payload = response.json() if response.content else {}
+        # Re-fence the exact reservation before recording the outcome. Only
+        # immutable dispatch identity is checked here; no actor/matter/contact
+        # row lock is reacquired across the already-completed provider call.
+        message = await db.scalar(
+            select(SmsMessage)
+            .where(
+                SmsMessage.id == dispatch_message_id,
+                SmsMessage.tenant_id == tenant_id,
+                SmsMessage.dispatch_attempt_id == attempt_id,
+                SmsMessage.status == "dispatching",
+            )
+            .with_for_update()
+        )
+        if message is None:
+            raise SmsError(
+                "SMS dispatch ownership changed during provider submission",
+                409,
+                delivery_certainty="outcome_unknown",
+                sms_message_id=dispatch_message_id,
+                reconciliation_required=True,
+                code="sms_dispatch_ownership_changed",
+            )
         provider_status = str(payload.get("status") or "").lower()
         observed_provider_message_id = (
             str(payload["sid"]) if payload.get("sid") else None
