@@ -66,6 +66,24 @@ for key in POSTGRES_PASSWORD CLARITY_APP_PASSWORD REDIS_PASSWORD LITELLM_DB_PASS
   }
 done
 
+# dev1 has no usable OAuth provider, so the demo session is the only way in and
+# this configuration is load-bearing rather than optional. get_settings() raises
+# on an incomplete demo triple, which surfaces only as a backend that never
+# reaches /health -- a 120s timeout and a log dump that does not name the cause.
+# Fail here instead, while the running stack is still untouched.
+demo_mode="$(get_env DEMO_MODE_ENABLED)"
+if [[ "$demo_mode" == true ]]; then
+  demo_code="$(get_env DEMO_ACCESS_CODE)"
+  [[ ${#demo_code} -ge 16 && "$demo_code" != replace-with-* ]] || {
+    echo "ERROR: DEMO_ACCESS_CODE must be a real value of at least 16 characters when DEMO_MODE_ENABLED=true" >&2
+    exit 2
+  }
+  [[ -n "$(get_env DEMO_FIXTURE_TENANT_DOMAIN)" ]] || {
+    echo "ERROR: DEMO_FIXTURE_TENANT_DOMAIN is required when DEMO_MODE_ENABLED=true" >&2
+    exit 2
+  }
+fi
+
 release_sha="$(git -C "$APP_DIR" rev-parse HEAD)"
 [[ "$release_sha" =~ ^[0-9a-f]{40}$ ]] || exit 2
 [[ -z "${GITHUB_DEPLOY_COMMIT:-}" || "$release_sha" == "$GITHUB_DEPLOY_COMMIT" ]] || {
