@@ -514,7 +514,12 @@ async def decide_sms_review_item(
     current_user=Depends(require_capability("manage_matters")),
     db: AsyncSession = Depends(get_db),
 ):
-    await set_tenant_context(db, str(current_user.tenant_id))
+    # Read the tenant id once, before anything can roll back. A rollback
+    # expires every attribute on current_user, so reading it again in the
+    # handler below issues a lazy refresh -- which raises MissingGreenlet and
+    # replaces whatever actually went wrong with an unrelated SQLAlchemy error.
+    tenant_id = current_user.tenant_id
+    await set_tenant_context(db, str(tenant_id))
     try:
         item = await resolve_review_item(
             db,
@@ -545,7 +550,8 @@ async def decide_sms_review_item(
         raise HTTPException(exc.status_code, str(exc)) from exc
     except Exception:
         await db.rollback()
-        await set_tenant_context(db, str(current_user.tenant_id))
+        # tenant_id captured above: current_user is expired at this point.
+        await set_tenant_context(db, str(tenant_id))
         raise
     return item
 
