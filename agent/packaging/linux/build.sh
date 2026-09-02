@@ -50,6 +50,13 @@ cp "${AGENT_ROOT}/packaging/search-node/lawhand.options" "${STAGE}/search-node/"
 cp "${AGENT_ROOT}/packaging/search-node/opensearch.yml" "${STAGE}/search-node/"
 cp "${AGENT_ROOT}/packaging/search-node/performance-analyzer.properties" "${STAGE}/search-node/"
 cp "${AGENT_ROOT}/../docs/search-node-operations.md" "${STAGE}/search-node/"
+# The runbook tells the operator to run these after an upgrade, after a
+# snapshot restore, and during rebuild quarantine recovery, so they have to
+# be on the host rather than only in the repository.
+mkdir -p "${STAGE}/search-node/benchmarks"
+cp "${AGENT_ROOT}/benchmarks/search_node/documents.jsonl" "${STAGE}/search-node/benchmarks/"
+cp "${AGENT_ROOT}/benchmarks/search_node/queries.json" "${STAGE}/search-node/benchmarks/"
+cp "${AGENT_ROOT}/benchmarks/search_node/run_benchmark.py" "${STAGE}/search-node/benchmarks/"
 chmod +x "${STAGE}/install.sh" "${STAGE}/lawhand-agent" "${STAGE}/lawhand-agent-update"
 
 TARBALL="${DIST_DIR}/lawhand-agent-${VERSION}-linux-${ARCH}.tar.gz"
