@@ -4516,6 +4516,20 @@ async def test_expired_demo_purge_removes_sms_secrets_content_and_review_but_kee
     db_session.add_all([session, config, retired_by])
     await db_session.flush()
     credential_id = uuid.uuid4()
+    credential = SmsProviderCredential(
+        id=credential_id,
+        tenant_id=demo.id,
+        provider="twilio",
+        generation=1,
+        account_sid=config.account_sid,
+        encrypted_auth_token=None,
+        messaging_service_sid=config.messaging_service_sid,
+        retired_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+        retired_by_user_id=retired_by.id,
+        retirement_reason="bounded_rotation_after_resolution",
+    )
+    db_session.add(credential)
+    await db_session.flush()
     message = SmsMessage(
         tenant_id=demo.id,
         idempotency_key="demo-sensitive-message",
@@ -4530,19 +4544,7 @@ async def test_expired_demo_purge_removes_sms_secrets_content_and_review_but_kee
         category="customer_reply",
         provider_credential_id=credential_id,
     )
-    credential = SmsProviderCredential(
-        id=credential_id,
-        tenant_id=demo.id,
-        provider="twilio",
-        generation=1,
-        account_sid=config.account_sid,
-        encrypted_auth_token=None,
-        messaging_service_sid=config.messaging_service_sid,
-        retired_at=datetime.now(timezone.utc) - timedelta(minutes=1),
-        retired_by_user_id=retired_by.id,
-        retirement_reason="bounded_rotation_after_resolution",
-    )
-    db_session.add_all([credential, message])
+    db_session.add(message)
     await db_session.flush()
     contact = Contact(
         tenant_id=demo.id,
