@@ -60,7 +60,13 @@ never overwrite operator-owned service or OpenSearch configuration on upgrade.
    `search_node_enabled=false`, and restart the agent to verify the existing
    file-share functions are unchanged.
 5. Run the preflight health and snapshot checks, then opt in and restart. The
-   agent fails startup rather than silently falling back to SQLite full text.
+   agent fails startup rather than silently falling back to SQLite full text,
+   and logs every reason the preflight rejected the node. The most common one
+   is a node that never received the packaged `opensearch.yml` and still has
+   OpenSearch's stock 85% low watermark, which reads as
+   `disk watermarks do not match the packaged opensearch.yml: low='85%'
+   (expected '80%')`. Because this failure stops the whole agent — including
+   scanning and content fetch — verify health before opting in.
 
 Agent upgrades preserve the config, control database, OpenSearch data path,
 and index aliases. The existing MSI permanent data component and Linux
@@ -77,10 +83,22 @@ must live outside the agent binary/install directory.
 - Default request bounds are 100 results, 10,000 offset, 1,000 query
   characters, 500 chunks or 8 MiB per bulk operation, and a 10-second engine
   request timeout. The gateway body cap is 64 KiB.
-- Use the synthetic fixtures in `agent/benchmarks/search_node` for repeatable
-  phrase, Boolean, field-filter, ACL-deny, highlighting, and page checks. Add a
-  representative customer-owned corpus for throughput and p95 latency without
-  copying that corpus off-site.
+- Run the acceptance queries with the packaged runner. The installers place it
+  and its fixtures in the install tree's `search-node/benchmarks` directory:
+
+  ```text
+  export LAWHAND_BENCHMARK_OPENSEARCH_PASSWORD=...
+  python run_benchmark.py --url https://127.0.0.1:9200 --username lawhand_agent --ca-path <local CA bundle>
+  ```
+
+  It loads the synthetic corpus into its own disposable index generation, runs
+  the phrase, Boolean/field-filter, ACL-deny, and ACL-allow checks, deletes that
+  generation, and exits non-zero if any check fails. It never reads or writes
+  the aliases the agent serves from, so it is safe to run against the live node.
+  The password comes from the environment so it never reaches a shell history.
+  These fixtures prove the engine, mapping, analyzer, and ACL filter — not that
+  the customer corpus is intact. Add a representative customer-owned corpus for
+  throughput and p95 latency without copying that corpus off-site.
 
 ## Index versions, rebuilds, and upgrades
 
