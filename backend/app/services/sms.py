@@ -370,7 +370,25 @@ async def _lock_sms_matter_authorization(
     one that lands after the fence applies without retroactively cancelling the
     already-authorized dispatch. Locks are actor-local; unrelated tenant users
     remain concurrent.
+
+    The recipient Contact is taken first. Inbound routing and review resolution
+    both lock Contact before actor/Matter, and this fence runs in a fresh
+    transaction after the reservation commit -- the dispatch path's earlier
+    Contact lock is already released by then. Taking Matter first here made the
+    two paths mirror images: resolution holds Contact and waits for Matter,
+    while dispatch holds Matter and then needs Contact, because the
+    communication_logs row written below carries a foreign key to contacts and
+    so takes a KEY SHARE lock on it. That is an ABBA cycle and PostgreSQL
+    resolves it by killing one side with a deadlock error mid-dispatch.
     """
+    if contact_id is not None:
+        contact_locked = await db.scalar(
+            select(Contact.id)
+            .where(Contact.id == contact_id, Contact.tenant_id == tenant_id)
+            .with_for_update()
+        )
+        if contact_locked is None:
+            return None
     user = await _lock_sms_actor(
         db,
         tenant_id=tenant_id,

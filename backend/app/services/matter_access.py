@@ -18,27 +18,42 @@ def matter_access_predicate(
     is_admin: bool,
     matter_id_column,
 ):
+    # correlate_except pins each subquery's own FROM. This predicate is embedded
+    # in whatever query the caller is building, and matter_id_column belongs to
+    # that outer query, so SQLAlchemy auto-correlation is what makes the
+    # reference work. But a caller that already joins Matter -- the overdue
+    # tasks report does, to read matter_name -- makes Matter an outer FROM too,
+    # and auto-correlation then hoists the subquery's own Matter out with it,
+    # leaving a SELECT with no FROM at all: "returned no FROM clauses due to
+    # auto-correlation". Naming the table here keeps it local without
+    # suppressing the correlation the predicate depends on.
     if is_admin:
         return exists(
-            select(Matter.id).where(
+            select(Matter.id)
+            .where(
                 Matter.tenant_id == tenant_id,
                 Matter.id == matter_id_column,
             )
+            .correlate_except(Matter)
         )
     return or_(
         exists(
-            select(Matter.id).where(
+            select(Matter.id)
+            .where(
                 Matter.tenant_id == tenant_id,
                 Matter.id == matter_id_column,
                 Matter.user_id == user_id,
             )
+            .correlate_except(Matter)
         ),
         exists(
-            select(MatterAssignment.id).where(
+            select(MatterAssignment.id)
+            .where(
                 MatterAssignment.tenant_id == tenant_id,
                 MatterAssignment.matter_id == matter_id_column,
                 MatterAssignment.user_id == user_id,
             )
+            .correlate_except(MatterAssignment)
         ),
     )
 
