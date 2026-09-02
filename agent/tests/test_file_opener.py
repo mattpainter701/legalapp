@@ -252,3 +252,52 @@ async def test_broker_is_disabled_off_windows(monkeypatch):
     monkeypatch.setattr(file_opener.sys, "platform", "linux")
     stop = asyncio.Event()
     await file_opener.run_broker(AgentConfig(), None, None, None, stop)
+
+
+@pytest.mark.asyncio
+async def test_broker_survives_a_peer_that_vanishes_before_the_error_reply(monkeypatch):
+    """A dead peer must not take the broker down with it.
+
+    The error reply and the handle close both run in the loop's except/finally,
+    where a raise is not caught by the sibling ``except Exception`` and so ends
+    ``run_broker`` for the whole service lifetime. Shutdown takes this exact
+    path: ``wake_broker`` sends an unknown action and closes the pipe.
+    """
+    monkeypatch.setattr(file_opener.sys, "platform", "win32")
+    closed = []
+
+    def close(handle):
+        closed.append(handle)
+        raise OSError("the handle is invalid")
+
+    monkeypatch.setitem(sys.modules, "win32file", SimpleNamespace(CloseHandle=close))
+
+    stop = asyncio.Event()
+    accepted = []
+
+    def accept(_name):
+        accepted.append(_name)
+        if len(accepted) == 3:
+            stop.set()
+        return (f"pipe{len(accepted)}", "1", "S-1-5-21-1-1-1-1")
+
+    monkeypatch.setattr(file_opener, "_accept_pipe", accept)
+    monkeypatch.setattr(
+        file_opener, "_read_message", lambda handle: {"action": "shutdown"}
+    )
+
+    def vanished(_handle, _value):
+        raise OSError("the pipe has been ended")
+
+    monkeypatch.setattr(file_opener, "_write_message", vanished)
+
+    await asyncio.wait_for(
+        file_opener.run_broker(
+            SimpleNamespace(agent_id=AGENT_ID), None, None, None, stop
+        ),
+        timeout=5,
+    )
+
+    # Three full accepts means the loop kept serving through both failures.
+    assert len(accepted) == 3
+    assert closed == ["pipe1", "pipe2", "pipe3"]
