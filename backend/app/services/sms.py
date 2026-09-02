@@ -371,24 +371,12 @@ async def _lock_sms_matter_authorization(
     already-authorized dispatch. Locks are actor-local; unrelated tenant users
     remain concurrent.
 
-    The recipient Contact is taken first. Inbound routing and review resolution
-    both lock Contact before actor/Matter, and this fence runs in a fresh
-    transaction after the reservation commit -- the dispatch path's earlier
-    Contact lock is already released by then. Taking Matter first here made the
-    two paths mirror images: resolution holds Contact and waits for Matter,
-    while dispatch holds Matter and then needs Contact, because the
-    communication_logs row written below carries a foreign key to contacts and
-    so takes a KEY SHARE lock on it. That is an ABBA cycle and PostgreSQL
-    resolves it by killing one side with a deadlock error mid-dispatch.
+    This fence deliberately does not lock the recipient Contact. It runs in a
+    fresh transaction after the reservation commit, so a Contact lock here
+    would wait on any holder of that row -- including a caller mid-flow -- for
+    no authorization benefit. The dispatch/resolution lock cycle it might seem
+    to fix is broken at its real source instead; see the Contact locks below.
     """
-    if contact_id is not None:
-        contact_locked = await db.scalar(
-            select(Contact.id)
-            .where(Contact.id == contact_id, Contact.tenant_id == tenant_id)
-            .with_for_update()
-        )
-        if contact_locked is None:
-            return None
     user = await _lock_sms_actor(
         db,
         tenant_id=tenant_id,
@@ -513,7 +501,9 @@ async def _lock_sms_replay(
     contact = await db.scalar(
         select(Contact)
         .where(Contact.id == contact_id, Contact.tenant_id == tenant_id)
-        .with_for_update()
+        # FOR NO KEY UPDATE: see the resolution fence for why FOR UPDATE here
+        # closes a dispatch/resolution lock cycle through a foreign key.
+        .with_for_update(key_share=True)
     )
     if contact is None:
         raise SmsError(
@@ -1914,7 +1904,9 @@ async def send_sms(
         select(Contact)
         .where(Contact.id == contact_id, Contact.tenant_id == tenant_id)
         .execution_options(populate_existing=True)
-        .with_for_update()
+        # FOR NO KEY UPDATE: fence the phone/consent state without blocking the
+        # FOR KEY SHARE that a foreign key reference to this contact takes.
+        .with_for_update(key_share=True)
     )
     locked_consent = (
         await load_sms_consent(db, tenant_id, contact_id, lock=True)
@@ -2017,6 +2009,26 @@ async def send_sms(
             delivery_certainty="not_attempted",
             sms_message_id=dispatch_message_id,
         ) from exc
+    # Retake the Contact before the actor/Matter fence. The Contact lock this
+    # path took earlier belonged to a transaction that has since committed, so
+    # this transaction would otherwise take Matter first and then need Contact
+    # again -- for the communication_logs row below, whose foreign key takes a
+    # lock on the contact. Review resolution and inbound routing both take
+    # Contact before Matter, so that inversion is a lock cycle: resolution
+    # holds Contact waiting on Matter while dispatch holds Matter waiting on
+    # Contact, and PostgreSQL kills one of them mid-dispatch.
+    #
+    # This belongs here rather than inside _lock_sms_matter_authorization:
+    # reconciliation and review use that fence too, in transactions that may
+    # already hold the Contact or have no reason to wait for it.
+    if contact_id is not None:
+        ordered_contact = await db.scalar(
+            select(Contact.id)
+            .where(Contact.id == contact_id, Contact.tenant_id == tenant_id)
+            .with_for_update(key_share=True)
+        )
+        if ordered_contact is None:
+            raise SmsError("SMS target was not found", 404, code="sms_target_not_found")
     final_authorization = await _lock_sms_matter_authorization(
         db,
         tenant_id=tenant_id,
@@ -2291,7 +2303,9 @@ async def apply_inbound(
             select(Contact)
             .where(Contact.tenant_id == tenant_id)
             .order_by(Contact.id)
-            .with_for_update()
+            # FOR NO KEY UPDATE: routing must see a stable phone, not block
+            # foreign key references to these contacts.
+            .with_for_update(key_share=True)
         )
     ).all()
     candidates = []
@@ -2547,10 +2561,19 @@ async def resolve_review_item(
         # evidence is fenced, take the target Contact before actor/matter locks.
         # Dispatch takes Contact before its final actor/matter fence, so review
         # must use the same order or the two paths can deadlock deterministically.
+        #
+        # FOR NO KEY UPDATE, not FOR UPDATE. What this fence needs is that the
+        # phone checked below cannot change under it, and that is exactly what
+        # FOR NO KEY UPDATE denies. FOR UPDATE additionally blocks FOR KEY
+        # SHARE, the lock PostgreSQL takes on a parent row when a child row
+        # references it -- and dispatch inserts a communication_logs row whose
+        # foreign key points at this contact. That extra strength bought
+        # nothing and closed a lock cycle: resolution holding Contact and
+        # waiting on Matter, dispatch holding Matter and waiting on Contact.
         contact = await db.scalar(
             select(Contact)
             .where(Contact.id == contact_id, Contact.tenant_id == tenant_id)
-            .with_for_update()
+            .with_for_update(key_share=True)
         )
         if contact is None:
             raise SmsError("Resolution target was not found", 404)
