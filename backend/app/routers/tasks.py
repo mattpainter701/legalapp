@@ -1433,6 +1433,7 @@ async def transition_task_status(
 ):
     tenant_uuid = uuid.UUID(str(current_user.tenant_id))
     tenant_id = str(tenant_uuid)
+    current_user_id = current_user.id
     await set_tenant_context(db, tenant_id)
     task = (
         await db.execute(
@@ -1573,6 +1574,7 @@ async def transition_task_status(
             await db.rollback()
             await set_tenant_context(db, tenant_id)
             current_task = await _load_task_or_404(db, task_id, tenant_uuid)
+            current_user = await db.get(User, current_user_id)
             await _require_sms_task_access(db, current_task, current_user)
             current_response = await _task_response_with_delivery(
                 db, current_task, current_user
@@ -2176,6 +2178,7 @@ async def update_task(
     db: AsyncSession = Depends(get_db),
 ):
     tenant_id = str(current_user.tenant_id)
+    current_user_id = current_user.id
     await set_tenant_context(db, tenant_id)
 
     result = await db.execute(
@@ -2456,6 +2459,7 @@ async def update_task(
         await db.rollback()
         await set_tenant_context(db, tenant_id)
         current_task = await _load_task_or_404(db, task_id, uuid.UUID(tenant_id))
+        current_user = await db.get(User, current_user_id)
         await _require_sms_task_access(db, current_task, current_user)
         current_response = await _task_response_with_delivery(
             db, current_task, current_user
