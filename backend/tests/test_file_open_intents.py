@@ -17,6 +17,7 @@ from app.schemas.file_open_intent import (
 )
 from app.services import file_open_intents as service
 from app.services.demo_registry import DEMO_TABLE_REGISTRY
+from app.services.native_authorization import NativeAuthorizationError
 
 
 class _Result:
@@ -28,6 +29,9 @@ class _Result:
 
     def scalar_one_or_none(self):
         return self.value
+
+    def scalars(self):
+        return SimpleNamespace(all=lambda: self.value)
 
 
 class _DB:
@@ -145,6 +149,84 @@ async def test_create_fails_closed_when_disabled_or_source_is_unavailable(monkey
             matter_id=None,
             action="open",
         )
+
+
+@pytest.mark.asyncio
+async def test_matter_scoped_create_requires_matter_authorization(monkeypatch):
+    """A matter-scoped open carries that matter's policy, so it is authorized.
+
+    Without this the share binding alone decided the outcome, which let a user
+    with no relationship to a restricted matter mint a handle against it and
+    stamp its id onto the durable intent and audit rows.
+    """
+    tenant_id, user_id, file_id, source_id, share_id, agent_id, matter_id = _ids()
+    file_entry = SimpleNamespace(
+        id=file_id,
+        source_id=source_id,
+        file_revision="r1",
+        path=r"\\server\share\walled\brief.pdf",
+    )
+    share = SimpleNamespace(id=share_id, share_path=r"\\server\share")
+    agent = SimpleNamespace(id=agent_id)
+    denied = AsyncMock(side_effect=NativeAuthorizationError("matter is unavailable"))
+    # raising=False so that a regression which drops the call entirely fails on
+    # the missing denial below, not on a missing patch target.
+    monkeypatch.setattr(service, "require_matter_authorization", denied, raising=False)
+
+    # The file really is inside the walled matter's bound folder, so the binding
+    # check alone would happily mint a handle: authorization is the only thing
+    # standing here. (A folder-scoped binding is used deliberately — a
+    # whole-share binding cannot reach path_is_within_root's True branch.)
+    binding = SimpleNamespace(folder_path="walled")
+    db = _DB((file_entry, share, agent), [binding])
+    with pytest.raises(service.OpenIntentError, match="not bound to this matter"):
+        await service.create_intent(
+            db,
+            tenant_id=str(tenant_id),
+            user_id=str(user_id),
+            file_id=str(file_id),
+            matter_id=str(matter_id),
+            action="open",
+        )
+
+    assert denied.await_count == 1
+    # Nothing durable may survive a denial, and the denial must be worded
+    # exactly like a missing binding so the two stay indistinguishable.
+    assert db.added == []
+    assert db.commits == 0
+
+
+@pytest.mark.asyncio
+async def test_matter_free_create_stays_open_for_unfiled_on_prem_files(monkeypatch):
+    """On-prem files commonly belong to no matter; the share DACL governs them.
+
+    The node enforces that by impersonating the signed-in Windows user before it
+    will disclose the path, so no matter policy is consulted or required here.
+    """
+    tenant_id, user_id, file_id, source_id, share_id, agent_id, _ = _ids()
+    file_entry = SimpleNamespace(
+        id=file_id,
+        source_id=source_id,
+        file_revision="r1",
+        path=r"\\server\share\unfiled.pdf",
+    )
+    share = SimpleNamespace(id=share_id, share_path=r"\\server\share")
+    agent = SimpleNamespace(id=agent_id)
+    never = AsyncMock()
+    monkeypatch.setattr(service, "require_matter_authorization", never, raising=False)
+
+    intent, handle = await service.create_intent(
+        _DB((file_entry, share, agent)),
+        tenant_id=str(tenant_id),
+        user_id=str(user_id),
+        file_id=str(file_id),
+        matter_id=None,
+        action="open",
+    )
+
+    assert never.await_count == 0
+    assert intent.matter_id is None
+    assert intent.handle_hash == hashlib.sha256(handle.encode()).hexdigest()
 
 
 def test_invalid_file_open_identity_is_rejected():

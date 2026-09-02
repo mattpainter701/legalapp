@@ -14,6 +14,10 @@ from app.models.file_open_intent import FileOpenIntent
 from app.models.smb_agent import SmbAgent
 from app.models.smb_file_index import SmbFileIndex
 from app.models.smb_share import SmbShare
+from app.services.native_authorization import (
+    NativeAuthorizationError,
+    require_matter_authorization,
+)
 from app.services.smb import _normalize_folder_path, path_is_within_root
 
 
@@ -70,6 +74,21 @@ async def create_intent(
     file_entry, share, agent = row
     if matter_id:
         from app.models.matter_smb_share import MatterSmbShare
+
+        # A matter-scoped open carries that matter's restriction/ethical-wall
+        # policy, so it is authorized exactly as every other matter-scoped read
+        # path is, and before the binding below. Without this a caller could
+        # both reach a walled matter's binding and stamp its id onto the
+        # durable intent and audit row.
+        #
+        # A matter-free open stays deliberately unauthorized here: on-premises
+        # files commonly belong to no matter, and their access control is the
+        # share DACL, which the node enforces by impersonating the signed-in
+        # Windows user before it will even disclose the path.
+        try:
+            await require_matter_authorization(db, tenant_id, user_id, matter_id)
+        except NativeAuthorizationError as exc:
+            raise OpenIntentError("File is not bound to this matter") from exc
 
         bindings = (
             (
