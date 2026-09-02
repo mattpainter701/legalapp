@@ -956,7 +956,7 @@
       "name": "pypdf",
       "scope": "runtime/dev",
       "source": "mcp-server/requirements.txt",
-      "specifier": "==6.15.0"
+      "specifier": "==6.16.1"
     },
     {
       "ecosystem": "pypi",
