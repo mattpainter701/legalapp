@@ -113,6 +113,19 @@ Each switch defaults off, so dev1 work never changes IONOS behaviour until step 
   than race.
 - dev1 responds `302` to unauthenticated requests — that is Cloudflare Access, not
   an origin error. Probing it meaningfully requires the service token.
+- **A Cloudflare Access service token needs two things, and missing either looks
+  identical.** The token must exist (client id `<32 hex>.access`, secret 64
+  lowercase hex, shown once at creation) — *and* the Access application must
+  carry a `non_identity` policy whose `include` names it. An application holding
+  only an email policy rejects every service token. Diagnose from the 302
+  `Location` header: decode its `meta` JWT, and `service_token_status: false`
+  with `auth_status: NONE`, byte-identical with and without the headers, means
+  the token was never recognised rather than rejected. Such a policy grants
+  non-interactive access to the whole hostname, so treat adding one as an
+  access-widening change, not a config detail.
+- Never write an unverified service token into GitHub secrets. Absent credentials
+  fail at the workflow's own guard and name their own cause; a bad token fails at
+  the HTTPS call instead and reads as “dev1 is down”.
 - dev1 uses isolated dev-only volumes. Fixtures and tenants from other
   environments do not exist there and must be seeded locally.
 - Never copy production customer data into dev1 to make it look realistic. This is
