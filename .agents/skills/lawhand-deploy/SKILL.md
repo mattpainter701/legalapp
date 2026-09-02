@@ -114,15 +114,43 @@ Each switch defaults off, so dev1 work never changes IONOS behaviour until step 
 - dev1 responds `302` to unauthenticated requests — that is Cloudflare Access, not
   an origin error. Probing it meaningfully requires the service token.
 - **A Cloudflare Access service token needs two things, and missing either looks
-  identical.** The token must exist (client id `<32 hex>.access`, secret 64
-  lowercase hex, shown once at creation) — *and* the Access application must
-  carry a `non_identity` policy whose `include` names it. An application holding
-  only an email policy rejects every service token. Diagnose from the 302
-  `Location` header: decode its `meta` JWT, and `service_token_status: false`
-  with `auth_status: NONE`, byte-identical with and without the headers, means
-  the token was never recognised rather than rejected. Such a policy grants
-  non-interactive access to the whole hostname, so treat adding one as an
-  access-widening change, not a config detail.
+  identical.** The token must exist (client id `<32 hex>.access`) — *and* the
+  Access application must carry a `non_identity` policy whose `include` names
+  it. An application holding only an email policy rejects every service token.
+  Diagnose from the 302 `Location` header: decode its `meta` JWT, and
+  `service_token_status: false` with `auth_status: NONE`, byte-identical with
+  and without the headers, means the token was never recognised rather than
+  rejected. Such a policy grants non-interactive access to the whole hostname,
+  so treat adding one as an access-widening change, not a config detail.
+- **Do not judge a service-token secret by its shape.** Cloudflare issues
+  secrets of varying length and alphabet; a 54-character secret is as valid as
+  any other. There is no length or hex test that distinguishes a good secret
+  from a bad one, so never conclude "the secret is malformed" from inspection —
+  the only evidence is an authenticated request. Rotating on a shape hunch
+  invalidates a working credential and proves nothing.
+- **Creating a reusable policy does not attach it.** A policy with
+  `Used by applications: --` is inert. In the Cloudflare UI the application
+  editor is a wizard whose policy step only persists on the final *Save
+  application*; backing out silently discards it. Verify by reading the app,
+  never by trusting the UI.
+- **Attaching a reusable policy over the API is a read-modify-write `PUT` on
+  the application.** `PATCH` returns `10405 Method not allowed for this
+  authentication scheme`, and `PUT /access/apps/<app>/policies/<policy>`
+  returns `12083 policy_not_found`. GET the app, drop the read-only fields
+  (`id`, `uid`, `aud`, `created_at`, `updated_at`), set `policies` to the full
+  desired list of `{id, precedence}`, and PUT the whole object back — then
+  diff the app before and after to prove no setting drifted.
+- **Access apps and policies are account-scoped, not zone-scoped.** An API
+  token showing `Access: Apps and Policies Write` still returns
+  `1010 auth.forbidden` when that row sits under *Zone*. The permission must be
+  added under the **Account** group. `Access: Service Tokens Edit` is separate
+  and also account-scoped. An account-owned token lives under *Manage Account →
+  API Tokens*, not *My Profile → API Tokens*, and verifies at
+  `/accounts/<id>/tokens/verify` — the user endpoint reports it invalid.
+- **Probe with a normal user agent.** `Python-urllib` is blocked at the
+  Cloudflare edge with `403 error code: 1010` before Access is evaluated, which
+  reads exactly like a rejected token. `curl/8.5.0` passes. The workflows use
+  curl, so this bites diagnostic scripts only.
 - Never write an unverified service token into GitHub secrets. Absent credentials
   fail at the workflow's own guard and name their own cause; a bad token fails at
   the HTTPS call instead and reads as “dev1 is down”.
