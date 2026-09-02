@@ -72,3 +72,4 @@ htmlcov/
 
 # Python build metadata
 *.egg-info/
+/search-node/build/

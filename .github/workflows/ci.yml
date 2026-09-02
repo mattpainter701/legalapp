@@ -705,6 +705,24 @@ jobs:
           fi
           diff-cover coverage.xml --compare-branch="$base" --fail-under=80
 
+      # Advisory for now, deliberately non-blocking. The aggregate above can be
+      # met while one file in the diff is barely tested — PR #308 passed at
+      # 80.65% with a module at 44.5%, PR #307 at 81.0% with one at 52.9%. This
+      # reports that case so the threshold can be calibrated on real PRs before
+      # anyone decides whether it should gate.
+      - name: Report per-file diff coverage (advisory)
+        continue-on-error: true
+        working-directory: backend
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BASE_SHA: ${{ github.event.before }}
+        run: |
+          base="${PR_BASE_SHA:-$PUSH_BASE_SHA}"
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            base="$(git rev-parse HEAD^)"
+          fi
+          python scripts/check_diff_coverage_floors.py             --coverage coverage.xml --compare-branch "$base"             --per-file-min 70 --min-changed-lines 10
+
       - name: Upload backend coverage evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node.js 24)
