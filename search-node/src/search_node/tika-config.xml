@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Defense in depth for the Tika application invoked inside the one-shot child.
+  Container network=none, process limits, input/output caps, and wall timeout
+  remain authoritative. Office macros are data and are never executed.
+-->
+<properties>
+  <parsers>
+    <parser class="org.apache.tika.parser.DefaultParser">
+      <parser-exclude class="org.apache.tika.parser.external.ExternalParser"/>
+    </parser>
+  </parsers>
+  <service-loader dynamic="false" loadErrorHandler="WARN"/>
+</properties>

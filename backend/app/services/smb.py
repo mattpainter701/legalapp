@@ -446,10 +446,19 @@ def path_is_within_root(candidate: str, root: str) -> bool:
     root_path = ntpath.normcase(ntpath.normpath(root.replace("/", "\\")))
     if not candidate_path.startswith("\\\\") or not root_path.startswith("\\\\"):
         return False
-    try:
-        return ntpath.commonpath([candidate_path, root_path]) == root_path
-    except ValueError:
+    candidate_drive, candidate_rest = ntpath.splitdrive(candidate_path)
+    root_drive, root_rest = ntpath.splitdrive(root_path)
+    if candidate_drive != root_drive:
         return False
+    # ntpath.commonpath cannot judge a bare share root such as \\server\share:
+    # splitdrive puts the whole thing in the drive and leaves an empty path,
+    # which counts as relative against the candidate's absolute one, so it
+    # raises and every file on a whole-share matter binding was refused.
+    # Comparing share-relative segments keeps the boundary that stops
+    # \\server\share\matter2 from matching a \\server\share\matter root.
+    root_parts = [part for part in root_rest.split("\\") if part]
+    candidate_parts = [part for part in candidate_rest.split("\\") if part]
+    return candidate_parts[: len(root_parts)] == root_parts
 
 
 def _escape_like(value: str, escape: str = "!") -> str:
